@@ -9,24 +9,24 @@ external services are needed in CI.
 import os
 os.environ.setdefault("JWT_SECRET_KEY", "pytest-local-secret-key-32chars!!")
 
-import asyncio
-import pytest
-import pytest_asyncio
-from unittest.mock import AsyncMock, patch
-from httpx import AsyncClient, ASGITransport
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+import asyncio  # noqa: E402
+import pytest  # noqa: E402
+import pytest_asyncio  # noqa: E402
+from unittest.mock import AsyncMock, patch  # noqa: E402
+from httpx import AsyncClient, ASGITransport  # noqa: E402
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker  # noqa: E402
 
-from db.base import Base
-from db.session import get_db
+from db.base import Base  # noqa: E402
+from db.session import get_db  # noqa: E402
 
 # Import every model so Base.metadata.create_all registers the full schema.
 # Without this, tests that exercise one table transitively depend on another
 # model being imported by a sibling test — leading to FK-resolution failures
 # when tests run in isolation.
-import models.user       # noqa: F401
-import models.portfolio  # noqa: F401
-import models.watchlist  # noqa: F401
-import models.alert      # noqa: F401
+import models.user       # noqa: E402,F401
+import models.portfolio  # noqa: E402,F401
+import models.watchlist  # noqa: E402,F401
+import models.alert      # noqa: E402,F401
 
 # Disable slowapi rate limiter — tests exercise endpoints in tight loops
 # and would otherwise trip the 5/min register cap, etc.

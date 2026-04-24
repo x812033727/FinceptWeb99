@@ -1,5 +1,9 @@
 import { useState, FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import {
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+} from "recharts";
 import {
   usePortfolios,
   usePortfolioDetail,
@@ -10,6 +14,7 @@ import {
 } from "@/hooks/usePortfolio";
 import HoldingsTable from "@/components/portfolio/HoldingsTable";
 import AllocationPie from "@/components/portfolio/AllocationPie";
+import api from "@/lib/api";
 
 // ── Add Transaction form ──────────────────────────────────────────
 function AddTransactionForm({ portfolioId, onClose }: { portfolioId: string; onClose: () => void }) {
@@ -100,6 +105,98 @@ function CreatePortfolioModal({ onClose }: { onClose: () => void }) {
           <button type="submit" disabled={create.isPending} className="px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:opacity-90 disabled:opacity-50">Create</button>
         </div>
       </form>
+    </div>
+  );
+}
+
+// ── Performance chart ─────────────────────────────────────────────
+
+const PERIOD_DAYS: Record<string, number> = { "1M": 30, "3M": 90, "6M": 180, "1Y": 365 };
+
+function PerformanceChart({ portfolioId }: { portfolioId: string }) {
+  const [period, setPeriod] = useState("3M");
+  const days = PERIOD_DAYS[period];
+
+  const { data = [], isLoading } = useQuery<{ date: string; value: number }[]>({
+    queryKey: ["portfolio-performance", portfolioId, days],
+    queryFn: () =>
+      api.get(`/portfolio/${portfolioId}/performance?days=${days}`).then((r) => r.data),
+    staleTime: 3_600_000,
+  });
+
+  const formatted = data.map((p) => ({
+    date: p.date.slice(5),
+    value: Math.round(p.value),
+  }));
+
+  return (
+    <div className="bg-card border border-border rounded-lg p-5 space-y-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-foreground font-medium">Performance</h2>
+        <div className="flex gap-1">
+          {Object.keys(PERIOD_DAYS).map((p) => (
+            <button
+              key={p}
+              onClick={() => setPeriod(p)}
+              className={`px-2.5 py-1 text-xs rounded transition-colors ${
+                period === p
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="h-[180px] flex items-center justify-center text-muted-foreground text-sm animate-pulse">
+          Loading…
+        </div>
+      ) : formatted.length === 0 ? (
+        <div className="h-[180px] flex items-center justify-center text-muted-foreground text-sm">
+          No snapshot data yet — snapshots are recorded daily at 23:00 UTC.
+        </div>
+      ) : (
+        <ResponsiveContainer width="100%" height={180}>
+          <AreaChart data={formatted} margin={{ left: 0, right: 0, top: 4, bottom: 0 }}>
+            <defs>
+              <linearGradient id="perfGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
+                <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+            <XAxis
+              dataKey="date"
+              tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
+              interval="preserveStartEnd"
+            />
+            <YAxis
+              tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
+              width={60}
+              tickFormatter={(v) => `$${(v / 1000).toFixed(0)}K`}
+            />
+            <Tooltip
+              contentStyle={{
+                background: "hsl(var(--card))",
+                border: "1px solid hsl(var(--border))",
+                fontSize: 11,
+              }}
+              formatter={(v: number) => [`$${v.toLocaleString()}`, "Value (USD)"]}
+            />
+            <Area
+              type="monotone"
+              dataKey="value"
+              stroke="hsl(var(--primary))"
+              strokeWidth={2}
+              fill="url(#perfGradient)"
+              dot={false}
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      )}
     </div>
   );
 }
@@ -253,6 +350,9 @@ function PortfolioDetail({
           <AllocationPie holdings={detail.holdings} />
         </div>
       </div>
+
+      {/* Performance chart */}
+      <PerformanceChart portfolioId={portfolioId} />
 
       {/* Optimiser */}
       <div className="bg-card border border-border rounded-lg p-5 space-y-4">

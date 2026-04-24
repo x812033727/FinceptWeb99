@@ -3,6 +3,7 @@ APScheduler setup — AsyncIOScheduler runs inside the FastAPI event loop.
 Jobs are registered here and started/stopped via the lifespan hook in main.py.
 """
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 scheduler = AsyncIOScheduler(timezone="UTC")
@@ -48,6 +49,17 @@ def setup_jobs() -> None:
         refresh_tw_symbol_map,
         trigger=IntervalTrigger(hours=24),
         id="tw_symbol_map",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # ── Portfolio EOD snapshots ───────────────────────────────────
+    # Run at 23:00 UTC daily (after US + TW markets have both closed)
+    from tasks.portfolio_snapshot import take_all_snapshots
+    scheduler.add_job(
+        take_all_snapshots,
+        trigger=CronTrigger(hour=23, minute=0, timezone="UTC"),
+        id="portfolio_snapshots",
         replace_existing=True,
         max_instances=1,
     )

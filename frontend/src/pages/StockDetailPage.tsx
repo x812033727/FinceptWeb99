@@ -95,6 +95,11 @@ const fetchMargin = (sym: string) =>
 const fetchRevenue = (sym: string) =>
   api.get<RevenueRow[]>(`/tw/revenue/${sym}?months=24`).then((r) => r.data);
 
+const fetchEarnings = (sym: string) =>
+  api.get<{ earnings_date: string | null; eps_estimate: number | null; revenue_estimate: number | null }>(
+    `/us/earnings/${sym}`
+  ).then((r) => r.data);
+
 // ── shared helpers ─────────────────────────────────────────────────
 
 const fmt = (n: number | null | undefined, d = 2) =>
@@ -752,6 +757,13 @@ export default function StockDetailPage() {
     staleTime: 3_600_000,
   });
 
+  const { data: earnings } = useQuery({
+    queryKey: ["earnings", sym],
+    queryFn: () => fetchEarnings(sym),
+    staleTime: 6 * 3_600_000,
+    enabled: mkt === "US",
+  });
+
   useWebSocket(`${sym}:${mkt}`, (data: unknown) => {
     const d = data as Record<string, number>;
     if (d.price) setLivePrice(d.price);
@@ -872,6 +884,22 @@ export default function StockDetailPage() {
                 <StatRow label="52W High" value={fmt(fundamentals?.fifty_two_week_high as number | null)} />
                 <StatRow label="52W Low" value={fmt(fundamentals?.fifty_two_week_low as number | null)} />
                 <StatRow label="Sector" value={fundamentals?.sector as string | null} />
+                {earnings?.earnings_date && (
+                  <>
+                    <StatRow label="Next Earnings" value={earnings.earnings_date} />
+                    {earnings.eps_estimate != null && (
+                      <StatRow label="EPS Est." value={fmt(earnings.eps_estimate)} />
+                    )}
+                    {earnings.revenue_estimate != null && (
+                      <StatRow
+                        label="Rev. Est."
+                        value={earnings.revenue_estimate >= 1e9
+                          ? `$${(earnings.revenue_estimate / 1e9).toFixed(2)}B`
+                          : `$${(earnings.revenue_estimate / 1e6).toFixed(0)}M`}
+                      />
+                    )}
+                  </>
+                )}
               </>
             ) : (
               <>

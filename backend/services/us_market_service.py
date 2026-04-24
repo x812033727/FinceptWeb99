@@ -367,3 +367,44 @@ async def get_news(ticker: str, limit: int = 10) -> list[dict[str, Any]]:
     if result:
         await cache_set(key, json.dumps(result), TTL_NEWS)
     return result
+
+
+async def get_earnings(ticker: str) -> dict[str, Any]:
+    """Next earnings date and consensus EPS/revenue estimates from yfinance."""
+    key = f"us:earnings:{ticker.upper()}"
+    cached = await cache_get(key)
+    if cached:
+        return json.loads(cached)
+
+    import asyncio
+    loop = asyncio.get_event_loop()
+
+    def _fetch():
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        try:
+            cal = t.calendar
+        except Exception:
+            cal = None
+
+        if cal is None:
+            return {"earnings_date": None, "eps_estimate": None, "revenue_estimate": None}
+
+        if isinstance(cal, dict):
+            dates = cal.get("Earnings Date", [])
+            if isinstance(dates, list) and dates:
+                raw = dates[0]
+                next_date = raw.date().isoformat() if hasattr(raw, "date") else str(raw)
+            else:
+                next_date = None
+            return {
+                "earnings_date": next_date,
+                "eps_estimate": cal.get("Earnings Average"),
+                "revenue_estimate": cal.get("Revenue Average"),
+            }
+        return {"earnings_date": None, "eps_estimate": None, "revenue_estimate": None}
+
+    result = await loop.run_in_executor(None, _fetch)
+    # cache for 6 hours — earnings dates don't change often
+    await cache_set(key, json.dumps(result), 6 * 3600)
+    return result

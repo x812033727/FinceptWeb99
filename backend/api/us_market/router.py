@@ -120,3 +120,9 @@ async def macro(indicator: str, _: Auth):
 async def news(ticker: str, _: Auth, limit: int = Query(10, le=30)):
     """Recent news headlines for a US stock (via yfinance)."""
     return await svc.get_news(ticker.upper(), limit=limit)
+
+
+@router.get("/earnings/{ticker}")
+async def earnings(ticker: str, _: Auth):
+    """Next earnings date and EPS/revenue consensus estimate for a US stock."""
+    return await svc.get_earnings(ticker.upper())

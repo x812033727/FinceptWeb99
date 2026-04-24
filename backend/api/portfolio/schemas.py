@@ -66,6 +66,11 @@ class PortfolioListItem(BaseModel):
     currency: str
 
 
+class PerformancePoint(BaseModel):
+    date: str
+    value: float
+
+
 class OptimiseRequest(BaseModel):
     target_risk: str = "medium"   # "low" | "medium" | "high"
     max_weight: float = 1.0

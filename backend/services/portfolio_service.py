@@ -292,3 +292,36 @@ async def optimise_portfolio(
     )
     result["frontier"] = efficient_frontier(returns_df, n_points=20)
     return result
+
+
+async def get_performance(
+    portfolio_id: str,
+    user_id: str,
+    db: AsyncSession,
+    days: int = 90,
+) -> list[dict]:
+    """Return daily value snapshots for the portfolio over the last N days."""
+    from datetime import date, timedelta
+    from sqlalchemy import and_, select
+    from models.portfolio import PortfolioSnapshot
+
+    portfolio = await get_portfolio(portfolio_id, user_id, db)
+    if not portfolio:
+        return []
+
+    cutoff = date.today() - timedelta(days=days)
+    rows = list(
+        (
+            await db.scalars(
+                select(PortfolioSnapshot)
+                .where(
+                    and_(
+                        PortfolioSnapshot.portfolio_id == portfolio.id,
+                        PortfolioSnapshot.snapshot_date >= cutoff,
+                    )
+                )
+                .order_by(PortfolioSnapshot.snapshot_date)
+            )
+        ).all()
+    )
+    return [{"date": r.snapshot_date.isoformat(), "value": r.total_value_usd} for r in rows]

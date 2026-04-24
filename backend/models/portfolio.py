@@ -1,7 +1,7 @@
 import enum
 import uuid
 from datetime import datetime, date
-from sqlalchemy import String, Numeric, BigInteger, Enum, DateTime, Date, ForeignKey, Text
+from sqlalchemy import String, Numeric, BigInteger, Enum, DateTime, Date, ForeignKey, Float, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from db.base import Base
@@ -62,3 +62,22 @@ class Transaction(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
     portfolio: Mapped["Portfolio"] = relationship("Portfolio", back_populates="transactions")
+
+
+class PortfolioSnapshot(Base):
+    __tablename__ = "portfolio_snapshots"
+    __table_args__ = (
+        UniqueConstraint("portfolio_id", "snapshot_date",
+                         name="uq_portfolio_snapshots_portfolio_id_snapshot_date"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    portfolio_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("portfolios.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    snapshot_date: Mapped[date] = mapped_column(Date, nullable=False)
+    total_value_usd: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+    portfolio: Mapped["Portfolio"] = relationship("Portfolio")

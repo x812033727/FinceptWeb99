@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.portfolio.schemas import (
     PortfolioCreate,
     PortfolioListItem,
+    PerformancePoint,
     PortfolioSummary,
     TransactionCreate,
     OptimiseRequest,
@@ -86,3 +87,9 @@ async def optimise(portfolio_id: str, body: OptimiseRequest, user: Auth, db: DB)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Optimisation error: {e}")
+
+
+@router.get("/{portfolio_id}/performance", response_model=list[PerformancePoint])
+async def performance(portfolio_id: str, user: Auth, db: DB, days: int = 90):
+    """Daily portfolio value snapshots for the last N days."""
+    return await svc.get_performance(portfolio_id, user["id"], db, days=days)

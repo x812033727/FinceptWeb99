@@ -79,7 +79,7 @@ def optimize(
     return {
         "weights": {sym: round(float(w), 6) for sym, w in zip(symbols, weights_arr)},
         "metrics": _calc_metrics(returns_df, weights_arr, risk_free_rate),
-        "converged": result.success,
+        "converged": bool(result.success),
     }
 
 

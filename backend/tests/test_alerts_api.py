@@ -106,7 +106,7 @@ async def test_check_and_fire_above(db_session: AsyncSession):
     db_session.add(alert)
     await db_session.commit()
 
-    with patch("services.alert_service.push_alert_to_user", new_callable=AsyncMock) as mock_push:
+    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock) as mock_push:
         await AlertService.check_and_fire(db_session, "NVDA", "US", current_price=520.0)
         mock_push.assert_awaited_once()
 
@@ -133,7 +133,7 @@ async def test_check_and_fire_below_not_triggered(db_session: AsyncSession):
     db_session.add(alert)
     await db_session.commit()
 
-    with patch("services.alert_service.push_alert_to_user", new_callable=AsyncMock) as mock_push:
+    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock) as mock_push:
         await AlertService.check_and_fire(db_session, "META", "US", current_price=350.0)
         mock_push.assert_not_awaited()
 

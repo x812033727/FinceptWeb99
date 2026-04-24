@@ -19,6 +19,15 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from db.base import Base
 from db.session import get_db
 
+# Import every model so Base.metadata.create_all registers the full schema.
+# Without this, tests that exercise one table transitively depend on another
+# model being imported by a sibling test — leading to FK-resolution failures
+# when tests run in isolation.
+import models.user       # noqa: F401
+import models.portfolio  # noqa: F401
+import models.watchlist  # noqa: F401
+import models.alert      # noqa: F401
+
 # ── in-memory SQLite engine ───────────────────────────────────────
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"

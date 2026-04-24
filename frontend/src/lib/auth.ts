@@ -1,0 +1,36 @@
+import api from "./api";
+import { useAuthStore } from "@/store/authStore";
+
+export async function login(email: string, password: string): Promise<void> {
+  const { data } = await api.post<{ access_token: string }>("/auth/login", { email, password });
+  const me = await api.get("/auth/me", {
+    headers: { Authorization: `Bearer ${data.access_token}` },
+  });
+  useAuthStore.getState().setAuth(data.access_token, me.data);
+}
+
+export async function register(email: string, password: string): Promise<void> {
+  const { data } = await api.post<{ access_token: string }>("/auth/register", { email, password });
+  const me = await api.get("/auth/me", {
+    headers: { Authorization: `Bearer ${data.access_token}` },
+  });
+  useAuthStore.getState().setAuth(data.access_token, me.data);
+}
+
+export async function logout(): Promise<void> {
+  await api.post("/auth/logout").catch(() => null);
+  useAuthStore.getState().clearAuth();
+}
+
+/** Attempt a silent refresh using the httpOnly cookie on app load. */
+export async function silentRefresh(): Promise<void> {
+  try {
+    const { data } = await api.post<{ access_token: string }>("/auth/refresh");
+    useAuthStore.getState().setToken(data.access_token);
+    const me = await api.get("/auth/me");
+    useAuthStore.getState().setAuth(data.access_token, me.data);
+  } catch {
+    // No valid refresh cookie — user must log in
+    useAuthStore.getState().clearAuth();
+  }
+}

@@ -68,6 +68,7 @@ FinceptWeb/
 │   ├── tasks/            # APScheduler jobs (US 10s, TW 60s, off-hours throttle)
 │   ├── tests/            # pytest — in-memory SQLite + AsyncMock Redis
 │   │   ├── test_admin_api.py       # 11 tests: stats, user list, role/active CRUD
+│   │   ├── test_alert_service.py   # 19 unit tests: CRUD + check_and_fire (pure)
 │   │   ├── test_alerts_api.py      # 8 tests: CRUD, check-and-fire logic
 │   │   ├── test_analytics.py       # 25 unit tests: DCF, VaR, backtest (pure)
 │   │   ├── test_analytics_api.py   # 15 tests: DCF/VaR/backtest HTTP endpoints
@@ -80,6 +81,7 @@ FinceptWeb/
 │   │   ├── test_tw_market_api.py   # 25 tests: all TW market endpoints
 │   │   ├── test_us_market_api.py   # 21 tests: all US market endpoints
 │   │   ├── test_watchlist_api.py   # 7 tests: watchlist + item CRUD
+│   │   ├── test_watchlist_service.py # 16 unit tests: CRUD + enrichment (pure)
 │   │   └── test_websocket_manager.py # 15 tests: auth, delta suppression, alert fan-out
 │   ├── limiter.py        # slowapi Limiter (rate limiting on auth endpoints)
 │   ├── logging_config.py # JSON logging (prod) / plain text (debug)
@@ -96,7 +98,8 @@ FinceptWeb/
 │       │   └── portfolio/ # AllocationPie, HoldingsTable
 │       ├── hooks/
 │       │   ├── useWebSocket.ts   # Singleton WS + useAlertSocket() hook
-│       │   └── usePortfolio.ts   # Portfolio CRUD + optimise mutations
+│       │   ├── usePortfolio.ts   # Portfolio CRUD + optimise mutations
+│       │   └── usePortfolio.test.ts  # 8 tests: query keys, enabled-gate, invalidation
 │       ├── pages/        # One file per route (13 pages)
 │       │   # AIPage, AdminPage, AlertsPage, AnalyticsPage, DashboardPage,
 │       │   # LoginPage, MacroPage, MarketPage, PortfolioPage, ScreenerPage,
@@ -174,8 +177,12 @@ Frontend tests use Vitest + jsdom; see `src/test/setup.ts` for global setup.
 **Note:** The `client`-fixture tests (`test_auth_api`, `test_portfolio_api`, etc.) produce
 `pyo3_runtime.PanicException` errors in this dev environment due to a missing `_cffi_backend`
 compiled extension (`ModuleNotFoundError: No module named '_cffi_backend'`). This is a
-system-level environment issue, not a code defect. The 25 pure-unit tests in `test_analytics.py`
-run cleanly. All tests pass in CI (ubuntu-latest with a full Python install).
+system-level environment issue, not a code defect. All tests pass in CI (ubuntu-latest with a
+full Python install).
+
+Locally-runnable pure unit tests (no jose/cryptography dependency): 102 tests across
+`test_analytics.py`, `test_analytics_service.py`, `test_portfolio_optimizer.py`,
+`test_portfolio_service_fx.py`, `test_watchlist_service.py`, `test_alert_service.py`.
 
 ## Running lint / type-check
 

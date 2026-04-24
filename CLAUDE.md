@@ -97,8 +97,9 @@ FinceptWeb/
 │       │   ├── layout/   # AppLayout (top bar + sidebar), Sidebar, NotificationBell
 │       │   └── portfolio/ # AllocationPie, HoldingsTable
 │       ├── hooks/
-│       │   ├── useWebSocket.ts   # Singleton WS + useAlertSocket() hook
-│       │   ├── usePortfolio.ts   # Portfolio CRUD + optimise mutations
+│       │   ├── useWebSocket.ts       # Singleton WS + useAlertSocket() hook
+│       │   ├── useWebSocket.test.ts  # 11 tests: connect, routing, alert, cleanup
+│       │   ├── usePortfolio.ts       # Portfolio CRUD + optimise mutations
 │       │   └── usePortfolio.test.ts  # 8 tests: query keys, enabled-gate, invalidation
 │       ├── pages/        # One file per route (13 pages)
 │       │   # AIPage, AdminPage, AlertsPage, AnalyticsPage, DashboardPage,

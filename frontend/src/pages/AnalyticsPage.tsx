@@ -247,6 +247,9 @@ function BacktestPanel() {
   const [strategy, setStrategy] = useState("sma_crossover");
   const [fast, setFast] = useState("20");
   const [slow, setSlow] = useState("50");
+  const [rsiPeriod, setRsiPeriod] = useState("14");
+  const [rsiOversold, setRsiOversold] = useState("30");
+  const [rsiOverbought, setRsiOverbought] = useState("70");
   const [start, setStart] = useState("2020-01-01");
   const [end, setEnd] = useState("2024-12-31");
   const [capital, setCapital] = useState("100000");
@@ -259,6 +262,7 @@ function BacktestPanel() {
     e.preventDefault();
     const params: Record<string, unknown> = {};
     if (strategy === "sma_crossover") { params.fast = +fast; params.slow = +slow; }
+    if (strategy === "rsi_mean_reversion") { params.period = +rsiPeriod; params.oversold = +rsiOversold; params.overbought = +rsiOverbought; }
     run.mutate({
       symbols: symbols.split(",").map(s => s.trim()),
       markets: markets.split(",").map(s => s.trim()),
@@ -286,6 +290,11 @@ function BacktestPanel() {
             {strategy === "sma_crossover" && <>
               <div><label className={labelCls}>Fast SMA</label><input type="number" className={inputCls} value={fast} onChange={e => setFast(e.target.value)} /></div>
               <div><label className={labelCls}>Slow SMA</label><input type="number" className={inputCls} value={slow} onChange={e => setSlow(e.target.value)} /></div>
+            </>}
+            {strategy === "rsi_mean_reversion" && <>
+              <div><label className={labelCls}>RSI Period</label><input type="number" className={inputCls} value={rsiPeriod} onChange={e => setRsiPeriod(e.target.value)} /></div>
+              <div><label className={labelCls}>Oversold (buy below)</label><input type="number" className={inputCls} value={rsiOversold} onChange={e => setRsiOversold(e.target.value)} /></div>
+              <div><label className={labelCls}>Overbought (sell above)</label><input type="number" className={inputCls} value={rsiOverbought} onChange={e => setRsiOverbought(e.target.value)} /></div>
             </>}
             <div><label className={labelCls}>Start Date</label><input type="date" className={inputCls} value={start} onChange={e => setStart(e.target.value)} /></div>
             <div><label className={labelCls}>End Date</label><input type="date" className={inputCls} value={end} onChange={e => setEnd(e.target.value)} /></div>
@@ -385,7 +394,7 @@ export default function AnalyticsPage() {
         <DCFPanel
           onAnalyseWithAI={(ctx) =>
             analyseWithAI(
-              "earnings_analyst",
+              "equity_analyst",
               { dcf_result: ctx },
               "Interpret this DCF result. Is the stock undervalued or overvalued? What are the key assumptions driving the valuation?"
             )

@@ -1,0 +1,107 @@
+from fastapi import APIRouter, Depends, HTTPException
+from typing import Annotated
+
+from api.analytics.schemas import (
+    DCFRequest, DCFResponse,
+    VaRRequest, VaRResponse,
+    BacktestRequest, BacktestResponse,
+)
+from auth.permissions import require_analyst
+import services.analytics_service as svc
+
+router = APIRouter()
+Analyst = Annotated[dict, Depends(require_analyst)]
+
+
+@router.post("/dcf", response_model=DCFResponse)
+async def dcf(body: DCFRequest, _: Analyst):
+    """
+    DCF valuation. Fetches FCF from market data automatically;
+    supply 'overrides' to customise any input (wacc, growth_rate_1, etc.).
+
+    Example override body:
+    {
+      "symbol": "AAPL", "market": "US",
+      "overrides": {
+        "fcf_history": [90e9, 100e9, 110e9],
+        "growth_rate_1": 0.12,
+        "growth_rate_2": 0.06,
+        "terminal_growth": 0.03,
+        "wacc": 0.09,
+        "shares": 15.4e9,
+        "net_debt": 48e9,
+        "current_price": 182.5
+      }
+    }
+    """
+    try:
+        result = await svc.run_dcf_analysis(body.symbol, body.market, body.overrides)
+        if not result:
+            raise HTTPException(status_code=400, detail="Insufficient data for DCF")
+        return DCFResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Analytics error: {e}")
+
+
+@router.post("/var", response_model=VaRResponse)
+async def var(body: VaRRequest, _: Analyst):
+    """
+    Portfolio VaR via historical simulation, parametric, or Monte Carlo.
+    Use method='all' to get all three in one call.
+    """
+    if len(body.symbols) != len(body.markets):
+        raise HTTPException(status_code=400, detail="symbols and markets must be same length")
+    if len(body.weights) != len(body.symbols):
+        raise HTTPException(status_code=400, detail="weights must match symbols length")
+
+    try:
+        result = await svc.run_var_analysis(
+            symbols=body.symbols,
+            markets=body.markets,
+            weights=body.weights,
+            portfolio_value=body.portfolio_value,
+            method=body.method,
+            confidence=body.confidence,
+            horizon_days=body.horizon_days,
+        )
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return VaRResponse(**result)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Computation timed out")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Analytics error: {e}")
+
+
+@router.post("/backtest", response_model=BacktestResponse)
+async def backtest(body: BacktestRequest, _: Analyst):
+    """
+    Event-driven backtest engine.
+    Built-in strategies: 'sma_crossover' (params: fast, slow),
+                         'rsi_mean_reversion' (params: period, oversold, overbought)
+    """
+    if len(body.symbols) != len(body.markets):
+        raise HTTPException(status_code=400, detail="symbols and markets must be same length")
+    if body.start_date >= body.end_date:
+        raise HTTPException(status_code=400, detail="start_date must be before end_date")
+
+    try:
+        result = await svc.run_backtest_analysis(
+            symbols=body.symbols,
+            markets=body.markets,
+            strategy=body.strategy,
+            params=body.params,
+            start_date=body.start_date,
+            end_date=body.end_date,
+            initial_capital=body.initial_capital,
+        )
+        return BacktestResponse(**result)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Backtest timed out (30s limit)")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Backtest error: {e}")
+
+
+import asyncio  # noqa: E402 — imported here to avoid circular at module load

@@ -31,11 +31,12 @@ export default function DashboardPage() {
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           {[
             { label: "US Market", desc: "Coming in Phase 9", icon: "🇺🇸", href: null },
             { label: "台股", desc: "Coming in Phase 9", icon: "🇹🇼", href: null },
             { label: "Portfolio", desc: "Track holdings & P&L", icon: "📊", href: "/portfolio" },
+            { label: "Analytics", desc: "DCF · VaR · Backtest", icon: "📐", href: "/analytics" },
           ].map((card) => (
             card.href
               ? <Link key={card.label} to={card.href} className="bg-card border border-border rounded-lg p-5 space-y-2 hover:border-primary/50 transition-colors block">

@@ -59,6 +59,19 @@ class Settings(BaseSettings):
     OLLAMA_HOST: str = "http://localhost:11434"
     DEFAULT_LLM_PROVIDER: str = "openai"  # openai | anthropic | gemini | ollama
 
+    # Claude Agent (tool-use via claude-agent-sdk). Off by default; analyst/admin only when on.
+    CLAUDE_AGENT_ENABLED: bool = False
+    CLAUDE_AGENT_MODEL: str = "claude-sonnet-4-5-20250929"
+    CLAUDE_AGENT_MAX_TURNS: int = 8
+    CLAUDE_AGENT_TOOL_TIMEOUT_S: int = 30
+    CLAUDE_AGENT_PYTHON_MEM_MB: int = 256
+    CLAUDE_AGENT_PYTHON_CPU_S: int = 5
+    CLAUDE_AGENT_WEBFETCH_ALLOWLIST: str = ""  # comma-separated host allowlist; empty = block
+
+    @property
+    def claude_agent_webfetch_hosts(self) -> list[str]:
+        return [h.strip().lower() for h in self.CLAUDE_AGENT_WEBFETCH_ALLOWLIST.split(",") if h.strip()]
+
     # Rate limits
     FINMIND_DAILY_REQUEST_LIMIT: int = 550  # conservative under free-tier 600
     AI_REQUESTS_ANALYST_DAILY: int = 20

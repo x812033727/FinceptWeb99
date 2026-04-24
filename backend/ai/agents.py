@@ -104,6 +104,23 @@ _AGENTS: dict[str, AgentSpec] = {
         default_provider="ollama",
         default_model="llama3.2",
     ),
+    "claude_research": AgentSpec(
+        name="Claude Research Assistant",
+        description="Autonomous research agent with tools (DCF, VaR, backtest, SQL, web, Python)",
+        system_prompt=(
+            "You are an autonomous financial research assistant with access to FinceptWeb's "
+            "analytics toolset. Your job is to answer the user's investment question end-to-end: "
+            "pull the data, run the analysis, interpret the numbers, and write a crisp conclusion. "
+            "Tools available: get_quote (US/TW), run_dcf, run_var, run_backtest, query_user_data "
+            "(read-only, scoped to caller), web_fetch (allowlisted hosts), python_exec (sandbox). "
+            "Favour calling tools over guessing. Never fabricate figures — if a tool returns an "
+            "error, report it and try a different approach or say you cannot answer. "
+            "When you finish, summarise the key findings in 3-5 bullet points. "
+            "Be concise; do not restate the user's question."
+        ),
+        default_provider="claude_agent",
+        default_model="claude-sonnet-4-5-20250929",
+    ),
 }
 
 

@@ -13,10 +13,20 @@ interface AgentInfo {
   default_provider: string;
 }
 
+interface ToolCallEvent {
+  id: string;
+  name: string;
+  args: unknown;
+  result?: string;
+  isError?: boolean;
+  status: "running" | "done" | "error";
+}
+
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   streaming?: boolean;
+  toolCalls?: ToolCallEvent[];
 }
 
 // ── api helpers ────────────────────────────────────────────────────
@@ -28,6 +38,14 @@ async function fetchAgents(): Promise<AgentInfo[]> {
 
 // ── sub-components ─────────────────────────────────────────────────
 
+const providerColor: Record<string, string> = {
+  openai: "text-green-400",
+  anthropic: "text-orange-400",
+  gemini: "text-blue-400",
+  ollama: "text-purple-400",
+  claude_agent: "text-amber-300",
+};
+
 function AgentCard({
   agent,
   selected,
@@ -37,12 +55,6 @@ function AgentCard({
   selected: boolean;
   onClick: () => void;
 }) {
-  const providerColor: Record<string, string> = {
-    openai: "text-green-400",
-    anthropic: "text-orange-400",
-    gemini: "text-blue-400",
-    ollama: "text-purple-400",
-  };
   return (
     <button
       onClick={onClick}
@@ -61,6 +73,38 @@ function AgentCard({
   );
 }
 
+function ToolCallCard({ call }: { call: ToolCallEvent }) {
+  const statusColor =
+    call.status === "running" ? "bg-amber-400 animate-pulse" :
+    call.status === "error" ? "bg-red-500" :
+    "bg-green-500";
+  const argsStr = JSON.stringify(call.args, null, 2);
+  return (
+    <div className="border border-border/60 bg-muted/30 rounded-md p-2 text-xs my-1.5">
+      <div className="flex items-center gap-2">
+        <span className={`inline-block w-2 h-2 rounded-full ${statusColor}`} />
+        <span className="font-mono text-amber-300">{call.name}</span>
+        <span className="text-muted-foreground">
+          {call.status === "running" ? "calling…" :
+           call.status === "error" ? "failed" : "done"}
+        </span>
+      </div>
+      <details className="mt-1.5">
+        <summary className="cursor-pointer text-muted-foreground hover:text-foreground select-none">args</summary>
+        <pre className="mt-1 bg-background/60 border border-border rounded p-2 overflow-auto max-h-40 text-foreground/80">{argsStr}</pre>
+      </details>
+      {call.result && (
+        <details className="mt-1">
+          <summary className={`cursor-pointer hover:text-foreground select-none ${call.isError ? "text-red-400" : "text-muted-foreground"}`}>
+            result
+          </summary>
+          <pre className="mt-1 bg-background/60 border border-border rounded p-2 overflow-auto max-h-60 text-foreground/80 whitespace-pre-wrap">{call.result}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
 function MessageBubble({ msg }: { msg: ChatMessage }) {
   const isUser = msg.role === "user";
   return (
@@ -72,6 +116,7 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
             : "bg-card border border-border text-foreground"
         }`}
       >
+        {!isUser && msg.toolCalls?.map((tc) => <ToolCallCard key={tc.id} call={tc} />)}
         {msg.content}
         {msg.streaming && (
           <span className="inline-block w-1.5 h-3.5 bg-current ml-0.5 animate-pulse align-middle" />
@@ -85,6 +130,7 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
 
 export default function AIPage() {
   const token = useAuthStore((s) => s.token);
+  const role = useAuthStore((s) => s.user?.role);
   const location = useLocation();
   const navState = location.state as {
     agentId?: string;
@@ -103,17 +149,18 @@ export default function AIPage() {
   const [input, setInput] = useState(navState?.initialMessage ?? "");
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [useClaudeAgent, setUseClaudeAgent] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const sentNavState = useRef(false);
 
-  // Select first agent once loaded (only if not set via nav state)
+  const canUseClaudeAgent = role === "analyst" || role === "admin";
+
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (agents.length && !selectedAgent) setSelectedAgent(agents[0].id);
   }, [agents, selectedAgent]);
 
-  // Auto-send initial message from navigation state (e.g. from MacroPage)
   useEffect(() => {
     if (navState?.initialMessage && agents.length && selectedAgent && !sentNavState.current) {
       sentNavState.current = true;
@@ -122,7 +169,6 @@ export default function AIPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agents, selectedAgent]);
 
-  // Scroll to bottom on new messages
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -142,12 +188,29 @@ export default function AIPage() {
     setError(null);
     const userMsg: ChatMessage = { role: "user", content: text };
     const history = [...messages, userMsg];
-    setMessages([...history, { role: "assistant", content: "", streaming: true }]);
+    setMessages([...history, { role: "assistant", content: "", streaming: true, toolCalls: [] }]);
     setStreaming(true);
+
+    const activeSpec = agents.find((a) => a.id === selectedAgent);
+    const effectiveProvider =
+      useClaudeAgent && canUseClaudeAgent && activeSpec?.default_provider !== "claude_agent"
+        ? "claude_agent"
+        : undefined;
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     let assembled = "";
+
+    const updateLastAssistant = (mutator: (m: ChatMessage) => ChatMessage) => {
+      setMessages((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        if (last?.role === "assistant") {
+          next[next.length - 1] = mutator(last);
+        }
+        return next;
+      });
+    };
 
     try {
       const resp = await fetch("/api/ai/chat", {
@@ -160,6 +223,7 @@ export default function AIPage() {
           agent_id: selectedAgent,
           messages: history.map((m) => ({ role: m.role, content: m.content })),
           context,
+          provider: effectiveProvider,
         }),
         signal: ctrl.signal,
       });
@@ -188,11 +252,28 @@ export default function AIPage() {
             if (obj.error) { setError(obj.error); break; }
             if (obj.delta) {
               assembled += obj.delta;
-              setMessages((prev) => {
-                const next = [...prev];
-                next[next.length - 1] = { role: "assistant", content: assembled, streaming: true };
-                return next;
-              });
+              updateLastAssistant((m) => ({ ...m, content: assembled, streaming: true }));
+            }
+            if (obj.tool_call) {
+              const tc: ToolCallEvent = {
+                id: obj.tool_call.id,
+                name: obj.tool_call.name,
+                args: obj.tool_call.args,
+                status: "running",
+              };
+              updateLastAssistant((m) => ({ ...m, toolCalls: [...(m.toolCalls ?? []), tc] }));
+            }
+            if (obj.tool_result) {
+              updateLastAssistant((m) => ({
+                ...m,
+                toolCalls: (m.toolCalls ?? []).map((tc) =>
+                  tc.id === obj.tool_result.id
+                    ? { ...tc, result: obj.tool_result.summary,
+                        isError: obj.tool_result.is_error,
+                        status: obj.tool_result.is_error ? "error" : "done" }
+                    : tc
+                ),
+              }));
             }
           } catch { /* ignore malformed */ }
         }
@@ -203,13 +284,15 @@ export default function AIPage() {
       }
     } finally {
       setStreaming(false);
-      setMessages((prev) => {
-        const next = [...prev];
-        if (next.length && next[next.length - 1].role === "assistant") {
-          next[next.length - 1] = { role: "assistant", content: assembled || next[next.length - 1].content };
-        }
-        return next;
-      });
+      // Finalise: stop spinner on any tool still "running" (e.g. aborted mid-call)
+      updateLastAssistant((m) => ({
+        ...m,
+        streaming: false,
+        content: assembled || m.content,
+        toolCalls: (m.toolCalls ?? []).map((tc) =>
+          tc.status === "running" ? { ...tc, status: "error", result: tc.result ?? "cancelled" } : tc,
+        ),
+      }));
     }
   }
 
@@ -224,6 +307,9 @@ export default function AIPage() {
   }
 
   const activeAgent = agents.find((a) => a.id === selectedAgent);
+  const effectiveIsClaudeAgent =
+    activeAgent?.default_provider === "claude_agent" ||
+    (useClaudeAgent && canUseClaudeAgent);
 
   return (
     <div className="min-h-screen bg-background flex">
@@ -264,13 +350,33 @@ export default function AIPage() {
               <span className="text-xs text-muted-foreground ml-2">{activeAgent.description}</span>
             )}
           </div>
-          <button
-            onClick={clearChat}
-            disabled={streaming}
-            className="text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
-          >
-            Clear chat
-          </button>
+          <div className="flex items-center gap-4">
+            {canUseClaudeAgent && activeAgent && activeAgent.default_provider !== "claude_agent" && (
+              <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none"
+                     title="Route through Claude Agent with tools (DCF, VaR, SQL, web, Python)">
+                <input
+                  type="checkbox"
+                  checked={useClaudeAgent}
+                  disabled={streaming}
+                  onChange={(e) => setUseClaudeAgent(e.target.checked)}
+                  className="accent-amber-400"
+                />
+                Use tools (Claude Agent)
+              </label>
+            )}
+            {effectiveIsClaudeAgent && (
+              <span className="text-xs text-amber-300" title="Tool-use mode active">
+                ⚡ tools on
+              </span>
+            )}
+            <button
+              onClick={clearChat}
+              disabled={streaming}
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
+            >
+              Clear chat
+            </button>
+          </div>
         </header>
 
         {/* message list */}

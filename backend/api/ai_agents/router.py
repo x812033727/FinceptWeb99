@@ -4,10 +4,17 @@ AI Agents API.
 GET  /api/ai/agents               – list available agents
 POST /api/ai/chat                 – SSE streaming chat (requires auth)
 
-Quota enforcement via Redis: analyst → 20 req/day, viewer → 5 req/day.
-Each SSE event is:  data: <json>\n\n
-Final event:        data: [DONE]\n\n
-Error event:        data: {"error": "..."}\n\n
+Quota: analyst → 20 req/day, viewer → 5 req/day (Redis-backed, key_ai_counter).
+
+SSE event shapes:
+  data: {"delta": "..."}                                               (all providers)
+  data: {"tool_call": {"id": "...", "name": "...", "args": {...}}}     (claude_agent only)
+  data: {"tool_result": {"id": "...", "name": "...", "summary": "...", "is_error": false}}
+  data: {"error": "..."}                                               (any fatal error)
+  data: [DONE]                                                         (terminator)
+
+The `claude_agent` provider is gated by feature flag + analyst/admin role
+because it reads user-owned data and can execute tools.
 """
 import json
 from typing import Annotated, AsyncGenerator
@@ -15,7 +22,7 @@ from typing import Annotated, AsyncGenerator
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from api.ai_agents.schemas import ChatRequest, AgentInfo
+from api.ai_agents.schemas import AgentInfo, ChatRequest
 from auth.permissions import require_viewer
 from cache.redis_cache import cache_incr, key_ai_counter
 from ai.agents import get_agent, list_agents
@@ -55,11 +62,11 @@ async def agents_list(_: CurrentUser):
 async def chat(body: ChatRequest, user: CurrentUser):
     """
     Stream a chat response from the selected agent persona.
-    Returns Server-Sent Events (text/event-stream).
 
     Attach structured context (e.g. DCF result, portfolio snapshot) in
-    the `context` field and it will be prepended to the system prompt as
-    a JSON block.
+    the `context` field — it will be prepended to the system prompt as
+    a JSON block. Pass `provider="claude_agent"` as override (or pick an
+    agent whose default_provider is claude_agent) to enable tool-use.
     """
     await _check_quota(user)
 
@@ -68,7 +75,6 @@ async def chat(body: ChatRequest, user: CurrentUser):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Build system prompt, optionally with injected context
     system_content = agent.system_prompt
     if body.context:
         ctx_json = json.dumps(body.context, indent=2, ensure_ascii=False)
@@ -78,18 +84,34 @@ async def chat(body: ChatRequest, user: CurrentUser):
     for m in body.messages:
         messages.append({"role": m.role, "content": m.content})
 
-    provider = body.provider or agent.default_provider
+    provider = (body.provider or agent.default_provider).lower()
     model = body.model or agent.default_model
+
+    mcp_server = None
+    allowed_tools: list[str] = []
+    if provider == "claude_agent":
+        if not settings.CLAUDE_AGENT_ENABLED:
+            raise HTTPException(status_code=503, detail="Claude Agent is disabled")
+        if user.get("role") not in ("analyst", "admin"):
+            raise HTTPException(status_code=403, detail="Claude Agent requires analyst role")
+        # Lazy import — keeps SDK out of the hot path for other providers
+        from ai.tools import build_toolset, tool_names
+        mcp_server = build_toolset(user["id"])
+        allowed_tools = tool_names()
 
     async def event_generator() -> AsyncGenerator[bytes, None]:
         try:
-            async for chunk in stream_chat(
+            async for event in stream_chat(
                 messages=messages,
                 provider=provider,
                 model=model,
+                mcp_server=mcp_server,
+                allowed_tools=allowed_tools,
+                max_turns=settings.CLAUDE_AGENT_MAX_TURNS,
             ):
-                payload = json.dumps({"delta": chunk}, ensure_ascii=False)
-                yield f"data: {payload}\n\n".encode()
+                payload = _event_to_sse(event)
+                if payload is not None:
+                    yield payload
         except Exception as exc:
             err = json.dumps({"error": str(exc)}, ensure_ascii=False)
             yield f"data: {err}\n\n".encode()
@@ -101,6 +123,35 @@ async def chat(body: ChatRequest, user: CurrentUser):
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",   # disable nginx buffering
+            "X-Accel-Buffering": "no",
         },
     )
+
+
+def _event_to_sse(event: dict) -> bytes | None:
+    """Translate internal event dict into an SSE `data:` frame.
+
+    Unknown event types are dropped (forward-compat: we can add new types
+    in the router without breaking old clients).
+    """
+    etype = event.get("type")
+    if etype == "delta":
+        out = {"delta": event.get("text", "")}
+    elif etype == "tool_call":
+        out = {"tool_call": {
+            "id": event.get("id"),
+            "name": event.get("name"),
+            "args": event.get("args"),
+        }}
+    elif etype == "tool_result":
+        out = {"tool_result": {
+            "id": event.get("id"),
+            "name": event.get("name"),
+            "summary": event.get("summary", ""),
+            "is_error": event.get("is_error", False),
+        }}
+    elif etype == "error":
+        out = {"error": event.get("message", "unknown error")}
+    else:
+        return None
+    return f"data: {json.dumps(out, ensure_ascii=False)}\n\n".encode()

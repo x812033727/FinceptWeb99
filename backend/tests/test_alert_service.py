@@ -1,0 +1,267 @@
+"""
+Pure unit tests for AlertService — CRUD and check_and_fire logic.
+
+All DB work uses the in-process SQLite test engine (db_session fixture).
+push_alert_to_user is mocked so no WebSocket infrastructure is needed.
+
+Note: api.websocket.manager imports jose/cryptography which triggers a
+pyo3 panic in this dev environment (missing _cffi_backend). We pre-inject
+a lightweight stub module into sys.modules to bypass that import chain.
+"""
+import sys
+import types
+import uuid
+import pytest
+from unittest.mock import AsyncMock, patch
+from sqlalchemy.ext.asyncio import AsyncSession
+
+# ── Stub out api.websocket.manager before any import triggers jose ────
+_ws_stub = types.ModuleType("api.websocket.manager")
+_ws_stub.push_alert_to_user = AsyncMock()  # type: ignore[attr-defined]
+sys.modules.setdefault("api.websocket.manager", _ws_stub)
+# Also stub parent packages so Python's import machinery is satisfied
+sys.modules.setdefault("api.websocket", types.ModuleType("api.websocket"))
+# ─────────────────────────────────────────────────────────────────────
+
+from models.user import User, UserRole          # noqa: E402
+from models.alert import AlertCondition  # noqa: E402
+from api.alerts.schemas import AlertCreate      # noqa: E402
+from services.alert_service import AlertService  # noqa: E402
+
+
+# ── helpers ──────────────────────────────────────────────────────────
+
+async def _make_user(db: AsyncSession) -> User:
+    u = User(
+        email=f"alert_{uuid.uuid4().hex[:8]}@test.com",
+        hashed_password="x",
+        role=UserRole.viewer,
+    )
+    db.add(u)
+    await db.commit()
+    await db.refresh(u)
+    return u
+
+
+def _alert_body(
+    symbol: str = "AAPL",
+    market: str = "US",
+    condition: str = "above",
+    target_price: float = 200.0,
+) -> AlertCreate:
+    return AlertCreate(symbol=symbol, market=market, condition=condition, target_price=target_price)
+
+
+# ── list ─────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_list_empty_for_new_user(db_session: AsyncSession):
+    user = await _make_user(db_session)
+    result = await AlertService.list(db_session, user.id)
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_list_returns_only_own_alerts(db_session: AsyncSession):
+    u1 = await _make_user(db_session)
+    u2 = await _make_user(db_session)
+    await AlertService.create(db_session, u1.id, _alert_body("AAPL"))
+    result = await AlertService.list(db_session, u2.id)
+    assert result == []
+
+
+# ── create ────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_create_alert_persisted(db_session: AsyncSession):
+    user = await _make_user(db_session)
+    body = _alert_body("MSFT", "US", "below", 300.0)
+    alert = await AlertService.create(db_session, user.id, body)
+
+    assert alert.symbol == "MSFT"
+    assert alert.condition == AlertCondition.below
+    assert alert.target_price == 300.0
+    assert alert.triggered is False
+    assert alert.triggered_at is None
+
+
+@pytest.mark.asyncio
+async def test_create_alert_symbol_uppercased(db_session: AsyncSession):
+    user = await _make_user(db_session)
+    alert = await AlertService.create(db_session, user.id, _alert_body("tsla"))
+    assert alert.symbol == "TSLA"
+
+
+@pytest.mark.asyncio
+async def test_list_after_create(db_session: AsyncSession):
+    user = await _make_user(db_session)
+    await AlertService.create(db_session, user.id, _alert_body("NVDA"))
+    await AlertService.create(db_session, user.id, _alert_body("AMD"))
+    alerts = await AlertService.list(db_session, user.id)
+    symbols = {a.symbol for a in alerts}
+    assert "NVDA" in symbols
+    assert "AMD" in symbols
+
+
+# ── delete ────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_delete_own_alert(db_session: AsyncSession):
+    user = await _make_user(db_session)
+    alert = await AlertService.create(db_session, user.id, _alert_body("GOOG"))
+    ok = await AlertService.delete(db_session, user.id, alert.id)
+    assert ok is True
+    remaining = await AlertService.list(db_session, user.id)
+    assert all(a.id != alert.id for a in remaining)
+
+
+@pytest.mark.asyncio
+async def test_delete_other_user_alert_returns_false(db_session: AsyncSession):
+    u1 = await _make_user(db_session)
+    u2 = await _make_user(db_session)
+    alert = await AlertService.create(db_session, u1.id, _alert_body("META"))
+    ok = await AlertService.delete(db_session, u2.id, alert.id)
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_delete_nonexistent_returns_false(db_session: AsyncSession):
+    user = await _make_user(db_session)
+    ok = await AlertService.delete(db_session, user.id, uuid.uuid4())
+    assert ok is False
+
+
+# ── check_and_fire ────────────────────────────────────────────────────
+# Each test uses a unique symbol (CFx prefix) to prevent cross-test
+# contamination in the session-scoped in-memory database.
+
+@pytest.mark.asyncio
+async def test_check_and_fire_above_triggers(db_session: AsyncSession):
+    """Alert 'price above 200' fires when current_price = 205."""
+    user = await _make_user(db_session)
+    alert = await AlertService.create(db_session, user.id, _alert_body("CF1", "US", "above", 200.0))
+
+    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock) as mock_push:
+        await AlertService.check_and_fire(db_session, "CF1", "US", 205.0)
+
+    await db_session.refresh(alert)
+    assert alert.triggered is True
+    assert alert.triggered_at is not None
+    mock_push.assert_awaited_once()
+    payload = mock_push.call_args[0][1]
+    assert payload["symbol"] == "CF1"
+    assert payload["current_price"] == 205.0
+    assert payload["condition"] == "above"
+
+
+@pytest.mark.asyncio
+async def test_check_and_fire_below_triggers(db_session: AsyncSession):
+    """Alert 'price below 150' fires when current_price = 148."""
+    user = await _make_user(db_session)
+    alert = await AlertService.create(db_session, user.id, _alert_body("CF2", "US", "below", 150.0))
+
+    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock) as mock_push:
+        await AlertService.check_and_fire(db_session, "CF2", "US", 148.0)
+
+    await db_session.refresh(alert)
+    assert alert.triggered is True
+    mock_push.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_check_and_fire_above_not_triggered_when_price_below(db_session: AsyncSession):
+    """Alert 'price above 200' must NOT fire when current_price = 195."""
+    user = await _make_user(db_session)
+    alert = await AlertService.create(db_session, user.id, _alert_body("CF3", "US", "above", 200.0))
+
+    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock) as mock_push:
+        await AlertService.check_and_fire(db_session, "CF3", "US", 195.0)
+
+    await db_session.refresh(alert)
+    assert alert.triggered is False
+    mock_push.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_check_and_fire_below_not_triggered_when_price_above(db_session: AsyncSession):
+    """Alert 'price below 150' must NOT fire when current_price = 155."""
+    user = await _make_user(db_session)
+    alert = await AlertService.create(db_session, user.id, _alert_body("CF4", "US", "below", 150.0))
+
+    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock) as mock_push:
+        await AlertService.check_and_fire(db_session, "CF4", "US", 155.0)
+
+    await db_session.refresh(alert)
+    assert alert.triggered is False
+    mock_push.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_check_and_fire_exact_boundary_above_triggers(db_session: AsyncSession):
+    """Condition 'above' fires when price equals the target exactly (>=)."""
+    user = await _make_user(db_session)
+    alert = await AlertService.create(db_session, user.id, _alert_body("CF5", "US", "above", 200.0))
+
+    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock):
+        await AlertService.check_and_fire(db_session, "CF5", "US", 200.0)
+
+    await db_session.refresh(alert)
+    assert alert.triggered is True
+
+
+@pytest.mark.asyncio
+async def test_check_and_fire_already_triggered_not_fired_again(db_session: AsyncSession):
+    """An already-triggered alert is never pushed again."""
+    user = await _make_user(db_session)
+    await AlertService.create(db_session, user.id, _alert_body("CF6", "US", "above", 100.0))
+
+    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock) as mock_push:
+        # First firing
+        await AlertService.check_and_fire(db_session, "CF6", "US", 950.0)
+        assert mock_push.await_count == 1
+        # Second call — alert already triggered, query filters it out
+        await AlertService.check_and_fire(db_session, "CF6", "US", 960.0)
+        assert mock_push.await_count == 1  # still 1
+
+
+@pytest.mark.asyncio
+async def test_check_and_fire_multiple_alerts_same_symbol(db_session: AsyncSession):
+    """Two different users can have alerts for the same symbol; both fire."""
+    u1 = await _make_user(db_session)
+    u2 = await _make_user(db_session)
+    a1 = await AlertService.create(db_session, u1.id, _alert_body("CF7", "US", "above", 100.0))
+    a2 = await AlertService.create(db_session, u2.id, _alert_body("CF7", "US", "above", 110.0))
+
+    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock) as mock_push:
+        await AlertService.check_and_fire(db_session, "CF7", "US", 115.0)
+
+    await db_session.refresh(a1)
+    await db_session.refresh(a2)
+    assert a1.triggered is True
+    assert a2.triggered is True
+    assert mock_push.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_check_and_fire_no_alerts_returns_without_push(db_session: AsyncSession):
+    """When no untriggered alerts match the symbol, push must not be called."""
+    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock) as mock_push:
+        await AlertService.check_and_fire(db_session, "CF_NONEXISTENT", "US", 999.0)
+
+    mock_push.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_check_and_fire_wrong_market_not_matched(db_session: AsyncSession):
+    """Symbol matches but market differs — alert must not fire."""
+    user = await _make_user(db_session)
+    alert = await AlertService.create(
+        db_session, user.id, _alert_body("CF8", "TW", "above", 500.0)
+    )
+
+    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock) as mock_push:
+        await AlertService.check_and_fire(db_session, "CF8", "US", 600.0)
+
+    await db_session.refresh(alert)
+    assert alert.triggered is False
+    mock_push.assert_not_awaited()

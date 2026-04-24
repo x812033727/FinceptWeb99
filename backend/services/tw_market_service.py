@@ -359,7 +359,7 @@ async def get_news(symbol: str, limit: int = 10) -> list[dict[str, Any]]:
 
     import asyncio
     from datetime import datetime, timezone
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def _fetch():
         import yfinance as yf

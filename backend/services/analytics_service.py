@@ -116,7 +116,7 @@ async def run_var_analysis(
         # Run in executor to avoid blocking the event loop. Pass positional
         # args (not a lambda) so the callable is picklable for the worker
         # process — lambdas aren't picklable under any mp start method.
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         results["monte_carlo"] = await asyncio.wait_for(
             loop.run_in_executor(
                 _executor,
@@ -181,7 +181,7 @@ async def run_backtest_analysis(
     # Run in executor (can be CPU-heavy for 5-year multi-asset). Pass
     # positional args instead of wrapping in a lambda — lambdas can't be
     # pickled to the worker process.
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     result = await asyncio.wait_for(
         loop.run_in_executor(
             _executor,

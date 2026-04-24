@@ -9,7 +9,11 @@ import yfinance as yf
 
 
 def _run(fn, *args, **kwargs):
-    loop = asyncio.get_event_loop()
+    # Must be called from within an async context (the consumer awaits the
+    # returned future). get_running_loop() is the non-deprecated API.
+    # The lambda here is safe: run_in_executor(None, ...) uses the default
+    # ThreadPoolExecutor, and threads share memory — no pickling involved.
+    loop = asyncio.get_running_loop()
     return loop.run_in_executor(None, lambda: fn(*args, **kwargs))
 
 

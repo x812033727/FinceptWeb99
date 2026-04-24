@@ -341,7 +341,7 @@ async def get_news(ticker: str, limit: int = 10) -> list[dict[str, Any]]:
         return json.loads(cached)
 
     import asyncio
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def _fetch():
         import yfinance as yf
@@ -378,7 +378,7 @@ async def get_earnings(ticker: str) -> dict[str, Any]:
         return json.loads(cached)
 
     import asyncio
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def _fetch():
         import yfinance as yf

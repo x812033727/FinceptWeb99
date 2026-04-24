@@ -258,7 +258,7 @@ async def test_backtest_sma_crossover(client: AsyncClient, db_session: AsyncSess
 
     bars = _synthetic_bars(300)
 
-    with patch("services.us_market_service.get_history", new_callable=AsyncMock) as mock_hist:
+    with patch("services.analytics_service.us_history", new_callable=AsyncMock) as mock_hist:
         mock_hist.return_value = bars
 
         r = await client.post("/api/analytics/backtest", json={
@@ -290,7 +290,7 @@ async def test_backtest_rsi_strategy(client: AsyncClient, db_session: AsyncSessi
 
     bars = _synthetic_bars(300)
 
-    with patch("services.us_market_service.get_history", new_callable=AsyncMock) as mock_hist:
+    with patch("services.analytics_service.us_history", new_callable=AsyncMock) as mock_hist:
         mock_hist.return_value = bars
 
         r = await client.post("/api/analytics/backtest", json={
@@ -314,7 +314,7 @@ async def test_backtest_equity_curve_present(client: AsyncClient, db_session: As
 
     bars = _synthetic_bars(300)
 
-    with patch("services.us_market_service.get_history", new_callable=AsyncMock) as mock_hist:
+    with patch("services.analytics_service.us_history", new_callable=AsyncMock) as mock_hist:
         mock_hist.return_value = bars
 
         r = await client.post("/api/analytics/backtest", json={

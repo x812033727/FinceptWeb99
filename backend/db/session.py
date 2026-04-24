@@ -1,13 +1,13 @@
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from config import settings
 
-engine = create_async_engine(
-    settings.DATABASE_URL,
-    echo=settings.DEBUG,
-    pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
-)
+# SQLite (used by tests) uses StaticPool and rejects server-pool kwargs;
+# every other dialect (postgres in prod) wants the connection-pool tuning.
+_engine_kwargs: dict = {"echo": settings.DEBUG}
+if not settings.DATABASE_URL.startswith("sqlite"):
+    _engine_kwargs.update(pool_pre_ping=True, pool_size=10, max_overflow=20)
+
+engine = create_async_engine(settings.DATABASE_URL, **_engine_kwargs)
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,

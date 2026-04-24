@@ -231,7 +231,7 @@ function PerformanceChart({ portfolioId }: { portfolioId: string }) {
               type="monotone"
               dataKey="spy"
               name="SPY (benchmark)"
-              stroke="#94a3b8"
+              stroke="hsl(var(--muted-foreground))"
               strokeWidth={1.5}
               strokeDasharray="4 2"
               dot={false}

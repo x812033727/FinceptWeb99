@@ -71,6 +71,7 @@ FinceptWeb/
 │   │   ├── test_alerts_api.py      # 8 tests: CRUD, check-and-fire logic
 │   │   ├── test_analytics.py       # 25 unit tests: DCF, VaR, backtest (pure)
 │   │   ├── test_analytics_api.py   # 15 tests: DCF/VaR/backtest HTTP endpoints
+│   │   ├── test_analytics_service.py # 17 unit tests: DCF/VaR/backtest orchestration
 │   │   ├── test_auth_api.py        # 14 tests: register, login, refresh, API keys
 │   │   ├── test_portfolio_api.py   # 12 tests: portfolio + transaction CRUD
 │   │   ├── test_portfolio_extended.py # 14 tests: detail, performance, optimiser

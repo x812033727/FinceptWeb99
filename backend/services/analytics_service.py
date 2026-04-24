@@ -113,12 +113,14 @@ async def run_var_analysis(
     if method in ("parametric", "all"):
         results["parametric"] = var_parametric(port_returns, portfolio_value, confidence, horizon_days)
     if method in ("monte_carlo", "all"):
-        # Run in executor to avoid blocking the event loop
+        # Run in executor to avoid blocking the event loop. Pass positional
+        # args (not a lambda) so the callable is picklable for the worker
+        # process — lambdas aren't picklable under any mp start method.
         loop = asyncio.get_event_loop()
         results["monte_carlo"] = await asyncio.wait_for(
             loop.run_in_executor(
                 _executor,
-                lambda: var_monte_carlo(aligned, w, portfolio_value, confidence, horizon_days),
+                var_monte_carlo, aligned, w, portfolio_value, confidence, horizon_days,
             ),
             timeout=_TIMEOUT,
         )
@@ -176,12 +178,14 @@ async def run_backtest_analysis(
     # Update strategy params with symbol list
     params = {**params, "symbols": list(df.columns)}
 
-    # Run in executor (can be CPU-heavy for 5-year multi-asset)
+    # Run in executor (can be CPU-heavy for 5-year multi-asset). Pass
+    # positional args instead of wrapping in a lambda — lambdas can't be
+    # pickled to the worker process.
     loop = asyncio.get_event_loop()
     result = await asyncio.wait_for(
         loop.run_in_executor(
             _executor,
-            lambda: run_backtest(df, strategy, params, initial_capital),
+            run_backtest, df, strategy, params, initial_capital,
         ),
         timeout=_TIMEOUT,
     )

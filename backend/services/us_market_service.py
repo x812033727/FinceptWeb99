@@ -326,3 +326,44 @@ async def get_macro_indicator(name: str) -> list[dict]:
     data = await get_series(series_id)
     await cache_set(key, json.dumps(data), TTL_HISTORY)
     return data
+
+
+# ── News ──────────────────────────────────────────────────────────
+
+TTL_NEWS = 5 * 60  # 5 minutes
+
+
+async def get_news(ticker: str, limit: int = 10) -> list[dict[str, Any]]:
+    key = f"us:news:{ticker.upper()}"
+    cached = await cache_get(key)
+    if cached:
+        return json.loads(cached)
+
+    import asyncio
+    loop = asyncio.get_event_loop()
+
+    def _fetch():
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        raw = t.news or []
+        items = []
+        for n in raw[:limit]:
+            thumbnail = None
+            if t_data := n.get("thumbnail"):
+                resolutions = t_data.get("resolutions", [])
+                thumbnail = resolutions[0].get("url") if resolutions else None
+            items.append({
+                "title":     n.get("title", ""),
+                "publisher": n.get("publisher", ""),
+                "link":      n.get("link", ""),
+                "published_at": datetime.fromtimestamp(
+                    n.get("providerPublishTime", 0), tz=timezone.utc
+                ).isoformat(),
+                "thumbnail": thumbnail,
+            })
+        return items
+
+    result = await loop.run_in_executor(None, _fetch)
+    if result:
+        await cache_set(key, json.dumps(result), TTL_NEWS)
+    return result

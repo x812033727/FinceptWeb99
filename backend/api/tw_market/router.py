@@ -114,3 +114,9 @@ async def indices(_: Auth):
         return await svc.get_index()
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Data source error: {e}")
+
+
+@router.get("/news/{symbol}")
+async def news(symbol: str, _: Auth, limit: int = Query(10, le=30)):
+    """Recent news headlines for a TW stock (via yfinance .TW suffix)."""
+    return await svc.get_news(symbol.upper(), limit=limit)

@@ -19,6 +19,7 @@ const NAV: NavItem[] = [
   { to: "/analytics", label: "Analytics", icon: "📐" },
   { to: "/macro", label: "Macro", icon: "🌐" },
   { to: "/ai", label: "AI Agents", icon: "🤖" },
+  { to: "/settings", label: "Settings", icon: "⚙" },
 ];
 
 export default function Sidebar() {

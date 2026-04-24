@@ -34,6 +34,18 @@ class UserResponse(BaseModel):
     ai_requests_remaining: int | None = None
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def password_strength(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters")
+        return v
+
+
 class APIKeyCreateRequest(BaseModel):
     name: str
     expires_days: int | None = None  # None = never expires

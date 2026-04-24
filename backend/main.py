@@ -48,6 +48,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Rate limiting
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from limiter import limiter
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
 # Prometheus middleware (before CORS so it measures all requests)
 from middleware.metrics import PrometheusMiddleware, metrics_endpoint
 app.add_middleware(PrometheusMiddleware)

@@ -14,8 +14,8 @@ import type { OHLCVBar, Market } from "@/types/market";
 type Period = "1d" | "5d" | "1mo" | "3mo" | "1y" | "5y";
 type Interval = "1m" | "5m" | "15m" | "1h" | "1d" | "1wk";
 
-type USTab = "chart" | "financials" | "options";
-type TWTab = "chart" | "institutional" | "margin" | "revenue";
+type USTab = "chart" | "financials" | "options" | "news";
+type TWTab = "chart" | "institutional" | "margin" | "revenue" | "news";
 
 interface OptionRow {
   strike: number;
@@ -649,6 +649,76 @@ function RevenuePanel({ symbol }: { symbol: string }) {
   );
 }
 
+// ── News feed ─────────────────────────────────────────────────────
+
+interface NewsItem {
+  title: string;
+  publisher: string;
+  link: string;
+  published_at: string;
+  thumbnail: string | null;
+}
+
+function NewsFeed({ symbol, market }: { symbol: string; market: "US" | "TW" }) {
+  const { data: items = [], isLoading } = useQuery<NewsItem[]>({
+    queryKey: ["news", market, symbol],
+    queryFn: () =>
+      api
+        .get(`/api/${market === "US" ? "us" : "tw"}/news/${symbol}`)
+        .then((r) => r.data),
+    staleTime: 5 * 60_000,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="bg-card border border-border rounded-lg p-4 text-xs text-muted-foreground animate-pulse">
+        Loading news…
+      </div>
+    );
+  }
+  if (!items.length) {
+    return (
+      <div className="bg-card border border-border rounded-lg p-4 text-xs text-muted-foreground">
+        No recent news found.
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-card border border-border rounded-lg overflow-hidden divide-y divide-border">
+      {items.map((item, i) => (
+        <a
+          key={i}
+          href={item.link}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex gap-3 p-3 hover:bg-accent/5 transition-colors"
+        >
+          {item.thumbnail && (
+            <img
+              src={item.thumbnail}
+              alt=""
+              className="w-16 h-12 object-cover rounded shrink-0"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+            />
+          )}
+          <div className="flex-1 min-w-0 space-y-1">
+            <p className="text-sm font-medium leading-snug line-clamp-2">{item.title}</p>
+            <p className="text-xs text-muted-foreground">
+              {item.publisher} ·{" "}
+              {new Date(item.published_at).toLocaleDateString(undefined, {
+                month: "short",
+                day: "numeric",
+                year: "numeric",
+              })}
+            </p>
+          </div>
+        </a>
+      ))}
+    </div>
+  );
+}
+
 // ── main page ──────────────────────────────────────────────────────
 
 export default function StockDetailPage() {
@@ -740,6 +810,7 @@ export default function StockDetailPage() {
             <TabButton active={usTab === "chart"} label="Chart" onClick={() => setUsTab("chart")} />
             <TabButton active={usTab === "financials"} label="Financials" onClick={() => setUsTab("financials")} />
             <TabButton active={usTab === "options"} label="Options" onClick={() => setUsTab("options")} />
+            <TabButton active={usTab === "news"} label="News" onClick={() => setUsTab("news")} />
           </>
         ) : (
           <>
@@ -747,6 +818,7 @@ export default function StockDetailPage() {
             <TabButton active={twTab === "institutional"} label="法人買賣超" onClick={() => setTwTab("institutional")} />
             <TabButton active={twTab === "margin"} label="融資融券" onClick={() => setTwTab("margin")} />
             <TabButton active={twTab === "revenue"} label="月營收" onClick={() => setTwTab("revenue")} />
+            <TabButton active={twTab === "news"} label="新聞" onClick={() => setTwTab("news")} />
           </>
         )}
       </div>
@@ -851,6 +923,8 @@ export default function StockDetailPage() {
           <RevenuePanel symbol={sym} />
         </div>
       )}
+      {mkt === "US" && usTab === "news" && <NewsFeed symbol={sym} market="US" />}
+      {mkt === "TW" && twTab === "news" && <NewsFeed symbol={sym} market="TW" />}
 
       {/* US description */}
       {mkt === "US" && usTab === "chart" && fundamentals?.description && (

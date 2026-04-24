@@ -343,3 +343,47 @@ async def get_index() -> dict[str, Any]:
     result = await twse.get_taiex()
     await cache_set(key, json.dumps(result), TTL_QUOTE)
     return result
+
+
+# ── News ──────────────────────────────────────────────────────────
+
+TTL_NEWS = 5 * 60
+
+
+async def get_news(symbol: str, limit: int = 10) -> list[dict[str, Any]]:
+    """Fetch news for a TW stock via yfinance ({symbol}.TW format)."""
+    key = f"tw:news:{symbol.upper()}"
+    cached = await cache_get(key)
+    if cached:
+        return json.loads(cached)
+
+    import asyncio
+    from datetime import datetime, timezone
+    loop = asyncio.get_event_loop()
+
+    def _fetch():
+        import yfinance as yf
+        ticker_str = f"{symbol}.TW"
+        t = yf.Ticker(ticker_str)
+        raw = t.news or []
+        items = []
+        for n in raw[:limit]:
+            thumbnail = None
+            if t_data := n.get("thumbnail"):
+                resolutions = t_data.get("resolutions", [])
+                thumbnail = resolutions[0].get("url") if resolutions else None
+            items.append({
+                "title":     n.get("title", ""),
+                "publisher": n.get("publisher", ""),
+                "link":      n.get("link", ""),
+                "published_at": datetime.fromtimestamp(
+                    n.get("providerPublishTime", 0), tz=timezone.utc
+                ).isoformat(),
+                "thumbnail": thumbnail,
+            })
+        return items
+
+    result = await loop.run_in_executor(None, _fetch)
+    if result:
+        await cache_set(key, json.dumps(result), TTL_NEWS)
+    return result

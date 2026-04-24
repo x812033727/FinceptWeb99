@@ -114,3 +114,9 @@ async def macro(indicator: str, _: Auth):
     if not data:
         raise HTTPException(status_code=404, detail="Indicator not found or FRED key not configured")
     return data
+
+
+@router.get("/news/{ticker}")
+async def news(ticker: str, _: Auth, limit: int = Query(10, le=30)):
+    """Recent news headlines for a US stock (via yfinance)."""
+    return await svc.get_news(ticker.upper(), limit=limit)

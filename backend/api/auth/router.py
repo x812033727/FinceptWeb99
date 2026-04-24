@@ -9,15 +9,19 @@ from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fastapi import Request
+
 from api.auth.schemas import (
     APIKeyCreateRequest,
     APIKeyCreateResponse,
     APIKeyListItem,
+    ChangePasswordRequest,
     LoginRequest,
     RegisterRequest,
     TokenResponse,
     UserResponse,
 )
+from limiter import limiter
 from auth.jwt_handler import (
     create_access_token,
     create_refresh_token,
@@ -83,7 +87,8 @@ async def _get_ai_remaining(user_id: str, role: str) -> int:
 # ── Endpoints ─────────────────────────────────────────────────────
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-async def register(body: RegisterRequest, response: Response, db: AsyncSession = Depends(get_db)):
+@limiter.limit("5/minute")
+async def register(request: Request, body: RegisterRequest, response: Response, db: AsyncSession = Depends(get_db)):
     existing = await db.scalar(select(User).where(User.email == body.email))
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -102,7 +107,8 @@ async def register(body: RegisterRequest, response: Response, db: AsyncSession =
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: LoginRequest, response: Response, db: AsyncSession = Depends(get_db)):
+@limiter.limit("10/minute")
+async def login(request: Request, body: LoginRequest, response: Response, db: AsyncSession = Depends(get_db)):
     user = await db.scalar(select(User).where(User.email == body.email))
     if not user or not pwd_ctx.verify(body.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -182,6 +188,21 @@ async def me(current_user: dict = Depends(get_current_user), db: AsyncSession = 
         created_at=user.created_at,
         ai_requests_remaining=remaining,
     )
+
+
+@router.patch("/me", status_code=status.HTTP_204_NO_CONTENT)
+async def change_password(
+    body: ChangePasswordRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    user = await db.get(User, current_user["id"])
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not pwd_ctx.verify(body.current_password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    user.hashed_password = pwd_ctx.hash(body.new_password)
+    await db.commit()
 
 
 # ── API Keys ──────────────────────────────────────────────────────

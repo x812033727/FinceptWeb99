@@ -64,8 +64,8 @@ from api.tw_market.router import router as tw_router
 app.include_router(tw_router, prefix="/api/tw", tags=["TW Market"])
 from api.websocket.router import router as ws_router
 app.include_router(ws_router)
-# Phase 6:  from api.portfolio.router import router as portfolio_router
-#           app.include_router(portfolio_router, prefix="/api/portfolio", tags=["Portfolio"])
+from api.portfolio.router import router as portfolio_router
+app.include_router(portfolio_router, prefix="/api/portfolio", tags=["Portfolio"])
 # Phase 7:  from api.analytics.router import router as analytics_router
 #           app.include_router(analytics_router, prefix="/api/analytics", tags=["Analytics"])
 # Phase 8:  from api.ai_agents.router import router as ai_router

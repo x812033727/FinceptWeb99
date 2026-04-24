@@ -4,6 +4,7 @@ import { useAuthStore } from "@/store/authStore";
 import { silentRefresh } from "@/lib/auth";
 import LoginPage from "@/pages/LoginPage";
 import DashboardPage from "@/pages/DashboardPage";
+import PortfolioPage from "@/pages/PortfolioPage";
 
 // ── Protected route ───────────────────────────────────────────────
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -41,7 +42,11 @@ export default function App() {
             </RequireAuth>
           }
         />
-        {/* Phase 3+: /stock/:market/:symbol, /screener, /portfolio, /analytics, /ai */}
+        {/* Phase 3+: /stock/:market/:symbol, /screener, /analytics, /ai */}
+        <Route
+          path="/portfolio"
+          element={<RequireAuth><PortfolioPage /></RequireAuth>}
+        />
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>

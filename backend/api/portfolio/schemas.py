@@ -1,0 +1,78 @@
+from pydantic import BaseModel, field_validator
+from datetime import date
+from uuid import UUID
+
+
+class PortfolioCreate(BaseModel):
+    name: str
+    currency: str = "USD"
+
+    @field_validator("currency")
+    @classmethod
+    def upper_currency(cls, v: str) -> str:
+        return v.upper()
+
+
+class TransactionCreate(BaseModel):
+    symbol: str
+    market: str          # "US" | "TW"
+    tx_type: str         # "buy" | "sell" | "dividend"
+    quantity: float
+    price: float
+    fx_rate: float = 1.0
+    tx_date: date
+    notes: str | None = None
+
+    @field_validator("market")
+    @classmethod
+    def upper_market(cls, v: str) -> str:
+        return v.upper()
+
+    @field_validator("tx_type")
+    @classmethod
+    def lower_tx_type(cls, v: str) -> str:
+        return v.lower()
+
+
+class HoldingResponse(BaseModel):
+    id: str
+    symbol: str
+    market: str
+    quantity: float
+    avg_cost: float
+    cost_currency: str
+    current_price: float
+    current_value: float
+    cost_value: float
+    unrealized_pnl: float
+    unrealized_pnl_pct: float
+    weight_pct: float
+
+
+class PortfolioSummary(BaseModel):
+    id: str
+    name: str
+    currency: str
+    total_value: float
+    total_cost: float
+    total_pnl: float
+    total_pnl_pct: float
+    holdings: list[HoldingResponse]
+
+
+class PortfolioListItem(BaseModel):
+    id: UUID
+    name: str
+    currency: str
+
+
+class OptimiseRequest(BaseModel):
+    target_risk: str = "medium"   # "low" | "medium" | "high"
+    max_weight: float = 1.0
+
+
+class OptimiseResponse(BaseModel):
+    weights: dict[str, float]
+    metrics: dict
+    converged: bool = True
+    frontier: list[dict] = []

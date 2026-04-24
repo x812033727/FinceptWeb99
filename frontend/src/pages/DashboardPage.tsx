@@ -1,6 +1,6 @@
 import { useAuthStore } from "@/store/authStore";
 import { logout } from "@/lib/auth";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 
 export default function DashboardPage() {
   const { user } = useAuthStore();
@@ -33,15 +33,21 @@ export default function DashboardPage() {
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {[
-            { label: "US Market", desc: "Coming in Phase 3", icon: "🇺🇸" },
-            { label: "台股", desc: "Coming in Phase 4", icon: "🇹🇼" },
-            { label: "Portfolio", desc: "Coming in Phase 6", icon: "📊" },
+            { label: "US Market", desc: "Coming in Phase 9", icon: "🇺🇸", href: null },
+            { label: "台股", desc: "Coming in Phase 9", icon: "🇹🇼", href: null },
+            { label: "Portfolio", desc: "Track holdings & P&L", icon: "📊", href: "/portfolio" },
           ].map((card) => (
-            <div key={card.label} className="bg-card border border-border rounded-lg p-5 space-y-2">
-              <div className="text-2xl">{card.icon}</div>
-              <h2 className="text-foreground font-medium">{card.label}</h2>
-              <p className="text-xs text-muted-foreground">{card.desc}</p>
-            </div>
+            card.href
+              ? <Link key={card.label} to={card.href} className="bg-card border border-border rounded-lg p-5 space-y-2 hover:border-primary/50 transition-colors block">
+                  <div className="text-2xl">{card.icon}</div>
+                  <h2 className="text-foreground font-medium">{card.label}</h2>
+                  <p className="text-xs text-muted-foreground">{card.desc}</p>
+                </Link>
+              : <div key={card.label} className="bg-card border border-border rounded-lg p-5 space-y-2 opacity-60">
+                  <div className="text-2xl">{card.icon}</div>
+                  <h2 className="text-foreground font-medium">{card.label}</h2>
+                  <p className="text-xs text-muted-foreground">{card.desc}</p>
+                </div>
           ))}
         </div>
 

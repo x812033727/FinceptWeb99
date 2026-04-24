@@ -1,64 +1,54 @@
 import { useAuthStore } from "@/store/authStore";
-import { logout } from "@/lib/auth";
-import { useNavigate, Link } from "react-router-dom";
+import { Link } from "react-router-dom";
+
+const CARDS = [
+  { label: "US Market", desc: "S&P 500 quotes & screener", icon: "🇺🇸", href: "/market/US" },
+  { label: "台股", desc: "上市上櫃即時行情", icon: "🇹🇼", href: "/market/TW" },
+  { label: "Screener", desc: "Filter stocks by any metric", icon: "🔍", href: "/screener" },
+  { label: "Portfolio", desc: "Holdings, P&L & optimizer", icon: "📊", href: "/portfolio" },
+  { label: "Analytics", desc: "DCF · VaR · Backtest", icon: "📐", href: "/analytics" },
+  { label: "AI Agents", desc: "6 CFA-grade personas", icon: "🤖", href: "/ai" },
+];
 
 export default function DashboardPage() {
   const { user } = useAuthStore();
-  const navigate = useNavigate();
-
-  async function handleLogout() {
-    await logout();
-    navigate("/login");
-  }
 
   return (
-    <div className="min-h-screen bg-background p-8">
-      <div className="max-w-4xl mx-auto space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-primary">Dashboard</h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              Welcome, <span className="text-foreground">{user?.email}</span>
-              {" · "}
-              <span className="capitalize text-accent">{user?.role}</span>
-            </p>
-          </div>
-          <button
-            onClick={handleLogout}
-            className="px-4 py-2 text-sm rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-foreground transition-colors"
-          >
-            Sign out
-          </button>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-          {[
-            { label: "US Market", desc: "Coming in Phase 9", icon: "🇺🇸", href: null },
-            { label: "台股", desc: "Coming in Phase 9", icon: "🇹🇼", href: null },
-            { label: "Portfolio", desc: "Track holdings & P&L", icon: "📊", href: "/portfolio" },
-            { label: "Analytics", desc: "DCF · VaR · Backtest", icon: "📐", href: "/analytics" },
-            { label: "AI Agents", desc: "6 CFA-grade personas", icon: "🤖", href: "/ai" },
-          ].map((card) => (
-            card.href
-              ? <Link key={card.label} to={card.href} className="bg-card border border-border rounded-lg p-5 space-y-2 hover:border-primary/50 transition-colors block">
-                  <div className="text-2xl">{card.icon}</div>
-                  <h2 className="text-foreground font-medium">{card.label}</h2>
-                  <p className="text-xs text-muted-foreground">{card.desc}</p>
-                </Link>
-              : <div key={card.label} className="bg-card border border-border rounded-lg p-5 space-y-2 opacity-60">
-                  <div className="text-2xl">{card.icon}</div>
-                  <h2 className="text-foreground font-medium">{card.label}</h2>
-                  <p className="text-xs text-muted-foreground">{card.desc}</p>
-                </div>
-          ))}
-        </div>
-
-        {user?.ai_requests_remaining !== undefined && (
-          <p className="text-xs text-muted-foreground">
-            AI requests remaining today: {user.ai_requests_remaining}
-          </p>
-        )}
+    <div className="p-8 space-y-8">
+      {/* welcome */}
+      <div>
+        <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          Welcome back, <span className="text-foreground">{user?.email}</span>
+          {" · "}
+          <span className="capitalize text-primary">{user?.role}</span>
+        </p>
       </div>
+
+      {/* nav cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+        {CARDS.map((card) => (
+          <Link
+            key={card.label}
+            to={card.href}
+            className="bg-card border border-border rounded-lg p-5 space-y-2 hover:border-primary/50 hover:bg-card/80 transition-colors block group"
+          >
+            <div className="text-2xl">{card.icon}</div>
+            <h2 className="text-foreground font-medium group-hover:text-primary transition-colors">
+              {card.label}
+            </h2>
+            <p className="text-xs text-muted-foreground">{card.desc}</p>
+          </Link>
+        ))}
+      </div>
+
+      {/* quota */}
+      {user?.ai_requests_remaining !== undefined && (
+        <div className="text-xs text-muted-foreground border-t border-border pt-4">
+          AI requests remaining today:{" "}
+          <span className="text-foreground font-medium">{user.ai_requests_remaining}</span>
+        </div>
+      )}
     </div>
   );
 }

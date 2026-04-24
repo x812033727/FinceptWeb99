@@ -9,6 +9,7 @@ import {
   type Time,
 } from "lightweight-charts";
 import type { OHLCVBar } from "@/types/market";
+import { useThemeStore } from "@/store/themeStore";
 
 interface Props {
   bars: OHLCVBar[];
@@ -20,7 +21,18 @@ function toTime(t: string | number): Time {
   return t as Time;
 }
 
+function getChartColors() {
+  const style = getComputedStyle(document.documentElement);
+  const v = (name: string) => `hsl(${style.getPropertyValue(name).trim()})`;
+  return {
+    textColor: v("--muted-foreground"),
+    gridColor: v("--border"),
+    borderColor: v("--border"),
+  };
+}
+
 export default function CandlestickChart({ bars, height = 360 }: Props) {
+  const theme = useThemeStore((s) => s.theme);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -29,29 +41,31 @@ export default function CandlestickChart({ bars, height = 360 }: Props) {
   useEffect(() => {
     if (!containerRef.current) return;
 
+    const { textColor, gridColor, borderColor } = getChartColors();
+
     const chart = createChart(containerRef.current, {
       width: containerRef.current.clientWidth,
       height,
       layout: {
         background: { type: ColorType.Solid, color: "transparent" },
-        textColor: "#9ca3af",
+        textColor,
         fontSize: 11,
       },
       grid: {
-        vertLines: { color: "#1f2937" },
-        horzLines: { color: "#1f2937" },
+        vertLines: { color: gridColor },
+        horzLines: { color: gridColor },
       },
       crosshair: { mode: 1 },
-      rightPriceScale: { borderColor: "#374151" },
+      rightPriceScale: { borderColor },
       timeScale: {
-        borderColor: "#374151",
+        borderColor,
         timeVisible: true,
         secondsVisible: false,
       },
     });
     chartRef.current = chart;
 
-    // Candlestick series
+    // Candlestick series — up/down colors are semantic data colors, not theme-dependent
     const candle = chart.addCandlestickSeries({
       upColor: "#22c55e",
       downColor: "#ef4444",
@@ -64,7 +78,7 @@ export default function CandlestickChart({ bars, height = 360 }: Props) {
 
     // Volume histogram (overlay in lower 20% of price scale)
     const vol = chart.addHistogramSeries({
-      color: "#374151",
+      color: borderColor,
       priceFormat: { type: "volume" },
       priceScaleId: "vol",
     });
@@ -86,6 +100,21 @@ export default function CandlestickChart({ bars, height = 360 }: Props) {
       volRef.current = null;
     };
   }, [height]);
+
+  // Re-apply theme colours without recreating the chart
+  useEffect(() => {
+    if (!chartRef.current) return;
+    const { textColor, gridColor, borderColor } = getChartColors();
+    chartRef.current.applyOptions({
+      layout: { textColor },
+      grid: {
+        vertLines: { color: gridColor },
+        horzLines: { color: gridColor },
+      },
+      rightPriceScale: { borderColor },
+      timeScale: { borderColor },
+    });
+  }, [theme]);
 
   useEffect(() => {
     if (!candleRef.current || !volRef.current || !bars.length) return;

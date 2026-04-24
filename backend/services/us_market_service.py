@@ -223,7 +223,8 @@ async def _get_sp500_tickers() -> list[str]:
     if _sp500_cache:
         return _sp500_cache
     # Fetch from Wikipedia (simple, no API key required)
-    import httpx, re
+    import httpx
+    import re
     async with httpx.AsyncClient(timeout=15.0) as c:
         r = await c.get("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
     tickers = re.findall(r'<td><a[^>]+>([A-Z]{1,5})</a></td>', r.text)

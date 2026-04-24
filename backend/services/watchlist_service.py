@@ -3,10 +3,9 @@ Watchlist service — CRUD + live price enrichment.
 """
 import asyncio
 import uuid
-from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select, delete
+from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 

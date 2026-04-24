@@ -20,7 +20,6 @@ Auth flow:
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import Callable
 
 from fastapi import WebSocket, WebSocketDisconnect
 from jose import JWTError
@@ -29,7 +28,7 @@ from auth.jwt_handler import decode_access_token
 from cache.redis_cache import get_redis
 
 # symbol+market → last sent price (for delta detection)
-type PriceCache = dict[str, float]
+PriceCache = dict[str, float]
 
 # websocket → set of "SYMBOL:MARKET" strings
 _subscriptions: dict[WebSocket, set[str]] = {}

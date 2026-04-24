@@ -6,7 +6,7 @@ All responses are JSON. Timestamps converted to UTC before returning.
 """
 import asyncio
 import httpx
-from datetime import datetime, date, timedelta, timezone
+from datetime import datetime, date
 from typing import Any
 
 _BASE = "https://openapi.twse.com.tw/v1"
@@ -42,7 +42,6 @@ def _to_utc8_ts(date_str: str) -> str:
         except ValueError:
             return date_str
     # Taiwan is UTC+8, no DST
-    from datetime import timezone as tz_
     import pytz
     tw = pytz.timezone("Asia/Taipei")
     return tw.localize(dt).isoformat()

@@ -1,14 +1,30 @@
 from contextlib import asynccontextmanager
+
+import sqlalchemy
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-import sqlalchemy
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
-from config import settings
+from api.admin.router import router as admin_router
+from api.ai_agents.router import router as ai_router
+from api.alerts.router import router as alerts_router
+from api.analytics.router import router as analytics_router
+from api.auth.router import router as auth_router
+from api.portfolio.router import router as portfolio_router
+from api.tw_market.router import router as tw_router
+from api.us_market.router import router as us_router
+from api.watchlist.router import router as watchlist_router
+from api.websocket.router import router as ws_router
 from cache.redis_cache import ping as redis_ping
-from db.session import engine, AsyncSessionLocal
+from config import settings
 from db.seed import seed_admin
+from db.session import AsyncSessionLocal, engine
+from limiter import limiter
 from logging_config import setup_logging
+from middleware.metrics import PrometheusMiddleware, metrics_endpoint
 
 setup_logging()
 
@@ -48,18 +64,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Rate limiting
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIMiddleware
-from limiter import limiter
-
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
-# Prometheus middleware (before CORS so it measures all requests)
-from middleware.metrics import PrometheusMiddleware, metrics_endpoint
 app.add_middleware(PrometheusMiddleware)
 
 app.add_middleware(
@@ -71,34 +79,15 @@ app.add_middleware(
 )
 
 # ── Routers ───────────────────────────────────────────────────────
-from api.auth.router import router as auth_router
 app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
-
-from api.us_market.router import router as us_router
 app.include_router(us_router, prefix="/api/us", tags=["US Market"])
-
-from api.tw_market.router import router as tw_router
 app.include_router(tw_router, prefix="/api/tw", tags=["TW Market"])
-
-from api.websocket.router import router as ws_router
 app.include_router(ws_router)
-
-from api.portfolio.router import router as portfolio_router
 app.include_router(portfolio_router, prefix="/api/portfolio", tags=["Portfolio"])
-
-from api.analytics.router import router as analytics_router
 app.include_router(analytics_router, prefix="/api/analytics", tags=["Analytics"])
-
-from api.ai_agents.router import router as ai_router
 app.include_router(ai_router, prefix="/api/ai", tags=["AI Agents"])
-
-from api.watchlist.router import router as watchlist_router
 app.include_router(watchlist_router, prefix="/api/watchlist", tags=["Watchlist"])
-
-from api.alerts.router import router as alerts_router
 app.include_router(alerts_router, prefix="/api/alerts", tags=["Alerts"])
-
-from api.admin.router import router as admin_router
 app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
 
 

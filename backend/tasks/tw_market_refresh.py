@@ -4,7 +4,6 @@ Polls TWSE every 60 seconds during market hours (09:00-13:30 CST).
 """
 import asyncio
 import json
-from datetime import datetime, timezone
 
 from api.websocket.manager import publish_update, _subscriptions
 from cache.redis_cache import cache_set, key_quote

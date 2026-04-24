@@ -12,7 +12,7 @@ Error event:        data: {"error": "..."}\n\n
 import json
 from typing import Annotated, AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from api.ai_agents.schemas import ChatRequest, AgentInfo

@@ -16,7 +16,6 @@ Output dict:
   sensitivity       grid of intrinsic_value vs wacc × terminal_growth
   scenarios         bull / base / bear intrinsic values
 """
-import numpy as np
 from typing import Any
 
 

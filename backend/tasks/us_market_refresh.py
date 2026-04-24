@@ -9,7 +9,7 @@ from datetime import datetime
 import pytz
 
 from api.websocket.manager import publish_update, _subscriptions
-from cache.redis_cache import cache_get, cache_set, key_quote
+from cache.redis_cache import cache_set, key_quote
 from config import settings
 import data.us.polygon_connector as polygon
 import data.us.yfinance_connector as yfinance
@@ -102,7 +102,8 @@ def _should_run_offhours() -> bool:
 async def refresh_sp500_universe() -> None:
     """Fetches and caches the S&P 500 ticker list once daily."""
     global _sp500
-    import httpx, re
+    import httpx
+    import re
     try:
         async with httpx.AsyncClient(timeout=15.0) as c:
             r = await c.get("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")

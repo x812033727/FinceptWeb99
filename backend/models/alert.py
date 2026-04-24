@@ -1,10 +1,14 @@
 import enum
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from db.base import Base
+
+if TYPE_CHECKING:
+    from models.user import User
 
 
 class AlertCondition(str, enum.Enum):

@@ -40,7 +40,7 @@ async def get_monthly_revenue(symbol: str, year: int, month: int) -> list[dict[s
     if not table:
         return rows
 
-    headers = [th.get_text(strip=True) for th in table.find_all("th")]
+    _headers = [th.get_text(strip=True) for th in table.find_all("th")]
     for tr in table.find_all("tr")[1:]:
         cells = [td.get_text(strip=True) for td in tr.find_all("td")]
         if len(cells) < 3:

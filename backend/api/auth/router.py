@@ -29,7 +29,6 @@ from auth.jwt_handler import (
 )
 from cache.redis_cache import (
     cache_delete,
-    cache_incr,
     cache_set,
     get_redis,
     key_ai_counter,

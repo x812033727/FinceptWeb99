@@ -261,7 +261,7 @@ function IVSurface({ options, optionType }: { options: OptionRow[]; optionType: 
   const maxIV = Math.max(...allIVs);
 
   function ivColor(iv: number | undefined): string {
-    if (!iv || maxIV === minIV) return "#1f2937";
+    if (!iv || maxIV === minIV) return "hsl(var(--card))";
     const t = (iv - minIV) / (maxIV - minIV);
     // low IV = blue, high IV = red
     const r = Math.round(t * 239);
@@ -457,10 +457,10 @@ function InstitutionalPanel({ symbol }: { symbol: string }) {
           <h4 className="text-xs font-semibold text-foreground mb-2">外資淨買超（千股，近 30 日）</h4>
           <ResponsiveContainer width="100%" height={120}>
             <BarChart data={chartData} margin={{ left: 0, right: 0 }}>
-              <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#6b7280" }} interval="preserveStartEnd" />
-              <YAxis tick={{ fontSize: 10, fill: "#6b7280" }} width={40} />
-              <Tooltip contentStyle={{ background: "#111827", border: "1px solid #374151", fontSize: 11 }} />
-              <ReferenceLine y={0} stroke="#374151" />
+              <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} interval="preserveStartEnd" />
+              <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} width={40} />
+              <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }} />
+              <ReferenceLine y={0} stroke="hsl(var(--border))" />
               <Bar dataKey="fini" name="外資" radius={[2, 2, 0, 0]}>
                 {chartData.map((d, i) => (
                   <Cell key={i} fill={d.fini >= 0 ? "#22c55e" : "#ef4444"} />
@@ -539,9 +539,9 @@ function MarginPanel({ symbol }: { symbol: string }) {
         <h4 className="text-xs font-semibold text-foreground mb-2">融資融券餘額（千股，近 30 日）</h4>
         <ResponsiveContainer width="100%" height={130}>
           <BarChart data={chartData} margin={{ left: 0, right: 0 }}>
-            <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#6b7280" }} interval="preserveStartEnd" />
-            <YAxis tick={{ fontSize: 10, fill: "#6b7280" }} width={45} />
-            <Tooltip contentStyle={{ background: "#111827", border: "1px solid #374151", fontSize: 11 }} />
+            <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} interval="preserveStartEnd" />
+            <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} width={45} />
+            <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }} />
             <Bar dataKey="margin_balance" name="融資餘額" fill="#3b82f6" radius={[2, 2, 0, 0]} />
             <Bar dataKey="short_balance" name="融券餘額" fill="#f59e0b" radius={[2, 2, 0, 0]} />
           </BarChart>
@@ -605,10 +605,10 @@ function RevenuePanel({ symbol }: { symbol: string }) {
         <h4 className="text-xs font-semibold text-foreground mb-2">月營收（百萬新台幣）</h4>
         <ResponsiveContainer width="100%" height={130}>
           <BarChart data={chartData} margin={{ left: 0, right: 0 }}>
-            <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#6b7280" }} interval="preserveStartEnd" />
-            <YAxis tick={{ fontSize: 10, fill: "#6b7280" }} width={50} />
+            <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} interval="preserveStartEnd" />
+            <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} width={50} />
             <Tooltip
-              contentStyle={{ background: "#111827", border: "1px solid #374151", fontSize: 11 }}
+              contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
               formatter={(v: number) => [`${v}M NTD`, "Revenue"]}
             />
             <Bar dataKey="revenue" name="月營收" fill="#6366f1" radius={[2, 2, 0, 0]} />

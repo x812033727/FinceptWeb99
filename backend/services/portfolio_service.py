@@ -8,7 +8,6 @@ Multi-currency rule:
   FX rate is cached 4h in Redis.
 """
 import asyncio
-import json
 from datetime import date, timedelta
 from typing import Any
 from uuid import UUID
@@ -21,7 +20,6 @@ from analytics.portfolio_optimizer import optimize, efficient_frontier
 from cache.redis_cache import cache_get, cache_set
 from data.us.fred_connector import get_latest
 from models.portfolio import Holding, Portfolio, Transaction, TransactionType
-from models.user import User
 from services.us_market_service import get_quote as us_quote, get_history as us_history
 from services.tw_market_service import get_quote as tw_quote, get_history as tw_history
 
@@ -301,7 +299,7 @@ async def get_performance(
     days: int = 90,
 ) -> list[dict]:
     """Return daily value snapshots for the portfolio over the last N days."""
-    from datetime import date, timedelta
+    from datetime import date
     from sqlalchemy import and_, select
     from models.portfolio import PortfolioSnapshot
 

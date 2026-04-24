@@ -120,3 +120,18 @@ async def indices(_: Auth):
 async def news(symbol: str, _: Auth, limit: int = Query(10, le=30)):
     """Recent news headlines for a TW stock (via yfinance .TW suffix)."""
     return await svc.get_news(symbol.upper(), limit=limit)
+
+
+@router.get("/search")
+async def search(
+    _: Auth,
+    q: str = Query(..., min_length=1, max_length=20),
+    limit: int = Query(10, ge=1, le=30),
+):
+    """Search TW exchange symbols by prefix or substring (case-insensitive)."""
+    results = [
+        {"symbol": sym, "market": "TW"}
+        for sym in svc._exchange_map
+        if q.upper() in sym.upper()
+    ][:limit]
+    return results

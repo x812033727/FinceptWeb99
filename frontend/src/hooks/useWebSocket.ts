@@ -5,7 +5,7 @@
  *
  * key format: "SYMBOL:MARKET"  e.g. "AAPL:US" | "2330:TW"
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuthStore } from "@/store/authStore";
 
 type Callback = (data: unknown) => void;
@@ -23,10 +23,17 @@ type AlertCallback = (alert: AlertMessage) => void;
 
 const subscribers = new Map<string, Set<Callback>>();
 const alertCallbacks = new Set<AlertCallback>();
+const wsStateListeners = new Set<(connected: boolean) => void>();
 let socket: WebSocket | null = null;
 let reconnectDelay = 1000;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let authenticated = false;
+let wsConnected = false;
+
+function notifyWsState(connected: boolean): void {
+  wsConnected = connected;
+  wsStateListeners.forEach((cb) => cb(connected));
+}
 
 function getWsUrl(): string {
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
@@ -55,6 +62,7 @@ function connect(token: string): void {
 
   socket.onopen = () => {
     reconnectDelay = 1000;
+    notifyWsState(true);
     sendJson({ action: "auth", token });
   };
 
@@ -97,6 +105,7 @@ function connect(token: string): void {
   socket.onclose = () => {
     authenticated = false;
     socket = null;
+    notifyWsState(false);
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
       const t = useAuthStore.getState().token;
@@ -113,6 +122,7 @@ function disconnect(): void {
   socket?.close();
   socket = null;
   authenticated = false;
+  notifyWsState(false);
 }
 
 // ── React hooks ───────────────────────────────────────────────────
@@ -138,6 +148,15 @@ export function useWebSocket(key: string, callback: Callback): void {
       if (subscribers.size === 0) disconnect();
     };
   }, [key, token]);
+}
+
+export function useWsConnected(): boolean {
+  const [connected, setConnected] = useState(wsConnected);
+  useEffect(() => {
+    wsStateListeners.add(setConnected);
+    return () => { wsStateListeners.delete(setConnected); };
+  }, []);
+  return connected;
 }
 
 export function useAlertSocket(callback: AlertCallback): void {

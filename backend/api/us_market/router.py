@@ -126,3 +126,16 @@ async def news(ticker: str, _: Auth, limit: int = Query(10, le=30)):
 async def earnings(ticker: str, _: Auth):
     """Next earnings date and EPS/revenue consensus estimate for a US stock."""
     return await svc.get_earnings(ticker.upper())
+
+
+@router.get("/search")
+async def search(
+    _: Auth,
+    q: str = Query(..., min_length=1, max_length=20),
+    limit: int = Query(10, ge=1, le=30),
+):
+    """Search S&P 500 symbols by prefix or substring (case-insensitive)."""
+    q_upper = q.upper()
+    tickers = await svc._get_sp500_tickers()
+    results = [t for t in tickers if q_upper in t][:limit]
+    return [{"symbol": t, "market": "US"} for t in results]

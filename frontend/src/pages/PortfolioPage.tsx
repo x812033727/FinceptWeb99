@@ -2,7 +2,7 @@ import { useState, FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
 import {
   usePortfolios,
@@ -112,27 +112,63 @@ function CreatePortfolioModal({ onClose }: { onClose: () => void }) {
 // ── Performance chart ─────────────────────────────────────────────
 
 const PERIOD_DAYS: Record<string, number> = { "1M": 30, "3M": 90, "6M": 180, "1Y": 365 };
+const PERIOD_TO_YFINANCE: Record<string, string> = { "1M": "1mo", "3M": "3mo", "6M": "6mo", "1Y": "1y" };
+
+function normalize(points: { date: string; value: number }[]): { date: string; indexed: number }[] {
+  if (!points.length) return [];
+  const base = points[0].value;
+  if (base === 0) return [];
+  return points.map((p) => ({ date: p.date.slice(5), indexed: parseFloat(((p.value / base) * 100).toFixed(2)) }));
+}
 
 function PerformanceChart({ portfolioId }: { portfolioId: string }) {
   const [period, setPeriod] = useState("3M");
   const days = PERIOD_DAYS[period];
+  const yfinancePeriod = PERIOD_TO_YFINANCE[period];
 
-  const { data = [], isLoading } = useQuery<{ date: string; value: number }[]>({
+  const { data: perfData = [], isLoading: perfLoading } = useQuery<{ date: string; value: number }[]>({
     queryKey: ["portfolio-performance", portfolioId, days],
     queryFn: () =>
       api.get(`/portfolio/${portfolioId}/performance?days=${days}`).then((r) => r.data),
     staleTime: 3_600_000,
   });
 
-  const formatted = data.map((p) => ({
-    date: p.date.slice(5),
-    value: Math.round(p.value),
-  }));
+  const { data: spyHistory = [] } = useQuery<{ date: string; close: number }[]>({
+    queryKey: ["spy-history", yfinancePeriod],
+    queryFn: () =>
+      api.get(`/us/history/SPY?period=${yfinancePeriod}&interval=1d`).then((r) => r.data),
+    staleTime: 3_600_000,
+  });
+
+  const portfolioIndexed = normalize(perfData);
+
+  const spyIndexed = (() => {
+    if (!spyHistory.length) return [];
+    const base = spyHistory[0].close;
+    if (base === 0) return [];
+    return spyHistory.map((p) => ({ date: p.date?.slice(0, 10).slice(5), spy: parseFloat(((p.close / base) * 100).toFixed(2)) }));
+  })();
+
+  // Merge on date key
+  const merged: Record<string, { date: string; portfolio?: number; spy?: number }> = {};
+  for (const p of portfolioIndexed) merged[p.date] = { date: p.date, portfolio: p.indexed };
+  for (const s of spyIndexed) {
+    if (merged[s.date]) merged[s.date].spy = s.spy;
+    else merged[s.date] = { date: s.date, spy: s.spy };
+  }
+  const chartData = Object.values(merged).sort((a, b) => a.date.localeCompare(b.date));
+
+  const hasPerfData = portfolioIndexed.length > 0;
 
   return (
     <div className="bg-card border border-border rounded-lg p-5 space-y-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-foreground font-medium">Performance</h2>
+        <div>
+          <h2 className="text-foreground font-medium">Performance</h2>
+          {hasPerfData && (
+            <p className="text-[10px] text-muted-foreground">Indexed to 100 at start of period</p>
+          )}
+        </div>
         <div className="flex gap-1">
           {Object.keys(PERIOD_DAYS).map((p) => (
             <button
@@ -150,23 +186,17 @@ function PerformanceChart({ portfolioId }: { portfolioId: string }) {
         </div>
       </div>
 
-      {isLoading ? (
-        <div className="h-[180px] flex items-center justify-center text-muted-foreground text-sm animate-pulse">
+      {perfLoading ? (
+        <div className="h-[200px] flex items-center justify-center text-muted-foreground text-sm animate-pulse">
           Loading…
         </div>
-      ) : formatted.length === 0 ? (
-        <div className="h-[180px] flex items-center justify-center text-muted-foreground text-sm">
+      ) : !hasPerfData ? (
+        <div className="h-[200px] flex items-center justify-center text-muted-foreground text-sm">
           No snapshot data yet — snapshots are recorded daily at 23:00 UTC.
         </div>
       ) : (
-        <ResponsiveContainer width="100%" height={180}>
-          <AreaChart data={formatted} margin={{ left: 0, right: 0, top: 4, bottom: 0 }}>
-            <defs>
-              <linearGradient id="perfGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
-                <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
-              </linearGradient>
-            </defs>
+        <ResponsiveContainer width="100%" height={200}>
+          <LineChart data={chartData} margin={{ left: 0, right: 8, top: 4, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
             <XAxis
               dataKey="date"
@@ -175,8 +205,9 @@ function PerformanceChart({ portfolioId }: { portfolioId: string }) {
             />
             <YAxis
               tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
-              width={60}
-              tickFormatter={(v) => `$${(v / 1000).toFixed(0)}K`}
+              width={44}
+              tickFormatter={(v) => v.toFixed(0)}
+              domain={["auto", "auto"]}
             />
             <Tooltip
               contentStyle={{
@@ -184,17 +215,29 @@ function PerformanceChart({ portfolioId }: { portfolioId: string }) {
                 border: "1px solid hsl(var(--border))",
                 fontSize: 11,
               }}
-              formatter={(v: number) => [`$${v.toLocaleString()}`, "Value (USD)"]}
+              formatter={(v: number, name: string) => [`${v.toFixed(2)}`, name]}
             />
-            <Area
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Line
               type="monotone"
-              dataKey="value"
+              dataKey="portfolio"
+              name="Portfolio"
               stroke="hsl(var(--primary))"
               strokeWidth={2}
-              fill="url(#perfGradient)"
               dot={false}
+              connectNulls
             />
-          </AreaChart>
+            <Line
+              type="monotone"
+              dataKey="spy"
+              name="SPY (benchmark)"
+              stroke="#94a3b8"
+              strokeWidth={1.5}
+              strokeDasharray="4 2"
+              dot={false}
+              connectNulls
+            />
+          </LineChart>
         </ResponsiveContainer>
       )}
     </div>

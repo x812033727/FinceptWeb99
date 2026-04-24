@@ -69,7 +69,7 @@ FinceptWeb/
 │   ├── tests/            # pytest — in-memory SQLite + AsyncMock Redis
 │   │   ├── test_admin_api.py       # 11 tests: stats, user list, role/active CRUD
 │   │   ├── test_alert_service.py   # 19 unit tests: CRUD + check_and_fire (pure)
-│   │   ├── test_alerts_api.py      # 8 tests: CRUD, check-and-fire logic
+│   │   ├── test_alerts_api.py      # 6 HTTP tests: CRUD + auth (check_and_fire covered in test_alert_service.py)
 │   │   ├── test_analytics.py       # 25 unit tests: DCF, VaR, backtest (pure)
 │   │   ├── test_analytics_api.py   # 15 tests: DCF/VaR/backtest HTTP endpoints
 │   │   ├── test_analytics_service.py # 17 unit tests: DCF/VaR/backtest orchestration

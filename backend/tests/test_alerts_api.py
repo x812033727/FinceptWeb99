@@ -1,10 +1,12 @@
-"""Integration tests for price alert CRUD and check-and-fire logic."""
+"""Integration tests for price alert CRUD HTTP endpoints.
+
+check_and_fire logic is covered comprehensively (19 tests, boundary
+cases, multi-user fan-out, double-fire guard, market mismatch) in
+test_alert_service.py — as pure unit tests that don't require the
+FastAPI test client. Only HTTP-surface behavior lives here.
+"""
 import pytest
 from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from models.alert import AlertCondition, PriceAlert
-from services.alert_service import AlertService
 
 
 async def _auth_headers(client: AsyncClient, email: str = "alerts@example.com") -> dict[str, str]:
@@ -86,56 +88,3 @@ async def test_delete_nonexistent_alert(client: AsyncClient):
 async def test_alert_requires_auth(client: AsyncClient):
     r = await client.get("/api/alerts")
     assert r.status_code == 401
-
-
-@pytest.mark.asyncio
-async def test_check_and_fire_above(db_session: AsyncSession):
-    """check_and_fire marks alert triggered and calls push (mocked via monkeypatch)."""
-    import uuid
-    from unittest.mock import AsyncMock, patch
-
-    user_id = uuid.uuid4()
-    alert = PriceAlert(
-        user_id=user_id,
-        symbol="NVDA",
-        market="US",
-        condition=AlertCondition.above,
-        target_price=500.0,
-        triggered=False,
-    )
-    db_session.add(alert)
-    await db_session.commit()
-
-    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock) as mock_push:
-        await AlertService.check_and_fire(db_session, "NVDA", "US", current_price=520.0)
-        mock_push.assert_awaited_once()
-
-    await db_session.refresh(alert)
-    assert alert.triggered is True
-    assert alert.triggered_at is not None
-
-
-@pytest.mark.asyncio
-async def test_check_and_fire_below_not_triggered(db_session: AsyncSession):
-    """Alert with condition=below is NOT fired if price is still above target."""
-    import uuid
-    from unittest.mock import AsyncMock, patch
-
-    user_id = uuid.uuid4()
-    alert = PriceAlert(
-        user_id=user_id,
-        symbol="META",
-        market="US",
-        condition=AlertCondition.below,
-        target_price=300.0,
-        triggered=False,
-    )
-    db_session.add(alert)
-    await db_session.commit()
-
-    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock) as mock_push:
-        await AlertService.check_and_fire(db_session, "META", "US", current_price=350.0)
-        mock_push.assert_not_awaited()
-
-    await db_session.refresh(alert)
-    assert alert.triggered is False

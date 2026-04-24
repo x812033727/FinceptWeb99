@@ -28,6 +28,11 @@ import models.portfolio  # noqa: F401
 import models.watchlist  # noqa: F401
 import models.alert      # noqa: F401
 
+# Disable slowapi rate limiter — tests exercise endpoints in tight loops
+# and would otherwise trip the 5/min register cap, etc.
+from limiter import limiter  # noqa: E402
+limiter.enabled = False
+
 # ── in-memory SQLite engine ───────────────────────────────────────
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"

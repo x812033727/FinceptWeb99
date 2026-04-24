@@ -3,30 +3,16 @@ Pure unit tests for AlertService — CRUD and check_and_fire logic.
 
 All DB work uses the in-process SQLite test engine (db_session fixture).
 push_alert_to_user is mocked so no WebSocket infrastructure is needed.
-
-Note: api.websocket.manager imports jose/cryptography which triggers a
-pyo3 panic in this dev environment (missing _cffi_backend). We pre-inject
-a lightweight stub module into sys.modules to bypass that import chain.
 """
-import sys
-import types
 import uuid
 import pytest
 from unittest.mock import AsyncMock, patch
 from sqlalchemy.ext.asyncio import AsyncSession
 
-# ── Stub out api.websocket.manager before any import triggers jose ────
-_ws_stub = types.ModuleType("api.websocket.manager")
-_ws_stub.push_alert_to_user = AsyncMock()  # type: ignore[attr-defined]
-sys.modules.setdefault("api.websocket.manager", _ws_stub)
-# Also stub parent packages so Python's import machinery is satisfied
-sys.modules.setdefault("api.websocket", types.ModuleType("api.websocket"))
-# ─────────────────────────────────────────────────────────────────────
-
-from models.user import User, UserRole          # noqa: E402
-from models.alert import AlertCondition  # noqa: E402
-from api.alerts.schemas import AlertCreate      # noqa: E402
-from services.alert_service import AlertService  # noqa: E402
+from models.user import User, UserRole
+from models.alert import AlertCondition
+from api.alerts.schemas import AlertCreate
+from services.alert_service import AlertService
 
 
 # ── helpers ──────────────────────────────────────────────────────────

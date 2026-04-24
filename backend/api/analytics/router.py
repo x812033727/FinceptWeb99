@@ -42,6 +42,8 @@ async def dcf(request: Request, body: DCFRequest, _: Analyst):
         if not result:
             raise HTTPException(status_code=400, detail="Insufficient data for DCF")
         return DCFResponse(**result)
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -73,6 +75,8 @@ async def var(request: Request, body: VaRRequest, _: Analyst):
         if "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
         return VaRResponse(**result)
+    except HTTPException:
+        raise
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Computation timed out")
     except Exception as e:
@@ -103,6 +107,8 @@ async def backtest(request: Request, body: BacktestRequest, _: Analyst):
             initial_capital=body.initial_capital,
         )
         return BacktestResponse(**result)
+    except HTTPException:
+        raise
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Backtest timed out (30s limit)")
     except Exception as e:

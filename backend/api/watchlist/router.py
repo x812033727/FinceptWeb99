@@ -16,6 +16,7 @@ from api.watchlist.schemas import WatchlistCreate, WatchlistItemAdd, WatchlistOu
 from auth.permissions import require_viewer
 from db.session import get_db
 import services.watchlist_service as svc
+from services.watchlist_service import DuplicateWatchlistItem
 
 router = APIRouter()
 CurrentUser = Annotated[dict, Depends(require_viewer)]
@@ -43,7 +44,10 @@ async def delete_watchlist(wid: str, user: CurrentUser, db: DB):
 async def add_item(wid: str, body: WatchlistItemAdd, user: CurrentUser, db: DB):
     if body.market.upper() not in ("US", "TW"):
         raise HTTPException(status_code=400, detail="market must be US or TW")
-    item = await svc.add_item(db, user["id"], wid, body.symbol, body.market)
+    try:
+        item = await svc.add_item(db, user["id"], wid, body.symbol, body.market)
+    except DuplicateWatchlistItem as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     if item is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
     return item

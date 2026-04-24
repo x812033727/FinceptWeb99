@@ -149,7 +149,7 @@ async def refresh(
     if not valid:
         raise HTTPException(status_code=401, detail="Session revoked")
 
-    user = await db.get(User, user_id)
+    user = await db.get(User, UUID(user_id))
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="User not found")
 
@@ -183,7 +183,7 @@ async def logout(
 
 @router.get("/me", response_model=UserResponse)
 async def me(current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    user = await db.get(User, current_user["id"])
+    user = await db.get(User, UUID(current_user["id"]))
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     remaining = await _get_ai_remaining(str(user.id), user.role.value)
@@ -203,7 +203,7 @@ async def change_password(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    user = await db.get(User, current_user["id"])
+    user = await db.get(User, UUID(current_user["id"]))
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     if not pwd_ctx.verify(body.current_password, user.hashed_password):
@@ -227,7 +227,7 @@ async def create_api_key(
         else None
     )
     api_key = APIKey(
-        user_id=current_user["id"],
+        user_id=UUID(current_user["id"]),
         key_hash=_hash_key(raw),
         name=body.name,
         expires_at=expires_at,
@@ -243,7 +243,7 @@ async def list_api_keys(
     db: AsyncSession = Depends(get_db),
 ):
     rows = await db.scalars(
-        select(APIKey).where(APIKey.user_id == current_user["id"]).order_by(APIKey.created_at.desc())
+        select(APIKey).where(APIKey.user_id == UUID(current_user["id"])).order_by(APIKey.created_at.desc())
     )
     return [
         APIKeyListItem(

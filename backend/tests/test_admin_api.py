@@ -22,13 +22,28 @@ def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _promote_to_admin(db: AsyncSession, email: str) -> None:
-    """Directly set a user's role to admin in the test DB."""
+async def _promote_to_admin(
+    db: AsyncSession,
+    email: str,
+    client: AsyncClient | None = None,
+    password: str = "Test1234!",
+) -> str | None:
+    """
+    Directly set a user's role to admin in the test DB.
+    If `client` is provided, re-login and return a fresh token whose JWT
+    claim reflects the new role (JWTs are stateless — the old token still
+    carries role=viewer).
+    """
     from sqlalchemy import select
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one()
     user.role = UserRole.admin
     await db.commit()
+
+    if client is not None:
+        r = await client.post("/api/auth/login", json={"email": email, "password": password})
+        return r.json()["access_token"]
+    return None
 
 
 # ── access control ─────────────────────────────────────────────────
@@ -52,7 +67,7 @@ async def test_admin_requires_admin_role(client: AsyncClient):
 async def test_admin_stats_shape(client: AsyncClient, db_session: AsyncSession):
     email = "admin_stats@test.com"
     token = await _register_login(client, email)
-    await _promote_to_admin(db_session, email)
+    token = await _promote_to_admin(db_session, email, client=client)
 
     r = await client.get("/api/admin/stats", headers=_auth(token))
     assert r.status_code == 200
@@ -70,7 +85,7 @@ async def test_admin_stats_shape(client: AsyncClient, db_session: AsyncSession):
 async def test_admin_stats_counts_multiple_users(client: AsyncClient, db_session: AsyncSession):
     admin_email = "admin_count@test.com"
     admin_tok = await _register_login(client, admin_email)
-    await _promote_to_admin(db_session, admin_email)
+    admin_tok = await _promote_to_admin(db_session, admin_email, client=client)
 
     # Register two more users
     await _register_login(client, "extra1_count@test.com")
@@ -87,7 +102,7 @@ async def test_admin_stats_counts_multiple_users(client: AsyncClient, db_session
 async def test_admin_list_users(client: AsyncClient, db_session: AsyncSession):
     email = "admin_list@test.com"
     token = await _register_login(client, email)
-    await _promote_to_admin(db_session, email)
+    token = await _promote_to_admin(db_session, email, client=client)
 
     r = await client.get("/api/admin/users", headers=_auth(token))
     assert r.status_code == 200
@@ -107,7 +122,7 @@ async def test_admin_list_users(client: AsyncClient, db_session: AsyncSession):
 async def test_admin_list_users_pagination(client: AsyncClient, db_session: AsyncSession):
     email = "admin_page@test.com"
     token = await _register_login(client, email)
-    await _promote_to_admin(db_session, email)
+    token = await _promote_to_admin(db_session, email, client=client)
 
     # Create extra users
     for i in range(3):
@@ -124,7 +139,7 @@ async def test_admin_list_users_pagination(client: AsyncClient, db_session: Asyn
 async def test_admin_update_user_role(client: AsyncClient, db_session: AsyncSession):
     admin_email = "admin_role@test.com"
     admin_tok = await _register_login(client, admin_email)
-    await _promote_to_admin(db_session, admin_email)
+    admin_tok = await _promote_to_admin(db_session, admin_email, client=client)
 
     target_email = "target_role@test.com"
     await _register_login(client, target_email)
@@ -148,7 +163,7 @@ async def test_admin_update_user_role(client: AsyncClient, db_session: AsyncSess
 async def test_admin_update_role_invalid(client: AsyncClient, db_session: AsyncSession):
     email = "admin_badrole@test.com"
     token = await _register_login(client, email)
-    await _promote_to_admin(db_session, email)
+    token = await _promote_to_admin(db_session, email, client=client)
 
     users_r = await client.get("/api/admin/users", headers=_auth(token))
     uid = users_r.json()[0]["id"]
@@ -161,7 +176,7 @@ async def test_admin_update_role_invalid(client: AsyncClient, db_session: AsyncS
 async def test_admin_update_role_nonexistent_user(client: AsyncClient, db_session: AsyncSession):
     email = "admin_nouser@test.com"
     token = await _register_login(client, email)
-    await _promote_to_admin(db_session, email)
+    token = await _promote_to_admin(db_session, email, client=client)
 
     r = await client.patch(
         "/api/admin/users/00000000-0000-0000-0000-000000000000/role",
@@ -177,7 +192,7 @@ async def test_admin_update_role_nonexistent_user(client: AsyncClient, db_sessio
 async def test_admin_disable_and_enable_user(client: AsyncClient, db_session: AsyncSession):
     admin_email = "admin_toggle@test.com"
     admin_tok = await _register_login(client, admin_email)
-    await _promote_to_admin(db_session, admin_email)
+    admin_tok = await _promote_to_admin(db_session, admin_email, client=client)
 
     target_email = "target_toggle@test.com"
     await _register_login(client, target_email)
@@ -207,7 +222,7 @@ async def test_admin_disable_and_enable_user(client: AsyncClient, db_session: As
 async def test_admin_active_nonexistent_user(client: AsyncClient, db_session: AsyncSession):
     email = "admin_noact@test.com"
     token = await _register_login(client, email)
-    await _promote_to_admin(db_session, email)
+    token = await _promote_to_admin(db_session, email, client=client)
 
     r = await client.patch(
         "/api/admin/users/00000000-0000-0000-0000-000000000000/active",

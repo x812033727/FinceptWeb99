@@ -6,11 +6,16 @@ import uuid
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.watchlist import Watchlist, WatchlistItem
 from models.portfolio import Market
+
+
+class DuplicateWatchlistItem(Exception):
+    """Raised when an (watchlist, symbol, market) triple already exists."""
 
 
 # ── helpers ────────────────────────────────────────────────────────
@@ -111,7 +116,13 @@ async def add_item(
         market=Market(market.upper()),
     )
     db.add(item)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise DuplicateWatchlistItem(
+            f"{symbol.upper()} ({market.upper()}) is already in this watchlist"
+        ) from exc
     await db.refresh(item)
     return await _enrich_item(item)
 

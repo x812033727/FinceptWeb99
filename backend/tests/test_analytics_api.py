@@ -17,11 +17,23 @@ async def _register_and_login(client: AsyncClient, email: str) -> str:
     return r.json()["access_token"]
 
 
-async def _promote(db: AsyncSession, email: str, role: UserRole = UserRole.analyst) -> None:
+async def _promote(
+    db: AsyncSession,
+    email: str,
+    role: UserRole = UserRole.analyst,
+    client: AsyncClient | None = None,
+    password: str = "Pass99!!",
+) -> str | None:
+    """Update role in DB. If client is passed, re-login so the new JWT
+    carries the promoted role (JWTs are stateless)."""
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one()
     user.role = role
     await db.commit()
+    if client is not None:
+        r = await client.post("/api/auth/login", json={"email": email, "password": password})
+        return r.json()["access_token"]
+    return None
 
 
 def _analyst_headers(token: str) -> dict:
@@ -51,7 +63,7 @@ async def test_dcf_requires_auth(client: AsyncClient):
 async def test_dcf_with_full_overrides(client: AsyncClient, db_session: AsyncSession):
     """TW market skips fundamentals fetch; full overrides make it self-contained."""
     token = await _register_and_login(client, "dcf_analyst@example.com")
-    await _promote(db_session, "dcf_analyst@example.com")
+    token = await _promote(db_session, "dcf_analyst@example.com", client=client)
 
     r = await client.post("/api/analytics/dcf", json={
         "symbol": "2330",
@@ -86,7 +98,7 @@ async def test_dcf_margin_of_safety_present_when_price_given(
     client: AsyncClient, db_session: AsyncSession
 ):
     token = await _register_and_login(client, "dcf_mos@example.com")
-    await _promote(db_session, "dcf_mos@example.com")
+    token = await _promote(db_session, "dcf_mos@example.com", client=client)
 
     r = await client.post("/api/analytics/dcf", json={
         "symbol": "TEST",
@@ -108,7 +120,7 @@ async def test_dcf_margin_of_safety_present_when_price_given(
 @pytest.mark.asyncio
 async def test_dcf_scenarios_shape(client: AsyncClient, db_session: AsyncSession):
     token = await _register_and_login(client, "dcf_scenarios@example.com")
-    await _promote(db_session, "dcf_scenarios@example.com")
+    token = await _promote(db_session, "dcf_scenarios@example.com", client=client)
 
     r = await client.post("/api/analytics/dcf", json={
         "symbol": "TSMC",
@@ -142,7 +154,7 @@ async def test_var_requires_auth(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_var_mismatched_lengths(client: AsyncClient, db_session: AsyncSession):
     token = await _register_and_login(client, "var_mismatch@example.com")
-    await _promote(db_session, "var_mismatch@example.com")
+    token = await _promote(db_session, "var_mismatch@example.com", client=client)
 
     r = await client.post("/api/analytics/var", json={
         "symbols": ["AAPL", "MSFT"],
@@ -156,7 +168,7 @@ async def test_var_mismatched_lengths(client: AsyncClient, db_session: AsyncSess
 @pytest.mark.asyncio
 async def test_var_historical_method(client: AsyncClient, db_session: AsyncSession):
     token = await _register_and_login(client, "var_hist@example.com")
-    await _promote(db_session, "var_hist@example.com")
+    token = await _promote(db_session, "var_hist@example.com", client=client)
 
     bars = _synthetic_bars()
     with patch("services.analytics_service._fetch_returns", new_callable=AsyncMock) as mock_fr:
@@ -186,7 +198,7 @@ async def test_var_historical_method(client: AsyncClient, db_session: AsyncSessi
 @pytest.mark.asyncio
 async def test_var_parametric_method(client: AsyncClient, db_session: AsyncSession):
     token = await _register_and_login(client, "var_param@example.com")
-    await _promote(db_session, "var_param@example.com")
+    token = await _promote(db_session, "var_param@example.com", client=client)
 
     bars = _synthetic_bars()
     with patch("services.analytics_service._fetch_returns", new_callable=AsyncMock) as mock_fr:
@@ -210,7 +222,7 @@ async def test_var_parametric_method(client: AsyncClient, db_session: AsyncSessi
 @pytest.mark.asyncio
 async def test_var_no_data_returns_400(client: AsyncClient, db_session: AsyncSession):
     token = await _register_and_login(client, "var_nodata@example.com")
-    await _promote(db_session, "var_nodata@example.com")
+    token = await _promote(db_session, "var_nodata@example.com", client=client)
 
     with patch("services.analytics_service._fetch_returns", new_callable=AsyncMock) as mock_fr:
         mock_fr.return_value = {}   # empty → no price data
@@ -241,7 +253,7 @@ async def test_backtest_requires_auth(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_backtest_invalid_date_range(client: AsyncClient, db_session: AsyncSession):
     token = await _register_and_login(client, "bt_dates@example.com")
-    await _promote(db_session, "bt_dates@example.com")
+    token = await _promote(db_session, "bt_dates@example.com", client=client)
 
     r = await client.post("/api/analytics/backtest", json={
         "symbols": ["AAPL"], "markets": ["US"],
@@ -254,7 +266,7 @@ async def test_backtest_invalid_date_range(client: AsyncClient, db_session: Asyn
 @pytest.mark.asyncio
 async def test_backtest_sma_crossover(client: AsyncClient, db_session: AsyncSession):
     token = await _register_and_login(client, "bt_sma@example.com")
-    await _promote(db_session, "bt_sma@example.com")
+    token = await _promote(db_session, "bt_sma@example.com", client=client)
 
     bars = _synthetic_bars(300)
 
@@ -286,7 +298,7 @@ async def test_backtest_sma_crossover(client: AsyncClient, db_session: AsyncSess
 @pytest.mark.asyncio
 async def test_backtest_rsi_strategy(client: AsyncClient, db_session: AsyncSession):
     token = await _register_and_login(client, "bt_rsi@example.com")
-    await _promote(db_session, "bt_rsi@example.com")
+    token = await _promote(db_session, "bt_rsi@example.com", client=client)
 
     bars = _synthetic_bars(300)
 
@@ -310,7 +322,7 @@ async def test_backtest_rsi_strategy(client: AsyncClient, db_session: AsyncSessi
 @pytest.mark.asyncio
 async def test_backtest_equity_curve_present(client: AsyncClient, db_session: AsyncSession):
     token = await _register_and_login(client, "bt_equity@example.com")
-    await _promote(db_session, "bt_equity@example.com")
+    token = await _promote(db_session, "bt_equity@example.com", client=client)
 
     bars = _synthetic_bars(300)
 

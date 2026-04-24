@@ -1,8 +1,8 @@
-FROM python:3.11-slim AS base
+# ── Stage 1: dependency builder ──────────────────────────────────
+FROM python:3.11-slim AS builder
 
-WORKDIR /app
+WORKDIR /build
 
-# System deps for asyncpg + bcrypt compilation
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq-dev \
         gcc \
@@ -10,9 +10,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-COPY . .
+
+# ── Stage 2: runtime ─────────────────────────────────────────────
+FROM python:3.11-slim AS runtime
+
+# libpq needed at runtime for asyncpg
+RUN apt-get update && apt-get install -y --no-install-recommends libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user
+RUN useradd -m -u 1001 appuser
+
+WORKDIR /app
+
+COPY --from=builder /install /usr/local
+COPY --chown=appuser:appuser . .
+
+USER appuser
 
 EXPOSE 8000
 

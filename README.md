@@ -115,9 +115,12 @@ docker compose up -d
 ```
 
 服務啟動後：
-- **前端**：http://localhost:3000
-- **API 文件**：http://localhost:8000/docs
-- **API（ReDoc）**：http://localhost:8000/redoc
+- **前端**：http://localhost
+- **API 文件**：http://localhost/docs
+- **API（ReDoc）**：http://localhost/redoc
+
+> **生產部署提示：** 設定強密碼於 `.env`（`POSTGRES_PASSWORD`、`JWT_SECRET_KEY`、`REDIS_PASSWORD`），
+> 並在 nginx 前端掛載 TLS 憑證（Certbot / Let's Encrypt）。
 
 ---
 
@@ -273,16 +276,22 @@ GET  /api/ai/agents                      # 列出可用代理人
 
 ## 開發路線圖
 
-| 時程 | 里程碑 |
+| 狀態 | 里程碑 |
 |------|--------|
-| **已完成** | 專案架構設計、API 框架、Docker 配置、文件 |
-| **Q2 2026** | 美股核心 API（報價、歷史、財報、選股篩選器） |
-| **Q2 2026** | 台股核心 API（行情、法人、籌碼、月營收） |
-| **Q3 2026** | 前端儀表板（K 線圖、投資組合、選股工具） |
-| **Q3 2026** | AI 代理人整合、量化分析引擎 |
-| **Q4 2026** | 選擇權分析、多帳戶投資組合管理 |
-| **Q4 2026** | Kubernetes 部署、機構功能 |
-| **2027** | 行動版（PWA）、社群市集 |
+| ✅ **完成** | Phase 0：專案架構、Docker Compose、TimescaleDB、nginx |
+| ✅ **完成** | Phase 1：JWT 認證、API 金鑰、角色權限（viewer / analyst / admin）|
+| ✅ **完成** | Phase 2：美股資料（Polygon → yfinance 瀑布、FRED 總體、S&P500 宇宙）|
+| ✅ **完成** | Phase 3：台股資料（TWSE OpenAPI → FinMind 瀑布、法人、融資券）|
+| ✅ **完成** | Phase 4：WebSocket 即時串流（Auth-first、Redis Pub/Sub、delta 抑制）|
+| ✅ **完成** | Phase 5：APScheduler（美股 10s / 台股 60s、off-hours 節流）|
+| ✅ **完成** | Phase 6：投資組合管理（多幣別 P&L、均攤成本、Sharpe 最佳化）|
+| ✅ **完成** | Phase 7：CFA 分析引擎（DCF、VaR 三種方法、事件驅動回測）|
+| ✅ **完成** | Phase 8：AI 代理人（6 人格、OpenAI / Anthropic / Gemini / Ollama SSE）|
+| ✅ **完成** | Phase 9：完整 React UI（K 線圖、選股篩選器、個股詳情、Sidebar）|
+| ✅ **完成** | Phase 10：Docker 生產強化（多階段 build、nginx 限速、Redis 認證）|
+| 🔄 **規劃中** | 選擇權鏈分析、隱含波動率曲面 |
+| 🔄 **規劃中** | Kubernetes 水平擴展、Helm Chart |
+| 🔄 **規劃中** | 行動版 PWA |
 
 ---
 

@@ -2,8 +2,8 @@ services:
   postgres:
     image: timescale/timescaledb:latest-pg15
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-finceptweb}
-      POSTGRES_USER: ${POSTGRES_USER:-fincept}
+      POSTGRES_DB:       ${POSTGRES_DB:-finceptweb}
+      POSTGRES_USER:     ${POSTGRES_USER:-fincept}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -17,12 +17,18 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: redis-server /etc/redis/redis.conf
+    command: >
+      sh -c 'redis-server /etc/redis/redis.conf
+             --requirepass "$${REDIS_PASSWORD:-}"'
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     volumes:
       - ./docker/redis/redis.conf:/etc/redis/redis.conf:ro
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: >
+        ["CMD-SHELL",
+         "redis-cli ${REDIS_PASSWORD:+-a $REDIS_PASSWORD} ping | grep PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -42,20 +48,20 @@ services:
     build: ./backend
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fincept}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-finceptweb}
-      REDIS_URL: redis://redis:6379
-      POLYGON_API_KEY: ${POLYGON_API_KEY:-}
-      FINMIND_TOKEN: ${FINMIND_TOKEN:-}
-      FRED_API_KEY: ${FRED_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      DATABASE_URL:      postgresql+asyncpg://${POSTGRES_USER:-fincept}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-finceptweb}
+      REDIS_URL:         redis://${REDIS_PASSWORD:+:${REDIS_PASSWORD}@}redis:6379
+      POLYGON_API_KEY:   ${POLYGON_API_KEY:-}
+      FINMIND_TOKEN:     ${FINMIND_TOKEN:-}
+      FRED_API_KEY:      ${FRED_API_KEY:-}
+      OPENAI_API_KEY:    ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
-      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      GEMINI_API_KEY:    ${GEMINI_API_KEY:-}
+      OLLAMA_HOST:       ${OLLAMA_HOST:-http://ollama:11434}
+      JWT_SECRET_KEY:    ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+      JWT_ALGORITHM:     ${JWT_ALGORITHM:-HS256}
+      CORS_ORIGINS:      ${CORS_ORIGINS:-http://localhost}
+      ADMIN_EMAIL:       ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD:    ${ADMIN_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -66,7 +72,9 @@ services:
     restart: unless-stopped
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      target: production
     restart: unless-stopped
 
   nginx:

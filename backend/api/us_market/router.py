@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from typing import Annotated
 
 from api.us_market.schemas import (
@@ -10,6 +10,7 @@ from api.us_market.schemas import (
     MacroDataPoint,
 )
 from dependencies import get_current_user
+from limiter import limiter
 import services.us_market_service as svc
 
 router = APIRouter()
@@ -84,7 +85,9 @@ async def options(
 
 
 @router.get("/screener", response_model=list[ScreenerItem])
+@limiter.limit("30/minute")
 async def screener(
+    request: Request,
     _: Auth,
     min_market_cap: float | None = Query(None, description="Minimum market cap in USD"),
     max_pe: float | None = Query(None, description="Maximum P/E ratio"),

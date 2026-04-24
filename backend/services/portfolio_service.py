@@ -24,20 +24,38 @@ from services.us_market_service import get_quote as us_quote, get_history as us_
 from services.tw_market_service import get_quote as tw_quote, get_history as tw_history
 
 TTL_FX = 4 * 3600
+TTL_FX_LAST_KNOWN = 30 * 86400   # 30 days — survives FRED outages
 TTL_HISTORY = 4 * 3600
+
+_FX_HARD_FALLBACK = 32.0   # only used on cold cache + FRED failure
 
 
 # ── FX helpers ────────────────────────────────────────────────────
 
 async def _get_twd_usd_rate() -> float:
-    """TWD per 1 USD. Cached 4h from FRED DEXTW series."""
+    """
+    TWD per 1 USD. Fresh cache 4h from FRED DEXTW; falls back to the
+    last-known-good rate (30d TTL) if FRED is down. Hard-coded 32.0 is
+    only used if the long-term cache is also empty (first cold start).
+    """
     key = "fx:twd_usd"
+    key_last = "fx:twd_usd:last_known"
+
     cached = await cache_get(key)
     if cached:
         return float(cached)
-    rate = await get_latest("DEXTW") or 32.0   # fallback
-    await cache_set(key, str(rate), TTL_FX)
-    return rate
+
+    rate = await get_latest("DEXTW")
+    if rate:
+        await cache_set(key, str(rate), TTL_FX)
+        await cache_set(key_last, str(rate), TTL_FX_LAST_KNOWN)
+        return rate
+
+    last_known = await cache_get(key_last)
+    if last_known:
+        return float(last_known)
+
+    return _FX_HARD_FALLBACK
 
 
 async def _to_portfolio_currency(amount: float, cost_currency: str, portfolio_currency: str) -> float:

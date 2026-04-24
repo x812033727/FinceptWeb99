@@ -46,6 +46,10 @@ pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 REFRESH_COOKIE = "refresh_token"
 REFRESH_TTL = settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400
 
+# Pre-computed bcrypt hash of a random string, used to equalize timing
+# when the submitted email doesn't exist — prevents user-enumeration attacks.
+_DUMMY_HASH = pwd_ctx.hash(secrets.token_urlsafe(16))
+
 
 # ── Helpers ───────────────────────────────────────────────────────
 
@@ -64,7 +68,7 @@ async def _set_refresh_cookie(response: Response, user_id: str) -> str:
         key=REFRESH_COOKIE,
         value=token,
         httponly=True,
-        secure=False,   # set True in production behind HTTPS
+        secure=not settings.DEBUG,   # HTTPS-only outside debug/dev
         samesite="lax",
         max_age=REFRESH_TTL,
         path="/api/auth",
@@ -109,7 +113,11 @@ async def register(request: Request, body: RegisterRequest, response: Response, 
 @limiter.limit("10/minute")
 async def login(request: Request, body: LoginRequest, response: Response, db: AsyncSession = Depends(get_db)):
     user = await db.scalar(select(User).where(User.email == body.email))
-    if not user or not pwd_ctx.verify(body.password, user.hashed_password):
+    # Always run bcrypt verify — even when user is None — to equalize timing
+    # and prevent user-enumeration via response-time analysis.
+    target_hash = user.hashed_password if user else _DUMMY_HASH
+    password_ok = pwd_ctx.verify(body.password, target_hash)
+    if not user or not password_ok:
         raise HTTPException(status_code=401, detail="Invalid credentials")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account disabled")

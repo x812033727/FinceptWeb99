@@ -1,11 +1,11 @@
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from datetime import date, datetime
 from uuid import UUID
 
 
 class PortfolioCreate(BaseModel):
-    name: str
-    currency: str = "USD"
+    name: str = Field(..., min_length=1, max_length=100)
+    currency: str = Field(default="USD", min_length=3, max_length=3)
 
     @field_validator("currency")
     @classmethod
@@ -14,14 +14,14 @@ class PortfolioCreate(BaseModel):
 
 
 class TransactionCreate(BaseModel):
-    symbol: str
-    market: str          # "US" | "TW"
-    tx_type: str         # "buy" | "sell" | "dividend"
-    quantity: float
-    price: float
-    fx_rate: float = 1.0
+    symbol: str = Field(..., min_length=1, max_length=20)
+    market: str = Field(..., min_length=2, max_length=4)   # "US" | "TW"
+    tx_type: str = Field(..., min_length=3, max_length=10) # "buy" | "sell" | "dividend"
+    quantity: float = Field(..., gt=0)
+    price: float = Field(..., ge=0)
+    fx_rate: float = Field(default=1.0, gt=0)
     tx_date: date
-    notes: str | None = None
+    notes: str | None = Field(default=None, max_length=500)
 
     @field_validator("market")
     @classmethod

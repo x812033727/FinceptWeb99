@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
 
 
 class Settings(BaseSettings):
@@ -19,6 +20,21 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    @field_validator("JWT_SECRET_KEY")
+    @classmethod
+    def validate_jwt_secret(cls, v: str) -> str:
+        import os
+        if not v or v == "change_me":
+            if os.environ.get("DEBUG", "").lower() in ("true", "1"):
+                return v
+            raise ValueError(
+                "JWT_SECRET_KEY must be set to a strong random value "
+                "(min 32 chars) in production. Set DEBUG=true to bypass."
+            )
+        if len(v) < 32:
+            raise ValueError("JWT_SECRET_KEY must be at least 32 characters")
+        return v
 
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173"

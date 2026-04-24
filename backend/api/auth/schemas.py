@@ -1,11 +1,11 @@
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from datetime import datetime
 from uuid import UUID
 
 
 class RegisterRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(..., min_length=8, max_length=128)
 
     @field_validator("password")
     @classmethod
@@ -17,7 +17,7 @@ class RegisterRequest(BaseModel):
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(..., max_length=128)
 
 
 class TokenResponse(BaseModel):
@@ -35,8 +35,8 @@ class UserResponse(BaseModel):
 
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str
+    current_password: str = Field(..., max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
 
     @field_validator("new_password")
     @classmethod
@@ -47,8 +47,8 @@ class ChangePasswordRequest(BaseModel):
 
 
 class APIKeyCreateRequest(BaseModel):
-    name: str
-    expires_days: int | None = None  # None = never expires
+    name: str = Field(..., min_length=1, max_length=100)
+    expires_days: int | None = Field(default=None, ge=1, le=3650)  # None = never expires
 
 
 class APIKeyCreateResponse(BaseModel):

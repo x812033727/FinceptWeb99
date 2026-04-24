@@ -1,13 +1,13 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class WatchlistCreate(BaseModel):
-    name: str
+    name: str = Field(..., min_length=1, max_length=100)
 
 
 class WatchlistItemAdd(BaseModel):
-    symbol: str
-    market: str   # "US" | "TW"
+    symbol: str = Field(..., min_length=1, max_length=20)
+    market: str = Field(..., min_length=2, max_length=4)   # "US" | "TW"
 
 
 class WatchlistItemOut(BaseModel):

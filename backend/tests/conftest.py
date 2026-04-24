@@ -4,6 +4,11 @@ Shared pytest fixtures.
 Tests run against an in-memory SQLite database and mock Redis so no
 external services are needed in CI.
 """
+# Must set env before any backend module is imported — config.py instantiates
+# Settings() at import time and validates JWT_SECRET_KEY strength.
+import os
+os.environ.setdefault("JWT_SECRET_KEY", "pytest-local-secret-key-32chars!!")
+
 import asyncio
 import pytest
 import pytest_asyncio

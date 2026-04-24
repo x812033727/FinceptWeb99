@@ -5,6 +5,7 @@ publishes updates to the Redis Pub/Sub channel.
 """
 import asyncio
 import json
+import logging
 from datetime import datetime
 import pytz
 
@@ -14,6 +15,8 @@ from config import settings
 import data.us.polygon_connector as polygon
 import data.us.yfinance_connector as yfinance
 from services.us_market_service import _is_market_open, TTL_QUOTE
+
+logger = logging.getLogger(__name__)
 
 _ET = pytz.timezone("America/New_York")
 
@@ -76,8 +79,8 @@ async def refresh_us_quotes() -> None:
             from services.alert_service import AlertService
             async with AsyncSessionLocal() as db:
                 await AlertService.check_and_fire(db, sym, "US", result["price"])
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("US quote refresh failed for %s: %s", sym, exc)
 
     # Process all subscribed symbols concurrently
     await asyncio.gather(*[_fetch_and_publish(sym) for sym in symbols])

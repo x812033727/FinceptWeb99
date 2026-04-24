@@ -125,10 +125,17 @@ def run_backtest(
 
 
 def _compute_metrics(equity_curve: list[dict], initial_capital: float, trades: list) -> dict:
-    values = np.array([e["value"] for e in equity_curve])
-    returns = np.diff(values) / values[:-1]
+    values = np.array([e["value"] for e in equity_curve], dtype=float)
+    # Guard against zero-value bars (portfolio fully liquidated) which would
+    # produce inf/NaN via plain division and corrupt every downstream metric.
+    prev = values[:-1]
+    returns = np.divide(
+        np.diff(values), prev,
+        out=np.zeros(len(prev), dtype=float),
+        where=prev > 0,
+    )
 
-    total_return = (values[-1] - initial_capital) / initial_capital
+    total_return = (values[-1] - initial_capital) / initial_capital if initial_capital > 0 else 0.0
     n_days = len(values)
     ann_return = (1 + total_return) ** (252 / n_days) - 1 if n_days > 0 else 0
 
@@ -136,8 +143,12 @@ def _compute_metrics(equity_curve: list[dict], initial_capital: float, trades: l
     sharpe  = ann_return / ann_vol if ann_vol > 1e-9 else 0
 
     roll_max = np.maximum.accumulate(values)
-    dd = (values - roll_max) / roll_max
-    max_dd = float(dd.min())
+    dd = np.divide(
+        values - roll_max, roll_max,
+        out=np.zeros_like(values),
+        where=roll_max > 0,
+    )
+    max_dd = float(dd.min()) if len(dd) else 0.0
 
     buy_trades  = [t for t in trades if t["side"] == "buy"]
     sell_trades = [t for t in trades if t["side"] == "sell"]

@@ -4,6 +4,7 @@ Polls TWSE every 60 seconds during market hours (09:00-13:30 CST).
 """
 import asyncio
 import json
+import logging
 
 from api.websocket.manager import publish_update, _subscriptions
 from cache.redis_cache import cache_set, key_quote
@@ -11,6 +12,8 @@ from services.tw_market_service import (
     _is_tw_market_open, _normalize_quote, TTL_QUOTE, refresh_symbol_map,
 )
 import data.tw.twse_connector as twse
+
+logger = logging.getLogger(__name__)
 
 
 def _subscribed_tw_symbols() -> set[str]:
@@ -57,8 +60,8 @@ async def refresh_tw_quotes() -> None:
             from services.alert_service import AlertService
             async with AsyncSessionLocal() as db:
                 await AlertService.check_and_fire(db, sym, "TW", result["price"])
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("TW quote refresh failed for %s: %s", sym, exc)
 
     # TWSE rate limit: 1 req/sec via semaphore in connector, so run sequentially
     for sym in symbols:
@@ -71,5 +74,5 @@ async def refresh_tw_symbol_map() -> None:
     """Refreshes the in-process TWSE/TPEx symbol→exchange map once daily."""
     try:
         await refresh_symbol_map()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("TW symbol map refresh failed: %s", exc)

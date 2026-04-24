@@ -1,58 +1,135 @@
 import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import {
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Cell,
+} from "recharts";
 import api from "@/lib/api";
 import CandlestickChart from "@/components/charts/CandlestickChart";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import type { OHLCVBar, Market } from "@/types/market";
 
-// ── API helpers ────────────────────────────────────────────────────
+// ── types ──────────────────────────────────────────────────────────
 
 type Period = "1d" | "5d" | "1mo" | "3mo" | "1y" | "5y";
 type Interval = "1m" | "5m" | "15m" | "1h" | "1d" | "1wk";
 
+type USTab = "chart" | "financials" | "options";
+type TWTab = "chart" | "institutional" | "margin" | "revenue";
+
+interface OptionRow {
+  strike: number;
+  expiration_date?: string;
+  contract_type: string;
+  bid?: number;
+  ask?: number;
+  last_price?: number;
+  volume?: number;
+  open_interest?: number;
+  implied_volatility?: number;
+  delta?: number;
+  gamma?: number;
+}
+
+interface InstitutionalRow {
+  date: string;
+  fini_buy: number;
+  fini_sell: number;
+  sitc_buy: number;
+  sitc_sell: number;
+  dealer_buy: number;
+  dealer_sell: number;
+}
+
+interface MarginRow {
+  date: string;
+  margin_purchase: number;
+  margin_balance: number;
+  short_sale: number;
+  short_balance: number;
+}
+
+interface RevenueRow {
+  date: string;
+  revenue: number;
+  revenue_mom: number | null;
+  revenue_yoy: number | null;
+}
+
+// ── API helpers ────────────────────────────────────────────────────
+
 const PERIOD_INTERVAL: Record<Period, Interval> = {
-  "1d": "5m",
-  "5d": "15m",
-  "1mo": "1h",
-  "3mo": "1d",
-  "1y": "1d",
-  "5y": "1wk",
+  "1d": "5m", "5d": "15m", "1mo": "1h", "3mo": "1d", "1y": "1d", "5y": "1wk",
 };
 
-async function fetchHistory(market: Market, symbol: string, period: Period): Promise<OHLCVBar[]> {
-  const interval = PERIOD_INTERVAL[period];
-  const endpoint =
-    market === "US"
-      ? `/us/history/${symbol}?period=${period}&interval=${interval}`
-      : `/tw/history/${symbol}?months=${period === "5y" ? 60 : period === "1y" ? 12 : 3}`;
-  const res = await api.get<OHLCVBar[]>(endpoint);
-  return res.data;
-}
+const fetchHistory = (mkt: Market, sym: string, period: Period) =>
+  api.get<OHLCVBar[]>(
+    mkt === "US"
+      ? `/us/history/${sym}?period=${period}&interval=${PERIOD_INTERVAL[period]}`
+      : `/tw/history/${sym}?months=${period === "5y" ? 60 : period === "1y" ? 12 : 3}`
+  ).then((r) => r.data);
 
-async function fetchFundamentals(market: Market, symbol: string) {
-  if (market !== "US") return null;
-  const res = await api.get<Record<string, unknown>>(`/us/fundamentals/${symbol}`);
-  return res.data;
-}
+const fetchQuote = (mkt: Market, sym: string) =>
+  api.get<Record<string, unknown>>(mkt === "US" ? `/us/quote/${sym}` : `/tw/quote/${sym}`)
+    .then((r) => r.data);
 
-async function fetchQuote(market: Market, symbol: string) {
-  const res = await api.get<Record<string, unknown>>(
-    market === "US" ? `/us/quote/${symbol}` : `/tw/quote/${symbol}`
-  );
-  return res.data;
-}
+const fetchFundamentals = (sym: string) =>
+  api.get<Record<string, unknown>>(`/us/fundamentals/${sym}`).then((r) => r.data);
 
-// ── sub-components ─────────────────────────────────────────────────
+const fetchFinancials = (sym: string) =>
+  api.get<{ symbol: string; source: string; data: unknown }>(`/us/financials/${sym}`)
+    .then((r) => r.data);
+
+const fetchOptions = (sym: string, expiry?: string) =>
+  api.get<OptionRow[]>(`/us/options/${sym}${expiry ? `?expiration_date=${expiry}` : ""}`)
+    .then((r) => r.data);
+
+const fetchInstitutional = (sym: string) =>
+  api.get<InstitutionalRow[]>(`/tw/institutional/${sym}?days=60`).then((r) => r.data);
+
+const fetchMargin = (sym: string) =>
+  api.get<MarginRow[]>(`/tw/margin/${sym}?days=60`).then((r) => r.data);
+
+const fetchRevenue = (sym: string) =>
+  api.get<RevenueRow[]>(`/tw/revenue/${sym}?months=24`).then((r) => r.data);
+
+// ── shared helpers ─────────────────────────────────────────────────
+
+const fmt = (n: number | null | undefined, d = 2) =>
+  n == null ? "—" : n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+
+const fmtPct = (n: number | null | undefined, alreadyPct = false) => {
+  if (n == null) return "—";
+  const v = alreadyPct ? n : n * 100;
+  return `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
+};
+
+const fmtK = (n: number) =>
+  n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(0)}K` : String(n);
+
+// ── reusable UI atoms ──────────────────────────────────────────────
 
 function StatRow({ label, value }: { label: string; value: string | number | null | undefined }) {
   return (
     <div className="flex justify-between items-center py-1.5 border-b border-border/50 last:border-0">
       <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="text-xs text-foreground font-medium">
-        {value === null || value === undefined ? "—" : value}
-      </span>
+      <span className="text-xs text-foreground font-medium">{value ?? "—"}</span>
     </div>
+  );
+}
+
+function TabButton({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-4 py-2 text-sm border-b-2 transition-colors ${
+        active
+          ? "border-primary text-foreground font-medium"
+          : "border-transparent text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -69,6 +146,395 @@ function PeriodButton({ active, label, onClick }: { active: boolean; label: stri
   );
 }
 
+function Loading() {
+  return <div className="p-8 text-center text-muted-foreground text-sm animate-pulse">Loading…</div>;
+}
+
+// ── US tab panels ──────────────────────────────────────────────────
+
+function FinancialsPanel({ symbol }: { symbol: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["financials", "US", symbol],
+    queryFn: () => fetchFinancials(symbol),
+    staleTime: 3_600_000,
+  });
+
+  if (isLoading) return <Loading />;
+  if (!data) return <div className="p-6 text-muted-foreground text-sm">No financials available.</div>;
+
+  // yfinance returns {income_statement, balance_sheet, cash_flow} as record of records
+  const raw = data.data as Record<string, Record<string, number | null>> | null;
+  if (!raw) return <div className="p-6 text-muted-foreground text-sm">No financials data.</div>;
+
+  const sections: Array<{ title: string; key: string }> = [
+    { title: "Income Statement", key: "income_statement" },
+    { title: "Balance Sheet", key: "balance_sheet" },
+    { title: "Cash Flow", key: "cash_flow" },
+  ];
+
+  return (
+    <div className="space-y-6 p-4">
+      {sections.map(({ title, key }) => {
+        const table = raw[key] as Record<string, Record<string, number | null>> | undefined;
+        if (!table || !Object.keys(table).length) return null;
+
+        // Rows = metric names, Columns = dates
+        const rows = Object.keys(table);
+        const cols = rows.length
+          ? Object.keys(table[rows[0]] ?? {}).sort().reverse().slice(0, 5)
+          : [];
+
+        if (!cols.length) return null;
+
+        return (
+          <div key={key}>
+            <h3 className="text-sm font-semibold text-foreground mb-2">{title}</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-border text-muted-foreground">
+                    <th className="text-left py-1.5 pr-4 font-medium min-w-[200px]">Metric</th>
+                    {cols.map((c) => (
+                      <th key={c} className="text-right py-1.5 px-2 font-medium">{c.slice(0, 4)}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={row} className="border-b border-border/30 hover:bg-accent/5">
+                      <td className="py-1.5 pr-4 text-muted-foreground">{row}</td>
+                      {cols.map((c) => {
+                        const v = (table[row] as Record<string, number | null>)?.[c];
+                        return (
+                          <td key={c} className="text-right py-1.5 px-2 text-foreground">
+                            {v == null ? "—" : Math.abs(v) >= 1e9
+                              ? `${(v / 1e9).toFixed(2)}B`
+                              : Math.abs(v) >= 1e6
+                              ? `${(v / 1e6).toFixed(1)}M`
+                              : v.toLocaleString()}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function OptionsPanel({ symbol }: { symbol: string }) {
+  const [optionType, setOptionType] = useState<"call" | "put">("call");
+
+  const { data: options = [], isLoading } = useQuery({
+    queryKey: ["options", symbol],
+    queryFn: () => fetchOptions(symbol),
+    staleTime: 300_000,
+  });
+
+  if (isLoading) return <Loading />;
+  if (!options.length) return <div className="p-6 text-muted-foreground text-sm">No options data available.</div>;
+
+  // Get available expiry dates
+  const expiries = [...new Set(options.map((o) => o.expiration_date).filter(Boolean))].sort();
+  const filtered = options.filter((o) => o.contract_type?.toLowerCase() === optionType);
+
+  return (
+    <div className="p-4 space-y-4">
+      {/* controls */}
+      <div className="flex items-center gap-4">
+        <div className="flex rounded border border-border overflow-hidden text-sm">
+          {(["call", "put"] as const).map((t) => (
+            <button
+              key={t}
+              onClick={() => setOptionType(t)}
+              className={`px-4 py-1.5 transition-colors ${
+                optionType === t
+                  ? t === "call" ? "bg-green-900/40 text-green-400" : "bg-red-900/40 text-red-400"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {t.toUpperCase()}
+            </button>
+          ))}
+        </div>
+        <span className="text-xs text-muted-foreground">{filtered.length} contracts</span>
+      </div>
+
+      {/* expiry legend */}
+      {expiries.length > 0 && (
+        <div className="text-xs text-muted-foreground">
+          Available expirations: {expiries.slice(0, 6).join(" · ")}{expiries.length > 6 ? " …" : ""}
+        </div>
+      )}
+
+      {/* table */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-border text-muted-foreground">
+              <th className="text-left py-2 pr-3 font-medium">Expiry</th>
+              <th className="text-right py-2 px-2 font-medium">Strike</th>
+              <th className="text-right py-2 px-2 font-medium">Bid</th>
+              <th className="text-right py-2 px-2 font-medium">Ask</th>
+              <th className="text-right py-2 px-2 font-medium">Last</th>
+              <th className="text-right py-2 px-2 font-medium">Volume</th>
+              <th className="text-right py-2 px-2 font-medium">OI</th>
+              <th className="text-right py-2 px-2 font-medium">IV</th>
+              <th className="text-right py-2 px-2 font-medium">Delta</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.slice(0, 80).map((o, i) => (
+              <tr key={i} className="border-b border-border/30 hover:bg-accent/5">
+                <td className="py-1.5 pr-3 text-muted-foreground">{o.expiration_date ?? "—"}</td>
+                <td className="text-right py-1.5 px-2 font-medium text-foreground">{fmt(o.strike)}</td>
+                <td className="text-right py-1.5 px-2 text-foreground">{fmt(o.bid)}</td>
+                <td className="text-right py-1.5 px-2 text-foreground">{fmt(o.ask)}</td>
+                <td className="text-right py-1.5 px-2 text-foreground">{fmt(o.last_price)}</td>
+                <td className="text-right py-1.5 px-2 text-muted-foreground">{o.volume ? fmtK(o.volume) : "—"}</td>
+                <td className="text-right py-1.5 px-2 text-muted-foreground">{o.open_interest ? fmtK(o.open_interest) : "—"}</td>
+                <td className="text-right py-1.5 px-2 text-muted-foreground">
+                  {o.implied_volatility ? `${(o.implied_volatility * 100).toFixed(1)}%` : "—"}
+                </td>
+                <td className="text-right py-1.5 px-2 text-muted-foreground">{fmt(o.delta, 3)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── TW tab panels ──────────────────────────────────────────────────
+
+function InstitutionalPanel({ symbol }: { symbol: string }) {
+  const { data = [], isLoading } = useQuery({
+    queryKey: ["institutional", symbol],
+    queryFn: () => fetchInstitutional(symbol),
+    staleTime: 300_000,
+  });
+
+  if (isLoading) return <Loading />;
+  if (!data.length) return <div className="p-6 text-muted-foreground text-sm">No institutional data.</div>;
+
+  const chartData = [...data].reverse().slice(-30).map((r) => ({
+    date: r.date.slice(5),
+    fini: Math.round((r.fini_buy - r.fini_sell) / 1000),
+    sitc: Math.round((r.sitc_buy - r.sitc_sell) / 1000),
+    dealer: Math.round((r.dealer_buy - r.dealer_sell) / 1000),
+  }));
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="space-y-4">
+        {/* net buy bar chart */}
+        <div>
+          <h4 className="text-xs font-semibold text-foreground mb-2">外資淨買超（千股，近 30 日）</h4>
+          <ResponsiveContainer width="100%" height={120}>
+            <BarChart data={chartData} margin={{ left: 0, right: 0 }}>
+              <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#6b7280" }} interval="preserveStartEnd" />
+              <YAxis tick={{ fontSize: 10, fill: "#6b7280" }} width={40} />
+              <Tooltip contentStyle={{ background: "#111827", border: "1px solid #374151", fontSize: 11 }} />
+              <ReferenceLine y={0} stroke="#374151" />
+              <Bar dataKey="fini" name="外資" radius={[2, 2, 0, 0]}>
+                {chartData.map((d, i) => (
+                  <Cell key={i} fill={d.fini >= 0 ? "#22c55e" : "#ef4444"} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* table */}
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-border text-muted-foreground">
+                <th className="text-left py-2 pr-4 font-medium">日期</th>
+                <th className="text-right py-2 px-2 font-medium">外資買</th>
+                <th className="text-right py-2 px-2 font-medium">外資賣</th>
+                <th className="text-right py-2 px-2 font-medium text-green-400">外資淨</th>
+                <th className="text-right py-2 px-2 font-medium">投信買</th>
+                <th className="text-right py-2 px-2 font-medium">投信賣</th>
+                <th className="text-right py-2 px-2 font-medium text-blue-400">投信淨</th>
+                <th className="text-right py-2 px-2 font-medium text-purple-400">自營淨</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...data].reverse().slice(0, 30).map((r) => {
+                const finiNet = r.fini_buy - r.fini_sell;
+                const sitcNet = r.sitc_buy - r.sitc_sell;
+                const dealerNet = r.dealer_buy - r.dealer_sell;
+                return (
+                  <tr key={r.date} className="border-b border-border/30 hover:bg-accent/5">
+                    <td className="py-1.5 pr-4 text-muted-foreground">{r.date}</td>
+                    <td className="text-right py-1.5 px-2">{fmtK(r.fini_buy)}</td>
+                    <td className="text-right py-1.5 px-2">{fmtK(r.fini_sell)}</td>
+                    <td className={`text-right py-1.5 px-2 font-medium ${finiNet >= 0 ? "text-green-400" : "text-red-400"}`}>
+                      {finiNet >= 0 ? "+" : ""}{fmtK(Math.abs(finiNet))}
+                    </td>
+                    <td className="text-right py-1.5 px-2">{fmtK(r.sitc_buy)}</td>
+                    <td className="text-right py-1.5 px-2">{fmtK(r.sitc_sell)}</td>
+                    <td className={`text-right py-1.5 px-2 font-medium ${sitcNet >= 0 ? "text-green-400" : "text-red-400"}`}>
+                      {sitcNet >= 0 ? "+" : ""}{fmtK(Math.abs(sitcNet))}
+                    </td>
+                    <td className={`text-right py-1.5 px-2 font-medium ${dealerNet >= 0 ? "text-green-400" : "text-red-400"}`}>
+                      {dealerNet >= 0 ? "+" : ""}{fmtK(Math.abs(dealerNet))}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MarginPanel({ symbol }: { symbol: string }) {
+  const { data = [], isLoading } = useQuery({
+    queryKey: ["margin", symbol],
+    queryFn: () => fetchMargin(symbol),
+    staleTime: 300_000,
+  });
+
+  if (isLoading) return <Loading />;
+  if (!data.length) return <div className="p-6 text-muted-foreground text-sm">No margin data.</div>;
+
+  const chartData = [...data].reverse().slice(-30).map((r) => ({
+    date: r.date.slice(5),
+    margin_balance: Math.round(r.margin_balance / 1000),
+    short_balance: Math.round(r.short_balance / 1000),
+  }));
+
+  return (
+    <div className="p-4 space-y-4">
+      <div>
+        <h4 className="text-xs font-semibold text-foreground mb-2">融資融券餘額（千股，近 30 日）</h4>
+        <ResponsiveContainer width="100%" height={130}>
+          <BarChart data={chartData} margin={{ left: 0, right: 0 }}>
+            <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#6b7280" }} interval="preserveStartEnd" />
+            <YAxis tick={{ fontSize: 10, fill: "#6b7280" }} width={45} />
+            <Tooltip contentStyle={{ background: "#111827", border: "1px solid #374151", fontSize: 11 }} />
+            <Bar dataKey="margin_balance" name="融資餘額" fill="#3b82f6" radius={[2, 2, 0, 0]} />
+            <Bar dataKey="short_balance" name="融券餘額" fill="#f59e0b" radius={[2, 2, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-border text-muted-foreground">
+              <th className="text-left py-2 pr-4 font-medium">日期</th>
+              <th className="text-right py-2 px-2 font-medium text-blue-400">融資買入</th>
+              <th className="text-right py-2 px-2 font-medium text-blue-400">融資餘額</th>
+              <th className="text-right py-2 px-2 font-medium text-yellow-400">融券賣出</th>
+              <th className="text-right py-2 px-2 font-medium text-yellow-400">融券餘額</th>
+              <th className="text-right py-2 px-2 font-medium">券資比</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...data].reverse().slice(0, 30).map((r) => {
+              const ratio = r.margin_balance > 0 ? (r.short_balance / r.margin_balance) * 100 : null;
+              return (
+                <tr key={r.date} className="border-b border-border/30 hover:bg-accent/5">
+                  <td className="py-1.5 pr-4 text-muted-foreground">{r.date}</td>
+                  <td className="text-right py-1.5 px-2 text-blue-400">{fmtK(r.margin_purchase)}</td>
+                  <td className="text-right py-1.5 px-2 text-blue-400 font-medium">{fmtK(r.margin_balance)}</td>
+                  <td className="text-right py-1.5 px-2 text-yellow-400">{fmtK(r.short_sale)}</td>
+                  <td className="text-right py-1.5 px-2 text-yellow-400 font-medium">{fmtK(r.short_balance)}</td>
+                  <td className="text-right py-1.5 px-2 text-muted-foreground">
+                    {ratio != null ? `${ratio.toFixed(1)}%` : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function RevenuePanel({ symbol }: { symbol: string }) {
+  const { data = [], isLoading } = useQuery({
+    queryKey: ["revenue", symbol],
+    queryFn: () => fetchRevenue(symbol),
+    staleTime: 3_600_000,
+  });
+
+  if (isLoading) return <Loading />;
+  if (!data.length) return <div className="p-6 text-muted-foreground text-sm">No revenue data.</div>;
+
+  const chartData = [...data].reverse().slice(-24).map((r) => ({
+    date: r.date.slice(0, 7),
+    revenue: Math.round(r.revenue / 1000),   // millions NTD
+    yoy: r.revenue_yoy,
+  }));
+
+  return (
+    <div className="p-4 space-y-4">
+      <div>
+        <h4 className="text-xs font-semibold text-foreground mb-2">月營收（百萬新台幣）</h4>
+        <ResponsiveContainer width="100%" height={130}>
+          <BarChart data={chartData} margin={{ left: 0, right: 0 }}>
+            <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#6b7280" }} interval="preserveStartEnd" />
+            <YAxis tick={{ fontSize: 10, fill: "#6b7280" }} width={50} />
+            <Tooltip
+              contentStyle={{ background: "#111827", border: "1px solid #374151", fontSize: 11 }}
+              formatter={(v: number) => [`${v}M NTD`, "Revenue"]}
+            />
+            <Bar dataKey="revenue" name="月營收" fill="#6366f1" radius={[2, 2, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-border text-muted-foreground">
+              <th className="text-left py-2 pr-4 font-medium">月份</th>
+              <th className="text-right py-2 px-2 font-medium">營收（千元）</th>
+              <th className="text-right py-2 px-2 font-medium">月增率</th>
+              <th className="text-right py-2 px-2 font-medium">年增率</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...data].reverse().slice(0, 24).map((r) => (
+              <tr key={r.date} className="border-b border-border/30 hover:bg-accent/5">
+                <td className="py-1.5 pr-4 text-muted-foreground">{r.date.slice(0, 7)}</td>
+                <td className="text-right py-1.5 px-2 text-foreground font-medium">
+                  {r.revenue.toLocaleString()}
+                </td>
+                <td className={`text-right py-1.5 px-2 font-medium ${
+                  r.revenue_mom == null ? "text-muted-foreground"
+                  : r.revenue_mom >= 0 ? "text-green-400" : "text-red-400"
+                }`}>
+                  {r.revenue_mom == null ? "—" : fmtPct(r.revenue_mom, true)}
+                </td>
+                <td className={`text-right py-1.5 px-2 font-medium ${
+                  r.revenue_yoy == null ? "text-muted-foreground"
+                  : r.revenue_yoy >= 0 ? "text-green-400" : "text-red-400"
+                }`}>
+                  {r.revenue_yoy == null ? "—" : fmtPct(r.revenue_yoy, true)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // ── main page ──────────────────────────────────────────────────────
 
 export default function StockDetailPage() {
@@ -78,31 +544,31 @@ export default function StockDetailPage() {
   const sym = symbol.toUpperCase();
 
   const [period, setPeriod] = useState<Period>("1y");
+  const [usTab, setUsTab] = useState<USTab>("chart");
+  const [twTab, setTwTab] = useState<TWTab>("chart");
   const [livePrice, setLivePrice] = useState<number | null>(null);
   const [liveChange, setLiveChange] = useState<number | null>(null);
 
-  // Static quote for initial load
   const { data: quote } = useQuery({
     queryKey: ["quote", mkt, sym],
     queryFn: () => fetchQuote(mkt, sym),
     staleTime: 15_000,
   });
 
-  // OHLCV bars
   const { data: bars = [], isLoading: barsLoading } = useQuery({
     queryKey: ["history", mkt, sym, period],
     queryFn: () => fetchHistory(mkt, sym, period),
     staleTime: 60_000,
+    enabled: mkt === "US" ? usTab === "chart" : twTab === "chart",
   });
 
-  // Fundamentals
   const { data: fundamentals } = useQuery({
     queryKey: ["fundamentals", mkt, sym],
-    queryFn: () => fetchFundamentals(mkt, sym),
-    staleTime: 60_000 * 60,
+    queryFn: () => fetchFundamentals(sym),
+    staleTime: 3_600_000,
+    enabled: mkt === "US",
   });
 
-  // Live WebSocket updates
   useWebSocket(`${sym}:${mkt}`, (data: unknown) => {
     const d = data as Record<string, number>;
     if (d.price) setLivePrice(d.price);
@@ -113,18 +579,10 @@ export default function StockDetailPage() {
   const displayChange = liveChange ?? (quote?.change_pct as number | undefined);
   const isPositive = (displayChange ?? 0) >= 0;
 
-  function fmt(n: number | null | undefined, digits = 2) {
-    if (n === null || n === undefined) return "—";
-    return n.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
-  }
-
-  function fmtPct(n: number | null | undefined) {
-    if (n === null || n === undefined) return "—";
-    return `${n >= 0 ? "+" : ""}${(n * 100).toFixed(2)}%`;
-  }
+  const showChart = mkt === "US" ? usTab === "chart" : twTab === "chart";
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 space-y-5">
       {/* breadcrumb */}
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <button onClick={() => navigate(`/market/${mkt}`)} className="hover:text-foreground transition-colors">
@@ -138,7 +596,16 @@ export default function StockDetailPage() {
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold text-foreground">{sym}</h1>
-          {quote?.name && <p className="text-sm text-muted-foreground mt-0.5">{quote.name as string}</p>}
+          {(quote?.name || quote?.name_zh) && (
+            <p className="text-sm text-muted-foreground mt-0.5">
+              {(quote.name ?? quote.name_zh) as string}
+              {mkt === "TW" && quote?.exchange && (
+                <span className="ml-2 text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded">
+                  {quote.exchange as string}
+                </span>
+              )}
+            </p>
+          )}
         </div>
         <div className="text-right">
           <div className="text-3xl font-bold text-foreground">
@@ -147,58 +614,126 @@ export default function StockDetailPage() {
           <div className={`text-sm font-medium ${isPositive ? "text-green-400" : "text-red-400"}`}>
             {displayChange !== undefined ? fmtPct(displayChange) : "—"}
           </div>
-          {quote?.currency && (
-            <div className="text-xs text-muted-foreground mt-0.5">{quote.currency as string}</div>
-          )}
+          <div className="text-xs text-muted-foreground mt-0.5">
+            {mkt === "US" ? (quote?.currency as string ?? "USD") : "TWD"}
+          </div>
         </div>
       </div>
 
-      {/* chart + fundamentals */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        {/* chart (3/4 width) */}
-        <div className="lg:col-span-3 bg-card border border-border rounded-lg overflow-hidden">
-          {/* period selector */}
-          <div className="flex items-center gap-1 px-4 pt-3 pb-2 border-b border-border">
-            {(["1d", "5d", "1mo", "3mo", "1y", "5y"] as Period[]).map((p) => (
-              <PeriodButton key={p} active={p === period} label={p} onClick={() => setPeriod(p)} />
-            ))}
+      {/* tabs */}
+      <div className="flex border-b border-border">
+        {mkt === "US" ? (
+          <>
+            <TabButton active={usTab === "chart"} label="Chart" onClick={() => setUsTab("chart")} />
+            <TabButton active={usTab === "financials"} label="Financials" onClick={() => setUsTab("financials")} />
+            <TabButton active={usTab === "options"} label="Options" onClick={() => setUsTab("options")} />
+          </>
+        ) : (
+          <>
+            <TabButton active={twTab === "chart"} label="K 線" onClick={() => setTwTab("chart")} />
+            <TabButton active={twTab === "institutional"} label="法人買賣超" onClick={() => setTwTab("institutional")} />
+            <TabButton active={twTab === "margin"} label="融資融券" onClick={() => setTwTab("margin")} />
+            <TabButton active={twTab === "revenue"} label="月營收" onClick={() => setTwTab("revenue")} />
+          </>
+        )}
+      </div>
+
+      {/* chart tab */}
+      {showChart && (
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-5">
+          {/* chart */}
+          <div className="lg:col-span-3 bg-card border border-border rounded-lg overflow-hidden">
+            <div className="flex items-center gap-1 px-4 pt-3 pb-2 border-b border-border">
+              {(["1d", "5d", "1mo", "3mo", "1y", "5y"] as Period[]).map((p) => (
+                <PeriodButton key={p} active={p === period} label={p} onClick={() => setPeriod(p)} />
+              ))}
+            </div>
+            <div className="p-3">
+              {barsLoading ? (
+                <div className="h-[360px] flex items-center justify-center text-muted-foreground text-sm animate-pulse">
+                  Loading chart…
+                </div>
+              ) : bars.length === 0 ? (
+                <div className="h-[360px] flex items-center justify-center text-muted-foreground text-sm">
+                  No data available
+                </div>
+              ) : (
+                <CandlestickChart bars={bars} height={360} />
+              )}
+            </div>
           </div>
-          <div className="p-3">
-            {barsLoading ? (
-              <div className="h-[360px] flex items-center justify-center text-muted-foreground text-sm animate-pulse">
-                Loading chart…
-              </div>
-            ) : bars.length === 0 ? (
-              <div className="h-[360px] flex items-center justify-center text-muted-foreground text-sm">
-                No data available
-              </div>
+
+          {/* stats sidebar */}
+          <div className="bg-card border border-border rounded-lg p-4">
+            <h3 className="text-sm font-semibold text-foreground mb-3">
+              {mkt === "US" ? "Fundamentals" : "基本資料"}
+            </h3>
+            {mkt === "US" ? (
+              <>
+                <StatRow label="Market Cap" value={
+                  quote?.market_cap
+                    ? `$${((quote.market_cap as number) / 1e9).toFixed(2)}B`
+                    : "—"
+                } />
+                <StatRow label="P/E Ratio" value={fmt(fundamentals?.pe_ratio as number | null)} />
+                <StatRow label="P/B Ratio" value={fmt(fundamentals?.pb_ratio as number | null)} />
+                <StatRow label="EPS" value={fmt(fundamentals?.eps as number | null)} />
+                <StatRow label="Beta" value={fmt(fundamentals?.beta as number | null)} />
+                <StatRow label="Div. Yield" value={
+                  fundamentals?.dividend_yield
+                    ? `${((fundamentals.dividend_yield as number) * 100).toFixed(2)}%`
+                    : "—"
+                } />
+                <StatRow label="52W High" value={fmt(fundamentals?.fifty_two_week_high as number | null)} />
+                <StatRow label="52W Low" value={fmt(fundamentals?.fifty_two_week_low as number | null)} />
+                <StatRow label="Sector" value={fundamentals?.sector as string | null} />
+              </>
             ) : (
-              <CandlestickChart bars={bars} height={360} />
+              <>
+                <StatRow label="開盤" value={fmt(quote?.open as number | null)} />
+                <StatRow label="最高" value={fmt(quote?.high as number | null)} />
+                <StatRow label="最低" value={fmt(quote?.low as number | null)} />
+                <StatRow label="昨收" value={fmt(quote?.prev_close as number | null)} />
+                <StatRow label="成交量" value={quote?.volume ? (quote.volume as number).toLocaleString() : "—"} />
+                <StatRow label="市場" value={quote?.exchange as string | null} />
+              </>
             )}
+            <StatRow label="Volume" value={quote?.volume ? (quote.volume as number).toLocaleString() : "—"} />
           </div>
         </div>
+      )}
 
-        {/* fundamentals (1/4 width) */}
-        <div className="bg-card border border-border rounded-lg p-4">
-          <h3 className="text-sm font-semibold text-foreground mb-3">Fundamentals</h3>
-          <StatRow label="Market Cap" value={quote?.market_cap ? `$${((quote.market_cap as number) / 1e9).toFixed(2)}B` : "—"} />
-          <StatRow label="P/E Ratio" value={fmt(fundamentals?.pe_ratio as number | null)} />
-          <StatRow label="P/B Ratio" value={fmt(fundamentals?.pb_ratio as number | null)} />
-          <StatRow label="EPS" value={fmt(fundamentals?.eps as number | null)} />
-          <StatRow label="Beta" value={fmt(fundamentals?.beta as number | null)} />
-          <StatRow label="Dividend Yield" value={fundamentals?.dividend_yield ? fmtPct(fundamentals.dividend_yield as number) : "—"} />
-          <StatRow label="52W High" value={fmt(fundamentals?.fifty_two_week_high as number | null)} />
-          <StatRow label="52W Low" value={fmt(fundamentals?.fifty_two_week_low as number | null)} />
-          <StatRow label="Sector" value={fundamentals?.sector as string | null} />
-          {mkt === "TW" && fundamentals?.foreign_ownership_pct !== undefined && (
-            <StatRow label="Foreign Own." value={fmtPct((fundamentals.foreign_ownership_pct as number) / 100)} />
-          )}
-          <StatRow label="Volume" value={quote?.volume ? (quote.volume as number).toLocaleString() : "—"} />
+      {/* US non-chart tabs */}
+      {mkt === "US" && usTab === "financials" && (
+        <div className="bg-card border border-border rounded-lg overflow-hidden">
+          <FinancialsPanel symbol={sym} />
         </div>
-      </div>
+      )}
+      {mkt === "US" && usTab === "options" && (
+        <div className="bg-card border border-border rounded-lg overflow-hidden">
+          <OptionsPanel symbol={sym} />
+        </div>
+      )}
 
-      {/* description */}
-      {fundamentals?.description && (
+      {/* TW non-chart tabs */}
+      {mkt === "TW" && twTab === "institutional" && (
+        <div className="bg-card border border-border rounded-lg overflow-hidden">
+          <InstitutionalPanel symbol={sym} />
+        </div>
+      )}
+      {mkt === "TW" && twTab === "margin" && (
+        <div className="bg-card border border-border rounded-lg overflow-hidden">
+          <MarginPanel symbol={sym} />
+        </div>
+      )}
+      {mkt === "TW" && twTab === "revenue" && (
+        <div className="bg-card border border-border rounded-lg overflow-hidden">
+          <RevenuePanel symbol={sym} />
+        </div>
+      )}
+
+      {/* US description */}
+      {mkt === "US" && usTab === "chart" && fundamentals?.description && (
         <div className="bg-card border border-border rounded-lg p-4">
           <h3 className="text-sm font-semibold text-foreground mb-2">About</h3>
           <p className="text-xs text-muted-foreground leading-relaxed line-clamp-4">

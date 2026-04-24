@@ -88,15 +88,19 @@ function MacroChart({
       </div>
       <ResponsiveContainer width="100%" height={220}>
         <LineChart data={clean} margin={{ left: 0, right: 8, top: 4, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+          <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
           <XAxis
             dataKey="date"
-            tick={{ fontSize: 10, fill: "#6b7280" }}
+            tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
             interval="preserveStartEnd"
           />
-          <YAxis tick={{ fontSize: 10, fill: "#6b7280" }} width={45} />
+          <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} width={45} />
           <Tooltip
-            contentStyle={{ background: "#111827", border: "1px solid #374151", fontSize: 11 }}
+            contentStyle={{
+              background: "hsl(var(--card))",
+              border: "1px solid hsl(var(--border))",
+              fontSize: 11,
+            }}
             formatter={(v: number) => [`${v.toFixed(3)} ${unit}`, indicator]}
           />
           {indicator === "10Y−2Y Spread" && <ReferenceLine y={0} stroke="#6b7280" strokeDasharray="4 4" />}

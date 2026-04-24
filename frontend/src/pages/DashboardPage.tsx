@@ -66,7 +66,7 @@ interface NewsItem {
 function RecentNews() {
   const { data: items = [], isLoading } = useQuery<NewsItem[]>({
     queryKey: ["news", "US", "SPY"],
-    queryFn: () => api.get("/api/us/news/SPY").then((r) => r.data),
+    queryFn: () => api.get("/us/news/SPY").then((r) => r.data),
     staleTime: 5 * 60_000,
   });
 

@@ -4,6 +4,7 @@ import { useAuthStore } from "@/store/authStore";
 import { silentRefresh } from "@/lib/auth";
 
 import AppLayout from "@/components/layout/AppLayout";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import LoginPage from "@/pages/LoginPage";
 import DashboardPage from "@/pages/DashboardPage";
 import MarketPage from "@/pages/MarketPage";
@@ -16,6 +17,7 @@ import WatchlistPage from "@/pages/WatchlistPage";
 import AIPage from "@/pages/AIPage";
 import AlertsPage from "@/pages/AlertsPage";
 import SettingsPage from "@/pages/SettingsPage";
+import AdminPage from "@/pages/AdminPage";
 
 // ── Protected route ───────────────────────────────────────────────
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -42,33 +44,36 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
+      <ErrorBoundary>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
 
-        {/* All authenticated pages share the AppLayout (sidebar + main area) */}
-        <Route
-          element={
-            <RequireAuth>
-              <AppLayout />
-            </RequireAuth>
-          }
-        >
-          <Route path="/dashboard" element={<DashboardPage />} />
-          <Route path="/market/:market" element={<MarketPage />} />
-          <Route path="/stock/:market/:symbol" element={<StockDetailPage />} />
-          <Route path="/screener" element={<ScreenerPage />} />
-          <Route path="/portfolio" element={<PortfolioPage />} />
-          <Route path="/analytics" element={<AnalyticsPage />} />
-          <Route path="/macro" element={<MacroPage />} />
-          <Route path="/watchlist" element={<WatchlistPage />} />
-          <Route path="/alerts" element={<AlertsPage />} />
-          <Route path="/ai" element={<AIPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-        </Route>
+          {/* All authenticated pages share the AppLayout (sidebar + main area) */}
+          <Route
+            element={
+              <RequireAuth>
+                <AppLayout />
+              </RequireAuth>
+            }
+          >
+            <Route path="/dashboard" element={<ErrorBoundary><DashboardPage /></ErrorBoundary>} />
+            <Route path="/market/:market" element={<ErrorBoundary><MarketPage /></ErrorBoundary>} />
+            <Route path="/stock/:market/:symbol" element={<ErrorBoundary><StockDetailPage /></ErrorBoundary>} />
+            <Route path="/screener" element={<ErrorBoundary><ScreenerPage /></ErrorBoundary>} />
+            <Route path="/portfolio" element={<ErrorBoundary><PortfolioPage /></ErrorBoundary>} />
+            <Route path="/analytics" element={<ErrorBoundary><AnalyticsPage /></ErrorBoundary>} />
+            <Route path="/macro" element={<ErrorBoundary><MacroPage /></ErrorBoundary>} />
+            <Route path="/watchlist" element={<ErrorBoundary><WatchlistPage /></ErrorBoundary>} />
+            <Route path="/alerts" element={<ErrorBoundary><AlertsPage /></ErrorBoundary>} />
+            <Route path="/ai" element={<ErrorBoundary><AIPage /></ErrorBoundary>} />
+            <Route path="/settings" element={<ErrorBoundary><SettingsPage /></ErrorBoundary>} />
+            <Route path="/admin" element={<ErrorBoundary><AdminPage /></ErrorBoundary>} />
+          </Route>
 
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
-      </Routes>
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        </Routes>
+      </ErrorBoundary>
     </BrowserRouter>
   );
 }

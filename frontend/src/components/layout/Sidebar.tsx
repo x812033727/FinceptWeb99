@@ -1,6 +1,7 @@
 import { NavLink } from "react-router-dom";
 import { logout } from "@/lib/auth";
 import { useNavigate } from "react-router-dom";
+import { useAuthStore } from "@/store/authStore";
 
 interface NavItem {
   to: string;
@@ -22,8 +23,27 @@ const NAV: NavItem[] = [
   { to: "/settings", label: "Settings", icon: "⚙" },
 ];
 
+function NavItem({ item }: { item: NavItem }) {
+  return (
+    <NavLink
+      to={item.to}
+      className={({ isActive }) =>
+        `flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors ${
+          isActive
+            ? "bg-primary/15 text-primary font-medium"
+            : "text-muted-foreground hover:text-foreground hover:bg-accent/10"
+        }`
+      }
+    >
+      <span className="text-base leading-none">{item.icon}</span>
+      {item.label}
+    </NavLink>
+  );
+}
+
 export default function Sidebar() {
   const navigate = useNavigate();
+  const role = useAuthStore((s) => s.user?.role);
 
   async function handleLogout() {
     await logout();
@@ -41,21 +61,11 @@ export default function Sidebar() {
       {/* nav */}
       <nav className="flex-1 overflow-y-auto py-3 space-y-0.5 px-2">
         {NAV.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            className={({ isActive }) =>
-              `flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors ${
-                isActive
-                  ? "bg-primary/15 text-primary font-medium"
-                  : "text-muted-foreground hover:text-foreground hover:bg-accent/10"
-              }`
-            }
-          >
-            <span className="text-base leading-none">{item.icon}</span>
-            {item.label}
-          </NavLink>
+          <NavItem key={item.to} item={item} />
         ))}
+        {role === "admin" && (
+          <NavItem item={{ to: "/admin", label: "Admin", icon: "🛡" }} />
+        )}
       </nav>
 
       {/* footer */}

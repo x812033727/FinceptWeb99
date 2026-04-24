@@ -98,6 +98,9 @@ app.include_router(watchlist_router, prefix="/api/watchlist", tags=["Watchlist"]
 from api.alerts.router import router as alerts_router
 app.include_router(alerts_router, prefix="/api/alerts", tags=["Alerts"])
 
+from api.admin.router import router as admin_router
+app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
+
 
 @app.get("/metrics", include_in_schema=False)
 async def prometheus_metrics(request: Request) -> Response:

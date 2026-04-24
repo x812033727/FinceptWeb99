@@ -23,6 +23,25 @@
   }
 }
 
+/* Light theme overrides — applied when <html data-light> is set */
+[data-light] {
+  --background: 210 20% 98%;
+  --foreground: 222 47% 11%;
+  --primary: 199 89% 38%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 210 20% 93%;
+  --secondary-foreground: 222 47% 11%;
+  --muted: 210 20% 90%;
+  --muted-foreground: 215 16% 40%;
+  --accent: 199 89% 38%;
+  --accent-foreground: 0 0% 100%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --border: 214 32% 85%;
+  --input: 210 20% 92%;
+  --ring: 199 89% 38%;
+}
+
 @layer base {
   * {
     @apply border-border;

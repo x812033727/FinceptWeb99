@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import "./index.css";
+import "@/store/themeStore"; // eagerly initialize theme (applies data-light attribute)
 
 const queryClient = new QueryClient({
   defaultOptions: {

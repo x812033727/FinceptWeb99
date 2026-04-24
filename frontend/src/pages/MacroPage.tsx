@@ -103,7 +103,7 @@ function MacroChart({
             }}
             formatter={(v: number) => [`${v.toFixed(3)} ${unit}`, indicator]}
           />
-          {indicator === "10Y−2Y Spread" && <ReferenceLine y={0} stroke="#6b7280" strokeDasharray="4 4" />}
+          {indicator === "10Y−2Y Spread" && <ReferenceLine y={0} stroke="hsl(var(--muted-foreground))" strokeDasharray="4 4" />}
           <Line
             type="monotone"
             dataKey="value"

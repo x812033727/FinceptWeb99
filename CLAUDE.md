@@ -68,14 +68,14 @@ FinceptWeb/
 │   ├── tasks/            # APScheduler jobs (US 10s, TW 60s, off-hours throttle)
 │   ├── tests/            # pytest — in-memory SQLite + AsyncMock Redis
 │   │   ├── test_admin_api.py       # 11 tests: stats, user list, role/active CRUD
-│   │   ├── test_alerts_api.py      # 9 tests: CRUD, check-and-fire logic
+│   │   ├── test_alerts_api.py      # 8 tests: CRUD, check-and-fire logic
 │   │   ├── test_analytics.py       # 25 unit tests: DCF, VaR, backtest (pure)
 │   │   ├── test_analytics_api.py   # 15 tests: DCF/VaR/backtest HTTP endpoints
-│   │   ├── test_auth_api.py        # 16 tests: register, login, refresh, API keys
-│   │   ├── test_portfolio_api.py   # 11 tests: portfolio + transaction CRUD
+│   │   ├── test_auth_api.py        # 14 tests: register, login, refresh, API keys
+│   │   ├── test_portfolio_api.py   # 12 tests: portfolio + transaction CRUD
 │   │   ├── test_portfolio_extended.py # 14 tests: detail, performance, optimiser
 │   │   ├── test_us_market_api.py   # 21 tests: all US market endpoints
-│   │   └── test_watchlist_api.py   # 8 tests: watchlist + item CRUD
+│   │   └── test_watchlist_api.py   # 7 tests: watchlist + item CRUD
 │   ├── limiter.py        # slowapi Limiter (rate limiting on auth endpoints)
 │   ├── logging_config.py # JSON logging (prod) / plain text (debug)
 │   ├── config.py         # Pydantic Settings (env-driven)

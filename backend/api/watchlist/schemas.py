@@ -6,8 +6,8 @@ class WatchlistCreate(BaseModel):
 
 
 class WatchlistItemAdd(BaseModel):
-    symbol: str = Field(..., min_length=1, max_length=20)
-    market: str = Field(..., min_length=2, max_length=4)   # "US" | "TW"
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    market: str = Field(..., pattern=r"^(US|TW|us|tw)$")
 
 
 class WatchlistItemOut(BaseModel):

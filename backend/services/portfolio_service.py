@@ -8,6 +8,7 @@ Multi-currency rule:
   FX rate is cached 4h in Redis.
 """
 import asyncio
+import logging
 from datetime import date, timedelta
 from typing import Any
 from uuid import UUID
@@ -22,6 +23,8 @@ from data.us.fred_connector import get_latest
 from models.portfolio import Holding, Portfolio, Transaction, TransactionType
 from services.us_market_service import get_quote as us_quote, get_history as us_history
 from services.tw_market_service import get_quote as tw_quote, get_history as tw_history
+
+logger = logging.getLogger(__name__)
 
 TTL_FX = 4 * 3600
 TTL_FX_LAST_KNOWN = 30 * 86400   # 30 days — survives FRED outages
@@ -53,8 +56,15 @@ async def _get_twd_usd_rate() -> float:
 
     last_known = await cache_get(key_last)
     if last_known:
+        logger.warning(
+            "FRED DEXTW unavailable; using last-known TWD/USD rate %s", last_known,
+        )
         return float(last_known)
 
+    logger.error(
+        "FRED DEXTW unavailable and no cached rate; using hard fallback %.2f",
+        _FX_HARD_FALLBACK,
+    )
     return _FX_HARD_FALLBACK
 
 

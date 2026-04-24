@@ -5,7 +5,7 @@ from models.alert import AlertCondition
 
 
 class AlertCreate(BaseModel):
-    symbol: str = Field(..., max_length=20)
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
     market: str = Field(..., pattern="^(US|TW)$")
     condition: AlertCondition
     target_price: float = Field(..., gt=0)

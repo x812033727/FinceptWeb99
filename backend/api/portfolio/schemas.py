@@ -14,9 +14,9 @@ class PortfolioCreate(BaseModel):
 
 
 class TransactionCreate(BaseModel):
-    symbol: str = Field(..., min_length=1, max_length=20)
-    market: str = Field(..., min_length=2, max_length=4)   # "US" | "TW"
-    tx_type: str = Field(..., min_length=3, max_length=10) # "buy" | "sell" | "dividend"
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    market: str = Field(..., pattern=r"^(US|TW|us|tw)$")
+    tx_type: str = Field(..., pattern=r"^(buy|sell|dividend|BUY|SELL|DIVIDEND)$")
     quantity: float = Field(..., gt=0)
     price: float = Field(..., ge=0)
     fx_rate: float = Field(default=1.0, gt=0)

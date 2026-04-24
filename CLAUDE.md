@@ -96,9 +96,10 @@ FinceptWeb/
 │       │   # AIPage, AdminPage, AlertsPage, AnalyticsPage, DashboardPage,
 │       │   # LoginPage, MacroPage, MarketPage, PortfolioPage, ScreenerPage,
 │       │   # SettingsPage, StockDetailPage, WatchlistPage
-│       ├── store/        # Zustand: authStore, notificationStore, themeStore
+│       ├── store/        # Zustand: authStore (+ .test), notificationStore, themeStore
+│       ├── test/         # Vitest setup (jsdom + RTL cleanup)
 │       ├── types/        # TypeScript interfaces (market, portfolio, analytics)
-│       └── lib/          # api.ts (axios baseURL="/api"), auth.ts (silentRefresh)
+│       └── lib/          # api.ts (+ .test: bearer/refresh/dedup), auth.ts (silentRefresh)
 ├── helm/fincept-web/     # Kubernetes Helm chart
 ├── docker/               # nginx.conf, redis.conf
 ├── .github/workflows/    # ci.yml (pytest + ruff + tsc + eslint + build)
@@ -152,11 +153,18 @@ FinceptWeb/
 ## Running tests
 
 ```bash
+# Backend
 cd backend
 pytest tests/ -v --asyncio-mode=auto
+
+# Frontend
+cd frontend
+npm test            # one-shot
+npm run test:watch  # watch mode
 ```
 
-Tests use in-memory SQLite (aiosqlite) and AsyncMock Redis — no external services needed.
+Backend tests use in-memory SQLite (aiosqlite) and AsyncMock Redis — no external services needed.
+Frontend tests use Vitest + jsdom; see `src/test/setup.ts` for global setup.
 
 **Note:** The `client`-fixture tests (`test_auth_api`, `test_portfolio_api`, etc.) produce
 `pyo3_runtime.PanicException` errors in this dev environment due to a missing `_cffi_backend`

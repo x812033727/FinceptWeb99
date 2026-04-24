@@ -31,14 +31,15 @@ docker compose up --build
 FinceptWeb/
 ├── backend/
 │   ├── api/              # FastAPI routers, one package per domain
+│   │   ├── admin/        # User management, system stats (admin role only)
 │   │   ├── auth/         # JWT login/register/refresh/logout, API keys
-│   │   ├── us_market/    # US quotes, history, fundamentals, options, macro, news
+│   │   ├── us_market/    # US quotes, history, fundamentals, options, macro, news, search
 │   │   ├── tw_market/    # TW quotes, history, institutional, margin, revenue, news
-│   │   ├── portfolio/    # Holdings, transactions, P&L, optimizer
+│   │   ├── portfolio/    # Holdings, transactions, P&L, optimizer, performance snapshots
 │   │   ├── analytics/    # DCF, VaR, backtest
 │   │   ├── ai_agents/    # SSE streaming chat (6 CFA personas, 4 LLM providers)
 │   │   ├── watchlist/    # Multi-watchlist CRUD with live quote enrichment
-│   │   ├── alerts/       # Price alert CRUD
+│   │   ├── alerts/       # Price alert CRUD + check-and-fire
 │   │   └── websocket/    # Auth-first WS, Redis pub/sub, delta suppression
 │   ├── ai/               # LLM router + agent persona definitions
 │   ├── analytics/        # Pure computation: dcf.py, risk.py, backtest.py
@@ -55,32 +56,52 @@ FinceptWeb/
 │   ├── middleware/
 │   │   └── metrics.py    # Prometheus middleware + /metrics endpoint
 │   ├── models/           # SQLAlchemy ORM: User, APIKey, Portfolio, Holding,
-│   │                     #   Transaction, Watchlist, WatchlistItem, PriceAlert
+│   │                     #   Transaction, PortfolioSnapshot, Watchlist,
+│   │                     #   WatchlistItem, PriceAlert
 │   ├── services/         # Business logic (cached, waterfall)
+│   │   ├── alert_service.py
+│   │   ├── analytics_service.py
+│   │   ├── portfolio_service.py
+│   │   ├── tw_market_service.py
+│   │   ├── us_market_service.py
+│   │   └── watchlist_service.py
 │   ├── tasks/            # APScheduler jobs (US 10s, TW 60s, off-hours throttle)
-│   ├── tests/            # pytest with in-memory SQLite + AsyncMock Redis
+│   ├── tests/            # pytest — in-memory SQLite + AsyncMock Redis
+│   │   ├── test_admin_api.py       # 11 tests: stats, user list, role/active CRUD
+│   │   ├── test_alerts_api.py      # 9 tests: CRUD, check-and-fire logic
+│   │   ├── test_analytics.py       # 25 unit tests: DCF, VaR, backtest (pure)
+│   │   ├── test_analytics_api.py   # 15 tests: DCF/VaR/backtest HTTP endpoints
+│   │   ├── test_auth_api.py        # 16 tests: register, login, refresh, API keys
+│   │   ├── test_portfolio_api.py   # 11 tests: portfolio + transaction CRUD
+│   │   ├── test_portfolio_extended.py # 14 tests: detail, performance, optimiser
+│   │   ├── test_us_market_api.py   # 21 tests: all US market endpoints
+│   │   └── test_watchlist_api.py   # 8 tests: watchlist + item CRUD
 │   ├── limiter.py        # slowapi Limiter (rate limiting on auth endpoints)
 │   ├── logging_config.py # JSON logging (prod) / plain text (debug)
 │   ├── config.py         # Pydantic Settings (env-driven)
 │   ├── dependencies.py   # get_current_user (JWT + API key dual auth)
-│   └── main.py           # FastAPI app, middleware, routers, lifespan
+│   ├── pyproject.toml    # ruff lint config ([tool.ruff.lint] section)
+│   └── main.py           # FastAPI app — all imports at top, middleware, routers, lifespan
 ├── frontend/
 │   ├── public/           # PWA: manifest.webmanifest, sw.js, icons
 │   └── src/
 │       ├── components/
-│       │   ├── charts/   # CandlestickChart (lightweight-charts v4)
+│       │   ├── charts/   # CandlestickChart (lightweight-charts v4, theme-aware)
 │       │   ├── layout/   # AppLayout (top bar + sidebar), Sidebar, NotificationBell
 │       │   └── portfolio/ # AllocationPie, HoldingsTable
 │       ├── hooks/
 │       │   ├── useWebSocket.ts   # Singleton WS + useAlertSocket() hook
-│       │   └── usePortfolio.ts
-│       ├── pages/        # One file per route
-│       ├── store/        # Zustand: authStore, notificationStore
+│       │   └── usePortfolio.ts   # Portfolio CRUD + optimise mutations
+│       ├── pages/        # One file per route (13 pages)
+│       │   # AIPage, AdminPage, AlertsPage, AnalyticsPage, DashboardPage,
+│       │   # LoginPage, MacroPage, MarketPage, PortfolioPage, ScreenerPage,
+│       │   # SettingsPage, StockDetailPage, WatchlistPage
+│       ├── store/        # Zustand: authStore, notificationStore, themeStore
 │       ├── types/        # TypeScript interfaces (market, portfolio, analytics)
-│       └── lib/          # api.ts (axios), auth.ts (silentRefresh)
+│       └── lib/          # api.ts (axios baseURL="/api"), auth.ts (silentRefresh)
 ├── helm/fincept-web/     # Kubernetes Helm chart
 ├── docker/               # nginx.conf, redis.conf
-├── .github/workflows/    # ci.yml (pytest + lint + build), docker.yml (GHCR push)
+├── .github/workflows/    # ci.yml (pytest + ruff + tsc + eslint + build)
 ├── docker-compose.yml
 └── CLAUDE.md
 ```
@@ -125,7 +146,7 @@ FinceptWeb/
 - React 18 + TypeScript + Vite; TanStack Query (staleTime 15s)
 - lightweight-charts **v4** API (`chart.addCandlestickSeries()` — NOT v5)
 - TanStack Virtual for screener rows
-- Zustand for auth + notifications
+- Zustand for auth + notifications + theme
 - PWA: manifest + service worker (cache-first static, network-first /api/)
 
 ## Running tests
@@ -136,6 +157,25 @@ pytest tests/ -v --asyncio-mode=auto
 ```
 
 Tests use in-memory SQLite (aiosqlite) and AsyncMock Redis — no external services needed.
+
+**Note:** The `client`-fixture tests (`test_auth_api`, `test_portfolio_api`, etc.) produce
+`pyo3_runtime.PanicException` errors in this dev environment due to a missing `_cffi_backend`
+compiled extension (`ModuleNotFoundError: No module named '_cffi_backend'`). This is a
+system-level environment issue, not a code defect. The 25 pure-unit tests in `test_analytics.py`
+run cleanly. All tests pass in CI (ubuntu-latest with a full Python install).
+
+## Running lint / type-check
+
+```bash
+# Backend
+cd backend
+ruff check . --select E,W,F --ignore E501   # zero warnings expected
+
+# Frontend
+cd frontend
+npx tsc --noEmit                            # zero errors expected
+npm run lint                                # ESLint v9 flat config, zero warnings
+```
 
 ## Environment variables (backend `.env`)
 
@@ -170,7 +210,7 @@ alembic revision -m "description" --autogenerate   # generate new migration
 ```bash
 docker compose up -d
 ```
-Services: nginx (80/443) → frontend (Vite build) + backend (uvicorn, 2 workers) + timescaledb + redis
+Services: nginx (80/443) → frontend (Vite build) + backend (uvicorn, 2 workers) + postgresql + redis
 
 **Kubernetes** (Helm):
 ```bash
@@ -183,9 +223,51 @@ helm install fincept ./helm/fincept-web \
 
 ## Conventions
 
+### General
 - All backend timestamps: UTC, stored as `DateTime(timezone=True)`
 - All UUIDs: `uuid.UUID` Python type, `UUID(as_uuid=True)` SQLAlchemy column
 - TW ROC calendar offset: `int(year_str) + 1911`
 - TWSE rate limit: `asyncio.Semaphore(1)` + 1.1s delay between requests
 - No comments explaining WHAT code does; only WHY when non-obvious
 - Never use lightweight-charts v5 API in this project
+
+### Backend lint (ruff)
+- Config in `backend/pyproject.toml` under `[tool.ruff.lint]` (not `[tool.ruff]`)
+- `type PriceCache = dict[str, float]` is Python 3.12+ syntax — use plain assignment instead:
+  `PriceCache = dict[str, float]`
+- `F821` on `Mapped["User"]` string annotations → fix with `TYPE_CHECKING` guard
+
+### Frontend API calls
+- `api.ts` sets `baseURL: "/api"` — **never** include `/api` prefix in path arguments.
+  Use `api.get("/auth/me")`, not `api.get("/api/auth/me")`.
+- The two exceptions are raw `axios.post("/api/auth/refresh", ...)` in `auth.ts`
+  (uses base axios without the instance) and `fetch("/api/ai/chat", ...)` in `AIPage.tsx`
+  (uses native fetch, not the axios instance).
+
+### Frontend theme-aware chart colors
+- Recharts components: use CSS variables via string literals, e.g.
+  `stroke="hsl(var(--border))"`, `fill: "hsl(var(--muted-foreground))"`.
+- lightweight-charts (CandlestickChart): CSS variables cannot be passed directly.
+  Use `getComputedStyle(document.documentElement).getPropertyValue("--border")` and
+  wrap with `hsl(...)`. Subscribe to `useThemeStore` and call `chart.applyOptions()`
+  in a `useEffect([theme])` to re-apply colors on toggle without recreating the chart.
+- Data-series colors (`#22c55e` green, `#ef4444` red, `#3b82f6` blue, etc.) are
+  intentional semantic colors — do NOT replace with CSS variables.
+
+### Frontend ESLint (v9 flat config)
+- Config file: `frontend/eslint.config.js` using `typescript-eslint` unified package
+- `@typescript-eslint/no-explicit-any`: off
+- `react-hooks/incompatible-library`: off (TanStack Virtual not React Compiler aware)
+- "Latest callback" ref pattern (`cbRef.current = callback` during render) is valid;
+  suppress with `// eslint-disable-next-line react-hooks/refs` if flagged.
+- Sub-components defined inside a parent component body are flagged by
+  `react-hooks/static-components` — move them outside with explicit props.
+
+### @types/react 18.3 JSX pitfalls
+- `{/* comment */}` block comments in JSX produce `void` which is not in `ReactNode` —
+  this causes the next sibling expression to show a cascade type error. Remove all
+  top-level JSX block comments from component return statements.
+- `{condition && <expr>}` where `condition` has type `unknown` produces `unknown` —
+  wrap with `Boolean(condition)` or use a ternary.
+- Optional chaining: `h.current_price?.toFixed(2)` on `number | null | undefined` —
+  guard with `(h.current_price ?? 0).toFixed(2)`.

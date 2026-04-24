@@ -12,7 +12,7 @@
 
 專業級金融智能平台——伺服器版，支援 CFA 級分析、AI 自動化，以及美股、台股與全球市場數據整合。
 
-[📚 文件](#文件) · [🚀 快速啟動](#快速啟動) · [💬 討論](https://github.com/x812033727/finceptweb/discussions) · [🐛 回報問題](https://github.com/x812033727/finceptweb/issues)
+[🚀 快速啟動](#快速啟動) · [💬 討論](https://github.com/x812033727/finceptweb/discussions) · [🐛 回報問題](https://github.com/x812033727/finceptweb/issues)
 
 </div>
 
@@ -33,24 +33,45 @@
 ```
 FinceptWeb/
 ├── backend/              # FastAPI 伺服器
-│   ├── api/              # REST API 路由
-│   │   ├── us_market/    # 美股模組
-│   │   ├── tw_market/    # 台股模組
-│   │   ├── portfolio/    # 投資組合管理
-│   │   ├── analytics/    # 量化分析引擎
-│   │   └── ai_agents/    # AI 代理人
-│   ├── data/             # 資料連接器
-│   │   ├── us/           # 美股資料源（Polygon、Yahoo Finance、FRED）
-│   │   └── tw/           # 台股資料源（TWSE OpenAPI、TEJ、FinMind）
-│   └── models/           # 資料模型
-├── frontend/             # React 前端
-│   ├── components/       # UI 元件
-│   │   ├── charts/       # 圖表（K 線、成交量、指標）
-│   │   ├── screener/     # 選股工具
-│   │   └── dashboard/    # 儀表板
-│   └── pages/            # 頁面路由
-├── docker-compose.yml    # 一鍵部署
-└── docs/                 # 說明文件
+│   ├── api/              # REST API 路由（一域一套件）
+│   │   ├── auth/         # JWT 登入／註冊／刷新／登出、API 金鑰
+│   │   ├── us_market/    # 美股報價、歷史、基本面、選擇權、總經、新聞
+│   │   ├── tw_market/    # 台股行情、歷史、法人、融資券、月營收、新聞
+│   │   ├── portfolio/    # 持倉、交易紀錄、P&L、最佳化
+│   │   ├── analytics/    # DCF、VaR、策略回測
+│   │   ├── ai_agents/    # SSE 串流對話（6 CFA 人格、4 LLM 供應商）
+│   │   ├── watchlist/    # 多觀察清單 CRUD + 即時報價擴充
+│   │   ├── alerts/       # 價格警報 CRUD
+│   │   └── websocket/    # Auth-first WS、Redis Pub/Sub、delta 抑制
+│   ├── ai/               # LLM 路由器 + 代理人人格定義
+│   ├── analytics/        # 純計算：dcf.py、risk.py、backtest.py
+│   ├── auth/             # JWT handler + 角色權限
+│   ├── cache/            # Redis helpers（get/set/delete、key helpers）
+│   ├── data/
+│   │   ├── us/           # Polygon → yfinance 瀑布；FRED 連接器
+│   │   └── tw/           # TWSE → FinMind → MOPS 瀑布
+│   ├── db/               # Alembic 遷移、引擎、seed
+│   ├── middleware/        # Prometheus metrics 中介層
+│   ├── models/           # SQLAlchemy ORM：User、Portfolio、Holding 等
+│   ├── services/         # 業務邏輯（快取、瀑布）
+│   ├── tasks/            # APScheduler 排程任務
+│   └── tests/            # pytest（in-memory SQLite + AsyncMock Redis）
+├── frontend/             # React 18 + TypeScript + Vite
+│   ├── public/           # PWA：manifest、service worker、icon
+│   └── src/
+│       ├── components/
+│       │   ├── charts/   # CandlestickChart（lightweight-charts v4）
+│       │   ├── layout/   # AppLayout、Sidebar、NotificationBell
+│       │   └── portfolio/ # AllocationPie、HoldingsTable
+│       ├── hooks/        # useWebSocket、usePortfolio
+│       ├── pages/        # 每個路由一個檔案（共 13 頁）
+│       ├── store/        # Zustand：authStore、notificationStore、themeStore
+│       ├── types/        # TypeScript 介面
+│       └── lib/          # api.ts（axios）、auth.ts（silentRefresh）
+├── helm/fincept-web/     # Kubernetes Helm chart
+├── docker/               # nginx.conf、redis.conf
+├── .github/workflows/    # CI（pytest + lint + build）、Docker GHCR 推送
+└── docker-compose.yml
 ```
 
 ---
@@ -59,16 +80,14 @@ FinceptWeb/
 
 | 功能 | 說明 |
 |------|------|
-| 📊 **CFA 級分析** | DCF 估值模型、投資組合最佳化、風險指標（VaR、Sharpe Ratio）、衍生品定價 |
-| 🇺🇸 **美股整合** | 即時報價、財報分析、SEC 申報資料、選擇權鏈、ETF 持股明細、S&P 500 成分 |
-| 🇹🇼 **台股整合** | 上市櫃即時行情、籌碼分析、法人買賣超、融資融券、財報（XBRL）、MSCI 成分 |
-| 🤖 **AI 代理人** | 37 種分析框架（Buffett、Graham、Lynch 等投資大師風格）；支援 OpenAI、Anthropic、Gemini、Ollama 等多家 LLM |
-| 🌐 **100+ 資料連接器** | Yahoo Finance、Polygon、FRED、IMF、World Bank、FinMind、TWSE OpenAPI、TEJ |
-| 📈 **技術分析** | K 線圖、均線、RSI、MACD、布林通道、KD 指標、即時 WebSocket 串流 |
-| 🔬 **量化分析** | 因子模型、統計套利、回測引擎、隨機波動率、固定收益定價（QuantLib）|
-| 🧠 **AI 量化實驗室** | ML 選股模型、強化學習交易代理、HFT 回測 |
-| 👥 **多用戶管理** | JWT 認證、角色權限控管、API 金鑰管理、使用量追蹤 |
-| 🐳 **容器化部署** | Docker Compose 一鍵啟動，支援 Kubernetes 水平擴展 |
+| 📊 **CFA 級分析** | DCF 估值模型、投資組合最佳化（均值-變異數）、VaR（歷史／參數／Monte Carlo）、策略回測 |
+| 🇺🇸 **美股整合** | 即時報價、歷史 K 線、基本面、選擇權鏈、選股篩選器、S&P 500 搜尋、盈餘日期 |
+| 🇹🇼 **台股整合** | 上市櫃即時行情、法人買賣超、融資融券、月營收、財報（MOPS）、K 線圖 |
+| 🤖 **AI 代理人** | 6 位 CFA 人格（equity_analyst、risk_manager、portfolio_advisor、macro_analyst、options_strategist、quant_researcher）；支援 OpenAI、Anthropic、Gemini、Ollama |
+| 📈 **即時串流** | WebSocket（Auth-first）、Redis Pub/Sub 扇出、delta 抑制、30s 心跳 |
+| 🔬 **量化計算** | DCF 敏感度 5×3 網格、VaR Cholesky 相關、事件驅動回測（SMA crossover、RSI）|
+| 👥 **多用戶管理** | JWT（15min access + 7d refresh）、API 金鑰、三級角色（viewer / analyst / admin）|
+| 🐳 **容器化部署** | Docker Compose 一鍵啟動，Kubernetes Helm chart 水平擴展 |
 
 ---
 
@@ -79,22 +98,21 @@ FinceptWeb/
 | 類別 | 內容 |
 |------|------|
 | **交易所** | NYSE、NASDAQ、AMEX、OTC |
-| **指數** | S&P 500、NASDAQ 100、Dow Jones、Russell 2000、VIX |
-| **資料類型** | 即時報價、歷史 OHLCV、基本面、財報、SEC 申報（10-K/10-Q/8-K） |
-| **衍生品** | 選擇權鏈、隱含波動率曲面、到期行事曆 |
-| **ETF／基金** | 持股明細、溢折價、淨值追蹤 |
-| **資料來源** | Polygon.io、Yahoo Finance、FRED、SEC EDGAR、CBOE |
+| **指數** | S&P 500、NASDAQ 100、Dow Jones、Russell 2000 |
+| **資料類型** | 即時報價、歷史 OHLCV、基本面、選擇權鏈、盈餘預測 |
+| **總體經濟** | FRED（Fed Funds Rate、CPI、GDP、殖利率曲線、USD 指數、TWD/USD）|
+| **資料來源** | Polygon.io → yfinance 瀑布、FRED |
 
 ### 🇹🇼 台股（Taiwan Equities）
 
 | 類別 | 內容 |
 |------|------|
 | **交易所** | 臺灣證券交易所（TWSE）、證券櫃檯買賣中心（TPEx）|
-| **指數** | 加權股價指數（TAIEX）、OTC 指數、半導體類股指數、電子類股指數 |
-| **資料類型** | 即時行情、歷史 OHLCV、每日成交統計、借券資料 |
+| **指數** | 加權股價指數（TAIEX）、OTC 指數 |
+| **資料類型** | 即時行情、歷史 OHLCV、每日成交統計 |
 | **籌碼分析** | 外資（FINI）、投信、自營商買賣超；融資融券餘額 |
-| **財報資料** | 月營收、季報、年報（XBRL 格式）、股利政策 |
-| **資料來源** | TWSE OpenAPI、FinMind、TEJ（台灣經濟新報）、公開資訊觀測站 |
+| **財報資料** | 月營收、基本面（PE／PB／殖利率）|
+| **資料來源** | TWSE OpenAPI → FinMind → 公開資訊觀測站（MOPS）瀑布 |
 
 ---
 
@@ -107,7 +125,7 @@ git clone https://github.com/x812033727/finceptweb.git
 cd finceptweb
 
 # 複製並設定環境變數
-cp .env.example .env
+cp backend/.env.example backend/.env
 # 在 .env 中填入您的 API 金鑰（見下方說明）
 
 # 啟動所有服務
@@ -141,7 +159,10 @@ docker compose up -d
 cd backend
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt
+
+# 複製環境變數
+cp .env.example .env               # 填入 API 金鑰
 
 # 資料庫初始化
 alembic upgrade head
@@ -155,87 +176,136 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev                        # Vite dev server → http://localhost:5173
 ```
+
+#### 執行測試
+
+```bash
+cd backend
+pytest tests/ -v --asyncio-mode=auto
+```
+
+測試使用 in-memory SQLite（aiosqlite）+ AsyncMock Redis，無需外部服務。
 
 ---
 
 ## 環境變數設定
 
-在根目錄的 `.env` 中設定以下金鑰：
+`backend/.env`：
 
 ```env
 # 資料庫
-DATABASE_URL=postgresql://user:password@localhost:5432/finceptweb
+DATABASE_URL=postgresql+asyncpg://fincept:password@localhost:5432/finceptweb
 REDIS_URL=redis://localhost:6379
 
-# 美股資料
-POLYGON_API_KEY=your_polygon_key          # polygon.io
-YAHOO_FINANCE_ENABLED=true                # 免費，無需金鑰
-
-# 台股資料
-FINMIND_TOKEN=your_finmind_token          # finmindtrade.com
-TWSE_API_ENABLED=true                     # 官方免費 API
-
-# AI / LLM
-OPENAI_API_KEY=your_openai_key
-ANTHROPIC_API_KEY=your_anthropic_key
-GEMINI_API_KEY=your_gemini_key            # 可選
-OLLAMA_HOST=http://localhost:11434        # 本地 LLM
-
-# 總體經濟
-FRED_API_KEY=your_fred_key               # 美聯準免費 API
-
 # 安全性
-JWT_SECRET_KEY=your_super_secret_key
-JWT_ALGORITHM=HS256
+JWT_SECRET_KEY=<min-32-char-secret>
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=<password>
+
+# 美股資料（Polygon 為選用，fallback 至 yfinance）
+POLYGON_API_KEY=
+
+# 台股資料（FinMind 為選用）
+FINMIND_TOKEN=
+
+# 總體經濟（FRED 為選用）
+FRED_API_KEY=
+
+# AI / LLM（依需求填入）
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+GEMINI_API_KEY=
+OLLAMA_HOST=http://localhost:11434
+
+# 其他
+DEBUG=false
+CORS_ORIGINS=http://localhost:5173
 ```
 
 ---
 
 ## API 端點概覽
 
+### 認證
+
+```
+POST /api/auth/register              # 註冊
+POST /api/auth/login                 # 登入（回傳 access token）
+POST /api/auth/refresh               # 刷新 access token（httpOnly cookie）
+POST /api/auth/logout                # 登出（撤銷 refresh token）
+GET  /api/auth/me                    # 取得目前使用者
+PATCH /api/auth/me                   # 更新個人資料
+GET  /api/auth/api-keys              # 列出 API 金鑰
+POST /api/auth/api-keys              # 建立 API 金鑰
+DELETE /api/auth/api-keys/{id}       # 刪除 API 金鑰
+```
+
 ### 美股
 
 ```
-GET  /api/us/quote/{ticker}              # 即時報價
-GET  /api/us/history/{ticker}            # 歷史 K 線
-GET  /api/us/fundamentals/{ticker}       # 基本面資料
-GET  /api/us/financials/{ticker}         # 財報（損益表、資產負債、現金流）
-GET  /api/us/options/{ticker}            # 選擇權鏈
-GET  /api/us/screener                    # 選股篩選器
-GET  /api/us/indices                     # 指數行情
+GET  /api/us/quote/{ticker}          # 即時報價
+GET  /api/us/history/{ticker}        # 歷史 K 線（?period=1y&interval=1d）
+GET  /api/us/fundamentals/{ticker}   # 基本面資料
+GET  /api/us/options/{ticker}        # 選擇權鏈
+GET  /api/us/screener                # 選股篩選器（?sector=&min_market_cap=&max_pe=）
+GET  /api/us/news/{ticker}           # 個股新聞
+GET  /api/us/search                  # 代號搜尋（?q=AAPL）
+GET  /api/us/earnings/{ticker}       # 盈餘日期與預估
+GET  /api/us/macro                   # 總體經濟指標（FRED）
 ```
 
 ### 台股
 
 ```
-GET  /api/tw/quote/{symbol}              # 即時行情（e.g., 2330）
-GET  /api/tw/history/{symbol}            # 歷史 K 線
-GET  /api/tw/fundamentals/{symbol}       # 基本面
-GET  /api/tw/financials/{symbol}         # 財報
-GET  /api/tw/institutional/{symbol}      # 法人買賣超
-GET  /api/tw/margin/{symbol}             # 融資融券
-GET  /api/tw/revenue/{symbol}            # 月營收
-GET  /api/tw/screener                    # 選股篩選器
-GET  /api/tw/indices                     # 大盤指數
+GET  /api/tw/quote/{symbol}          # 即時行情（e.g., 2330）
+GET  /api/tw/history/{symbol}        # 歷史 K 線
+GET  /api/tw/fundamentals/{symbol}   # 基本面（PE／PB／殖利率）
+GET  /api/tw/institutional/{symbol}  # 法人買賣超
+GET  /api/tw/margin/{symbol}         # 融資融券
+GET  /api/tw/revenue/{symbol}        # 月營收
+GET  /api/tw/screener                # 選股篩選器
+GET  /api/tw/news/{symbol}           # 個股新聞
+GET  /api/tw/indices                 # 大盤指數
 ```
 
-### 分析
+### 投資組合
 
 ```
-POST /api/analytics/dcf                  # DCF 估值
-POST /api/analytics/portfolio/optimize   # 投資組合最佳化
-POST /api/analytics/risk/var             # VaR 計算
-POST /api/analytics/backtest             # 策略回測
+GET  /api/portfolio                  # 列出所有投資組合
+POST /api/portfolio                  # 建立投資組合
+GET  /api/portfolio/{id}             # 投資組合詳情（持倉、P&L）
+DELETE /api/portfolio/{id}           # 刪除投資組合
+POST /api/portfolio/{id}/transaction # 新增交易（buy / sell）
+GET  /api/portfolio/{id}/performance # 績效快照（?days=90）
+POST /api/portfolio/{id}/optimise    # 均值-變異數最佳化（需 analyst 角色）
+```
+
+### 分析（需 analyst 角色）
+
+```
+POST /api/analytics/dcf              # DCF 估值（敏感度網格 + bull/base/bear）
+POST /api/analytics/var              # VaR（historical / parametric / monte_carlo）
+POST /api/analytics/backtest         # 策略回測（sma_crossover / rsi_mean_reversion）
 ```
 
 ### AI 代理人
 
 ```
-POST /api/ai/analyze                     # 請 AI 分析個股
-POST /api/ai/portfolio/review            # AI 投資組合評審
-GET  /api/ai/agents                      # 列出可用代理人
+POST /api/ai/chat                    # SSE 串流對話（指定 persona + provider）
+```
+
+### 觀察清單 / 警報
+
+```
+GET  /api/watchlist                  # 列出觀察清單
+POST /api/watchlist                  # 建立觀察清單
+POST /api/watchlist/{id}/items       # 新增標的
+DELETE /api/watchlist/{id}/items/{symbol}  # 移除標的
+GET  /api/alerts                     # 列出價格警報
+POST /api/alerts                     # 建立警報
+DELETE /api/alerts/{id}              # 刪除警報
 ```
 
 ---
@@ -245,16 +315,18 @@ GET  /api/ai/agents                      # 列出可用代理人
 | 層級 | 技術 |
 |------|------|
 | **後端框架** | FastAPI 0.110+、Python 3.11+ |
-| **資料庫** | PostgreSQL 15（主要）、TimescaleDB（時間序列）|
-| **快取** | Redis 7 |
-| **即時串流** | WebSocket（FastAPI 原生）|
+| **資料庫** | PostgreSQL 15+（非同步，asyncpg）|
+| **快取** | Redis 7（報價 15s、歷史 4h、基本面 24h）|
+| **即時串流** | WebSocket（FastAPI 原生）+ Redis Pub/Sub |
 | **前端框架** | React 18、TypeScript、Vite |
 | **UI 元件庫** | shadcn/ui、Tailwind CSS |
-| **圖表** | TradingView Lightweight Charts、Recharts |
-| **量化計算** | QuantLib-Python、NumPy、Pandas、SciPy |
-| **ML 框架** | scikit-learn、PyTorch（選用）|
-| **容器化** | Docker、Docker Compose、Kubernetes（選用）|
-| **認證** | JWT（python-jose）、OAuth2 |
+| **圖表** | lightweight-charts v4、Recharts |
+| **狀態管理** | Zustand、TanStack Query |
+| **量化計算** | NumPy、Pandas、SciPy |
+| **排程** | APScheduler（US 10s / TW 60s）|
+| **認證** | JWT（python-jose）、slowapi 限速 |
+| **容器化** | Docker、Docker Compose、Kubernetes Helm |
+| **可觀測性** | Prometheus（/metrics）、JSON 結構化日誌 |
 
 ---
 
@@ -265,11 +337,11 @@ GET  /api/ai/agents                      # 列出可用代理人
 | **語言/框架** | C++20 + Qt6 | Python（FastAPI）+ React |
 | **部署方式** | 本機安裝（exe/dmg/.run）| Docker / Cloud Server |
 | **多用戶** | 單機使用 | 原生多用戶支援 |
-| **美股支援** | 部分（Yahoo Finance 等）| 深度整合（Polygon + EDGAR）|
-| **台股支援** | 無 | 完整支援（TWSE + FinMind）|
+| **美股支援** | 部分（Yahoo Finance 等）| 深度整合（Polygon + FRED）|
+| **台股支援** | 無 | 完整支援（TWSE + FinMind + MOPS）|
 | **UI 存取** | 需安裝桌面客戶端 | 任何瀏覽器 |
 | **API 對外開放** | 無 | REST API + WebSocket |
-| **AI 代理人** | 37 種（本地端）| 37 種（伺服器端，可多人共用）|
+| **AI 代理人** | 無 | 6 CFA 人格（伺服器端，多人共用）|
 | **效能** | 原生二進制，最快 | 受網路延遲影響，可水平擴展 |
 
 ---
@@ -278,20 +350,37 @@ GET  /api/ai/agents                      # 列出可用代理人
 
 | 狀態 | 里程碑 |
 |------|--------|
-| ✅ **完成** | Phase 0：專案架構、Docker Compose、TimescaleDB、nginx |
+| ✅ **完成** | Phase 0：專案架構、Docker Compose、PostgreSQL、nginx |
 | ✅ **完成** | Phase 1：JWT 認證、API 金鑰、角色權限（viewer / analyst / admin）|
 | ✅ **完成** | Phase 2：美股資料（Polygon → yfinance 瀑布、FRED 總體、S&P500 宇宙）|
 | ✅ **完成** | Phase 3：台股資料（TWSE OpenAPI → FinMind 瀑布、法人、融資券）|
 | ✅ **完成** | Phase 4：WebSocket 即時串流（Auth-first、Redis Pub/Sub、delta 抑制）|
 | ✅ **完成** | Phase 5：APScheduler（美股 10s / 台股 60s、off-hours 節流）|
-| ✅ **完成** | Phase 6：投資組合管理（多幣別 P&L、均攤成本、Sharpe 最佳化）|
-| ✅ **完成** | Phase 7：CFA 分析引擎（DCF、VaR 三種方法、事件驅動回測）|
-| ✅ **完成** | Phase 8：AI 代理人（6 人格、OpenAI / Anthropic / Gemini / Ollama SSE）|
+| ✅ **完成** | Phase 6：投資組合管理（多幣別 P&L、均攤成本、均值-變異數最佳化）|
+| ✅ **完成** | Phase 7：CFA 分析引擎（DCF + 敏感度、VaR 三種方法、事件驅動回測）|
+| ✅ **完成** | Phase 8：AI 代理人（6 CFA 人格、OpenAI / Anthropic / Gemini / Ollama SSE）|
 | ✅ **完成** | Phase 9：完整 React UI（K 線圖、選股篩選器、個股詳情、Sidebar）|
 | ✅ **完成** | Phase 10：Docker 生產強化（多階段 build、nginx 限速、Redis 認證）|
-| 🔄 **規劃中** | 選擇權鏈分析、隱含波動率曲面 |
-| 🔄 **規劃中** | Kubernetes 水平擴展、Helm Chart |
-| 🔄 **規劃中** | 行動版 PWA |
+| ✅ **完成** | Phase 11：Kubernetes Helm chart（ingress、HPA、secrets）|
+| ✅ **完成** | Phase 12：Prometheus metrics 中介層、JSON 結構化日誌 |
+| ✅ **完成** | Phase 13：PWA（manifest、service worker、cache-first 靜態）|
+| ✅ **完成** | Phase 14：觀察清單多清單 CRUD + 即時報價擴充 |
+| ✅ **完成** | Phase 15：價格警報 CRUD + WebSocket 推送 |
+| ✅ **完成** | Phase 16：Admin 頁面（使用者管理、角色升降、系統統計）|
+| ✅ **完成** | Phase 17：AI 聊天頁面（SSE 串流、6 人格切換、4 LLM 供應商）|
+| ✅ **完成** | Phase 18：Settings 頁面（個人資料、密碼、API 金鑰管理）|
+| ✅ **完成** | Phase 19：TanStack Virtual 選股篩選器（大量列渲染）|
+| ✅ **完成** | Phase 20：回測 UI（策略參數、股票曲線圖、指標表格）|
+| ✅ **完成** | Phase 21：VaR UI（多資產輸入、方法選擇、結果視覺化）|
+| ✅ **完成** | Phase 22：DCF UI（覆寫參數、敏感度表格、情境比較）|
+| ✅ **完成** | Phase 23：整合測試（auth、portfolio、TW market API 測試套件）|
+| ✅ **完成** | Phase 24：Ruff lint 修正（43 errors）、StockDetailPage 主題色修正 |
+| ✅ **完成** | Phase 25：修正前端雙 /api 前綴錯誤、新增 analytics API 整合測試 |
+| ✅ **完成** | Phase 26：PortfolioPage 主題色修正、新增 portfolio 延伸整合測試 |
+| ✅ **完成** | Phase 27：CandlestickChart 主題感知修正、新增 US market API 整合測試 |
+| 🔄 **規劃中** | 選擇權鏈分析頁面、隱含波動率曲面 |
+| 🔄 **規劃中** | 台股 XBRL 財報深度整合 |
+| 🔄 **規劃中** | 多因子選股模型（ML）|
 
 ---
 
@@ -299,13 +388,12 @@ GET  /api/ai/agents                      # 列出可用代理人
 
 歡迎貢獻新的資料連接器、AI 代理人、分析模組或前端元件。
 
-- 閱讀 [CONTRIBUTING.md](docs/CONTRIBUTING.md)
 - [回報 Bug](https://github.com/x812033727/finceptweb/issues)
 - [功能建議](https://github.com/x812033727/finceptweb/discussions)
 
 **特別歡迎以下貢獻：**
-- 台股資料連接器（TEJ、公開資訊觀測站）
-- 美股基本面分析模組
+- 台股資料連接器（TEJ、公開資訊觀測站深度整合）
+- 選擇權隱含波動率曲面計算
 - 前端圖表元件
 - 量化策略回測範例
 

@@ -201,6 +201,138 @@ function PerformanceChart({ portfolioId }: { portfolioId: string }) {
   );
 }
 
+// ── CSV export ────────────────────────────────────────────────────
+
+function exportCSV(rows: Record<string, unknown>[], filename: string) {
+  if (!rows.length) return;
+  const headers = Object.keys(rows[0]);
+  const csv = [
+    headers.join(","),
+    ...rows.map((r) =>
+      headers
+        .map((h) => {
+          const v = r[h];
+          const s = String(v ?? "");
+          return s.includes(",") || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
+        })
+        .join(",")
+    ),
+  ].join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Transaction history ───────────────────────────────────────────
+
+interface TransactionRow {
+  id: string;
+  symbol: string;
+  market: string;
+  tx_type: string;
+  quantity: number;
+  price: number;
+  fx_rate: number;
+  tx_date: string;
+  notes: string | null;
+  created_at: string;
+}
+
+function TransactionHistory({ portfolioId }: { portfolioId: string }) {
+  const { data: txns = [], isLoading } = useQuery<TransactionRow[]>({
+    queryKey: ["portfolio-transactions", portfolioId],
+    queryFn: () =>
+      api.get(`/portfolio/${portfolioId}/transactions?limit=200`).then((r) => r.data),
+    staleTime: 30_000,
+  });
+
+  function handleExport() {
+    exportCSV(
+      txns.map((t) => ({
+        date: t.tx_date,
+        symbol: t.symbol,
+        market: t.market,
+        type: t.tx_type,
+        quantity: t.quantity,
+        price: t.price,
+        fx_rate: t.fx_rate,
+        value: t.quantity * t.price,
+        notes: t.notes ?? "",
+      })),
+      `transactions-${portfolioId}.csv`
+    );
+  }
+
+  return (
+    <div className="bg-card border border-border rounded-lg p-5 space-y-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-foreground font-medium">Transaction History</h2>
+        <button
+          onClick={handleExport}
+          disabled={!txns.length}
+          className="text-xs text-primary hover:underline disabled:opacity-40"
+        >
+          Export CSV
+        </button>
+      </div>
+
+      {isLoading && <p className="text-xs text-muted-foreground animate-pulse">Loading…</p>}
+      {!isLoading && txns.length === 0 && (
+        <p className="text-xs text-muted-foreground py-4 text-center">No transactions yet.</p>
+      )}
+
+      {txns.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-border text-muted-foreground">
+                <th className="text-left py-2 pr-4 font-medium">Date</th>
+                <th className="text-left py-2 px-2 font-medium">Symbol</th>
+                <th className="text-left py-2 px-2 font-medium">Mkt</th>
+                <th className="text-left py-2 px-2 font-medium">Type</th>
+                <th className="text-right py-2 px-2 font-medium">Qty</th>
+                <th className="text-right py-2 px-2 font-medium">Price</th>
+                <th className="text-right py-2 px-2 font-medium">Value</th>
+                <th className="text-left py-2 pl-4 font-medium">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {txns.map((t) => (
+                <tr key={t.id} className="border-b border-border/30 hover:bg-accent/5">
+                  <td className="py-1.5 pr-4 text-muted-foreground">{t.tx_date}</td>
+                  <td className="py-1.5 px-2 font-medium text-primary">{t.symbol}</td>
+                  <td className="py-1.5 px-2 text-muted-foreground">{t.market}</td>
+                  <td className={`py-1.5 px-2 font-medium capitalize ${
+                    t.tx_type === "buy"      ? "text-green-400"
+                    : t.tx_type === "sell"   ? "text-red-400"
+                    : "text-amber-400"
+                  }`}>{t.tx_type}</td>
+                  <td className="py-1.5 px-2 text-right text-foreground">
+                    {t.quantity.toLocaleString()}
+                  </td>
+                  <td className="py-1.5 px-2 text-right text-foreground">
+                    {t.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </td>
+                  <td className="py-1.5 px-2 text-right text-muted-foreground">
+                    {(t.quantity * t.price).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  </td>
+                  <td className="py-1.5 pl-4 text-muted-foreground max-w-[160px] truncate">
+                    {t.notes ?? ""}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────
 export default function PortfolioPage() {
   const { data: portfolios, isLoading } = usePortfolios();
@@ -304,9 +436,28 @@ function PortfolioDetail({
   onAddTx, onOptimise, onDelete,
   optimiseResult, optimisePending, onRunOptimise,
 }: any) {
+  const [detailTab, setDetailTab] = useState<"overview" | "transactions">("overview");
+
   if (!detail) return <div className="text-muted-foreground text-sm">{isFetching ? "Loading…" : ""}</div>;
 
   const pnlPositive = detail.total_pnl >= 0;
+
+  function exportHoldings() {
+    exportCSV(
+      detail.holdings.map((h: any) => ({
+        symbol: h.symbol,
+        market: h.market,
+        quantity: h.quantity,
+        avg_cost: h.avg_cost,
+        current_price: h.current_price,
+        current_value: h.current_value,
+        unrealized_pnl: h.unrealized_pnl,
+        unrealized_pnl_pct: h.unrealized_pnl_pct,
+        weight_pct: h.weight_pct,
+      })),
+      `holdings-${portfolioId}.csv`
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -333,26 +484,54 @@ function PortfolioDetail({
         ))}
       </div>
 
-      {/* Holdings + pie */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 bg-card border border-border rounded-lg p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-foreground font-medium">Holdings</h2>
-            <button onClick={onAddTx} className="text-xs px-3 py-1 bg-primary/10 text-primary rounded hover:bg-primary/20">
-              + Transaction
-            </button>
-          </div>
-          <HoldingsTable holdings={detail.holdings} currency={detail.currency} />
-        </div>
-
-        <div className="bg-card border border-border rounded-lg p-5">
-          <h2 className="text-foreground font-medium mb-2">Allocation</h2>
-          <AllocationPie holdings={detail.holdings} />
-        </div>
+      {/* Tab selector */}
+      <div className="flex gap-1 bg-secondary/30 p-1 rounded-lg w-fit">
+        {(["overview", "transactions"] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setDetailTab(t)}
+            className={`px-4 py-1.5 text-sm rounded-md transition-colors capitalize ${
+              detailTab === t
+                ? "bg-card text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {t === "overview" ? "Overview" : "Transactions"}
+          </button>
+        ))}
       </div>
 
-      {/* Performance chart */}
-      <PerformanceChart portfolioId={portfolioId} />
+      {detailTab === "overview" && (
+        <>
+          {/* Holdings + pie */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2 bg-card border border-border rounded-lg p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-foreground font-medium">Holdings</h2>
+                <div className="flex gap-2">
+                  <button
+                    onClick={exportHoldings}
+                    disabled={!detail.holdings.length}
+                    className="text-xs text-primary hover:underline disabled:opacity-40"
+                  >
+                    Export CSV
+                  </button>
+                  <button onClick={onAddTx} className="text-xs px-3 py-1 bg-primary/10 text-primary rounded hover:bg-primary/20">
+                    + Transaction
+                  </button>
+                </div>
+              </div>
+              <HoldingsTable holdings={detail.holdings} currency={detail.currency} />
+            </div>
+
+            <div className="bg-card border border-border rounded-lg p-5">
+              <h2 className="text-foreground font-medium mb-2">Allocation</h2>
+              <AllocationPie holdings={detail.holdings} />
+            </div>
+          </div>
+
+          {/* Performance chart */}
+          <PerformanceChart portfolioId={portfolioId} />
 
       {/* Optimiser */}
       <div className="bg-card border border-border rounded-lg p-5 space-y-4">
@@ -411,6 +590,12 @@ function PortfolioDetail({
           Delete portfolio
         </button>
       </div>
+        </>
+      )}
+
+      {detailTab === "transactions" && (
+        <TransactionHistory portfolioId={portfolioId} />
+      )}
     </div>
   );
 }

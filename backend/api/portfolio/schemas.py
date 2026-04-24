@@ -1,5 +1,5 @@
 from pydantic import BaseModel, field_validator
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 
 
@@ -81,3 +81,23 @@ class OptimiseResponse(BaseModel):
     metrics: dict
     converged: bool = True
     frontier: list[dict] = []
+
+
+class TransactionResponse(BaseModel):
+    id: UUID
+    symbol: str
+    market: str
+    tx_type: str
+    quantity: float
+    price: float
+    fx_rate: float
+    tx_date: date
+    notes: str | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+    @field_validator("market", "tx_type", mode="before")
+    @classmethod
+    def enum_to_str(cls, v: object) -> str:
+        return v.value if hasattr(v, "value") else str(v)

@@ -325,3 +325,18 @@ async def get_performance(
         ).all()
     )
     return [{"date": r.snapshot_date.isoformat(), "value": r.total_value_usd} for r in rows]
+
+
+async def get_transactions(
+    portfolio_id: str, user_id: str, db: AsyncSession, limit: int = 200
+) -> list[Transaction]:
+    portfolio = await get_portfolio(portfolio_id, user_id, db)
+    if not portfolio:
+        return []
+    rows = await db.scalars(
+        select(Transaction)
+        .where(Transaction.portfolio_id == portfolio.id)
+        .order_by(Transaction.tx_date.desc(), Transaction.created_at.desc())
+        .limit(limit)
+    )
+    return list(rows.all())

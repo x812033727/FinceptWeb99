@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
+import asyncio
+from fastapi import APIRouter, Depends, HTTPException, Request
 from typing import Annotated
 
 from api.analytics.schemas import (
@@ -7,6 +8,7 @@ from api.analytics.schemas import (
     BacktestRequest, BacktestResponse,
 )
 from auth.permissions import require_analyst
+from limiter import limiter
 import services.analytics_service as svc
 
 router = APIRouter()
@@ -14,7 +16,8 @@ Analyst = Annotated[dict, Depends(require_analyst)]
 
 
 @router.post("/dcf", response_model=DCFResponse)
-async def dcf(body: DCFRequest, _: Analyst):
+@limiter.limit("10/minute")
+async def dcf(request: Request, body: DCFRequest, _: Analyst):
     """
     DCF valuation. Fetches FCF from market data automatically;
     supply 'overrides' to customise any input (wacc, growth_rate_1, etc.).
@@ -46,7 +49,8 @@ async def dcf(body: DCFRequest, _: Analyst):
 
 
 @router.post("/var", response_model=VaRResponse)
-async def var(body: VaRRequest, _: Analyst):
+@limiter.limit("5/minute")
+async def var(request: Request, body: VaRRequest, _: Analyst):
     """
     Portfolio VaR via historical simulation, parametric, or Monte Carlo.
     Use method='all' to get all three in one call.
@@ -76,7 +80,8 @@ async def var(body: VaRRequest, _: Analyst):
 
 
 @router.post("/backtest", response_model=BacktestResponse)
-async def backtest(body: BacktestRequest, _: Analyst):
+@limiter.limit("5/minute")
+async def backtest(request: Request, body: BacktestRequest, _: Analyst):
     """
     Event-driven backtest engine.
     Built-in strategies: 'sma_crossover' (params: fast, slow),
@@ -102,6 +107,3 @@ async def backtest(body: BacktestRequest, _: Analyst):
         raise HTTPException(status_code=504, detail="Backtest timed out (30s limit)")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Backtest error: {e}")
-
-
-import asyncio  # noqa: E402 — imported here to avoid circular at module load

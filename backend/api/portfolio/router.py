@@ -8,6 +8,7 @@ from api.portfolio.schemas import (
     PerformancePoint,
     PortfolioSummary,
     TransactionCreate,
+    TransactionResponse,
     OptimiseRequest,
     OptimiseResponse,
 )
@@ -93,3 +94,9 @@ async def optimise(portfolio_id: str, body: OptimiseRequest, user: Auth, db: DB)
 async def performance(portfolio_id: str, user: Auth, db: DB, days: int = 90):
     """Daily portfolio value snapshots for the last N days."""
     return await svc.get_performance(portfolio_id, user["id"], db, days=days)
+
+
+@router.get("/{portfolio_id}/transactions", response_model=list[TransactionResponse])
+async def list_transactions(portfolio_id: str, user: Auth, db: DB, limit: int = 200):
+    """All transactions for a portfolio, newest first."""
+    return await svc.get_transactions(portfolio_id, user["id"], db, limit=limit)

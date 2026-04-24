@@ -669,7 +669,7 @@ function NewsFeed({ symbol, market }: { symbol: string; market: "US" | "TW" }) {
     queryKey: ["news", market, symbol],
     queryFn: () =>
       api
-        .get(`/api/${market === "US" ? "us" : "tw"}/news/${symbol}`)
+        .get(`/${market === "US" ? "us" : "tw"}/news/${symbol}`)
         .then((r) => r.data),
     staleTime: 5 * 60_000,
   });

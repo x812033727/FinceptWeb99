@@ -43,19 +43,19 @@ function AdminContent() {
 
   const { data: stats } = useQuery<SystemStats>({
     queryKey: ["admin", "stats"],
-    queryFn: () => api.get("/api/admin/stats").then((r) => r.data),
+    queryFn: () => api.get("/admin/stats").then((r) => r.data),
   });
 
   const { data: users = [], isLoading } = useQuery<AdminUser[]>({
     queryKey: ["admin", "users"],
-    queryFn: () => api.get("/api/admin/users?limit=200").then((r) => r.data),
+    queryFn: () => api.get("/admin/users?limit=200").then((r) => r.data),
   });
 
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const updateRole = useMutation({
     mutationFn: ({ id, role }: { id: string; role: string }) =>
-      api.patch(`/api/admin/users/${id}/role`, { role }),
+      api.patch(`/admin/users/${id}/role`, { role }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin"] });
       setEditingId(null);
@@ -64,7 +64,7 @@ function AdminContent() {
 
   const toggleActive = useMutation({
     mutationFn: ({ id, is_active }: { id: string; is_active: boolean }) =>
-      api.patch(`/api/admin/users/${id}/active`, { is_active }),
+      api.patch(`/admin/users/${id}/active`, { is_active }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin"] }),
   });
 

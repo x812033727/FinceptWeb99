@@ -29,11 +29,11 @@ export default function AlertsPage() {
 
   const { data: alerts = [], isLoading } = useQuery<Alert[]>({
     queryKey: ["alerts"],
-    queryFn: () => api.get("/api/alerts").then((r) => r.data),
+    queryFn: () => api.get("/alerts").then((r) => r.data),
   });
 
   const createMut = useMutation({
-    mutationFn: (body: AlertCreate) => api.post("/api/alerts", body),
+    mutationFn: (body: AlertCreate) => api.post("/alerts", body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["alerts"] });
       setForm(EMPTY);
@@ -43,7 +43,7 @@ export default function AlertsPage() {
   });
 
   const deleteMut = useMutation({
-    mutationFn: (id: string) => api.delete(`/api/alerts/${id}`),
+    mutationFn: (id: string) => api.delete(`/alerts/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["alerts"] }),
   });
 

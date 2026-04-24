@@ -42,7 +42,7 @@ export default function SettingsPage() {
   // ── Profile ───────────────────────────────────────────────────
   const { data: me } = useQuery<UserProfile>({
     queryKey: ["me"],
-    queryFn: () => api.get("/api/auth/me").then((r) => r.data),
+    queryFn: () => api.get("/auth/me").then((r) => r.data),
   });
 
   // ── Change password ───────────────────────────────────────────
@@ -52,7 +52,7 @@ export default function SettingsPage() {
 
   const changePw = useMutation({
     mutationFn: (body: { current_password: string; new_password: string }) =>
-      api.patch("/api/auth/me", body),
+      api.patch("/auth/me", body),
     onSuccess: () => {
       setPwForm({ current: "", next: "", confirm: "" });
       setPwError("");
@@ -80,14 +80,14 @@ export default function SettingsPage() {
   // ── API Keys ──────────────────────────────────────────────────
   const { data: apiKeys = [] } = useQuery<ApiKey[]>({
     queryKey: ["api-keys"],
-    queryFn: () => api.get("/api/auth/api-keys").then((r) => r.data),
+    queryFn: () => api.get("/auth/api-keys").then((r) => r.data),
   });
 
   const [keyName, setKeyName] = useState("");
   const [newKey, setNewKey] = useState<string | null>(null);
 
   const createKey = useMutation({
-    mutationFn: (name: string) => api.post("/api/auth/api-keys", { name }),
+    mutationFn: (name: string) => api.post("/auth/api-keys", { name }),
     onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ["api-keys"] });
       setNewKey(r.data.key);
@@ -96,7 +96,7 @@ export default function SettingsPage() {
   });
 
   const deleteKey = useMutation({
-    mutationFn: (id: string) => api.delete(`/api/auth/api-keys/${id}`),
+    mutationFn: (id: string) => api.delete(`/auth/api-keys/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["api-keys"] }),
   });
 

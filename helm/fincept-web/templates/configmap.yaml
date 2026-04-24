@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "fincept-web.fullname" . }}-backend-env
+  labels:
+    {{- include "fincept-web.labels" . | nindent 4 }}
+data:
+  DEBUG: {{ .Values.env.backend.DEBUG | quote }}
+  DATABASE_URL: "postgresql+asyncpg://{{ .Values.postgresql.user }}:$(POSTGRES_PASSWORD)@{{ .Values.postgresql.host }}:{{ .Values.postgresql.port }}/{{ .Values.postgresql.database }}"
+  REDIS_URL: "redis://:$(REDIS_PASSWORD)@{{ .Values.redis.host }}:{{ .Values.redis.port }}/0"
+  OLLAMA_BASE_URL: {{ .Values.env.backend.OLLAMA_BASE_URL | quote }}
+  CORS_ORIGINS: {{ .Values.env.backend.CORS_ORIGINS | quote }}

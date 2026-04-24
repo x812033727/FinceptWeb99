@@ -1,0 +1,14 @@
+apiVersion: v2
+name: fincept-web
+description: Fincept Web Terminal — professional financial intelligence platform
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - finance
+  - terminal
+  - fastapi
+  - react
+home: https://github.com/x812033727/finceptweb
+maintainers:
+  - name: Fincept

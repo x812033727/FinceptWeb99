@@ -1,0 +1,131 @@
+replicaCount:
+  backend: 2
+  frontend: 2
+
+image:
+  backend:
+    repository: ghcr.io/x812033727/finceptweb-backend
+    tag: latest
+    pullPolicy: IfNotPresent
+  frontend:
+    repository: ghcr.io/x812033727/finceptweb-frontend
+    tag: latest
+    pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+service:
+  backend:
+    type: ClusterIP
+    port: 8000
+  frontend:
+    type: ClusterIP
+    port: 80
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  host: fincept.example.com
+  tls:
+    enabled: true
+    secretName: fincept-tls
+
+resources:
+  backend:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  frontend:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+autoscaling:
+  backend:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+  frontend:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+
+postgresql:
+  host: postgres
+  port: 5432
+  database: fincept
+  user: fincept
+  # existingSecret: fincept-pg-secret
+  # passwordKey: password
+
+redis:
+  host: redis
+  port: 6379
+  # existingSecret: fincept-redis-secret
+  # passwordKey: password
+
+env:
+  backend:
+    DEBUG: "false"
+    POLYGON_API_KEY: ""
+    FRED_API_KEY: ""
+    FINMIND_TOKEN: ""
+    OPENAI_API_KEY: ""
+    ANTHROPIC_API_KEY: ""
+    GEMINI_API_KEY: ""
+    OLLAMA_BASE_URL: "http://ollama:11434"
+    JWT_SECRET_KEY: ""
+    CORS_ORIGINS: "https://fincept.example.com"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  fsGroup: 1001
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+livenessProbe:
+  backend:
+    httpGet:
+      path: /health
+      port: 8000
+    initialDelaySeconds: 30
+    periodSeconds: 15
+    failureThreshold: 3
+  frontend:
+    httpGet:
+      path: /
+      port: 80
+    initialDelaySeconds: 10
+    periodSeconds: 15
+
+readinessProbe:
+  backend:
+    httpGet:
+      path: /health
+      port: 8000
+    initialDelaySeconds: 10
+    periodSeconds: 10
+  frontend:
+    httpGet:
+      path: /
+      port: 80
+    initialDelaySeconds: 5
+    periodSeconds: 10

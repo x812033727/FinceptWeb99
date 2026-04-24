@@ -1,0 +1,42 @@
+{
+  "name": "Fincept Web Terminal",
+  "short_name": "Fincept",
+  "description": "Professional financial intelligence platform — US & Taiwan markets",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#0f1117",
+  "theme_color": "#6366f1",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icon-512.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["finance", "productivity"],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "US Market",
+      "url": "/market/US",
+      "description": "US equity quotes and screener"
+    },
+    {
+      "name": "台股",
+      "url": "/market/TW",
+      "description": "Taiwan equity quotes"
+    },
+    {
+      "name": "Portfolio",
+      "url": "/portfolio",
+      "description": "Track holdings and P&L"
+    },
+    {
+      "name": "AI Agents",
+      "url": "/ai",
+      "description": "CFA-grade AI analysis"
+    }
+  ]
+}

@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fincept-web.fullname" . }}-backend
+  labels:
+    {{- include "fincept-web.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  replicas: {{ .Values.replicaCount.backend }}
+  selector:
+    matchLabels:
+      {{- include "fincept-web.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: backend
+  template:
+    metadata:
+      labels:
+        {{- include "fincept-web.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: backend
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: backend
+          image: "{{ .Values.image.backend.repository }}:{{ .Values.image.backend.tag }}"
+          imagePullPolicy: {{ .Values.image.backend.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "fincept-web.fullname" . }}-backend-env
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "fincept-web.secretName" . }}
+                  key: POSTGRES_PASSWORD
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "fincept-web.secretName" . }}
+                  key: REDIS_PASSWORD
+            - name: JWT_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "fincept-web.secretName" . }}
+                  key: JWT_SECRET_KEY
+            - name: POLYGON_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "fincept-web.secretName" . }}
+                  key: POLYGON_API_KEY
+            - name: FRED_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "fincept-web.secretName" . }}
+                  key: FRED_API_KEY
+            - name: FINMIND_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "fincept-web.secretName" . }}
+                  key: FINMIND_TOKEN
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "fincept-web.secretName" . }}
+                  key: OPENAI_API_KEY
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "fincept-web.secretName" . }}
+                  key: ANTHROPIC_API_KEY
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "fincept-web.secretName" . }}
+                  key: GEMINI_API_KEY
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe.backend | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe.backend | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources.backend | nindent 12 }}

@@ -74,6 +74,8 @@ FinceptWeb/
 │   │   ├── test_auth_api.py        # 14 tests: register, login, refresh, API keys
 │   │   ├── test_portfolio_api.py   # 12 tests: portfolio + transaction CRUD
 │   │   ├── test_portfolio_extended.py # 14 tests: detail, performance, optimiser
+│   │   ├── test_portfolio_optimizer.py # 16 unit tests: mean-variance + frontier (pure)
+│   │   ├── test_portfolio_service_fx.py # 9 unit tests: FX cache + fallback (pure)
 │   │   ├── test_tw_market_api.py   # 25 tests: all TW market endpoints
 │   │   ├── test_us_market_api.py   # 21 tests: all US market endpoints
 │   │   ├── test_watchlist_api.py   # 7 tests: watchlist + item CRUD

@@ -33,15 +33,15 @@ export default function HoldingsTable({ holdings, currency }: Props) {
               <td className="py-2 pr-4 text-muted-foreground">{h.market}</td>
               <td className="py-2 pr-4 text-right">{h.quantity.toLocaleString()}</td>
               <td className="py-2 pr-4 text-right">{h.avg_cost.toFixed(2)}</td>
-              <td className="py-2 pr-4 text-right">{h.current_price.toFixed(2)}</td>
-              <td className="py-2 pr-4 text-right">{h.current_value.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
-              <td className={`py-2 pr-4 text-right font-medium ${h.unrealized_pnl >= 0 ? "text-positive" : "text-negative"}`}>
-                {h.unrealized_pnl >= 0 ? "+" : ""}
-                {h.unrealized_pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              <td className="py-2 pr-4 text-right">{(h.current_price ?? 0).toFixed(2)}</td>
+              <td className="py-2 pr-4 text-right">{(h.current_value ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+              <td className={`py-2 pr-4 text-right font-medium ${(h.unrealized_pnl ?? 0) >= 0 ? "text-positive" : "text-negative"}`}>
+                {(h.unrealized_pnl ?? 0) >= 0 ? "+" : ""}
+                {(h.unrealized_pnl ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
               </td>
-              <td className={`py-2 pr-4 text-right ${h.unrealized_pnl_pct >= 0 ? "text-positive" : "text-negative"}`}>
-                {h.unrealized_pnl_pct >= 0 ? "+" : ""}
-                {h.unrealized_pnl_pct.toFixed(2)}%
+              <td className={`py-2 pr-4 text-right ${(h.unrealized_pnl_pct ?? 0) >= 0 ? "text-positive" : "text-negative"}`}>
+                {(h.unrealized_pnl_pct ?? 0) >= 0 ? "+" : ""}
+                {(h.unrealized_pnl_pct ?? 0).toFixed(2)}%
               </td>
               <td className="py-2 text-right text-muted-foreground">{h.weight_pct?.toFixed(1)}%</td>
             </tr>

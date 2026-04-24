@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useParams, Link, useNavigate } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import api from "@/lib/api";
 import type { Market, ScreenerResult } from "@/types/market";
@@ -91,6 +91,16 @@ function IndexCard({ idx }: { idx: MarketIndex }) {
   );
 }
 
+// ── sort indicator ─────────────────────────────────────────────────
+
+type SortKey = "change_pct" | "volume" | "market_cap";
+type SortDir = "asc" | "desc";
+
+function SortIndicator({ k, sortKey, sortDir }: { k: SortKey; sortKey: SortKey; sortDir: SortDir }) {
+  if (sortKey !== k) return <span className="text-muted-foreground/40 ml-1">↕</span>;
+  return <span className="text-primary ml-1">{sortDir === "desc" ? "↓" : "↑"}</span>;
+}
+
 // ── main page ──────────────────────────────────────────────────────
 
 export default function MarketPage() {
@@ -98,8 +108,8 @@ export default function MarketPage() {
   const mkt = market.toUpperCase() as Market;
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
-  const [sortKey, setSortKey] = useState<"change_pct" | "volume" | "market_cap">("change_pct");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [sortKey, setSortKey] = useState<SortKey>("change_pct");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
 
   const { data: rows = [], isLoading } = useQuery({
     queryKey: ["screener", mkt],
@@ -114,7 +124,7 @@ export default function MarketPage() {
     staleTime: 60_000,
   });
 
-  function toggleSort(key: typeof sortKey) {
+  function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === "desc" ? "asc" : "desc"));
     else { setSortKey(key); setSortDir("desc"); }
   }
@@ -129,11 +139,6 @@ export default function MarketPage() {
       const bv = (b[sortKey] ?? 0) as number;
       return sortDir === "desc" ? bv - av : av - bv;
     });
-
-  function SortIndicator({ k }: { k: typeof sortKey }) {
-    if (sortKey !== k) return <span className="text-muted-foreground/40 ml-1">↕</span>;
-    return <span className="text-primary ml-1">{sortDir === "desc" ? "↓" : "↑"}</span>;
-  }
 
   return (
     <div className="p-6 space-y-6">
@@ -199,19 +204,19 @@ export default function MarketPage() {
                     className="text-right px-4 py-2.5 font-medium cursor-pointer select-none hover:text-foreground"
                     onClick={() => toggleSort("change_pct")}
                   >
-                    Change<SortIndicator k="change_pct" />
+                    Change<SortIndicator k="change_pct" sortKey={sortKey} sortDir={sortDir} />
                   </th>
                   <th
                     className="text-right px-4 py-2.5 font-medium cursor-pointer select-none hover:text-foreground"
                     onClick={() => toggleSort("volume")}
                   >
-                    Volume<SortIndicator k="volume" />
+                    Volume<SortIndicator k="volume" sortKey={sortKey} sortDir={sortDir} />
                   </th>
                   <th
                     className="text-right px-4 py-2.5 font-medium cursor-pointer select-none hover:text-foreground"
                     onClick={() => toggleSort("market_cap")}
                   >
-                    Mkt Cap<SortIndicator k="market_cap" />
+                    Mkt Cap<SortIndicator k="market_cap" sortKey={sortKey} sortDir={sortDir} />
                   </th>
                   <th className="text-right px-4 py-2.5 font-medium">P/E</th>
                   <th className="text-left px-4 py-2.5 font-medium">Sector</th>

@@ -1,5 +1,5 @@
 import { useState, FormEvent } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { login, register } from "@/lib/auth";
 
 export default function LoginPage() {

@@ -182,7 +182,7 @@ function FinancialsPanel({ symbol }: { symbol: string }) {
   return (
     <div className="space-y-6 p-4">
       {sections.map(({ title, key }) => {
-        const table = raw[key] as Record<string, Record<string, number | null>> | undefined;
+        const table = raw[key] as unknown as Record<string, Record<string, number | null>> | undefined;
         if (!table || !Object.keys(table).length) return null;
 
         // Rows = metric names, Columns = dates
@@ -778,7 +778,6 @@ export default function StockDetailPage() {
 
   return (
     <div className="p-6 space-y-5">
-      {/* breadcrumb */}
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <button onClick={() => navigate(`/market/${mkt}`)} className="hover:text-foreground transition-colors">
           {mkt === "US" ? "US Market" : "台股"}
@@ -787,16 +786,15 @@ export default function StockDetailPage() {
         <span className="text-foreground font-medium">{sym}</span>
       </div>
 
-      {/* header */}
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold text-foreground">{sym}</h1>
-          {(quote?.name || quote?.name_zh) && (
+          {Boolean(quote?.name || quote?.name_zh) && (
             <p className="text-sm text-muted-foreground mt-0.5">
-              {(quote.name ?? quote.name_zh) as string}
-              {mkt === "TW" && quote?.exchange && (
+              {String(quote?.name ?? quote?.name_zh ?? "")}
+              {mkt === "TW" && Boolean(quote?.exchange) && (
                 <span className="ml-2 text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded">
-                  {quote.exchange as string}
+                  {String(quote?.exchange ?? "")}
                 </span>
               )}
             </p>
@@ -815,7 +813,6 @@ export default function StockDetailPage() {
         </div>
       </div>
 
-      {/* tabs */}
       <div className="flex border-b border-border">
         {mkt === "US" ? (
           <>
@@ -835,7 +832,6 @@ export default function StockDetailPage() {
         )}
       </div>
 
-      {/* chart tab */}
       {showChart && (
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-5">
           {/* chart */}
@@ -923,7 +919,6 @@ export default function StockDetailPage() {
         </div>
       )}
 
-      {/* US non-chart tabs */}
       {mkt === "US" && usTab === "financials" && (
         <div className="bg-card border border-border rounded-lg overflow-hidden">
           <FinancialsPanel symbol={sym} />
@@ -935,31 +930,34 @@ export default function StockDetailPage() {
         </div>
       )}
 
-      {/* TW non-chart tabs */}
-      {mkt === "TW" && twTab === "institutional" && (
-        <div className="bg-card border border-border rounded-lg overflow-hidden">
-          <InstitutionalPanel symbol={sym} />
-        </div>
+      {mkt === "TW" ? (
+        <>
+          {twTab === "institutional" && (
+            <div className="bg-card border border-border rounded-lg overflow-hidden">
+              <InstitutionalPanel symbol={sym} />
+            </div>
+          )}
+          {twTab === "margin" && (
+            <div className="bg-card border border-border rounded-lg overflow-hidden">
+              <MarginPanel symbol={sym} />
+            </div>
+          )}
+          {twTab === "revenue" && (
+            <div className="bg-card border border-border rounded-lg overflow-hidden">
+              <RevenuePanel symbol={sym} />
+            </div>
+          )}
+          {twTab === "news" && <NewsFeed symbol={sym} market="TW" />}
+        </>
+      ) : (
+        usTab === "news" ? <NewsFeed symbol={sym} market="US" /> : null
       )}
-      {mkt === "TW" && twTab === "margin" && (
-        <div className="bg-card border border-border rounded-lg overflow-hidden">
-          <MarginPanel symbol={sym} />
-        </div>
-      )}
-      {mkt === "TW" && twTab === "revenue" && (
-        <div className="bg-card border border-border rounded-lg overflow-hidden">
-          <RevenuePanel symbol={sym} />
-        </div>
-      )}
-      {mkt === "US" && usTab === "news" && <NewsFeed symbol={sym} market="US" />}
-      {mkt === "TW" && twTab === "news" && <NewsFeed symbol={sym} market="TW" />}
 
-      {/* US description */}
-      {mkt === "US" && usTab === "chart" && fundamentals?.description && (
+      {mkt === "US" && usTab === "chart" && Boolean(fundamentals?.description) && (
         <div className="bg-card border border-border rounded-lg p-4">
           <h3 className="text-sm font-semibold text-foreground mb-2">About</h3>
           <p className="text-xs text-muted-foreground leading-relaxed line-clamp-4">
-            {fundamentals.description as string}
+            {String(fundamentals?.description ?? "")}
           </p>
         </div>
       )}

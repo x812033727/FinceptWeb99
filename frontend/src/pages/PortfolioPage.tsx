@@ -382,7 +382,7 @@ export default function PortfolioPage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showAddTx, setShowAddTx] = useState(false);
-  const [showOptimise, setShowOptimise] = useState(false);
+
 
   const { data: detail, isFetching } = usePortfolioDetail(selected);
   const deleteP = useDeletePortfolio();
@@ -449,14 +449,13 @@ export default function PortfolioPage() {
           detail={detail}
           isFetching={isFetching}
           onAddTx={() => setShowAddTx(true)}
-          onOptimise={() => setShowOptimise(true)}
           onDelete={async () => {
             await deleteP.mutateAsync(activeId);
             setSelected(null);
           }}
           optimiseResult={optimise.data}
           optimisePending={optimise.isPending}
-          onRunOptimise={(risk) => optimise.mutate({ target_risk: risk, max_weight: 1 })}
+          onRunOptimise={(risk: string) => optimise.mutate({ target_risk: risk, max_weight: 1 })}
         />
       )}
 
@@ -476,7 +475,7 @@ export default function PortfolioPage() {
 // ── Portfolio detail panel ────────────────────────────────────────
 function PortfolioDetail({
   portfolioId, detail, isFetching,
-  onAddTx, onOptimise, onDelete,
+  onAddTx, onDelete,
   optimiseResult, optimisePending, onRunOptimise,
 }: any) {
   const [detailTab, setDetailTab] = useState<"overview" | "transactions">("overview");

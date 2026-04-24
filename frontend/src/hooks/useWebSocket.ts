@@ -130,6 +130,7 @@ function disconnect(): void {
 export function useWebSocket(key: string, callback: Callback): void {
   const token = useAuthStore((s) => s.token);
   const cbRef = useRef(callback);
+  // eslint-disable-next-line react-hooks/refs
   cbRef.current = callback;
 
   useEffect(() => {
@@ -162,6 +163,7 @@ export function useWsConnected(): boolean {
 export function useAlertSocket(callback: AlertCallback): void {
   const token = useAuthStore((s) => s.token);
   const cbRef = useRef(callback);
+  // eslint-disable-next-line react-hooks/refs
   cbRef.current = callback;
 
   useEffect(() => {

@@ -21,6 +21,7 @@ function GlobalSearch() {
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     if (query.trim().length === 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setResults([]);
       setOpen(false);
       return;

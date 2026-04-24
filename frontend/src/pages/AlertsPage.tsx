@@ -22,10 +22,6 @@ interface AlertCreate {
 
 const EMPTY: AlertCreate = { symbol: "", market: "US", condition: "above", target_price: 0 };
 
-function fmt(n: number) {
-  return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
 export default function AlertsPage() {
   const qc = useQueryClient();
   const [form, setForm] = useState<AlertCreate>(EMPTY);

@@ -99,7 +99,7 @@ export default function AIPage() {
 
   const [selectedAgent, setSelectedAgent] = useState<string>(navState?.agentId ?? "");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [context, setContext] = useState<Record<string, unknown>>(navState?.context ?? {});
+  const [context] = useState<Record<string, unknown>>(navState?.context ?? {});
   const [input, setInput] = useState(navState?.initialMessage ?? "");
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -109,6 +109,7 @@ export default function AIPage() {
 
   // Select first agent once loaded (only if not set via nav state)
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (agents.length && !selectedAgent) setSelectedAgent(agents[0].id);
   }, [agents, selectedAgent]);
 

@@ -70,6 +70,8 @@ from api.analytics.router import router as analytics_router
 app.include_router(analytics_router, prefix="/api/analytics", tags=["Analytics"])
 from api.ai_agents.router import router as ai_router
 app.include_router(ai_router, prefix="/api/ai", tags=["AI Agents"])
+from api.watchlist.router import router as watchlist_router
+app.include_router(watchlist_router, prefix="/api/watchlist", tags=["Watchlist"])
 
 
 @app.get("/api/health", tags=["System"])

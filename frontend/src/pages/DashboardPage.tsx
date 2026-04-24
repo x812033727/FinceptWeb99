@@ -5,6 +5,7 @@ const CARDS = [
   { label: "US Market", desc: "S&P 500 quotes & screener", icon: "🇺🇸", href: "/market/US" },
   { label: "台股", desc: "上市上櫃即時行情", icon: "🇹🇼", href: "/market/TW" },
   { label: "Screener", desc: "Filter stocks by any metric", icon: "🔍", href: "/screener" },
+  { label: "Watchlist", desc: "Track symbols with live prices", icon: "⭐", href: "/watchlist" },
   { label: "Portfolio", desc: "Holdings, P&L & optimizer", icon: "📊", href: "/portfolio" },
   { label: "Analytics", desc: "DCF · VaR · Backtest", icon: "📐", href: "/analytics" },
   { label: "Macro", desc: "FRED indicators · yield curve", icon: "🌐", href: "/macro" },

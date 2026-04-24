@@ -73,8 +73,10 @@ const fetchQuote = (mkt: Market, sym: string) =>
   api.get<Record<string, unknown>>(mkt === "US" ? `/us/quote/${sym}` : `/tw/quote/${sym}`)
     .then((r) => r.data);
 
-const fetchFundamentals = (sym: string) =>
-  api.get<Record<string, unknown>>(`/us/fundamentals/${sym}`).then((r) => r.data);
+const fetchFundamentals = (mkt: Market, sym: string) =>
+  api.get<Record<string, unknown>>(
+    mkt === "US" ? `/us/fundamentals/${sym}` : `/tw/fundamentals/${sym}`
+  ).then((r) => r.data);
 
 const fetchFinancials = (sym: string) =>
   api.get<{ symbol: string; source: string; data: unknown }>(`/us/financials/${sym}`)
@@ -227,8 +229,104 @@ function FinancialsPanel({ symbol }: { symbol: string }) {
   );
 }
 
+// ── IV Surface heatmap ────────────────────────────────────────────
+
+function IVSurface({ options, optionType }: { options: OptionRow[]; optionType: "call" | "put" }) {
+  const filtered = options.filter(
+    (o) => o.contract_type?.toLowerCase() === optionType && o.implied_volatility != null
+  );
+  if (!filtered.length) return null;
+
+  const expiries = [...new Set(filtered.map((o) => o.expiration_date).filter(Boolean))].sort().slice(0, 8);
+  const strikes = [...new Set(filtered.map((o) => o.strike))].sort((a, b) => a - b);
+  // Take ~12 strikes centred around median
+  const mid = Math.floor(strikes.length / 2);
+  const slicedStrikes = strikes.slice(Math.max(0, mid - 6), mid + 6);
+
+  // iv lookup
+  const ivMap: Record<string, number> = {};
+  filtered.forEach((o) => {
+    if (o.expiration_date && o.strike) {
+      ivMap[`${o.expiration_date}:${o.strike}`] = (o.implied_volatility ?? 0) * 100;
+    }
+  });
+
+  const allIVs = Object.values(ivMap).filter(Boolean);
+  const minIV = Math.min(...allIVs);
+  const maxIV = Math.max(...allIVs);
+
+  function ivColor(iv: number | undefined): string {
+    if (!iv || maxIV === minIV) return "#1f2937";
+    const t = (iv - minIV) / (maxIV - minIV);
+    // low IV = blue, high IV = red
+    const r = Math.round(t * 239);
+    const g = Math.round((1 - Math.abs(t - 0.5) * 2) * 120);
+    const b = Math.round((1 - t) * 239);
+    return `rgb(${r},${g},${b})`;
+  }
+
+  if (!expiries.length || !slicedStrikes.length) return null;
+
+  return (
+    <div className="mt-4">
+      <h4 className="text-xs font-semibold text-foreground mb-2">
+        Implied Volatility Surface ({optionType.toUpperCase()})
+      </h4>
+      <div className="overflow-x-auto">
+        <table className="text-xs border-collapse">
+          <thead>
+            <tr>
+              <th className="text-left pr-3 pb-1 text-muted-foreground font-medium">Strike \ Expiry</th>
+              {expiries.map((e) => (
+                <th key={e} className="px-1 pb-1 text-muted-foreground font-medium text-center min-w-[60px]">
+                  {e?.slice(5)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {slicedStrikes.map((strike) => (
+              <tr key={strike}>
+                <td className="pr-3 py-0.5 text-muted-foreground">{strike}</td>
+                {expiries.map((expiry) => {
+                  const iv = ivMap[`${expiry}:${strike}`];
+                  return (
+                    <td
+                      key={expiry}
+                      className="text-center py-0.5 px-1 rounded text-[10px] font-medium"
+                      style={{
+                        backgroundColor: ivColor(iv),
+                        color: iv ? "#f9fafb" : "transparent",
+                        minWidth: 52,
+                      }}
+                    >
+                      {iv ? `${iv.toFixed(1)}%` : "·"}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="flex items-center gap-2 mt-2 text-[10px] text-muted-foreground">
+          <span>Low IV</span>
+          <div className="flex h-2 w-24 rounded overflow-hidden">
+            {Array.from({ length: 24 }).map((_, i) => (
+              <div key={i} style={{ flex: 1, backgroundColor: ivColor(minIV + (i / 23) * (maxIV - minIV)) }} />
+            ))}
+          </div>
+          <span>High IV</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Options panel ─────────────────────────────────────────────────
+
 function OptionsPanel({ symbol }: { symbol: string }) {
   const [optionType, setOptionType] = useState<"call" | "put">("call");
+  const [view, setView] = useState<"table" | "surface">("table");
 
   const { data: options = [], isLoading } = useQuery({
     queryKey: ["options", symbol],
@@ -246,7 +344,7 @@ function OptionsPanel({ symbol }: { symbol: string }) {
   return (
     <div className="p-4 space-y-4">
       {/* controls */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3 flex-wrap">
         <div className="flex rounded border border-border overflow-hidden text-sm">
           {(["call", "put"] as const).map((t) => (
             <button
@@ -262,18 +360,34 @@ function OptionsPanel({ symbol }: { symbol: string }) {
             </button>
           ))}
         </div>
+        <div className="flex rounded border border-border overflow-hidden text-sm">
+          {(["table", "surface"] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => setView(v)}
+              className={`px-3 py-1.5 transition-colors ${
+                view === v ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {v === "table" ? "Table" : "IV Surface"}
+            </button>
+          ))}
+        </div>
         <span className="text-xs text-muted-foreground">{filtered.length} contracts</span>
       </div>
 
       {/* expiry legend */}
-      {expiries.length > 0 && (
+      {view === "table" && expiries.length > 0 && (
         <div className="text-xs text-muted-foreground">
           Available expirations: {expiries.slice(0, 6).join(" · ")}{expiries.length > 6 ? " …" : ""}
         </div>
       )}
 
+      {/* IV surface */}
+      {view === "surface" && <IVSurface options={options} optionType={optionType} />}
+
       {/* table */}
-      <div className="overflow-x-auto">
+      {view === "table" && <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-border text-muted-foreground">
@@ -306,7 +420,7 @@ function OptionsPanel({ symbol }: { symbol: string }) {
             ))}
           </tbody>
         </table>
-      </div>
+      </div>}
     </div>
   );
 }
@@ -564,9 +678,8 @@ export default function StockDetailPage() {
 
   const { data: fundamentals } = useQuery({
     queryKey: ["fundamentals", mkt, sym],
-    queryFn: () => fetchFundamentals(sym),
+    queryFn: () => fetchFundamentals(mkt, sym),
     staleTime: 3_600_000,
-    enabled: mkt === "US",
   });
 
   useWebSocket(`${sym}:${mkt}`, (data: unknown) => {
@@ -694,6 +807,13 @@ export default function StockDetailPage() {
                 <StatRow label="最高" value={fmt(quote?.high as number | null)} />
                 <StatRow label="最低" value={fmt(quote?.low as number | null)} />
                 <StatRow label="昨收" value={fmt(quote?.prev_close as number | null)} />
+                <StatRow label="本益比 P/E" value={fmt(fundamentals?.pe_ratio as number | null)} />
+                <StatRow label="淨值比 P/B" value={fmt(fundamentals?.pb_ratio as number | null)} />
+                <StatRow label="殖利率" value={
+                  fundamentals?.dividend_yield != null
+                    ? `${(fundamentals.dividend_yield as number).toFixed(2)}%`
+                    : "—"
+                } />
                 <StatRow label="成交量" value={quote?.volume ? (quote.volume as number).toLocaleString() : "—"} />
                 <StatRow label="市場" value={quote?.exchange as string | null} />
               </>

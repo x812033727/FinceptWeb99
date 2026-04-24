@@ -17,6 +17,15 @@ router = APIRouter()
 Auth = Annotated[dict, Depends(get_current_user)]
 
 
+@router.get("/fundamentals/{symbol}")
+async def fundamentals(symbol: str, _: Auth):
+    """本益比、股價淨值比、殖利率 from TWSE BWIBBU_d."""
+    try:
+        return await svc.get_fundamentals(symbol)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Data source error: {e}")
+
+
 @router.get("/quote/{symbol}", response_model=TWQuoteResponse)
 async def quote(symbol: str, _: Auth):
     try:

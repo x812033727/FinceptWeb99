@@ -13,6 +13,7 @@ const NAV: NavItem[] = [
   { to: "/market/US", label: "US Market", icon: "🇺🇸" },
   { to: "/market/TW", label: "台股", icon: "🇹🇼" },
   { to: "/screener", label: "Screener", icon: "🔍" },
+  { to: "/watchlist", label: "Watchlist", icon: "⭐" },
   { to: "/portfolio", label: "Portfolio", icon: "📊" },
   { to: "/analytics", label: "Analytics", icon: "📐" },
   { to: "/macro", label: "Macro", icon: "🌐" },

@@ -258,6 +258,28 @@ async def get_revenue(symbol: str, months: int = 12) -> list[dict[str, Any]]:
 
 # ── Financials ────────────────────────────────────────────────────
 
+async def get_fundamentals(symbol: str) -> dict[str, Any]:
+    """PE, PB, dividend yield from TWSE BWIBBU_d + exchange info."""
+    key = f"tw:fundamentals:{symbol}"
+    cached = await cache_get(key)
+    if cached:
+        return json.loads(cached)
+
+    result: dict[str, Any] = {
+        "symbol": symbol,
+        "market": "TW",
+        "exchange": get_exchange(symbol),
+    }
+    try:
+        ratios = await twse.get_valuation_ratios(symbol)
+        result.update(ratios)
+    except Exception:
+        pass
+
+    await cache_set(key, json.dumps(result), TTL_FUNDAMENTALS)
+    return result
+
+
 async def get_financials(symbol: str) -> list[dict[str, Any]]:
     key = f"tw:financials:{symbol}"
     cached = await cache_get(key)

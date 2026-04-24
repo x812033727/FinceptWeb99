@@ -12,6 +12,7 @@ import ScreenerPage from "@/pages/ScreenerPage";
 import PortfolioPage from "@/pages/PortfolioPage";
 import AnalyticsPage from "@/pages/AnalyticsPage";
 import MacroPage from "@/pages/MacroPage";
+import WatchlistPage from "@/pages/WatchlistPage";
 import AIPage from "@/pages/AIPage";
 
 // ── Protected route ───────────────────────────────────────────────
@@ -57,6 +58,7 @@ export default function App() {
           <Route path="/portfolio" element={<PortfolioPage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/macro" element={<MacroPage />} />
+          <Route path="/watchlist" element={<WatchlistPage />} />
           <Route path="/ai" element={<AIPage />} />
         </Route>
 

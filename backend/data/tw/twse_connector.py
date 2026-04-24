@@ -197,3 +197,36 @@ async def get_taiex() -> dict[str, Any]:
             "time": latest.get("時間"),
         }
     return {}
+
+
+# ── Valuation ratios: PE, PB, dividend yield ─────────────────────
+
+async def get_valuation_ratios(symbol: str) -> dict[str, Any]:
+    """
+    本益比、股價淨值比、殖利率 from TWSE BWIBBU_d endpoint.
+    Returns the most recent available record for `symbol`.
+    """
+    data = await _get(
+        "https://www.twse.com.tw/exchangeReport/BWIBBU_d",
+        params={"response": "json", "stockNo": symbol},
+    )
+    rows: list = []
+    if isinstance(data, dict):
+        rows = data.get("data", []) or data.get("Data", [])
+    elif isinstance(data, list):
+        rows = data
+
+    if not rows:
+        return {}
+
+    # Rows: [日期, 殖利率(%), 股利年度, 本益比, 股價淨值比]
+    last = rows[-1]
+    try:
+        return {
+            "pe_ratio":       _tw_num(last[3]) if len(last) > 3 else None,
+            "pb_ratio":       _tw_num(last[4]) if len(last) > 4 else None,
+            "dividend_yield": _tw_num(last[1]) if len(last) > 1 else None,
+            "fetched_at":     last[0] if last else None,
+        }
+    except Exception:
+        return {}

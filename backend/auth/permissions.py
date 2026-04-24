@@ -14,5 +14,6 @@ def require_role(*roles: str):
     return _check
 
 
+require_viewer  = require_role("viewer", "analyst", "admin")
 require_analyst = require_role("analyst", "admin")
-require_admin = require_role("admin")
+require_admin   = require_role("admin")

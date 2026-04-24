@@ -6,6 +6,7 @@ import LoginPage from "@/pages/LoginPage";
 import DashboardPage from "@/pages/DashboardPage";
 import PortfolioPage from "@/pages/PortfolioPage";
 import AnalyticsPage from "@/pages/AnalyticsPage";
+import AIPage from "@/pages/AIPage";
 
 // ── Protected route ───────────────────────────────────────────────
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -50,6 +51,10 @@ export default function App() {
         <Route
           path="/analytics"
           element={<RequireAuth><AnalyticsPage /></RequireAuth>}
+        />
+        <Route
+          path="/ai"
+          element={<RequireAuth><AIPage /></RequireAuth>}
         />
         {/* Phase 9+: /stock/:market/:symbol, /screener */}
         <Route path="/" element={<Navigate to="/dashboard" replace />} />

@@ -1,0 +1,71 @@
+"""
+Prometheus metrics middleware.
+
+Exports:
+  http_requests_total{method, path, status}   Counter
+  http_request_duration_seconds{method, path}  Histogram
+  http_active_requests                         Gauge
+"""
+import re
+import time
+
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
+
+REQUEST_COUNT = Counter(
+    "http_requests_total",
+    "Total HTTP requests",
+    ["method", "path", "status"],
+)
+REQUEST_LATENCY = Histogram(
+    "http_request_duration_seconds",
+    "HTTP request latency in seconds",
+    ["method", "path"],
+    buckets=[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
+)
+ACTIVE_REQUESTS = Gauge("http_active_requests", "Currently active HTTP requests")
+
+# Normalize dynamic path segments to limit cardinality
+_NORMALIZATIONS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"^/api/(us|tw)/quote/[^/]+$"),       r"/api/\1/quote/{symbol}"),
+    (re.compile(r"^/api/(us|tw)/history/[^/]+$"),     r"/api/\1/history/{symbol}"),
+    (re.compile(r"^/api/(us|tw)/fundamentals/[^/]+"), r"/api/\1/fundamentals/{symbol}"),
+    (re.compile(r"^/api/watchlist/[^/]+/items/[^/]+"), "/api/watchlist/{wid}/items/{iid}"),
+    (re.compile(r"^/api/watchlist/[^/]+/items"),       "/api/watchlist/{wid}/items"),
+    (re.compile(r"^/api/watchlist/[^/]+$"),            "/api/watchlist/{wid}"),
+    (re.compile(r"^/api/alerts/[^/]+$"),               "/api/alerts/{id}"),
+    (re.compile(r"^/api/portfolio/[^/]+$"),            "/api/portfolio/{id}"),
+]
+
+
+def _normalize_path(path: str) -> str:
+    for pattern, replacement in _NORMALIZATIONS:
+        if pattern.match(path):
+            return pattern.sub(replacement, path)
+    return path
+
+
+class PrometheusMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next) -> Response:
+        if request.url.path == "/metrics":
+            return await call_next(request)
+
+        ACTIVE_REQUESTS.inc()
+        start = time.perf_counter()
+        try:
+            response = await call_next(request)
+        finally:
+            ACTIVE_REQUESTS.dec()
+
+        latency = time.perf_counter() - start
+        path = _normalize_path(request.url.path)
+        REQUEST_COUNT.labels(request.method, path, response.status_code).inc()
+        REQUEST_LATENCY.labels(request.method, path).observe(latency)
+        return response
+
+
+async def metrics_endpoint(_request: Request) -> Response:
+    """Prometheus scrape endpoint — mount at /metrics."""
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)

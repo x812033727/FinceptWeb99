@@ -62,10 +62,8 @@ async def refresh_us_quotes() -> None:
             from services.us_market_service import _normalize_quote
             result = _normalize_quote(sym, raw)
 
-            # Update cache
             await cache_set(key_quote("us", sym), json.dumps(result), TTL_QUOTE)
 
-            # Publish to WebSocket bus
             await publish_update(sym, "US", {
                 "price":      result["price"],
                 "change":     result["change"],
@@ -73,6 +71,11 @@ async def refresh_us_quotes() -> None:
                 "volume":     result["volume"],
                 "ts":         result["ts"],
             })
+
+            from db.session import AsyncSessionLocal
+            from services.alert_service import AlertService
+            async with AsyncSessionLocal() as db:
+                await AlertService.check_and_fire(db, sym, "US", result["price"])
         except Exception:
             pass
 

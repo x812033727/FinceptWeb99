@@ -14,6 +14,7 @@ import AnalyticsPage from "@/pages/AnalyticsPage";
 import MacroPage from "@/pages/MacroPage";
 import WatchlistPage from "@/pages/WatchlistPage";
 import AIPage from "@/pages/AIPage";
+import AlertsPage from "@/pages/AlertsPage";
 
 // ── Protected route ───────────────────────────────────────────────
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -59,6 +60,7 @@ export default function App() {
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/macro" element={<MacroPage />} />
           <Route path="/watchlist" element={<WatchlistPage />} />
+          <Route path="/alerts" element={<AlertsPage />} />
           <Route path="/ai" element={<AIPage />} />
         </Route>
 

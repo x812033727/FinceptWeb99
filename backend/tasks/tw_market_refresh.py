@@ -53,6 +53,11 @@ async def refresh_tw_quotes() -> None:
                 "ts":         result["ts"],
                 "tz":         "Asia/Taipei",
             })
+
+            from db.session import AsyncSessionLocal
+            from services.alert_service import AlertService
+            async with AsyncSessionLocal() as db:
+                await AlertService.check_and_fire(db, sym, "TW", result["price"])
         except Exception:
             pass
 

@@ -35,6 +35,10 @@ type PriceCache = dict[str, float]
 _subscriptions: dict[WebSocket, set[str]] = {}
 # websocket → last-price cache
 _last_prices: dict[WebSocket, PriceCache] = {}
+# websocket → user_id string (populated on successful auth)
+_ws_user: dict[WebSocket, str] = {}
+# user_id → set of websockets (multi-tab support)
+_user_ws: dict[str, set[WebSocket]] = {}
 
 _listener_task: asyncio.Task | None = None
 AUTH_TIMEOUT = 5.0       # seconds to send auth message after connect
@@ -65,6 +69,10 @@ async def handle_market_ws(ws: WebSocket) -> None:
 
     _subscriptions[ws] = set()
     _last_prices[ws] = {}
+
+    user_id: str = payload.get("sub", "")
+    _ws_user[ws] = user_id
+    _user_ws.setdefault(user_id, set()).add(ws)
 
     heartbeat_task = asyncio.create_task(_heartbeat(ws))
 
@@ -107,6 +115,11 @@ async def handle_market_ws(ws: WebSocket) -> None:
         heartbeat_task.cancel()
         _subscriptions.pop(ws, None)
         _last_prices.pop(ws, None)
+        uid = _ws_user.pop(ws, None)
+        if uid and uid in _user_ws:
+            _user_ws[uid].discard(ws)
+            if not _user_ws[uid]:
+                del _user_ws[uid]
 
 
 async def _send_snapshot(ws: WebSocket, subs: set[str]) -> None:
@@ -208,3 +221,21 @@ async def publish_update(symbol: str, market: str, data: dict) -> None:
     r = await get_redis()
     payload = {"symbol": symbol, "market": market, **data}
     await r.publish(PUBSUB_CHANNEL, json.dumps(payload))
+
+
+async def push_alert_to_user(user_id: str, data: dict) -> None:
+    """Push a fired alert directly to all WebSocket connections owned by user_id."""
+    connections = list(_user_ws.get(user_id, set()))
+    dead: list[WebSocket] = []
+    for ws in connections:
+        ok = await _safe_send(ws, data)
+        if not ok:
+            dead.append(ws)
+    for ws in dead:
+        _subscriptions.pop(ws, None)
+        _last_prices.pop(ws, None)
+        uid = _ws_user.pop(ws, None)
+        if uid and uid in _user_ws:
+            _user_ws[uid].discard(ws)
+            if not _user_ws[uid]:
+                del _user_ws[uid]

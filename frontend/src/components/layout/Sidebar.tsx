@@ -14,6 +14,7 @@ const NAV: NavItem[] = [
   { to: "/market/TW", label: "台股", icon: "🇹🇼" },
   { to: "/screener", label: "Screener", icon: "🔍" },
   { to: "/watchlist", label: "Watchlist", icon: "⭐" },
+  { to: "/alerts", label: "Alerts", icon: "🔔" },
   { to: "/portfolio", label: "Portfolio", icon: "📊" },
   { to: "/analytics", label: "Analytics", icon: "📐" },
   { to: "/macro", label: "Macro", icon: "🌐" },

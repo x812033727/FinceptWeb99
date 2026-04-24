@@ -10,7 +10,19 @@ import { useAuthStore } from "@/store/authStore";
 
 type Callback = (data: unknown) => void;
 
+export type AlertMessage = {
+  type: "alert";
+  id: string;
+  symbol: string;
+  market: string;
+  condition: "above" | "below";
+  target_price: number;
+  current_price: number;
+};
+type AlertCallback = (alert: AlertMessage) => void;
+
 const subscribers = new Map<string, Set<Callback>>();
+const alertCallbacks = new Set<AlertCallback>();
 let socket: WebSocket | null = null;
 let reconnectDelay = 1000;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -66,11 +78,15 @@ function connect(token: string): void {
 
       if (msg.type === "ping") {
         sendJson({ action: "pong" });
-        // After first auth+snapshot cycle, re-subscribe on reconnect
         if (!authenticated) {
           authenticated = true;
           subscribeSymbols();
         }
+        return;
+      }
+
+      if (msg.type === "alert") {
+        alertCallbacks.forEach((cb) => cb(msg as AlertMessage));
         return;
       }
     } catch {
@@ -81,7 +97,6 @@ function connect(token: string): void {
   socket.onclose = () => {
     authenticated = false;
     socket = null;
-    // Reconnect with exponential backoff
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
       const t = useAuthStore.getState().token;
@@ -100,7 +115,7 @@ function disconnect(): void {
   authenticated = false;
 }
 
-// ── React hook ────────────────────────────────────────────────────
+// ── React hooks ───────────────────────────────────────────────────
 
 export function useWebSocket(key: string, callback: Callback): void {
   const token = useAuthStore((s) => s.token);
@@ -110,15 +125,11 @@ export function useWebSocket(key: string, callback: Callback): void {
   useEffect(() => {
     if (!token) return;
 
-    // Register subscriber
     if (!subscribers.has(key)) subscribers.set(key, new Set());
     const cb: Callback = (data) => cbRef.current(data);
     subscribers.get(key)!.add(cb);
 
-    // Ensure connection exists
     connect(token);
-
-    // If already authenticated, send subscribe immediately
     if (authenticated) subscribeSymbols();
 
     return () => {
@@ -127,4 +138,18 @@ export function useWebSocket(key: string, callback: Callback): void {
       if (subscribers.size === 0) disconnect();
     };
   }, [key, token]);
+}
+
+export function useAlertSocket(callback: AlertCallback): void {
+  const token = useAuthStore((s) => s.token);
+  const cbRef = useRef(callback);
+  cbRef.current = callback;
+
+  useEffect(() => {
+    if (!token) return;
+    const cb: AlertCallback = (alert) => cbRef.current(alert);
+    alertCallbacks.add(cb);
+    connect(token);
+    return () => { alertCallbacks.delete(cb); };
+  }, [token]);
 }

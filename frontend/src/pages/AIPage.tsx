@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useLocation } from "react-router-dom";
 import api from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 
@@ -84,22 +85,40 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
 
 export default function AIPage() {
   const token = useAuthStore((s) => s.token);
+  const location = useLocation();
+  const navState = location.state as {
+    agentId?: string;
+    initialMessage?: string;
+    context?: Record<string, unknown>;
+  } | null;
+
   const { data: agents = [], isLoading } = useQuery({
     queryKey: ["ai-agents"],
     queryFn: fetchAgents,
   });
 
-  const [selectedAgent, setSelectedAgent] = useState<string>("");
+  const [selectedAgent, setSelectedAgent] = useState<string>(navState?.agentId ?? "");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState("");
+  const [context, setContext] = useState<Record<string, unknown>>(navState?.context ?? {});
+  const [input, setInput] = useState(navState?.initialMessage ?? "");
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const sentNavState = useRef(false);
 
-  // Select first agent once loaded
+  // Select first agent once loaded (only if not set via nav state)
   useEffect(() => {
     if (agents.length && !selectedAgent) setSelectedAgent(agents[0].id);
+  }, [agents, selectedAgent]);
+
+  // Auto-send initial message from navigation state (e.g. from MacroPage)
+  useEffect(() => {
+    if (navState?.initialMessage && agents.length && selectedAgent && !sentNavState.current) {
+      sentNavState.current = true;
+      sendMessage();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agents, selectedAgent]);
 
   // Scroll to bottom on new messages
@@ -139,6 +158,7 @@ export default function AIPage() {
         body: JSON.stringify({
           agent_id: selectedAgent,
           messages: history.map((m) => ({ role: m.role, content: m.content })),
+          context,
         }),
         signal: ctrl.signal,
       });

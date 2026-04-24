@@ -1,4 +1,5 @@
 import { useState, FormEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   usePortfolios,
   usePortfolioDetail,
@@ -115,16 +116,37 @@ export default function PortfolioPage() {
   const deleteP = useDeletePortfolio();
   const optimise = useOptimise(selected ?? "");
 
+  const navigate = useNavigate();
   const activeId = selected ?? portfolios?.[0]?.id ?? null;
+
+  function analyseWithAI() {
+    navigate("/ai", {
+      state: {
+        agentId: "portfolio_advisor",
+        initialMessage: "Review my portfolio and suggest improvements to the allocation, risk profile, and any concentration risks.",
+        context: { portfolio: detail ?? null },
+      },
+    });
+  }
 
   return (
     <div className="min-h-screen bg-background p-6 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-primary">Portfolio</h1>
-        <button onClick={() => setShowCreate(true)} className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:opacity-90">
-          + New Portfolio
-        </button>
+        <div className="flex gap-2">
+          {detail && (
+            <button
+              onClick={analyseWithAI}
+              className="px-4 py-2 text-sm bg-primary/10 border border-primary/30 text-primary rounded-md hover:bg-primary/20 transition-colors"
+            >
+              🤖 Analyse with AI
+            </button>
+          )}
+          <button onClick={() => setShowCreate(true)} className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:opacity-90">
+            + New Portfolio
+          </button>
+        </div>
       </div>
 
       {isLoading && <p className="text-muted-foreground text-sm">Loading…</p>}

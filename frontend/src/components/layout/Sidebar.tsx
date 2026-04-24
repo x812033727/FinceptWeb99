@@ -15,6 +15,7 @@ const NAV: NavItem[] = [
   { to: "/screener", label: "Screener", icon: "🔍" },
   { to: "/portfolio", label: "Portfolio", icon: "📊" },
   { to: "/analytics", label: "Analytics", icon: "📐" },
+  { to: "/macro", label: "Macro", icon: "🌐" },
   { to: "/ai", label: "AI Agents", icon: "🤖" },
 ];
 

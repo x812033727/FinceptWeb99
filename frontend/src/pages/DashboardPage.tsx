@@ -7,6 +7,7 @@ const CARDS = [
   { label: "Screener", desc: "Filter stocks by any metric", icon: "🔍", href: "/screener" },
   { label: "Portfolio", desc: "Holdings, P&L & optimizer", icon: "📊", href: "/portfolio" },
   { label: "Analytics", desc: "DCF · VaR · Backtest", icon: "📐", href: "/analytics" },
+  { label: "Macro", desc: "FRED indicators · yield curve", icon: "🌐", href: "/macro" },
   { label: "AI Agents", desc: "6 CFA-grade personas", icon: "🤖", href: "/ai" },
 ];
 

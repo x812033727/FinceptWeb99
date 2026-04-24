@@ -1,4 +1,5 @@
 import { useState, FormEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -12,10 +13,13 @@ type Tab = "dcf" | "var" | "backtest";
 const inputCls = "w-full px-3 py-1.5 rounded bg-input border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring";
 const labelCls = "block text-xs text-muted-foreground mb-1";
 
-function Card({ title, children }: { title: string; children: React.ReactNode }) {
+function Card({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
   return (
     <div className="bg-card border border-border rounded-lg p-5 space-y-4">
-      <h2 className="text-foreground font-medium">{title}</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-foreground font-medium">{title}</h2>
+        {action}
+      </div>
       {children}
     </div>
   );
@@ -31,7 +35,7 @@ function Metric({ label, value, color }: { label: string; value: string; color?:
 }
 
 // ── DCF Panel ─────────────────────────────────────────────────────
-function DCFPanel() {
+function DCFPanel({ onAnalyseWithAI }: { onAnalyseWithAI: (ctx: unknown) => void }) {
   const [symbol, setSymbol] = useState("AAPL");
   const [market, setMarket] = useState("US");
   const [wacc, setWacc] = useState("0.09");
@@ -84,7 +88,16 @@ function DCFPanel() {
       </Card>
 
       {r && (
-        <Card title="DCF Results">
+        <Card title="DCF Results"
+          action={
+            <button
+              onClick={() => onAnalyseWithAI(r)}
+              className="text-xs text-primary hover:underline"
+            >
+              🤖 Ask AI
+            </button>
+          }
+        >
           <div className="grid grid-cols-2 gap-3">
             <Metric label="Intrinsic Value" value={`$${r.intrinsic_value.toFixed(2)}`} color="text-primary" />
             <Metric label="Margin of Safety" value={r.margin_of_safety != null ? `${r.margin_of_safety.toFixed(1)}%` : "—"}
@@ -335,7 +348,12 @@ function BacktestPanel() {
 
 // ── Main page ─────────────────────────────────────────────────────
 export default function AnalyticsPage() {
+  const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>("dcf");
+
+  function analyseWithAI(agentId: string, context: unknown, message: string) {
+    navigate("/ai", { state: { agentId, context, initialMessage: message } });
+  }
 
   const tabs: { id: Tab; label: string }[] = [
     { id: "dcf",      label: "DCF Valuation" },
@@ -363,7 +381,17 @@ export default function AnalyticsPage() {
         ))}
       </div>
 
-      {tab === "dcf"      && <DCFPanel />}
+      {tab === "dcf" && (
+        <DCFPanel
+          onAnalyseWithAI={(ctx) =>
+            analyseWithAI(
+              "earnings_analyst",
+              { dcf_result: ctx },
+              "Interpret this DCF result. Is the stock undervalued or overvalued? What are the key assumptions driving the valuation?"
+            )
+          }
+        />
+      )}
       {tab === "var"      && <VaRPanel />}
       {tab === "backtest" && <BacktestPanel />}
     </div>

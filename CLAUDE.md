@@ -76,7 +76,8 @@ FinceptWeb/
 │   │   ├── test_portfolio_extended.py # 14 tests: detail, performance, optimiser
 │   │   ├── test_tw_market_api.py   # 25 tests: all TW market endpoints
 │   │   ├── test_us_market_api.py   # 21 tests: all US market endpoints
-│   │   └── test_watchlist_api.py   # 7 tests: watchlist + item CRUD
+│   │   ├── test_watchlist_api.py   # 7 tests: watchlist + item CRUD
+│   │   └── test_websocket_manager.py # 15 tests: auth, delta suppression, alert fan-out
 │   ├── limiter.py        # slowapi Limiter (rate limiting on auth endpoints)
 │   ├── logging_config.py # JSON logging (prod) / plain text (debug)
 │   ├── config.py         # Pydantic Settings (env-driven)

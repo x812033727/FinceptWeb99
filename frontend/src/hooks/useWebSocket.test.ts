@@ -52,10 +52,14 @@ function resetFake() {
 // hoisting works correctly. Both must be declared before any test runs.
 vi.stubGlobal("WebSocket", FakeWebSocket);
 
-vi.mock("@/store/authStore", () => ({
-  useAuthStore: (selector: (s: { token: string | null }) => unknown) =>
-    selector({ token: "test-token" }),
-}));
+vi.mock("@/store/authStore", () => {
+  const state = { token: "test-token" };
+  const useAuthStore = (selector: (s: typeof state) => unknown) => selector(state);
+  // The hook now calls useAuthStore.getState() inside socket.onopen to
+  // re-read the latest token, so the mock has to expose it.
+  (useAuthStore as unknown as { getState: () => typeof state }).getState = () => state;
+  return { useAuthStore };
+});
 
 // ── helpers ────────────────────────────────────────────────────────
 

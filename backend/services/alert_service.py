@@ -8,7 +8,8 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.alert import AlertCondition, PriceAlert
-from api.alerts.schemas import AlertCreate
+from schemas.alert import AlertCreate
+from services.notification_service import notify_user
 
 
 class AlertService:
@@ -58,11 +59,9 @@ class AlertService:
     ) -> None:
         """
         Check untriggered alerts for this symbol+market, fire any that match.
-        Pushes alert notifications to connected WebSocket clients via the WS manager.
-        Called from market refresh tasks.
+        Pushes alert notifications via the registered notification transport
+        (WebSocket in production). Called from market refresh tasks.
         """
-        from api.websocket.manager import push_alert_to_user
-
         result = await db.execute(
             select(PriceAlert).where(
                 and_(
@@ -91,7 +90,7 @@ class AlertService:
         if fired:
             await db.commit()
             for alert in fired:
-                await push_alert_to_user(str(alert.user_id), {
+                await notify_user(str(alert.user_id), {
                     "type": "alert",
                     "id": str(alert.id),
                     "symbol": alert.symbol,

@@ -3,13 +3,17 @@ replicaCount:
   frontend: 2
 
 image:
+  # Tags are intentionally empty so Helm fails fast if a deploy doesn't pin
+  # a specific version (e.g. `--set image.backend.tag=v0.2.0` or use a
+  # @sha256 digest). The `latest` floating tag is unsafe in production
+  # because rollback then becomes impossible.
   backend:
     repository: ghcr.io/x812033727/finceptweb-backend
-    tag: latest
+    tag: ""
     pullPolicy: IfNotPresent
   frontend:
     repository: ghcr.io/x812033727/finceptweb-frontend
-    tag: latest
+    tag: ""
     pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -129,3 +133,12 @@ readinessProbe:
       port: 80
     initialDelaySeconds: 5
     periodSeconds: 10
+
+# PodDisruptionBudget keeps at least one pod available during voluntary
+# disruptions (node drains, cluster upgrades, HPA scale-downs).
+podDisruptionBudget:
+  enabled: true
+  backend:
+    minAvailable: 1
+  frontend:
+    minAvailable: 1

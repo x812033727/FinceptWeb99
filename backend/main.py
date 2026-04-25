@@ -1,7 +1,8 @@
+import ipaddress
 from contextlib import asynccontextmanager
 
 import sqlalchemy
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from slowapi import _rate_limit_exceeded_handler
@@ -44,8 +45,10 @@ async def lifespan(app: FastAPI):
         await seed_admin(db)
 
     from tasks.scheduler import scheduler, setup_jobs
-    from api.websocket.manager import start_pubsub_listener
+    from api.websocket.manager import push_alert_to_user, start_pubsub_listener
+    from services.notification_service import register_push_impl
 
+    register_push_impl(push_alert_to_user)
     setup_jobs()
     scheduler.start()
     await start_pubsub_listener()
@@ -94,8 +97,32 @@ app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
 app.include_router(system_router, prefix="/api/system", tags=["System"])
 
 
+def _client_is_allowed(request: Request) -> bool:
+    """Allow scraping from configured CIDRs OR a valid bearer token."""
+    if settings.METRICS_AUTH_TOKEN:
+        header = request.headers.get("authorization", "")
+        if header.startswith("Bearer ") and header[7:] == settings.METRICS_AUTH_TOKEN:
+            return True
+    client_host = request.client.host if request.client else ""
+    if not client_host:
+        return False
+    try:
+        addr = ipaddress.ip_address(client_host)
+    except ValueError:
+        return False
+    for cidr in settings.metrics_allow_cidrs:
+        try:
+            if addr in ipaddress.ip_network(cidr, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 @app.get("/metrics", include_in_schema=False)
 async def prometheus_metrics(request: Request) -> Response:
+    if not _client_is_allowed(request):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="metrics access denied")
     return await metrics_endpoint(request)
 
 

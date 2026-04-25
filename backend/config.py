@@ -25,13 +25,16 @@ class Settings(BaseSettings):
     @classmethod
     def validate_jwt_secret(cls, v: str) -> str:
         import os
+        debug_on = os.environ.get("DEBUG", "").lower() in ("true", "1")
         if not v or v == "change_me":
-            if os.environ.get("DEBUG", "").lower() in ("true", "1"):
+            if debug_on:
                 return v
             raise ValueError(
                 "JWT_SECRET_KEY must be set to a strong random value "
-                "(min 32 chars) in production. Set DEBUG=true to bypass."
+                "(min 32 chars) in production. Set DEBUG=true only for local dev."
             )
+        # Length check now applies in BOTH debug and prod — DEBUG only allows
+        # the literal placeholder, never a short real-looking secret.
         if len(v) < 32:
             raise ValueError("JWT_SECRET_KEY must be at least 32 characters")
         return v
@@ -85,10 +88,42 @@ class Settings(BaseSettings):
     GITHUB_OWNER: str = "x812033727"
     GITHUB_REPO: str = "FinceptWeb"
     UPDATE_CHECK_INTERVAL_HOURS: int = 6
-    # Shell command run by POST /api/admin/update. Empty = feature disabled
-    # (endpoint returns status="not_configured"). Operators set this in .env to
-    # e.g. "docker compose pull && docker compose up -d backend".
+    # Argv list run by POST /api/admin/update. Empty = feature disabled
+    # (endpoint returns status="not_configured"). Operators set this as a
+    # JSON-encoded list of args in .env, e.g.:
+    #   UPDATE_COMMAND=["docker","compose","pull"]
+    # First token must be in UPDATE_COMMAND_ALLOWLIST. Shell metacharacters
+    # are never interpreted (no shell is spawned).
     UPDATE_COMMAND: str = ""
+    UPDATE_COMMAND_ALLOWLIST: str = "docker,docker-compose,kubectl,helm,/usr/local/bin/update.sh"
+
+    @property
+    def update_command_argv(self) -> list[str]:
+        import json
+        raw = self.UPDATE_COMMAND.strip()
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"UPDATE_COMMAND must be a JSON list of strings: {exc}")
+        if not isinstance(parsed, list) or not all(isinstance(p, str) for p in parsed):
+            raise ValueError("UPDATE_COMMAND must be a JSON list of strings")
+        return parsed
+
+    @property
+    def update_command_allowlist(self) -> list[str]:
+        return [p.strip() for p in self.UPDATE_COMMAND_ALLOWLIST.split(",") if p.strip()]
+
+    # Prometheus /metrics access control. Default = loopback only. Production
+    # operators can either narrow to in-cluster CIDRs or set METRICS_AUTH_TOKEN
+    # and have Prometheus pass `Authorization: Bearer <token>`.
+    METRICS_ALLOW_CIDRS: str = "127.0.0.1/32,::1/128"
+    METRICS_AUTH_TOKEN: str = ""
+
+    @property
+    def metrics_allow_cidrs(self) -> list[str]:
+        return [c.strip() for c in self.METRICS_ALLOW_CIDRS.split(",") if c.strip()]
 
     # Environment
     DEBUG: bool = False

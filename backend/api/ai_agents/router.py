@@ -55,11 +55,20 @@ async def _check_quota(user: dict) -> None:
 async def _refund_quota(user: dict) -> None:
     """Decrement the daily AI quota counter so a user isn't charged for a
     request that produced no usable output (validation failure before the
-    LLM call, or a stream that yielded zero tokens)."""
+    LLM call, or a stream that yielded zero tokens).
+
+    Failure here means the user's quota stays incremented even though they
+    got nothing back. We log at error level so this surfaces in alerts and
+    operators can manually decrement if needed.
+    """
     try:
         await cache_decr(key_ai_counter(user["id"]))
-    except Exception:
-        logger.exception("Failed to refund AI quota for user %s", user.get("id"))
+    except Exception as exc:
+        logger.error(
+            "ai.quota.refund_failed",
+            extra={"user_id": user.get("id"), "error": str(exc)},
+            exc_info=True,
+        )
 
 
 # ── routes ────────────────────────────────────────────────────────

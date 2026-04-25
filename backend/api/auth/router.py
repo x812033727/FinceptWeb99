@@ -128,7 +128,9 @@ async def login(request: Request, body: LoginRequest, response: Response, db: As
 
 
 @router.post("/refresh", response_model=TokenResponse)
+@limiter.limit("30/minute")
 async def refresh(
+    request: Request,
     response: Response,
     refresh_token: str | None = Cookie(default=None, alias=REFRESH_COOKIE),
     db: AsyncSession = Depends(get_db),
@@ -163,7 +165,9 @@ async def refresh(
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("30/minute")
 async def logout(
+    request: Request,
     response: Response,
     refresh_token: str | None = Cookie(default=None, alias=REFRESH_COOKIE),
 ):
@@ -233,7 +237,8 @@ async def create_api_key(
         expires_at=expires_at,
     )
     db.add(api_key)
-    await db.flush()
+    await db.commit()
+    await db.refresh(api_key)
     return APIKeyCreateResponse(id=api_key.id, name=api_key.name, key=raw, expires_at=expires_at)
 
 
@@ -264,3 +269,4 @@ async def delete_api_key(
     if not key or str(key.user_id) != current_user["id"]:
         raise HTTPException(status_code=404, detail="API key not found")
     await db.delete(key)
+    await db.commit()

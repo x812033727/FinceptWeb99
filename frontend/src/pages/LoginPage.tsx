@@ -56,6 +56,7 @@ export default function LoginPage() {
             <input
               type="password"
               required
+              minLength={mode === "register" ? 8 : undefined}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full px-3 py-2 rounded-md bg-input border border-border text-foreground text-sm outline-none focus:ring-1 focus:ring-ring"

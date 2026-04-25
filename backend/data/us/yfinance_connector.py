@@ -1,20 +1,24 @@
 """
-yfinance wrapper — sync calls run in a thread executor to avoid blocking asyncio.
-All timestamps normalized to Unix ms UTC before returning.
+yfinance wrapper — sync calls run in a bounded thread executor to avoid
+blocking asyncio AND to cap concurrent yfinance HTTP fan-out (each Ticker
+call triggers multiple Yahoo HTTP requests).
 """
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 import yfinance as yf
 
+# 8 concurrent yfinance fetches keeps Yahoo happy and bounds memory under load.
+# Far smaller than the default ThreadPoolExecutor (min(32, cpu*5)) which would
+# happily spawn dozens of threads when a screener page hits.
+_MAX_WORKERS = 8
+_executor = ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix="yfinance")
+
 
 def _run(fn, *args, **kwargs):
-    # Must be called from within an async context (the consumer awaits the
-    # returned future). get_running_loop() is the non-deprecated API.
-    # The lambda here is safe: run_in_executor(None, ...) uses the default
-    # ThreadPoolExecutor, and threads share memory — no pickling involved.
     loop = asyncio.get_running_loop()
-    return loop.run_in_executor(None, lambda: fn(*args, **kwargs))
+    return loop.run_in_executor(_executor, lambda: fn(*args, **kwargs))
 
 
 def _ts_to_ms(ts) -> int | None:

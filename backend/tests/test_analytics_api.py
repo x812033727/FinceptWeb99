@@ -162,7 +162,10 @@ async def test_var_mismatched_lengths(client: AsyncClient, db_session: AsyncSess
         "weights": [0.5, 0.5],
         "portfolio_value": 100000,
     }, headers=_analyst_headers(token))
-    assert r.status_code == 400
+    # Pydantic schema-level model_validator now rejects mismatched lengths
+    # before the route runs (422), while older route-level validation
+    # returned 400. Accept either.
+    assert r.status_code in (400, 422)
 
 
 @pytest.mark.asyncio
@@ -260,7 +263,9 @@ async def test_backtest_invalid_date_range(client: AsyncClient, db_session: Asyn
         "strategy": "sma_crossover", "params": {"fast": 20, "slow": 50},
         "start_date": "2023-12-31", "end_date": "2020-01-01",  # reversed
     }, headers=_analyst_headers(token))
-    assert r.status_code == 400
+    # Schema-level model_validator catches reversed dates as 422; the older
+    # route-level check returned 400.
+    assert r.status_code in (400, 422)
 
 
 @pytest.mark.asyncio

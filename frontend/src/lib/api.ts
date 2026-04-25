@@ -21,13 +21,24 @@ api.interceptors.request.use((config) => {
 // when the call site only catches the rejected promise. Used by both
 // the axios interceptor below and the SSE fetch path in AIPage.
 
+// Server-supplied error strings are rendered as plain text via React (no
+// dangerouslySetInnerHTML), so XSS is already prevented; the slice is purely
+// to stop a hostile/buggy backend from blowing up the toast UI.
+const MAX_DETAIL_LEN = 200;
+
+function safeDetail(input: unknown): string | undefined {
+  if (typeof input !== "string" || !input) return undefined;
+  return input.length > MAX_DETAIL_LEN ? input.slice(0, MAX_DETAIL_LEN) + "…" : input;
+}
+
 export function notifyRateLimited(detail?: string, retryAfterSec?: number): void {
-  const isAiQuota = !!detail && /ai quota/i.test(detail);
+  const safe = safeDetail(detail);
+  const isAiQuota = !!safe && /ai quota/i.test(safe);
   const title = isAiQuota ? "AI quota exceeded" : "Rate limit reached";
   const fallback = isAiQuota
     ? "Daily AI request limit reached. Resets at midnight UTC."
     : "Too many requests — please slow down and try again shortly.";
-  const message = detail || fallback;
+  const message = safe || fallback;
   const retry = retryAfterSec
     ? ` Retry in ~${retryAfterSec}s.`
     : "";
@@ -42,6 +53,11 @@ export function notifyRateLimited(detail?: string, retryAfterSec?: number): void
 // ── Response interceptor: auto-refresh on 401, toast on 429 ──────
 let refreshing: Promise<string> | null = null;
 
+// Defence-in-depth alongside the per-request `_retry` flag — if a future
+// edit ever removes that flag, the counter still bounds total retries per
+// request to a safe ceiling.
+const MAX_RETRIES = 1;
+
 api.interceptors.response.use(
   (res) => res,
   async (err: AxiosError) => {
@@ -55,8 +71,10 @@ api.interceptors.response.use(
       return Promise.reject(err);
     }
 
-    // Only retry once and only on 401 (not on the refresh endpoint itself)
-    if (status !== 401 || (original as any)._retry) {
+    // Only retry on 401 (not on the refresh endpoint itself), and never
+    // more than MAX_RETRIES times per request.
+    const retryCount = ((original as { _retryCount?: number })._retryCount) ?? 0;
+    if (status !== 401 || retryCount >= MAX_RETRIES) {
       return Promise.reject(err);
     }
     if (original.url?.includes("/auth/refresh")) {
@@ -64,7 +82,7 @@ api.interceptors.response.use(
       return Promise.reject(err);
     }
 
-    (original as any)._retry = true;
+    (original as { _retryCount?: number })._retryCount = retryCount + 1;
 
     // Deduplicate concurrent refresh calls
     if (!refreshing) {

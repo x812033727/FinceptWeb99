@@ -27,6 +27,23 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+type Role = "viewer" | "analyst" | "admin";
+
+// Role hierarchy: admin >= analyst >= viewer. Pages that require analyst
+// will accept admin too. Backend remains the source of truth — this guard
+// only prevents the client from rendering features the user obviously
+// can't use.
+const ROLE_RANK: Record<Role, number> = { viewer: 0, analyst: 1, admin: 2 };
+
+function RequireRole({ role, children }: { role: Role; children: React.ReactNode }) {
+  const user = useAuthStore((s) => s.user);
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated());
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  const userRank = user ? ROLE_RANK[user.role] : -1;
+  if (userRank < ROLE_RANK[role]) return <Navigate to="/dashboard" replace />;
+  return <>{children}</>;
+}
+
 // ── App shell ─────────────────────────────────────────────────────
 export default function App() {
   const [booting, setBooting] = useState(true);
@@ -63,13 +80,13 @@ export default function App() {
             <Route path="/stock/:market/:symbol" element={<ErrorBoundary><StockDetailPage /></ErrorBoundary>} />
             <Route path="/screener" element={<ErrorBoundary><ScreenerPage /></ErrorBoundary>} />
             <Route path="/portfolio" element={<ErrorBoundary><PortfolioPage /></ErrorBoundary>} />
-            <Route path="/analytics" element={<ErrorBoundary><AnalyticsPage /></ErrorBoundary>} />
+            <Route path="/analytics" element={<RequireRole role="analyst"><ErrorBoundary><AnalyticsPage /></ErrorBoundary></RequireRole>} />
             <Route path="/macro" element={<ErrorBoundary><MacroPage /></ErrorBoundary>} />
             <Route path="/watchlist" element={<ErrorBoundary><WatchlistPage /></ErrorBoundary>} />
             <Route path="/alerts" element={<ErrorBoundary><AlertsPage /></ErrorBoundary>} />
             <Route path="/ai" element={<ErrorBoundary><AIPage /></ErrorBoundary>} />
             <Route path="/settings" element={<ErrorBoundary><SettingsPage /></ErrorBoundary>} />
-            <Route path="/admin" element={<ErrorBoundary><AdminPage /></ErrorBoundary>} />
+            <Route path="/admin" element={<RequireRole role="admin"><ErrorBoundary><AdminPage /></ErrorBoundary></RequireRole>} />
           </Route>
 
           <Route path="/" element={<Navigate to="/dashboard" replace />} />

@@ -27,8 +27,15 @@ const wsStateListeners = new Set<(connected: boolean) => void>();
 let socket: WebSocket | null = null;
 let reconnectDelay = 1000;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let authAckTimer: ReturnType<typeof setTimeout> | null = null;
 let authenticated = false;
 let wsConnected = false;
+
+// Server expects an auth message within ~5s of the WebSocket opening; we
+// give it the same window to ack before tearing down. If the server never
+// responds (network half-open, broken proxy), the close+reconnect loop
+// will keep trying with backoff.
+const AUTH_ACK_TIMEOUT_MS = 7_000;
 
 function notifyWsState(connected: boolean): void {
   wsConnected = connected;
@@ -55,6 +62,7 @@ function subscribeSymbols(): void {
 }
 
 function connect(token: string): void {
+  if (!token) return;
   if (socket && socket.readyState !== WebSocket.CLOSED) return;
 
   socket = new WebSocket(getWsUrl());
@@ -63,7 +71,19 @@ function connect(token: string): void {
   socket.onopen = () => {
     reconnectDelay = 1000;
     notifyWsState(true);
-    sendJson({ action: "auth", token });
+    // Re-read the latest token in case it rotated during connect()
+    const liveToken = useAuthStore.getState().token;
+    if (!liveToken) {
+      socket?.close();
+      return;
+    }
+    sendJson({ action: "auth", token: liveToken });
+    if (authAckTimer) clearTimeout(authAckTimer);
+    authAckTimer = setTimeout(() => {
+      if (!authenticated && socket && socket.readyState !== WebSocket.CLOSED) {
+        socket.close(4002, "auth ack timeout");
+      }
+    }, AUTH_ACK_TIMEOUT_MS);
   };
 
   socket.onmessage = (ev) => {
@@ -105,6 +125,10 @@ function connect(token: string): void {
   socket.onclose = () => {
     authenticated = false;
     socket = null;
+    if (authAckTimer) {
+      clearTimeout(authAckTimer);
+      authAckTimer = null;
+    }
     notifyWsState(false);
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
@@ -119,6 +143,10 @@ function connect(token: string): void {
 
 function disconnect(): void {
   if (reconnectTimer) clearTimeout(reconnectTimer);
+  if (authAckTimer) {
+    clearTimeout(authAckTimer);
+    authAckTimer = null;
+  }
   socket?.close();
   socket = null;
   authenticated = false;

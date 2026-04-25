@@ -1,11 +1,27 @@
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Any
+
+MAX_SYMBOLS = 50
+MAX_OVERRIDES = 32
+MAX_PARAMS = 32
+SYMBOL_PATTERN = r"^[A-Za-z0-9.\-]{1,20}$"
+
+
+def _bounded_overrides(v: dict[str, Any]) -> dict[str, Any]:
+    if len(v) > MAX_OVERRIDES:
+        raise ValueError(f"At most {MAX_OVERRIDES} override fields are allowed")
+    return v
 
 
 class DCFRequest(BaseModel):
-    symbol: str
-    market: str = "US"
-    overrides: dict[str, Any] = {}
+    symbol: str = Field(..., pattern=SYMBOL_PATTERN)
+    market: str = Field("US", pattern="^(US|TW)$")
+    overrides: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("overrides")
+    @classmethod
+    def _check_overrides(cls, v: dict[str, Any]) -> dict[str, Any]:
+        return _bounded_overrides(v)
 
 
 class DCFResponse(BaseModel):
@@ -21,13 +37,23 @@ class DCFResponse(BaseModel):
 
 
 class VaRRequest(BaseModel):
-    symbols: list[str]
-    markets: list[str]
-    weights: list[float]
-    portfolio_value: float
-    method: str = "all"          # "historical" | "parametric" | "monte_carlo" | "all"
-    confidence: float = 0.95
-    horizon_days: int = 1
+    symbols: list[str] = Field(..., min_length=1, max_length=MAX_SYMBOLS)
+    markets: list[str] = Field(..., min_length=1, max_length=MAX_SYMBOLS)
+    weights: list[float] = Field(..., min_length=1, max_length=MAX_SYMBOLS)
+    portfolio_value: float = Field(..., gt=0, le=1e15)
+    method: str = Field("all", pattern="^(historical|parametric|monte_carlo|all)$")
+    confidence: float = Field(0.95, gt=0.0, lt=1.0)
+    horizon_days: int = Field(1, ge=1, le=252)
+
+    @field_validator("symbols")
+    @classmethod
+    def symbols_format(cls, v: list[str]) -> list[str]:
+        import re
+        pat = re.compile(SYMBOL_PATTERN)
+        for s in v:
+            if not pat.match(s):
+                raise ValueError(f"Invalid symbol: {s!r}")
+        return v
 
     @field_validator("weights")
     @classmethod
@@ -35,6 +61,12 @@ class VaRRequest(BaseModel):
         if any(w < 0 for w in v):
             raise ValueError("Weights must be non-negative")
         return v
+
+    @model_validator(mode="after")
+    def _matched_lengths(self):
+        if not (len(self.symbols) == len(self.markets) == len(self.weights)):
+            raise ValueError("symbols, markets, and weights must have equal length")
+        return self
 
 
 class VaRResponse(BaseModel):
@@ -47,13 +79,36 @@ class VaRResponse(BaseModel):
 
 
 class BacktestRequest(BaseModel):
-    symbols: list[str]
-    markets: list[str]
-    strategy: str = "sma_crossover"   # "sma_crossover" | "rsi_mean_reversion"
-    params: dict[str, Any] = {}
-    start_date: str                   # "YYYY-MM-DD"
-    end_date: str
-    initial_capital: float = 100_000.0
+    symbols: list[str] = Field(..., min_length=1, max_length=MAX_SYMBOLS)
+    markets: list[str] = Field(..., min_length=1, max_length=MAX_SYMBOLS)
+    strategy: str = Field("sma_crossover", pattern="^(sma_crossover|rsi_mean_reversion)$")
+    params: dict[str, Any] = Field(default_factory=dict)
+    start_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    end_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    initial_capital: float = Field(100_000.0, gt=0, le=1e12)
+
+    @field_validator("symbols")
+    @classmethod
+    def symbols_format(cls, v: list[str]) -> list[str]:
+        import re
+        pat = re.compile(SYMBOL_PATTERN)
+        for s in v:
+            if not pat.match(s):
+                raise ValueError(f"Invalid symbol: {s!r}")
+        return v
+
+    @field_validator("params")
+    @classmethod
+    def _check_params(cls, v: dict[str, Any]) -> dict[str, Any]:
+        if len(v) > MAX_PARAMS:
+            raise ValueError(f"At most {MAX_PARAMS} strategy params are allowed")
+        return v
+
+    @model_validator(mode="after")
+    def _date_order(self):
+        if self.end_date < self.start_date:
+            raise ValueError("end_date must be on or after start_date")
+        return self
 
 
 class BacktestResponse(BaseModel):

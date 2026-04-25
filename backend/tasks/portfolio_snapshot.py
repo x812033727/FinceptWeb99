@@ -10,15 +10,36 @@ from datetime import date
 from sqlalchemy import and_, select
 from sqlalchemy.orm import selectinload
 
-from cache.redis_cache import cache_get, key_quote
+from cache.redis_cache import acquire_lock, cache_get, key_quote, release_lock
 from db.session import AsyncSessionLocal
 from models.portfolio import Portfolio, PortfolioSnapshot
 
 log = logging.getLogger(__name__)
 
+# 23:00 UTC + a 30-minute window covers any clock skew between pods. The
+# lock self-expires so a crashed holder never wedges tomorrow's run.
+_SNAPSHOT_LOCK_KEY = "lock:portfolio_snapshot"
+_SNAPSHOT_LOCK_TTL = 1800  # 30 minutes
+
 
 async def take_all_snapshots() -> None:
-    """Called by APScheduler once daily after all markets close (~23:00 UTC)."""
+    """Called by APScheduler once daily after all markets close (~23:00 UTC).
+
+    In multi-pod deployments every pod's APScheduler will fire at the same
+    time. The Redis lock ensures only ONE pod actually writes snapshots —
+    the rest no-op.
+    """
+    if not await acquire_lock(_SNAPSHOT_LOCK_KEY, _SNAPSHOT_LOCK_TTL):
+        log.info("portfolio_snapshot.skipped_lock_held")
+        return
+
+    try:
+        await _do_snapshots()
+    finally:
+        await release_lock(_SNAPSHOT_LOCK_KEY)
+
+
+async def _do_snapshots() -> None:
     from services.portfolio_service import _get_twd_usd_rate
 
     async with AsyncSessionLocal() as db:

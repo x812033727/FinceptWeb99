@@ -166,7 +166,10 @@ async def test_trigger_update_not_configured(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_trigger_update_success(monkeypatch):
-    monkeypatch.setattr(vs.settings, "UPDATE_COMMAND", "true")
+    # New format: JSON-encoded argv list. argv[0] basename must be in the
+    # allowlist so the call survives the safety check.
+    monkeypatch.setattr(vs.settings, "UPDATE_COMMAND", '["true"]')
+    monkeypatch.setattr(vs.settings, "UPDATE_COMMAND_ALLOWLIST", "true")
 
     class _Proc:
         returncode = 0
@@ -175,17 +178,18 @@ async def test_trigger_update_success(monkeypatch):
         def kill(self):
             pass
 
-    async def _shell(*a, **k):
+    async def _exec(*a, **k):
         return _Proc()
 
-    monkeypatch.setattr(vs.asyncio, "create_subprocess_shell", _shell)
+    monkeypatch.setattr(vs.asyncio, "create_subprocess_exec", _exec)
     result = await vs.trigger_update()
     assert result["status"] == "started"
 
 
 @pytest.mark.asyncio
 async def test_trigger_update_nonzero_exit(monkeypatch):
-    monkeypatch.setattr(vs.settings, "UPDATE_COMMAND", "false")
+    monkeypatch.setattr(vs.settings, "UPDATE_COMMAND", '["false"]')
+    monkeypatch.setattr(vs.settings, "UPDATE_COMMAND_ALLOWLIST", "false")
 
     class _Proc:
         returncode = 1
@@ -194,10 +198,28 @@ async def test_trigger_update_nonzero_exit(monkeypatch):
         def kill(self):
             pass
 
-    async def _shell(*a, **k):
+    async def _exec(*a, **k):
         return _Proc()
 
-    monkeypatch.setattr(vs.asyncio, "create_subprocess_shell", _shell)
+    monkeypatch.setattr(vs.asyncio, "create_subprocess_exec", _exec)
     result = await vs.trigger_update()
     assert result["status"] == "failed"
     assert "exit=1" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_trigger_update_blocked_by_allowlist(monkeypatch):
+    monkeypatch.setattr(vs.settings, "UPDATE_COMMAND", '["rm","-rf","/"]')
+    monkeypatch.setattr(vs.settings, "UPDATE_COMMAND_ALLOWLIST", "docker,kubectl")
+    result = await vs.trigger_update()
+    assert result["status"] == "failed"
+    assert "allowlist" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_trigger_update_invalid_json(monkeypatch):
+    # Plain string (legacy shell style) is no longer accepted.
+    monkeypatch.setattr(vs.settings, "UPDATE_COMMAND", "docker compose pull")
+    result = await vs.trigger_update()
+    assert result["status"] == "failed"
+    assert "misconfigured" in result["message"]

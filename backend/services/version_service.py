@@ -10,7 +10,9 @@ Flow:
                   module-level asyncio.Lock so concurrent misses fan in.
 
     POST /api/admin/update ──► trigger_update()
-        └─ asyncio.create_subprocess_shell(UPDATE_COMMAND)
+        └─ asyncio.create_subprocess_exec(*UPDATE_COMMAND argv)
+           First arg is enforced against UPDATE_COMMAND_ALLOWLIST so a
+           compromised admin account can't pivot to arbitrary RCE.
 """
 from __future__ import annotations
 
@@ -146,16 +148,28 @@ async def trigger_update() -> dict[str, Any]:
     Returns a status dict — never raises. Stdout/stderr are logged but not
     returned to the client to avoid leaking deployment internals.
     """
-    cmd = settings.UPDATE_COMMAND.strip()
-    if not cmd:
+    try:
+        argv = settings.update_command_argv
+    except ValueError as exc:
+        log.error("admin.update.invalid_config", extra={"error": str(exc)})
+        return {"status": STATUS_FAILED, "message": "UPDATE_COMMAND misconfigured"}
+
+    if not argv:
         return {
             "status": STATUS_NOT_CONFIGURED,
             "message": "UPDATE_COMMAND is empty. Set it in .env to enable one-click updates.",
         }
 
+    program = argv[0]
+    allowlist = settings.update_command_allowlist
+    program_name = program.rsplit("/", 1)[-1]
+    if program not in allowlist and program_name not in allowlist:
+        log.error("admin.update.blocked", extra={"program": program_name})
+        return {"status": STATUS_FAILED, "message": "update command not in allowlist"}
+
     try:
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

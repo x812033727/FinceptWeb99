@@ -120,6 +120,30 @@ async def acquire_token(key: str, capacity: float, rate: float) -> bool:
         raise RedisUnavailable(str(exc)) from exc
 
 
+async def acquire_lock(key: str, ttl_seconds: int, value: str = "1") -> bool:
+    """SET NX with TTL — used by scheduler tasks to coordinate across pods.
+
+    Returns True if this caller acquired the lock. The TTL acts as a
+    self-healing safety net: if the holder crashes without releasing, the
+    lock auto-expires.
+    """
+    try:
+        r = await get_redis()
+        # SET key value NX EX ttl — atomic
+        result = await r.set(key, value, nx=True, ex=ttl_seconds)
+        return bool(result)
+    except Exception:
+        return False
+
+
+async def release_lock(key: str) -> None:
+    try:
+        r = await get_redis()
+        await r.delete(key)
+    except Exception:
+        pass
+
+
 async def ping() -> bool:
     try:
         r = await get_redis()

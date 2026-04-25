@@ -9,9 +9,13 @@
  * Install: navigator.serviceWorker.register('/sw.js')
  */
 
-const SHELL_CACHE   = "fincept-shell-v1";
-const API_CACHE     = "fincept-api-v1";
-const STATIC_CACHE  = "fincept-static-v1";
+// Version is appended to the registration URL by main.tsx (?v=<pkg.version>)
+// so each release scopes its caches separately and the activate handler can
+// purge anything that doesn't match the current version.
+const SW_VERSION    = new URL(self.location.href).searchParams.get("v") || "dev";
+const SHELL_CACHE   = `fincept-shell-${SW_VERSION}`;
+const API_CACHE     = `fincept-api-${SW_VERSION}`;
+const STATIC_CACHE  = `fincept-static-${SW_VERSION}`;
 
 const SHELL_ASSETS = [
   "/",

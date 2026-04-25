@@ -26,7 +26,7 @@ spec:
         runAsUser: 101
       containers:
         - name: frontend
-          image: "{{ .Values.image.frontend.repository }}:{{ .Values.image.frontend.tag }}"
+          image: "{{ .Values.image.frontend.repository }}:{{ required "image.frontend.tag is required — pin a specific version (no 'latest') for reliable rollback" .Values.image.frontend.tag }}"
           imagePullPolicy: {{ .Values.image.frontend.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false

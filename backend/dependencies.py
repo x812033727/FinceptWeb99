@@ -23,18 +23,22 @@ async def get_current_user(
     """
     Authenticate via Bearer JWT or X-API-Key header.
     Returns a dict with 'id' (str UUID) and 'role'.
+
+    A malformed/expired Bearer token always returns 401 — we never silently
+    fall through to the API key path, since an attacker forging a Bearer
+    header should not be able to probe for valid X-API-Key values too.
     """
     # ── Try Bearer JWT ────────────────────────────────────────────
     if token:
         try:
             payload = decode_access_token(token)
-            return {"id": payload["sub"], "role": payload["role"]}
         except JWTError:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        return {"id": payload["sub"], "role": payload["role"]}
 
     # ── Try API Key ───────────────────────────────────────────────
     if api_key:
@@ -47,12 +51,14 @@ async def get_current_user(
         if row.expires_at and row.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="API key expired")
 
-        # Update last_used_at without a full commit overhead
-        row.last_used_at = datetime.now(timezone.utc)
-
         user = await db.get(User, row.user_id)
         if not user or not user.is_active:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+
+        # Persist last_used_at so admin audit views aren't perpetually NULL.
+        # get_db() commits at the end of the request, so this is durable.
+        row.last_used_at = datetime.now(timezone.utc)
+        await db.flush()
 
         return {"id": str(user.id), "role": user.role.value}
 

@@ -2,7 +2,9 @@
 Pure unit tests for AlertService — CRUD and check_and_fire logic.
 
 All DB work uses the in-process SQLite test engine (db_session fixture).
-push_alert_to_user is mocked so no WebSocket infrastructure is needed.
+notify_user (the transport-agnostic dispatch in services.notification_service,
+re-exported through services.alert_service) is mocked so no WebSocket
+infrastructure is needed.
 """
 import uuid
 import pytest
@@ -127,7 +129,7 @@ async def test_check_and_fire_above_triggers(db_session: AsyncSession):
     user = await _make_user(db_session)
     alert = await AlertService.create(db_session, user.id, _alert_body("CF1", "US", "above", 200.0))
 
-    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock) as mock_push:
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
         await AlertService.check_and_fire(db_session, "CF1", "US", 205.0)
 
     await db_session.refresh(alert)
@@ -146,7 +148,7 @@ async def test_check_and_fire_below_triggers(db_session: AsyncSession):
     user = await _make_user(db_session)
     alert = await AlertService.create(db_session, user.id, _alert_body("CF2", "US", "below", 150.0))
 
-    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock) as mock_push:
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
         await AlertService.check_and_fire(db_session, "CF2", "US", 148.0)
 
     await db_session.refresh(alert)
@@ -160,7 +162,7 @@ async def test_check_and_fire_above_not_triggered_when_price_below(db_session: A
     user = await _make_user(db_session)
     alert = await AlertService.create(db_session, user.id, _alert_body("CF3", "US", "above", 200.0))
 
-    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock) as mock_push:
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
         await AlertService.check_and_fire(db_session, "CF3", "US", 195.0)
 
     await db_session.refresh(alert)
@@ -174,7 +176,7 @@ async def test_check_and_fire_below_not_triggered_when_price_above(db_session: A
     user = await _make_user(db_session)
     alert = await AlertService.create(db_session, user.id, _alert_body("CF4", "US", "below", 150.0))
 
-    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock) as mock_push:
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
         await AlertService.check_and_fire(db_session, "CF4", "US", 155.0)
 
     await db_session.refresh(alert)
@@ -188,7 +190,7 @@ async def test_check_and_fire_exact_boundary_above_triggers(db_session: AsyncSes
     user = await _make_user(db_session)
     alert = await AlertService.create(db_session, user.id, _alert_body("CF5", "US", "above", 200.0))
 
-    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock):
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock):
         await AlertService.check_and_fire(db_session, "CF5", "US", 200.0)
 
     await db_session.refresh(alert)
@@ -201,7 +203,7 @@ async def test_check_and_fire_already_triggered_not_fired_again(db_session: Asyn
     user = await _make_user(db_session)
     await AlertService.create(db_session, user.id, _alert_body("CF6", "US", "above", 100.0))
 
-    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock) as mock_push:
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
         # First firing
         await AlertService.check_and_fire(db_session, "CF6", "US", 950.0)
         assert mock_push.await_count == 1
@@ -218,7 +220,7 @@ async def test_check_and_fire_multiple_alerts_same_symbol(db_session: AsyncSessi
     a1 = await AlertService.create(db_session, u1.id, _alert_body("CF7", "US", "above", 100.0))
     a2 = await AlertService.create(db_session, u2.id, _alert_body("CF7", "US", "above", 110.0))
 
-    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock) as mock_push:
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
         await AlertService.check_and_fire(db_session, "CF7", "US", 115.0)
 
     await db_session.refresh(a1)
@@ -231,7 +233,7 @@ async def test_check_and_fire_multiple_alerts_same_symbol(db_session: AsyncSessi
 @pytest.mark.asyncio
 async def test_check_and_fire_no_alerts_returns_without_push(db_session: AsyncSession):
     """When no untriggered alerts match the symbol, push must not be called."""
-    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock) as mock_push:
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
         await AlertService.check_and_fire(db_session, "CF_NONEXISTENT", "US", 999.0)
 
     mock_push.assert_not_awaited()
@@ -245,7 +247,7 @@ async def test_check_and_fire_wrong_market_not_matched(db_session: AsyncSession)
         db_session, user.id, _alert_body("CF8", "TW", "above", 500.0)
     )
 
-    with patch("api.websocket.manager.push_alert_to_user", new_callable=AsyncMock) as mock_push:
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
         await AlertService.check_and_fire(db_session, "CF8", "US", 600.0)
 
     await db_session.refresh(alert)

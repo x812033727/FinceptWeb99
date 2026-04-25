@@ -20,9 +20,6 @@ logger = logging.getLogger(__name__)
 
 _ET = pytz.timezone("America/New_York")
 
-# In-process S&P 500 ticker list (populated by refresh_sp500_universe)
-_sp500: list[str] = []
-
 
 def _subscribed_us_symbols() -> set[str]:
     """Return all US symbols currently subscribed by any WebSocket client."""
@@ -103,18 +100,11 @@ def _should_run_offhours() -> bool:
 # ── S&P 500 universe ──────────────────────────────────────────────
 
 async def refresh_sp500_universe() -> None:
-    """Fetches and caches the S&P 500 ticker list once daily."""
-    global _sp500
-    import httpx
-    import re
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as c:
-            r = await c.get("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
-        tickers = re.findall(r'<td><a[^>]+>([A-Z]{1,5})</a></td>', r.text)
-        _sp500 = list(dict.fromkeys(tickers))[:505]
-    except Exception:
-        pass
+    """Force-refresh the S&P 500 ticker cache once daily.
 
-
-def get_sp500() -> list[str]:
-    return _sp500
+    Populates the same module-level cache that
+    `services/us_market_service::_get_sp500_tickers` reads, so the daily
+    scheduled work is actually visible to request handlers.
+    """
+    from data.us.sp500_universe import get_sp500_tickers
+    await get_sp500_tickers(force_refresh=True)

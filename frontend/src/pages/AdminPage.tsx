@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { useAuthStore } from "@/store/authStore";
-import { useTriggerUpdate, useVersion } from "@/hooks/useVersion";
+import { useCheckForUpdates, useTriggerUpdate, useVersion } from "@/hooks/useVersion";
 import api from "@/lib/api";
 
 interface AdminUser {
@@ -29,10 +29,12 @@ const ROLE_COLORS: Record<string, string> = {
 
 function SystemUpdateCard() {
   const { data: version, isLoading } = useVersion();
+  const check = useCheckForUpdates();
   const trigger = useTriggerUpdate();
 
   const status = trigger.data?.status;
   const message = trigger.data?.message;
+  const checkError = check.isError;
 
   return (
     <div className="bg-card border border-border rounded-lg p-4">
@@ -53,6 +55,9 @@ function SystemUpdateCard() {
               )}
             </p>
           )}
+          {checkError && (
+            <p className="text-xs text-red-500 mt-2">Failed to reach GitHub. Try again.</p>
+          )}
           {status && (
             <p
               className={`text-xs mt-2 ${
@@ -67,13 +72,22 @@ function SystemUpdateCard() {
             </p>
           )}
         </div>
-        <button
-          disabled={!version?.update_available || trigger.isPending}
-          onClick={() => trigger.mutate()}
-          className="text-xs px-3 py-1.5 rounded border border-border bg-background hover:bg-accent/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-        >
-          {trigger.isPending ? "Updating…" : "Update now"}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            disabled={check.isPending || trigger.isPending}
+            onClick={() => check.mutate()}
+            className="text-xs px-3 py-1.5 rounded border border-border bg-background hover:bg-accent/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {check.isPending ? "Checking…" : "Check for updates"}
+          </button>
+          <button
+            disabled={!version?.update_available || trigger.isPending || check.isPending}
+            onClick={() => trigger.mutate()}
+            className="text-xs px-3 py-1.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {trigger.isPending ? "Updating…" : "Update now"}
+          </button>
+        </div>
       </div>
     </div>
   );

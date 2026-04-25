@@ -18,3 +18,13 @@ export function useTriggerUpdate() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["version"] }),
   });
 }
+
+export function useCheckForUpdates() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<VersionStatus>("/admin/version/check").then((r) => r.data),
+    onSuccess: (data) => {
+      qc.setQueryData(["version"], data);
+    },
+  });
+}

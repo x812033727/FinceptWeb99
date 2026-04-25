@@ -216,20 +216,9 @@ async def get_options(ticker: str, expiration_date: str | None = None) -> list[d
 # ── Screener ──────────────────────────────────────────────────────
 
 # S&P 500 tickers cached in-process (updated daily by scheduler in Phase 5)
-_sp500_cache: list[str] = []
-
 async def _get_sp500_tickers() -> list[str]:
-    global _sp500_cache
-    if _sp500_cache:
-        return _sp500_cache
-    # Fetch from Wikipedia (simple, no API key required)
-    import httpx
-    import re
-    async with httpx.AsyncClient(timeout=15.0) as c:
-        r = await c.get("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
-    tickers = re.findall(r'<td><a[^>]+>([A-Z]{1,5})</a></td>', r.text)
-    _sp500_cache = list(dict.fromkeys(tickers))[:505]
-    return _sp500_cache
+    from data.us.sp500_universe import get_sp500_tickers
+    return await get_sp500_tickers()
 
 
 async def get_screener(

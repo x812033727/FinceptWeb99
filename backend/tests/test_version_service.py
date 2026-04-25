@@ -155,6 +155,40 @@ async def test_version_status_unreachable_github_returns_safe_default():
     assert status["update_available"] is False
 
 
+# ── force_refresh_status ──────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_force_refresh_status_writes_cache_and_returns_fresh():
+    fresh = {
+        "tag": "v0.2.0",
+        "name": "v0.2.0",
+        "html_url": "https://example.com/r",
+        "published_at": "2026-04-25T00:00:00Z",
+    }
+    with patch.object(vs, "fetch_latest_release", AsyncMock(return_value=fresh)) as fetch_mock, \
+         patch.object(vs, "cache_set", AsyncMock()) as set_mock, \
+         patch.object(vs, "cache_get", AsyncMock(return_value=json.dumps(fresh))):
+        status = await vs.force_refresh_status()
+
+    fetch_mock.assert_awaited_once()
+    set_mock.assert_awaited_once()
+    assert status["latest"] == "0.2.0"
+    assert status["update_available"] is True
+
+
+@pytest.mark.asyncio
+async def test_force_refresh_status_handles_github_failure():
+    """If GitHub is unreachable during a manual check, we don't blow up the
+    cache and we fall through to whatever get_version_status returns."""
+    with patch.object(vs, "fetch_latest_release", AsyncMock(return_value=None)), \
+         patch.object(vs, "cache_set", AsyncMock()) as set_mock, \
+         patch.object(vs, "cache_get", AsyncMock(return_value=None)):
+        status = await vs.force_refresh_status()
+
+    set_mock.assert_not_awaited()
+    assert status["update_available"] is False
+
+
 # ── trigger_update ────────────────────────────────────────────────
 
 @pytest.mark.asyncio

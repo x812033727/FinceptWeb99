@@ -111,3 +111,40 @@ async def test_update_admin_started(client: AsyncClient, db_session: AsyncSessio
         r = await client.post("/api/admin/update", headers=_auth(token))
     assert r.status_code == 200
     assert r.json()["status"] == "started"
+
+
+# ── POST /api/admin/version/check ─────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_version_check_requires_auth(client: AsyncClient):
+    r = await client.post("/api/admin/version/check")
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_version_check_requires_admin_role(client: AsyncClient):
+    token = await _register_login(client, "viewer_check@test.com")
+    r = await client.post("/api/admin/version/check", headers=_auth(token))
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_version_check_returns_fresh_status(client: AsyncClient, db_session: AsyncSession):
+    email = "admin_check@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    fresh = {
+        "current": "0.1.0",
+        "latest": "0.2.0",
+        "update_available": True,
+        "html_url": "https://example.com/r",
+        "published_at": "2026-04-25T00:00:00Z",
+    }
+    with patch("api.admin.router.force_refresh_status", AsyncMock(return_value=fresh)) as mock:
+        r = await client.post("/api/admin/version/check", headers=_auth(token))
+    mock.assert_awaited_once()
+    assert r.status_code == 200
+    body = r.json()
+    assert body["latest"] == "0.2.0"
+    assert body["update_available"] is True

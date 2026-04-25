@@ -9,7 +9,8 @@ from db.session import get_db
 from models.alert import PriceAlert
 from models.user import User, UserRole
 from models.watchlist import Watchlist
-from services.version_service import trigger_update
+from api.system.router import VersionStatus
+from services.version_service import force_refresh_status, trigger_update
 from .schemas import ActiveUpdate, AdminUserItem, RoleUpdate, SystemStats, UpdateResult
 
 router = APIRouter()
@@ -79,3 +80,14 @@ async def update_active(user_id: uuid.UUID, body: ActiveUpdate, _: Admin, db: DB
 async def trigger_system_update(_: Admin) -> UpdateResult:
     result = await trigger_update()
     return UpdateResult(**result)
+
+
+@router.post("/version/check", response_model=VersionStatus)
+async def check_for_updates(_: Admin) -> VersionStatus:
+    """Force a fresh GitHub lookup, bypassing the Redis cache.
+
+    Same payload shape as `GET /api/system/version` so the frontend can drop
+    the response straight into its `["version"]` query cache.
+    """
+    data = await force_refresh_status()
+    return VersionStatus(**data)

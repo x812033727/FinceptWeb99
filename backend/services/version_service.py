@@ -96,6 +96,22 @@ async def refresh_release_cache() -> None:
     log.info("github.release.cached", extra={"tag": info.get("tag")})
 
 
+async def force_refresh_status() -> dict[str, Any]:
+    """Bypass cache, hit GitHub directly, then return current status.
+
+    Used by `POST /api/admin/version/check` so an admin can trigger a fresh
+    lookup without waiting for the next scheduler tick. Concurrent admins
+    clicking simultaneously fan in via the same `_fetch_lock` so we still
+    only emit one GitHub request per burst.
+    """
+    async with _fetch_lock:
+        info = await fetch_latest_release()
+        if info is not None:
+            await cache_set(key_github_release(), json.dumps(info), CACHE_TTL_SECONDS)
+        log.info("github.release.manual_check", extra={"tag": (info or {}).get("tag", "")})
+    return await get_version_status()
+
+
 async def _read_cached() -> dict[str, Any] | None:
     cached = await cache_get(key_github_release())
     if not cached:

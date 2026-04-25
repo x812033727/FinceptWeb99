@@ -160,3 +160,6 @@ def key_refresh_token(user_id: str, jti: str) -> str:
 
 def key_user_sessions(user_id: str) -> str:
     return f"user_sessions:{user_id}"
+
+def key_github_release() -> str:
+    return "github:release:latest"

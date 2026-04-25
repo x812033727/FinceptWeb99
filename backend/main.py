@@ -8,12 +8,14 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
+from _version import __version__
 from api.admin.router import router as admin_router
 from api.ai_agents.router import router as ai_router
 from api.alerts.router import router as alerts_router
 from api.analytics.router import router as analytics_router
 from api.auth.router import router as auth_router
 from api.portfolio.router import router as portfolio_router
+from api.system.router import router as system_router
 from api.tw_market.router import router as tw_router
 from api.us_market.router import router as us_router
 from api.watchlist.router import router as watchlist_router
@@ -58,7 +60,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Fincept Web Terminal",
     description="Professional financial intelligence platform — server edition",
-    version="0.1.0",
+    version=__version__,
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
@@ -89,6 +91,7 @@ app.include_router(ai_router, prefix="/api/ai", tags=["AI Agents"])
 app.include_router(watchlist_router, prefix="/api/watchlist", tags=["Watchlist"])
 app.include_router(alerts_router, prefix="/api/alerts", tags=["Alerts"])
 app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
+app.include_router(system_router, prefix="/api/system", tags=["System"])
 
 
 @app.get("/metrics", include_in_schema=False)
@@ -102,5 +105,5 @@ async def health():
     return {
         "status": "ok",
         "redis": "ok" if redis_ok else "error",
-        "version": "0.1.0",
+        "version": __version__,
     }

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { useAuthStore } from "@/store/authStore";
+import { useTriggerUpdate, useVersion } from "@/hooks/useVersion";
 import api from "@/lib/api";
 
 interface AdminUser {
@@ -25,6 +26,58 @@ const ROLE_COLORS: Record<string, string> = {
   analyst: "text-blue-400 bg-blue-400/10 border-blue-400/30",
   viewer:  "text-muted-foreground bg-muted/20 border-border",
 };
+
+function SystemUpdateCard() {
+  const { data: version, isLoading } = useVersion();
+  const trigger = useTriggerUpdate();
+
+  const status = trigger.data?.status;
+  const message = trigger.data?.message;
+
+  return (
+    <div className="bg-card border border-border rounded-lg p-4">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <p className="text-sm font-medium">System update</p>
+          {isLoading || !version ? (
+            <p className="text-xs text-muted-foreground animate-pulse mt-1">
+              Checking GitHub…
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground mt-1">
+              Current <span className="font-mono">v{version.current}</span>
+              {" · "}
+              Latest <span className="font-mono">v{version.latest}</span>
+              {version.update_available && (
+                <span className="ml-2 text-amber-500">update available</span>
+              )}
+            </p>
+          )}
+          {status && (
+            <p
+              className={`text-xs mt-2 ${
+                status === "started"
+                  ? "text-green-500"
+                  : status === "failed"
+                  ? "text-red-500"
+                  : "text-muted-foreground"
+              }`}
+            >
+              {status}: {message}
+            </p>
+          )}
+        </div>
+        <button
+          disabled={!version?.update_available || trigger.isPending}
+          onClick={() => trigger.mutate()}
+          className="text-xs px-3 py-1.5 rounded border border-border bg-background hover:bg-accent/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          {trigger.isPending ? "Updating…" : "Update now"}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export default function AdminPage() {
   const user = useAuthStore((s) => s.user);
@@ -92,6 +145,8 @@ function AdminContent() {
           ))}
         </div>
       )}
+
+      <SystemUpdateCard />
 
       {/* User table */}
       <div className="bg-card border border-border rounded-lg overflow-hidden">

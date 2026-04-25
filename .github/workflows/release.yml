@@ -1,0 +1,42 @@
+name: Release
+
+# Triggered when a v*.*.* tag is pushed. Validates the tag matches
+# backend/_version.py and creates a GitHub Release so the in-app
+# /api/system/version endpoint can detect new versions.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches backend/_version.py
+        run: |
+          set -e
+          TAG="${GITHUB_REF_NAME#v}"
+          PY_VERSION=$(python -c "import re,sys; t=open('backend/_version.py').read(); print(re.search(r'__version__\s*=\s*[\"\\'](.+?)[\"\\']', t).group(1))")
+          echo "tag=$TAG  __version__=$PY_VERSION"
+          if [ "$TAG" != "$PY_VERSION" ]; then
+            echo "::error::tag $TAG does not match backend/_version.py ($PY_VERSION)"
+            exit 1
+          fi
+
+      - name: Verify package.json in sync
+        run: python scripts/sync-version.py --check
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true

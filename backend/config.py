@@ -81,6 +81,15 @@ class Settings(BaseSettings):
     ADMIN_EMAIL: str = ""
     ADMIN_PASSWORD: str = ""
 
+    # Auto-update / GitHub release polling
+    GITHUB_OWNER: str = "x812033727"
+    GITHUB_REPO: str = "FinceptWeb"
+    UPDATE_CHECK_INTERVAL_HOURS: int = 6
+    # Shell command run by POST /api/admin/update. Empty = feature disabled
+    # (endpoint returns status="not_configured"). Operators set this in .env to
+    # e.g. "docker compose pull && docker compose up -d backend".
+    UPDATE_COMMAND: str = ""
+
     # Environment
     DEBUG: bool = False
 

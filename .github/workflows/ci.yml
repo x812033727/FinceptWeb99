@@ -74,6 +74,21 @@ jobs:
         working-directory: backend
         run: ruff check . --select E,W,F --ignore E501
 
+  version-sync:
+    name: Version Sync Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify backend/_version.py matches frontend/package.json
+        run: python scripts/sync-version.py --check
+
   frontend-typecheck:
     name: Frontend Type Check
     runs-on: ubuntu-latest

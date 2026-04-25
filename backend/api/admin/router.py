@@ -9,7 +9,8 @@ from db.session import get_db
 from models.alert import PriceAlert
 from models.user import User, UserRole
 from models.watchlist import Watchlist
-from .schemas import ActiveUpdate, AdminUserItem, RoleUpdate, SystemStats
+from services.version_service import trigger_update
+from .schemas import ActiveUpdate, AdminUserItem, RoleUpdate, SystemStats, UpdateResult
 
 router = APIRouter()
 Admin = Annotated[dict, Depends(require_admin)]
@@ -72,3 +73,9 @@ async def update_active(user_id: uuid.UUID, body: ActiveUpdate, _: Admin, db: DB
         raise HTTPException(404, "User not found")
     user.is_active = body.is_active
     await db.commit()
+
+
+@router.post("/update", response_model=UpdateResult)
+async def trigger_system_update(_: Admin) -> UpdateResult:
+    result = await trigger_update()
+    return UpdateResult(**result)

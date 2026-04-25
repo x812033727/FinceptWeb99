@@ -63,3 +63,16 @@ def setup_jobs() -> None:
         replace_existing=True,
         max_instances=1,
     )
+
+    # ── GitHub release polling ────────────────────────────────────
+    # Pre-warms the Redis cache so GET /api/system/version is fast.
+    from config import settings
+    from services.version_service import refresh_release_cache
+    scheduler.add_job(
+        refresh_release_cache,
+        trigger=IntervalTrigger(hours=settings.UPDATE_CHECK_INTERVAL_HOURS),
+        id="github_release_check",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )

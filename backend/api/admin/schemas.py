@@ -27,3 +27,8 @@ class SystemStats(BaseModel):
     users_by_role: dict[str, int]
     total_alerts: int
     total_watchlists: int
+
+
+class UpdateResult(BaseModel):
+    status: str  # "started" | "not_configured" | "failed"
+    message: str

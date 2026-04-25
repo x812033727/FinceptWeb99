@@ -40,6 +40,7 @@ FinceptWeb/
 │   │   ├── ai_agents/    # SSE streaming chat (6 CFA personas, 4 LLM providers)
 │   │   ├── watchlist/    # Multi-watchlist CRUD with live quote enrichment
 │   │   ├── alerts/       # Price alert CRUD + check-and-fire
+│   │   ├── system/       # /version — current vs GitHub latest release
 │   │   └── websocket/    # Auth-first WS, Redis pub/sub, delta suppression
 │   ├── ai/               # LLM router + agent persona definitions
 │   ├── analytics/        # Pure computation: dcf.py, risk.py, backtest.py
@@ -65,6 +66,7 @@ FinceptWeb/
 │   │   ├── portfolio_service.py
 │   │   ├── tw_market_service.py
 │   │   ├── us_market_service.py
+│   │   ├── version_service.py    # GitHub release polling + admin-triggered update
 │   │   └── watchlist_service.py
 │   ├── tasks/            # APScheduler jobs (US 10s, TW 60s, off-hours throttle)
 │   ├── tests/            # pytest — in-memory SQLite + AsyncMock Redis
@@ -216,7 +218,32 @@ ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=<password>
 DEBUG=false
 CORS_ORIGINS=http://localhost:5173
+GITHUB_OWNER=x812033727
+GITHUB_REPO=FinceptWeb
+UPDATE_CHECK_INTERVAL_HOURS=6
+UPDATE_COMMAND=                 # empty = /api/admin/update returns "not_configured"
 ```
+
+## Versioning
+
+Single source of truth: `backend/_version.py::__version__`. To bump:
+
+```bash
+# 1. edit backend/_version.py
+# 2. mirror to frontend/package.json
+python scripts/sync-version.py
+
+# 3. tag and push
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+CI `version-sync` job fails if `_version.py` and `package.json` drift.
+Tag push triggers `.github/workflows/release.yml` which validates the tag
+matches `__version__` and creates a GitHub Release. Backend's
+`/api/system/version` reads `releases/latest` so newer versions surface as
+an "update available" badge in the TopBar; admins can click "Update now"
+in `AdminPage` to invoke `UPDATE_COMMAND` (typically
+`docker compose pull && docker compose up -d backend frontend`).
 
 ## Migrations
 

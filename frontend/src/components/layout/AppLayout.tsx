@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
 import Sidebar from "./Sidebar";
+import UpdateBadge from "./UpdateBadge";
 import { useAlertSocket, useWsConnected } from "@/hooks/useWebSocket";
 import { useNotificationStore } from "@/store/notificationStore";
 import { useThemeStore } from "@/store/themeStore";
@@ -245,7 +246,8 @@ export default function AppLayout() {
         {/* Top bar */}
         <div className="h-10 border-b border-border flex items-center gap-3 px-4 shrink-0">
           <GlobalSearch />
-          <div className="flex items-center gap-1 ml-auto">
+          <div className="flex items-center gap-2 ml-auto">
+            <UpdateBadge />
             <WsStatus />
             <ThemeToggle />
             <NotificationBell />

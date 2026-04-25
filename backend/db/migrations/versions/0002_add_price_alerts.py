@@ -16,8 +16,11 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    alert_condition = postgresql.ENUM("above", "below", name="alertcondition")
-    alert_condition.create(op.get_bind(), checkfirst=True)
+    op.execute("""
+    DO $$ BEGIN
+        CREATE TYPE alertcondition AS ENUM ('above', 'below');
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    """)
 
     op.create_table(
         "price_alerts",
@@ -27,7 +30,7 @@ def upgrade() -> None:
                   sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
         sa.Column("symbol", sa.String(20), nullable=False),
         sa.Column("market", sa.String(4), nullable=False),
-        sa.Column("condition", sa.Enum("above", "below", name="alertcondition"), nullable=False),
+        sa.Column("condition", postgresql.ENUM("above", "below", name="alertcondition", create_type=False), nullable=False),
         sa.Column("target_price", sa.Float(), nullable=False),
         sa.Column("triggered", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("triggered_at", sa.DateTime(timezone=True), nullable=True),

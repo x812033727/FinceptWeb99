@@ -64,6 +64,7 @@ def do_run_migrations(connection: Connection) -> None:
         target_metadata=target_metadata,
         include_object=include_object,
         compare_type=True,
+        transaction_per_migration=True,
     )
     with context.begin_transaction():
         context.run_migrations()

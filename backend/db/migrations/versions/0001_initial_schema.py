@@ -16,15 +16,22 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # ── Enums ─────────────────────────────────────────────────────
-    user_role = postgresql.ENUM("viewer", "analyst", "admin", name="userrole")
-    user_role.create(op.get_bind(), checkfirst=True)
-
-    market_enum = postgresql.ENUM("US", "TW", name="market")
-    market_enum.create(op.get_bind(), checkfirst=True)
-
-    tx_type_enum = postgresql.ENUM("buy", "sell", "dividend", name="transactiontype")
-    tx_type_enum.create(op.get_bind(), checkfirst=True)
+    # ── Enums (idempotent via DO/EXCEPTION) ───────────────────────
+    op.execute("""
+    DO $$ BEGIN
+        CREATE TYPE userrole AS ENUM ('viewer', 'analyst', 'admin');
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    """)
+    op.execute("""
+    DO $$ BEGIN
+        CREATE TYPE market AS ENUM ('US', 'TW');
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    """)
+    op.execute("""
+    DO $$ BEGIN
+        CREATE TYPE transactiontype AS ENUM ('buy', 'sell', 'dividend');
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    """)
 
     # ── users ─────────────────────────────────────────────────────
     op.create_table(
@@ -33,7 +40,7 @@ def upgrade() -> None:
         sa.Column("email", sa.String(255), nullable=False),
         sa.Column("hashed_password", sa.String(255), nullable=False),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
-        sa.Column("role", sa.Enum("viewer", "analyst", "admin", name="userrole"), nullable=False, server_default="viewer"),
+        sa.Column("role", postgresql.ENUM("viewer", "analyst", "admin", name="userrole", create_type=False), nullable=False, server_default="viewer"),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.UniqueConstraint("email", name="uq_users_email"),
     )
@@ -70,7 +77,7 @@ def upgrade() -> None:
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, server_default=sa.text("uuid_generate_v4()")),
         sa.Column("portfolio_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False),
         sa.Column("symbol", sa.String(20), nullable=False),
-        sa.Column("market", sa.Enum("US", "TW", name="market"), nullable=False),
+        sa.Column("market", postgresql.ENUM("US", "TW", name="market", create_type=False), nullable=False),
         sa.Column("quantity", sa.Numeric(18, 6), nullable=False),
         sa.Column("avg_cost", sa.Numeric(18, 6), nullable=False),
         sa.Column("cost_currency", sa.String(3), nullable=False),
@@ -84,8 +91,8 @@ def upgrade() -> None:
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, server_default=sa.text("uuid_generate_v4()")),
         sa.Column("portfolio_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False),
         sa.Column("symbol", sa.String(20), nullable=False),
-        sa.Column("market", sa.Enum("US", "TW", name="market"), nullable=False),
-        sa.Column("tx_type", sa.Enum("buy", "sell", "dividend", name="transactiontype"), nullable=False),
+        sa.Column("market", postgresql.ENUM("US", "TW", name="market", create_type=False), nullable=False),
+        sa.Column("tx_type", postgresql.ENUM("buy", "sell", "dividend", name="transactiontype", create_type=False), nullable=False),
         sa.Column("quantity", sa.Numeric(18, 6), nullable=False),
         sa.Column("price", sa.Numeric(18, 6), nullable=False),
         sa.Column("fx_rate", sa.Numeric(18, 6), nullable=False, server_default="1.0"),
@@ -110,7 +117,7 @@ def upgrade() -> None:
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, server_default=sa.text("uuid_generate_v4()")),
         sa.Column("watchlist_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("watchlists.id", ondelete="CASCADE"), nullable=False),
         sa.Column("symbol", sa.String(20), nullable=False),
-        sa.Column("market", sa.Enum("US", "TW", name="market"), nullable=False),
+        sa.Column("market", postgresql.ENUM("US", "TW", name="market", create_type=False), nullable=False),
         sa.Column("added_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.UniqueConstraint("watchlist_id", "symbol", "market", name="uq_watchlist_items_watchlist_id_symbol_market"),
     )

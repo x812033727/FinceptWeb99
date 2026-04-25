@@ -43,9 +43,9 @@ def upgrade() -> None:
     if not _is_postgres():
         return
 
-    op.execute("ALTER TABLE portfolio_snapshots DROP CONSTRAINT portfolio_snapshots_pkey")
+    op.execute("ALTER TABLE portfolio_snapshots DROP CONSTRAINT pk_portfolio_snapshots")
     op.execute(
-        "ALTER TABLE portfolio_snapshots ADD CONSTRAINT portfolio_snapshots_pkey "
+        "ALTER TABLE portfolio_snapshots ADD CONSTRAINT pk_portfolio_snapshots "
         "PRIMARY KEY (snapshot_date, id)"
     )
 
@@ -63,8 +63,8 @@ def downgrade() -> None:
     if not _is_postgres():
         return
 
-    op.execute("ALTER TABLE portfolio_snapshots DROP CONSTRAINT portfolio_snapshots_pkey")
+    op.execute("ALTER TABLE portfolio_snapshots DROP CONSTRAINT pk_portfolio_snapshots")
     op.execute(
-        "ALTER TABLE portfolio_snapshots ADD CONSTRAINT portfolio_snapshots_pkey "
+        "ALTER TABLE portfolio_snapshots ADD CONSTRAINT pk_portfolio_snapshots "
         "PRIMARY KEY (id)"
     )

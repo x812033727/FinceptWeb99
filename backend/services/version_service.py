@@ -2,17 +2,21 @@
 
 Flow:
     scheduler (every UPDATE_CHECK_INTERVAL_HOURS) ──► refresh_release_cache()
-        └─ fetch_latest_release() ──► Redis (TTL > scheduler interval)
+        └─ fetch_latest_version() ──► Redis (TTL > scheduler interval)
 
     GET /api/system/version ──► get_version_status()
         └─ Redis cache hit → no GitHub round-trip
-        └─ miss → fetch_latest_release() (and re-cache), serialised by a
+        └─ miss → fetch_latest_version() (and re-cache), serialised by a
                   module-level asyncio.Lock so concurrent misses fan in.
 
     POST /api/admin/update ──► trigger_update()
         └─ asyncio.create_subprocess_exec(*UPDATE_COMMAND argv)
            First arg is enforced against UPDATE_COMMAND_ALLOWLIST so a
            compromised admin account can't pivot to arbitrary RCE.
+
+fetch_latest_version() tries the Releases API first; if no Release exists
+yet it falls back to reading backend/_version.py on the default branch so
+a code-level version bump still surfaces as 'update available'.
 """
 from __future__ import annotations
 
@@ -42,6 +46,8 @@ STATUS_NOT_CONFIGURED: UpdateStatus = "not_configured"
 STATUS_FAILED: UpdateStatus = "failed"
 
 _TAG_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
+_VERSION_FILE_RE = re.compile(r'__version__\s*=\s*["\']([^"\']+)["\']')
+_VERSION_FILE_PATH = "backend/_version.py"
 _fetch_lock = asyncio.Lock()
 
 
@@ -87,9 +93,59 @@ async def fetch_latest_release() -> dict[str, Any] | None:
     }
 
 
+async def fetch_default_branch_version() -> dict[str, Any] | None:
+    """Read backend/_version.py off the default branch and parse __version__.
+
+    Used as a fallback so the in-app updater detects code-level bumps even
+    before a formal Release is published. Same shape as fetch_latest_release()
+    so callers can treat both uniformly.
+    """
+    if not settings.GITHUB_OWNER or not settings.GITHUB_REPO:
+        return None
+    url = (
+        f"https://api.github.com/repos/{settings.GITHUB_OWNER}/"
+        f"{settings.GITHUB_REPO}/contents/{_VERSION_FILE_PATH}"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=GITHUB_TIMEOUT_SECONDS) as client:
+            resp = await client.get(
+                url, headers={"Accept": "application/vnd.github.raw"}
+            )
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            text = resp.text
+    except Exception as exc:
+        log.warning("github.version_file.fetch_failed", extra={"error": str(exc)})
+        return None
+
+    m = _VERSION_FILE_RE.search(text)
+    if not m:
+        log.warning("github.version_file.parse_failed")
+        return None
+    version = m.group(1)
+    return {
+        "tag": f"v{version}",
+        "name": f"v{version}",
+        "html_url": (
+            f"https://github.com/{settings.GITHUB_OWNER}/"
+            f"{settings.GITHUB_REPO}/blob/HEAD/{_VERSION_FILE_PATH}"
+        ),
+        "published_at": "",
+    }
+
+
+async def fetch_latest_version() -> dict[str, Any] | None:
+    """Try Releases API first, fall back to default-branch _version.py."""
+    info = await fetch_latest_release()
+    if info is not None:
+        return info
+    return await fetch_default_branch_version()
+
+
 async def refresh_release_cache() -> None:
     """Scheduler entry point. Fetches and caches; never raises."""
-    info = await fetch_latest_release()
+    info = await fetch_latest_version()
     if info is None:
         return
     await cache_set(key_github_release(), json.dumps(info), CACHE_TTL_SECONDS)
@@ -105,7 +161,7 @@ async def force_refresh_status() -> dict[str, Any]:
     only emit one GitHub request per burst.
     """
     async with _fetch_lock:
-        info = await fetch_latest_release()
+        info = await fetch_latest_version()
         if info is not None:
             await cache_set(key_github_release(), json.dumps(info), CACHE_TTL_SECONDS)
         log.info("github.release.manual_check", extra={"tag": (info or {}).get("tag", "")})
@@ -135,7 +191,7 @@ async def get_version_status() -> dict[str, Any]:
         async with _fetch_lock:
             info = await _read_cached()      # second check inside lock
             if info is None:
-                info = await fetch_latest_release()
+                info = await fetch_latest_version()
                 if info is not None:
                     await cache_set(key_github_release(), json.dumps(info), CACHE_TTL_SECONDS)
 

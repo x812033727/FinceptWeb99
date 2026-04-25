@@ -136,7 +136,7 @@ async def test_version_status_cache_miss_falls_back_to_fetch():
     }
     with patch.object(vs, "cache_get", AsyncMock(return_value=None)), \
          patch.object(vs, "cache_set", AsyncMock()) as set_mock, \
-         patch.object(vs, "fetch_latest_release", AsyncMock(return_value=info)):
+         patch.object(vs, "fetch_latest_version", AsyncMock(return_value=info)):
         status = await vs.get_version_status()
 
     set_mock.assert_awaited_once()
@@ -147,7 +147,7 @@ async def test_version_status_cache_miss_falls_back_to_fetch():
 @pytest.mark.asyncio
 async def test_version_status_unreachable_github_returns_safe_default():
     with patch.object(vs, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(vs, "fetch_latest_release", AsyncMock(return_value=None)):
+         patch.object(vs, "fetch_latest_version", AsyncMock(return_value=None)):
         status = await vs.get_version_status()
 
     assert status["current"] == __version__
@@ -165,7 +165,7 @@ async def test_force_refresh_status_writes_cache_and_returns_fresh():
         "html_url": "https://example.com/r",
         "published_at": "2026-04-25T00:00:00Z",
     }
-    with patch.object(vs, "fetch_latest_release", AsyncMock(return_value=fresh)) as fetch_mock, \
+    with patch.object(vs, "fetch_latest_version", AsyncMock(return_value=fresh)) as fetch_mock, \
          patch.object(vs, "cache_set", AsyncMock()) as set_mock, \
          patch.object(vs, "cache_get", AsyncMock(return_value=json.dumps(fresh))):
         status = await vs.force_refresh_status()
@@ -180,13 +180,85 @@ async def test_force_refresh_status_writes_cache_and_returns_fresh():
 async def test_force_refresh_status_handles_github_failure():
     """If GitHub is unreachable during a manual check, we don't blow up the
     cache and we fall through to whatever get_version_status returns."""
-    with patch.object(vs, "fetch_latest_release", AsyncMock(return_value=None)), \
+    with patch.object(vs, "fetch_latest_version", AsyncMock(return_value=None)), \
          patch.object(vs, "cache_set", AsyncMock()) as set_mock, \
          patch.object(vs, "cache_get", AsyncMock(return_value=None)):
         status = await vs.force_refresh_status()
 
     set_mock.assert_not_awaited()
     assert status["update_available"] is False
+
+
+# ── fetch_default_branch_version (fallback path) ──────────────────
+
+class _RawResp:
+    def __init__(self, status_code: int, text: str = ""):
+        self.status_code = status_code
+        self.text = text
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"http {self.status_code}")
+
+
+def _client_returning(resp):
+    class _Client:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return None
+        async def get(self, *a, **k): return resp
+    return _Client
+
+
+@pytest.mark.asyncio
+async def test_fetch_default_branch_version_parses_version(monkeypatch):
+    monkeypatch.setattr(
+        vs.httpx, "AsyncClient",
+        _client_returning(_RawResp(200, '__version__ = "0.3.7"\n')),
+    )
+    info = await vs.fetch_default_branch_version()
+    assert info is not None
+    assert info["tag"] == "v0.3.7"
+    assert info["name"] == "v0.3.7"
+    assert info["published_at"] == ""
+    assert "backend/_version.py" in info["html_url"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_default_branch_version_404_returns_none(monkeypatch):
+    monkeypatch.setattr(
+        vs.httpx, "AsyncClient", _client_returning(_RawResp(404)),
+    )
+    assert await vs.fetch_default_branch_version() is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_default_branch_version_unparseable_returns_none(monkeypatch):
+    monkeypatch.setattr(
+        vs.httpx, "AsyncClient",
+        _client_returning(_RawResp(200, "# no version here\n")),
+    )
+    assert await vs.fetch_default_branch_version() is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_latest_version_prefers_release():
+    release_info = {"tag": "v9.9.9", "name": "v9.9.9", "html_url": "", "published_at": ""}
+    with patch.object(vs, "fetch_latest_release", AsyncMock(return_value=release_info)), \
+         patch.object(vs, "fetch_default_branch_version", AsyncMock()) as fb_mock:
+        info = await vs.fetch_latest_version()
+
+    fb_mock.assert_not_awaited()
+    assert info == release_info
+
+
+@pytest.mark.asyncio
+async def test_fetch_latest_version_falls_back_when_no_release():
+    fb_info = {"tag": "v0.1.1", "name": "v0.1.1", "html_url": "", "published_at": ""}
+    with patch.object(vs, "fetch_latest_release", AsyncMock(return_value=None)), \
+         patch.object(vs, "fetch_default_branch_version", AsyncMock(return_value=fb_info)):
+        info = await vs.fetch_latest_version()
+
+    assert info == fb_info
 
 
 # ── trigger_update ────────────────────────────────────────────────

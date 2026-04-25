@@ -2,11 +2,12 @@
 
 Flow:
     scheduler (every UPDATE_CHECK_INTERVAL_HOURS) ──► refresh_release_cache()
-        └─ fetch_latest_release() ──► Redis (TTL 1h)
+        └─ fetch_latest_release() ──► Redis (TTL > scheduler interval)
 
     GET /api/system/version ──► get_version_status()
         └─ Redis cache hit → no GitHub round-trip
-        └─ miss → fetch_latest_release() (and re-cache)
+        └─ miss → fetch_latest_release() (and re-cache), serialised by a
+                  module-level asyncio.Lock so concurrent misses fan in.
 
     POST /api/admin/update ──► trigger_update()
         └─ asyncio.create_subprocess_shell(UPDATE_COMMAND)
@@ -17,7 +18,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -27,11 +28,19 @@ from config import settings
 
 log = logging.getLogger(__name__)
 
-CACHE_TTL_SECONDS = 60 * 60          # 1 hour
+# Cache lifetime is intentionally longer than UPDATE_CHECK_INTERVAL_HOURS so a
+# missed scheduler tick (pod restart, clock skew) doesn't open a fetch storm.
+CACHE_TTL_SECONDS = (settings.UPDATE_CHECK_INTERVAL_HOURS + 1) * 60 * 60
 GITHUB_TIMEOUT_SECONDS = 10.0
-UPDATE_TIMEOUT_SECONDS = 60.0
+UPDATE_TIMEOUT_SECONDS = 180.0
+
+UpdateStatus = Literal["started", "not_configured", "failed"]
+STATUS_STARTED: UpdateStatus = "started"
+STATUS_NOT_CONFIGURED: UpdateStatus = "not_configured"
+STATUS_FAILED: UpdateStatus = "failed"
 
 _TAG_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
+_fetch_lock = asyncio.Lock()
 
 
 def _parse_semver(tag: str) -> tuple[int, int, int] | None:
@@ -85,23 +94,32 @@ async def refresh_release_cache() -> None:
     log.info("github.release.cached", extra={"tag": info.get("tag")})
 
 
+async def _read_cached() -> dict[str, Any] | None:
+    cached = await cache_get(key_github_release())
+    if not cached:
+        return None
+    try:
+        return json.loads(cached)
+    except json.JSONDecodeError:
+        log.warning("github.release.cache_corrupt", extra={"len": len(cached)})
+        return None
+
+
 async def get_version_status() -> dict[str, Any]:
     """Return current/latest version + update_available flag.
 
     Cache-first: if no cache and GitHub is unreachable, returns
     update_available=False with latest=current rather than failing the request.
     """
-    cached = await cache_get(key_github_release())
-    info: dict[str, Any] | None
-    if cached:
-        try:
-            info = json.loads(cached)
-        except json.JSONDecodeError:
-            info = None
-    else:
-        info = await fetch_latest_release()
-        if info is not None:
-            await cache_set(key_github_release(), json.dumps(info), CACHE_TTL_SECONDS)
+    info = await _read_cached()
+    if info is None:
+        # Fan-in concurrent misses behind a lock so we don't herd GitHub.
+        async with _fetch_lock:
+            info = await _read_cached()      # second check inside lock
+            if info is None:
+                info = await fetch_latest_release()
+                if info is not None:
+                    await cache_set(key_github_release(), json.dumps(info), CACHE_TTL_SECONDS)
 
     if info is None:
         return {
@@ -131,7 +149,7 @@ async def trigger_update() -> dict[str, Any]:
     cmd = settings.UPDATE_COMMAND.strip()
     if not cmd:
         return {
-            "status": "not_configured",
+            "status": STATUS_NOT_CONFIGURED,
             "message": "UPDATE_COMMAND is empty. Set it in .env to enable one-click updates.",
         }
 
@@ -145,12 +163,13 @@ async def trigger_update() -> dict[str, Any]:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=UPDATE_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
             proc.kill()
+            await proc.wait()    # reap so we don't leak a zombie
             log.error("admin.update.timeout", extra={"timeout_s": UPDATE_TIMEOUT_SECONDS})
-            return {"status": "failed", "message": "update command timed out"}
+            return {"status": STATUS_FAILED, "message": "update command timed out"}
 
         if proc.returncode == 0:
             log.info("admin.update.started", extra={"stdout_bytes": len(stdout or b"")})
-            return {"status": "started", "message": "update command dispatched"}
+            return {"status": STATUS_STARTED, "message": "update command dispatched"}
 
         log.error(
             "admin.update.failed",
@@ -159,7 +178,7 @@ async def trigger_update() -> dict[str, Any]:
                 "stderr": (stderr or b"").decode(errors="replace")[:500],
             },
         )
-        return {"status": "failed", "message": f"update command exit={proc.returncode}"}
+        return {"status": STATUS_FAILED, "message": f"update command exit={proc.returncode}"}
     except Exception as exc:
         log.exception("admin.update.exception")
-        return {"status": "failed", "message": str(exc)}
+        return {"status": STATUS_FAILED, "message": str(exc)}

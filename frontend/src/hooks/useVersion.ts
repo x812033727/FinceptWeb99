@@ -1,18 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import api from "@/lib/api";
-
-export interface VersionStatus {
-  current: string;
-  latest: string;
-  update_available: boolean;
-  html_url: string;
-  published_at: string;
-}
-
-export interface UpdateResult {
-  status: "started" | "not_configured" | "failed";
-  message: string;
-}
+import type { UpdateResult, VersionStatus } from "@/types/system";
 
 export function useVersion() {
   return useQuery({

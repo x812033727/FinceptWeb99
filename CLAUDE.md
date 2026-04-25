@@ -296,14 +296,16 @@ helm install fincept ./helm/fincept-web \
 ### Frontend theme-aware chart colors
 - Recharts components: use CSS variables via string literals, e.g.
   `stroke="hsl(var(--border))"`, `fill: "hsl(var(--muted-foreground))"`.
-- lightweight-charts (CandlestickChart): CSS variables cannot be passed directly.
-  Use `getComputedStyle(document.documentElement).getPropertyValue("--border")` and
-  wrap with `hsl(...)`. Note: shadcn-style CSS vars are space-separated
-  (`215 20% 55%`), but lightweight-charts v4's color parser only accepts the legacy
-  comma-separated form (`hsl(215, 20%, 55%)`) — split on whitespace and re-join
-  with `", "` before wrapping, otherwise it throws `Cannot parse color`.
-  Subscribe to `useThemeStore` and call `chart.applyOptions()` in a
-  `useEffect([theme])` to re-apply colors on toggle without recreating the chart.
+- lightweight-charts (CandlestickChart): its v4 color parser ONLY accepts hex,
+  named colors, and `rgb()`/`rgba()` — it rejects every form of `hsl()` (legacy
+  comma form `hsl(215, 20%, 55%)` and modern space form `hsl(215 20% 55%)` both
+  throw `Cannot parse color`). Since the project's CSS vars are shadcn-style
+  space-separated HSL components (`215 20% 55%`), read them with
+  `getComputedStyle(document.documentElement).getPropertyValue("--border")`, parse
+  the H/S/L numbers, convert to RGB in JS, and pass `rgb(r, g, b)` to the chart.
+  See `hslVarToRgb` in `CandlestickChart.tsx`. Subscribe to `useThemeStore` and
+  call `chart.applyOptions()` in a `useEffect([theme])` to re-apply colors on
+  toggle without recreating the chart.
 - Data-series colors (`#22c55e` green, `#ef4444` red, `#3b82f6` blue, etc.) are
   intentional semantic colors — do NOT replace with CSS variables.
 

@@ -21,12 +21,27 @@ function toTime(t: string | number): Time {
   return t as Time;
 }
 
+function hslVarToRgb(raw: string): string {
+  // shadcn-style CSS vars: "215 20% 55%" (H S% L%, no hsl() wrapper).
+  // lightweight-charts v4's color parser does NOT accept hsl(...) — convert to rgb().
+  const parts = raw.split(/\s+/);
+  if (parts.length < 3) return "rgb(128, 128, 128)";
+  const h = parseFloat(parts[0]);
+  const s = parseFloat(parts[1]) / 100;
+  const l = parseFloat(parts[2]) / 100;
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) =>
+    l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  const r = Math.round(255 * f(0));
+  const g = Math.round(255 * f(8));
+  const b = Math.round(255 * f(4));
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
 function getChartColors() {
   const style = getComputedStyle(document.documentElement);
-  const v = (name: string) => {
-    const raw = style.getPropertyValue(name).trim();
-    return `hsl(${raw.split(/\s+/).join(", ")})`;
-  };
+  const v = (name: string) => hslVarToRgb(style.getPropertyValue(name).trim());
   return {
     textColor: v("--muted-foreground"),
     gridColor: v("--border"),

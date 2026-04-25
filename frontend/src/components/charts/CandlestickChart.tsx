@@ -23,7 +23,10 @@ function toTime(t: string | number): Time {
 
 function getChartColors() {
   const style = getComputedStyle(document.documentElement);
-  const v = (name: string) => `hsl(${style.getPropertyValue(name).trim()})`;
+  const v = (name: string) => {
+    const raw = style.getPropertyValue(name).trim();
+    return `hsl(${raw.split(/\s+/).join(", ")})`;
+  };
   return {
     textColor: v("--muted-foreground"),
     gridColor: v("--border"),

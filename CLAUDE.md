@@ -298,8 +298,12 @@ helm install fincept ./helm/fincept-web \
   `stroke="hsl(var(--border))"`, `fill: "hsl(var(--muted-foreground))"`.
 - lightweight-charts (CandlestickChart): CSS variables cannot be passed directly.
   Use `getComputedStyle(document.documentElement).getPropertyValue("--border")` and
-  wrap with `hsl(...)`. Subscribe to `useThemeStore` and call `chart.applyOptions()`
-  in a `useEffect([theme])` to re-apply colors on toggle without recreating the chart.
+  wrap with `hsl(...)`. Note: shadcn-style CSS vars are space-separated
+  (`215 20% 55%`), but lightweight-charts v4's color parser only accepts the legacy
+  comma-separated form (`hsl(215, 20%, 55%)`) — split on whitespace and re-join
+  with `", "` before wrapping, otherwise it throws `Cannot parse color`.
+  Subscribe to `useThemeStore` and call `chart.applyOptions()` in a
+  `useEffect([theme])` to re-apply colors on toggle without recreating the chart.
 - Data-series colors (`#22c55e` green, `#ef4444` red, `#3b82f6` blue, etc.) are
   intentional semantic colors — do NOT replace with CSS variables.
 

@@ -1,29 +1,69 @@
 """
 TWSE OpenAPI connector.
 Base: https://openapi.twse.com.tw/v1/
-Rate limit: ~1 req/sec enforced via asyncio.Semaphore.
+Rate limit: ~1 req/sec enforced globally via a Redis token bucket so that
+all uvicorn workers and k8s pods share a single TWSE quota. A local
+Semaphore + 1.1s sleep is kept as a fallback when Redis is unavailable.
 All responses are JSON. Timestamps converted to UTC before returning.
 """
 import asyncio
+import logging
 import httpx
 from datetime import datetime, date
 from typing import Any
 
+from cache.redis_cache import RedisUnavailable, acquire_token
+
+logger = logging.getLogger(__name__)
+
 _BASE = "https://openapi.twse.com.tw/v1"
 _TPEX_BASE = "https://www.tpex.org.tw/openapi/v1"
 
-# Conservative rate limit — TWSE throttles above ~1 req/sec
-_sem = asyncio.Semaphore(1)
-_DELAY = 1.1  # seconds between releases
+# Global token bucket (Redis): ~0.91 tokens/sec, capacity 1.
+_BUCKET_KEY = "ratelimit:twse"
+_BUCKET_CAPACITY = 1.0
+_BUCKET_RATE = 1.0 / 1.1
+_POLL_INTERVAL = 0.1
+_MAX_WAIT = 30.0
+
+# Local fallback used when Redis is unreachable. Keeps single-process
+# behaviour sane and matches the previous Semaphore(1) + 1.1s pacing.
+_local_sem = asyncio.Semaphore(1)
+_LOCAL_DELAY = 1.1
+
+
+async def _wait_for_token() -> bool:
+    """Block until a TWSE token is available.
+
+    Returns True if a token was acquired via Redis, False if Redis was
+    unreachable and the caller should fall back to local pacing.
+    """
+    elapsed = 0.0
+    while elapsed < _MAX_WAIT:
+        try:
+            if await acquire_token(_BUCKET_KEY, _BUCKET_CAPACITY, _BUCKET_RATE):
+                return True
+        except RedisUnavailable as exc:
+            logger.warning("TWSE token bucket unavailable, using local pacing: %s", exc)
+            return False
+        await asyncio.sleep(_POLL_INTERVAL)
+        elapsed += _POLL_INTERVAL
+    # Bucket starvation — proceed anyway to avoid permanent stall.
+    logger.warning("TWSE token bucket wait exceeded %ss; proceeding", _MAX_WAIT)
+    return True
 
 
 async def _get(url: str, params: dict | None = None) -> Any:
-    async with _sem:
+    # Local Semaphore prevents per-process burst even when the global bucket
+    # has capacity (e.g. multiple coroutines in the same worker).
+    async with _local_sem:
+        used_redis = await _wait_for_token()
         async with httpx.AsyncClient(timeout=15.0) as c:
             r = await c.get(url, params=params)
             r.raise_for_status()
             data = r.json()
-        await asyncio.sleep(_DELAY)
+        if not used_redis:
+            await asyncio.sleep(_LOCAL_DELAY)
     return data
 
 

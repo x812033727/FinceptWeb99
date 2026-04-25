@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "react-router-dom";
-import api from "@/lib/api";
+import api, { notifyRateLimited } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 
 // ── types ──────────────────────────────────────────────────────────
@@ -230,6 +230,10 @@ export default function AIPage() {
 
       if (!resp.ok) {
         const data = await resp.json().catch(() => ({}));
+        if (resp.status === 429) {
+          const retryAfter = Number(resp.headers.get("retry-after")) || undefined;
+          notifyRateLimited(data.detail, retryAfter);
+        }
         throw new Error(data.detail ?? `HTTP ${resp.status}`);
       }
 

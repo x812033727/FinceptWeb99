@@ -3,6 +3,7 @@ import MockAdapter from "axios-mock-adapter";
 import axios from "axios";
 import api from "./api";
 import { useAuthStore } from "@/store/authStore";
+import { useToastStore } from "@/store/toastStore";
 
 describe("api axios instance", () => {
   let mock: MockAdapter;
@@ -14,6 +15,7 @@ describe("api axios instance", () => {
     mock = new MockAdapter(api);
     rootMock = new MockAdapter(axios);
     useAuthStore.getState().clearAuth();
+    useToastStore.setState({ toasts: [] });
   });
 
   it("baseURL is /api (so callers must not include the prefix)", () => {
@@ -98,5 +100,33 @@ describe("api axios instance", () => {
     expect(ra.data).toEqual({ path: "a" });
     expect(rb.data).toEqual({ path: "b" });
     expect(refreshSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("on 429 → pushes a warning toast and rejects the promise", async () => {
+    mock.onGet("/ai/chat").reply(429, {
+      detail: "Daily AI quota exceeded (5 requests/day). Resets at midnight UTC.",
+    });
+
+    await expect(api.get("/ai/chat")).rejects.toMatchObject({
+      response: { status: 429 },
+    });
+
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0].severity).toBe("warning");
+    expect(toasts[0].title).toBe("AI quota exceeded");
+    expect(toasts[0].detail).toContain("Resets at midnight UTC");
+  });
+
+  it("429 with non-quota detail uses generic title", async () => {
+    mock.onGet("/us/screener").reply(429, { detail: "Too many requests" });
+
+    await expect(api.get("/us/screener")).rejects.toMatchObject({
+      response: { status: 429 },
+    });
+
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts[0].title).toBe("Rate limit reached");
+    expect(toasts[0].detail).toContain("Too many requests");
   });
 });

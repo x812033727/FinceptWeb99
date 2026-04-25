@@ -1,8 +1,14 @@
+import time
 import redis.asyncio as aioredis
 from typing import Optional
 from config import settings
 
 _redis: Optional[aioredis.Redis] = None
+_token_bucket_sha: Optional[str] = None
+
+
+class RedisUnavailable(Exception):
+    """Raised when a Redis operation fails so the caller can use a local fallback."""
 
 
 async def get_redis() -> aioredis.Redis:
@@ -33,6 +39,85 @@ async def cache_incr(key: str, ttl_seconds: int | None = None) -> int:
     if ttl_seconds and count == 1:
         await r.expire(key, ttl_seconds)
     return count
+
+
+async def cache_decr(key: str, min_value: int = 0) -> int:
+    """Decrement a counter, never falling below `min_value`.
+
+    Used to refund quota counters when a request fails before producing
+    usable output (see ai_agents router refund logic).
+    """
+    r = await get_redis()
+    val = await r.decr(key)
+    try:
+        ival = int(val)
+    except (TypeError, ValueError):
+        return min_value
+    if ival < min_value:
+        await r.set(key, min_value)
+        return min_value
+    return ival
+
+
+# ── Distributed token bucket (rate limiter) ──────────────────────
+# Atomic refill + acquire in one Redis round-trip via Lua. Used to
+# enforce a global rate limit across all uvicorn workers / k8s pods —
+# something asyncio.Semaphore can't do because it's process-local.
+_TOKEN_BUCKET_LUA = """
+local key = KEYS[1]
+local capacity = tonumber(ARGV[1])
+local rate = tonumber(ARGV[2])
+local now = tonumber(ARGV[3])
+
+local data = redis.call('HMGET', key, 'tokens', 'ts')
+local tokens = tonumber(data[1])
+local ts = tonumber(data[2])
+if tokens == nil then
+    tokens = capacity
+    ts = now
+end
+
+local elapsed = math.max(0, now - ts) / 1000.0
+tokens = math.min(capacity, tokens + elapsed * rate)
+
+local allowed = 0
+if tokens >= 1 then
+    tokens = tokens - 1
+    allowed = 1
+end
+
+redis.call('HMSET', key, 'tokens', tokens, 'ts', now)
+redis.call('EXPIRE', key, 60)
+return allowed
+"""
+
+
+async def acquire_token(key: str, capacity: float, rate: float) -> bool:
+    """Try to acquire one token from a Redis-backed token bucket.
+
+    Returns True if a token was acquired, False if the bucket is empty.
+    Raises `RedisUnavailable` when Redis fails so the caller can fall back
+    to a local pacing strategy.
+
+    Args:
+        key: Redis key holding the bucket state (HMSET: tokens, ts).
+        capacity: Maximum number of tokens the bucket holds.
+        rate: Refill rate in tokens per second.
+    """
+    global _token_bucket_sha
+    now_ms = int(time.time() * 1000)
+    try:
+        r = await get_redis()
+        if _token_bucket_sha is None:
+            loaded = await r.script_load(_TOKEN_BUCKET_LUA)
+            _token_bucket_sha = loaded if isinstance(loaded, str) else None
+        if _token_bucket_sha:
+            result = await r.evalsha(_token_bucket_sha, 1, key, capacity, rate, now_ms)
+        else:
+            result = await r.eval(_TOKEN_BUCKET_LUA, 1, key, capacity, rate, now_ms)
+        return int(result) == 1
+    except Exception as exc:
+        raise RedisUnavailable(str(exc)) from exc
 
 
 async def ping() -> bool:

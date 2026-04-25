@@ -17,6 +17,7 @@ The `claude_agent` provider is gated by feature flag + analyst/admin role
 because it reads user-owned data and can execute tools.
 """
 import json
+import logging
 from typing import Annotated, AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -24,16 +25,17 @@ from fastapi.responses import StreamingResponse
 
 from api.ai_agents.schemas import AgentInfo, ChatRequest
 from auth.permissions import require_viewer
-from cache.redis_cache import cache_incr, key_ai_counter
+from cache.redis_cache import cache_decr, cache_incr, key_ai_counter
 from ai.agents import get_agent, list_agents
 from ai.llm_router import stream_chat
 from config import settings
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 CurrentUser = Annotated[dict, Depends(require_viewer)]
 
 
-# ── quota helper ──────────────────────────────────────────────────
+# ── quota helpers ─────────────────────────────────────────────────
 
 async def _check_quota(user: dict) -> None:
     role = user.get("role", "viewer")
@@ -48,6 +50,16 @@ async def _check_quota(user: dict) -> None:
             status_code=429,
             detail=f"Daily AI quota exceeded ({limit} requests/day). Resets at midnight UTC.",
         )
+
+
+async def _refund_quota(user: dict) -> None:
+    """Decrement the daily AI quota counter so a user isn't charged for a
+    request that produced no usable output (validation failure before the
+    LLM call, or a stream that yielded zero tokens)."""
+    try:
+        await cache_decr(key_ai_counter(user["id"]))
+    except Exception:
+        logger.exception("Failed to refund AI quota for user %s", user.get("id"))
 
 
 # ── routes ────────────────────────────────────────────────────────
@@ -73,6 +85,7 @@ async def chat(body: ChatRequest, user: CurrentUser):
     try:
         agent = get_agent(body.agent_id)
     except ValueError as e:
+        await _refund_quota(user)
         raise HTTPException(status_code=400, detail=str(e))
 
     system_content = agent.system_prompt
@@ -91,8 +104,10 @@ async def chat(body: ChatRequest, user: CurrentUser):
     allowed_tools: list[str] = []
     if provider == "claude_agent":
         if not settings.CLAUDE_AGENT_ENABLED:
+            await _refund_quota(user)
             raise HTTPException(status_code=503, detail="Claude Agent is disabled")
         if user.get("role") not in ("analyst", "admin"):
+            await _refund_quota(user)
             raise HTTPException(status_code=403, detail="Claude Agent requires analyst role")
         # Lazy import — keeps SDK out of the hot path for other providers
         from ai.tools import build_toolset, tool_names
@@ -100,6 +115,9 @@ async def chat(body: ChatRequest, user: CurrentUser):
         allowed_tools = tool_names()
 
     async def event_generator() -> AsyncGenerator[bytes, None]:
+        # Refund the quota when the stream produces no usable content —
+        # i.e. the provider raised before any delta or yielded only errors.
+        produced_content = False
         try:
             async for event in stream_chat(
                 messages=messages,
@@ -112,10 +130,14 @@ async def chat(body: ChatRequest, user: CurrentUser):
                 payload = _event_to_sse(event)
                 if payload is not None:
                     yield payload
+                    if event.get("type") in ("delta", "tool_call", "tool_result"):
+                        produced_content = True
         except Exception as exc:
             err = json.dumps({"error": str(exc)}, ensure_ascii=False)
             yield f"data: {err}\n\n".encode()
         finally:
+            if not produced_content:
+                await _refund_quota(user)
             yield b"data: [DONE]\n\n"
 
     return StreamingResponse(

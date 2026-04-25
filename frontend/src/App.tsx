@@ -5,6 +5,7 @@ import { silentRefresh } from "@/lib/auth";
 
 import AppLayout from "@/components/layout/AppLayout";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import Toaster from "@/components/Toaster";
 import LoginPage from "@/pages/LoginPage";
 import DashboardPage from "@/pages/DashboardPage";
 import MarketPage from "@/pages/MarketPage";
@@ -44,6 +45,7 @@ export default function App() {
 
   return (
     <BrowserRouter>
+      <Toaster />
       <ErrorBoundary>
         <Routes>
           <Route path="/login" element={<LoginPage />} />

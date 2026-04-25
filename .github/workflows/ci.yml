@@ -3,8 +3,11 @@ name: CI
 on:
   push:
     branches: [main, develop, "claude/**"]
+  # Run on PRs to any branch — fork PRs use `pull_request` (not
+  # `pull_request_target`) so secrets are unavailable, which is fine
+  # because no job below requires one. The default branch can drift
+  # from `main`, so we don't filter by base here.
   pull_request:
-    branches: [main]
 
 jobs:
   backend-test:

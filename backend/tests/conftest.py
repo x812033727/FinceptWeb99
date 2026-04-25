@@ -9,6 +9,28 @@ external services are needed in CI.
 import os
 os.environ.setdefault("JWT_SECRET_KEY", "pytest-local-secret-key-32chars!!")
 
+# Swap passlib's bcrypt scheme for pbkdf2_sha256 in tests. bcrypt 3.2.2 pulls in
+# a cffi C-extension (`_cffi_backend`) that is missing in some dev environments
+# and triggers `pyo3_runtime.PanicException` at module import. pbkdf2_sha256 is
+# pure-Python (hashlib) so it works everywhere. Production code path unchanged.
+import passlib.context as _passlib_context  # noqa: E402
+
+_orig_cryptcontext_init = _passlib_context.CryptContext.__init__
+
+
+def _patched_cryptcontext_init(self, *args, **kwargs):
+    schemes = kwargs.get("schemes") if "schemes" in kwargs else (args[0] if args else None)
+    if schemes and "bcrypt" in schemes:
+        replaced = ["pbkdf2_sha256" if s == "bcrypt" else s for s in schemes]
+        if "schemes" in kwargs:
+            kwargs["schemes"] = replaced
+        else:
+            args = (replaced,) + args[1:]
+    _orig_cryptcontext_init(self, *args, **kwargs)
+
+
+_passlib_context.CryptContext.__init__ = _patched_cryptcontext_init
+
 import asyncio  # noqa: E402
 import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402

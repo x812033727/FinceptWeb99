@@ -71,12 +71,15 @@ class PortfolioSnapshot(Base):
                          name="uq_portfolio_snapshots_portfolio_id_snapshot_date"),
     )
 
+    # snapshot_date is part of the PK so the table satisfies TimescaleDB's
+    # "partitioning column must be in every UNIQUE index" rule when converted
+    # to a hypertable in migration 0004.
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    snapshot_date: Mapped[date] = mapped_column(Date, primary_key=True, nullable=False)
     portfolio_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("portfolios.id", ondelete="CASCADE"),
         nullable=False, index=True,
     )
-    snapshot_date: Mapped[date] = mapped_column(Date, nullable=False)
     total_value_usd: Mapped[float] = mapped_column(Float, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 

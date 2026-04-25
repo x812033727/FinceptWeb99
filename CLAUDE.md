@@ -49,7 +49,8 @@ FinceptWeb/
 │   │   ├── us/           # Polygon → yfinance waterfall; FRED connector
 │   │   └── tw/           # TWSE → FinMind → MOPS waterfall
 │   ├── db/
-│   │   ├── migrations/   # Alembic versions (0001 initial, 0002 price_alerts)
+│   │   ├── migrations/   # Alembic versions (0001 initial, 0002 price_alerts,
+│   │   │                 #   0003 portfolio_snapshots, 0004 portfolio_snapshots → hypertable)
 │   │   ├── base.py       # DeclarativeBase with naming convention
 │   │   ├── seed.py       # Admin user seed on first boot
 │   │   └── session.py    # Async engine + get_db dependency

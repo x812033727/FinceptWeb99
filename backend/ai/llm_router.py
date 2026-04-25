@@ -34,11 +34,15 @@ async def stream_chat(
     mcp_server: Any = None,
     allowed_tools: list[str] | None = None,
     max_turns: int | None = None,
+    openai_tool_schemas: list[dict] | None = None,
+    openai_tool_dispatch: dict[str, Any] | None = None,
 ) -> AsyncGenerator[dict, None]:
     """
     Yield streaming events from the chosen provider.
-    `mcp_server`/`allowed_tools`/`max_turns` are only honored by the
-    `claude_agent` provider; other providers ignore them.
+    `mcp_server`/`allowed_tools`/`max_turns` are honored by `claude_agent`.
+    `openai_tool_schemas`/`openai_tool_dispatch` are honored by `minimax`
+    (and any future OpenAI-compat tool-using provider). Other providers
+    ignore both sets.
     """
     prov = (provider or settings.DEFAULT_LLM_PROVIDER).lower()
 
@@ -54,6 +58,17 @@ async def stream_chat(
     elif prov == "ollama":
         async for text in _ollama_stream(messages, model or "llama3.2", max_tokens, temperature):
             yield {"type": "delta", "text": text}
+    elif prov == "minimax":
+        async for ev in _minimax_stream(
+            messages,
+            model or settings.MINIMAX_MODEL,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            tool_schemas=openai_tool_schemas,
+            tool_dispatch=openai_tool_dispatch,
+            max_turns=max_turns or settings.MINIMAX_MAX_TURNS,
+        ):
+            yield ev
     elif prov == "claude_agent":
         async for ev in _claude_agent_stream(
             messages,
@@ -217,6 +232,214 @@ async def _ollama_stream(
                         break
                 except json.JSONDecodeError:
                     continue
+
+
+# ── OpenAI-compatible tool loop (MiniMax / DeepSeek / Qwen API …) ──
+
+async def _openai_compat_tool_loop(
+    *,
+    base_url: str,
+    chat_path: str,
+    api_key: str,
+    model: str,
+    messages: list[dict],
+    max_tokens: int,
+    temperature: float,
+    tool_schemas: list[dict] | None,
+    tool_dispatch: dict[str, Any] | None,
+    max_turns: int,
+    provider_label: str,
+    extra_headers: dict[str, str] | None = None,
+) -> AsyncGenerator[dict, None]:
+    """Streaming + multi-turn tool loop for OpenAI-compatible chat completions.
+
+    Yields the unified event dict shape used by stream_chat:
+        {"type": "delta", "text": "..."}
+        {"type": "tool_call", "id": "...", "name": "...", "args": {...}}
+        {"type": "tool_result", "id": "...", "name": "...", "summary": "...", "is_error": bool}
+        {"type": "error", "message": "..."}
+
+    Tool calls are accumulated across SSE deltas (OpenAI streams `arguments`
+    as a partial JSON string), executed via `tool_dispatch`, fed back in as
+    `role=tool` messages, and the loop re-calls the API until the model
+    finishes with `finish_reason="stop"` or `max_turns` is reached.
+    """
+    if not api_key:
+        yield {"type": "error", "message": f"{provider_label} API key not configured"}
+        return
+
+    url = f"{base_url.rstrip('/')}{chat_path}"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+        **(extra_headers or {}),
+    }
+    convo: list[dict] = list(messages)
+    tools_enabled = bool(tool_schemas and tool_dispatch)
+
+    for turn in range(max_turns):
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": convo,
+            "stream": True,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if tools_enabled:
+            payload["tools"] = tool_schemas
+            payload["tool_choice"] = "auto"
+
+        # accumulator: index → {id, name, arguments_str}
+        pending: dict[int, dict[str, str]] = {}
+        finish_reason: str | None = None
+        assistant_text_parts: list[str] = []
+        any_text = False
+
+        try:
+            async with httpx.AsyncClient(timeout=180) as client:
+                async with client.stream("POST", url, json=payload, headers=headers) as resp:
+                    if resp.status_code != 200:
+                        body = (await resp.aread()).decode(errors="replace")[:500]
+                        yield {
+                            "type": "error",
+                            "message": f"{provider_label} HTTP {resp.status_code}: {body}",
+                        }
+                        return
+                    async for line in resp.aiter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            obj = json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+                        choices = obj.get("choices") or []
+                        if not choices:
+                            continue
+                        choice = choices[0]
+                        delta = choice.get("delta") or {}
+                        text = delta.get("content")
+                        if text:
+                            assistant_text_parts.append(text)
+                            any_text = True
+                            yield {"type": "delta", "text": text}
+                        for tc in delta.get("tool_calls") or []:
+                            idx = tc.get("index", 0)
+                            slot = pending.setdefault(idx, {"id": "", "name": "", "args": ""})
+                            if tc.get("id"):
+                                slot["id"] = tc["id"]
+                            fn = tc.get("function") or {}
+                            if fn.get("name"):
+                                slot["name"] = fn["name"]
+                            if fn.get("arguments"):
+                                slot["args"] += fn["arguments"]
+                        if choice.get("finish_reason"):
+                            finish_reason = choice["finish_reason"]
+        except Exception as exc:
+            logger.exception("%s stream failed", provider_label)
+            yield {"type": "error", "message": str(exc)}
+            return
+
+        if finish_reason != "tool_calls" or not pending:
+            return  # natural stop, length cap, or content filter — done
+
+        # Append the assistant's tool-call message, then execute and feed back.
+        assistant_msg: dict[str, Any] = {
+            "role": "assistant",
+            "content": "".join(assistant_text_parts) if any_text else None,
+            "tool_calls": [
+                {
+                    "id": slot["id"] or f"call_{turn}_{idx}",
+                    "type": "function",
+                    "function": {"name": slot["name"], "arguments": slot["args"] or "{}"},
+                }
+                for idx, slot in sorted(pending.items())
+            ],
+        }
+        convo.append(assistant_msg)
+
+        for idx, slot in sorted(pending.items()):
+            tool_id = slot["id"] or f"call_{turn}_{idx}"
+            name = slot["name"]
+            try:
+                args = json.loads(slot["args"]) if slot["args"] else {}
+            except json.JSONDecodeError as exc:
+                err = f"invalid tool arguments JSON: {exc}"
+                yield {
+                    "type": "tool_result",
+                    "id": tool_id, "name": name,
+                    "summary": err, "is_error": True,
+                }
+                convo.append({
+                    "role": "tool", "tool_call_id": tool_id, "name": name,
+                    "content": json.dumps({"error": err}),
+                })
+                continue
+
+            yield {"type": "tool_call", "id": tool_id, "name": name, "args": args}
+
+            handler = (tool_dispatch or {}).get(name)
+            if handler is None:
+                err = f"unknown tool: {name}"
+                result_str = json.dumps({"error": err})
+                is_error = True
+            else:
+                try:
+                    result_str = await handler(args)
+                    is_error = False
+                except Exception as exc:
+                    logger.warning("%s tool %s failed: %s", provider_label, name, exc)
+                    result_str = json.dumps({"error": str(exc)})
+                    is_error = True
+
+            yield {
+                "type": "tool_result",
+                "id": tool_id, "name": name,
+                "summary": result_str if len(result_str) <= 2000 else result_str[:2000] + " …[truncated]",
+                "is_error": is_error,
+            }
+            convo.append({
+                "role": "tool",
+                "tool_call_id": tool_id,
+                "name": name,
+                "content": result_str,
+            })
+
+    yield {
+        "type": "error",
+        "message": f"{provider_label} hit max_turns={max_turns} without finishing",
+    }
+
+
+# ── MiniMax (OpenAI-compatible) ───────────────────────────────────
+
+async def _minimax_stream(
+    messages: list[dict],
+    model: str,
+    *,
+    max_tokens: int,
+    temperature: float,
+    tool_schemas: list[dict] | None,
+    tool_dispatch: dict[str, Any] | None,
+    max_turns: int,
+) -> AsyncGenerator[dict, None]:
+    async for ev in _openai_compat_tool_loop(
+        base_url=settings.MINIMAX_HOST,
+        chat_path="/v1/text/chatcompletion_v2",
+        api_key=settings.MINIMAX_API_KEY,
+        model=model,
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        tool_schemas=tool_schemas,
+        tool_dispatch=tool_dispatch,
+        max_turns=max_turns,
+        provider_label="minimax",
+    ):
+        yield ev
 
 
 # ── Claude Agent (tool-use via claude-agent-sdk) ───────────────────

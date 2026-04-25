@@ -111,6 +111,10 @@ async def chat(body: ChatRequest, user: CurrentUser):
 
     mcp_server = None
     allowed_tools: list[str] = []
+    openai_tool_schemas: list[dict] | None = None
+    openai_tool_dispatch: dict | None = None
+    max_turns: int | None = None
+
     if provider == "claude_agent":
         if not settings.CLAUDE_AGENT_ENABLED:
             await _refund_quota(user)
@@ -122,6 +126,15 @@ async def chat(body: ChatRequest, user: CurrentUser):
         from ai.tools import build_toolset, tool_names
         mcp_server = build_toolset(user["id"])
         allowed_tools = tool_names()
+        max_turns = settings.CLAUDE_AGENT_MAX_TURNS
+    elif provider == "minimax":
+        # Tools are optional: viewers fall back to plain chat (no tool schemas
+        # passed). Only analyst/admin get the OpenAI-compat toolset since
+        # query_user_data reads the caller's data.
+        max_turns = settings.MINIMAX_MAX_TURNS
+        if user.get("role") in ("analyst", "admin"):
+            from ai.tools.openai_compat import build_openai_compat_toolset
+            openai_tool_schemas, openai_tool_dispatch = build_openai_compat_toolset(user["id"])
 
     async def event_generator() -> AsyncGenerator[bytes, None]:
         # Refund the quota when the stream produces no usable content —
@@ -134,7 +147,9 @@ async def chat(body: ChatRequest, user: CurrentUser):
                 model=model,
                 mcp_server=mcp_server,
                 allowed_tools=allowed_tools,
-                max_turns=settings.CLAUDE_AGENT_MAX_TURNS,
+                max_turns=max_turns,
+                openai_tool_schemas=openai_tool_schemas,
+                openai_tool_dispatch=openai_tool_dispatch,
             ):
                 payload = _event_to_sse(event)
                 if payload is not None:

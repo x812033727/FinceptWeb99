@@ -60,7 +60,13 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
     OLLAMA_HOST: str = "http://localhost:11434"
-    DEFAULT_LLM_PROVIDER: str = "openai"  # openai | anthropic | gemini | ollama
+    DEFAULT_LLM_PROVIDER: str = "openai"  # openai | anthropic | gemini | ollama | minimax
+
+    # MiniMax (OpenAI-compatible chat completions + tool-use). Empty key disables the provider.
+    MINIMAX_API_KEY: str = ""
+    MINIMAX_HOST: str = "https://api.minimaxi.chat"  # international; mainland: https://api.minimax.chat
+    MINIMAX_MODEL: str = "MiniMax-M2.7"  # override per-request; alts: abab6.5s-chat, abab6.5-chat, MiniMax-Text-01
+    MINIMAX_MAX_TURNS: int = 6  # tool-loop ceiling so a misbehaving model can't burn the quota
 
     # Claude Agent (tool-use via claude-agent-sdk). Off by default; analyst/admin only when on.
     CLAUDE_AGENT_ENABLED: bool = False

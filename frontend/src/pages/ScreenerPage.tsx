@@ -9,6 +9,8 @@ import type { ScreenerResult, Market } from "@/types/market";
 
 // ── filters ────────────────────────────────────────────────────────
 
+type ETFMode = "all" | "exclude" | "only";
+
 interface Filters {
   market: Market;
   minMarketCap: string;
@@ -18,10 +20,12 @@ interface Filters {
   maxPB: string;
   minDivYield: string;
   minVolume: string;
+  etfMode: ETFMode;
   sector: string;
   minChangePct: string;
   maxChangePct: string;
   search: string;
+  strategy: string;       // id of an active TW preset, "" for none
 }
 
 const DEFAULT_FILTERS: Filters = {
@@ -33,11 +37,73 @@ const DEFAULT_FILTERS: Filters = {
   maxPB: "",
   minDivYield: "",
   minVolume: "",
+  etfMode: "all",
   sector: "",
   minChangePct: "",
   maxChangePct: "",
   search: "",
+  strategy: "",
 };
+
+// ── TW strategy presets ────────────────────────────────────────────
+//
+// Each preset is a partial-Filters delta that the screener applies on
+// click. They use only filter fields the TW backend already supports
+// (PE / PB / yield / volume / etfMode); strategies that need ROE or EPS
+// growth are deferred until the screener exposes those metrics in bulk.
+
+interface Strategy {
+  id: string;
+  nameKey: string;
+  descKey: string;
+  apply: (f: Filters) => Filters;
+}
+
+const RESET_TW_FIELDS = (f: Filters): Filters => ({
+  ...f,
+  minPE: "", maxPE: "", minPB: "", maxPB: "",
+  minDivYield: "", minVolume: "",
+  etfMode: "all",
+});
+
+const TW_STRATEGIES: Strategy[] = [
+  {
+    id: "high_yield",
+    nameKey: "screener.strategies.high_yield",
+    descKey: "screener.strategies.high_yield_desc",
+    apply: (f) => ({ ...RESET_TW_FIELDS(f), minDivYield: "5", maxPE: "15", etfMode: "exclude" }),
+  },
+  {
+    id: "deep_value",
+    nameKey: "screener.strategies.deep_value",
+    descKey: "screener.strategies.deep_value_desc",
+    apply: (f) => ({ ...RESET_TW_FIELDS(f), maxPE: "8", maxPB: "1", etfMode: "exclude" }),
+  },
+  {
+    id: "quality_value",
+    nameKey: "screener.strategies.quality_value",
+    descKey: "screener.strategies.quality_value_desc",
+    apply: (f) => ({ ...RESET_TW_FIELDS(f), maxPE: "15", minDivYield: "2.5", etfMode: "exclude" }),
+  },
+  {
+    id: "yield_etf",
+    nameKey: "screener.strategies.yield_etf",
+    descKey: "screener.strategies.yield_etf_desc",
+    apply: (f) => ({ ...RESET_TW_FIELDS(f), minDivYield: "3", etfMode: "only" }),
+  },
+  {
+    id: "liquid_blue_chip",
+    nameKey: "screener.strategies.liquid_blue_chip",
+    descKey: "screener.strategies.liquid_blue_chip_desc",
+    apply: (f) => ({ ...RESET_TW_FIELDS(f), minVolume: "10000000", etfMode: "exclude" }),
+  },
+  {
+    id: "neglected_value",
+    nameKey: "screener.strategies.neglected_value",
+    descKey: "screener.strategies.neglected_value_desc",
+    apply: (f) => ({ ...RESET_TW_FIELDS(f), maxPE: "10", minDivYield: "4", etfMode: "exclude" }),
+  },
+];
 
 // ── API helpers ────────────────────────────────────────────────────
 
@@ -77,6 +143,7 @@ async function fetchTWScreener(params: {
   max_pb?: number;
   min_dividend_yield?: number;
   min_volume?: number;
+  etfMode?: ETFMode;
 }): Promise<ScreenerResult[]> {
   const q = new URLSearchParams({ limit: "500" });
   if (params.min_pe) q.set("min_pe", String(params.min_pe));
@@ -85,6 +152,8 @@ async function fetchTWScreener(params: {
   if (params.max_pb) q.set("max_pb", String(params.max_pb));
   if (params.min_dividend_yield) q.set("min_dividend_yield", String(params.min_dividend_yield));
   if (params.min_volume) q.set("min_volume", String(params.min_volume));
+  if (params.etfMode === "exclude") q.set("include_etf", "false");
+  if (params.etfMode === "only") q.set("etf_only", "true");
   const res = await api.get<TWScreenerItem[]>(`/tw/screener?${q}`);
   return res.data.map((item) => ({
     symbol: item.symbol,
@@ -136,8 +205,8 @@ export default function ScreenerPage() {
   const [applied, setApplied] = useState<Filters>(DEFAULT_FILTERS);
   const parentRef = useRef<HTMLDivElement>(null);
 
-  function setFilter(key: keyof Filters, value: string) {
-    setFilters((prev) => ({ ...prev, [key]: value }));
+  function setFilter<K extends keyof Filters>(key: K, value: Filters[K]) {
+    setFilters((prev) => ({ ...prev, [key]: value, strategy: "" }));
   }
 
   function applyFilters() {
@@ -154,7 +223,7 @@ export default function ScreenerPage() {
       "screener-page", applied.market,
       applied.minMarketCap, applied.minPE, applied.maxPE,
       applied.minPB, applied.maxPB, applied.minDivYield,
-      applied.minVolume, applied.sector,
+      applied.minVolume, applied.sector, applied.etfMode,
     ],
     queryFn: () => {
       if (applied.market === "TW") {
@@ -165,6 +234,7 @@ export default function ScreenerPage() {
           max_pb: applied.maxPB ? Number(applied.maxPB) : undefined,
           min_dividend_yield: applied.minDivYield ? Number(applied.minDivYield) : undefined,
           min_volume: applied.minVolume ? Number(applied.minVolume) : undefined,
+          etfMode: applied.etfMode,
         });
       }
       return fetchUSScreener({
@@ -176,6 +246,12 @@ export default function ScreenerPage() {
     },
     staleTime: 120_000,
   });
+
+  function applyStrategy(s: Strategy) {
+    const next = { ...s.apply(filters), strategy: s.id };
+    setFilters(next);
+    setApplied(next);
+  }
 
   // Client-side filtering for search and change_pct range
   const rows = raw.filter((r) => {
@@ -204,6 +280,39 @@ export default function ScreenerPage() {
           {t("screener.subtitle")}
         </p>
       </div>
+
+      {/* strategy presets — TW only */}
+      {filters.market === "TW" && (
+        <div className="space-y-2">
+          <div className="flex items-baseline justify-between">
+            <h3 className="text-sm font-semibold text-foreground">{t("screener.strategies.title")}</h3>
+            <p className="text-xs text-muted-foreground">{t("screener.strategies.subtitle")}</p>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+            {TW_STRATEGIES.map((s) => {
+              const active = filters.strategy === s.id;
+              return (
+                <button
+                  key={s.id}
+                  onClick={() => applyStrategy(s)}
+                  className={`text-left p-3 rounded-lg border transition-colors ${
+                    active
+                      ? "bg-primary/10 border-primary/60"
+                      : "bg-card border-border hover:border-primary/40"
+                  }`}
+                >
+                  <div className={`text-sm font-medium ${active ? "text-primary" : "text-foreground"}`}>
+                    {t(s.nameKey)}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground mt-1 leading-snug line-clamp-2">
+                    {t(s.descKey)}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* filter panel */}
       <div className="bg-card border border-border rounded-lg p-4">
@@ -263,6 +372,18 @@ export default function ScreenerPage() {
                 onChange={(v) => setFilter("minDivYield", v)}
                 placeholder="3"
               />
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-muted-foreground">ETF</label>
+                <select
+                  value={filters.etfMode}
+                  onChange={(e) => setFilter("etfMode", e.target.value as ETFMode)}
+                  className="bg-background border border-border rounded px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:border-primary/50"
+                >
+                  <option value="all">{t("screener.etf_all")}</option>
+                  <option value="exclude">{t("screener.etf_exclude")}</option>
+                  <option value="only">{t("screener.etf_only")}</option>
+                </select>
+              </div>
             </>
           )}
           <FilterInput

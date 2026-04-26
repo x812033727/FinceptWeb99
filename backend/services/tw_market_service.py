@@ -585,12 +585,13 @@ async def get_screener(
     max_pb: float | None = None,
     min_dividend_yield: float | None = None,
     include_etf: bool = True,
+    etf_only: bool = False,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     key = (
         f"tw:screener:{exchange}:{min_volume}:"
         f"{min_pe}:{max_pe}:{min_pb}:{max_pb}:{min_dividend_yield}:"
-        f"{include_etf}:{limit}"
+        f"{include_etf}:{etf_only}:{limit}"
     )
     cached = await cache_get(key)
     if cached:
@@ -619,7 +620,10 @@ async def get_screener(
         code = (s.get("Code") or s.get("證券代號") or "").strip()
         if not code:
             continue
-        if not include_etf and is_etf(code):
+        symbol_is_etf = is_etf(code)
+        if etf_only and not symbol_is_etf:
+            continue
+        if not include_etf and symbol_is_etf:
             continue
         vol = twse._tw_int(s.get("成交股數") or s.get("TradeVolume", "0"))
         if min_volume and vol < min_volume:

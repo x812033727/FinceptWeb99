@@ -514,9 +514,28 @@
     "min_pb": "最低股價淨值比",
     "max_pb": "最高股價淨值比",
     "min_dividend_yield": "最低殖利率%",
+    "etf_all": "個股 + ETF",
+    "etf_exclude": "排除 ETF",
+    "etf_only": "只看 ETF",
     "apply": "套用篩選",
     "reset": "重設",
     "results_count": "符合 {{count}} 檔",
-    "no_results": "找不到符合條件的個股"
+    "no_results": "找不到符合條件的個股",
+    "strategies": {
+      "title": "選股策略",
+      "subtitle": "單擊套用預設條件組合",
+      "high_yield": "高股息存股",
+      "high_yield_desc": "殖利率 ≥ 5%、本益比 ≤ 15、排除 ETF",
+      "deep_value": "深度價值",
+      "deep_value_desc": "本益比 ≤ 8、股價淨值比 ≤ 1、排除 ETF",
+      "quality_value": "平價優質",
+      "quality_value_desc": "本益比 ≤ 15、殖利率 ≥ 2.5%、排除 ETF",
+      "yield_etf": "高息 ETF",
+      "yield_etf_desc": "殖利率 ≥ 3%、只看 ETF",
+      "liquid_blue_chip": "大盤主流股",
+      "liquid_blue_chip_desc": "成交量 ≥ 10M、排除 ETF",
+      "neglected_value": "被忽略低估",
+      "neglected_value_desc": "本益比 ≤ 10、殖利率 ≥ 4%、排除 ETF"
+    }
   }
 }

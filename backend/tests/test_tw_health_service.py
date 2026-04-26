@@ -485,6 +485,24 @@ async def test_screener_excludes_etf_when_include_etf_false():
 
 
 @pytest.mark.asyncio
+async def test_screener_etf_only_keeps_only_etfs():
+    """etf_only=True drops every regular stock."""
+    stocks = [
+        _stock_row("0050", vol=10_000_000, name="元大台灣50"),
+        _stock_row("2330", vol=50_000_000, name="台積電"),
+        _stock_row("00713", vol=5_000_000, name="高息低波"),
+        _stock_row("1101", vol=3_000_000, name="台泥"),
+    ]
+    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc.twse, "get_all_twse_symbols", new_callable=AsyncMock, return_value=stocks):
+        result = await svc.get_screener(etf_only=True, limit=10)
+
+    symbols = [r["symbol"] for r in result]
+    assert symbols == ["0050", "00713"]   # ordered by volume desc
+
+
+@pytest.mark.asyncio
 async def test_screener_volume_sort_lifts_regular_stock_above_etf_glut():
     """Regression: 250 low-volume ETFs no longer bury a high-volume stock."""
     stocks = [

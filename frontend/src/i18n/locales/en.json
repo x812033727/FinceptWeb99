@@ -514,9 +514,28 @@
     "min_pb": "Min P/B",
     "max_pb": "Max P/B",
     "min_dividend_yield": "Min Yield %",
+    "etf_all": "Stocks + ETFs",
+    "etf_exclude": "Stocks only",
+    "etf_only": "ETFs only",
     "apply": "Apply Filters",
     "reset": "Reset",
     "results_count": "{{count}} matches",
-    "no_results": "No stocks match these filters"
+    "no_results": "No stocks match these filters",
+    "strategies": {
+      "title": "Strategies",
+      "subtitle": "One-click filter presets",
+      "high_yield": "High-yield holders",
+      "high_yield_desc": "Yield ≥ 5%, P/E ≤ 15, stocks only",
+      "deep_value": "Deep value",
+      "deep_value_desc": "P/E ≤ 8, P/B ≤ 1, stocks only",
+      "quality_value": "Quality value",
+      "quality_value_desc": "P/E ≤ 15, yield ≥ 2.5%, stocks only",
+      "yield_etf": "Yield ETFs",
+      "yield_etf_desc": "Yield ≥ 3%, ETFs only",
+      "liquid_blue_chip": "Liquid blue chips",
+      "liquid_blue_chip_desc": "Volume ≥ 10M, stocks only",
+      "neglected_value": "Neglected value",
+      "neglected_value_desc": "P/E ≤ 10, yield ≥ 4%, stocks only"
+    }
   }
 }

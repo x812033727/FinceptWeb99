@@ -147,6 +147,7 @@ async def screener(
         None, description="Minimum dividend yield % (殖利率)"
     ),
     include_etf: bool = Query(True, description="Include ETF symbols (00xxx)"),
+    etf_only: bool = Query(False, description="Restrict results to ETFs only"),
     limit: int = Query(100, le=500),
 ):
     try:
@@ -159,6 +160,7 @@ async def screener(
             max_pb=max_pb,
             min_dividend_yield=min_dividend_yield,
             include_etf=include_etf,
+            etf_only=etf_only,
             limit=limit,
         )
     except Exception as e:

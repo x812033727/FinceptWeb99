@@ -308,6 +308,28 @@ async def test_screener_include_etf_false_forwards(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_screener_etf_only_default_false(client: AsyncClient):
+    h = await _auth_headers(client, "tw_scr_etf_only_default@example.com")
+    with patch("services.tw_market_service.get_screener", new_callable=AsyncMock) as mock:
+        mock.return_value = []
+        await client.get("/api/tw/screener", headers=h)
+
+    _, kwargs = mock.call_args
+    assert kwargs["etf_only"] is False
+
+
+@pytest.mark.asyncio
+async def test_screener_etf_only_forwards(client: AsyncClient):
+    h = await _auth_headers(client, "tw_scr_etf_only@example.com")
+    with patch("services.tw_market_service.get_screener", new_callable=AsyncMock) as mock:
+        mock.return_value = []
+        await client.get("/api/tw/screener?etf_only=true", headers=h)
+
+    _, kwargs = mock.call_args
+    assert kwargs["etf_only"] is True
+
+
+@pytest.mark.asyncio
 async def test_screener_forwards_fundamental_filters(client: AsyncClient):
     """PE/PB/yield filters from query string reach the service kwargs."""
     h = await _auth_headers(client, "tw_scr_fund@example.com")

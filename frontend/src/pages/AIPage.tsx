@@ -319,9 +319,9 @@ export default function AIPage() {
     (useClaudeAgent && canUseClaudeAgent);
 
   return (
-    <div className="min-h-screen bg-background flex">
+    <div className="h-full bg-background flex">
       {/* ── sidebar: agent selector ─────────────────────────────── */}
-      <aside className="w-64 border-r border-border flex flex-col p-4 gap-3 shrink-0">
+      <aside className="w-64 border-r border-border flex flex-col p-4 gap-3 shrink-0 overflow-y-auto">
         <div>
           <h2 className="text-sm font-semibold text-foreground">{t("ai.title")}</h2>
           <p className="text-xs text-muted-foreground mt-0.5">{t("ai.subtitle")}</p>
@@ -346,7 +346,7 @@ export default function AIPage() {
       </aside>
 
       {/* ── main chat area ──────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col min-w-0">
         {/* header */}
         <header className="border-b border-border px-6 py-3 flex items-center justify-between">
           <div>
@@ -387,7 +387,7 @@ export default function AIPage() {
         </header>
 
         {/* message list */}
-        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 min-h-0">
           {messages.length === 0 && (
             <div className="h-full flex items-center justify-center">
               <p className="text-sm text-muted-foreground">
@@ -409,7 +409,7 @@ export default function AIPage() {
         </div>
 
         {/* input bar */}
-        <div className="border-t border-border px-6 py-4">
+        <div className="border-t border-border px-6 py-4 shrink-0">
           <div className="flex gap-2">
             <textarea
               value={input}

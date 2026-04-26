@@ -196,12 +196,21 @@ async def test_get_screener_emits_static_fallback_when_yfinance_dead():
     Limit is bumped above 15 to clear the hoisted-ETF block at the top
     (SPY, QQQ, IVV, ... — see sp500_universe._FALLBACK_UNIVERSE) and
     confirm both flagship ETFs and mega-cap stocks come through.
+
+    Both `yfinance.get_batch_quotes` and `stooq.get_batch_quotes` are
+    patched to return {} so the test verifies the *shape* of the static
+    fallback (zero-price rows that still carry symbol + name) without
+    depending on whether the CI runner can actually reach Yahoo or
+    Stooq — Stooq in particular started returning real data in CI after
+    PR #34 fixed its field set.
     """
     with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
          patch.object(svc, "cache_set", new_callable=AsyncMock), \
          patch.object(svc, "_use_polygon", return_value=False), \
          patch.object(svc, "_get_sp500_tickers", new_callable=AsyncMock, return_value=["AAPL"]), \
-         patch.object(svc, "_screener_yfinance", new_callable=AsyncMock, return_value=[]):
+         patch.object(svc, "_screener_yfinance", new_callable=AsyncMock, return_value=[]), \
+         patch.object(svc.yfinance, "get_batch_quotes", new_callable=AsyncMock, return_value={}), \
+         patch.object(svc.stooq, "get_batch_quotes", new_callable=AsyncMock, return_value={}):
         result = await svc.get_screener(limit=20)
 
     symbols = [r["symbol"] for r in result]

@@ -47,3 +47,13 @@ async def search(
     limit: int = Query(10, ge=1, le=20),
 ) -> list[dict[str, Any]]:
     return await svc.search(q, limit=limit)
+
+
+@router.get("/news/{symbol}")
+async def news(
+    symbol: str,
+    _: Auth,
+    limit: int = Query(10, ge=1, le=30),
+) -> list[dict[str, Any]]:
+    """Crypto headlines for a Top 20 symbol via Google News RSS."""
+    return await svc.get_news(symbol.upper(), limit=limit)

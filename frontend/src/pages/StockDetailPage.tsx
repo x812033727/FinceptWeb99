@@ -18,6 +18,7 @@ type Interval = "1m" | "5m" | "15m" | "1h" | "1d" | "1wk";
 
 type USTab = "chart" | "financials" | "options" | "news";
 type TWTab = "chart" | "health" | "valuation" | "holdings" | "dividends" | "institutional" | "margin" | "revenue" | "news";
+type CryptoTab = "chart" | "news";
 
 const isTWETF = (symbol: string) => /^00\d{2,4}[A-Z]?$/.test(symbol);
 
@@ -1343,14 +1344,12 @@ interface NewsItem {
   thumbnail: string | null;
 }
 
-function NewsFeed({ symbol, market }: { symbol: string; market: "US" | "TW" }) {
+function NewsFeed({ symbol, market }: { symbol: string; market: "US" | "TW" | "CRYPTO" }) {
   const { t } = useTranslation();
+  const prefix = market === "US" ? "us" : market === "CRYPTO" ? "crypto" : "tw";
   const { data: items = [], isLoading } = useQuery<NewsItem[]>({
     queryKey: ["news", market, symbol],
-    queryFn: () =>
-      api
-        .get(`/${market === "US" ? "us" : "tw"}/news/${symbol}`)
-        .then((r) => r.data),
+    queryFn: () => api.get(`/${prefix}/news/${symbol}`).then((r) => r.data),
     staleTime: 5 * 60_000,
   });
 
@@ -1416,6 +1415,7 @@ export default function StockDetailPage() {
   const [period, setPeriod] = useState<Period>("1y");
   const [usTab, setUsTab] = useState<USTab>("chart");
   const [twTab, setTwTab] = useState<TWTab>("chart");
+  const [cryptoTab, setCryptoTab] = useState<CryptoTab>("chart");
   const [livePrice, setLivePrice] = useState<number | null>(null);
   const [liveChange, setLiveChange] = useState<number | null>(null);
 
@@ -1458,14 +1458,18 @@ export default function StockDetailPage() {
 
   const isETF = mkt === "TW" && (Boolean(quote?.is_etf) || isTWETF(sym));
 
-  const showChart = mkt === "CRYPTO" ? true
-    : mkt === "US" ? usTab === "chart" : twTab === "chart";
+  const showChart =
+    mkt === "CRYPTO" ? cryptoTab === "chart"
+    : mkt === "US" ? usTab === "chart"
+    : twTab === "chart";
 
   return (
     <div className="p-6 space-y-5">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <button onClick={() => navigate(`/market/${mkt}`)} className="hover:text-foreground transition-colors">
-          {mkt === "US" ? t("nav.us_market") : t("nav.tw_market")}
+          {mkt === "US" ? t("nav.us_market")
+            : mkt === "CRYPTO" ? t("nav.crypto")
+            : t("nav.tw_market")}
         </button>
         <span>/</span>
         <span className="text-foreground font-medium">{sym}</span>
@@ -1498,7 +1502,7 @@ export default function StockDetailPage() {
             {displayChange !== undefined ? fmtPct(displayChange) : "—"}
           </div>
           <div className="text-xs text-muted-foreground mt-0.5">
-            {mkt === "US" ? (quote?.currency as string ?? "USD") : "TWD"}
+            {mkt === "TW" ? "TWD" : (quote?.currency as string ?? "USD")}
           </div>
         </div>
       </div>
@@ -1513,10 +1517,8 @@ export default function StockDetailPage() {
           </>
         ) : mkt === "CRYPTO" ? (
           <>
-            {/* Crypto: only the chart tab makes sense — financials / options /
-                institutional / margin all assume an equity issuer. News could
-                come from CryptoPanic etc. but is out of scope (per plan). */}
-            <TabButton active={true} label={t("stock.history")} onClick={() => {}} />
+            <TabButton active={cryptoTab === "chart"} label={t("stock.history")} onClick={() => setCryptoTab("chart")} />
+            <TabButton active={cryptoTab === "news"} label={t("stock.news")} onClick={() => setCryptoTab("news")} />
           </>
         ) : isETF ? (
           <>
@@ -1678,6 +1680,8 @@ export default function StockDetailPage() {
           )}
           {twTab === "news" && <NewsFeed symbol={sym} market="TW" />}
         </>
+      ) : mkt === "CRYPTO" ? (
+        cryptoTab === "news" ? <NewsFeed symbol={sym} market="CRYPTO" /> : null
       ) : (
         usTab === "news" ? <NewsFeed symbol={sym} market="US" /> : null
       )}

@@ -92,3 +92,72 @@ async def search(q: str, limit: int = 10) -> list[dict[str, Any]]:
         return []
     matches = [s for s in TOP20 if needle in s][:limit]
     return [{"symbol": s, "market": "CRYPTO", "name": s} for s in matches]
+
+
+# ── News ──────────────────────────────────────────────────────────
+
+TTL_NEWS = 5 * 60
+
+
+async def _google_news_rss(query: str, limit: int) -> list[dict[str, Any]]:
+    """Google News RSS in en-US — same shape as the TW/US helpers."""
+    import httpx
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+
+    params = {"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"}
+    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as c:
+        r = await c.get("https://news.google.com/rss/search", params=params)
+        r.raise_for_status()
+        xml_text = r.text
+
+    root = ET.fromstring(xml_text)
+    items: list[dict[str, Any]] = []
+    for el in root.findall(".//item")[:limit]:
+        title = (el.findtext("title") or "").strip()
+        link = (el.findtext("link") or "").strip()
+        pub_date_raw = el.findtext("pubDate") or ""
+        source_el = el.find("source")
+        publisher = source_el.text.strip() if (source_el is not None and source_el.text) else ""
+        try:
+            published_at = parsedate_to_datetime(pub_date_raw).isoformat()
+        except (TypeError, ValueError):
+            published_at = pub_date_raw
+        if not title or not link:
+            continue
+        items.append({
+            "title":        title,
+            "publisher":    publisher,
+            "link":         link,
+            "published_at": published_at,
+            "thumbnail":    None,
+        })
+    return items
+
+
+async def get_news(symbol: str, limit: int = 10) -> list[dict[str, Any]]:
+    """
+    Crypto headlines via Google News RSS (en-US). Query is `{symbol}
+    {full name} crypto` — full name pulled from the curated NAMES map
+    so a search for `AVAX` becomes `AVAX Avalanche crypto` and surfaces
+    coverage from CoinDesk / The Block / Decrypt / Cointelegraph as
+    well as mainstream financial outlets.
+    """
+    sym = symbol.upper()
+    key = f"crypto:news:{sym}"
+    cached = await cache_get(key)
+    if cached:
+        return json.loads(cached)
+
+    from data.crypto.symbols import NAMES
+    name = NAMES.get(sym, "")
+    query = f"{sym} {name} crypto".strip() if name else f"{sym} cryptocurrency"
+
+    try:
+        items = await _google_news_rss(query, limit=limit)
+    except Exception:
+        items = []
+
+    if items:
+        await cache_set(key, json.dumps(items), TTL_NEWS)
+    return items

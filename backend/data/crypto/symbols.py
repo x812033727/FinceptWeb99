@@ -20,6 +20,31 @@ TOP20: tuple[str, ...] = (
     "UNI", "ATOM", "XLM", "FIL", "OP",
 )
 
+# Display names — used for news search queries and the StockDetailPage
+# header so we can render `Bitcoin` not `BTC` next to the price.
+NAMES: dict[str, str] = {
+    "BTC":   "Bitcoin",
+    "ETH":   "Ethereum",
+    "SOL":   "Solana",
+    "XRP":   "XRP",
+    "BNB":   "BNB",
+    "DOGE":  "Dogecoin",
+    "ADA":   "Cardano",
+    "AVAX":  "Avalanche",
+    "TRX":   "TRON",
+    "LINK":  "Chainlink",
+    "DOT":   "Polkadot",
+    "MATIC": "Polygon",
+    "LTC":   "Litecoin",
+    "BCH":   "Bitcoin Cash",
+    "NEAR":  "NEAR Protocol",
+    "UNI":   "Uniswap",
+    "ATOM":  "Cosmos",
+    "XLM":   "Stellar",
+    "FIL":   "Filecoin",
+    "OP":    "Optimism",
+}
+
 # Kraken's REST/WS pair format. We always quote against USD.
 # The REST API accepts these on /0/public/Ticker?pair=... and returns the
 # canonical key in the response, which may or may not match the request

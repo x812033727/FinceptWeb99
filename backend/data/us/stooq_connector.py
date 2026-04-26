@@ -12,9 +12,12 @@ Stooq's rate limiter also rejects concurrent fan-out (even 2 in flight
 trips a 503), so batch fetches walk the symbol list sequentially with
 a small inter-request delay.
 
-The `f=sd2t2ohlcvp` field set returns Symbol/Date/Time/Open/High/Low/
-Close/Volume/Prev — `Prev` is the previous session close, which gives
-us change% without needing a separate history call.
+The `f=sohlcvp` field set returns Symbol/Open/High/Low/Close/Volume/
+Prev — `Prev` is the previous session close, which gives us change%
+without a separate history call. We deliberately omit `d2t2`
+(Date/Time): the `d2t2…p` combination intermittently trips the same
+"DNS cache overflow" anti-scrape that the comma-batch endpoint hits,
+even on single-symbol calls. Date/Time aren't read anyway.
 """
 from __future__ import annotations
 
@@ -30,7 +33,7 @@ log = logging.getLogger(__name__)
 
 _INSTANT_URL = "https://stooq.com/q/l/"
 _TIMEOUT = 10.0
-_FIELDS = "sd2t2ohlcvp"
+_FIELDS = "sohlcvp"
 # Empirically, Stooq accepts ~5 req/sec from a single client. Concurrent
 # requests (even 2 in flight) trip a 503 DNS-overflow response. 0.2s
 # between calls clears that with margin.
@@ -68,6 +71,14 @@ async def _fetch_one(client: httpx.AsyncClient, ticker: str) -> dict | None:
         r.raise_for_status()
     except Exception as exc:
         log.warning("stooq.fetch_failed", extra={"ticker": ticker, "error": str(exc)})
+        return None
+    # Stooq returns HTTP 200 with body "DNS cache overflow" (or similar
+    # plain-text strings) when its anti-scrape kicks in. csv.DictReader
+    # would otherwise silently treat the string as a header row and yield
+    # zero data rows, hiding the failure.
+    if not r.text.startswith("Symbol"):
+        log.warning("stooq.non_csv_response",
+                    extra={"ticker": ticker, "body": r.text[:80]})
         return None
     rows = list(csv.DictReader(io.StringIO(r.text)))
     return rows[0] if rows else None

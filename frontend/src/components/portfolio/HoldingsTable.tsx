@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import type { Holding } from "@/types/portfolio";
 
 interface Props {
@@ -6,8 +7,10 @@ interface Props {
 }
 
 export default function HoldingsTable({ holdings, currency }: Props) {
+  const { t } = useTranslation();
+
   if (!holdings.length) {
-    return <p className="text-sm text-muted-foreground py-4">No holdings yet.</p>;
+    return <p className="text-sm text-muted-foreground py-4">{t("portfolio.holdings.no_holdings")}</p>;
   }
 
   return (
@@ -15,15 +18,15 @@ export default function HoldingsTable({ holdings, currency }: Props) {
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-border text-muted-foreground text-left">
-            <th className="pb-2 pr-4">Symbol</th>
-            <th className="pb-2 pr-4">Market</th>
-            <th className="pb-2 pr-4 text-right">Qty</th>
-            <th className="pb-2 pr-4 text-right">Avg Cost</th>
-            <th className="pb-2 pr-4 text-right">Price</th>
-            <th className="pb-2 pr-4 text-right">Value ({currency})</th>
-            <th className="pb-2 pr-4 text-right">P&L</th>
-            <th className="pb-2 text-right">P&L %</th>
-            <th className="pb-2 text-right">Weight</th>
+            <th className="pb-2 pr-4">{t("portfolio.holdings.symbol")}</th>
+            <th className="pb-2 pr-4">{t("portfolio.holdings.market")}</th>
+            <th className="pb-2 pr-4 text-right">{t("portfolio.holdings.qty")}</th>
+            <th className="pb-2 pr-4 text-right">{t("portfolio.holdings.avg_cost")}</th>
+            <th className="pb-2 pr-4 text-right">{t("portfolio.holdings.price")}</th>
+            <th className="pb-2 pr-4 text-right">{t("portfolio.holdings.value")} ({currency})</th>
+            <th className="pb-2 pr-4 text-right">{t("portfolio.holdings.pnl")}</th>
+            <th className="pb-2 text-right">{t("portfolio.holdings.pnl_pct")}</th>
+            <th className="pb-2 text-right">{t("portfolio.holdings.weight")}</th>
           </tr>
         </thead>
         <tbody>

@@ -1,16 +1,10 @@
 import { useAuthStore } from "@/store/authStore";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
 
 // ── Market indices ─────────────────────────────────────────────────
-
-const INDICES = [
-  { symbol: "SPY",  label: "S&P 500" },
-  { symbol: "QQQ",  label: "NASDAQ 100" },
-  { symbol: "IWM",  label: "Russell 2000" },
-  { symbol: "GLD",  label: "Gold ETF" },
-];
 
 function IndexCard({ symbol, label }: { symbol: string; label: string }) {
   const { data } = useQuery({
@@ -41,19 +35,6 @@ function IndexCard({ symbol, label }: { symbol: string; label: string }) {
   );
 }
 
-// ── Nav cards ─────────────────────────────────────────────────────
-
-const CARDS = [
-  { label: "US Market",  desc: "S&P 500 quotes & screener",  icon: "🇺🇸", href: "/market/US" },
-  { label: "台股",        desc: "上市上櫃即時行情",             icon: "🇹🇼", href: "/market/TW" },
-  { label: "Screener",   desc: "Filter stocks by any metric", icon: "🔍", href: "/screener" },
-  { label: "Watchlist",  desc: "Track symbols with live prices", icon: "⭐", href: "/watchlist" },
-  { label: "Portfolio",  desc: "Holdings, P&L & optimizer",   icon: "📊", href: "/portfolio" },
-  { label: "Analytics",  desc: "DCF · VaR · Backtest",        icon: "📐", href: "/analytics" },
-  { label: "Macro",      desc: "FRED indicators · yield curve", icon: "🌐", href: "/macro" },
-  { label: "AI Agents",  desc: "6 CFA-grade personas",        icon: "🤖", href: "/ai" },
-];
-
 // ── Recent news ────────────────────────────────────────────────────
 
 interface NewsItem {
@@ -64,6 +45,7 @@ interface NewsItem {
 }
 
 function RecentNews() {
+  const { t, i18n } = useTranslation();
   const { data: items = [], isLoading } = useQuery<NewsItem[]>({
     queryKey: ["news", "US", "SPY"],
     queryFn: () => api.get("/us/news/SPY").then((r) => r.data),
@@ -71,7 +53,7 @@ function RecentNews() {
   });
 
   if (isLoading) {
-    return <div className="text-xs text-muted-foreground animate-pulse">Loading news…</div>;
+    return <div className="text-xs text-muted-foreground animate-pulse">{t("dashboard.loading_news")}</div>;
   }
 
   if (!items.length) return null;
@@ -79,7 +61,7 @@ function RecentNews() {
   return (
     <div className="bg-card border border-border rounded-lg overflow-hidden">
       <div className="px-4 py-3 border-b border-border">
-        <h2 className="text-sm font-medium text-foreground">Market News</h2>
+        <h2 className="text-sm font-medium text-foreground">{t("dashboard.market_news")}</h2>
       </div>
       <div className="divide-y divide-border/50">
         {items.slice(0, 5).map((item, i) => (
@@ -94,7 +76,7 @@ function RecentNews() {
               <p className="text-sm text-foreground leading-snug line-clamp-2">{item.title}</p>
               <p className="text-xs text-muted-foreground mt-1">
                 {item.publisher} ·{" "}
-                {new Date(item.published_at).toLocaleDateString(undefined, {
+                {new Date(item.published_at).toLocaleDateString(i18n.language, {
                   month: "short", day: "numeric",
                 })}
               </p>
@@ -109,33 +91,52 @@ function RecentNews() {
 // ── Main ──────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
+  const { t } = useTranslation();
   const { user } = useAuthStore();
+
+  const indices = [
+    { symbol: "SPY", label: t("dashboard.indices.sp500") },
+    { symbol: "QQQ", label: t("dashboard.indices.nasdaq100") },
+    { symbol: "IWM", label: t("dashboard.indices.russell2000") },
+    { symbol: "GLD", label: t("dashboard.indices.gold_etf") },
+  ];
+
+  const cards = [
+    { labelKey: "nav.us_market",  descKey: "dashboard.cards.us_market_desc",  icon: "🇺🇸", href: "/market/US" },
+    { labelKey: "nav.tw_market",  descKey: "dashboard.cards.tw_market_desc",  icon: "🇹🇼", href: "/market/TW" },
+    { labelKey: "nav.screener",   descKey: "dashboard.cards.screener_desc",   icon: "🔍", href: "/screener" },
+    { labelKey: "nav.watchlist",  descKey: "dashboard.cards.watchlist_desc",  icon: "⭐", href: "/watchlist" },
+    { labelKey: "nav.portfolio",  descKey: "dashboard.cards.portfolio_desc",  icon: "📊", href: "/portfolio" },
+    { labelKey: "nav.analytics",  descKey: "dashboard.cards.analytics_desc",  icon: "📐", href: "/analytics" },
+    { labelKey: "nav.macro",      descKey: "dashboard.cards.macro_desc",      icon: "🌐", href: "/macro" },
+    { labelKey: "nav.ai",         descKey: "dashboard.cards.ai_desc",         icon: "🤖", href: "/ai" },
+  ];
 
   return (
     <div className="p-6 space-y-6">
       {/* welcome */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
+          <h1 className="text-2xl font-bold text-foreground">{t("dashboard.title")}</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Welcome back, <span className="text-foreground">{user?.email}</span>
+            {t("dashboard.welcome_back")}，<span className="text-foreground">{user?.email}</span>
             {" · "}
             <span className="capitalize text-primary">{user?.role}</span>
           </p>
         </div>
         {user?.ai_requests_remaining !== undefined && (
           <div className="text-xs text-muted-foreground text-right">
-            AI requests today
-            <div className="text-foreground font-medium text-sm">{user.ai_requests_remaining} remaining</div>
+            {t("dashboard.ai_requests_today")}
+            <div className="text-foreground font-medium text-sm">{user.ai_requests_remaining} {t("dashboard.remaining")}</div>
           </div>
         )}
       </div>
 
       {/* market indices */}
       <div>
-        <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Market Overview</h2>
+        <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">{t("dashboard.market_overview")}</h2>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {INDICES.map((idx) => (
+          {indices.map((idx) => (
             <IndexCard key={idx.symbol} symbol={idx.symbol} label={idx.label} />
           ))}
         </div>
@@ -144,26 +145,26 @@ export default function DashboardPage() {
       {/* nav cards + news */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
-          <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Quick Access</h2>
+          <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">{t("dashboard.quick_access")}</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {CARDS.map((card) => (
+            {cards.map((card) => (
               <Link
-                key={card.label}
+                key={card.labelKey}
                 to={card.href}
                 className="bg-card border border-border rounded-lg p-4 space-y-1.5 hover:border-primary/50 hover:bg-card/80 transition-colors block group"
               >
                 <div className="text-xl">{card.icon}</div>
                 <h2 className="text-foreground font-medium text-sm group-hover:text-primary transition-colors">
-                  {card.label}
+                  {t(card.labelKey)}
                 </h2>
-                <p className="text-xs text-muted-foreground">{card.desc}</p>
+                <p className="text-xs text-muted-foreground">{t(card.descKey)}</p>
               </Link>
             ))}
           </div>
         </div>
 
         <div>
-          <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Latest News</h2>
+          <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">{t("dashboard.latest_news")}</h2>
           <RecentNews />
         </div>
       </div>

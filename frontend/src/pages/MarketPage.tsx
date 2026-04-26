@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
 import type { Market, ScreenerResult } from "@/types/market";
 
@@ -48,14 +49,14 @@ interface TWScreenerItem {
   volume: number;
 }
 
-async function fetchTWIndex(): Promise<MarketIndex | null> {
+async function fetchTWIndex(twIndexLabel: string): Promise<MarketIndex | null> {
   try {
     const res = await api.get<TWIndexResponse>("/tw/indices");
     const d = res.data;
     if (!d.value) return null;
     return {
       symbol: "TAIEX",
-      name: "台灣加權指數",
+      name: twIndexLabel,
       price: d.value,
       change_pct: d.change ? (d.change / (d.value - d.change)) * 100 : 0,
     };
@@ -104,6 +105,7 @@ function SortIndicator({ k, sortKey, sortDir }: { k: SortKey; sortKey: SortKey; 
 // ── main page ──────────────────────────────────────────────────────
 
 export default function MarketPage() {
+  const { t } = useTranslation();
   const { market = "US" } = useParams<{ market: string }>();
   const mkt = market.toUpperCase() as Market;
   const navigate = useNavigate();
@@ -117,9 +119,10 @@ export default function MarketPage() {
     staleTime: 60_000,
   });
 
+  const twIndexLabel = t("market.tw_index");
   const { data: twIndex } = useQuery({
     queryKey: ["tw-index"],
-    queryFn: fetchTWIndex,
+    queryFn: () => fetchTWIndex(twIndexLabel),
     enabled: mkt === "TW",
     staleTime: 60_000,
   });
@@ -145,10 +148,10 @@ export default function MarketPage() {
       {/* header */}
       <div>
         <h1 className="text-2xl font-bold text-foreground">
-          {mkt === "US" ? "US Market" : "台灣股市"}
+          {mkt === "US" ? t("market.us_title") : t("market.tw_title")}
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          {mkt === "US" ? "S&P 500 constituents" : "上市上櫃股票"}
+          {mkt === "US" ? t("market.us_subtitle") : t("market.tw_subtitle")}
         </p>
       </div>
 
@@ -161,10 +164,10 @@ export default function MarketPage() {
       {mkt === "US" && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           {[
-            { symbol: "SPY", name: "S&P 500" },
-            { symbol: "QQQ", name: "NASDAQ 100" },
-            { symbol: "DIA", name: "Dow Jones" },
-            { symbol: "IWM", name: "Russell 2000" },
+            { symbol: "SPY", name: t("market.indices.sp500") },
+            { symbol: "QQQ", name: t("market.indices.nasdaq100") },
+            { symbol: "DIA", name: t("market.indices.dow") },
+            { symbol: "IWM", name: t("market.indices.russell2000") },
           ].map(({ symbol, name }) => {
             const row = rows.find((r) => r.symbol === symbol);
             if (!row) return null;
@@ -185,41 +188,41 @@ export default function MarketPage() {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder={mkt === "US" ? "Search symbol or name…" : "搜尋股票代號或名稱…"}
+            placeholder={mkt === "US" ? t("market.us_search_placeholder") : t("market.tw_search_placeholder")}
             className="w-full max-w-sm bg-background border border-border rounded-md px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/50"
           />
         </div>
 
         {isLoading ? (
-          <div className="p-8 text-center text-muted-foreground text-sm animate-pulse">Loading…</div>
+          <div className="p-8 text-center text-muted-foreground text-sm animate-pulse">{t("common.loading")}</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-xs text-muted-foreground">
-                  <th className="text-left px-4 py-2.5 font-medium">Symbol</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Name</th>
-                  <th className="text-right px-4 py-2.5 font-medium">Price</th>
+                  <th className="text-left px-4 py-2.5 font-medium">{t("market.table.symbol")}</th>
+                  <th className="text-left px-4 py-2.5 font-medium">{t("market.table.name")}</th>
+                  <th className="text-right px-4 py-2.5 font-medium">{t("market.table.price")}</th>
                   <th
                     className="text-right px-4 py-2.5 font-medium cursor-pointer select-none hover:text-foreground"
                     onClick={() => toggleSort("change_pct")}
                   >
-                    Change<SortIndicator k="change_pct" sortKey={sortKey} sortDir={sortDir} />
+                    {t("market.table.change")}<SortIndicator k="change_pct" sortKey={sortKey} sortDir={sortDir} />
                   </th>
                   <th
                     className="text-right px-4 py-2.5 font-medium cursor-pointer select-none hover:text-foreground"
                     onClick={() => toggleSort("volume")}
                   >
-                    Volume<SortIndicator k="volume" sortKey={sortKey} sortDir={sortDir} />
+                    {t("market.table.volume")}<SortIndicator k="volume" sortKey={sortKey} sortDir={sortDir} />
                   </th>
                   <th
                     className="text-right px-4 py-2.5 font-medium cursor-pointer select-none hover:text-foreground"
                     onClick={() => toggleSort("market_cap")}
                   >
-                    Mkt Cap<SortIndicator k="market_cap" sortKey={sortKey} sortDir={sortDir} />
+                    {t("market.table.market_cap")}<SortIndicator k="market_cap" sortKey={sortKey} sortDir={sortDir} />
                   </th>
-                  <th className="text-right px-4 py-2.5 font-medium">P/E</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Sector</th>
+                  <th className="text-right px-4 py-2.5 font-medium">{t("market.table.pe")}</th>
+                  <th className="text-left px-4 py-2.5 font-medium">{t("market.table.sector")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -262,7 +265,7 @@ export default function MarketPage() {
                 {filtered.length === 0 && (
                   <tr>
                     <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground text-sm">
-                      No results
+                      {t("common.no_results")}
                     </td>
                   </tr>
                 )}

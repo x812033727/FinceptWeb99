@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
 
 interface Alert {
@@ -23,6 +24,7 @@ interface AlertCreate {
 const EMPTY: AlertCreate = { symbol: "", market: "US", condition: "above", target_price: 0 };
 
 export default function AlertsPage() {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const [form, setForm] = useState<AlertCreate>(EMPTY);
   const [error, setError] = useState("");
@@ -39,7 +41,7 @@ export default function AlertsPage() {
       setForm(EMPTY);
       setError("");
     },
-    onError: () => setError("Failed to create alert."),
+    onError: () => setError(t("common.error")),
   });
 
   const deleteMut = useMutation({
@@ -49,8 +51,8 @@ export default function AlertsPage() {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.symbol.trim()) { setError("Symbol is required."); return; }
-    if (form.target_price <= 0) { setError("Target price must be > 0."); return; }
+    if (!form.symbol.trim()) { setError(t("alerts.symbol")); return; }
+    if (form.target_price <= 0) { setError(t("alerts.target_price")); return; }
     createMut.mutate({ ...form, symbol: form.symbol.trim().toUpperCase() });
   }
 
@@ -59,17 +61,17 @@ export default function AlertsPage() {
 
   return (
     <div className="p-6 space-y-6 max-w-3xl">
-      <h1 className="text-xl font-semibold">Price Alerts</h1>
+      <h1 className="text-xl font-semibold">{t("alerts.title")}</h1>
 
       {/* Create form */}
       <form
         onSubmit={handleSubmit}
         className="bg-card border border-border rounded-lg p-4 space-y-3"
       >
-        <h2 className="text-sm font-medium">New Alert</h2>
+        <h2 className="text-sm font-medium">{t("alerts.create")}</h2>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">Symbol</label>
+            <label className="text-xs text-muted-foreground">{t("alerts.symbol")}</label>
             <input
               className="w-full bg-background border border-border rounded px-2 py-1.5 text-sm"
               placeholder="AAPL"
@@ -78,7 +80,7 @@ export default function AlertsPage() {
             />
           </div>
           <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">Market</label>
+            <label className="text-xs text-muted-foreground">{t("alerts.market")}</label>
             <select
               className="w-full bg-background border border-border rounded px-2 py-1.5 text-sm"
               value={form.market}
@@ -89,7 +91,7 @@ export default function AlertsPage() {
             </select>
           </div>
           <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">Condition</label>
+            <label className="text-xs text-muted-foreground">{t("alerts.condition")}</label>
             <select
               className="w-full bg-background border border-border rounded px-2 py-1.5 text-sm"
               value={form.condition}
@@ -97,12 +99,12 @@ export default function AlertsPage() {
                 setForm((f) => ({ ...f, condition: e.target.value as "above" | "below" }))
               }
             >
-              <option value="above">Price above</option>
-              <option value="below">Price below</option>
+              <option value="above">{t("alerts.above")}</option>
+              <option value="below">{t("alerts.below")}</option>
             </select>
           </div>
           <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">Target Price</label>
+            <label className="text-xs text-muted-foreground">{t("alerts.target_price")}</label>
             <input
               type="number"
               min="0"
@@ -121,18 +123,18 @@ export default function AlertsPage() {
           disabled={createMut.isPending}
           className="px-4 py-1.5 rounded bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
         >
-          {createMut.isPending ? "Creating…" : "Create Alert"}
+          {createMut.isPending ? t("common.saving") : t("alerts.create")}
         </button>
       </form>
 
       {/* Active alerts */}
       <section className="space-y-2">
         <h2 className="text-sm font-medium">
-          Active <span className="text-muted-foreground">({active.length})</span>
+          {t("alerts.active")} <span className="text-muted-foreground">({active.length})</span>
         </h2>
-        {isLoading && <p className="text-xs text-muted-foreground">Loading…</p>}
+        {isLoading && <p className="text-xs text-muted-foreground">{t("common.loading")}</p>}
         {!isLoading && active.length === 0 && (
-          <p className="text-xs text-muted-foreground">No active alerts.</p>
+          <p className="text-xs text-muted-foreground">{t("alerts.no_alerts")}</p>
         )}
         {active.map((a) => (
           <AlertRow key={a.id} alert={a} onDelete={() => deleteMut.mutate(a.id)} />
@@ -143,7 +145,7 @@ export default function AlertsPage() {
       {triggered.length > 0 && (
         <section className="space-y-2">
           <h2 className="text-sm font-medium text-muted-foreground">
-            Triggered <span>({triggered.length})</span>
+            {t("alerts.triggered")} <span>({triggered.length})</span>
           </h2>
           {triggered.map((a) => (
             <AlertRow key={a.id} alert={a} onDelete={() => deleteMut.mutate(a.id)} />
@@ -155,6 +157,7 @@ export default function AlertsPage() {
 }
 
 function AlertRow({ alert: a, onDelete }: { alert: Alert; onDelete: () => void }) {
+  const { t } = useTranslation();
   return (
     <div
       className={`flex items-center justify-between px-4 py-2.5 rounded border text-sm ${
@@ -169,9 +172,8 @@ function AlertRow({ alert: a, onDelete }: { alert: Alert; onDelete: () => void }
           {a.market}
         </span>
         <span className="text-muted-foreground">
-          price{" "}
           <span className={a.condition === "above" ? "text-green-400" : "text-red-400"}>
-            {a.condition}
+            {a.condition === "above" ? t("alerts.above") : t("alerts.below")}
           </span>{" "}
           <span className="text-foreground font-medium">
             {a.market === "TW"
@@ -181,14 +183,14 @@ function AlertRow({ alert: a, onDelete }: { alert: Alert; onDelete: () => void }
         </span>
         {a.triggered && (
           <span className="text-xs text-amber-400 border border-amber-400/30 px-1.5 py-0.5 rounded">
-            triggered
+            {t("alerts.triggered")}
           </span>
         )}
       </div>
       <button
         onClick={onDelete}
         className="text-muted-foreground hover:text-red-400 transition-colors text-lg leading-none"
-        title="Delete alert"
+        title={t("alerts.delete")}
       >
         ×
       </button>

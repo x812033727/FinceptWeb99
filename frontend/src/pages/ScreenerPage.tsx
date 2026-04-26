@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRef } from "react";
+import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
 import type { ScreenerResult, Market } from "@/types/market";
 
@@ -98,6 +99,7 @@ const US_SECTORS = [
 ];
 
 export default function ScreenerPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [applied, setApplied] = useState<Filters>(DEFAULT_FILTERS);
@@ -152,9 +154,9 @@ export default function ScreenerPage() {
   return (
     <div className="p-6 flex flex-col gap-6 h-screen">
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Stock Screener</h1>
+        <h1 className="text-2xl font-bold text-foreground">{t("screener.title")}</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Filter and rank stocks across US and Taiwan markets
+          {t("screener.subtitle")}
         </p>
       </div>
 
@@ -163,7 +165,7 @@ export default function ScreenerPage() {
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
           {/* market toggle */}
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground">Market</label>
+            <label className="text-xs text-muted-foreground">{t("alerts.market")}</label>
             <div className="flex rounded border border-border overflow-hidden">
               {(["US", "TW"] as Market[]).map((m) => (
                 <button
@@ -182,39 +184,39 @@ export default function ScreenerPage() {
           </div>
 
           <FilterInput
-            label="Min Mkt Cap (B)"
+            label={t("screener.min_market_cap")}
             value={filters.minMarketCap}
             onChange={(v) => setFilter("minMarketCap", v)}
-            placeholder="e.g. 10"
+            placeholder="10"
           />
           <FilterInput
-            label="Max P/E"
+            label={t("screener.max_pe")}
             value={filters.maxPE}
             onChange={(v) => setFilter("maxPE", v)}
-            placeholder="e.g. 30"
+            placeholder="30"
           />
           <FilterInput
-            label="Min Volume"
+            label={t("market.table.volume")}
             value={filters.minVolume}
             onChange={(v) => setFilter("minVolume", v)}
-            placeholder="e.g. 1000000"
+            placeholder="1000000"
           />
           <FilterInput
-            label="Min Chg%"
+            label={`${t("market.table.change")} ≥`}
             value={filters.minChangePct}
             onChange={(v) => setFilter("minChangePct", v)}
-            placeholder="e.g. -5"
+            placeholder="-5"
           />
           <FilterInput
-            label="Max Chg%"
+            label={`${t("market.table.change")} ≤`}
             value={filters.maxChangePct}
             onChange={(v) => setFilter("maxChangePct", v)}
-            placeholder="e.g. 10"
+            placeholder="10"
           />
 
           {/* sector (US only) */}
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground">Sector</label>
+            <label className="text-xs text-muted-foreground">{t("market.table.sector")}</label>
             <select
               value={filters.sector}
               onChange={(e) => setFilter("sector", e.target.value)}
@@ -222,16 +224,16 @@ export default function ScreenerPage() {
               className="bg-background border border-border rounded px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:border-primary/50 disabled:opacity-40"
             >
               {US_SECTORS.map((s) => (
-                <option key={s} value={s}>{s || "All Sectors"}</option>
+                <option key={s} value={s}>{s || t("screener.all_sectors")}</option>
               ))}
             </select>
           </div>
 
           <FilterInput
-            label="Search"
+            label={t("common.search")}
             value={filters.search}
             onChange={(v) => setFilter("search", v)}
-            placeholder="Symbol / name"
+            placeholder=""
           />
         </div>
 
@@ -240,16 +242,16 @@ export default function ScreenerPage() {
             onClick={applyFilters}
             className="px-4 py-1.5 bg-primary text-primary-foreground rounded text-sm font-medium hover:bg-primary/90 transition-colors"
           >
-            {isFetching ? "Loading…" : "Apply Filters"}
+            {isFetching ? t("common.loading") : t("screener.apply")}
           </button>
           <button
             onClick={resetFilters}
             className="px-4 py-1.5 border border-border text-muted-foreground rounded text-sm hover:text-foreground transition-colors"
           >
-            Reset
+            {t("screener.reset")}
           </button>
           <span className="text-xs text-muted-foreground self-center ml-2">
-            {rows.length} results
+            {t("screener.results_count", { count: rows.length })}
           </span>
         </div>
       </div>
@@ -258,19 +260,19 @@ export default function ScreenerPage() {
       <div className="bg-card border border-border rounded-lg overflow-hidden flex flex-col flex-1 min-h-0">
         {/* fixed header */}
         <div className="grid grid-cols-[100px_1fr_100px_90px_100px_100px_80px_1fr] text-xs text-muted-foreground border-b border-border px-4 py-2.5 shrink-0">
-          <span className="font-medium">Symbol</span>
-          <span className="font-medium">Name</span>
-          <span className="font-medium text-right">Price</span>
-          <span className="font-medium text-right">Chg%</span>
-          <span className="font-medium text-right">Volume</span>
-          <span className="font-medium text-right">Mkt Cap</span>
-          <span className="font-medium text-right">P/E</span>
-          <span className="font-medium pl-4">Sector</span>
+          <span className="font-medium">{t("market.table.symbol")}</span>
+          <span className="font-medium">{t("market.table.name")}</span>
+          <span className="font-medium text-right">{t("market.table.price")}</span>
+          <span className="font-medium text-right">{t("market.table.change")}</span>
+          <span className="font-medium text-right">{t("market.table.volume")}</span>
+          <span className="font-medium text-right">{t("market.table.market_cap")}</span>
+          <span className="font-medium text-right">{t("market.table.pe")}</span>
+          <span className="font-medium pl-4">{t("market.table.sector")}</span>
         </div>
 
         {isLoading ? (
           <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm animate-pulse">
-            Loading…
+            {t("common.loading")}
           </div>
         ) : (
           <div ref={parentRef} className="overflow-auto flex-1">

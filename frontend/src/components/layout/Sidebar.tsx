@@ -1,29 +1,31 @@
 import { NavLink } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { logout } from "@/lib/auth";
 import { useNavigate } from "react-router-dom";
 import { useAuthStore } from "@/store/authStore";
 
-interface NavItem {
+interface NavItemDef {
   to: string;
-  label: string;
+  labelKey: string;
   icon: string;
 }
 
-const NAV: NavItem[] = [
-  { to: "/dashboard", label: "Dashboard", icon: "⊞" },
-  { to: "/market/US", label: "US Market", icon: "🇺🇸" },
-  { to: "/market/TW", label: "台股", icon: "🇹🇼" },
-  { to: "/screener", label: "Screener", icon: "🔍" },
-  { to: "/watchlist", label: "Watchlist", icon: "⭐" },
-  { to: "/alerts", label: "Alerts", icon: "🔔" },
-  { to: "/portfolio", label: "Portfolio", icon: "📊" },
-  { to: "/analytics", label: "Analytics", icon: "📐" },
-  { to: "/macro", label: "Macro", icon: "🌐" },
-  { to: "/ai", label: "AI Agents", icon: "🤖" },
-  { to: "/settings", label: "Settings", icon: "⚙" },
+const NAV: NavItemDef[] = [
+  { to: "/dashboard", labelKey: "nav.dashboard", icon: "⊞" },
+  { to: "/market/US", labelKey: "nav.us_market", icon: "🇺🇸" },
+  { to: "/market/TW", labelKey: "nav.tw_market", icon: "🇹🇼" },
+  { to: "/screener", labelKey: "nav.screener", icon: "🔍" },
+  { to: "/watchlist", labelKey: "nav.watchlist", icon: "⭐" },
+  { to: "/alerts", labelKey: "nav.alerts", icon: "🔔" },
+  { to: "/portfolio", labelKey: "nav.portfolio", icon: "📊" },
+  { to: "/analytics", labelKey: "nav.analytics", icon: "📐" },
+  { to: "/macro", labelKey: "nav.macro", icon: "🌐" },
+  { to: "/ai", labelKey: "nav.ai", icon: "🤖" },
+  { to: "/settings", labelKey: "nav.settings", icon: "⚙" },
 ];
 
-function NavItem({ item }: { item: NavItem }) {
+function NavItem({ item }: { item: NavItemDef }) {
+  const { t } = useTranslation();
   return (
     <NavLink
       to={item.to}
@@ -36,12 +38,13 @@ function NavItem({ item }: { item: NavItem }) {
       }
     >
       <span className="text-base leading-none">{item.icon}</span>
-      {item.label}
+      {t(item.labelKey)}
     </NavLink>
   );
 }
 
 export default function Sidebar() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const role = useAuthStore((s) => s.user?.role);
 
@@ -64,7 +67,7 @@ export default function Sidebar() {
           <NavItem key={item.to} item={item} />
         ))}
         {role === "admin" && (
-          <NavItem item={{ to: "/admin", label: "Admin", icon: "🛡" }} />
+          <NavItem item={{ to: "/admin", labelKey: "nav.admin", icon: "🛡" }} />
         )}
       </nav>
 
@@ -74,7 +77,7 @@ export default function Sidebar() {
           onClick={handleLogout}
           className="w-full text-left px-3 py-2 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-accent/10 transition-colors"
         >
-          Sign out
+          {t("nav.sign_out")}
         </button>
       </div>
     </aside>

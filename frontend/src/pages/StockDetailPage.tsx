@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Cell,
 } from "recharts";
+import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
 import CandlestickChart from "@/components/charts/CandlestickChart";
 import { useWebSocket } from "@/hooks/useWebSocket";
@@ -154,12 +155,14 @@ function PeriodButton({ active, label, onClick }: { active: boolean; label: stri
 }
 
 function Loading() {
-  return <div className="p-8 text-center text-muted-foreground text-sm animate-pulse">Loading…</div>;
+  const { t } = useTranslation();
+  return <div className="p-8 text-center text-muted-foreground text-sm animate-pulse">{t("common.loading")}</div>;
 }
 
 // ── US tab panels ──────────────────────────────────────────────────
 
 function FinancialsPanel({ symbol }: { symbol: string }) {
+  const { t } = useTranslation();
   const { data, isLoading } = useQuery({
     queryKey: ["financials", "US", symbol],
     queryFn: () => fetchFinancials(symbol),
@@ -167,16 +170,16 @@ function FinancialsPanel({ symbol }: { symbol: string }) {
   });
 
   if (isLoading) return <Loading />;
-  if (!data) return <div className="p-6 text-muted-foreground text-sm">No financials available.</div>;
+  if (!data) return <div className="p-6 text-muted-foreground text-sm">{t("common.no_data")}</div>;
 
   // yfinance returns {income_statement, balance_sheet, cash_flow} as record of records
   const raw = data.data as Record<string, Record<string, number | null>> | null;
-  if (!raw) return <div className="p-6 text-muted-foreground text-sm">No financials data.</div>;
+  if (!raw) return <div className="p-6 text-muted-foreground text-sm">{t("common.no_data")}</div>;
 
   const sections: Array<{ title: string; key: string }> = [
-    { title: "Income Statement", key: "income_statement" },
-    { title: "Balance Sheet", key: "balance_sheet" },
-    { title: "Cash Flow", key: "cash_flow" },
+    { title: t("stock.income_statement"), key: "income_statement" },
+    { title: t("stock.balance_sheet"), key: "balance_sheet" },
+    { title: t("stock.cash_flow"), key: "cash_flow" },
   ];
 
   return (
@@ -665,6 +668,7 @@ interface NewsItem {
 }
 
 function NewsFeed({ symbol, market }: { symbol: string; market: "US" | "TW" }) {
+  const { t } = useTranslation();
   const { data: items = [], isLoading } = useQuery<NewsItem[]>({
     queryKey: ["news", market, symbol],
     queryFn: () =>
@@ -677,7 +681,7 @@ function NewsFeed({ symbol, market }: { symbol: string; market: "US" | "TW" }) {
   if (isLoading) {
     return (
       <div className="bg-card border border-border rounded-lg p-4 text-xs text-muted-foreground animate-pulse">
-        Loading news…
+        {t("common.loading")}
       </div>
     );
   }
@@ -727,6 +731,7 @@ function NewsFeed({ symbol, market }: { symbol: string; market: "US" | "TW" }) {
 // ── main page ──────────────────────────────────────────────────────
 
 export default function StockDetailPage() {
+  const { t } = useTranslation();
   const { market = "US", symbol = "" } = useParams<{ market: string; symbol: string }>();
   const navigate = useNavigate();
   const mkt = market.toUpperCase() as Market;
@@ -780,7 +785,7 @@ export default function StockDetailPage() {
     <div className="p-6 space-y-5">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <button onClick={() => navigate(`/market/${mkt}`)} className="hover:text-foreground transition-colors">
-          {mkt === "US" ? "US Market" : "台股"}
+          {mkt === "US" ? t("nav.us_market") : t("nav.tw_market")}
         </button>
         <span>/</span>
         <span className="text-foreground font-medium">{sym}</span>
@@ -816,18 +821,18 @@ export default function StockDetailPage() {
       <div className="flex border-b border-border">
         {mkt === "US" ? (
           <>
-            <TabButton active={usTab === "chart"} label="Chart" onClick={() => setUsTab("chart")} />
-            <TabButton active={usTab === "financials"} label="Financials" onClick={() => setUsTab("financials")} />
-            <TabButton active={usTab === "options"} label="Options" onClick={() => setUsTab("options")} />
-            <TabButton active={usTab === "news"} label="News" onClick={() => setUsTab("news")} />
+            <TabButton active={usTab === "chart"} label={t("stock.history")} onClick={() => setUsTab("chart")} />
+            <TabButton active={usTab === "financials"} label={t("stock.fundamentals")} onClick={() => setUsTab("financials")} />
+            <TabButton active={usTab === "options"} label={t("stock.options")} onClick={() => setUsTab("options")} />
+            <TabButton active={usTab === "news"} label={t("stock.news")} onClick={() => setUsTab("news")} />
           </>
         ) : (
           <>
-            <TabButton active={twTab === "chart"} label="K 線" onClick={() => setTwTab("chart")} />
+            <TabButton active={twTab === "chart"} label={t("stock.history")} onClick={() => setTwTab("chart")} />
             <TabButton active={twTab === "institutional"} label="法人買賣超" onClick={() => setTwTab("institutional")} />
             <TabButton active={twTab === "margin"} label="融資融券" onClick={() => setTwTab("margin")} />
             <TabButton active={twTab === "revenue"} label="月營收" onClick={() => setTwTab("revenue")} />
-            <TabButton active={twTab === "news"} label="新聞" onClick={() => setTwTab("news")} />
+            <TabButton active={twTab === "news"} label={t("stock.news")} onClick={() => setTwTab("news")} />
           </>
         )}
       </div>
@@ -844,7 +849,7 @@ export default function StockDetailPage() {
             <div className="p-3">
               {barsLoading ? (
                 <div className="h-[360px] flex items-center justify-center text-muted-foreground text-sm animate-pulse">
-                  Loading chart…
+                  {t("common.loading")}
                 </div>
               ) : bars.length === 0 ? (
                 <div className="h-[360px] flex items-center justify-center text-muted-foreground text-sm">
@@ -859,7 +864,7 @@ export default function StockDetailPage() {
           {/* stats sidebar */}
           <div className="bg-card border border-border rounded-lg p-4">
             <h3 className="text-sm font-semibold text-foreground mb-3">
-              {mkt === "US" ? "Fundamentals" : "基本資料"}
+              {t("stock.fundamentals")}
             </h3>
             {mkt === "US" ? (
               <>

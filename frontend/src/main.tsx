@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import "./index.css";
 import "@/store/themeStore"; // eagerly initialize theme (applies data-light attribute)
+import "@/i18n";              // initialize i18next (en + zh-TW, default zh-TW)
 
 const queryClient = new QueryClient({
   defaultOptions: {

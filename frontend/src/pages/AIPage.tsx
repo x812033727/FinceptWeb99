@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import api, { notifyRateLimited } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 
@@ -74,6 +75,7 @@ function AgentCard({
 }
 
 function ToolCallCard({ call }: { call: ToolCallEvent }) {
+  const { t } = useTranslation();
   const statusColor =
     call.status === "running" ? "bg-amber-400 animate-pulse" :
     call.status === "error" ? "bg-red-500" :
@@ -85,18 +87,18 @@ function ToolCallCard({ call }: { call: ToolCallEvent }) {
         <span className={`inline-block w-2 h-2 rounded-full ${statusColor}`} />
         <span className="font-mono text-amber-300">{call.name}</span>
         <span className="text-muted-foreground">
-          {call.status === "running" ? "calling…" :
-           call.status === "error" ? "failed" : "done"}
+          {call.status === "running" ? t("ai.tool.calling") :
+           call.status === "error" ? t("ai.tool.failed") : t("ai.tool.done")}
         </span>
       </div>
       <details className="mt-1.5">
-        <summary className="cursor-pointer text-muted-foreground hover:text-foreground select-none">args</summary>
+        <summary className="cursor-pointer text-muted-foreground hover:text-foreground select-none">{t("ai.tool.args")}</summary>
         <pre className="mt-1 bg-background/60 border border-border rounded p-2 overflow-auto max-h-40 text-foreground/80">{argsStr}</pre>
       </details>
       {call.result && (
         <details className="mt-1">
           <summary className={`cursor-pointer hover:text-foreground select-none ${call.isError ? "text-red-400" : "text-muted-foreground"}`}>
-            result
+            {t("ai.tool.result")}
           </summary>
           <pre className="mt-1 bg-background/60 border border-border rounded p-2 overflow-auto max-h-60 text-foreground/80 whitespace-pre-wrap">{call.result}</pre>
         </details>
@@ -129,6 +131,7 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
 // ── main page ──────────────────────────────────────────────────────
 
 export default function AIPage() {
+  const { t } = useTranslation();
   const token = useAuthStore((s) => s.token);
   const role = useAuthStore((s) => s.user?.role);
   const location = useLocation();
@@ -320,11 +323,11 @@ export default function AIPage() {
       {/* ── sidebar: agent selector ─────────────────────────────── */}
       <aside className="w-64 border-r border-border flex flex-col p-4 gap-3 shrink-0">
         <div>
-          <h2 className="text-sm font-semibold text-foreground">AI Agents</h2>
-          <p className="text-xs text-muted-foreground mt-0.5">Select a persona</p>
+          <h2 className="text-sm font-semibold text-foreground">{t("ai.title")}</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">{t("ai.subtitle")}</p>
         </div>
         {isLoading ? (
-          <p className="text-xs text-muted-foreground animate-pulse">Loading…</p>
+          <p className="text-xs text-muted-foreground animate-pulse">{t("ai.loading")}</p>
         ) : (
           <div className="space-y-2">
             {agents.map((a) => (
@@ -338,7 +341,7 @@ export default function AIPage() {
           </div>
         )}
         <div className="mt-auto text-xs text-muted-foreground">
-          <a href="/dashboard" className="hover:text-foreground transition-colors">← Dashboard</a>
+          <a href="/dashboard" className="hover:text-foreground transition-colors">{t("ai.back_dashboard")}</a>
         </div>
       </aside>
 
@@ -348,7 +351,7 @@ export default function AIPage() {
         <header className="border-b border-border px-6 py-3 flex items-center justify-between">
           <div>
             <span className="font-medium text-foreground text-sm">
-              {activeAgent?.name ?? "Select an agent"}
+              {activeAgent?.name ?? t("ai.header_default")}
             </span>
             {activeAgent && (
               <span className="text-xs text-muted-foreground ml-2">{activeAgent.description}</span>
@@ -357,7 +360,7 @@ export default function AIPage() {
           <div className="flex items-center gap-4">
             {canUseClaudeAgent && activeAgent && activeAgent.default_provider !== "claude_agent" && (
               <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none"
-                     title="Route through Claude Agent with tools (DCF, VaR, SQL, web, Python)">
+                     title={t("ai.use_tools_hint")}>
                 <input
                   type="checkbox"
                   checked={useClaudeAgent}
@@ -365,12 +368,12 @@ export default function AIPage() {
                   onChange={(e) => setUseClaudeAgent(e.target.checked)}
                   className="accent-amber-400"
                 />
-                Use tools (Claude Agent)
+                {t("ai.use_tools")}
               </label>
             )}
             {effectiveIsClaudeAgent && (
-              <span className="text-xs text-amber-300" title="Tool-use mode active">
-                ⚡ tools on
+              <span className="text-xs text-amber-300" title={t("ai.tools_on_hint")}>
+                {t("ai.tools_on")}
               </span>
             )}
             <button
@@ -378,7 +381,7 @@ export default function AIPage() {
               disabled={streaming}
               className="text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
             >
-              Clear chat
+              {t("ai.clear_chat")}
             </button>
           </div>
         </header>
@@ -389,8 +392,8 @@ export default function AIPage() {
             <div className="h-full flex items-center justify-center">
               <p className="text-sm text-muted-foreground">
                 {activeAgent
-                  ? `Ask the ${activeAgent.name} anything…`
-                  : "Select an agent to begin"}
+                  ? t("ai.ask_placeholder", { agent: activeAgent.name })
+                  : t("ai.select_to_begin")}
               </p>
             </div>
           )}
@@ -417,7 +420,7 @@ export default function AIPage() {
                   sendMessage();
                 }
               }}
-              placeholder="Ask a question… (Enter to send, Shift+Enter for newline)"
+              placeholder={t("ai.input_placeholder")}
               rows={2}
               disabled={streaming || !selectedAgent}
               className="flex-1 resize-none bg-card border border-border rounded-md px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/50 disabled:opacity-50"
@@ -427,7 +430,7 @@ export default function AIPage() {
                 onClick={stopGeneration}
                 className="px-4 py-2 rounded-md bg-red-900/30 border border-red-800 text-red-400 text-sm hover:bg-red-900/50 transition-colors self-end"
               >
-                Stop
+                {t("ai.stop")}
               </button>
             ) : (
               <button
@@ -435,12 +438,12 @@ export default function AIPage() {
                 disabled={!input.trim() || !selectedAgent}
                 className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 self-end"
               >
-                Send
+                {t("ai.send")}
               </button>
             )}
           </div>
           <p className="text-xs text-muted-foreground mt-1.5">
-            AI responses are for informational purposes only and not financial advice.
+            {t("ai.disclaimer")}
           </p>
         </div>
       </div>

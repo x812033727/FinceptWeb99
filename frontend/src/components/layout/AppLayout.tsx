@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import Sidebar from "./Sidebar";
 import UpdateBadge from "./UpdateBadge";
 import { useAlertSocket, useWsConnected } from "@/hooks/useWebSocket";
@@ -10,6 +11,7 @@ import api from "@/lib/api";
 type SearchResult = { symbol: string; market: "US" | "TW" };
 
 function GlobalSearch() {
+  const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [open, setOpen] = useState(false);
@@ -94,7 +96,7 @@ function GlobalSearch() {
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={handleKeyDown}
         onFocus={() => results.length > 0 && setOpen(true)}
-        placeholder="Search symbol… (AAPL, 2330)"
+        placeholder={t("topbar.search_placeholder")}
         className="w-full h-7 rounded bg-muted/40 border border-border px-3 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
       />
       {open && results.length > 0 && (
@@ -124,23 +126,25 @@ function GlobalSearch() {
 }
 
 function WsStatus() {
+  const { t } = useTranslation();
   const connected = useWsConnected();
   return (
     <div
       className="flex items-center gap-1.5 text-[10px] text-muted-foreground select-none"
-      title={connected ? "WebSocket connected" : "WebSocket disconnected"}
+      title={connected ? t("topbar.ws_connected") : t("topbar.ws_disconnected")}
     >
       <span
         className={`w-2 h-2 rounded-full shrink-0 ${
           connected ? "bg-green-500" : "bg-red-500 animate-pulse"
         }`}
       />
-      <span className="hidden sm:inline">{connected ? "Live" : "Off"}</span>
+      <span className="hidden sm:inline">{connected ? t("topbar.live") : t("topbar.off")}</span>
     </div>
   );
 }
 
 function NotificationBell() {
+  const { t } = useTranslation();
   const { alerts, unreadCount, markAllRead, dismiss } = useNotificationStore();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -171,7 +175,7 @@ function NotificationBell() {
       <button
         onClick={toggle}
         className="relative p-1.5 rounded hover:bg-accent/10 text-muted-foreground hover:text-foreground transition-colors"
-        title="Alerts"
+        title={t("topbar.alerts_title")}
       >
         <span className="text-base leading-none">🔔</span>
         {unreadCount > 0 && (
@@ -184,10 +188,10 @@ function NotificationBell() {
       {open && (
         <div className="absolute right-0 top-full mt-1 w-80 bg-card border border-border rounded-lg shadow-xl z-50 overflow-hidden">
           <div className="px-3 py-2 border-b border-border">
-            <span className="text-xs font-medium">Price Alerts</span>
+            <span className="text-xs font-medium">{t("topbar.price_alerts")}</span>
           </div>
           {alerts.length === 0 ? (
-            <p className="px-3 py-4 text-xs text-muted-foreground text-center">No alerts yet.</p>
+            <p className="px-3 py-4 text-xs text-muted-foreground text-center">{t("topbar.no_alerts")}</p>
           ) : (
             <ul className="max-h-72 overflow-y-auto divide-y divide-border">
               {alerts.map((a) => (
@@ -197,7 +201,7 @@ function NotificationBell() {
                       {a.symbol} ({a.market})
                     </span>
                     <p className="text-muted-foreground">
-                      Price {a.condition}{" "}
+                      {a.condition === "above" ? t("topbar.price_above") : t("topbar.price_below")}{" "}
                       <span
                         className={
                           a.condition === "above" ? "text-green-400" : "text-red-400"
@@ -205,7 +209,7 @@ function NotificationBell() {
                       >
                         {a.target_price.toFixed(2)}
                       </span>{" "}
-                      — hit{" "}
+                      — {t("topbar.hit")}{" "}
                       <span className="text-foreground">{a.current_price.toFixed(2)}</span>
                     </p>
                   </div>
@@ -226,14 +230,31 @@ function NotificationBell() {
 }
 
 function ThemeToggle() {
+  const { t } = useTranslation();
   const { theme, toggle } = useThemeStore();
   return (
     <button
       onClick={toggle}
       className="p-1.5 rounded hover:bg-accent/10 text-muted-foreground hover:text-foreground transition-colors"
-      title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+      title={theme === "dark" ? t("topbar.switch_to_light") : t("topbar.switch_to_dark")}
     >
       <span className="text-base leading-none">{theme === "dark" ? "☀" : "🌙"}</span>
+    </button>
+  );
+}
+
+function LanguageToggle() {
+  const { i18n, t } = useTranslation();
+  const current = i18n.language;
+  const next = current === "zh-TW" ? "en" : "zh-TW";
+  const label = current === "zh-TW" ? "EN" : "中";
+  return (
+    <button
+      onClick={() => void i18n.changeLanguage(next)}
+      className="px-1.5 py-0.5 rounded text-[11px] font-medium hover:bg-accent/10 text-muted-foreground hover:text-foreground transition-colors min-w-[28px]"
+      title={t("topbar.language")}
+    >
+      {label}
     </button>
   );
 }
@@ -249,6 +270,7 @@ export default function AppLayout() {
           <div className="flex items-center gap-2 ml-auto">
             <UpdateBadge />
             <WsStatus />
+            <LanguageToggle />
             <ThemeToggle />
             <NotificationBell />
           </div>

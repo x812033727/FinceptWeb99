@@ -4,6 +4,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
   ReferenceLine, CartesianGrid,
 } from "recharts";
+import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
 import { useNavigate } from "react-router-dom";
 
@@ -16,19 +17,19 @@ interface DataPoint {
 
 // ── indicator config ───────────────────────────────────────────────
 
-const INDICATORS = [
-  { id: "fed_funds_rate", label: "Fed Funds Rate", color: "#6366f1", unit: "%" },
-  { id: "10y_yield",      label: "10Y Treasury",  color: "#22c55e", unit: "%" },
-  { id: "2y_yield",       label: "2Y Treasury",   color: "#86efac", unit: "%" },
-  { id: "10y_minus_2y",   label: "10Y−2Y Spread", color: "#f59e0b", unit: "%" },
-  { id: "cpi",            label: "CPI",           color: "#ef4444", unit: "index" },
-  { id: "unemployment",   label: "Unemployment",  color: "#a78bfa", unit: "%" },
-  { id: "gdp",            label: "GDP",           color: "#34d399", unit: "$B" },
-  { id: "usd_index",      label: "USD Index",     color: "#60a5fa", unit: "" },
-  { id: "twd_usd",        label: "TWD/USD",       color: "#fb923c", unit: "" },
+const INDICATOR_CONFIGS = [
+  { id: "fed_funds_rate", labelKey: "macro.indicators.fed_funds", color: "#6366f1", unit: "%" },
+  { id: "10y_yield",      labelKey: "macro.indicators.yield_10y", color: "#22c55e", unit: "%" },
+  { id: "2y_yield",       labelKey: "macro.indicators.yield_2y",  color: "#86efac", unit: "%" },
+  { id: "10y_minus_2y",   labelKey: "macro.indicators.yield_curve", color: "#f59e0b", unit: "%" },
+  { id: "cpi",            labelKey: "macro.indicators.cpi",      color: "#ef4444", unit: "index" },
+  { id: "unemployment",   labelKey: "macro.indicators.unemployment", color: "#a78bfa", unit: "%" },
+  { id: "gdp",            labelKey: "macro.indicators.gdp",      color: "#34d399", unit: "$B" },
+  { id: "usd_index",      labelKey: "macro.indicators.dxy",      color: "#60a5fa", unit: "" },
+  { id: "twd_usd",        labelKey: "macro.indicators.twd_usd",  color: "#fb923c", unit: "" },
 ] as const;
 
-type IndicatorId = typeof INDICATORS[number]["id"];
+type IndicatorId = typeof INDICATOR_CONFIGS[number]["id"];
 
 // ── API helper ────────────────────────────────────────────────────
 
@@ -71,6 +72,7 @@ function MacroChart({
   if (!clean.length) {
     return (
       <div className="h-64 flex items-center justify-center text-muted-foreground text-sm">
+        {/* No data fallback (English left as-is — backend message) */}
         No data — FRED API key not configured
       </div>
     );
@@ -103,7 +105,7 @@ function MacroChart({
             }}
             formatter={(v: number) => [`${v.toFixed(3)} ${unit}`, indicator]}
           />
-          {indicator === "10Y−2Y Spread" && <ReferenceLine y={0} stroke="hsl(var(--muted-foreground))" strokeDasharray="4 4" />}
+          <ReferenceLine y={0} stroke="hsl(var(--muted-foreground))" strokeDasharray="4 4" />
           <Line
             type="monotone"
             dataKey="value"
@@ -121,13 +123,15 @@ function MacroChart({
 // ── main page ──────────────────────────────────────────────────────
 
 export default function MacroPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [active, setActive] = useState<IndicatorId>("10y_minus_2y");
 
-  const activeSpec = INDICATORS.find((i) => i.id === active)!;
+  const activeSpec = INDICATOR_CONFIGS.find((i) => i.id === active)!;
+  const activeLabel = t(activeSpec.labelKey);
 
   // Fetch latest value for each indicator (for KPI cards)
-  const queries = INDICATORS.map((ind) =>
+  const queries = INDICATOR_CONFIGS.map((ind) =>
     // eslint-disable-next-line react-hooks/rules-of-hooks
     useQuery({
       queryKey: ["macro", ind.id],
@@ -136,18 +140,18 @@ export default function MacroPage() {
     })
   );
 
-  const latestValues = INDICATORS.reduce((acc, ind, i) => {
+  const latestValues = INDICATOR_CONFIGS.reduce((acc, ind, i) => {
     const data = queries[i].data;
     const last = data?.filter((d) => d.value != null).at(-1);
     acc[ind.id] = last?.value ?? null;
     return acc;
   }, {} as Record<string, number | null>);
 
-  const activeData = queries[INDICATORS.findIndex((i) => i.id === active)].data ?? [];
+  const activeData = queries[INDICATOR_CONFIGS.findIndex((i) => i.id === active)].data ?? [];
 
   function analyseWithAI() {
-    const context = INDICATORS.reduce((acc, ind) => {
-      acc[ind.label] = latestValues[ind.id];
+    const context = INDICATOR_CONFIGS.reduce((acc, ind) => {
+      acc[t(ind.labelKey)] = latestValues[ind.id];
       return acc;
     }, {} as Record<string, number | null>);
 
@@ -166,25 +170,25 @@ export default function MacroPage() {
       {/* header */}
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Macro Dashboard</h1>
+          <h1 className="text-2xl font-bold text-foreground">{t("macro.title")}</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            FRED economic indicators · updated monthly
+            {t("macro.subtitle")}
           </p>
         </div>
         <button
           onClick={analyseWithAI}
           className="px-4 py-2 bg-primary/10 border border-primary/30 text-primary rounded-lg text-sm hover:bg-primary/20 transition-colors"
         >
-          🤖 Analyse with AI
+          🤖 {t("nav.ai")}
         </button>
       </div>
 
       {/* KPI cards */}
       <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-9 gap-2">
-        {INDICATORS.map((ind) => (
+        {INDICATOR_CONFIGS.map((ind) => (
           <MiniCard
             key={ind.id}
-            label={ind.label}
+            label={t(ind.labelKey)}
             value={latestValues[ind.id]}
             unit={ind.unit}
             color={ind.color}
@@ -197,24 +201,12 @@ export default function MacroPage() {
       {/* main chart */}
       <div className="bg-card border border-border rounded-lg p-5">
         <MacroChart
-          indicator={activeSpec.label}
+          indicator={activeLabel}
           data={activeData}
           color={activeSpec.color}
           unit={activeSpec.unit}
         />
       </div>
-
-      {/* yield curve spread interpretation */}
-      {active === "10y_minus_2y" && (
-        <div className="bg-card border border-border rounded-lg p-4 text-xs text-muted-foreground space-y-1">
-          <span className="text-foreground font-medium">Yield Curve Note</span>
-          <p>
-            The 10Y–2Y spread is a leading recession indicator. Negative spread (inverted curve) has
-            historically preceded recessions by 6–18 months. A zero-crossing back to positive ("disinversion")
-            often coincides with recession onset.
-          </p>
-        </div>
-      )}
     </div>
   );
 }

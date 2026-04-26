@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
 
 // ── types ──────────────────────────────────────────────────────────
@@ -42,6 +43,7 @@ const removeItem = (wid: string, itemId: string) =>
 // ── sub-components ─────────────────────────────────────────────────
 
 function AddSymbolRow({ watchlistId }: { watchlistId: string }) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const [symbol, setSymbol] = useState("");
   const [market, setMarket] = useState("US");
@@ -54,7 +56,7 @@ function AddSymbolRow({ watchlistId }: { watchlistId: string }) {
       setSymbol("");
       setError("");
     },
-    onError: () => setError("Failed to add symbol"),
+    onError: () => setError(t("common.error")),
   });
 
   function submit(e: React.FormEvent) {
@@ -68,7 +70,7 @@ function AddSymbolRow({ watchlistId }: { watchlistId: string }) {
       <input
         value={symbol}
         onChange={(e) => setSymbol(e.target.value)}
-        placeholder="Symbol (e.g. AAPL, 2330)"
+        placeholder={`${t("watchlist.add_symbol")} (AAPL, 2330)`}
         className="flex-1 bg-background border border-border rounded px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary/50"
       />
       <select
@@ -84,7 +86,7 @@ function AddSymbolRow({ watchlistId }: { watchlistId: string }) {
         disabled={add.isPending}
         className="px-3 py-1.5 bg-primary text-primary-foreground text-sm rounded hover:opacity-90 disabled:opacity-50"
       >
-        {add.isPending ? "…" : "+ Add"}
+        {add.isPending ? "…" : `+ ${t("common.add")}`}
       </button>
       {error && <span className="text-xs text-red-400 self-center">{error}</span>}
     </form>
@@ -92,6 +94,7 @@ function AddSymbolRow({ watchlistId }: { watchlistId: string }) {
 }
 
 function WatchlistCard({ wl }: { wl: Watchlist }) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const [expanded, setExpanded] = useState(true);
 
@@ -118,25 +121,25 @@ function WatchlistCard({ wl }: { wl: Watchlist }) {
           <span className="text-xs text-muted-foreground font-normal">({wl.items.length})</span>
         </button>
         <button
-          onClick={() => { if (confirm(`Delete "${wl.name}"?`)) del.mutate(); }}
+          onClick={() => { if (confirm(`${t("common.delete")} "${wl.name}"?`)) del.mutate(); }}
           className="text-xs text-muted-foreground hover:text-red-400 transition-colors"
         >
-          Delete
+          {t("common.delete")}
         </button>
       </div>
 
       {expanded && (
         <div>
           {wl.items.length === 0 ? (
-            <div className="px-4 py-3 text-xs text-muted-foreground">No symbols yet.</div>
+            <div className="px-4 py-3 text-xs text-muted-foreground">{t("common.no_data")}</div>
           ) : (
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-xs text-muted-foreground border-b border-border">
-                  <th className="text-left px-4 py-2 font-medium">Symbol</th>
-                  <th className="text-left px-2 py-2 font-medium">Name</th>
-                  <th className="text-right px-4 py-2 font-medium">Price</th>
-                  <th className="text-right px-4 py-2 font-medium">Chg%</th>
+                  <th className="text-left px-4 py-2 font-medium">{t("market.table.symbol")}</th>
+                  <th className="text-left px-2 py-2 font-medium">{t("market.table.name")}</th>
+                  <th className="text-right px-4 py-2 font-medium">{t("market.table.price")}</th>
+                  <th className="text-right px-4 py-2 font-medium">{t("market.table.change")}</th>
                   <th className="px-2 py-2" />
                 </tr>
               </thead>
@@ -193,6 +196,7 @@ function WatchlistCard({ wl }: { wl: Watchlist }) {
 // ── main page ──────────────────────────────────────────────────────
 
 export default function WatchlistPage() {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const { data: watchlists = [], isLoading } = useQuery({
     queryKey: ["watchlists"],
@@ -213,8 +217,8 @@ export default function WatchlistPage() {
     <div className="p-6 space-y-6">
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Watchlist</h1>
-          <p className="text-sm text-muted-foreground mt-1">Track symbols with live prices</p>
+          <h1 className="text-2xl font-bold text-foreground">{t("watchlist.title")}</h1>
+          <p className="text-sm text-muted-foreground mt-1">{t("watchlist.live_prices")}</p>
         </div>
         <form
           onSubmit={(e) => { e.preventDefault(); create.mutate(); }}
@@ -223,7 +227,7 @@ export default function WatchlistPage() {
           <input
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            placeholder="New list name"
+            placeholder={t("watchlist.list_name")}
             className="bg-background border border-border rounded px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary/50 w-40"
           />
           <button
@@ -231,16 +235,16 @@ export default function WatchlistPage() {
             disabled={create.isPending}
             className="px-4 py-1.5 bg-primary text-primary-foreground text-sm rounded hover:opacity-90 disabled:opacity-50"
           >
-            + New List
+            + {t("watchlist.new_list")}
           </button>
         </form>
       </div>
 
       {isLoading ? (
-        <div className="text-muted-foreground text-sm animate-pulse">Loading…</div>
+        <div className="text-muted-foreground text-sm animate-pulse">{t("common.loading")}</div>
       ) : watchlists.length === 0 ? (
         <div className="bg-card border border-border rounded-lg p-8 text-center text-muted-foreground text-sm">
-          No watchlists yet. Create one above to start tracking symbols.
+          {t("watchlist.no_lists")}
         </div>
       ) : (
         <div className="space-y-4">

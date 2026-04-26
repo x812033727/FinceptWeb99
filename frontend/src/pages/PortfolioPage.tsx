@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
+import { useTranslation } from "react-i18next";
 import {
   usePortfolios,
   usePortfolioDetail,
@@ -18,6 +19,7 @@ import api from "@/lib/api";
 
 // ── Add Transaction form ──────────────────────────────────────────
 function AddTransactionForm({ portfolioId, onClose }: { portfolioId: string; onClose: () => void }) {
+  const { t } = useTranslation();
   const add = useAddTransaction(portfolioId);
   const [form, setForm] = useState({
     symbol: "", market: "US", tx_type: "buy",
@@ -48,29 +50,29 @@ function AddTransactionForm({ portfolioId, onClose }: { portfolioId: string; onC
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <form onSubmit={submit} className="bg-card border border-border rounded-lg p-6 w-full max-w-md space-y-4">
-        <h3 className="text-foreground font-semibold">Add Transaction</h3>
+        <h3 className="text-foreground font-semibold">{t("portfolio.transactions.add")}</h3>
         <div className="grid grid-cols-2 gap-3">
-          <div><label className={label}>Symbol</label><input required className={input} value={form.symbol} onChange={set("symbol")} placeholder="AAPL / 2330" /></div>
-          <div><label className={label}>Market</label>
+          <div><label className={label}>{t("alerts.symbol")}</label><input required className={input} value={form.symbol} onChange={set("symbol")} placeholder="AAPL / 2330" /></div>
+          <div><label className={label}>{t("alerts.market")}</label>
             <select className={input} value={form.market} onChange={set("market")}>
               <option value="US">US</option><option value="TW">TW</option>
             </select>
           </div>
-          <div><label className={label}>Type</label>
+          <div><label className={label}>{t("portfolio.transactions.type")}</label>
             <select className={input} value={form.tx_type} onChange={set("tx_type")}>
-              <option value="buy">Buy</option><option value="sell">Sell</option><option value="dividend">Dividend</option>
+              <option value="buy">{t("portfolio.transactions.buy")}</option><option value="sell">{t("portfolio.transactions.sell")}</option><option value="dividend">Dividend</option>
             </select>
           </div>
-          <div><label className={label}>Date</label><input type="date" required className={input} value={form.tx_date} onChange={set("tx_date")} /></div>
-          <div><label className={label}>Quantity</label><input type="number" required min="0" step="any" className={input} value={form.quantity} onChange={set("quantity")} /></div>
-          <div><label className={label}>Price</label><input type="number" required min="0" step="any" className={input} value={form.price} onChange={set("price")} /></div>
+          <div><label className={label}>{t("portfolio.transactions.executed_at")}</label><input type="date" required className={input} value={form.tx_date} onChange={set("tx_date")} /></div>
+          <div><label className={label}>{t("portfolio.transactions.qty")}</label><input type="number" required min="0" step="any" className={input} value={form.quantity} onChange={set("quantity")} /></div>
+          <div><label className={label}>{t("portfolio.transactions.price")}</label><input type="number" required min="0" step="any" className={input} value={form.price} onChange={set("price")} /></div>
           <div><label className={label}>FX Rate</label><input type="number" min="0" step="any" className={input} value={form.fx_rate} onChange={set("fx_rate")} /></div>
           <div><label className={label}>Notes</label><input className={input} value={form.notes} onChange={set("notes")} /></div>
         </div>
         <div className="flex gap-3 justify-end">
-          <button type="button" onClick={onClose} className="px-4 py-1.5 text-sm text-muted-foreground hover:text-foreground">Cancel</button>
+          <button type="button" onClick={onClose} className="px-4 py-1.5 text-sm text-muted-foreground hover:text-foreground">{t("common.cancel")}</button>
           <button type="submit" disabled={add.isPending} className="px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:opacity-90 disabled:opacity-50">
-            {add.isPending ? "Saving…" : "Add"}
+            {add.isPending ? t("common.saving") : t("common.add")}
           </button>
         </div>
       </form>
@@ -80,6 +82,7 @@ function AddTransactionForm({ portfolioId, onClose }: { portfolioId: string; onC
 
 // ── Create Portfolio modal ────────────────────────────────────────
 function CreatePortfolioModal({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation();
   const create = useCreatePortfolio();
   const [name, setName] = useState("");
   const [currency, setCurrency] = useState("USD");
@@ -93,16 +96,16 @@ function CreatePortfolioModal({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <form onSubmit={submit} className="bg-card border border-border rounded-lg p-6 w-full max-w-sm space-y-4">
-        <h3 className="text-foreground font-semibold">New Portfolio</h3>
-        <div><label className="block text-xs text-muted-foreground mb-1">Name</label>
+        <h3 className="text-foreground font-semibold">{t("portfolio.new_portfolio")}</h3>
+        <div><label className="block text-xs text-muted-foreground mb-1">{t("portfolio.portfolio_name")}</label>
           <input required className="w-full px-3 py-1.5 rounded bg-input border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring" value={name} onChange={(e) => setName(e.target.value)} /></div>
-        <div><label className="block text-xs text-muted-foreground mb-1">Base Currency</label>
+        <div><label className="block text-xs text-muted-foreground mb-1">{t("portfolio.currency")}</label>
           <select className="w-full px-3 py-1.5 rounded bg-input border border-border text-sm text-foreground" value={currency} onChange={(e) => setCurrency(e.target.value)}>
             <option value="USD">USD</option><option value="TWD">TWD</option>
           </select></div>
         <div className="flex gap-3 justify-end">
-          <button type="button" onClick={onClose} className="px-4 py-1.5 text-sm text-muted-foreground hover:text-foreground">Cancel</button>
-          <button type="submit" disabled={create.isPending} className="px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:opacity-90 disabled:opacity-50">Create</button>
+          <button type="button" onClick={onClose} className="px-4 py-1.5 text-sm text-muted-foreground hover:text-foreground">{t("common.cancel")}</button>
+          <button type="submit" disabled={create.isPending} className="px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:opacity-90 disabled:opacity-50">{t("portfolio.create")}</button>
         </div>
       </form>
     </div>
@@ -122,6 +125,7 @@ function normalize(points: { date: string; value: number }[]): { date: string; i
 }
 
 function PerformanceChart({ portfolioId }: { portfolioId: string }) {
+  const { t } = useTranslation();
   const [period, setPeriod] = useState("3M");
   const days = PERIOD_DAYS[period];
   const yfinancePeriod = PERIOD_TO_YFINANCE[period];
@@ -164,10 +168,7 @@ function PerformanceChart({ portfolioId }: { portfolioId: string }) {
     <div className="bg-card border border-border rounded-lg p-5 space-y-3">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-foreground font-medium">Performance</h2>
-          {hasPerfData && (
-            <p className="text-[10px] text-muted-foreground">Indexed to 100 at start of period</p>
-          )}
+          <h2 className="text-foreground font-medium">{t("portfolio.summary.performance")}</h2>
         </div>
         <div className="flex gap-1">
           {Object.keys(PERIOD_DAYS).map((p) => (
@@ -188,11 +189,11 @@ function PerformanceChart({ portfolioId }: { portfolioId: string }) {
 
       {perfLoading ? (
         <div className="h-[200px] flex items-center justify-center text-muted-foreground text-sm animate-pulse">
-          Loading…
+          {t("common.loading")}
         </div>
       ) : !hasPerfData ? (
         <div className="h-[200px] flex items-center justify-center text-muted-foreground text-sm">
-          No snapshot data yet — snapshots are recorded daily at 23:00 UTC.
+          {t("common.no_data")}
         </div>
       ) : (
         <ResponsiveContainer width="100%" height={200}>
@@ -286,6 +287,7 @@ interface TransactionRow {
 }
 
 function TransactionHistory({ portfolioId }: { portfolioId: string }) {
+  const { t } = useTranslation();
   const { data: txns = [], isLoading } = useQuery<TransactionRow[]>({
     queryKey: ["portfolio-transactions", portfolioId],
     queryFn: () =>
@@ -313,19 +315,19 @@ function TransactionHistory({ portfolioId }: { portfolioId: string }) {
   return (
     <div className="bg-card border border-border rounded-lg p-5 space-y-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-foreground font-medium">Transaction History</h2>
+        <h2 className="text-foreground font-medium">{t("portfolio.transactions.title")}</h2>
         <button
           onClick={handleExport}
           disabled={!txns.length}
           className="text-xs text-primary hover:underline disabled:opacity-40"
         >
-          Export CSV
+          CSV
         </button>
       </div>
 
-      {isLoading && <p className="text-xs text-muted-foreground animate-pulse">Loading…</p>}
+      {isLoading && <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>}
       {!isLoading && txns.length === 0 && (
-        <p className="text-xs text-muted-foreground py-4 text-center">No transactions yet.</p>
+        <p className="text-xs text-muted-foreground py-4 text-center">{t("portfolio.transactions.no_transactions")}</p>
       )}
 
       {txns.length > 0 && (
@@ -333,13 +335,13 @@ function TransactionHistory({ portfolioId }: { portfolioId: string }) {
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-border text-muted-foreground">
-                <th className="text-left py-2 pr-4 font-medium">Date</th>
-                <th className="text-left py-2 px-2 font-medium">Symbol</th>
-                <th className="text-left py-2 px-2 font-medium">Mkt</th>
-                <th className="text-left py-2 px-2 font-medium">Type</th>
-                <th className="text-right py-2 px-2 font-medium">Qty</th>
-                <th className="text-right py-2 px-2 font-medium">Price</th>
-                <th className="text-right py-2 px-2 font-medium">Value</th>
+                <th className="text-left py-2 pr-4 font-medium">{t("portfolio.transactions.executed_at")}</th>
+                <th className="text-left py-2 px-2 font-medium">{t("portfolio.holdings.symbol")}</th>
+                <th className="text-left py-2 px-2 font-medium">{t("portfolio.holdings.market")}</th>
+                <th className="text-left py-2 px-2 font-medium">{t("portfolio.transactions.type")}</th>
+                <th className="text-right py-2 px-2 font-medium">{t("portfolio.transactions.qty")}</th>
+                <th className="text-right py-2 px-2 font-medium">{t("portfolio.transactions.price")}</th>
+                <th className="text-right py-2 px-2 font-medium">{t("portfolio.holdings.value")}</th>
                 <th className="text-left py-2 pl-4 font-medium">Notes</th>
               </tr>
             </thead>
@@ -378,6 +380,7 @@ function TransactionHistory({ portfolioId }: { portfolioId: string }) {
 
 // ── Main page ─────────────────────────────────────────────────────
 export default function PortfolioPage() {
+  const { t } = useTranslation();
   const { data: portfolios, isLoading } = usePortfolios();
   const [selected, setSelected] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -405,23 +408,23 @@ export default function PortfolioPage() {
     <div className="min-h-screen bg-background p-6 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-primary">Portfolio</h1>
+        <h1 className="text-2xl font-bold text-primary">{t("portfolio.title")}</h1>
         <div className="flex gap-2">
           {detail && (
             <button
               onClick={analyseWithAI}
               className="px-4 py-2 text-sm bg-primary/10 border border-primary/30 text-primary rounded-md hover:bg-primary/20 transition-colors"
             >
-              🤖 Analyse with AI
+              🤖 {t("nav.ai")}
             </button>
           )}
           <button onClick={() => setShowCreate(true)} className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:opacity-90">
-            + New Portfolio
+            + {t("portfolio.new_portfolio")}
           </button>
         </div>
       </div>
 
-      {isLoading && <p className="text-muted-foreground text-sm">Loading…</p>}
+      {isLoading && <p className="text-muted-foreground text-sm">{t("common.loading")}</p>}
 
       {/* Portfolio selector tabs */}
       {portfolios && portfolios.length > 0 && (
@@ -461,8 +464,7 @@ export default function PortfolioPage() {
 
       {!portfolios?.length && !isLoading && (
         <div className="text-center py-16 text-muted-foreground">
-          <p className="text-lg">No portfolios yet.</p>
-          <p className="text-sm mt-1">Create one to start tracking your investments.</p>
+          <p className="text-lg">{t("portfolio.no_portfolios")}</p>
         </div>
       )}
 
@@ -478,9 +480,10 @@ function PortfolioDetail({
   onAddTx, onDelete,
   optimiseResult, optimisePending, onRunOptimise,
 }: any) {
+  const { t } = useTranslation();
   const [detailTab, setDetailTab] = useState<"overview" | "transactions">("overview");
 
-  if (!detail) return <div className="text-muted-foreground text-sm">{isFetching ? "Loading…" : ""}</div>;
+  if (!detail) return <div className="text-muted-foreground text-sm">{isFetching ? t("common.loading") : ""}</div>;
 
   const pnlPositive = detail.total_pnl >= 0;
 
@@ -506,15 +509,15 @@ function PortfolioDetail({
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
-          { label: "Total Value", value: `${detail.currency} ${detail.total_value.toLocaleString()}` },
-          { label: "Total Cost",  value: `${detail.currency} ${detail.total_cost.toLocaleString()}` },
+          { label: t("portfolio.summary.total_value"), value: `${detail.currency} ${detail.total_value.toLocaleString()}` },
+          { label: t("portfolio.summary.total_cost"),  value: `${detail.currency} ${detail.total_cost.toLocaleString()}` },
           {
-            label: "Unrealized P&L",
+            label: t("portfolio.summary.unrealized_pnl"),
             value: `${pnlPositive ? "+" : ""}${detail.total_pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
             color: pnlPositive ? "text-positive" : "text-negative",
           },
           {
-            label: "Return",
+            label: t("portfolio.summary.performance"),
             value: `${pnlPositive ? "+" : ""}${detail.total_pnl_pct.toFixed(2)}%`,
             color: pnlPositive ? "text-positive" : "text-negative",
           },
@@ -528,17 +531,17 @@ function PortfolioDetail({
 
       {/* Tab selector */}
       <div className="flex gap-1 bg-secondary/30 p-1 rounded-lg w-fit">
-        {(["overview", "transactions"] as const).map((t) => (
+        {(["overview", "transactions"] as const).map((tab) => (
           <button
-            key={t}
-            onClick={() => setDetailTab(t)}
+            key={tab}
+            onClick={() => setDetailTab(tab)}
             className={`px-4 py-1.5 text-sm rounded-md transition-colors capitalize ${
-              detailTab === t
+              detailTab === tab
                 ? "bg-card text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            {t === "overview" ? "Overview" : "Transactions"}
+            {tab === "overview" ? t("portfolio.tabs.holdings") : t("portfolio.tabs.transactions")}
           </button>
         ))}
       </div>
@@ -549,17 +552,17 @@ function PortfolioDetail({
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2 bg-card border border-border rounded-lg p-5">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-foreground font-medium">Holdings</h2>
+                <h2 className="text-foreground font-medium">{t("portfolio.tabs.holdings")}</h2>
                 <div className="flex gap-2">
                   <button
                     onClick={exportHoldings}
                     disabled={!detail.holdings.length}
                     className="text-xs text-primary hover:underline disabled:opacity-40"
                   >
-                    Export CSV
+                    CSV
                   </button>
                   <button onClick={onAddTx} className="text-xs px-3 py-1 bg-primary/10 text-primary rounded hover:bg-primary/20">
-                    + Transaction
+                    + {t("portfolio.transactions.add")}
                   </button>
                 </div>
               </div>
@@ -567,7 +570,7 @@ function PortfolioDetail({
             </div>
 
             <div className="bg-card border border-border rounded-lg p-5">
-              <h2 className="text-foreground font-medium mb-2">Allocation</h2>
+              <h2 className="text-foreground font-medium mb-2">{t("portfolio.tabs.allocation")}</h2>
               <AllocationPie holdings={detail.holdings} />
             </div>
           </div>
@@ -579,33 +582,37 @@ function PortfolioDetail({
       <div className="bg-card border border-border rounded-lg p-5 space-y-4">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-foreground font-medium">Portfolio Optimiser</h2>
-            <p className="text-xs text-muted-foreground mt-0.5">Mean-variance (max Sharpe). Suggested weights only — no trades executed.</p>
+            <h2 className="text-foreground font-medium">{t("portfolio.optimizer.title")}</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">{t("portfolio.optimizer.description")}</p>
           </div>
           <div className="flex gap-2">
-            {(["low","medium","high"] as const).map((risk) => (
+            {([
+              { key: "low", label: t("portfolio.optimizer.risk_low") },
+              { key: "medium", label: t("portfolio.optimizer.risk_medium") },
+              { key: "high", label: t("portfolio.optimizer.risk_high") },
+            ] as const).map(({ key, label }) => (
               <button
-                key={risk}
-                onClick={() => onRunOptimise(risk)}
+                key={key}
+                onClick={() => onRunOptimise(key)}
                 disabled={optimisePending}
-                className="px-3 py-1 text-xs border border-border rounded hover:bg-secondary/50 disabled:opacity-40 capitalize"
+                className="px-3 py-1 text-xs border border-border rounded hover:bg-secondary/50 disabled:opacity-40"
               >
-                {risk}
+                {label}
               </button>
             ))}
           </div>
         </div>
 
-        {optimisePending && <p className="text-sm text-muted-foreground animate-pulse">Optimising…</p>}
+        {optimisePending && <p className="text-sm text-muted-foreground animate-pulse">{t("portfolio.optimizer.running")}</p>}
 
         {optimiseResult && (
           <div className="space-y-3">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {[
-                { k: "Expected Return", v: `${(optimiseResult.metrics.expected_annual_return * 100).toFixed(1)}%` },
-                { k: "Volatility",      v: `${(optimiseResult.metrics.annual_volatility * 100).toFixed(1)}%` },
-                { k: "Sharpe",          v: optimiseResult.metrics.sharpe_ratio.toFixed(2) },
-                { k: "Max Drawdown",    v: `${(optimiseResult.metrics.max_drawdown * 100).toFixed(1)}%` },
+                { k: t("portfolio.optimizer.expected_return"), v: `${(optimiseResult.metrics.expected_annual_return * 100).toFixed(1)}%` },
+                { k: t("portfolio.optimizer.expected_vol"),    v: `${(optimiseResult.metrics.annual_volatility * 100).toFixed(1)}%` },
+                { k: t("portfolio.optimizer.sharpe"),          v: optimiseResult.metrics.sharpe_ratio.toFixed(2) },
+                { k: t("analytics.backtest.max_drawdown"),     v: `${(optimiseResult.metrics.max_drawdown * 100).toFixed(1)}%` },
               ].map((m) => (
                 <div key={m.k} className="bg-secondary/30 rounded p-3">
                   <p className="text-xs text-muted-foreground">{m.k}</p>
@@ -629,7 +636,7 @@ function PortfolioDetail({
           onClick={onDelete}
           className="text-xs text-negative/70 hover:text-negative"
         >
-          Delete portfolio
+          {t("common.delete")}
         </button>
       </div>
         </>

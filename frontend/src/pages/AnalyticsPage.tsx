@@ -5,6 +5,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
+import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
 
 type Tab = "dcf" | "var" | "backtest";
@@ -36,6 +37,7 @@ function Metric({ label, value, color }: { label: string; value: string; color?:
 
 // ── DCF Panel ─────────────────────────────────────────────────────
 function DCFPanel({ onAnalyseWithAI }: { onAnalyseWithAI: (ctx: unknown) => void }) {
+  const { t } = useTranslation();
   const [symbol, setSymbol] = useState("AAPL");
   const [market, setMarket] = useState("US");
   const [wacc, setWacc] = useState("0.09");
@@ -63,55 +65,57 @@ function DCFPanel({ onAnalyseWithAI }: { onAnalyseWithAI: (ctx: unknown) => void
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <Card title="DCF Inputs">
+      <Card title={`${t("analytics.tabs.dcf")} · ${t("analytics.dcf.inputs")}`}>
         <form onSubmit={submit} className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
-            <div><label className={labelCls}>Symbol</label><input className={inputCls} value={symbol} onChange={e => setSymbol(e.target.value)} /></div>
-            <div><label className={labelCls}>Market</label>
+            <div><label className={labelCls}>{t("analytics.dcf.symbol")}</label><input className={inputCls} value={symbol} onChange={e => setSymbol(e.target.value)} /></div>
+            <div><label className={labelCls}>{t("analytics.dcf.market")}</label>
               <select className={inputCls} value={market} onChange={e => setMarket(e.target.value)}>
                 <option value="US">US</option><option value="TW">TW</option>
               </select>
             </div>
-            <div><label className={labelCls}>WACC</label><input type="number" step="0.001" className={inputCls} value={wacc} onChange={e => setWacc(e.target.value)} /></div>
-            <div><label className={labelCls}>Growth Y1-5</label><input type="number" step="0.01" className={inputCls} value={g1} onChange={e => setG1(e.target.value)} /></div>
-            <div><label className={labelCls}>Growth Y6-10</label><input type="number" step="0.01" className={inputCls} value={g2} onChange={e => setG2(e.target.value)} /></div>
-            <div><label className={labelCls}>Terminal Growth</label><input type="number" step="0.001" className={inputCls} value={tg} onChange={e => setTg(e.target.value)} /></div>
-            <div><label className={labelCls}>Base FCF (optional)</label><input type="number" className={inputCls} value={fcf} onChange={e => setFcf(e.target.value)} placeholder="e.g. 100000000000" /></div>
-            <div><label className={labelCls}>Shares (optional)</label><input type="number" className={inputCls} value={shares} onChange={e => setShares(e.target.value)} /></div>
-            <div className="col-span-2"><label className={labelCls}>Current Price (for MoS %)</label><input type="number" step="0.01" className={inputCls} value={price} onChange={e => setPrice(e.target.value)} /></div>
+            <div><label className={labelCls}>{t("analytics.dcf.wacc")}</label><input type="number" step="0.001" className={inputCls} value={wacc} onChange={e => setWacc(e.target.value)} /></div>
+            <div><label className={labelCls}>{t("analytics.dcf.growth_rate")} Y1-5</label><input type="number" step="0.01" className={inputCls} value={g1} onChange={e => setG1(e.target.value)} /></div>
+            <div><label className={labelCls}>{t("analytics.dcf.growth_rate")} Y6-10</label><input type="number" step="0.01" className={inputCls} value={g2} onChange={e => setG2(e.target.value)} /></div>
+            <div><label className={labelCls}>{t("analytics.dcf.terminal_growth")}</label><input type="number" step="0.001" className={inputCls} value={tg} onChange={e => setTg(e.target.value)} /></div>
+            <div><label className={labelCls}>{t("analytics.dcf.fcf_history")}</label><input type="number" className={inputCls} value={fcf} onChange={e => setFcf(e.target.value)} placeholder="100000000000" /></div>
+            <div><label className={labelCls}>{t("analytics.dcf.shares")}</label><input type="number" className={inputCls} value={shares} onChange={e => setShares(e.target.value)} /></div>
+            <div className="col-span-2"><label className={labelCls}>{t("analytics.dcf.current_price")}</label><input type="number" step="0.01" className={inputCls} value={price} onChange={e => setPrice(e.target.value)} /></div>
           </div>
           <button type="submit" disabled={run.isPending} className="w-full py-2 bg-primary text-primary-foreground text-sm rounded hover:opacity-90 disabled:opacity-50">
-            {run.isPending ? "Computing…" : "Run DCF"}
+            {run.isPending ? t("analytics.dcf.running") : t("analytics.dcf.run")}
           </button>
           {run.isError && <p className="text-negative text-xs">{(run.error as any)?.response?.data?.detail}</p>}
         </form>
       </Card>
 
       {r && (
-        <Card title="DCF Results"
+        <Card title={`${t("analytics.tabs.dcf")} · ${t("analytics.dcf.results")}`}
           action={
             <button
               onClick={() => onAnalyseWithAI(r)}
               className="text-xs text-primary hover:underline"
             >
-              🤖 Ask AI
+              🤖 {t("nav.ai")}
             </button>
           }
         >
           <div className="grid grid-cols-2 gap-3">
-            <Metric label="Intrinsic Value" value={`$${r.intrinsic_value.toFixed(2)}`} color="text-primary" />
-            <Metric label="Margin of Safety" value={r.margin_of_safety != null ? `${r.margin_of_safety.toFixed(1)}%` : "—"}
+            <Metric label={t("analytics.dcf.fair_value")} value={`$${r.intrinsic_value.toFixed(2)}`} color="text-primary" />
+            <Metric label={t("analytics.dcf.margin_of_safety")} value={r.margin_of_safety != null ? `${r.margin_of_safety.toFixed(1)}%` : "—"}
               color={r.margin_of_safety > 0 ? "text-positive" : "text-negative"} />
             <Metric label="PV of FCFs"      value={`$${(r.pv_fcf / 1e9).toFixed(1)}B`} />
             <Metric label="PV Terminal"      value={`$${(r.pv_terminal / 1e9).toFixed(1)}B`} />
           </div>
 
           <div>
-            <p className="text-xs text-muted-foreground mb-2">Scenarios</p>
+            <p className="text-xs text-muted-foreground mb-2">{t("analytics.dcf.scenarios")}</p>
             <div className="grid grid-cols-3 gap-2">
               {Object.entries(r.scenarios).map(([name, val]: [string, any]) => (
                 <div key={name} className="text-center bg-secondary/30 rounded p-2">
-                  <p className="text-xs text-muted-foreground capitalize">{name}</p>
+                  <p className="text-xs text-muted-foreground capitalize">
+                    {name === "bull" ? t("analytics.dcf.bull") : name === "bear" ? t("analytics.dcf.bear") : t("analytics.dcf.base")}
+                  </p>
                   <p className="text-sm font-semibold text-foreground">${val.toFixed(2)}</p>
                 </div>
               ))}
@@ -119,7 +123,7 @@ function DCFPanel({ onAnalyseWithAI }: { onAnalyseWithAI: (ctx: unknown) => void
           </div>
 
           <div>
-            <p className="text-xs text-muted-foreground mb-2">Sensitivity (WACC × Terminal Growth)</p>
+            <p className="text-xs text-muted-foreground mb-2">{t("analytics.dcf.sensitivity_grid")}</p>
             <div className="overflow-x-auto">
               <table className="text-xs w-full">
                 <thead>
@@ -153,6 +157,7 @@ function DCFPanel({ onAnalyseWithAI }: { onAnalyseWithAI: (ctx: unknown) => void
 
 // ── VaR Panel ─────────────────────────────────────────────────────
 function VaRPanel() {
+  const { t } = useTranslation();
   const [symbols, setSymbols] = useState("AAPL,MSFT,TSLA");
   const [markets, setMarkets] = useState("US,US,US");
   const [weights, setWeights] = useState("0.4,0.3,0.3");
@@ -181,42 +186,42 @@ function VaRPanel() {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <Card title="VaR Inputs">
+      <Card title={`${t("analytics.tabs.var")} · ${t("analytics.var.inputs")}`}>
         <form onSubmit={submit} className="space-y-3">
-          <div><label className={labelCls}>Symbols (comma-separated)</label><input className={inputCls} value={symbols} onChange={e => setSymbols(e.target.value)} /></div>
-          <div><label className={labelCls}>Markets (US or TW, comma-separated)</label><input className={inputCls} value={markets} onChange={e => setMarkets(e.target.value)} /></div>
-          <div><label className={labelCls}>Weights (must match symbols, sum needn't be 1)</label><input className={inputCls} value={weights} onChange={e => setWeights(e.target.value)} /></div>
+          <div><label className={labelCls}>{t("analytics.var.symbols")}</label><input className={inputCls} value={symbols} onChange={e => setSymbols(e.target.value)} /></div>
+          <div><label className={labelCls}>{t("alerts.market")} (US,TW)</label><input className={inputCls} value={markets} onChange={e => setMarkets(e.target.value)} /></div>
+          <div><label className={labelCls}>{t("analytics.var.weights")}</label><input className={inputCls} value={weights} onChange={e => setWeights(e.target.value)} /></div>
           <div className="grid grid-cols-2 gap-3">
-            <div><label className={labelCls}>Portfolio Value</label><input type="number" className={inputCls} value={value} onChange={e => setValue(e.target.value)} /></div>
-            <div><label className={labelCls}>Method</label>
+            <div><label className={labelCls}>{t("analytics.var.portfolio_value")}</label><input type="number" className={inputCls} value={value} onChange={e => setValue(e.target.value)} /></div>
+            <div><label className={labelCls}>{t("analytics.var.method")}</label>
               <select className={inputCls} value={method} onChange={e => setMethod(e.target.value)}>
-                <option value="all">All methods</option>
-                <option value="historical">Historical</option>
-                <option value="parametric">Parametric</option>
-                <option value="monte_carlo">Monte Carlo</option>
+                <option value="all">{t("analytics.var.method_all")}</option>
+                <option value="historical">{t("analytics.var.method_historical")}</option>
+                <option value="parametric">{t("analytics.var.method_parametric")}</option>
+                <option value="monte_carlo">{t("analytics.var.method_monte_carlo")}</option>
               </select>
             </div>
-            <div><label className={labelCls}>Confidence</label><input type="number" step="0.01" min="0.9" max="0.99" className={inputCls} value={conf} onChange={e => setConf(e.target.value)} /></div>
-            <div><label className={labelCls}>Horizon (days)</label><input type="number" min="1" max="30" className={inputCls} value={horizon} onChange={e => setHorizon(e.target.value)} /></div>
+            <div><label className={labelCls}>{t("analytics.var.confidence")}</label><input type="number" step="0.01" min="0.9" max="0.99" className={inputCls} value={conf} onChange={e => setConf(e.target.value)} /></div>
+            <div><label className={labelCls}>{t("analytics.var.horizon_days")}</label><input type="number" min="1" max="30" className={inputCls} value={horizon} onChange={e => setHorizon(e.target.value)} /></div>
           </div>
           <button type="submit" disabled={run.isPending} className="w-full py-2 bg-primary text-primary-foreground text-sm rounded hover:opacity-90 disabled:opacity-50">
-            {run.isPending ? "Computing…" : "Compute VaR"}
+            {run.isPending ? t("analytics.var.running") : t("analytics.var.run")}
           </button>
           {run.isError && <p className="text-negative text-xs">{(run.error as any)?.response?.data?.detail}</p>}
         </form>
       </Card>
 
       {r && (
-        <Card title="VaR Results">
+        <Card title={`${t("analytics.tabs.var")} · ${t("analytics.var.results")}`}>
           <div className="space-y-4">
             {methods.filter(m => r[m]).map(m => (
               <div key={m}>
                 <p className="text-xs font-medium text-muted-foreground capitalize mb-2">{m.replace("_", " ")}</p>
                 <div className="grid grid-cols-2 gap-2">
-                  <Metric label="VaR Amount" value={`$${r[m].var_amount?.toLocaleString()}`} color="text-negative" />
-                  <Metric label="VaR %" value={`${(r[m].var_pct * 100).toFixed(2)}%`} color="text-negative" />
-                  {r[m].cvar_pct && <Metric label="CVaR %" value={`${(r[m].cvar_pct * 100).toFixed(2)}%`} />}
-                  {r[m].annualised_return && <Metric label="Ann. Return" value={`${(r[m].annualised_return * 100).toFixed(1)}%`} />}
+                  <Metric label={t("analytics.var.var_value")} value={`$${r[m].var_amount?.toLocaleString()}`} color="text-negative" />
+                  <Metric label={`${t("analytics.var.var_value")} %`} value={`${(r[m].var_pct * 100).toFixed(2)}%`} color="text-negative" />
+                  {r[m].cvar_pct && <Metric label={t("analytics.var.cvar_value")} value={`${(r[m].cvar_pct * 100).toFixed(2)}%`} />}
+                  {r[m].annualised_return && <Metric label={t("analytics.backtest.annualized_return")} value={`${(r[m].annualised_return * 100).toFixed(1)}%`} />}
                 </div>
               </div>
             ))}
@@ -242,6 +247,7 @@ function VaRPanel() {
 
 // ── Backtest Panel ────────────────────────────────────────────────
 function BacktestPanel() {
+  const { t } = useTranslation();
   const [symbols, setSymbols] = useState("AAPL");
   const [markets, setMarkets] = useState("US");
   const [strategy, setStrategy] = useState("sma_crossover");
@@ -276,32 +282,32 @@ function BacktestPanel() {
 
   return (
     <div className="space-y-6">
-      <Card title="Backtest Inputs">
+      <Card title={`${t("analytics.tabs.backtest")} · ${t("analytics.backtest.inputs")}`}>
         <form onSubmit={submit} className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
-            <div><label className={labelCls}>Symbols</label><input className={inputCls} value={symbols} onChange={e => setSymbols(e.target.value)} /></div>
-            <div><label className={labelCls}>Markets</label><input className={inputCls} value={markets} onChange={e => setMarkets(e.target.value)} /></div>
-            <div><label className={labelCls}>Strategy</label>
+            <div><label className={labelCls}>{t("analytics.var.symbols")}</label><input className={inputCls} value={symbols} onChange={e => setSymbols(e.target.value)} /></div>
+            <div><label className={labelCls}>{t("alerts.market")}</label><input className={inputCls} value={markets} onChange={e => setMarkets(e.target.value)} /></div>
+            <div><label className={labelCls}>{t("analytics.backtest.strategy")}</label>
               <select className={inputCls} value={strategy} onChange={e => setStrategy(e.target.value)}>
-                <option value="sma_crossover">SMA Crossover</option>
-                <option value="rsi_mean_reversion">RSI Mean Reversion</option>
+                <option value="sma_crossover">{t("analytics.backtest.strategy_sma")}</option>
+                <option value="rsi_mean_reversion">{t("analytics.backtest.strategy_rsi")}</option>
               </select>
             </div>
             {strategy === "sma_crossover" && <>
-              <div><label className={labelCls}>Fast SMA</label><input type="number" className={inputCls} value={fast} onChange={e => setFast(e.target.value)} /></div>
-              <div><label className={labelCls}>Slow SMA</label><input type="number" className={inputCls} value={slow} onChange={e => setSlow(e.target.value)} /></div>
+              <div><label className={labelCls}>{t("analytics.backtest.fast")} SMA</label><input type="number" className={inputCls} value={fast} onChange={e => setFast(e.target.value)} /></div>
+              <div><label className={labelCls}>{t("analytics.backtest.slow")} SMA</label><input type="number" className={inputCls} value={slow} onChange={e => setSlow(e.target.value)} /></div>
             </>}
             {strategy === "rsi_mean_reversion" && <>
-              <div><label className={labelCls}>RSI Period</label><input type="number" className={inputCls} value={rsiPeriod} onChange={e => setRsiPeriod(e.target.value)} /></div>
-              <div><label className={labelCls}>Oversold (buy below)</label><input type="number" className={inputCls} value={rsiOversold} onChange={e => setRsiOversold(e.target.value)} /></div>
-              <div><label className={labelCls}>Overbought (sell above)</label><input type="number" className={inputCls} value={rsiOverbought} onChange={e => setRsiOverbought(e.target.value)} /></div>
+              <div><label className={labelCls}>RSI {t("analytics.backtest.period")}</label><input type="number" className={inputCls} value={rsiPeriod} onChange={e => setRsiPeriod(e.target.value)} /></div>
+              <div><label className={labelCls}>{t("analytics.backtest.oversold")}</label><input type="number" className={inputCls} value={rsiOversold} onChange={e => setRsiOversold(e.target.value)} /></div>
+              <div><label className={labelCls}>{t("analytics.backtest.overbought")}</label><input type="number" className={inputCls} value={rsiOverbought} onChange={e => setRsiOverbought(e.target.value)} /></div>
             </>}
-            <div><label className={labelCls}>Start Date</label><input type="date" className={inputCls} value={start} onChange={e => setStart(e.target.value)} /></div>
-            <div><label className={labelCls}>End Date</label><input type="date" className={inputCls} value={end} onChange={e => setEnd(e.target.value)} /></div>
-            <div><label className={labelCls}>Initial Capital</label><input type="number" className={inputCls} value={capital} onChange={e => setCapital(e.target.value)} /></div>
+            <div><label className={labelCls}>{t("analytics.backtest.start_date")}</label><input type="date" className={inputCls} value={start} onChange={e => setStart(e.target.value)} /></div>
+            <div><label className={labelCls}>{t("analytics.backtest.end_date")}</label><input type="date" className={inputCls} value={end} onChange={e => setEnd(e.target.value)} /></div>
+            <div><label className={labelCls}>{t("analytics.backtest.initial_capital")}</label><input type="number" className={inputCls} value={capital} onChange={e => setCapital(e.target.value)} /></div>
           </div>
           <button type="submit" disabled={run.isPending} className="w-full py-2 bg-primary text-primary-foreground text-sm rounded hover:opacity-90 disabled:opacity-50">
-            {run.isPending ? "Running backtest…" : "Run Backtest"}
+            {run.isPending ? t("analytics.backtest.running") : t("analytics.backtest.run")}
           </button>
           {run.isError && <p className="text-negative text-xs">{(run.error as any)?.response?.data?.detail}</p>}
         </form>
@@ -309,21 +315,21 @@ function BacktestPanel() {
 
       {r?.status === "completed" && r.metrics && (
         <>
-          <Card title="Performance Metrics">
+          <Card title={t("analytics.backtest.performance_metrics")}>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <Metric label="Total Return" value={`${r.metrics.total_return_pct.toFixed(2)}%`} color={r.metrics.total_return_pct >= 0 ? "text-positive" : "text-negative"} />
-              <Metric label="Ann. Return"  value={`${r.metrics.annualised_return_pct.toFixed(2)}%`} />
-              <Metric label="Sharpe"       value={r.metrics.sharpe_ratio.toFixed(2)} />
-              <Metric label="Max Drawdown" value={`${r.metrics.max_drawdown_pct.toFixed(2)}%`} color="text-negative" />
-              <Metric label="Win Rate"     value={`${(r.metrics.win_rate * 100).toFixed(1)}%`} />
-              <Metric label="Volatility"   value={`${r.metrics.annualised_volatility.toFixed(2)}%`} />
-              <Metric label="Total Trades" value={`${r.metrics.total_trades}`} />
-              <Metric label="Final Value"  value={`$${r.metrics.final_value.toLocaleString()}`} color="text-primary" />
+              <Metric label={t("analytics.backtest.total_return")} value={`${r.metrics.total_return_pct.toFixed(2)}%`} color={r.metrics.total_return_pct >= 0 ? "text-positive" : "text-negative"} />
+              <Metric label={t("analytics.backtest.annualized_return")}  value={`${r.metrics.annualised_return_pct.toFixed(2)}%`} />
+              <Metric label={t("analytics.backtest.sharpe")}       value={r.metrics.sharpe_ratio.toFixed(2)} />
+              <Metric label={t("analytics.backtest.max_drawdown")} value={`${r.metrics.max_drawdown_pct.toFixed(2)}%`} color="text-negative" />
+              <Metric label={t("analytics.backtest.win_rate")}     value={`${(r.metrics.win_rate * 100).toFixed(1)}%`} />
+              <Metric label={t("portfolio.optimizer.expected_vol")}   value={`${r.metrics.annualised_volatility.toFixed(2)}%`} />
+              <Metric label={t("analytics.backtest.trades")} value={`${r.metrics.total_trades}`} />
+              <Metric label={t("portfolio.summary.total_value")}  value={`$${r.metrics.final_value.toLocaleString()}`} color="text-primary" />
             </div>
           </Card>
 
           {r.equity_curve && r.equity_curve.length > 0 && (
-            <Card title="Equity Curve">
+            <Card title={t("analytics.backtest.equity_curve")}>
               <ResponsiveContainer width="100%" height={280}>
                 <AreaChart data={r.equity_curve} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                   <defs>
@@ -357,6 +363,7 @@ function BacktestPanel() {
 
 // ── Main page ─────────────────────────────────────────────────────
 export default function AnalyticsPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>("dcf");
 
@@ -365,27 +372,27 @@ export default function AnalyticsPage() {
   }
 
   const tabs: { id: Tab; label: string }[] = [
-    { id: "dcf",      label: "DCF Valuation" },
-    { id: "var",      label: "VaR / Risk" },
-    { id: "backtest", label: "Backtest" },
+    { id: "dcf",      label: t("analytics.tabs.dcf") },
+    { id: "var",      label: t("analytics.tabs.var") },
+    { id: "backtest", label: t("analytics.tabs.backtest") },
   ];
 
   return (
     <div className="min-h-screen bg-background p-6 space-y-6">
-      <h1 className="text-2xl font-bold text-primary">Analytics</h1>
+      <h1 className="text-2xl font-bold text-primary">{t("analytics.title")}</h1>
 
       <div className="flex gap-1 bg-secondary/30 p-1 rounded-lg w-fit">
-        {tabs.map(t => (
+        {tabs.map(tabItem => (
           <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
+            key={tabItem.id}
+            onClick={() => setTab(tabItem.id)}
             className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
-              tab === t.id
+              tab === tabItem.id
                 ? "bg-card text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            {t.label}
+            {tabItem.label}
           </button>
         ))}
       </div>

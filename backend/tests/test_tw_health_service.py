@@ -428,3 +428,70 @@ def test_normalize_quote_flags_etf():
 
     q2 = svc._normalize_quote("2330", raw)
     assert q2["is_etf"] is False
+
+
+# ── Screener volume-sort + ETF exclusion ────────────────────────
+
+
+def _stock_row(code: str, vol: int, name: str = "", price: float = 100.0) -> dict:
+    return {
+        "Code": code, "Name": name,
+        "ClosingPrice": str(price),
+        "TradeVolume": str(vol),
+        "Change": "0",
+    }
+
+
+@pytest.mark.asyncio
+async def test_screener_sorts_by_volume_desc():
+    """Most-traded names appear first regardless of code order."""
+    stocks = [
+        _stock_row("0050", vol=10_000_000, name="元大台灣50"),
+        _stock_row("2330", vol=50_000_000, name="台積電"),
+        _stock_row("00713", vol=5_000_000, name="高息低波"),
+        _stock_row("2317", vol=20_000_000, name="鴻海"),
+    ]
+    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc.twse, "get_all_twse_symbols", new_callable=AsyncMock, return_value=stocks):
+        result = await svc.get_screener(limit=10)
+
+    assert [r["symbol"] for r in result] == ["2330", "2317", "0050", "00713"]
+
+
+@pytest.mark.asyncio
+async def test_screener_excludes_etf_when_include_etf_false():
+    """include_etf=False drops 00xxx symbols from the results."""
+    stocks = [
+        _stock_row("0050", vol=10_000_000, name="元大台灣50"),
+        _stock_row("2330", vol=50_000_000, name="台積電"),
+        _stock_row("00713", vol=5_000_000, name="高息低波"),
+        _stock_row("1101", vol=3_000_000, name="台泥"),
+    ]
+    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc.twse, "get_all_twse_symbols", new_callable=AsyncMock, return_value=stocks):
+        result = await svc.get_screener(include_etf=False, limit=10)
+
+    symbols = [r["symbol"] for r in result]
+    assert "0050" not in symbols
+    assert "00713" not in symbols
+    assert "2330" in symbols
+    assert "1101" in symbols
+
+
+@pytest.mark.asyncio
+async def test_screener_volume_sort_lifts_regular_stock_above_etf_glut():
+    """Regression: 250 low-volume ETFs no longer bury a high-volume stock."""
+    stocks = [
+        _stock_row(f"00{900 + i:04d}"[:5], vol=100, name=f"ETF{i}")
+        for i in range(250)
+    ] + [
+        _stock_row("2330", vol=50_000_000, name="台積電"),
+    ]
+    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc.twse, "get_all_twse_symbols", new_callable=AsyncMock, return_value=stocks):
+        result = await svc.get_screener(limit=2)
+
+    assert result[0]["symbol"] == "2330"

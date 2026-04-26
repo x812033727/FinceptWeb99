@@ -286,6 +286,28 @@ async def test_screener_forwards_filters(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_screener_include_etf_default_true(client: AsyncClient):
+    h = await _auth_headers(client, "tw_scr_etf_default@example.com")
+    with patch("services.tw_market_service.get_screener", new_callable=AsyncMock) as mock:
+        mock.return_value = []
+        await client.get("/api/tw/screener", headers=h)
+
+    _, kwargs = mock.call_args
+    assert kwargs["include_etf"] is True
+
+
+@pytest.mark.asyncio
+async def test_screener_include_etf_false_forwards(client: AsyncClient):
+    h = await _auth_headers(client, "tw_scr_etf_off@example.com")
+    with patch("services.tw_market_service.get_screener", new_callable=AsyncMock) as mock:
+        mock.return_value = []
+        await client.get("/api/tw/screener?include_etf=false", headers=h)
+
+    _, kwargs = mock.call_args
+    assert kwargs["include_etf"] is False
+
+
+@pytest.mark.asyncio
 async def test_screener_forwards_fundamental_filters(client: AsyncClient):
     """PE/PB/yield filters from query string reach the service kwargs."""
     h = await _auth_headers(client, "tw_scr_fund@example.com")

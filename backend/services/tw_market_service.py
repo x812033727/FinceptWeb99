@@ -584,11 +584,13 @@ async def get_screener(
     min_pb: float | None = None,
     max_pb: float | None = None,
     min_dividend_yield: float | None = None,
+    include_etf: bool = True,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     key = (
         f"tw:screener:{exchange}:{min_volume}:"
-        f"{min_pe}:{max_pe}:{min_pb}:{max_pb}:{min_dividend_yield}:{limit}"
+        f"{min_pe}:{max_pe}:{min_pb}:{max_pb}:{min_dividend_yield}:"
+        f"{include_etf}:{limit}"
     )
     cached = await cache_get(key)
     if cached:
@@ -599,6 +601,14 @@ async def get_screener(
     except Exception:
         all_stocks = []
 
+    # Sort by volume desc so the most-traded names surface first. The TWSE
+    # endpoint orders by symbol ascending, which means the ~250 ETFs (00xxx)
+    # bury every regular stock past the limit cap.
+    all_stocks.sort(
+        key=lambda s: twse._tw_int(s.get("成交股數") or s.get("TradeVolume", "0")),
+        reverse=True,
+    )
+
     needs_valuations = any(
         v is not None for v in (min_pe, max_pe, min_pb, max_pb, min_dividend_yield)
     )
@@ -608,6 +618,8 @@ async def get_screener(
     for s in all_stocks:
         code = (s.get("Code") or s.get("證券代號") or "").strip()
         if not code:
+            continue
+        if not include_etf and is_etf(code):
             continue
         vol = twse._tw_int(s.get("成交股數") or s.get("TradeVolume", "0"))
         if min_volume and vol < min_volume:

@@ -1,3 +1,4 @@
+import asyncio
 import ipaddress
 from contextlib import asynccontextmanager
 
@@ -53,6 +54,14 @@ async def lifespan(app: FastAPI):
     setup_jobs()
     scheduler.start()
     await start_pubsub_listener()
+
+    # Kick off the TW symbol-map refresh immediately. The scheduler also
+    # runs it daily, but APScheduler's IntervalTrigger only fires after one
+    # full interval has elapsed, so without this the search endpoint and
+    # exchange lookup would return empty for the first 24 hours after a
+    # cold start.
+    from services.tw_market_service import refresh_symbol_map
+    asyncio.create_task(refresh_symbol_map())
 
     # Kraken WebSocket pump — sub-second crypto ticker stream into the
     # internal pub/sub. Replaces the 30s scheduler poll for symbols clients

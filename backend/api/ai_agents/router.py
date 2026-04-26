@@ -22,10 +22,12 @@ from typing import Annotated, AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.ai_agents.schemas import AgentInfo, ChatRequest
 from auth.permissions import require_viewer
 from cache.redis_cache import cache_decr, cache_incr, key_ai_counter
+from db.session import get_db
 from ai.agents import get_agent, list_agents
 from ai.llm_router import stream_chat
 from config import settings
@@ -91,7 +93,11 @@ async def agents_list(_: CurrentUser):
 
 
 @router.post("/chat")
-async def chat(body: ChatRequest, user: CurrentUser):
+async def chat(
+    body: ChatRequest,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
     """
     Stream a chat response from the selected agent persona.
 
@@ -160,6 +166,7 @@ async def chat(body: ChatRequest, user: CurrentUser):
                 max_turns=max_turns,
                 openai_tool_schemas=openai_tool_schemas,
                 openai_tool_dispatch=openai_tool_dispatch,
+                db=db,
             ):
                 payload = _event_to_sse(event)
                 if payload is not None:

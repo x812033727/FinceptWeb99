@@ -350,6 +350,16 @@
     "yield_curve_title": "殖利率曲線",
     "loading": "載入中…"
   },
+  "llm_keys": {
+    "title": "AI 模型 API 金鑰",
+    "subtitle": "為各家 LLM 設定 API key（DB 加密儲存，覆蓋 .env 預設值）",
+    "test": "測試",
+    "testing": "測試中…",
+    "clear": "清除",
+    "validated": "驗證通過",
+    "invalid": "驗證失敗",
+    "replace_placeholder": "輸入新 key 以覆蓋既有"
+  },
   "screener": {
     "title": "篩選器",
     "subtitle": "依條件篩選個股",

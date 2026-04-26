@@ -350,6 +350,16 @@
     "yield_curve_title": "Yield Curve",
     "loading": "Loading…"
   },
+  "llm_keys": {
+    "title": "AI Model API Keys",
+    "subtitle": "Configure API keys per LLM provider (encrypted in DB, overrides .env)",
+    "test": "Test",
+    "testing": "Testing…",
+    "clear": "Clear",
+    "validated": "Validated",
+    "invalid": "Validation failed",
+    "replace_placeholder": "Enter new key to replace"
+  },
   "screener": {
     "title": "Screener",
     "subtitle": "Filter stocks by any metric",

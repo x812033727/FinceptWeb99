@@ -85,6 +85,7 @@ export default function SettingsPage() {
 
   const [keyName, setKeyName] = useState("");
   const [newKey, setNewKey] = useState<string | null>(null);
+  const [keyError, setKeyError] = useState<string | null>(null);
 
   const createKey = useMutation({
     mutationFn: (name: string) => api.post("/auth/api-keys", { name }),
@@ -92,6 +93,11 @@ export default function SettingsPage() {
       qc.invalidateQueries({ queryKey: ["api-keys"] });
       setNewKey(r.data.key);
       setKeyName("");
+      setKeyError(null);
+    },
+    onError: (err: Error) => {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setKeyError(detail ?? "Failed to create API key");
     },
   });
 
@@ -191,9 +197,10 @@ export default function SettingsPage() {
             disabled={createKey.isPending || !keyName.trim()}
             className="px-3 py-1.5 rounded bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
           >
-            Generate
+            {createKey.isPending ? "…" : "Generate"}
           </button>
         </div>
+        {keyError && <p className="text-xs text-red-400">{keyError}</p>}
 
         {/* List */}
         {apiKeys.length === 0 ? (

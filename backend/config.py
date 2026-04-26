@@ -88,6 +88,10 @@ class Settings(BaseSettings):
     OPENROUTER_TITLE: str = ""    # optional X-Title for OpenRouter analytics
     OPENROUTER_MAX_TURNS: int = 6
 
+    # Encryption key for at-rest LLM provider keys stored in the DB. Empty
+    # means "derive from JWT_SECRET_KEY" — see auth/llm_key_crypto.py.
+    LLM_KEY_ENCRYPTION_KEY: str = ""
+
     # Claude Agent (tool-use via claude-agent-sdk). Off by default; analyst/admin only when on.
     CLAUDE_AGENT_ENABLED: bool = False
     CLAUDE_AGENT_MODEL: str = "claude-sonnet-4-5-20250929"

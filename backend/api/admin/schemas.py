@@ -32,3 +32,26 @@ class SystemStats(BaseModel):
 class UpdateResult(BaseModel):
     status: str  # "started" | "not_configured" | "failed"
     message: str
+
+
+# ── LLM provider keys ─────────────────────────────────────────────
+
+class LLMKeyInfo(BaseModel):
+    """One row per provider in the admin UI list."""
+    provider: str
+    has_key: bool
+    source: str  # "db" | "env" | "none"
+    masked: str
+    last_validated_at: datetime | None = None
+    last_validation_ok: bool | None = None
+    last_validation_message: str | None = None
+    updated_at: datetime | None = None
+
+
+class LLMKeyUpsert(BaseModel):
+    api_key: str  # plaintext; encrypted server-side
+
+
+class LLMKeyValidation(BaseModel):
+    ok: bool
+    message: str

@@ -14,13 +14,45 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, TYPE_CHECKING
 
 import httpx
 
 from config import settings
 
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
 logger = logging.getLogger(__name__)
+
+
+async def _resolve_api_key(provider: str, db: "AsyncSession | None") -> str:
+    """Resolve the active API key for a provider.
+
+    Priority: DB-stored (admin-set, encrypted) → .env-supplied (settings) → "".
+    Empty string means "no key configured" — callers should yield that error.
+    """
+    if db is not None:
+        from services.llm_key_service import resolve_key as _db_resolve
+        try:
+            key = await _db_resolve(db, provider)
+            if key:
+                return key
+        except Exception as exc:  # noqa: BLE001 — DB hiccup must not break chat
+            logger.warning("llm_key.db_lookup_failed",
+                           extra={"provider": provider, "error": str(exc)})
+    # settings fallback
+    attr_map = {
+        "openai": "OPENAI_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+        "gemini": "GEMINI_API_KEY",
+        "minimax": "MINIMAX_API_KEY",
+        "groq": "GROQ_API_KEY",
+        "deepseek": "DEEPSEEK_API_KEY",
+        "openrouter": "OPENROUTER_API_KEY",
+    }
+    attr = attr_map.get(provider, "")
+    return getattr(settings, attr, "") if attr else ""
 
 
 # ── provider dispatch ──────────────────────────────────────────────
@@ -36,6 +68,7 @@ async def stream_chat(
     max_turns: int | None = None,
     openai_tool_schemas: list[dict] | None = None,
     openai_tool_dispatch: dict[str, Any] | None = None,
+    db: "AsyncSession | None" = None,
 ) -> AsyncGenerator[dict, None]:
     """
     Yield streaming events from the chosen provider.
@@ -43,17 +76,22 @@ async def stream_chat(
     `openai_tool_schemas`/`openai_tool_dispatch` are honored by `minimax`
     (and any future OpenAI-compat tool-using provider). Other providers
     ignore both sets.
+
+    `db` is an open AsyncSession used to resolve admin-stored API keys for
+    the chosen provider. When None or no DB key is set the streamer falls
+    back to the .env-supplied key in `settings`.
     """
     prov = (provider or settings.DEFAULT_LLM_PROVIDER).lower()
+    api_key = await _resolve_api_key(prov, db)
 
     if prov == "openai":
-        async for text in _openai_stream(messages, model or "gpt-4o-mini", max_tokens, temperature):
+        async for text in _openai_stream(messages, model or "gpt-4o-mini", max_tokens, temperature, api_key=api_key):
             yield {"type": "delta", "text": text}
     elif prov == "anthropic":
-        async for text in _anthropic_stream(messages, model or "claude-haiku-4-5-20251001", max_tokens, temperature):
+        async for text in _anthropic_stream(messages, model or "claude-haiku-4-5-20251001", max_tokens, temperature, api_key=api_key):
             yield {"type": "delta", "text": text}
     elif prov == "gemini":
-        async for text in _gemini_stream(messages, model or "gemini-2.0-flash", max_tokens, temperature):
+        async for text in _gemini_stream(messages, model or "gemini-2.0-flash", max_tokens, temperature, api_key=api_key):
             yield {"type": "delta", "text": text}
     elif prov == "ollama":
         async for text in _ollama_stream(messages, model or "llama3.2", max_tokens, temperature):
@@ -67,6 +105,7 @@ async def stream_chat(
             tool_schemas=openai_tool_schemas,
             tool_dispatch=openai_tool_dispatch,
             max_turns=max_turns or settings.MINIMAX_MAX_TURNS,
+            api_key=api_key,
         ):
             yield ev
     elif prov == "groq":
@@ -78,6 +117,7 @@ async def stream_chat(
             tool_schemas=openai_tool_schemas,
             tool_dispatch=openai_tool_dispatch,
             max_turns=max_turns or settings.GROQ_MAX_TURNS,
+            api_key=api_key,
         ):
             yield ev
     elif prov == "deepseek":
@@ -89,6 +129,7 @@ async def stream_chat(
             tool_schemas=openai_tool_schemas,
             tool_dispatch=openai_tool_dispatch,
             max_turns=max_turns or settings.DEEPSEEK_MAX_TURNS,
+            api_key=api_key,
         ):
             yield ev
     elif prov == "openrouter":
@@ -100,6 +141,7 @@ async def stream_chat(
             tool_schemas=openai_tool_schemas,
             tool_dispatch=openai_tool_dispatch,
             max_turns=max_turns or settings.OPENROUTER_MAX_TURNS,
+            api_key=api_key,
         ):
             yield ev
     elif prov == "claude_agent":
@@ -122,6 +164,8 @@ async def _openai_stream(
     model: str,
     max_tokens: int,
     temperature: float,
+    *,
+    api_key: str = "",
 ) -> AsyncGenerator[str, None]:
     try:
         from openai import AsyncOpenAI
@@ -129,11 +173,12 @@ async def _openai_stream(
         yield "[OpenAI SDK not installed]"
         return
 
-    if not settings.OPENAI_API_KEY:
+    key = api_key or settings.OPENAI_API_KEY
+    if not key:
         yield "[OpenAI API key not configured]"
         return
 
-    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    client = AsyncOpenAI(api_key=key)
     async with client.chat.completions.stream(
         model=model,
         messages=messages,  # type: ignore[arg-type]
@@ -153,6 +198,8 @@ async def _anthropic_stream(
     model: str,
     max_tokens: int,
     temperature: float,
+    *,
+    api_key: str = "",
 ) -> AsyncGenerator[str, None]:
     try:
         import anthropic
@@ -160,7 +207,8 @@ async def _anthropic_stream(
         yield "[Anthropic SDK not installed]"
         return
 
-    if not settings.ANTHROPIC_API_KEY:
+    key = api_key or settings.ANTHROPIC_API_KEY
+    if not key:
         yield "[Anthropic API key not configured]"
         return
 
@@ -172,7 +220,7 @@ async def _anthropic_stream(
         else:
             chat_msgs.append(m)
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    client = anthropic.AsyncAnthropic(api_key=key)
     async with client.messages.stream(
         model=model,
         system=system or anthropic.NOT_GIVEN,
@@ -191,6 +239,8 @@ async def _gemini_stream(
     model: str,
     max_tokens: int,
     temperature: float,
+    *,
+    api_key: str = "",
 ) -> AsyncGenerator[str, None]:
     try:
         import google.generativeai as genai
@@ -198,11 +248,12 @@ async def _gemini_stream(
         yield "[google-generativeai SDK not installed]"
         return
 
-    if not settings.GEMINI_API_KEY:
+    key = api_key or settings.GEMINI_API_KEY
+    if not key:
         yield "[Gemini API key not configured]"
         return
 
-    genai.configure(api_key=settings.GEMINI_API_KEY)
+    genai.configure(api_key=key)
     gmodel = genai.GenerativeModel(model)
 
     history = []
@@ -458,11 +509,12 @@ async def _minimax_stream(
     tool_schemas: list[dict] | None,
     tool_dispatch: dict[str, Any] | None,
     max_turns: int,
+    api_key: str = "",
 ) -> AsyncGenerator[dict, None]:
     async for ev in _openai_compat_tool_loop(
         base_url=settings.MINIMAX_HOST,
         chat_path="/v1/text/chatcompletion_v2",
-        api_key=settings.MINIMAX_API_KEY,
+        api_key=api_key or settings.MINIMAX_API_KEY,
         model=model,
         messages=messages,
         max_tokens=max_tokens,
@@ -486,11 +538,12 @@ async def _groq_stream(
     tool_schemas: list[dict] | None,
     tool_dispatch: dict[str, Any] | None,
     max_turns: int,
+    api_key: str = "",
 ) -> AsyncGenerator[dict, None]:
     async for ev in _openai_compat_tool_loop(
         base_url=settings.GROQ_HOST,
         chat_path="/v1/chat/completions",
-        api_key=settings.GROQ_API_KEY,
+        api_key=api_key or settings.GROQ_API_KEY,
         model=model,
         messages=messages,
         max_tokens=max_tokens,
@@ -514,11 +567,12 @@ async def _deepseek_stream(
     tool_schemas: list[dict] | None,
     tool_dispatch: dict[str, Any] | None,
     max_turns: int,
+    api_key: str = "",
 ) -> AsyncGenerator[dict, None]:
     async for ev in _openai_compat_tool_loop(
         base_url=settings.DEEPSEEK_HOST,
         chat_path="/v1/chat/completions",
-        api_key=settings.DEEPSEEK_API_KEY,
+        api_key=api_key or settings.DEEPSEEK_API_KEY,
         model=model,
         messages=messages,
         max_tokens=max_tokens,
@@ -542,6 +596,7 @@ async def _openrouter_stream(
     tool_schemas: list[dict] | None,
     tool_dispatch: dict[str, Any] | None,
     max_turns: int,
+    api_key: str = "",
 ) -> AsyncGenerator[dict, None]:
     # OpenRouter uses Referer + Title headers (optional) for app analytics.
     extra: dict[str, str] = {}
@@ -552,7 +607,7 @@ async def _openrouter_stream(
     async for ev in _openai_compat_tool_loop(
         base_url=settings.OPENROUTER_HOST,
         chat_path="/v1/chat/completions",
-        api_key=settings.OPENROUTER_API_KEY,
+        api_key=api_key or settings.OPENROUTER_API_KEY,
         model=model,
         messages=messages,
         max_tokens=max_tokens,

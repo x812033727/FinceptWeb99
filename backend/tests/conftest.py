@@ -45,10 +45,11 @@ from db.session import get_db  # noqa: E402
 # Without this, tests that exercise one table transitively depend on another
 # model being imported by a sibling test — leading to FK-resolution failures
 # when tests run in isolation.
-import models.user       # noqa: E402,F401
-import models.portfolio  # noqa: E402,F401
-import models.watchlist  # noqa: E402,F401
-import models.alert      # noqa: E402,F401
+import models.user              # noqa: E402,F401
+import models.portfolio         # noqa: E402,F401
+import models.watchlist         # noqa: E402,F401
+import models.alert             # noqa: E402,F401
+import models.llm_provider_key  # noqa: E402,F401
 
 # Disable slowapi rate limiter — tests exercise endpoints in tight loops
 # and would otherwise trip the 5/min register cap, etc.

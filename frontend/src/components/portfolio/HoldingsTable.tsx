@@ -14,39 +14,39 @@ export default function HoldingsTable({ holdings, currency }: Props) {
   }
 
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto -mx-2 sm:mx-0">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-border text-muted-foreground text-left">
-            <th className="pb-2 pr-4">{t("portfolio.holdings.symbol")}</th>
-            <th className="pb-2 pr-4">{t("portfolio.holdings.market")}</th>
-            <th className="pb-2 pr-4 text-right">{t("portfolio.holdings.qty")}</th>
-            <th className="pb-2 pr-4 text-right">{t("portfolio.holdings.avg_cost")}</th>
-            <th className="pb-2 pr-4 text-right">{t("portfolio.holdings.price")}</th>
-            <th className="pb-2 pr-4 text-right">{t("portfolio.holdings.value")} ({currency})</th>
-            <th className="pb-2 pr-4 text-right">{t("portfolio.holdings.pnl")}</th>
-            <th className="pb-2 text-right">{t("portfolio.holdings.pnl_pct")}</th>
-            <th className="pb-2 text-right">{t("portfolio.holdings.weight")}</th>
+          <tr className="border-b border-border text-xs sm:text-sm text-muted-foreground text-left">
+            <th className="pb-2 px-2 sm:pr-4 sm:pl-0">{t("portfolio.holdings.symbol")}</th>
+            <th className="hidden lg:table-cell pb-2 pr-4">{t("portfolio.holdings.market")}</th>
+            <th className="pb-2 px-2 sm:pr-4 sm:pl-0 text-right">{t("portfolio.holdings.qty")}</th>
+            <th className="hidden lg:table-cell pb-2 pr-4 text-right">{t("portfolio.holdings.avg_cost")}</th>
+            <th className="hidden sm:table-cell pb-2 pr-4 text-right">{t("portfolio.holdings.price")}</th>
+            <th className="pb-2 px-2 sm:pr-4 sm:pl-0 text-right">{t("portfolio.holdings.value")} ({currency})</th>
+            <th className="hidden md:table-cell pb-2 pr-4 text-right">{t("portfolio.holdings.pnl")}</th>
+            <th className="pb-2 px-2 sm:pl-0 text-right">{t("portfolio.holdings.pnl_pct")}</th>
+            <th className="hidden md:table-cell pb-2 text-right">{t("portfolio.holdings.weight")}</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody className="tabular-nums">
           {holdings.map((h) => (
             <tr key={h.id} className="border-b border-border/50 hover:bg-secondary/30 transition-colors">
-              <td className="py-2 pr-4 font-medium text-foreground">{h.symbol}</td>
-              <td className="py-2 pr-4 text-muted-foreground">{h.market}</td>
-              <td className="py-2 pr-4 text-right">{h.quantity.toLocaleString()}</td>
-              <td className="py-2 pr-4 text-right">{h.avg_cost.toFixed(2)}</td>
-              <td className="py-2 pr-4 text-right">{(h.current_price ?? 0).toFixed(2)}</td>
-              <td className="py-2 pr-4 text-right">{(h.current_value ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
-              <td className={`py-2 pr-4 text-right font-medium ${(h.unrealized_pnl ?? 0) >= 0 ? "text-positive" : "text-negative"}`}>
+              <td className="py-2 px-2 sm:pr-4 sm:pl-0 font-medium text-foreground">{h.symbol}</td>
+              <td className="hidden lg:table-cell py-2 pr-4 text-muted-foreground">{h.market}</td>
+              <td className="py-2 px-2 sm:pr-4 sm:pl-0 text-right">{h.quantity.toLocaleString()}</td>
+              <td className="hidden lg:table-cell py-2 pr-4 text-right">{h.avg_cost.toFixed(2)}</td>
+              <td className="hidden sm:table-cell py-2 pr-4 text-right">{(h.current_price ?? 0).toFixed(2)}</td>
+              <td className="py-2 px-2 sm:pr-4 sm:pl-0 text-right">{(h.current_value ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+              <td className={`hidden md:table-cell py-2 pr-4 text-right font-medium ${(h.unrealized_pnl ?? 0) >= 0 ? "text-positive" : "text-negative"}`}>
                 {(h.unrealized_pnl ?? 0) >= 0 ? "+" : ""}
                 {(h.unrealized_pnl ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
               </td>
-              <td className={`py-2 pr-4 text-right ${(h.unrealized_pnl_pct ?? 0) >= 0 ? "text-positive" : "text-negative"}`}>
+              <td className={`py-2 px-2 sm:pl-0 text-right ${(h.unrealized_pnl_pct ?? 0) >= 0 ? "text-positive" : "text-negative"}`}>
                 {(h.unrealized_pnl_pct ?? 0) >= 0 ? "+" : ""}
                 {(h.unrealized_pnl_pct ?? 0).toFixed(2)}%
               </td>
-              <td className="py-2 text-right text-muted-foreground">{h.weight_pct?.toFixed(1)}%</td>
+              <td className="hidden md:table-cell py-2 text-right text-muted-foreground">{h.weight_pct?.toFixed(1)}%</td>
             </tr>
           ))}
         </tbody>

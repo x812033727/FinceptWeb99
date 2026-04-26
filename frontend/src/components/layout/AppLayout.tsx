@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Outlet, useNavigate } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import Sidebar from "./Sidebar";
 import UpdateBadge from "./UpdateBadge";
@@ -261,15 +261,56 @@ function LanguageToggle() {
   );
 }
 
+function MenuButton({ onOpen }: { onOpen: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <button
+      onClick={onOpen}
+      aria-label={t("topbar.menu")}
+      className="lg:hidden p-1.5 -ml-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent/10 transition-colors"
+    >
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <line x1="3" y1="6" x2="21" y2="6" />
+        <line x1="3" y1="12" x2="21" y2="12" />
+        <line x1="3" y1="18" x2="21" y2="18" />
+      </svg>
+    </button>
+  );
+}
+
 export default function AppLayout() {
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const location = useLocation();
+
+  // Auto-close drawer on route change. NavLink onClick already calls
+  // onClose, but this also covers programmatic navigation (e.g. login
+  // redirect, search-bar selections).
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSidebarOpen(false);
+  }, [location.pathname]);
+
+  // Lock body scroll while drawer is open on mobile so the page behind
+  // doesn't scroll under the user's thumb.
+  useEffect(() => {
+    if (sidebarOpen) {
+      const prev = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+      return () => {
+        document.body.style.overflow = prev;
+      };
+    }
+  }, [sidebarOpen]);
+
   return (
     <div className="flex min-h-screen bg-background">
-      <Sidebar />
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Top bar */}
-        <div className="h-10 border-b border-border flex items-center gap-3 px-4 shrink-0">
+        <div className="h-10 border-b border-border flex items-center gap-2 sm:gap-3 px-3 sm:px-4 shrink-0">
+          <MenuButton onOpen={() => setSidebarOpen(true)} />
           <GlobalSearch />
-          <div className="flex items-center gap-2 ml-auto">
+          <div className="flex items-center gap-1 sm:gap-2 ml-auto">
             <UpdateBadge />
             <WsStatus />
             <LanguageToggle />

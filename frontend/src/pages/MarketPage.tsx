@@ -152,15 +152,15 @@ export default function MarketPage() {
     });
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-5 sm:space-y-6">
       {/* header */}
       <div>
-        <h1 className="text-2xl font-bold text-foreground">
+        <h1 className="text-xl sm:text-2xl font-bold text-foreground">
           {mkt === "US" ? t("market.us_title")
             : mkt === "CRYPTO" ? t("market.crypto_title")
             : t("market.tw_title")}
         </h1>
-        <p className="text-sm text-muted-foreground mt-1">
+        <p className="text-xs sm:text-sm text-muted-foreground mt-1">
           {mkt === "US" ? t("market.us_subtitle")
             : mkt === "CRYPTO" ? t("market.crypto_subtitle")
             : t("market.tw_subtitle")}
@@ -212,29 +212,29 @@ export default function MarketPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-xs text-muted-foreground">
-                  <th className="text-left px-4 py-2.5 font-medium">{t("market.table.symbol")}</th>
-                  <th className="text-left px-4 py-2.5 font-medium">{t("market.table.name")}</th>
-                  <th className="text-right px-4 py-2.5 font-medium">{t("market.table.price")}</th>
+                  <th className="text-left px-3 sm:px-4 py-2.5 font-medium">{t("market.table.symbol")}</th>
+                  <th className="text-left px-3 sm:px-4 py-2.5 font-medium">{t("market.table.name")}</th>
+                  <th className="text-right px-3 sm:px-4 py-2.5 font-medium">{t("market.table.price")}</th>
                   <th
-                    className="text-right px-4 py-2.5 font-medium cursor-pointer select-none hover:text-foreground"
+                    className="text-right px-3 sm:px-4 py-2.5 font-medium cursor-pointer select-none hover:text-foreground"
                     onClick={() => toggleSort("change_pct")}
                   >
                     {t("market.table.change")}<SortIndicator k="change_pct" sortKey={sortKey} sortDir={sortDir} />
                   </th>
                   <th
-                    className="text-right px-4 py-2.5 font-medium cursor-pointer select-none hover:text-foreground"
+                    className="hidden sm:table-cell text-right px-3 sm:px-4 py-2.5 font-medium cursor-pointer select-none hover:text-foreground"
                     onClick={() => toggleSort("volume")}
                   >
                     {t("market.table.volume")}<SortIndicator k="volume" sortKey={sortKey} sortDir={sortDir} />
                   </th>
                   <th
-                    className="text-right px-4 py-2.5 font-medium cursor-pointer select-none hover:text-foreground"
+                    className="hidden md:table-cell text-right px-3 sm:px-4 py-2.5 font-medium cursor-pointer select-none hover:text-foreground"
                     onClick={() => toggleSort("market_cap")}
                   >
                     {t("market.table.market_cap")}<SortIndicator k="market_cap" sortKey={sortKey} sortDir={sortDir} />
                   </th>
-                  <th className="text-right px-4 py-2.5 font-medium">{t("market.table.pe")}</th>
-                  <th className="text-left px-4 py-2.5 font-medium">{t("market.table.sector")}</th>
+                  <th className="hidden lg:table-cell text-right px-3 sm:px-4 py-2.5 font-medium">{t("market.table.pe")}</th>
+                  <th className="hidden lg:table-cell text-left px-3 sm:px-4 py-2.5 font-medium">{t("market.table.sector")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -244,32 +244,32 @@ export default function MarketPage() {
                     onClick={() => navigate(`/stock/${mkt}/${row.symbol}`)}
                     className="border-b border-border/40 hover:bg-accent/5 cursor-pointer transition-colors"
                   >
-                    <td className="px-4 py-2.5 font-medium text-primary">{row.symbol}</td>
-                    <td className="px-4 py-2.5 text-muted-foreground max-w-[180px] truncate">{row.name}</td>
-                    <td className="px-4 py-2.5 text-right text-foreground">
+                    <td className="px-3 sm:px-4 py-2.5 font-medium text-primary">{row.symbol}</td>
+                    <td className="px-3 sm:px-4 py-2.5 text-muted-foreground max-w-[120px] sm:max-w-[180px] truncate">{row.name}</td>
+                    <td className="px-3 sm:px-4 py-2.5 text-right text-foreground tabular-nums">
                       {row.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
-                    <td className="px-4 py-2.5 text-right">
+                    <td className="px-3 sm:px-4 py-2.5 text-right tabular-nums">
                       <ChangeCell value={row.change_pct} />
                     </td>
-                    <td className="px-4 py-2.5 text-right text-muted-foreground">
+                    <td className="hidden sm:table-cell px-3 sm:px-4 py-2.5 text-right text-muted-foreground tabular-nums">
                       {row.volume >= 1e6
                         ? `${(row.volume / 1e6).toFixed(1)}M`
                         : row.volume >= 1e3
                         ? `${(row.volume / 1e3).toFixed(0)}K`
                         : row.volume.toLocaleString()}
                     </td>
-                    <td className="px-4 py-2.5 text-right text-muted-foreground">
+                    <td className="hidden md:table-cell px-3 sm:px-4 py-2.5 text-right text-muted-foreground tabular-nums">
                       {row.market_cap
                         ? row.market_cap >= 1e12
                           ? `$${(row.market_cap / 1e12).toFixed(2)}T`
                           : `$${(row.market_cap / 1e9).toFixed(1)}B`
                         : "—"}
                     </td>
-                    <td className="px-4 py-2.5 text-right text-muted-foreground">
+                    <td className="hidden lg:table-cell px-3 sm:px-4 py-2.5 text-right text-muted-foreground tabular-nums">
                       {row.pe_ratio ? row.pe_ratio.toFixed(1) : "—"}
                     </td>
-                    <td className="px-4 py-2.5 text-muted-foreground max-w-[120px] truncate">
+                    <td className="hidden lg:table-cell px-3 sm:px-4 py-2.5 text-muted-foreground max-w-[120px] truncate">
                       {row.sector ?? "—"}
                     </td>
                   </tr>

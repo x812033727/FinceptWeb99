@@ -29,7 +29,9 @@
     "hit": "觸發",
     "switch_to_dark": "切換深色模式",
     "switch_to_light": "切換淺色模式",
-    "language": "語言"
+    "language": "語言",
+    "menu": "開啟選單",
+    "close_menu": "關閉選單"
   },
   "common": {
     "loading": "載入中…",

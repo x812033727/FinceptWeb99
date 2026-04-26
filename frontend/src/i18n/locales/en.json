@@ -29,7 +29,9 @@
     "hit": "hit",
     "switch_to_dark": "Switch to dark mode",
     "switch_to_light": "Switch to light mode",
-    "language": "Language"
+    "language": "Language",
+    "menu": "Open menu",
+    "close_menu": "Close menu"
   },
   "common": {
     "loading": "Loading…",

@@ -114,19 +114,19 @@ export default function DashboardPage() {
   ];
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-5 sm:space-y-6">
       {/* welcome */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">{t("dashboard.title")}</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div className="min-w-0">
+          <h1 className="text-xl sm:text-2xl font-bold text-foreground">{t("dashboard.title")}</h1>
+          <p className="text-xs sm:text-sm text-muted-foreground mt-0.5 truncate">
             {t("dashboard.welcome_back")}，<span className="text-foreground">{user?.email}</span>
             {" · "}
             <span className="capitalize text-primary">{user?.role}</span>
           </p>
         </div>
         {user?.ai_requests_remaining !== undefined && (
-          <div className="text-xs text-muted-foreground text-right">
+          <div className="text-xs text-muted-foreground sm:text-right shrink-0">
             {t("dashboard.ai_requests_today")}
             <div className="text-foreground font-medium text-sm">{user.ai_requests_remaining} {t("dashboard.remaining")}</div>
           </div>

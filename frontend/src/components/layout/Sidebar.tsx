@@ -25,11 +25,12 @@ const NAV: NavItemDef[] = [
   { to: "/settings", labelKey: "nav.settings", icon: "⚙" },
 ];
 
-function NavItem({ item }: { item: NavItemDef }) {
+function NavItem({ item, onNavigate }: { item: NavItemDef; onNavigate?: () => void }) {
   const { t } = useTranslation();
   return (
     <NavLink
       to={item.to}
+      onClick={onNavigate}
       className={({ isActive }) =>
         `flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors ${
           isActive
@@ -44,43 +45,79 @@ function NavItem({ item }: { item: NavItemDef }) {
   );
 }
 
-export default function Sidebar() {
+interface SidebarProps {
+  /** Mobile drawer open-state. Ignored on `lg:` and up where the
+   *  sidebar is permanently visible. */
+  open: boolean;
+  onClose: () => void;
+}
+
+export default function Sidebar({ open, onClose }: SidebarProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const role = useAuthStore((s) => s.user?.role);
 
   async function handleLogout() {
     await logout();
+    onClose();
     navigate("/login");
   }
 
   return (
-    <aside className="w-52 shrink-0 border-r border-border bg-card flex flex-col h-screen sticky top-0">
-      {/* branding */}
-      <div className="px-4 py-4 border-b border-border">
-        <span className="text-primary font-bold text-sm tracking-wider">FINCEPT</span>
-        <span className="text-muted-foreground text-xs ml-1">WEB</span>
-      </div>
+    <>
+      {/* Backdrop — mobile only, fades with the drawer. pointer-events-none
+          when closed so it doesn't block underlying content. */}
+      <div
+        onClick={onClose}
+        aria-hidden="true"
+        className={`fixed inset-0 bg-black/60 z-40 lg:hidden transition-opacity duration-200 ${
+          open ? "opacity-100" : "opacity-0 pointer-events-none"
+        }`}
+      />
 
-      {/* nav */}
-      <nav className="flex-1 overflow-y-auto py-3 space-y-0.5 px-2">
-        {NAV.map((item) => (
-          <NavItem key={item.to} item={item} />
-        ))}
-        {role === "admin" && (
-          <NavItem item={{ to: "/admin", labelKey: "nav.admin", icon: "🛡" }} />
-        )}
-      </nav>
+      <aside
+        className={`fixed lg:sticky top-0 left-0 z-50 h-screen w-64 lg:w-52 shrink-0 border-r border-border bg-card flex flex-col transform transition-transform duration-200 lg:translate-x-0 ${
+          open ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
+        }`}
+      >
+        {/* branding */}
+        <div className="px-4 py-4 border-b border-border flex items-center justify-between">
+          <div>
+            <span className="text-primary font-bold text-sm tracking-wider">FINCEPT</span>
+            <span className="text-muted-foreground text-xs ml-1">WEB</span>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label={t("topbar.close_menu")}
+            className="lg:hidden p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent/10 text-base leading-none"
+          >
+            ×
+          </button>
+        </div>
 
-      {/* footer */}
-      <div className="border-t border-border p-3">
-        <button
-          onClick={handleLogout}
-          className="w-full text-left px-3 py-2 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-accent/10 transition-colors"
-        >
-          {t("nav.sign_out")}
-        </button>
-      </div>
-    </aside>
+        {/* nav */}
+        <nav className="flex-1 overflow-y-auto py-3 space-y-0.5 px-2">
+          {NAV.map((item) => (
+            <NavItem key={item.to} item={item} onNavigate={onClose} />
+          ))}
+          {role === "admin" && (
+            <NavItem
+              item={{ to: "/admin", labelKey: "nav.admin", icon: "🛡" }}
+              onNavigate={onClose}
+            />
+          )}
+        </nav>
+
+        {/* footer */}
+        <div className="border-t border-border p-3">
+          <button
+            onClick={handleLogout}
+            className="w-full text-left px-3 py-2 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-accent/10 transition-colors"
+          >
+            {t("nav.sign_out")}
+          </button>
+        </div>
+      </aside>
+    </>
   );
 }

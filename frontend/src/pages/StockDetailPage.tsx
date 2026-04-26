@@ -236,7 +236,7 @@ function TabButton({ active, label, onClick }: { active: boolean; label: string;
   return (
     <button
       onClick={onClick}
-      className={`px-4 py-2 text-sm border-b-2 transition-colors ${
+      className={`shrink-0 whitespace-nowrap px-3 sm:px-4 py-2 text-sm border-b-2 transition-colors ${
         active
           ? "border-primary text-foreground font-medium"
           : "border-transparent text-muted-foreground hover:text-foreground"
@@ -1464,7 +1464,7 @@ export default function StockDetailPage() {
     : twTab === "chart";
 
   return (
-    <div className="p-6 space-y-5">
+    <div className="p-4 sm:p-6 space-y-4 sm:space-y-5">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <button onClick={() => navigate(`/market/${mkt}`)} className="hover:text-foreground transition-colors">
           {mkt === "US" ? t("nav.us_market")
@@ -1475,11 +1475,11 @@ export default function StockDetailPage() {
         <span className="text-foreground font-medium">{sym}</span>
       </div>
 
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">{sym}</h1>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-xl sm:text-2xl font-bold text-foreground">{sym}</h1>
           {Boolean(quote?.name || quote?.name_zh) && (
-            <p className="text-sm text-muted-foreground mt-0.5">
+            <p className="text-xs sm:text-sm text-muted-foreground mt-0.5 truncate">
               {String(quote?.name ?? quote?.name_zh ?? "")}
               {mkt === "TW" && Boolean(quote?.exchange) && (
                 <span className="ml-2 text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded">
@@ -1494,20 +1494,22 @@ export default function StockDetailPage() {
             </p>
           )}
         </div>
-        <div className="text-right">
-          <div className="text-3xl font-bold text-foreground">
+        <div className="text-right shrink-0">
+          <div className="text-2xl sm:text-3xl font-bold text-foreground tabular-nums">
             {displayPrice !== undefined ? fmt(displayPrice) : "—"}
           </div>
-          <div className={`text-sm font-medium ${isPositive ? "text-green-400" : "text-red-400"}`}>
+          <div className={`text-xs sm:text-sm font-medium tabular-nums ${isPositive ? "text-green-400" : "text-red-400"}`}>
             {displayChange !== undefined ? fmtPct(displayChange) : "—"}
           </div>
-          <div className="text-xs text-muted-foreground mt-0.5">
+          <div className="text-[10px] sm:text-xs text-muted-foreground mt-0.5">
             {mkt === "TW" ? "TWD" : (quote?.currency as string ?? "USD")}
           </div>
         </div>
       </div>
 
-      <div className="flex border-b border-border">
+      {/* Tab strip — horizontal scroll on small screens so 6-8 TW tabs
+          don't wrap or overflow. */}
+      <div className="flex border-b border-border overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
         {mkt === "US" ? (
           <>
             <TabButton active={usTab === "chart"} label={t("stock.history")} onClick={() => setUsTab("chart")} />

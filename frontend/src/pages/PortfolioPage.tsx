@@ -883,20 +883,20 @@ export default function PortfolioPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background p-6 space-y-6">
+    <div className="min-h-screen bg-background p-4 sm:p-6 space-y-5 sm:space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-primary">{t("portfolio.title")}</h1>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <h1 className="text-xl sm:text-2xl font-bold text-primary">{t("portfolio.title")}</h1>
         <div className="flex gap-2">
           {detail && (
             <button
               onClick={analyseWithAI}
-              className="px-4 py-2 text-sm bg-primary/10 border border-primary/30 text-primary rounded-md hover:bg-primary/20 transition-colors"
+              className="flex-1 sm:flex-none px-3 sm:px-4 py-2 text-sm bg-primary/10 border border-primary/30 text-primary rounded-md hover:bg-primary/20 transition-colors"
             >
               🤖 {t("nav.ai")}
             </button>
           )}
-          <button onClick={() => setShowCreate(true)} className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:opacity-90">
+          <button onClick={() => setShowCreate(true)} className="flex-1 sm:flex-none px-3 sm:px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:opacity-90 whitespace-nowrap">
             + {t("portfolio.new_portfolio")}
           </button>
         </div>

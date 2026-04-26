@@ -404,12 +404,50 @@ async def get_macro_indicator(name: str) -> list[dict]:
 TTL_NEWS = 5 * 60  # 5 minutes
 
 
-async def get_news(ticker: str, limit: int = 10) -> list[dict[str, Any]]:
-    key = f"us:news:{ticker.upper()}"
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+async def _google_news_rss(query: str, limit: int = 10) -> list[dict[str, Any]]:
+    """Google News RSS in en-US — same shape as the TW helper."""
+    import httpx
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
 
+    url = "https://news.google.com/rss/search"
+    params = {
+        "q":    query,
+        "hl":   "en-US",
+        "gl":   "US",
+        "ceid": "US:en",
+    }
+    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as c:
+        r = await c.get(url, params=params)
+        r.raise_for_status()
+        xml_text = r.text
+
+    root = ET.fromstring(xml_text)
+    items: list[dict[str, Any]] = []
+    for el in root.findall(".//item")[:limit]:
+        title = (el.findtext("title") or "").strip()
+        link = (el.findtext("link") or "").strip()
+        pub_date_raw = el.findtext("pubDate") or ""
+        source_el = el.find("source")
+        publisher = source_el.text.strip() if (source_el is not None and source_el.text) else ""
+        try:
+            published_at = parsedate_to_datetime(pub_date_raw).isoformat()
+        except (TypeError, ValueError):
+            published_at = pub_date_raw
+        if not title or not link:
+            continue
+        items.append({
+            "title":        title,
+            "publisher":    publisher,
+            "link":         link,
+            "published_at": published_at,
+            "thumbnail":    None,
+        })
+    return items
+
+
+async def _yfinance_news_fallback(ticker: str, limit: int) -> list[dict[str, Any]]:
+    """Legacy yfinance path. Fragile (Yahoo IP-blocks) but kept as last resort."""
     import asyncio
     loop = asyncio.get_running_loop()
 
@@ -424,20 +462,66 @@ async def get_news(ticker: str, limit: int = 10) -> list[dict[str, Any]]:
                 resolutions = t_data.get("resolutions", [])
                 thumbnail = resolutions[0].get("url") if resolutions else None
             items.append({
-                "title":     n.get("title", ""),
-                "publisher": n.get("publisher", ""),
-                "link":      n.get("link", ""),
+                "title":        n.get("title", ""),
+                "publisher":    n.get("publisher", ""),
+                "link":         n.get("link", ""),
                 "published_at": datetime.fromtimestamp(
                     n.get("providerPublishTime", 0), tz=timezone.utc
                 ).isoformat(),
-                "thumbnail": thumbnail,
+                "thumbnail":    thumbnail,
             })
         return items
 
-    result = await loop.run_in_executor(None, _fetch)
-    if result:
-        await cache_set(key, json.dumps(result), TTL_NEWS)
-    return result
+    return await loop.run_in_executor(None, _fetch)
+
+
+async def get_news(ticker: str, limit: int = 10) -> list[dict[str, Any]]:
+    """
+    US news — Google News RSS (en-US) primary, yfinance fallback. Mirrors
+    the TW news pipeline. Yahoo blocks many cloud IPs so yfinance.news is
+    unreliable in production; Google News covers Reuters / Bloomberg /
+    WSJ / MarketWatch / CNBC / Yahoo Finance etc. without an API key.
+
+    Query is `{ticker} {company name}` when a recent quote is cached or
+    when the ticker matches the curated fallback universe; otherwise we
+    fall back to `{ticker} stock`.
+    """
+    key = f"us:news:{ticker.upper()}"
+    cached = await cache_get(key)
+    if cached:
+        return json.loads(cached)
+
+    name = ""
+    try:
+        q_cached = await cache_get(key_quote("us", ticker))
+        if q_cached:
+            payload = json.loads(q_cached)
+            name = payload.get("name", "") or ""
+    except Exception:
+        pass
+    if not name:
+        # Last resort: pull the company name from the curated fallback list.
+        from data.us.sp500_universe import get_fallback_universe
+        name_map = dict(get_fallback_universe())
+        name = name_map.get(ticker.upper(), "")
+
+    query = f"{ticker} {name}".strip() if name else f"{ticker} stock"
+
+    items: list[dict[str, Any]] = []
+    try:
+        items = await _google_news_rss(query, limit=limit)
+    except Exception:
+        items = []
+
+    if not items:
+        try:
+            items = await _yfinance_news_fallback(ticker, limit)
+        except Exception:
+            items = []
+
+    if items:
+        await cache_set(key, json.dumps(items), TTL_NEWS)
+    return items
 
 
 async def get_earnings(ticker: str) -> dict[str, Any]:

@@ -80,3 +80,34 @@ def test_fallback_universe_has_company_names():
     for sym, name in pairs:
         assert sym, "empty symbol in fallback universe"
         assert name, f"empty name for {sym}"
+
+
+def test_fallback_universe_has_no_duplicate_symbols():
+    seen: set[str] = set()
+    for sym, _ in sp500.get_fallback_universe():
+        assert sym not in seen, f"duplicate symbol {sym!r} in fallback universe"
+        seen.add(sym)
+
+
+def test_fallback_universe_covers_major_sectors():
+    """At least one ticker from each major sector so any preset returns hits."""
+    by_symbol = dict(sp500.get_fallback_universe())
+    # Tech / semis / cloud
+    assert any(s in by_symbol for s in ("AAPL", "MSFT", "NVDA", "AMD"))
+    # Financials
+    assert any(s in by_symbol for s in ("JPM", "BAC", "GS"))
+    # Healthcare
+    assert any(s in by_symbol for s in ("UNH", "JNJ", "LLY"))
+    # Energy
+    assert any(s in by_symbol for s in ("XOM", "CVX", "COP"))
+    # REITs
+    assert any(s in by_symbol for s in ("PLD", "AMT", "O"))
+    # Materials
+    assert any(s in by_symbol for s in ("LIN", "FCX", "NEM"))
+    # Sector ETFs
+    assert any(s in by_symbol for s in ("XLK", "XLF", "XLE"))
+
+
+def test_fallback_universe_size_meets_minimum():
+    """We promise users a meaningful list — at least 200 names."""
+    assert len(sp500.get_fallback_universe()) >= 200

@@ -3,6 +3,12 @@
 Professional financial intelligence platform: FastAPI backend + React frontend,
 mirroring the FinceptTerminal C++/Qt6 desktop app as a server-side web service.
 
+> **Mainline branch:** `claude/create-terminal-documentation-iBmfW`.
+> All PRs target this branch (not `main`). The deployed backend / frontend
+> reads from here, so for changes to take effect you must (1) merge the PR
+> into this branch and (2) restart uvicorn / redeploy the container —
+> Python doesn't hot-reload the data-source connector layer.
+
 ## Quick start
 
 ```bash

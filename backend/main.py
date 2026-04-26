@@ -70,6 +70,13 @@ async def lifespan(app: FastAPI):
 
     asyncio.create_task(_tw_warmup())
 
+    # Pre-warm the S&P 500 ticker list. Without this the first /us/screener
+    # or /us/search request after a cold start either pays the Wikipedia
+    # scrape latency or — if Wikipedia is unreachable — collapses to []
+    # until the daily scheduler job runs.
+    from data.us.sp500_universe import get_sp500_tickers
+    asyncio.create_task(get_sp500_tickers())
+
     # Kraken WebSocket pump — sub-second crypto ticker stream into the
     # internal pub/sub. Replaces the 30s scheduler poll for symbols clients
     # are actively subscribed to (the scheduler poll stays as a safety net

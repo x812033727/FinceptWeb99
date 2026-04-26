@@ -133,3 +133,54 @@ async def test_get_screener_uses_polygon_when_no_fundamental_filter():
 
     yf_mock.assert_not_called()
     assert result[0]["symbol"] == "AAPL"
+
+
+@pytest.mark.asyncio
+async def test_get_screener_falls_through_to_yfinance_when_polygon_returns_empty():
+    """Transient Polygon failure → fall through so users still see results."""
+    yf_result = [{"symbol": "AAPL", "market": "US", "name": "Apple Inc.",
+                  "price": 175.0, "change_pct": 0, "volume": 1_000_000}]
+
+    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc, "_use_polygon", return_value=True), \
+         patch.object(svc.polygon, "get_snapshot_all", new_callable=AsyncMock, return_value=[]), \
+         patch.object(svc, "_get_sp500_tickers", new_callable=AsyncMock, return_value=["AAPL"]), \
+         patch.object(svc, "_screener_yfinance", new_callable=AsyncMock, return_value=yf_result) as yf_mock:
+        result = await svc.get_screener()
+
+    yf_mock.assert_awaited_once()
+    assert result == yf_result
+
+
+@pytest.mark.asyncio
+async def test_get_screener_falls_through_when_polygon_raises():
+    """Polygon API raising shouldn't bubble — fall through to yfinance."""
+    yf_result = [{"symbol": "AAPL", "market": "US", "name": "Apple Inc.",
+                  "price": 175.0, "change_pct": 0, "volume": 1_000_000}]
+
+    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc, "_use_polygon", return_value=True), \
+         patch.object(svc.polygon, "get_snapshot_all", new_callable=AsyncMock,
+                      side_effect=RuntimeError("polygon down")), \
+         patch.object(svc, "_get_sp500_tickers", new_callable=AsyncMock, return_value=["AAPL"]), \
+         patch.object(svc, "_screener_yfinance", new_callable=AsyncMock, return_value=yf_result):
+        result = await svc.get_screener()
+
+    assert result == yf_result
+
+
+@pytest.mark.asyncio
+async def test_get_screener_does_not_cache_empty_result():
+    """Empty result should not lock in a cache miss for TTL_SCREENER seconds."""
+    cache_set = AsyncMock()
+    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set", new=cache_set), \
+         patch.object(svc, "_use_polygon", return_value=False), \
+         patch.object(svc, "_get_sp500_tickers", new_callable=AsyncMock, return_value=[]), \
+         patch.object(svc, "_screener_yfinance", new_callable=AsyncMock, return_value=[]):
+        result = await svc.get_screener()
+
+    assert result == []
+    cache_set.assert_not_called()

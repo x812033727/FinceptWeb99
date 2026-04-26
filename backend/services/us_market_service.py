@@ -246,10 +246,18 @@ async def get_screener(
         v is not None for v in (min_pe, max_pe, min_pb, max_pb, min_dividend_yield, sector)
     )
 
+    results: list[dict[str, Any]] = []
     if _use_polygon() and not fundamental_filter:
-        snapshots = await polygon.get_snapshot_all()
+        try:
+            snapshots = await polygon.get_snapshot_all()
+        except Exception:
+            snapshots = []
         results = _filter_polygon_snapshots(snapshots, min_market_cap, min_volume, limit)
-    else:
+
+    # Fall through to yfinance when Polygon isn't configured, when a
+    # fundamental filter is active (Polygon's snapshot lacks those fields),
+    # or when Polygon returned nothing (transient API failure or quota).
+    if not results:
         tickers = await _get_sp500_tickers()
         results = await _screener_yfinance(
             tickers,
@@ -264,7 +272,10 @@ async def get_screener(
             limit=limit,
         )
 
-    await cache_set(key, json.dumps(results), TTL_SCREENER)
+    # Don't cache empty results — keeps the next request retrying instead
+    # of locking in a failure for TTL_SCREENER seconds.
+    if results:
+        await cache_set(key, json.dumps(results), TTL_SCREENER)
     return results
 
 

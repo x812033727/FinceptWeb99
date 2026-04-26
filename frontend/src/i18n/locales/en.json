@@ -179,6 +179,14 @@
       "no_holdings": "No holdings yet",
       "actions": "Actions"
     },
+    "expert_eval": {
+      "title": "Expert Evaluation",
+      "subtitle": "Pick an AI persona to review this portfolio in their voice",
+      "evaluate": "Evaluate",
+      "re_evaluate": "Re-evaluate",
+      "open_in_ai": "Open in AI page",
+      "uses_quota": "Uses {{count}} daily AI request"
+    },
     "transactions": {
       "title": "Transactions",
       "add": "Add Transaction",

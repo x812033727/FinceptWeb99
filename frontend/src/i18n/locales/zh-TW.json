@@ -179,6 +179,14 @@
       "no_holdings": "尚無持倉",
       "actions": "操作"
     },
+    "expert_eval": {
+      "title": "專家評估",
+      "subtitle": "挑一位 AI 顧問用其投資哲學評估這個組合",
+      "evaluate": "評估",
+      "re_evaluate": "重新評估",
+      "open_in_ai": "在 AI 顧問頁開啟",
+      "uses_quota": "消耗 {{count}} 次今日 AI 額度"
+    },
     "transactions": {
       "title": "交易紀錄",
       "add": "新增交易",

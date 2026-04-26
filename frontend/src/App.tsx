@@ -7,23 +7,25 @@ import AppLayout from "@/components/layout/AppLayout";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import Toaster from "@/components/Toaster";
 import LoginPage from "@/pages/LoginPage";
+import { pageLoaders } from "@/pageLoaders";
 
 // Authenticated pages are split into their own chunks so the initial
 // bundle doesn't pay for code paths the user hasn't reached yet. The
 // login page stays in the main chunk because it's the first thing
-// every unauthenticated visitor renders.
-const DashboardPage = lazy(() => import("@/pages/DashboardPage"));
-const MarketPage = lazy(() => import("@/pages/MarketPage"));
-const StockDetailPage = lazy(() => import("@/pages/StockDetailPage"));
-const ScreenerPage = lazy(() => import("@/pages/ScreenerPage"));
-const PortfolioPage = lazy(() => import("@/pages/PortfolioPage"));
-const AnalyticsPage = lazy(() => import("@/pages/AnalyticsPage"));
-const MacroPage = lazy(() => import("@/pages/MacroPage"));
-const WatchlistPage = lazy(() => import("@/pages/WatchlistPage"));
-const AIPage = lazy(() => import("@/pages/AIPage"));
-const AlertsPage = lazy(() => import("@/pages/AlertsPage"));
-const SettingsPage = lazy(() => import("@/pages/SettingsPage"));
-const AdminPage = lazy(() => import("@/pages/AdminPage"));
+// every unauthenticated visitor renders. Loaders live in pageLoaders
+// so Sidebar can also call them for hover/touch prefetch.
+const DashboardPage = lazy(pageLoaders.dashboard);
+const MarketPage = lazy(pageLoaders.market);
+const StockDetailPage = lazy(pageLoaders.stockDetail);
+const ScreenerPage = lazy(pageLoaders.screener);
+const PortfolioPage = lazy(pageLoaders.portfolio);
+const AnalyticsPage = lazy(pageLoaders.analytics);
+const MacroPage = lazy(pageLoaders.macro);
+const WatchlistPage = lazy(pageLoaders.watchlist);
+const AIPage = lazy(pageLoaders.ai);
+const AlertsPage = lazy(pageLoaders.alerts);
+const SettingsPage = lazy(pageLoaders.settings);
+const AdminPage = lazy(pageLoaders.admin);
 
 // ── Protected route ───────────────────────────────────────────────
 function RequireAuth({ children }: { children: React.ReactNode }) {

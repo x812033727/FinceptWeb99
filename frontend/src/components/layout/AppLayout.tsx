@@ -6,6 +6,7 @@ import UpdateBadge from "./UpdateBadge";
 import { useAlertSocket, useWsConnected } from "@/hooks/useWebSocket";
 import { useNotificationStore } from "@/store/notificationStore";
 import { useThemeStore } from "@/store/themeStore";
+import { prefetchPage } from "@/pageLoaders";
 import api from "@/lib/api";
 
 type SearchResult = { symbol: string; market: "US" | "TW" | "CRYPTO" };
@@ -110,7 +111,8 @@ function GlobalSearch() {
             <button
               key={`${r.market}:${r.symbol}`}
               onMouseDown={(e) => { e.preventDefault(); selectResult(r); }}
-              onMouseEnter={() => setActiveIdx(i)}
+              onMouseEnter={() => { setActiveIdx(i); prefetchPage(`/stock/${r.market}/${r.symbol}`); }}
+              onFocus={() => prefetchPage(`/stock/${r.market}/${r.symbol}`)}
               className={`w-full flex items-center gap-2 px-3 py-2 text-xs text-left transition-colors ${
                 i === activeIdx ? "bg-accent/20 text-foreground" : "hover:bg-accent/10 text-foreground"
               }`}

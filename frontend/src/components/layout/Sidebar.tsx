@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { logout } from "@/lib/auth";
 import { useNavigate } from "react-router-dom";
 import { useAuthStore } from "@/store/authStore";
+import { prefetchPage } from "@/pageLoaders";
 
 interface NavItemDef {
   to: string;
@@ -27,10 +28,18 @@ const NAV: NavItemDef[] = [
 
 function NavItem({ item, onNavigate }: { item: NavItemDef; onNavigate?: () => void }) {
   const { t } = useTranslation();
+  // Warm the destination page's chunk on hover (desktop) or touch
+  // (mobile) so by the time the click handler fires React.lazy already
+  // has the module — no Suspense fallback flicker. Prefetch is
+  // idempotent + cached, so spamming hovers is free.
+  const prefetch = () => prefetchPage(item.to);
   return (
     <NavLink
       to={item.to}
       onClick={onNavigate}
+      onMouseEnter={prefetch}
+      onFocus={prefetch}
+      onTouchStart={prefetch}
       className={({ isActive }) =>
         `flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors ${
           isActive

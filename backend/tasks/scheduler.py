@@ -54,6 +54,19 @@ def setup_jobs() -> None:
         max_instances=1,
     )
 
+    # TW ETF yields — recompute trailing-12-month dividend yield for every
+    # ETF nightly at 23:30 Asia/Taipei (15:30 UTC). BWIBBU_ALL doesn't
+    # cover ETFs, so the screener's yield filter would otherwise reject
+    # every ETF (the "高息 ETF" preset returned 0 results without this).
+    from tasks.tw_etf_yields_refresh import refresh_tw_etf_yields
+    scheduler.add_job(
+        refresh_tw_etf_yields,
+        trigger=CronTrigger(hour=15, minute=30, timezone="UTC"),
+        id="tw_etf_yields",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     # ── Crypto market quote polling ───────────────────────────────
     # Every 30s; 24/7, no trading-hours skip. Will be replaced by the
     # Kraken WebSocket pump in Week 3 (then this becomes an idle no-op).

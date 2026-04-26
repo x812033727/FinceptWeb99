@@ -536,18 +536,44 @@ async def get_health(symbol: str, periods: int = 8) -> dict[str, Any]:
 
 # ── Screener ──────────────────────────────────────────────────────
 
+async def _get_etf_yields_cached() -> dict[str, float]:
+    """TTM dividend yield for every TW ETF; populated by the daily
+    refresh_tw_etf_yields scheduler job. Empty dict on cold cache."""
+    cached = await cache_get("tw:etf_yields_all")
+    if cached:
+        try:
+            return json.loads(cached)
+        except (TypeError, ValueError):
+            return {}
+    return {}
+
+
 async def _get_all_valuations_cached() -> dict[str, dict[str, float | None]]:
-    """Bulk PE/PB/dividend_yield for every TWSE stock; cached 24h."""
+    """
+    Bulk PE/PB/dividend_yield for every TWSE-listed security.
+
+    BWIBBU_ALL covers individual stocks only — it returns nothing for ETFs.
+    We merge the daily-refreshed ETF yield map on top so the screener's
+    `min_dividend_yield` filter applies uniformly across stocks and ETFs.
+    """
     key = "tw:valuations:all"
     cached = await cache_get(key)
     if cached:
-        return json.loads(cached)
-    try:
-        data = await twse.get_all_valuation_ratios()
-    except Exception:
-        data = {}
-    if data:
-        await cache_set(key, json.dumps(data), TTL_FUNDAMENTALS)
+        data = json.loads(cached)
+    else:
+        try:
+            data = await twse.get_all_valuation_ratios()
+        except Exception:
+            data = {}
+        if data:
+            await cache_set(key, json.dumps(data), TTL_FUNDAMENTALS)
+
+    etf_yields = await _get_etf_yields_cached()
+    if etf_yields:
+        for sym, y in etf_yields.items():
+            entry = data.setdefault(sym, {"pe_ratio": None, "pb_ratio": None, "dividend_yield": None})
+            entry["dividend_yield"] = y
+
     return data
 
 

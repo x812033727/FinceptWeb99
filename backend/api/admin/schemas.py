@@ -55,3 +55,50 @@ class LLMKeyUpsert(BaseModel):
 class LLMKeyValidation(BaseModel):
     ok: bool
     message: str
+
+
+# ── Per-persona model routing ────────────────────────────────────
+
+class PersonaConfigOut(BaseModel):
+    persona_id: str
+    name: str
+    description: str
+    default_provider: str
+    default_model: str
+    effective_provider: str
+    effective_model: str
+    is_overridden: bool
+
+
+class PersonaOverrideIn(BaseModel):
+    provider: str
+    model: str
+
+
+# ── LLM usage summary ────────────────────────────────────────────
+
+class UsageBucketOut(BaseModel):
+    period: str
+    provider: str
+    model: str
+    requests: int
+    prompt_tokens: int
+    completion_tokens: int
+    cost_usd: float
+
+
+class UsageDayPoint(BaseModel):
+    date: str
+    cost_usd: float
+    requests: int
+
+
+class UsageSummaryOut(BaseModel):
+    range_days: int
+    user_scoped: bool
+    total_requests: int
+    total_prompt_tokens: int
+    total_completion_tokens: int
+    total_cost_usd: float
+    by_provider: list[UsageBucketOut]
+    by_day: list[UsageDayPoint]

@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth.llm_key_crypto import decrypt, encrypt, mask
 from config import settings
 from models.llm_provider_key import LLMProviderKey
+from models.user_llm_provider_key import UserLLMProviderKey
 
 logger = logging.getLogger(__name__)
 
@@ -78,16 +79,121 @@ def _env_fallback(provider: str) -> str:
     return getattr(settings, attr, "") if attr else ""
 
 
-async def resolve_key(db: AsyncSession, provider: str) -> str | None:
-    """Return the active key for a provider — DB row first, .env fallback."""
+async def resolve_key(
+    db: AsyncSession, provider: str, user_id: uuid.UUID | None = None,
+) -> str | None:
+    """Return the active key for a provider.
+
+    Lookup order:
+      1. The caller's per-user row in user_llm_provider_keys (if user_id given)
+      2. The system row in llm_provider_keys
+      3. .env fallback
+
+    Returns None only if all three are absent.
+    """
+    if user_id is not None:
+        urow = await db.get(UserLLMProviderKey, (user_id, provider))
+        if urow is not None:
+            plain = decrypt(urow.encrypted_key)
+            if plain:
+                return plain
+            logger.warning("llm_key.user.decrypt_failed",
+                           extra={"provider": provider, "user_id": str(user_id)})
+
     row = await db.get(LLMProviderKey, provider)
     if row is not None:
         plain = decrypt(row.encrypted_key)
         if plain:
             return plain
-        logger.warning("llm_key.decrypt_failed", extra={"provider": provider})
+        logger.warning("llm_key.system.decrypt_failed", extra={"provider": provider})
+
     fallback = _env_fallback(provider)
     return fallback or None
+
+
+# ── Per-user key CRUD ────────────────────────────────────────────
+
+async def list_user_keys(db: AsyncSession, user_id: uuid.UUID) -> list[KeyInfo]:
+    """Per-user analogue of list_keys — system rows are NOT included."""
+    rows = (await db.execute(
+        select(UserLLMProviderKey).where(UserLLMProviderKey.user_id == user_id)
+    )).scalars().all()
+    by_provider = {r.provider: r for r in rows}
+
+    out: list[KeyInfo] = []
+    for prov in SUPPORTED_PROVIDERS:
+        row = by_provider.get(prov)
+        if row is None:
+            out.append(KeyInfo(
+                provider=prov, has_key=False, source="none", masked="",
+                last_validated_at=None, last_validation_ok=None,
+                last_validation_message=None, updated_at=None,
+            ))
+            continue
+        plain = decrypt(row.encrypted_key) or ""
+        out.append(KeyInfo(
+            provider=prov,
+            has_key=bool(plain),
+            source="db" if plain else "none",
+            masked=mask(plain) if plain else "(decrypt failed)",
+            last_validated_at=row.last_validated_at,
+            last_validation_ok=row.last_validation_ok,
+            last_validation_message=row.last_validation_message,
+            updated_at=row.updated_at,
+        ))
+    return out
+
+
+async def upsert_user_key(
+    db: AsyncSession, user_id: uuid.UUID, provider: str, plaintext: str,
+) -> KeyInfo:
+    if provider not in SUPPORTED_PROVIDERS:
+        raise ValueError(f"unsupported provider: {provider}")
+    if not plaintext.strip():
+        raise ValueError("key cannot be blank")
+
+    encrypted = encrypt(plaintext.strip())
+    row = await db.get(UserLLMProviderKey, (user_id, provider))
+    if row is None:
+        row = UserLLMProviderKey(
+            user_id=user_id, provider=provider, encrypted_key=encrypted,
+        )
+        db.add(row)
+    else:
+        row.encrypted_key = encrypted
+        row.last_validated_at = None
+        row.last_validation_ok = None
+        row.last_validation_message = None
+    await db.commit()
+    await db.refresh(row)
+
+    return KeyInfo(
+        provider=provider, has_key=True, source="db",
+        masked=mask(plaintext),
+        last_validated_at=row.last_validated_at,
+        last_validation_ok=row.last_validation_ok,
+        last_validation_message=row.last_validation_message,
+        updated_at=row.updated_at,
+    )
+
+
+async def delete_user_key(db: AsyncSession, user_id: uuid.UUID, provider: str) -> None:
+    row = await db.get(UserLLMProviderKey, (user_id, provider))
+    if row is not None:
+        await db.delete(row)
+        await db.commit()
+
+
+async def record_user_validation(
+    db: AsyncSession, user_id: uuid.UUID, provider: str, result: ValidationResult,
+) -> None:
+    row = await db.get(UserLLMProviderKey, (user_id, provider))
+    if row is None:
+        return
+    row.last_validated_at = datetime.utcnow()
+    row.last_validation_ok = result.ok
+    row.last_validation_message = result.message[:500]
+    await db.commit()
 
 
 async def list_keys(db: AsyncSession) -> list[KeyInfo]:

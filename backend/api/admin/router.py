@@ -12,6 +12,8 @@ from models.user import User, UserRole
 from models.watchlist import Watchlist
 from api.system.router import VersionStatus
 from services import llm_key_service as keys
+from services import persona_override_service as personas
+from services import llm_usage_service as usage
 from services.version_service import force_refresh_status, trigger_update
 from .schemas import (
     ActiveUpdate,
@@ -19,9 +21,14 @@ from .schemas import (
     LLMKeyInfo,
     LLMKeyUpsert,
     LLMKeyValidation,
+    PersonaConfigOut,
+    PersonaOverrideIn,
     RoleUpdate,
     SystemStats,
     UpdateResult,
+    UsageBucketOut,
+    UsageDayPoint,
+    UsageSummaryOut,
 )
 
 router = APIRouter()
@@ -148,6 +155,70 @@ async def delete_llm_key(provider: str, _: Admin, db: DB) -> None:
     if provider not in keys.SUPPORTED_PROVIDERS:
         raise HTTPException(400, f"unsupported provider: {provider}")
     await keys.delete_key(db, provider)
+
+
+# ── Per-persona model routing ────────────────────────────────────
+
+def _persona_config_to_schema(p: personas.PersonaConfig) -> PersonaConfigOut:
+    return PersonaConfigOut(
+        persona_id=p.persona_id,
+        name=p.name,
+        description=p.description,
+        default_provider=p.default_provider,
+        default_model=p.default_model,
+        effective_provider=p.effective_provider,
+        effective_model=p.effective_model,
+        is_overridden=p.is_overridden,
+    )
+
+
+@router.get("/personas", response_model=list[PersonaConfigOut])
+async def list_personas(_: Admin, db: DB) -> list[PersonaConfigOut]:
+    """List every persona with its compiled-default + currently-effective provider/model."""
+    return [_persona_config_to_schema(p) for p in await personas.list_personas(db)]
+
+
+@router.put("/personas/{persona_id}", response_model=PersonaConfigOut)
+async def upsert_persona_override(
+    persona_id: str, body: PersonaOverrideIn, user: Admin, db: DB,
+) -> PersonaConfigOut:
+    try:
+        cfg = await personas.upsert_override(
+            db, persona_id, body.provider, body.model, uuid.UUID(user["id"]),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return _persona_config_to_schema(cfg)
+
+
+@router.delete("/personas/{persona_id}", status_code=204)
+async def delete_persona_override(persona_id: str, _: Admin, db: DB) -> None:
+    await personas.delete_override(db, persona_id)
+
+
+# ── LLM usage summary (admin-wide) ───────────────────────────────
+
+def _summary_to_schema(s: usage.UsageSummary) -> UsageSummaryOut:
+    return UsageSummaryOut(
+        range_days=s.range_days,
+        user_scoped=s.user_scoped,
+        total_requests=s.total_requests,
+        total_prompt_tokens=s.total_prompt_tokens,
+        total_completion_tokens=s.total_completion_tokens,
+        total_cost_usd=s.total_cost_usd,
+        by_provider=[UsageBucketOut(**b.__dict__) for b in s.by_provider],
+        by_day=[UsageDayPoint(**d) for d in s.by_day],
+    )
+
+
+@router.get("/llm-usage", response_model=UsageSummaryOut)
+async def admin_llm_usage(
+    _: Admin, db: DB, range_days: int = 30,
+) -> UsageSummaryOut:
+    """System-wide LLM usage aggregate for the last `range_days` days."""
+    range_days = max(1, min(range_days, 365))
+    summary = await usage.usage_summary(db, range_days=range_days)
+    return _summary_to_schema(summary)
 
 
 @router.post("/llm-keys/{provider}/test", response_model=LLMKeyValidation)

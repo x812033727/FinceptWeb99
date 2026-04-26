@@ -360,6 +360,31 @@
     "invalid": "Validation failed",
     "replace_placeholder": "Enter new key to replace"
   },
+  "my_keys": {
+    "title": "My LLM API Keys",
+    "subtitle": "Personal keys take priority over system + .env so usage hits your own account",
+    "fallback_to_system": "using system"
+  },
+  "personas": {
+    "title": "Persona → Model Routing",
+    "subtitle": "Override the default LLM provider/model per persona",
+    "persona": "Persona",
+    "provider": "Provider",
+    "model": "Model",
+    "overridden": "overridden",
+    "reset": "Reset"
+  },
+  "usage": {
+    "title": "LLM Usage",
+    "subtitle_admin": "Platform-wide token usage and estimated cost",
+    "subtitle_me": "Your personal token usage and estimated cost",
+    "cost": "Cost",
+    "requests": "Requests",
+    "prompt_tokens": "Prompt tokens",
+    "completion_tokens": "Completion tokens",
+    "by_provider": "By Provider",
+    "empty": "No usage yet in this range"
+  },
   "screener": {
     "title": "Screener",
     "subtitle": "Filter stocks by any metric",

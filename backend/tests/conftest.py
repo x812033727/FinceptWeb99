@@ -49,7 +49,10 @@ import models.user              # noqa: E402,F401
 import models.portfolio         # noqa: E402,F401
 import models.watchlist         # noqa: E402,F401
 import models.alert             # noqa: E402,F401
-import models.llm_provider_key  # noqa: E402,F401
+import models.llm_provider_key       # noqa: E402,F401
+import models.persona_override       # noqa: E402,F401
+import models.user_llm_provider_key  # noqa: E402,F401
+import models.llm_usage_event         # noqa: E402,F401
 
 # Disable slowapi rate limiter — tests exercise endpoints in tight loops
 # and would otherwise trip the 5/min register cap, etc.

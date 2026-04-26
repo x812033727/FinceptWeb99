@@ -397,6 +397,7 @@ _AGENTS: dict[str, AgentSpec] = {
 
 
 def get_agent(agent_id: str) -> AgentSpec:
+    """Return the compiled-in spec for `agent_id` (no DB overrides applied)."""
     spec = _AGENTS.get(agent_id)
     if spec is None:
         raise ValueError(f"Unknown agent: {agent_id!r}. Available: {list(_AGENTS)}")
@@ -413,3 +414,32 @@ def list_agents() -> list[dict]:
         }
         for aid, spec in _AGENTS.items()
     ]
+
+
+def all_persona_ids() -> list[str]:
+    return list(_AGENTS.keys())
+
+
+async def get_agent_resolved(db, agent_id: str) -> AgentSpec:
+    """Return the spec with admin-set provider/model overrides applied.
+
+    Falls back to the compiled defaults if no override row exists or the DB
+    lookup fails (so chat survives a transient DB hiccup).
+    """
+    base = get_agent(agent_id)
+    if db is None:
+        return base
+    try:
+        from models.persona_override import PersonaOverride
+        row = await db.get(PersonaOverride, agent_id)
+    except Exception:
+        return base
+    if row is None:
+        return base
+    return AgentSpec(
+        name=base.name,
+        description=base.description,
+        system_prompt=base.system_prompt,
+        default_provider=row.provider,
+        default_model=row.model,
+    )

@@ -251,6 +251,244 @@ function LLMKeyRow({ info }: { info: LLMKeyInfo }) {
   );
 }
 
+// ── Persona model routing ────────────────────────────────────────
+
+interface PersonaConfig {
+  persona_id: string;
+  name: string;
+  description: string;
+  default_provider: string;
+  default_model: string;
+  effective_provider: string;
+  effective_model: string;
+  is_overridden: boolean;
+}
+
+const VALID_PROVIDERS = [
+  "openai", "anthropic", "gemini", "ollama",
+  "minimax", "groq", "deepseek", "openrouter", "claude_agent",
+];
+
+function PersonaRow({ p }: { p: PersonaConfig }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const [provider, setProvider] = useState(p.effective_provider);
+  const [model, setModel] = useState(p.effective_model);
+  const dirty = provider !== p.effective_provider || model !== p.effective_model;
+
+  const save = useMutation({
+    mutationFn: () => api.put(`/admin/personas/${p.persona_id}`, { provider, model }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "personas"] }),
+  });
+
+  const reset = useMutation({
+    mutationFn: () => api.delete(`/admin/personas/${p.persona_id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "personas"] }),
+  });
+
+  return (
+    <div className="grid grid-cols-[200px_140px_1fr_auto] items-center gap-2 py-1.5 border-b border-border/40 text-xs">
+      <div>
+        <span className="font-medium text-sm">{p.name}</span>
+        {p.is_overridden && (
+          <span className="ml-1.5 text-[9px] border border-amber-400/30 text-amber-400 bg-amber-400/10 px-1 rounded">
+            {t("personas.overridden")}
+          </span>
+        )}
+      </div>
+      <select
+        value={provider}
+        onChange={(e) => setProvider(e.target.value)}
+        className="bg-background border border-border rounded px-2 py-1 text-xs"
+      >
+        {VALID_PROVIDERS.map((p) => <option key={p} value={p}>{p}</option>)}
+      </select>
+      <input
+        value={model}
+        onChange={(e) => setModel(e.target.value)}
+        placeholder="model id"
+        className="bg-background border border-border rounded px-2 py-1 text-xs font-mono"
+      />
+      <div className="flex gap-1">
+        <button
+          onClick={() => save.mutate()}
+          disabled={!dirty || save.isPending}
+          className="px-2.5 py-1 text-xs bg-primary text-primary-foreground rounded hover:opacity-90 disabled:opacity-30"
+        >
+          {save.isPending ? "…" : t("common.save")}
+        </button>
+        {p.is_overridden && (
+          <button
+            onClick={() => reset.mutate()}
+            className="px-2.5 py-1 text-xs border border-border text-muted-foreground rounded hover:text-foreground"
+          >
+            {t("personas.reset")}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PersonasCard() {
+  const { t } = useTranslation();
+  const { data: list = [], isLoading } = useQuery<PersonaConfig[]>({
+    queryKey: ["admin", "personas"],
+    queryFn: () => api.get("/admin/personas").then((r) => r.data),
+  });
+
+  return (
+    <div className="bg-card border border-border rounded-lg p-4 space-y-2">
+      <div>
+        <p className="text-sm font-medium">{t("personas.title")}</p>
+        <p className="text-xs text-muted-foreground mt-0.5">{t("personas.subtitle")}</p>
+      </div>
+      {isLoading ? (
+        <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>
+      ) : (
+        <div className="grid grid-cols-[200px_140px_1fr_auto] gap-2 text-[10px] text-muted-foreground uppercase tracking-wider border-b border-border pb-1">
+          <span>{t("personas.persona")}</span>
+          <span>{t("personas.provider")}</span>
+          <span>{t("personas.model")}</span>
+          <span></span>
+        </div>
+      )}
+      {list.map((p) => <PersonaRow key={p.persona_id} p={p} />)}
+    </div>
+  );
+}
+
+
+// ── LLM usage summary ───────────────────────────────────────────
+
+interface UsageBucket {
+  provider: string;
+  model: string;
+  requests: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cost_usd: number;
+}
+
+interface UsageDay {
+  date: string;
+  cost_usd: number;
+  requests: number;
+}
+
+interface UsageSummary {
+  range_days: number;
+  user_scoped: boolean;
+  total_requests: number;
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  total_cost_usd: number;
+  by_provider: UsageBucket[];
+  by_day: UsageDay[];
+}
+
+const PROVIDER_COLOR: Record<string, string> = {
+  openai: "text-green-400",
+  anthropic: "text-orange-400",
+  gemini: "text-blue-400",
+  minimax: "text-purple-400",
+  groq: "text-pink-400",
+  deepseek: "text-cyan-400",
+  openrouter: "text-yellow-400",
+  ollama: "text-violet-400",
+};
+
+export function UsageCard({ scope }: { scope: "admin" | "me" }) {
+  const { t } = useTranslation();
+  const [days, setDays] = useState(30);
+  const path = scope === "admin" ? "/admin/llm-usage" : "/auth/llm-usage";
+  const { data, isLoading } = useQuery<UsageSummary>({
+    queryKey: ["llm-usage", scope, days],
+    queryFn: () => api.get(`${path}?range_days=${days}`).then((r) => r.data),
+  });
+
+  return (
+    <div className="bg-card border border-border rounded-lg p-4 space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-medium">{t("usage.title")}</p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {scope === "admin" ? t("usage.subtitle_admin") : t("usage.subtitle_me")}
+          </p>
+        </div>
+        <div className="flex gap-1">
+          {[7, 30, 90].map((d) => (
+            <button
+              key={d}
+              onClick={() => setDays(d)}
+              className={`px-2.5 py-1 text-xs rounded ${
+                days === d
+                  ? "bg-primary text-primary-foreground"
+                  : "border border-border text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {d}d
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {isLoading || !data ? (
+        <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>
+      ) : data.total_requests === 0 ? (
+        <p className="text-xs text-muted-foreground py-3">{t("usage.empty")}</p>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <Stat label={t("usage.cost")} value={`$${data.total_cost_usd.toFixed(4)}`} />
+            <Stat label={t("usage.requests")} value={data.total_requests.toLocaleString()} />
+            <Stat label={t("usage.prompt_tokens")} value={data.total_prompt_tokens.toLocaleString()} />
+            <Stat label={t("usage.completion_tokens")} value={data.total_completion_tokens.toLocaleString()} />
+          </div>
+
+          <div className="space-y-1">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">{t("usage.by_provider")}</p>
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-muted-foreground border-b border-border/50">
+                  <th className="text-left py-1 font-medium">{t("personas.provider")}</th>
+                  <th className="text-left py-1 font-medium">{t("personas.model")}</th>
+                  <th className="text-right py-1 font-medium">{t("usage.requests")}</th>
+                  <th className="text-right py-1 font-medium">tokens</th>
+                  <th className="text-right py-1 font-medium">{t("usage.cost")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.by_provider.map((b, i) => (
+                  <tr key={i} className="border-b border-border/30">
+                    <td className={`py-1 font-medium ${PROVIDER_COLOR[b.provider] ?? "text-foreground"}`}>{b.provider}</td>
+                    <td className="py-1 font-mono text-muted-foreground">{b.model}</td>
+                    <td className="py-1 text-right">{b.requests.toLocaleString()}</td>
+                    <td className="py-1 text-right text-muted-foreground">
+                      {(b.prompt_tokens + b.completion_tokens).toLocaleString()}
+                    </td>
+                    <td className="py-1 text-right font-medium">${b.cost_usd.toFixed(4)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="bg-secondary/30 rounded p-2">
+      <p className="text-[10px] text-muted-foreground uppercase tracking-wider">{label}</p>
+      <p className="text-sm font-semibold mt-0.5 tabular-nums">{value}</p>
+    </div>
+  );
+}
+
+
 function LLMKeysCard() {
   const { t } = useTranslation();
   const { data: keys = [], isLoading } = useQuery<LLMKeyInfo[]>({
@@ -346,6 +584,10 @@ function AdminContent() {
       <SystemUpdateCard />
 
       <LLMKeysCard />
+
+      <UsageCard scope="admin" />
+
+      <PersonasCard />
 
       {/* User table */}
       <div className="bg-card border border-border rounded-lg overflow-hidden">

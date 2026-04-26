@@ -28,7 +28,7 @@ from api.ai_agents.schemas import AgentInfo, ChatRequest
 from auth.permissions import require_viewer
 from cache.redis_cache import cache_decr, cache_incr, key_ai_counter
 from db.session import get_db
-from ai.agents import get_agent, list_agents
+from ai.agents import get_agent_resolved, list_agents
 from ai.llm_router import stream_chat
 from config import settings
 
@@ -109,7 +109,7 @@ async def chat(
     await _check_quota(user)
 
     try:
-        agent = get_agent(body.agent_id)
+        agent = await get_agent_resolved(db, body.agent_id)
     except ValueError as e:
         await _refund_quota(user)
         raise HTTPException(status_code=400, detail=str(e))
@@ -153,9 +153,11 @@ async def chat(
             openai_tool_schemas, openai_tool_dispatch = build_openai_compat_toolset(user["id"])
 
     async def event_generator() -> AsyncGenerator[bytes, None]:
+        from services.llm_usage_service import record_usage
         # Refund the quota when the stream produces no usable content —
         # i.e. the provider raised before any delta or yielded only errors.
         produced_content = False
+        usage_seen: dict[str, int] | None = None
         try:
             async for event in stream_chat(
                 messages=messages,
@@ -167,11 +169,20 @@ async def chat(
                 openai_tool_schemas=openai_tool_schemas,
                 openai_tool_dispatch=openai_tool_dispatch,
                 db=db,
+                user_id=user["id"],
             ):
+                etype = event.get("type")
+                if etype == "usage":
+                    # Don't forward to client; record server-side only.
+                    usage_seen = {
+                        "prompt_tokens": int(event.get("prompt_tokens", 0)),
+                        "completion_tokens": int(event.get("completion_tokens", 0)),
+                    }
+                    continue
                 payload = _event_to_sse(event)
                 if payload is not None:
                     yield payload
-                    if event.get("type") in ("delta", "tool_call", "tool_result"):
+                    if etype in ("delta", "tool_call", "tool_result"):
                         produced_content = True
         except Exception as exc:
             err = json.dumps({"error": str(exc)}, ensure_ascii=False)
@@ -179,6 +190,16 @@ async def chat(
         finally:
             if not produced_content:
                 await _refund_quota(user)
+            if usage_seen is not None and produced_content:
+                await record_usage(
+                    db,
+                    user_id=user["id"],
+                    provider=provider,
+                    model=model,
+                    persona_id=body.agent_id,
+                    prompt_tokens=usage_seen["prompt_tokens"],
+                    completion_tokens=usage_seen["completion_tokens"],
+                )
             yield b"data: [DONE]\n\n"
 
     return StreamingResponse(

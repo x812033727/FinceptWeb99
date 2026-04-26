@@ -360,6 +360,31 @@
     "invalid": "驗證失敗",
     "replace_placeholder": "輸入新 key 以覆蓋既有"
   },
+  "my_keys": {
+    "title": "我的 LLM API 金鑰",
+    "subtitle": "個人 key 會優先於系統共用 key 與 .env，使用您自己的帳號計費",
+    "fallback_to_system": "用系統設定"
+  },
+  "personas": {
+    "title": "顧問人格 → 模型對應",
+    "subtitle": "覆蓋每個 persona 的預設 LLM provider 與 model",
+    "persona": "顧問",
+    "provider": "Provider",
+    "model": "Model",
+    "overridden": "已覆蓋",
+    "reset": "還原預設"
+  },
+  "usage": {
+    "title": "LLM 用量",
+    "subtitle_admin": "全平台 token 與成本（僅估算）",
+    "subtitle_me": "您個人的 token 與成本（僅估算）",
+    "cost": "成本",
+    "requests": "請求次數",
+    "prompt_tokens": "Prompt tokens",
+    "completion_tokens": "Completion tokens",
+    "by_provider": "依 Provider 拆分",
+    "empty": "此區間尚無用量"
+  },
   "screener": {
     "title": "篩選器",
     "subtitle": "依條件篩選個股",

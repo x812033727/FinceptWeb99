@@ -270,3 +270,107 @@ async def delete_api_key(
         raise HTTPException(status_code=404, detail="API key not found")
     await db.delete(key)
     await db.commit()
+
+
+# ── Per-user LLM provider keys ───────────────────────────────────
+
+from services import llm_key_service as _keys  # noqa: E402
+from api.admin.schemas import LLMKeyInfo, LLMKeyUpsert, LLMKeyValidation  # noqa: E402
+
+
+def _info_to_schema(info: _keys.KeyInfo) -> LLMKeyInfo:
+    return LLMKeyInfo(
+        provider=info.provider,
+        has_key=info.has_key,
+        source=info.source,
+        masked=info.masked,
+        last_validated_at=info.last_validated_at,
+        last_validation_ok=info.last_validation_ok,
+        last_validation_message=info.last_validation_message,
+        updated_at=info.updated_at,
+    )
+
+
+@router.get("/llm-keys", response_model=list[LLMKeyInfo])
+async def list_my_llm_keys(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[LLMKeyInfo]:
+    """List the caller's per-user LLM keys (system rows are not exposed here)."""
+    rows = await _keys.list_user_keys(db, UUID(current_user["id"]))
+    return [_info_to_schema(r) for r in rows]
+
+
+@router.put("/llm-keys/{provider}", response_model=LLMKeyInfo)
+async def upsert_my_llm_key(
+    provider: str,
+    body: LLMKeyUpsert,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LLMKeyInfo:
+    if provider not in _keys.SUPPORTED_PROVIDERS:
+        raise HTTPException(400, f"unsupported provider: {provider}")
+    try:
+        info = await _keys.upsert_user_key(
+            db, UUID(current_user["id"]), provider, body.api_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return _info_to_schema(info)
+
+
+@router.delete("/llm-keys/{provider}", status_code=204)
+async def delete_my_llm_key(
+    provider: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    if provider not in _keys.SUPPORTED_PROVIDERS:
+        raise HTTPException(400, f"unsupported provider: {provider}")
+    await _keys.delete_user_key(db, UUID(current_user["id"]), provider)
+
+
+@router.post("/llm-keys/{provider}/test", response_model=LLMKeyValidation)
+async def test_my_llm_key(
+    provider: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LLMKeyValidation:
+    """Verify the caller's per-user key for `provider`. Falls back to system+env."""
+    if provider not in _keys.SUPPORTED_PROVIDERS:
+        raise HTTPException(400, f"unsupported provider: {provider}")
+    key = await _keys.resolve_key(db, provider, UUID(current_user["id"]))
+    if not key:
+        return LLMKeyValidation(ok=False, message="no key configured")
+    result = await _keys.validate_key(provider, key)
+    await _keys.record_user_validation(db, UUID(current_user["id"]), provider, result)
+    return LLMKeyValidation(ok=result.ok, message=result.message)
+
+
+# ── Per-user LLM usage ───────────────────────────────────────────
+
+from services import llm_usage_service as _usage  # noqa: E402
+from api.admin.schemas import UsageSummaryOut, UsageBucketOut, UsageDayPoint  # noqa: E402
+
+
+@router.get("/llm-usage", response_model=UsageSummaryOut)
+async def my_llm_usage(
+    range_days: int = 30,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UsageSummaryOut:
+    """The caller's own LLM usage aggregate for the last `range_days` days."""
+    range_days = max(1, min(range_days, 365))
+    s = await _usage.usage_summary(
+        db, range_days=range_days, user_id=UUID(current_user["id"]),
+    )
+    return UsageSummaryOut(
+        range_days=s.range_days,
+        user_scoped=s.user_scoped,
+        total_requests=s.total_requests,
+        total_prompt_tokens=s.total_prompt_tokens,
+        total_completion_tokens=s.total_completion_tokens,
+        total_cost_usd=s.total_cost_usd,
+        by_provider=[UsageBucketOut(**b.__dict__) for b in s.by_provider],
+        by_day=[UsageDayPoint(**d) for d in s.by_day],
+    )

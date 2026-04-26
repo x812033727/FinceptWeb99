@@ -5,10 +5,11 @@ LLM Router — streams events from OpenAI / Anthropic / Gemini / Ollama / Claude
   {"type": "delta", "text": "..."}                 text token (all providers)
   {"type": "tool_call", "id": "...", "name": "...", "args": {...}}     claude_agent only
   {"type": "tool_result", "id": "...", "name": "...", "summary": "..."}  claude_agent only
+  {"type": "usage", "prompt_tokens": int, "completion_tokens": int}     emitted at end
   {"type": "error", "message": "..."}              provider-level failure
 
-The four non-Claude providers emit only `delta`. The chat endpoint translates
-every event into its SSE wire form (see api/ai_agents/router.py).
+The chat endpoint records the `usage` event into llm_usage_events for cost
+tracking. Providers that don't expose token counts simply don't emit usage.
 """
 from __future__ import annotations
 
@@ -26,16 +27,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-async def _resolve_api_key(provider: str, db: "AsyncSession | None") -> str:
+async def _resolve_api_key(
+    provider: str, db: "AsyncSession | None", user_id: "str | None" = None,
+) -> str:
     """Resolve the active API key for a provider.
 
-    Priority: DB-stored (admin-set, encrypted) → .env-supplied (settings) → "".
-    Empty string means "no key configured" — callers should yield that error.
+    Priority: per-user DB row (if user_id given) → system DB row →
+    .env-supplied (settings) → "". Empty means "no key configured" —
+    callers should yield that error.
     """
     if db is not None:
         from services.llm_key_service import resolve_key as _db_resolve
+        import uuid as _uuid
+        uid = None
+        if user_id:
+            try:
+                uid = _uuid.UUID(user_id)
+            except (TypeError, ValueError):
+                uid = None
         try:
-            key = await _db_resolve(db, provider)
+            key = await _db_resolve(db, provider, uid)
             if key:
                 return key
         except Exception as exc:  # noqa: BLE001 — DB hiccup must not break chat
@@ -69,6 +80,7 @@ async def stream_chat(
     openai_tool_schemas: list[dict] | None = None,
     openai_tool_dispatch: dict[str, Any] | None = None,
     db: "AsyncSession | None" = None,
+    user_id: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """
     Yield streaming events from the chosen provider.
@@ -82,20 +94,20 @@ async def stream_chat(
     back to the .env-supplied key in `settings`.
     """
     prov = (provider or settings.DEFAULT_LLM_PROVIDER).lower()
-    api_key = await _resolve_api_key(prov, db)
+    api_key = await _resolve_api_key(prov, db, user_id)
 
     if prov == "openai":
-        async for text in _openai_stream(messages, model or "gpt-4o-mini", max_tokens, temperature, api_key=api_key):
-            yield {"type": "delta", "text": text}
+        async for ev in _openai_stream(messages, model or "gpt-4o-mini", max_tokens, temperature, api_key=api_key):
+            yield ev
     elif prov == "anthropic":
-        async for text in _anthropic_stream(messages, model or "claude-haiku-4-5-20251001", max_tokens, temperature, api_key=api_key):
-            yield {"type": "delta", "text": text}
+        async for ev in _anthropic_stream(messages, model or "claude-haiku-4-5-20251001", max_tokens, temperature, api_key=api_key):
+            yield ev
     elif prov == "gemini":
-        async for text in _gemini_stream(messages, model or "gemini-2.0-flash", max_tokens, temperature, api_key=api_key):
-            yield {"type": "delta", "text": text}
+        async for ev in _gemini_stream(messages, model or "gemini-2.0-flash", max_tokens, temperature, api_key=api_key):
+            yield ev
     elif prov == "ollama":
-        async for text in _ollama_stream(messages, model or "llama3.2", max_tokens, temperature):
-            yield {"type": "delta", "text": text}
+        async for ev in _ollama_stream(messages, model or "llama3.2", max_tokens, temperature):
+            yield ev
     elif prov == "minimax":
         async for ev in _minimax_stream(
             messages,
@@ -166,16 +178,16 @@ async def _openai_stream(
     temperature: float,
     *,
     api_key: str = "",
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[dict, None]:
     try:
         from openai import AsyncOpenAI
     except ImportError:
-        yield "[OpenAI SDK not installed]"
+        yield {"type": "delta", "text": "[OpenAI SDK not installed]"}
         return
 
     key = api_key or settings.OPENAI_API_KEY
     if not key:
-        yield "[OpenAI API key not configured]"
+        yield {"type": "delta", "text": "[OpenAI API key not configured]"}
         return
 
     client = AsyncOpenAI(api_key=key)
@@ -188,7 +200,19 @@ async def _openai_stream(
         async for event in stream:
             delta = event.choices[0].delta.content if event.choices else None
             if delta:
-                yield delta
+                yield {"type": "delta", "text": delta}
+        # Final aggregated chunk carries usage.
+        try:
+            final = await stream.get_final_completion()
+            usage = getattr(final, "usage", None)
+            if usage:
+                yield {
+                    "type": "usage",
+                    "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+                    "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+                }
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("openai.usage_unavailable: %s", exc)
 
 
 # ── Anthropic ─────────────────────────────────────────────────────
@@ -200,16 +224,16 @@ async def _anthropic_stream(
     temperature: float,
     *,
     api_key: str = "",
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[dict, None]:
     try:
         import anthropic
     except ImportError:
-        yield "[Anthropic SDK not installed]"
+        yield {"type": "delta", "text": "[Anthropic SDK not installed]"}
         return
 
     key = api_key or settings.ANTHROPIC_API_KEY
     if not key:
-        yield "[Anthropic API key not configured]"
+        yield {"type": "delta", "text": "[Anthropic API key not configured]"}
         return
 
     system = ""
@@ -229,7 +253,18 @@ async def _anthropic_stream(
         temperature=temperature,
     ) as stream:
         async for text in stream.text_stream:
-            yield text
+            yield {"type": "delta", "text": text}
+        try:
+            final = await stream.get_final_message()
+            usage = getattr(final, "usage", None)
+            if usage:
+                yield {
+                    "type": "usage",
+                    "prompt_tokens": int(getattr(usage, "input_tokens", 0) or 0),
+                    "completion_tokens": int(getattr(usage, "output_tokens", 0) or 0),
+                }
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("anthropic.usage_unavailable: %s", exc)
 
 
 # ── Gemini ────────────────────────────────────────────────────────
@@ -241,16 +276,16 @@ async def _gemini_stream(
     temperature: float,
     *,
     api_key: str = "",
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[dict, None]:
     try:
         import google.generativeai as genai
     except ImportError:
-        yield "[google-generativeai SDK not installed]"
+        yield {"type": "delta", "text": "[google-generativeai SDK not installed]"}
         return
 
     key = api_key or settings.GEMINI_API_KEY
     if not key:
-        yield "[Gemini API key not configured]"
+        yield {"type": "delta", "text": "[Gemini API key not configured]"}
         return
 
     genai.configure(api_key=key)
@@ -279,9 +314,21 @@ async def _gemini_stream(
             temperature=temperature,
         ),
     )
+    last_chunk = None
     async for chunk in response:
         if chunk.text:
-            yield chunk.text
+            yield {"type": "delta", "text": chunk.text}
+        last_chunk = chunk
+    try:
+        meta = getattr(last_chunk, "usage_metadata", None) if last_chunk else None
+        if meta:
+            yield {
+                "type": "usage",
+                "prompt_tokens": int(getattr(meta, "prompt_token_count", 0) or 0),
+                "completion_tokens": int(getattr(meta, "candidates_token_count", 0) or 0),
+            }
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("gemini.usage_unavailable: %s", exc)
 
 
 # ── Ollama ────────────────────────────────────────────────────────
@@ -291,7 +338,7 @@ async def _ollama_stream(
     model: str,
     max_tokens: int,
     temperature: float,
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[dict, None]:
     url = f"{settings.OLLAMA_HOST.rstrip('/')}/api/chat"
     payload = {
         "model": model,
@@ -302,7 +349,7 @@ async def _ollama_stream(
     async with httpx.AsyncClient(timeout=120) as client:
         async with client.stream("POST", url, json=payload) as response:
             if response.status_code != 200:
-                yield f"[Ollama error: {response.status_code}]"
+                yield {"type": "delta", "text": f"[Ollama error: {response.status_code}]"}
                 return
             async for line in response.aiter_lines():
                 if not line:
@@ -311,8 +358,17 @@ async def _ollama_stream(
                     data = json.loads(line)
                     content = data.get("message", {}).get("content", "")
                     if content:
-                        yield content
+                        yield {"type": "delta", "text": content}
                     if data.get("done"):
+                        # Ollama returns prompt_eval_count + eval_count in the final chunk.
+                        prompt_t = int(data.get("prompt_eval_count", 0) or 0)
+                        completion_t = int(data.get("eval_count", 0) or 0)
+                        if prompt_t or completion_t:
+                            yield {
+                                "type": "usage",
+                                "prompt_tokens": prompt_t,
+                                "completion_tokens": completion_t,
+                            }
                         break
                 except json.JSONDecodeError:
                     continue
@@ -373,12 +429,18 @@ async def _openai_compat_tool_loop(
         if tools_enabled:
             payload["tools"] = tool_schemas
             payload["tool_choice"] = "auto"
+        # Ask OpenAI-compat servers to include usage in the final stream chunk
+        # (OpenAI / Groq / DeepSeek / OpenRouter all honor this). MiniMax may
+        # ignore it; that's fine, we just won't get usage from them.
+        payload["stream_options"] = {"include_usage": True}
 
         # accumulator: index → {id, name, arguments_str}
         pending: dict[int, dict[str, str]] = {}
         finish_reason: str | None = None
         assistant_text_parts: list[str] = []
         any_text = False
+        prompt_tokens_seen = 0
+        completion_tokens_seen = 0
 
         try:
             async with httpx.AsyncClient(timeout=180) as client:
@@ -400,6 +462,11 @@ async def _openai_compat_tool_loop(
                             obj = json.loads(data)
                         except json.JSONDecodeError:
                             continue
+                        # Final chunk often has empty choices but a usage block.
+                        usage = obj.get("usage")
+                        if usage:
+                            prompt_tokens_seen = int(usage.get("prompt_tokens", 0) or 0)
+                            completion_tokens_seen = int(usage.get("completion_tokens", 0) or 0)
                         choices = obj.get("choices") or []
                         if not choices:
                             continue
@@ -428,7 +495,14 @@ async def _openai_compat_tool_loop(
             return
 
         if finish_reason != "tool_calls" or not pending:
-            return  # natural stop, length cap, or content filter — done
+            # Natural stop, length cap, or content filter — emit usage if we got it.
+            if prompt_tokens_seen or completion_tokens_seen:
+                yield {
+                    "type": "usage",
+                    "prompt_tokens": prompt_tokens_seen,
+                    "completion_tokens": completion_tokens_seen,
+                }
+            return
 
         # Append the assistant's tool-call message, then execute and feed back.
         assistant_msg: dict[str, Any] = {

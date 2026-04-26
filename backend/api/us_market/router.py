@@ -90,7 +90,11 @@ async def screener(
     request: Request,
     _: Auth,
     min_market_cap: float | None = Query(None, description="Minimum market cap in USD"),
+    min_pe: float | None = Query(None, description="Minimum P/E ratio"),
     max_pe: float | None = Query(None, description="Maximum P/E ratio"),
+    min_pb: float | None = Query(None, description="Minimum P/B ratio"),
+    max_pb: float | None = Query(None, description="Maximum P/B ratio"),
+    min_dividend_yield: float | None = Query(None, description="Minimum dividend yield % (e.g. 3 = 3%)"),
     min_volume: int | None = Query(None, description="Minimum daily volume"),
     sector: str | None = Query(None, description="Sector filter (partial match)"),
     limit: int = Query(100, le=500),
@@ -98,7 +102,11 @@ async def screener(
     try:
         return await svc.get_screener(
             min_market_cap=min_market_cap,
+            min_pe=min_pe,
             max_pe=max_pe,
+            min_pb=min_pb,
+            max_pb=max_pb,
+            min_dividend_yield=min_dividend_yield,
             min_volume=min_volume,
             sector=sector,
             limit=limit,

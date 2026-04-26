@@ -221,6 +221,48 @@ async def test_screener_passes_filters(client: AsyncClient):
     assert kwargs["sector"] == "Technology"
 
 
+@pytest.mark.asyncio
+async def test_screener_forwards_fundamental_filters(client: AsyncClient):
+    """min_pe, min_pb, max_pb, min_dividend_yield reach the service kwargs."""
+    h = await _auth_headers(client, "scr_fund@example.com")
+    with patch("services.us_market_service.get_screener", new_callable=AsyncMock) as mock:
+        mock.return_value = []
+        await client.get(
+            "/api/us/screener?min_pe=5&max_pe=20&min_pb=0.5&max_pb=3&min_dividend_yield=2.5",
+            headers=h,
+        )
+
+    _, kwargs = mock.call_args
+    assert kwargs["min_pe"] == pytest.approx(5.0)
+    assert kwargs["max_pe"] == pytest.approx(20.0)
+    assert kwargs["min_pb"] == pytest.approx(0.5)
+    assert kwargs["max_pb"] == pytest.approx(3.0)
+    assert kwargs["min_dividend_yield"] == pytest.approx(2.5)
+
+
+@pytest.mark.asyncio
+async def test_screener_returns_fundamental_fields(client: AsyncClient):
+    """Response carries pb_ratio + dividend_yield when populated."""
+    h = await _auth_headers(client, "scr_shape@example.com")
+    payload = [
+        {
+            "symbol": "AAPL", "market": "US", "name": "Apple Inc.",
+            "price": 175.0, "change_pct": 0.5, "volume": 50_000_000,
+            "market_cap": 2_700_000_000_000.0,
+            "pe_ratio": 28.5, "pb_ratio": 45.0, "dividend_yield": 0.5,
+            "sector": "Technology",
+        },
+    ]
+    with patch("services.us_market_service.get_screener", new_callable=AsyncMock) as mock:
+        mock.return_value = payload
+        r = await client.get("/api/us/screener?max_pe=30", headers=h)
+
+    assert r.status_code == 200
+    row = r.json()[0]
+    assert row["pb_ratio"] == pytest.approx(45.0)
+    assert row["dividend_yield"] == pytest.approx(0.5)
+
+
 # ── news ──────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

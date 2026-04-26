@@ -535,7 +535,19 @@
       "liquid_blue_chip": "大盤主流股",
       "liquid_blue_chip_desc": "成交量 ≥ 10M、排除 ETF",
       "neglected_value": "被忽略低估",
-      "neglected_value_desc": "本益比 ≤ 10、殖利率 ≥ 4%、排除 ETF"
+      "neglected_value_desc": "本益比 ≤ 10、殖利率 ≥ 4%、排除 ETF",
+      "us_graham_value": "葛拉漢價值股",
+      "us_graham_value_desc": "本益比 ≤ 15、股價淨值比 ≤ 1.5、成交量 ≥ 1M",
+      "us_mega_cap": "超大型藍籌",
+      "us_mega_cap_desc": "市值 ≥ 2000 億美元",
+      "us_dividend_stalwart": "穩健配息股",
+      "us_dividend_stalwart_desc": "殖利率 ≥ 3%、市值 ≥ 200 億美元",
+      "us_tech_giants": "科技巨頭",
+      "us_tech_giants_desc": "科技類股、市值 ≥ 1000 億美元",
+      "us_high_volume": "高量交易股",
+      "us_high_volume_desc": "成交量 ≥ 20M",
+      "us_quality_fair_price": "平價優質股",
+      "us_quality_fair_price_desc": "本益比 ≤ 25、股價淨值比 ≤ 4、市值 ≥ 100 億美元"
     }
   }
 }

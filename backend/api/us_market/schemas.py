@@ -62,6 +62,8 @@ class ScreenerItem(BaseModel):
     volume: int
     market_cap: float | None = None
     pe_ratio: float | None = None
+    pb_ratio: float | None = None
+    dividend_yield: float | None = None       # in percent (3.5 = 3.5%)
     sector: str | None = None
 
 

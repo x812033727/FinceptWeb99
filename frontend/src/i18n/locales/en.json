@@ -535,7 +535,19 @@
       "liquid_blue_chip": "Liquid blue chips",
       "liquid_blue_chip_desc": "Volume ≥ 10M, stocks only",
       "neglected_value": "Neglected value",
-      "neglected_value_desc": "P/E ≤ 10, yield ≥ 4%, stocks only"
+      "neglected_value_desc": "P/E ≤ 10, yield ≥ 4%, stocks only",
+      "us_graham_value": "Graham value",
+      "us_graham_value_desc": "P/E ≤ 15, P/B ≤ 1.5, volume ≥ 1M",
+      "us_mega_cap": "Mega-cap blue chip",
+      "us_mega_cap_desc": "Market cap ≥ $200B",
+      "us_dividend_stalwart": "Dividend stalwart",
+      "us_dividend_stalwart_desc": "Yield ≥ 3%, market cap ≥ $20B",
+      "us_tech_giants": "Tech giants",
+      "us_tech_giants_desc": "Technology sector, market cap ≥ $100B",
+      "us_high_volume": "High-volume movers",
+      "us_high_volume_desc": "Volume ≥ 20M",
+      "us_quality_fair_price": "Quality at fair price",
+      "us_quality_fair_price_desc": "P/E ≤ 25, P/B ≤ 4, market cap ≥ $10B"
     }
   }
 }

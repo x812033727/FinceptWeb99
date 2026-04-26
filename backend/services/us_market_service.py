@@ -223,22 +223,46 @@ async def _get_sp500_tickers() -> list[str]:
 
 async def get_screener(
     min_market_cap: float | None = None,
+    min_pe: float | None = None,
     max_pe: float | None = None,
+    min_pb: float | None = None,
+    max_pb: float | None = None,
+    min_dividend_yield: float | None = None,
     min_volume: int | None = None,
     sector: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
-    key = f"us:screener:{min_market_cap}:{max_pe}:{min_volume}:{sector}:{limit}"
+    key = (
+        f"us:screener:{min_market_cap}:{min_pe}:{max_pe}:{min_pb}:{max_pb}:"
+        f"{min_dividend_yield}:{min_volume}:{sector}:{limit}"
+    )
     cached = await cache_get(key)
     if cached:
         return json.loads(cached)
 
-    if _use_polygon():
+    # Polygon's bulk snapshot endpoint doesn't expose PE/PB/yield/sector,
+    # so any fundamental filter forces the yfinance path.
+    fundamental_filter = any(
+        v is not None for v in (min_pe, max_pe, min_pb, max_pb, min_dividend_yield, sector)
+    )
+
+    if _use_polygon() and not fundamental_filter:
         snapshots = await polygon.get_snapshot_all()
         results = _filter_polygon_snapshots(snapshots, min_market_cap, min_volume, limit)
     else:
         tickers = await _get_sp500_tickers()
-        results = await _screener_yfinance(tickers, min_market_cap, max_pe, min_volume, sector, limit)
+        results = await _screener_yfinance(
+            tickers,
+            min_cap=min_market_cap,
+            min_pe=min_pe,
+            max_pe=max_pe,
+            min_pb=min_pb,
+            max_pb=max_pb,
+            min_dividend_yield=min_dividend_yield,
+            min_vol=min_volume,
+            sector=sector,
+            limit=limit,
+        )
 
     await cache_set(key, json.dumps(results), TTL_SCREENER)
     return results
@@ -262,7 +286,19 @@ def _filter_polygon_snapshots(snaps: list[dict], min_cap, min_vol, limit) -> lis
     return out[:limit]
 
 
-async def _screener_yfinance(tickers, min_cap, max_pe, min_vol, sector, limit) -> list[dict]:
+async def _screener_yfinance(
+    tickers: list[str],
+    *,
+    min_cap: float | None = None,
+    min_pe: float | None = None,
+    max_pe: float | None = None,
+    min_pb: float | None = None,
+    max_pb: float | None = None,
+    min_dividend_yield: float | None = None,
+    min_vol: int | None = None,
+    sector: str | None = None,
+    limit: int = 100,
+) -> list[dict]:
     import asyncio
     results = []
 
@@ -271,11 +307,24 @@ async def _screener_yfinance(tickers, min_cap, max_pe, min_vol, sector, limit) -
             info = await yfinance.get_info(t)
             cap = info.get("marketCap", 0) or 0
             pe = info.get("trailingPE")
+            pb = info.get("priceToBook")
+            # yfinance returns dividendYield as a fraction (0.025 = 2.5%);
+            # the screener filter and column are both in percent, so multiply.
+            raw_yield = info.get("dividendYield")
+            yield_pct = (raw_yield * 100) if raw_yield is not None else None
             vol = info.get("volume", 0) or 0
             sec = info.get("sector", "")
             if min_cap and cap < min_cap:
                 return
-            if max_pe and pe and pe > max_pe:
+            if min_pe is not None and (pe is None or pe < min_pe):
+                return
+            if max_pe is not None and (pe is None or pe > max_pe):
+                return
+            if min_pb is not None and (pb is None or pb < min_pb):
+                return
+            if max_pb is not None and (pb is None or pb > max_pb):
+                return
+            if min_dividend_yield is not None and (yield_pct is None or yield_pct < min_dividend_yield):
                 return
             if min_vol and vol < min_vol:
                 return
@@ -287,7 +336,10 @@ async def _screener_yfinance(tickers, min_cap, max_pe, min_vol, sector, limit) -
                 "price": info.get("currentPrice") or info.get("regularMarketPrice", 0),
                 "change_pct": info.get("regularMarketChangePercent", 0),
                 "volume": vol, "market_cap": cap,
-                "pe_ratio": pe, "sector": sec,
+                "pe_ratio": pe,
+                "pb_ratio": pb,
+                "dividend_yield": round(yield_pct, 3) if yield_pct is not None else None,
+                "sector": sec,
             })
         except Exception:
             pass

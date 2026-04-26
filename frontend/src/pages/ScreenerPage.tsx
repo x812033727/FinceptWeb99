@@ -66,6 +66,53 @@ const RESET_TW_FIELDS = (f: Filters): Filters => ({
   etfMode: "all",
 });
 
+const RESET_US_FIELDS = (f: Filters): Filters => ({
+  ...f,
+  minMarketCap: "",
+  minPE: "", maxPE: "", minPB: "", maxPB: "",
+  minDivYield: "", minVolume: "",
+  sector: "",
+});
+
+const US_STRATEGIES: Strategy[] = [
+  {
+    id: "us_graham_value",
+    nameKey: "screener.strategies.us_graham_value",
+    descKey: "screener.strategies.us_graham_value_desc",
+    apply: (f) => ({ ...RESET_US_FIELDS(f), maxPE: "15", maxPB: "1.5", minVolume: "1000000" }),
+  },
+  {
+    id: "us_mega_cap",
+    nameKey: "screener.strategies.us_mega_cap",
+    descKey: "screener.strategies.us_mega_cap_desc",
+    apply: (f) => ({ ...RESET_US_FIELDS(f), minMarketCap: "200" }),
+  },
+  {
+    id: "us_dividend_stalwart",
+    nameKey: "screener.strategies.us_dividend_stalwart",
+    descKey: "screener.strategies.us_dividend_stalwart_desc",
+    apply: (f) => ({ ...RESET_US_FIELDS(f), minDivYield: "3", minMarketCap: "20" }),
+  },
+  {
+    id: "us_tech_giants",
+    nameKey: "screener.strategies.us_tech_giants",
+    descKey: "screener.strategies.us_tech_giants_desc",
+    apply: (f) => ({ ...RESET_US_FIELDS(f), sector: "Technology", minMarketCap: "100" }),
+  },
+  {
+    id: "us_high_volume",
+    nameKey: "screener.strategies.us_high_volume",
+    descKey: "screener.strategies.us_high_volume_desc",
+    apply: (f) => ({ ...RESET_US_FIELDS(f), minVolume: "20000000" }),
+  },
+  {
+    id: "us_quality_fair_price",
+    nameKey: "screener.strategies.us_quality_fair_price",
+    descKey: "screener.strategies.us_quality_fair_price_desc",
+    apply: (f) => ({ ...RESET_US_FIELDS(f), maxPE: "25", maxPB: "4", minMarketCap: "10" }),
+  },
+];
+
 const TW_STRATEGIES: Strategy[] = [
   {
     id: "high_yield",
@@ -109,13 +156,21 @@ const TW_STRATEGIES: Strategy[] = [
 
 async function fetchUSScreener(params: {
   min_market_cap?: number;
+  min_pe?: number;
   max_pe?: number;
+  min_pb?: number;
+  max_pb?: number;
+  min_dividend_yield?: number;
   min_volume?: number;
   sector?: string;
 }): Promise<ScreenerResult[]> {
   const q = new URLSearchParams({ limit: "500" });
   if (params.min_market_cap) q.set("min_market_cap", String(params.min_market_cap));
+  if (params.min_pe) q.set("min_pe", String(params.min_pe));
   if (params.max_pe) q.set("max_pe", String(params.max_pe));
+  if (params.min_pb) q.set("min_pb", String(params.min_pb));
+  if (params.max_pb) q.set("max_pb", String(params.max_pb));
+  if (params.min_dividend_yield) q.set("min_dividend_yield", String(params.min_dividend_yield));
   if (params.min_volume) q.set("min_volume", String(params.min_volume));
   if (params.sector) q.set("sector", params.sector);
   const res = await api.get<ScreenerResult[]>(`/us/screener?${q}`);
@@ -239,7 +294,11 @@ export default function ScreenerPage() {
       }
       return fetchUSScreener({
         min_market_cap: applied.minMarketCap ? Number(applied.minMarketCap) * 1e9 : undefined,
+        min_pe: applied.minPE ? Number(applied.minPE) : undefined,
         max_pe: applied.maxPE ? Number(applied.maxPE) : undefined,
+        min_pb: applied.minPB ? Number(applied.minPB) : undefined,
+        max_pb: applied.maxPB ? Number(applied.maxPB) : undefined,
+        min_dividend_yield: applied.minDivYield ? Number(applied.minDivYield) : undefined,
         min_volume: applied.minVolume ? Number(applied.minVolume) : undefined,
         sector: applied.sector || undefined,
       });
@@ -281,38 +340,36 @@ export default function ScreenerPage() {
         </p>
       </div>
 
-      {/* strategy presets — TW only */}
-      {filters.market === "TW" && (
-        <div className="space-y-2">
-          <div className="flex items-baseline justify-between">
-            <h3 className="text-sm font-semibold text-foreground">{t("screener.strategies.title")}</h3>
-            <p className="text-xs text-muted-foreground">{t("screener.strategies.subtitle")}</p>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
-            {TW_STRATEGIES.map((s) => {
-              const active = filters.strategy === s.id;
-              return (
-                <button
-                  key={s.id}
-                  onClick={() => applyStrategy(s)}
-                  className={`text-left p-3 rounded-lg border transition-colors ${
-                    active
-                      ? "bg-primary/10 border-primary/60"
-                      : "bg-card border-border hover:border-primary/40"
-                  }`}
-                >
-                  <div className={`text-sm font-medium ${active ? "text-primary" : "text-foreground"}`}>
-                    {t(s.nameKey)}
-                  </div>
-                  <div className="text-[11px] text-muted-foreground mt-1 leading-snug line-clamp-2">
-                    {t(s.descKey)}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+      {/* strategy presets — per market */}
+      <div className="space-y-2">
+        <div className="flex items-baseline justify-between">
+          <h3 className="text-sm font-semibold text-foreground">{t("screener.strategies.title")}</h3>
+          <p className="text-xs text-muted-foreground">{t("screener.strategies.subtitle")}</p>
         </div>
-      )}
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+          {(filters.market === "TW" ? TW_STRATEGIES : US_STRATEGIES).map((s) => {
+            const active = filters.strategy === s.id;
+            return (
+              <button
+                key={s.id}
+                onClick={() => applyStrategy(s)}
+                className={`text-left p-3 rounded-lg border transition-colors ${
+                  active
+                    ? "bg-primary/10 border-primary/60"
+                    : "bg-card border-border hover:border-primary/40"
+                }`}
+              >
+                <div className={`text-sm font-medium ${active ? "text-primary" : "text-foreground"}`}>
+                  {t(s.nameKey)}
+                </div>
+                <div className="text-[11px] text-muted-foreground mt-1 leading-snug line-clamp-2">
+                  {t(s.descKey)}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
       {/* filter panel */}
       <div className="bg-card border border-border rounded-lg p-4">
@@ -337,19 +394,12 @@ export default function ScreenerPage() {
             </div>
           </div>
 
-          {filters.market === "US" ? (
+          {filters.market === "US" && (
             <FilterInput
               label={t("screener.min_market_cap")}
               value={filters.minMarketCap}
               onChange={(v) => setFilter("minMarketCap", v)}
               placeholder="10"
-            />
-          ) : (
-            <FilterInput
-              label={t("screener.min_pe")}
-              value={filters.minPE}
-              onChange={(v) => setFilter("minPE", v)}
-              placeholder="5"
             />
           )}
           <FilterInput
@@ -358,33 +408,31 @@ export default function ScreenerPage() {
             onChange={(v) => setFilter("maxPE", v)}
             placeholder="30"
           />
+          <FilterInput
+            label={t("screener.max_pb")}
+            value={filters.maxPB}
+            onChange={(v) => setFilter("maxPB", v)}
+            placeholder="3"
+          />
+          <FilterInput
+            label={t("screener.min_dividend_yield")}
+            value={filters.minDivYield}
+            onChange={(v) => setFilter("minDivYield", v)}
+            placeholder="3"
+          />
           {filters.market === "TW" && (
-            <>
-              <FilterInput
-                label={t("screener.max_pb")}
-                value={filters.maxPB}
-                onChange={(v) => setFilter("maxPB", v)}
-                placeholder="3"
-              />
-              <FilterInput
-                label={t("screener.min_dividend_yield")}
-                value={filters.minDivYield}
-                onChange={(v) => setFilter("minDivYield", v)}
-                placeholder="3"
-              />
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-muted-foreground">ETF</label>
-                <select
-                  value={filters.etfMode}
-                  onChange={(e) => setFilter("etfMode", e.target.value as ETFMode)}
-                  className="bg-background border border-border rounded px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:border-primary/50"
-                >
-                  <option value="all">{t("screener.etf_all")}</option>
-                  <option value="exclude">{t("screener.etf_exclude")}</option>
-                  <option value="only">{t("screener.etf_only")}</option>
-                </select>
-              </div>
-            </>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">ETF</label>
+              <select
+                value={filters.etfMode}
+                onChange={(e) => setFilter("etfMode", e.target.value as ETFMode)}
+                className="bg-background border border-border rounded px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:border-primary/50"
+              >
+                <option value="all">{t("screener.etf_all")}</option>
+                <option value="exclude">{t("screener.etf_exclude")}</option>
+                <option value="only">{t("screener.etf_only")}</option>
+              </select>
+            </div>
           )}
           <FilterInput
             label={t("market.table.volume")}

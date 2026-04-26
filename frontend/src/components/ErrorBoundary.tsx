@@ -38,7 +38,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
             {i18n.t("common.something_wrong")}
           </p>
           <p className="text-xs text-muted-foreground max-w-sm break-words">
-            {this.state.error?.message ?? i18n.t("common.unexpected_error")}
+            {this.state.error?.message || i18n.t("common.unexpected_error")}
           </p>
           <div className="flex gap-2 mt-2">
             <button

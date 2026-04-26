@@ -48,13 +48,22 @@ async def get_quote(ticker: str) -> dict[str, Any]:
     if cached:
         return json.loads(cached)
 
+    raw: dict[str, Any] = {}
     try:
         raw = await polygon.get_quote(ticker) if _use_polygon() else await yfinance.get_quote(ticker)
     except Exception:
-        raw = await yfinance.get_quote(ticker)
+        try:
+            raw = await yfinance.get_quote(ticker)
+        except Exception:
+            # Both providers failed (Yahoo IP-blocked, Polygon quota, etc).
+            # Don't raise — fall through and return a zero-priced result so
+            # the API stays 200 and the frontend renders "0.00" instead of
+            # bubbling up as a 502 / blank "—". Don't cache the zero state.
+            raw = {}
 
     result = _normalize_quote(ticker, raw)
-    await cache_set(key, json.dumps(result), TTL_QUOTE)
+    if result.get("price"):
+        await cache_set(key, json.dumps(result), TTL_QUOTE)
     return result
 
 

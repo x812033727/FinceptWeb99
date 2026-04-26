@@ -35,6 +35,17 @@ def _ts_to_ms(ts) -> int | None:
     return None
 
 
+def _safe_attr(obj, name):
+    """fast_info attributes are property descriptors that may trigger HTTP
+    calls and raise non-AttributeError exceptions (network, rate limits,
+    Yahoo response errors). Plain getattr(..., default) only catches
+    AttributeError, so we need a wider net."""
+    try:
+        return getattr(obj, name, None)
+    except Exception:
+        return None
+
+
 async def get_quote(ticker: str) -> dict[str, Any]:
     def _fetch():
         t = yf.Ticker(ticker)
@@ -47,13 +58,13 @@ async def get_quote(ticker: str) -> dict[str, Any]:
             info = t.info or {}
         except Exception:
             info = {}
-        price = getattr(fi, "last_price", None) or info.get("currentPrice", 0)
-        prev = getattr(fi, "previous_close", None) or info.get("previousClose", 0)
-        open_ = getattr(fi, "open", None)
-        high = getattr(fi, "day_high", None)
-        low = getattr(fi, "day_low", None)
-        volume = getattr(fi, "three_month_average_volume", None) or info.get("volume", 0)
-        market_cap = getattr(fi, "market_cap", None)
+        price = _safe_attr(fi, "last_price") or info.get("currentPrice", 0)
+        prev = _safe_attr(fi, "previous_close") or info.get("previousClose", 0)
+        open_ = _safe_attr(fi, "open")
+        high = _safe_attr(fi, "day_high")
+        low = _safe_attr(fi, "day_low")
+        volume = _safe_attr(fi, "three_month_average_volume") or info.get("volume", 0)
+        market_cap = _safe_attr(fi, "market_cap")
 
         # Final fallback: fast_info also blocked. Pull last 5d of daily bars
         # via yf.download() (same chart endpoint, different code path) and

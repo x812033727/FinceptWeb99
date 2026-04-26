@@ -50,7 +50,7 @@ function AddTransactionForm({ portfolioId, onClose }: { portfolioId: string; onC
   const add = useAddTransaction(portfolioId);
   const [form, setForm] = useState({
     symbol: "", market: "US", tx_type: "buy",
-    quantity: "", price: "", fx_rate: "1",
+    quantity: "", price: "", fx_rate: "",
     tx_date: new Date().toISOString().slice(0, 10), notes: "",
   });
   const [userPinnedFx, setUserPinnedFx] = useState(false);
@@ -72,13 +72,16 @@ function AddTransactionForm({ portfolioId, onClose }: { portfolioId: string; onC
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+    // Empty string → send null so the backend auto-stamps the historical
+    // rate. Sending 0 or NaN would be rejected by Pydantic.
+    const fx = form.fx_rate.trim() === "" ? null : parseFloat(form.fx_rate);
     await add.mutateAsync({
       symbol: form.symbol.toUpperCase(),
       market: form.market,
       tx_type: form.tx_type,
       quantity: parseFloat(form.quantity),
       price: parseFloat(form.price),
-      fx_rate: parseFloat(form.fx_rate),
+      fx_rate: fx,
       tx_date: form.tx_date,
       notes: form.notes || undefined,
     } as any);
@@ -107,7 +110,7 @@ function AddTransactionForm({ portfolioId, onClose }: { portfolioId: string; onC
           <div><label className={label}>{t("portfolio.transactions.executed_at")}</label><input type="date" required className={input} value={form.tx_date} onChange={set("tx_date")} /></div>
           <div><label className={label}>{t("portfolio.transactions.qty")}</label><input type="number" required min="0" step="any" className={input} value={form.quantity} onChange={set("quantity")} /></div>
           <div><label className={label}>{t("portfolio.transactions.price")}</label><input type="number" required min="0" step="any" className={input} value={form.price} onChange={set("price")} /></div>
-          <div><label className={label}>FX Rate</label><input type="number" min="0" step="any" className={input} value={form.fx_rate} onChange={set("fx_rate")} /></div>
+          <div><label className={label}>FX Rate</label><input type="number" min="0" step="any" placeholder="auto" className={input} value={form.fx_rate} onChange={set("fx_rate")} /></div>
           <div><label className={label}>Notes</label><input className={input} value={form.notes} onChange={set("notes")} /></div>
         </div>
         <div className="flex gap-3 justify-end">
@@ -813,8 +816,9 @@ function TransactionHistory({ portfolioId }: { portfolioId: string }) {
                   <td className="py-1.5 px-2 text-right text-muted-foreground">
                     {tx.fx_rate === 1 ? "—" : tx.fx_rate.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })}
                   </td>
-                  <td className="py-1.5 px-2 text-right text-muted-foreground">
-                    {(tx.quantity * tx.price * (tx.fx_rate || 1)).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  <td className="py-1.5 px-2 text-right text-muted-foreground whitespace-nowrap">
+                    {(tx.quantity * tx.price).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    <span className="ml-1 text-[10px] opacity-60">{tx.market === "TW" ? "TWD" : "USD"}</span>
                   </td>
                   <td className="py-1.5 pl-4 text-muted-foreground max-w-[160px] truncate">
                     {tx.notes ?? ""}

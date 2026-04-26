@@ -450,10 +450,28 @@ async def _cost_value_in_portfolio_currency(
     for tx in txs:
         tx_qty = float(tx.quantity)
         tx_price = float(tx.price)
-        # If the trade currency matches the portfolio currency, skip the
-        # FX multiplier even when fx_rate happens to be != 1 (legacy
-        # data from before auto-stamping).
-        rate = 1.0 if same_currency else float(tx.fx_rate or 1.0)
+        if same_currency:
+            # If the trade currency matches the portfolio currency, skip the
+            # FX multiplier even when fx_rate happens to be != 1 (legacy
+            # data from before auto-stamping).
+            rate = 1.0
+        else:
+            stored = float(tx.fx_rate or 0.0)
+            # Across a real currency pair (TWD↔USD), fx_rate=1.0 is
+            # implausible — almost certainly a frontend default that was
+            # submitted before the auto-suggest fetch landed, or a legacy
+            # row from before fx_rate auto-stamping. Trusting it would
+            # treat the foreign-currency cost basis as if it were already
+            # in the portfolio currency (e.g. 125,000 TWD == 125,000 USD).
+            # Re-derive at compute time from the historical rate.
+            if stored > 0 and stored != 1.0:
+                rate = stored
+            else:
+                rate = await get_default_fx_rate(
+                    market=str(tx.market.value),
+                    portfolio_currency=portfolio_currency,
+                    tx_date=tx.tx_date,
+                )
         if tx.tx_type == TransactionType.buy:
             new_qty = qty + tx_qty
             if new_qty <= 0:

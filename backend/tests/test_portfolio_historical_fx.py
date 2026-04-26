@@ -208,3 +208,81 @@ async def test_cost_value_returns_none_for_holding_with_no_history():
         portfolio_currency="TWD", cost_currency="USD", db=db,
     )
     assert cost is None
+
+
+def _mock_tw_tx(tx_type: str, qty: float, price: float, fx_rate: float, day: int):
+    """Same as _mock_tx but for a TW-market trade (TWD-priced)."""
+    from models.portfolio import Market as MarketEnum, TransactionType
+    tx = MagicMock()
+    tx.tx_type = TransactionType[tx_type]
+    tx.quantity = qty
+    tx.price = price
+    tx.fx_rate = fx_rate
+    tx.tx_date = _date(2024, 4, day)
+    tx.market = MarketEnum.TW
+    tx.symbol = "00878"
+    return tx
+
+
+@pytest.mark.asyncio
+async def test_cost_value_recovers_from_legacy_fx_rate_one_cross_currency():
+    """Regression test for the calculation bug shown in the bug-report
+    screenshot: a TW (TWD) buy stored with fx_rate=1.0 in a USD portfolio.
+
+    Trusting the stored 1.0 would price the cost basis at 125,000 USD
+    (the TWD figure). Re-deriving from the historical TWD/USD rate
+    (≈32) recovers the real ~3,906 USD cost.
+    """
+    txs = [_mock_tw_tx("buy", qty=5_000, price=25.0, fx_rate=1.0, day=26)]
+    db = _mock_db_with_txs(txs)
+
+    with patch.object(
+        svc, "get_default_fx_rate", new_callable=AsyncMock, return_value=1 / 32.0,
+    ) as mock_default:
+        cost = await svc._cost_value_in_portfolio_currency(
+            portfolio_id=str(uuid4()), symbol="00878", market="TW",
+            portfolio_currency="USD", cost_currency="TWD", db=db,
+        )
+
+    # 5_000 × 25 × (1/32) ≈ 3_906.25 USD
+    assert cost == pytest.approx(3_906.25, rel=1e-4)
+    mock_default.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cost_value_recovers_when_fx_rate_zero_or_missing():
+    """fx_rate=0 (or treated as falsy) on a cross-currency tx must also
+    trigger re-derivation rather than silently dropping the conversion."""
+    txs = [_mock_tw_tx("buy", qty=1_000, price=100.0, fx_rate=0.0, day=10)]
+    db = _mock_db_with_txs(txs)
+
+    with patch.object(
+        svc, "get_default_fx_rate", new_callable=AsyncMock, return_value=1 / 30.0,
+    ):
+        cost = await svc._cost_value_in_portfolio_currency(
+            portfolio_id=str(uuid4()), symbol="00878", market="TW",
+            portfolio_currency="USD", cost_currency="TWD", db=db,
+        )
+
+    # 1_000 × 100 / 30 ≈ 3_333.33 USD
+    assert cost == pytest.approx(100_000 / 30.0)
+
+
+@pytest.mark.asyncio
+async def test_cost_value_keeps_realistic_stored_rate():
+    """A realistic stored fx_rate (e.g. 32.0) is trusted as-is — no
+    re-derivation. This preserves the historical-rate semantics for
+    transactions that were correctly auto-stamped at trade time."""
+    txs = [_mock_tx("buy", qty=10, price=170.0, fx_rate=32.0, day=10)]
+    db = _mock_db_with_txs(txs)
+
+    with patch.object(
+        svc, "get_default_fx_rate", new_callable=AsyncMock,
+    ) as mock_default:
+        cost = await svc._cost_value_in_portfolio_currency(
+            portfolio_id=str(uuid4()), symbol="AAPL", market="US",
+            portfolio_currency="TWD", cost_currency="USD", db=db,
+        )
+
+    assert cost == pytest.approx(54_400.0)   # 10 × 170 × 32
+    mock_default.assert_not_called()

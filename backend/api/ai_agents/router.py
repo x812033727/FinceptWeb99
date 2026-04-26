@@ -115,6 +115,16 @@ async def chat(
         raise HTTPException(status_code=400, detail=str(e))
 
     system_content = agent.system_prompt
+    # Default response language: Traditional Chinese. Smart-match if the user
+    # clearly writes in another language so cross-lingual conversations don't
+    # feel forced. Appended after the persona prompt so persona-specific
+    # voice / style instructions still take precedence over tone choices.
+    system_content += (
+        "\n\n## 回應語言\n"
+        "預設使用**繁體中文（台灣用語）**回應，包括金融術語（殖利率、本益比、"
+        "三大法人等）。除非使用者明確以其他語言提問，否則請維持繁體中文。"
+        "若使用者用英文或簡體中文，可鏡像對方語言回應。"
+    )
     if body.context:
         ctx_json = json.dumps(body.context, indent=2, ensure_ascii=False)
         system_content += f"\n\n<context>\n{ctx_json}\n</context>"

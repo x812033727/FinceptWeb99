@@ -5,6 +5,7 @@ import { silentRefresh } from "@/lib/auth";
 
 import AppLayout from "@/components/layout/AppLayout";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { PageSkeleton } from "@/components/Skeleton";
 import Toaster from "@/components/Toaster";
 import LoginPage from "@/pages/LoginPage";
 import { pageLoaders } from "@/pageLoaders";
@@ -51,12 +52,6 @@ function RequireRole({ role, children }: { role: Role; children: React.ReactNode
   return <>{children}</>;
 }
 
-function RouteFallback() {
-  return (
-    <div className="p-6 text-muted-foreground text-sm animate-pulse">Loading…</div>
-  );
-}
-
 // ── App shell ─────────────────────────────────────────────────────
 export default function App() {
   const [booting, setBooting] = useState(true);
@@ -88,18 +83,18 @@ export default function App() {
               </RequireAuth>
             }
           >
-            <Route path="/dashboard" element={<ErrorBoundary><Suspense fallback={<RouteFallback />}><DashboardPage /></Suspense></ErrorBoundary>} />
-            <Route path="/market/:market" element={<ErrorBoundary><Suspense fallback={<RouteFallback />}><MarketPage /></Suspense></ErrorBoundary>} />
-            <Route path="/stock/:market/:symbol" element={<ErrorBoundary><Suspense fallback={<RouteFallback />}><StockDetailPage /></Suspense></ErrorBoundary>} />
-            <Route path="/screener" element={<ErrorBoundary><Suspense fallback={<RouteFallback />}><ScreenerPage /></Suspense></ErrorBoundary>} />
-            <Route path="/portfolio" element={<ErrorBoundary><Suspense fallback={<RouteFallback />}><PortfolioPage /></Suspense></ErrorBoundary>} />
-            <Route path="/analytics" element={<RequireRole role="analyst"><ErrorBoundary><Suspense fallback={<RouteFallback />}><AnalyticsPage /></Suspense></ErrorBoundary></RequireRole>} />
-            <Route path="/macro" element={<ErrorBoundary><Suspense fallback={<RouteFallback />}><MacroPage /></Suspense></ErrorBoundary>} />
-            <Route path="/watchlist" element={<ErrorBoundary><Suspense fallback={<RouteFallback />}><WatchlistPage /></Suspense></ErrorBoundary>} />
-            <Route path="/alerts" element={<ErrorBoundary><Suspense fallback={<RouteFallback />}><AlertsPage /></Suspense></ErrorBoundary>} />
-            <Route path="/ai" element={<ErrorBoundary><Suspense fallback={<RouteFallback />}><AIPage /></Suspense></ErrorBoundary>} />
-            <Route path="/settings" element={<ErrorBoundary><Suspense fallback={<RouteFallback />}><SettingsPage /></Suspense></ErrorBoundary>} />
-            <Route path="/admin" element={<RequireRole role="admin"><ErrorBoundary><Suspense fallback={<RouteFallback />}><AdminPage /></Suspense></ErrorBoundary></RequireRole>} />
+            <Route path="/dashboard" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><DashboardPage /></Suspense></ErrorBoundary>} />
+            <Route path="/market/:market" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><MarketPage /></Suspense></ErrorBoundary>} />
+            <Route path="/stock/:market/:symbol" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><StockDetailPage /></Suspense></ErrorBoundary>} />
+            <Route path="/screener" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><ScreenerPage /></Suspense></ErrorBoundary>} />
+            <Route path="/portfolio" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><PortfolioPage /></Suspense></ErrorBoundary>} />
+            <Route path="/analytics" element={<RequireRole role="analyst"><ErrorBoundary><Suspense fallback={<PageSkeleton />}><AnalyticsPage /></Suspense></ErrorBoundary></RequireRole>} />
+            <Route path="/macro" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><MacroPage /></Suspense></ErrorBoundary>} />
+            <Route path="/watchlist" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><WatchlistPage /></Suspense></ErrorBoundary>} />
+            <Route path="/alerts" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><AlertsPage /></Suspense></ErrorBoundary>} />
+            <Route path="/ai" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><AIPage /></Suspense></ErrorBoundary>} />
+            <Route path="/settings" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><SettingsPage /></Suspense></ErrorBoundary>} />
+            <Route path="/admin" element={<RequireRole role="admin"><ErrorBoundary><Suspense fallback={<PageSkeleton />}><AdminPage /></Suspense></ErrorBoundary></RequireRole>} />
           </Route>
 
           <Route path="/" element={<Navigate to="/dashboard" replace />} />

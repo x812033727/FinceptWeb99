@@ -159,9 +159,12 @@ async def test_version_status_unreachable_github_returns_safe_default():
 
 @pytest.mark.asyncio
 async def test_force_refresh_status_writes_cache_and_returns_fresh():
+    # Pick a tag that's guaranteed newer than __version__ regardless of how
+    # the current release moves over time. (A previous incarnation of this
+    # test hard-coded 'v0.2.0' and broke the day we shipped 0.2.0.)
     fresh = {
-        "tag": "v0.2.0",
-        "name": "v0.2.0",
+        "tag": "v99.0.0",
+        "name": "v99.0.0",
         "html_url": "https://example.com/r",
         "published_at": "2026-04-25T00:00:00Z",
     }
@@ -172,7 +175,7 @@ async def test_force_refresh_status_writes_cache_and_returns_fresh():
 
     fetch_mock.assert_awaited_once()
     set_mock.assert_awaited_once()
-    assert status["latest"] == "0.2.0"
+    assert status["latest"] == "99.0.0"
     assert status["update_available"] is True
 
 

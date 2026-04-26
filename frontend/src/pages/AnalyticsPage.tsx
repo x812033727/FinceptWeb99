@@ -378,15 +378,15 @@ export default function AnalyticsPage() {
   ];
 
   return (
-    <div className="min-h-screen bg-background p-6 space-y-6">
-      <h1 className="text-2xl font-bold text-primary">{t("analytics.title")}</h1>
+    <div className="min-h-screen bg-background p-4 sm:p-6 space-y-5 sm:space-y-6">
+      <h1 className="text-xl sm:text-2xl font-bold text-primary">{t("analytics.title")}</h1>
 
-      <div className="flex gap-1 bg-secondary/30 p-1 rounded-lg w-fit">
+      <div className="flex gap-1 bg-secondary/30 p-1 rounded-lg w-fit max-w-full overflow-x-auto">
         {tabs.map(tabItem => (
           <button
             key={tabItem.id}
             onClick={() => setTab(tabItem.id)}
-            className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
+            className={`shrink-0 px-3 sm:px-4 py-1.5 text-sm rounded-md transition-colors whitespace-nowrap ${
               tab === tabItem.id
                 ? "bg-card text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground"

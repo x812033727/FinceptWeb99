@@ -332,10 +332,10 @@ export default function ScreenerPage() {
   const items = rowVirtualizer.getVirtualItems();
 
   return (
-    <div className="p-6 flex flex-col gap-6 h-screen">
+    <div className="p-4 sm:p-6 flex flex-col gap-5 sm:gap-6 h-screen">
       <div>
-        <h1 className="text-2xl font-bold text-foreground">{t("screener.title")}</h1>
-        <p className="text-sm text-muted-foreground mt-1">
+        <h1 className="text-xl sm:text-2xl font-bold text-foreground">{t("screener.title")}</h1>
+        <p className="text-xs sm:text-sm text-muted-foreground mt-1">
           {t("screener.subtitle")}
         </p>
       </div>
@@ -496,9 +496,9 @@ export default function ScreenerPage() {
       </div>
 
       {/* virtual table */}
-      <div className="bg-card border border-border rounded-lg overflow-hidden flex flex-col flex-1 min-h-0">
+      <div className="bg-card border border-border rounded-lg overflow-x-auto overflow-y-hidden flex flex-col flex-1 min-h-0">
         {/* fixed header */}
-        <div className="grid grid-cols-[100px_1fr_100px_90px_100px_100px_80px_1fr] text-xs text-muted-foreground border-b border-border px-4 py-2.5 shrink-0">
+        <div className="grid grid-cols-[100px_1fr_100px_90px_100px_100px_80px_1fr] min-w-[680px] text-xs text-muted-foreground border-b border-border px-4 py-2.5 shrink-0">
           <span className="font-medium">{t("market.table.symbol")}</span>
           <span className="font-medium">{t("market.table.name")}</span>
           <span className="font-medium text-right">{t("market.table.price")}</span>
@@ -518,7 +518,7 @@ export default function ScreenerPage() {
             {t("common.loading")}
           </div>
         ) : (
-          <div ref={parentRef} className="overflow-auto flex-1">
+          <div ref={parentRef} className="overflow-y-auto flex-1 min-w-[680px]">
             <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
               {items.map((virtualRow) => {
                 const row = rows[virtualRow.index];
@@ -530,7 +530,7 @@ export default function ScreenerPage() {
                     data-index={virtualRow.index}
                     ref={rowVirtualizer.measureElement}
                     onClick={() => navigate(`/stock/${applied.market}/${row.symbol}`)}
-                    className="grid grid-cols-[100px_1fr_100px_90px_100px_100px_80px_1fr] absolute w-full px-4 items-center border-b border-border/30 hover:bg-accent/5 cursor-pointer transition-colors"
+                    className="grid grid-cols-[100px_1fr_100px_90px_100px_100px_80px_1fr] min-w-[680px] absolute w-full px-4 items-center border-b border-border/30 hover:bg-accent/5 cursor-pointer transition-colors"
                     style={{ top: virtualRow.start, height: 44 }}
                   >
                     <span className="font-medium text-primary text-sm">{row.symbol}</span>

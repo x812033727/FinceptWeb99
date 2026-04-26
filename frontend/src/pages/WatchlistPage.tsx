@@ -137,19 +137,19 @@ function WatchlistCard({ wl }: { wl: Watchlist }) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-xs text-muted-foreground border-b border-border">
-                  <th className="text-left px-4 py-2 font-medium">{t("market.table.symbol")}</th>
-                  <th className="text-left px-2 py-2 font-medium">{t("market.table.name")}</th>
-                  <th className="text-right px-4 py-2 font-medium">{t("market.table.price")}</th>
-                  <th className="text-right px-4 py-2 font-medium">{t("market.table.change")}</th>
+                  <th className="text-left px-3 sm:px-4 py-2 font-medium">{t("market.table.symbol")}</th>
+                  <th className="hidden sm:table-cell text-left px-2 py-2 font-medium">{t("market.table.name")}</th>
+                  <th className="text-right px-3 sm:px-4 py-2 font-medium">{t("market.table.price")}</th>
+                  <th className="text-right px-3 sm:px-4 py-2 font-medium">{t("market.table.change")}</th>
                   <th className="px-2 py-2" />
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="tabular-nums">
                 {wl.items.map((item) => {
                   const pos = (item.change_pct ?? 0) >= 0;
                   return (
                     <tr key={item.id} className="border-b border-border/30 hover:bg-accent/5 group">
-                      <td className="px-4 py-2.5">
+                      <td className="px-3 sm:px-4 py-2.5">
                         <Link
                           to={`/stock/${item.market}/${item.symbol}`}
                           className="font-medium text-primary hover:underline"
@@ -158,15 +158,15 @@ function WatchlistCard({ wl }: { wl: Watchlist }) {
                         </Link>
                         <span className="text-xs text-muted-foreground ml-1.5">{item.market}</span>
                       </td>
-                      <td className="px-2 py-2.5 text-muted-foreground text-xs max-w-[180px] truncate">
+                      <td className="hidden sm:table-cell px-2 py-2.5 text-muted-foreground text-xs max-w-[180px] truncate">
                         {item.name ?? "—"}
                       </td>
-                      <td className="text-right px-4 py-2.5 text-foreground">
+                      <td className="text-right px-3 sm:px-4 py-2.5 text-foreground">
                         {item.price != null
                           ? item.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
                           : "—"}
                       </td>
-                      <td className={`text-right px-4 py-2.5 text-sm font-medium ${pos ? "text-green-400" : "text-red-400"}`}>
+                      <td className={`text-right px-3 sm:px-4 py-2.5 text-sm font-medium ${pos ? "text-green-400" : "text-red-400"}`}>
                         {item.change_pct != null
                           ? `${pos ? "+" : ""}${item.change_pct.toFixed(2)}%`
                           : "—"}
@@ -174,7 +174,8 @@ function WatchlistCard({ wl }: { wl: Watchlist }) {
                       <td className="px-2 py-2.5 text-right">
                         <button
                           onClick={() => removeIt.mutate(item.id)}
-                          className="text-xs text-muted-foreground hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                          aria-label={t("watchlist.remove") || "Remove"}
+                          className="text-base text-muted-foreground hover:text-red-400 sm:text-xs sm:opacity-0 sm:group-hover:opacity-100 transition-all"
                         >
                           ✕
                         </button>
@@ -215,11 +216,11 @@ export default function WatchlistPage() {
   });
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-start justify-between">
+    <div className="p-4 sm:p-6 space-y-5 sm:space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">{t("watchlist.title")}</h1>
-          <p className="text-sm text-muted-foreground mt-1">{t("watchlist.live_prices")}</p>
+          <h1 className="text-xl sm:text-2xl font-bold text-foreground">{t("watchlist.title")}</h1>
+          <p className="text-xs sm:text-sm text-muted-foreground mt-1">{t("watchlist.live_prices")}</p>
         </div>
         <form
           onSubmit={(e) => { e.preventDefault(); create.mutate(); }}
@@ -229,12 +230,12 @@ export default function WatchlistPage() {
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             placeholder={t("watchlist.list_name")}
-            className="bg-background border border-border rounded px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary/50 w-40"
+            className="flex-1 sm:flex-none sm:w-40 bg-background border border-border rounded px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary/50"
           />
           <button
             type="submit"
             disabled={create.isPending}
-            className="px-4 py-1.5 bg-primary text-primary-foreground text-sm rounded hover:opacity-90 disabled:opacity-50"
+            className="px-3 sm:px-4 py-1.5 bg-primary text-primary-foreground text-sm rounded hover:opacity-90 disabled:opacity-50 whitespace-nowrap"
           >
             + {t("watchlist.new_list")}
           </button>

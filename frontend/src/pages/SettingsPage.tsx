@@ -109,8 +109,8 @@ export default function SettingsPage() {
   });
 
   return (
-    <div className="p-6 space-y-5 max-w-2xl">
-      <h1 className="text-xl font-semibold">Settings</h1>
+    <div className="p-4 sm:p-6 space-y-5 max-w-2xl">
+      <h1 className="text-xl sm:text-2xl font-semibold">Settings</h1>
 
       {/* Profile */}
       <Section title="Profile">

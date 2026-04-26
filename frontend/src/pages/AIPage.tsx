@@ -347,9 +347,11 @@ export default function AIPage() {
     // (flex-1 main → ErrorBoundary → AIPage), so we pin the height explicitly.
     // overflow-hidden on the outer flex row prevents any vertical growth from
     // children (long agent list, long chat history) from spilling onto body.
-    <div className="h-[calc(100vh-2.5rem)] bg-background flex overflow-hidden">
-      {/* ── sidebar: agent selector ─────────────────────────────── */}
-      <aside className="w-64 border-r border-border flex flex-col p-4 gap-3 shrink-0 overflow-y-auto">
+    <div className="h-[calc(100vh-2.5rem)] bg-background flex flex-col lg:flex-row overflow-hidden">
+      {/* ── sidebar: agent selector. On mobile this becomes a
+          top section with bounded height so the chat still
+          gets the bulk of the viewport. */}
+      <aside className="lg:w-64 border-b lg:border-b-0 lg:border-r border-border flex flex-col p-3 lg:p-4 gap-3 shrink-0 overflow-y-auto max-h-[40vh] lg:max-h-none">
         <div>
           <h2 className="text-sm font-semibold text-foreground">{t("ai.title")}</h2>
           <p className="text-xs text-muted-foreground mt-0.5">{t("ai.subtitle")}</p>
@@ -418,10 +420,10 @@ export default function AIPage() {
       </aside>
 
       {/* ── main chat area ──────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
         {/* header */}
-        <header className="border-b border-border px-6 py-3 flex items-center justify-between">
-          <div>
+        <header className="border-b border-border px-3 sm:px-6 py-3 flex items-center justify-between gap-2">
+          <div className="min-w-0">
             <span className="font-medium text-foreground text-sm">
               {activeAgent
                 ? (i18n.exists(`personas.agents.${activeAgent.id}.name`)
@@ -430,14 +432,14 @@ export default function AIPage() {
                 : t("ai.header_default")}
             </span>
             {activeAgent && (
-              <span className="text-xs text-muted-foreground ml-2">
+              <span className="hidden sm:inline text-xs text-muted-foreground ml-2">
                 {i18n.exists(`personas.agents.${activeAgent.id}.description`)
                   ? t(`personas.agents.${activeAgent.id}.description`)
                   : activeAgent.description}
               </span>
             )}
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-4 shrink-0">
             {canUseClaudeAgent && activeAgent && activeAgent.default_provider !== "claude_agent" && (
               <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none"
                      title={t("ai.use_tools_hint")}>
@@ -448,7 +450,7 @@ export default function AIPage() {
                   onChange={(e) => setUseClaudeAgent(e.target.checked)}
                   className="accent-amber-400"
                 />
-                {t("ai.use_tools")}
+                <span className="hidden sm:inline">{t("ai.use_tools")}</span>
               </label>
             )}
             {effectiveIsClaudeAgent && (
@@ -459,7 +461,7 @@ export default function AIPage() {
             <button
               onClick={clearChat}
               disabled={streaming}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40 whitespace-nowrap"
             >
               {t("ai.clear_chat")}
             </button>
@@ -467,7 +469,7 @@ export default function AIPage() {
         </header>
 
         {/* message list */}
-        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 min-h-0">
+        <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 space-y-4 min-h-0">
           {messages.length === 0 && (
             <div className="h-full flex items-center justify-center">
               <p className="text-sm text-muted-foreground">
@@ -493,7 +495,7 @@ export default function AIPage() {
         </div>
 
         {/* input bar */}
-        <div className="border-t border-border px-6 py-4 shrink-0">
+        <div className="border-t border-border px-3 sm:px-6 py-3 sm:py-4 shrink-0">
           <div className="flex gap-2">
             <textarea
               value={input}

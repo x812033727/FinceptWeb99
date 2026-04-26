@@ -60,8 +60,8 @@ export default function AlertsPage() {
   const triggered = alerts.filter((a) => a.triggered);
 
   return (
-    <div className="p-6 space-y-6 max-w-3xl">
-      <h1 className="text-xl font-semibold">{t("alerts.title")}</h1>
+    <div className="p-4 sm:p-6 space-y-5 sm:space-y-6 max-w-3xl">
+      <h1 className="text-xl sm:text-2xl font-semibold">{t("alerts.title")}</h1>
 
       {/* Create form */}
       <form

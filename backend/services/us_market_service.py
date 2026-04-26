@@ -272,6 +272,24 @@ async def get_screener(
             limit=limit,
         )
 
+    # Static last-resort fallback: yfinance also blocked (Yahoo IP-bans
+    # cloud providers fairly often). Emit a curated symbol+name list so
+    # the user at least sees a click-through list of US stocks. Skipped
+    # when filters were active — we can't honour them without info — and
+    # when results were already populated.
+    if not results and not fundamental_filter and not min_market_cap and not min_volume:
+        from data.us.sp500_universe import get_fallback_universe
+        results = [
+            {
+                "symbol": sym, "market": "US", "name": name,
+                "price": 0.0, "change_pct": 0.0, "volume": 0,
+                "market_cap": None, "pe_ratio": None,
+                "pb_ratio": None, "dividend_yield": None,
+                "sector": None,
+            }
+            for sym, name in get_fallback_universe()[:limit]
+        ]
+
     # Don't cache empty results — keeps the next request retrying instead
     # of locking in a failure for TTL_SCREENER seconds.
     if results:

@@ -25,30 +25,77 @@ _TIMEOUT_S = 15.0
 _MAX_TICKERS = 505
 
 # Curated fallback — top ~80 US names by market cap / liquidity. Used when
-# the Wikipedia scrape fails or returns no matches. Order is roughly
-# market-cap descending so results stay sensible even before a real refresh.
-_FALLBACK_TICKERS: list[str] = [
+# the Wikipedia scrape fails or returns no matches. (symbol, company name)
+# tuples so the screener can emit a click-through list even when yfinance
+# is also unreachable (Yahoo IP-blocks cloud providers fairly often).
+_FALLBACK_UNIVERSE: list[tuple[str, str]] = [
     # Mega-cap tech
-    "AAPL", "MSFT", "NVDA", "GOOGL", "GOOG", "AMZN", "META", "AVGO", "TSLA", "ORCL",
+    ("AAPL", "Apple Inc."), ("MSFT", "Microsoft Corporation"),
+    ("NVDA", "NVIDIA Corporation"), ("GOOGL", "Alphabet Inc. Class A"),
+    ("GOOG", "Alphabet Inc. Class C"), ("AMZN", "Amazon.com Inc."),
+    ("META", "Meta Platforms Inc."), ("AVGO", "Broadcom Inc."),
+    ("TSLA", "Tesla Inc."), ("ORCL", "Oracle Corporation"),
     # Financials
-    "BRK-B", "JPM", "V", "MA", "BAC", "WFC", "GS", "MS", "AXP", "BLK",
+    ("BRK-B", "Berkshire Hathaway Inc. Class B"), ("JPM", "JPMorgan Chase & Co."),
+    ("V", "Visa Inc."), ("MA", "Mastercard Incorporated"),
+    ("BAC", "Bank of America Corp."), ("WFC", "Wells Fargo & Company"),
+    ("GS", "Goldman Sachs Group Inc."), ("MS", "Morgan Stanley"),
+    ("AXP", "American Express Company"), ("BLK", "BlackRock Inc."),
     # Healthcare
-    "LLY", "UNH", "JNJ", "MRK", "ABBV", "PFE", "TMO", "ABT", "AMGN", "DHR",
+    ("LLY", "Eli Lilly and Company"), ("UNH", "UnitedHealth Group"),
+    ("JNJ", "Johnson & Johnson"), ("MRK", "Merck & Co."),
+    ("ABBV", "AbbVie Inc."), ("PFE", "Pfizer Inc."),
+    ("TMO", "Thermo Fisher Scientific"), ("ABT", "Abbott Laboratories"),
+    ("AMGN", "Amgen Inc."), ("DHR", "Danaher Corporation"),
     # Consumer / retail
-    "WMT", "PG", "HD", "COST", "KO", "PEP", "MCD", "NKE", "SBUX", "TGT",
+    ("WMT", "Walmart Inc."), ("PG", "Procter & Gamble"),
+    ("HD", "Home Depot Inc."), ("COST", "Costco Wholesale"),
+    ("KO", "Coca-Cola Company"), ("PEP", "PepsiCo Inc."),
+    ("MCD", "McDonald's Corporation"), ("NKE", "Nike Inc."),
+    ("SBUX", "Starbucks Corporation"), ("TGT", "Target Corporation"),
     # Industrial / energy
-    "XOM", "CVX", "GE", "CAT", "BA", "RTX", "HON", "UNP", "LMT", "DE",
+    ("XOM", "Exxon Mobil Corporation"), ("CVX", "Chevron Corporation"),
+    ("GE", "General Electric Company"), ("CAT", "Caterpillar Inc."),
+    ("BA", "Boeing Company"), ("RTX", "RTX Corporation"),
+    ("HON", "Honeywell International"), ("UNP", "Union Pacific Corporation"),
+    ("LMT", "Lockheed Martin"), ("DE", "Deere & Company"),
     # Comm services / media
-    "NFLX", "DIS", "TMUS", "VZ", "T", "CMCSA",
+    ("NFLX", "Netflix Inc."), ("DIS", "Walt Disney Company"),
+    ("TMUS", "T-Mobile US"), ("VZ", "Verizon Communications"),
+    ("T", "AT&T Inc."), ("CMCSA", "Comcast Corporation"),
     # Semis / hardware
-    "AMD", "QCOM", "INTC", "TXN", "MU", "AMAT", "LRCX", "ADI",
+    ("AMD", "Advanced Micro Devices"), ("QCOM", "Qualcomm Inc."),
+    ("INTC", "Intel Corporation"), ("TXN", "Texas Instruments"),
+    ("MU", "Micron Technology"), ("AMAT", "Applied Materials"),
+    ("LRCX", "Lam Research"), ("ADI", "Analog Devices"),
     # Software / cloud
-    "CRM", "ADBE", "NOW", "INTU", "CSCO", "IBM", "PLTR",
+    ("CRM", "Salesforce Inc."), ("ADBE", "Adobe Inc."),
+    ("NOW", "ServiceNow Inc."), ("INTU", "Intuit Inc."),
+    ("CSCO", "Cisco Systems"), ("IBM", "International Business Machines"),
+    ("PLTR", "Palantir Technologies"),
     # Utilities / staples / misc
-    "NEE", "DUK", "SO", "MO", "PM", "PYPL", "SQ", "UBER", "ABNB", "BKNG",
+    ("NEE", "NextEra Energy"), ("DUK", "Duke Energy"),
+    ("SO", "Southern Company"), ("MO", "Altria Group"),
+    ("PM", "Philip Morris International"), ("PYPL", "PayPal Holdings"),
+    ("SQ", "Block Inc."), ("UBER", "Uber Technologies"),
+    ("ABNB", "Airbnb Inc."), ("BKNG", "Booking Holdings"),
     # Index ETFs commonly searched
-    "SPY", "QQQ", "DIA", "IWM", "VTI", "VOO",
+    ("SPY", "SPDR S&P 500 ETF"), ("QQQ", "Invesco QQQ Trust"),
+    ("DIA", "SPDR Dow Jones Industrial Average ETF"),
+    ("IWM", "iShares Russell 2000 ETF"),
+    ("VTI", "Vanguard Total Stock Market ETF"),
+    ("VOO", "Vanguard S&P 500 ETF"),
 ]
+
+# Symbols-only view kept for backwards compat with callers that just need
+# the ticker list (search endpoint, screener iteration).
+_FALLBACK_TICKERS: list[str] = [sym for sym, _ in _FALLBACK_UNIVERSE]
+
+
+def get_fallback_universe() -> list[tuple[str, str]]:
+    """Curated (symbol, name) pairs for click-through lists when yfinance
+    is unreachable. Same ordering as _FALLBACK_TICKERS."""
+    return list(_FALLBACK_UNIVERSE)
 
 
 def _dedupe(seq: list[str]) -> list[str]:

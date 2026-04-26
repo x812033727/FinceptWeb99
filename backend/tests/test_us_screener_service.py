@@ -173,14 +173,52 @@ async def test_get_screener_falls_through_when_polygon_raises():
 
 @pytest.mark.asyncio
 async def test_get_screener_does_not_cache_empty_result():
-    """Empty result should not lock in a cache miss for TTL_SCREENER seconds."""
+    """Empty result should not lock in a cache miss for TTL_SCREENER seconds.
+    But for a no-filter request the static fallback kicks in instead."""
     cache_set = AsyncMock()
+    # Filter active so static fallback won't engage and we can verify the
+    # no-cache-on-empty branch directly.
     with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
          patch.object(svc, "cache_set", new=cache_set), \
          patch.object(svc, "_use_polygon", return_value=False), \
          patch.object(svc, "_get_sp500_tickers", new_callable=AsyncMock, return_value=[]), \
          patch.object(svc, "_screener_yfinance", new_callable=AsyncMock, return_value=[]):
-        result = await svc.get_screener()
+        result = await svc.get_screener(min_dividend_yield=3.0)
 
     assert result == []
     cache_set.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_screener_emits_static_fallback_when_yfinance_dead():
+    """No filters + yfinance unreachable + Polygon disabled → curated list."""
+    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc, "_use_polygon", return_value=False), \
+         patch.object(svc, "_get_sp500_tickers", new_callable=AsyncMock, return_value=["AAPL"]), \
+         patch.object(svc, "_screener_yfinance", new_callable=AsyncMock, return_value=[]):
+        result = await svc.get_screener(limit=10)
+
+    # AAPL should be in the static fallback (top of the curated list).
+    symbols = [r["symbol"] for r in result]
+    assert "AAPL" in symbols
+    # All rows must satisfy the schema (price/change_pct/volume present).
+    for r in result:
+        assert r["market"] == "US"
+        assert isinstance(r["name"], str) and r["name"]
+        assert r["price"] == 0.0
+        assert r["volume"] == 0
+
+
+@pytest.mark.asyncio
+async def test_static_fallback_skipped_when_fundamental_filter_active():
+    """If user set min_dividend_yield=3 we can't honour it without info,
+    so don't pretend by returning the static list."""
+    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc, "_use_polygon", return_value=False), \
+         patch.object(svc, "_get_sp500_tickers", new_callable=AsyncMock, return_value=["AAPL"]), \
+         patch.object(svc, "_screener_yfinance", new_callable=AsyncMock, return_value=[]):
+        result = await svc.get_screener(min_dividend_yield=3.0)
+
+    assert result == []

@@ -135,6 +135,12 @@ FinceptWeb/
 
 ### Market data waterfall
 - US: Polygon.io → yfinance (quote, history, fundamentals, options, news)
+- US screener fallback chain: Polygon snapshot → `_screener_yfinance` (per-
+  symbol `.info`, slow + frequently rate-limited) → curated `_FALLBACK_UNIVERSE`
+  enriched via `yfinance.get_batch_quotes()` (uses `yf.download()` chart
+  endpoint, far more rate-limit resilient than `.info`). Rows where every
+  price is 0 are NOT cached so the next request retries instead of locking
+  in 10 min of zeros.
 - TW: TWSE OpenAPI → FinMind → MOPS; BWIBBU_d for PE/PB/yield
 - Crypto: Kraken public REST (`get_quote`/`get_history`); Top 20 universe in
   `data/crypto/symbols.py`. USDT/USDC/DAI normalized to USD for FX

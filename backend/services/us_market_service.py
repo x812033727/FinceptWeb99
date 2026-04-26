@@ -272,27 +272,37 @@ async def get_screener(
             limit=limit,
         )
 
-    # Static last-resort fallback: yfinance also blocked (Yahoo IP-bans
-    # cloud providers fairly often). Emit a curated symbol+name list so
-    # the user at least sees a click-through list of US stocks. Skipped
-    # when filters were active — we can't honour them without info — and
-    # when results were already populated.
+    # Static last-resort fallback: the yfinance .info path was also blocked
+    # (Yahoo IP-bans cloud providers fairly often). Emit a curated symbol+
+    # name list so the user at least sees a click-through list of US stocks.
+    # We still try yfinance's chart endpoint via get_batch_quotes — that
+    # endpoint is far more resilient to rate-limiting than .info, so prices
+    # usually come through even when the per-symbol info path doesn't.
+    # Skipped when filters were active — we can't honour PE/PB/sector
+    # without info — and when results were already populated.
     if not results and not fundamental_filter and not min_market_cap and not min_volume:
         from data.us.sp500_universe import get_fallback_universe
+        universe = get_fallback_universe()[:limit]
+        symbols = [sym for sym, _ in universe]
+        quotes = await yfinance.get_batch_quotes(symbols)
         results = [
             {
                 "symbol": sym, "market": "US", "name": name,
-                "price": 0.0, "change_pct": 0.0, "volume": 0,
+                "price": quotes.get(sym, {}).get("price", 0.0),
+                "change_pct": quotes.get(sym, {}).get("change_pct", 0.0),
+                "volume": quotes.get(sym, {}).get("volume", 0),
                 "market_cap": None, "pe_ratio": None,
                 "pb_ratio": None, "dividend_yield": None,
                 "sector": None,
             }
-            for sym, name in get_fallback_universe()[:limit]
+            for sym, name in universe
         ]
 
     # Don't cache empty results — keeps the next request retrying instead
-    # of locking in a failure for TTL_SCREENER seconds.
-    if results:
+    # of locking in a failure for TTL_SCREENER seconds. Same goes for the
+    # curated-list fallback when every row has price=0 (batch quotes also
+    # blocked) — caching that would lock the user into the zero state.
+    if results and any(r.get("price") for r in results):
         await cache_set(key, json.dumps(results), TTL_SCREENER)
     return results
 

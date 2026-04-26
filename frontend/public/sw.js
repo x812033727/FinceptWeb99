@@ -2,9 +2,18 @@
  * Fincept Web Terminal — Service Worker
  *
  * Caching strategy:
- *  - App shell (HTML/JS/CSS): Cache-first (stale-while-revalidate)
- *  - API /api/*:              Network-first (1s timeout → stale cache)
- *  - Static assets (/icon-*): Cache-first, long TTL
+ *  - Vite hashed bundles (/assets/*-[hash].js|css): Cache-first (immutable —
+ *    filename includes a content hash, so a different filename means
+ *    different content; safe to never re-fetch).
+ *  - Other JS/CSS:           Stale-while-revalidate.
+ *  - HTML (SPA routes):      Network-first, fallback to cached "/".
+ *  - Static assets:          Cache-first, long TTL.
+ *  - API /api/* (read):      Network-first w/ 3 s timeout. Offline
+ *                            fallback only if cached response is < 5 min
+ *                            old — financial data going stale silently
+ *                            is worse than failing visibly.
+ *  - API /api/auth/*:        Network-only (auth must never be served
+ *                            from cache).
  *
  * Install: navigator.serviceWorker.register('/sw.js')
  */
@@ -45,6 +54,17 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
+// Vite emits assets with a content-hash suffix
+// (e.g. /assets/index-BVSWP350.js). The filename changes whenever the
+// content changes, so a cached entry under a given URL is guaranteed
+// to match the current build → safe for cache-first.
+const HASHED_ASSET_RE = /^\/assets\/.+-[A-Za-z0-9_-]{8,}\.(js|css)$/;
+
+// API responses older than this are not used as offline fallback.
+// Quotes / screener / fundamentals all rotate within minutes; serving
+// older data without indication would be worse than failing.
+const API_MAX_STALE_MS = 5 * 60 * 1000;
+
 // ── Fetch ─────────────────────────────────────────────────────────
 self.addEventListener("fetch", (event) => {
   const { request } = event;
@@ -53,7 +73,15 @@ self.addEventListener("fetch", (event) => {
   // Never intercept WebSocket or non-GET
   if (request.method !== "GET" || url.pathname.startsWith("/ws")) return;
 
+  // Auth endpoints are never cached. Even GET /api/auth/me must hit
+  // the server — a stale response could keep a logged-out user
+  // looking authenticated until they navigate.
+  if (url.pathname.startsWith("/api/auth/")) {
+    return; // let the network handle it
+  }
+
   // API routes: network-first with 3s timeout, fallback to cache
+  // (only if cache is fresh enough — see API_MAX_STALE_MS).
   if (url.pathname.startsWith("/api/")) {
     event.respondWith(networkFirstWithCache(request, API_CACHE, 3000));
     return;
@@ -65,7 +93,13 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // JS/CSS bundles: stale-while-revalidate
+  // Vite content-hashed bundles: cache-first (immutable by filename).
+  if (HASHED_ASSET_RE.test(url.pathname)) {
+    event.respondWith(cacheFirst(request, SHELL_CACHE));
+    return;
+  }
+
+  // Other JS/CSS (sw.js, dev assets): stale-while-revalidate.
   if (/\.(js|css)$/.test(url.pathname)) {
     event.respondWith(staleWhileRevalidate(request, SHELL_CACHE));
     return;
@@ -106,18 +140,40 @@ async function networkFirstWithCache(request, cacheName, timeoutMs) {
     clearTimeout(timer);
     if (response.ok) {
       const cache = await caches.open(cacheName);
-      cache.put(request, response.clone());
+      // Stamp the response with the time it was cached so the
+      // offline-fallback path can drop it once it goes stale. Stored
+      // as a header on a cloned response — the original is returned
+      // to the page untouched.
+      const stamped = new Response(await response.clone().blob(), {
+        status: response.status,
+        statusText: response.statusText,
+        headers: appendDateHeader(response.headers),
+      });
+      cache.put(request, stamped);
     }
     return response;
   } catch {
     clearTimeout(timer);
     const cached = await caches.match(request);
-    if (cached) return cached;
+    if (cached && !isStale(cached, API_MAX_STALE_MS)) return cached;
     return new Response(JSON.stringify({ error: "offline" }), {
       status: 503,
       headers: { "Content-Type": "application/json" },
     });
   }
+}
+
+function appendDateHeader(headers) {
+  const out = new Headers(headers);
+  out.set("X-SW-Cached-At", String(Date.now()));
+  return out;
+}
+
+function isStale(response, maxAgeMs) {
+  const stamp = response.headers.get("X-SW-Cached-At");
+  if (!stamp) return false; // legacy entry — treat as fresh once
+  const age = Date.now() - Number(stamp);
+  return Number.isFinite(age) && age > maxAgeMs;
 }
 
 async function spaFallback(request) {

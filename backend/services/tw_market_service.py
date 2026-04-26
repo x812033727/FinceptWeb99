@@ -11,6 +11,7 @@ Timezone: Taiwan is UTC+8, no DST. All API responses are tagged with
 tz="Asia/Taipei" so the frontend can display correct local labels.
 """
 import json
+import re
 from datetime import datetime, date, timedelta, timezone
 from typing import Any
 
@@ -37,6 +38,16 @@ TTL_SCREENER     = 10 * 60
 
 # In-process symbol→exchange map; refreshed by scheduler (Phase 5)
 _exchange_map: dict[str, str] = {}   # symbol → "TWSE" | "TPEx"
+
+
+# TW ETFs are 4–6-digit codes that start with "00" (e.g. 0050, 0056,
+# 00713, 006208). Futures-based ETFs and 反向/槓桿 ETFs (00xxxR / 00xxxL)
+# also fit this regex. Regular stocks are 4-digit codes 1xxx–9xxx.
+_ETF_CODE = re.compile(r"^00\d{2,4}[A-Z]?$")
+
+
+def is_etf(symbol: str) -> bool:
+    return bool(_ETF_CODE.match(symbol or ""))
 
 
 def _is_tw_market_open() -> bool:
@@ -140,6 +151,7 @@ def _normalize_quote(symbol: str, raw: dict) -> dict[str, Any]:
         "ts":            int(datetime.now(timezone.utc).timestamp() * 1000),
         "tz":            "Asia/Taipei",
         "is_market_open": _is_tw_market_open(),
+        "is_etf":        is_etf(symbol),
     }
 
 
@@ -850,4 +862,112 @@ async def get_valuation_band(
     }
     if values:
         await cache_set(key, json.dumps(result), TTL_VALUATION_BAND)
+    return result
+
+
+# ── Dividends + ETF holdings ──────────────────────────────────────
+
+TTL_DIVIDENDS    = 24 * 3600
+TTL_ETF_HOLDINGS = 24 * 3600
+
+
+def _normalize_dividend(r: dict) -> dict[str, Any]:
+    """
+    FinMind TaiwanStockDividend rows vary year-over-year. Common keys:
+      date / CashEarningsDistribution / StockEarningsDistribution
+      / CashStatutorySurplus / StockStatutorySurplus
+      / CashExDividendTradingDate / StockExDividendTradingDate
+    Collapse into a single (date, cash_dividend, stock_dividend) row.
+    """
+    cash = (
+        (r.get("CashEarningsDistribution") or 0)
+        + (r.get("CashStatutorySurplus") or 0)
+    )
+    stock = (
+        (r.get("StockEarningsDistribution") or 0)
+        + (r.get("StockStatutorySurplus") or 0)
+    )
+    return {
+        "date":            r.get("date") or r.get("CashExDividendTradingDate"),
+        "ex_date":         r.get("CashExDividendTradingDate") or r.get("StockExDividendTradingDate"),
+        "cash_dividend":   round(float(cash), 4) if cash else 0.0,
+        "stock_dividend":  round(float(stock), 4) if stock else 0.0,
+    }
+
+
+async def get_dividends(symbol: str) -> list[dict[str, Any]]:
+    """Cash + stock dividend history, normalized and oldest-first."""
+    key = f"tw:dividends:{symbol}"
+    cached = await cache_get(key)
+    if cached:
+        return json.loads(cached)
+
+    rows: list[dict] = []
+    try:
+        rows = await finmind.get_dividends(symbol)
+    except Exception:
+        rows = []
+
+    out = [_normalize_dividend(r) for r in rows]
+    out = [r for r in out if r["date"] and (r["cash_dividend"] or r["stock_dividend"])]
+    out.sort(key=lambda r: r["date"])
+
+    await cache_set(key, json.dumps(out), TTL_DIVIDENDS)
+    return out
+
+
+async def get_etf_holdings(symbol: str) -> dict[str, Any]:
+    """
+    Top constituents with weights, latest snapshot only. Returns
+    {"as_of": None, "holdings": []} if FinMind doesn't expose holdings
+    for this ETF (free-tier restriction or not-an-ETF). Frontend
+    renders an empty state in that case.
+    """
+    empty: dict[str, Any] = {"as_of": None, "holdings": []}
+    if not is_etf(symbol):
+        return empty
+
+    key = f"tw:etf_holdings:{symbol}"
+    cached = await cache_get(key)
+    if cached:
+        return json.loads(cached)
+
+    rows: list[dict] = []
+    try:
+        rows = await finmind.get_etf_holdings(symbol)
+    except Exception:
+        rows = []
+
+    if not rows:
+        return empty
+
+    latest_date = max(r.get("date", "") for r in rows)
+    snapshot = [r for r in rows if r.get("date") == latest_date]
+
+    out: list[dict[str, Any]] = []
+    for r in snapshot:
+        # FinMind field names vary: stock_id / SecurityCode and
+        # weight / Weight / shares_per. Try several.
+        sym = r.get("stock_id") or r.get("SecurityCode") or r.get("symbol", "")
+        weight = (
+            r.get("weight")
+            or r.get("Weight")
+            or r.get("shares_per")
+            or r.get("HoldingPct")
+        )
+        try:
+            weight_f = float(weight) if weight is not None else None
+        except (TypeError, ValueError):
+            weight_f = None
+        if not sym or weight_f is None:
+            continue
+        out.append({
+            "symbol":   sym,
+            "name_zh":  r.get("stock_name") or r.get("name_zh") or "",
+            "weight":   round(weight_f, 4),
+        })
+
+    out.sort(key=lambda r: r["weight"], reverse=True)
+    result = {"as_of": latest_date, "holdings": out}
+    await cache_set(key, json.dumps(result), TTL_ETF_HOLDINGS)
     return result

@@ -159,6 +159,27 @@
       "percentile": "歷史分位",
       "no_data": "資料不足,無法繪製估值帶"
     },
+    "etf": {
+      "holdings_tab": "持股明細",
+      "no_holdings": "此 ETF 暫無持股資料",
+      "as_of": "資料截至 {{date}}",
+      "top10_concentration": "前十大持股集中度",
+      "constituent": "代號",
+      "weight": "權重",
+      "others": "其他"
+    },
+    "dividends": {
+      "tab": "配息",
+      "no_data": "無配息紀錄",
+      "cash": "現金股利",
+      "stock": "股票股利",
+      "announce_date": "公告日",
+      "ex_date": "除息日",
+      "last_payout": "最近一次現金配息",
+      "avg_5y": "近五年現金平均",
+      "implied_yield": "推估殖利率 (五年均)",
+      "years_paid": "已配息年數"
+    },
     "metrics": {
       "open": "開盤",
       "high": "最高",

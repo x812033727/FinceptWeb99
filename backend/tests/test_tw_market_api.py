@@ -500,3 +500,54 @@ async def test_valuation_band_rejects_years_out_of_range(client: AsyncClient):
     h = await _auth_headers(client, "tw_band_yrs@example.com")
     r = await client.get("/api/tw/valuation-band/2330?years=11", headers=h)
     assert r.status_code == 422
+
+
+# ── dividends + ETF holdings ──────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_dividends_requires_auth(client: AsyncClient):
+    r = await client.get("/api/tw/dividends/2330")
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_dividends_returns_list(client: AsyncClient):
+    h = await _auth_headers(client, "tw_div@example.com")
+    payload = [
+        {"date": "2023-08-15", "ex_date": "2023-09-15",
+         "cash_dividend": 11.0, "stock_dividend": 0.0},
+    ]
+    with patch("services.tw_market_service.get_dividends", new_callable=AsyncMock) as mock:
+        mock.return_value = payload
+        r = await client.get("/api/tw/dividends/2330", headers=h)
+
+    assert r.status_code == 200
+    rows = r.json()
+    assert rows[0]["cash_dividend"] == pytest.approx(11.0)
+
+
+@pytest.mark.asyncio
+async def test_etf_holdings_requires_auth(client: AsyncClient):
+    r = await client.get("/api/tw/etf/0050/holdings")
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_etf_holdings_response_shape(client: AsyncClient):
+    h = await _auth_headers(client, "tw_etf@example.com")
+    payload = {
+        "as_of": "2024-01-31",
+        "holdings": [
+            {"symbol": "2330", "name_zh": "台積電", "weight": 25.0},
+            {"symbol": "2454", "name_zh": "聯發科", "weight": 10.0},
+        ],
+    }
+    with patch("services.tw_market_service.get_etf_holdings", new_callable=AsyncMock) as mock:
+        mock.return_value = payload
+        r = await client.get("/api/tw/etf/0050/holdings", headers=h)
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["as_of"] == "2024-01-31"
+    assert body["holdings"][0]["symbol"] == "2330"
+    mock.assert_awaited_once_with("0050")

@@ -325,3 +325,106 @@ async def test_get_valuation_band_pb_uses_balance_sheet():
 async def test_get_valuation_band_invalid_metric_raises():
     with pytest.raises(ValueError):
         await svc.get_valuation_band("2330", metric="bogus")
+
+
+# ── ETF detection + dividends + holdings ────────────────────────
+
+
+def test_is_etf_recognizes_4_to_6_digit_codes_starting_with_00():
+    # Standard 4-digit ETFs
+    assert svc.is_etf("0050") is True
+    assert svc.is_etf("0056") is True
+    # 5-digit
+    assert svc.is_etf("00713") is True
+    # 6-digit
+    assert svc.is_etf("006208") is True
+    # Inverse / leveraged ETFs (suffix)
+    assert svc.is_etf("00632R") is True
+
+
+def test_is_etf_rejects_regular_stocks_and_garbage():
+    assert svc.is_etf("2330") is False
+    assert svc.is_etf("1101") is False
+    assert svc.is_etf("9999") is False
+    assert svc.is_etf("") is False
+    assert svc.is_etf("AAPL") is False
+    # 3-digit codes shouldn't match
+    assert svc.is_etf("005") is False
+
+
+@pytest.mark.asyncio
+async def test_get_dividends_normalizes_and_sorts():
+    """Cash + stock components summed, rows without payout dropped."""
+    raw = [
+        {"date": "2023-08-15", "CashEarningsDistribution": 2.5,
+         "CashStatutorySurplus": 0.5, "StockEarningsDistribution": 0,
+         "CashExDividendTradingDate": "2023-09-15"},
+        {"date": "2022-08-15", "CashEarningsDistribution": 2.0,
+         "StockEarningsDistribution": 0.1,
+         "CashExDividendTradingDate": "2022-09-15"},
+        # Empty payout row — should be dropped.
+        {"date": "2021-01-01", "CashEarningsDistribution": 0,
+         "StockEarningsDistribution": 0},
+    ]
+    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc.finmind, "get_dividends", new_callable=AsyncMock, return_value=raw):
+        result = await svc.get_dividends("2330")
+
+    assert len(result) == 2
+    # Sorted ascending
+    assert result[0]["date"] == "2022-08-15"
+    assert result[1]["date"] == "2023-08-15"
+    # Cash summed = 2.5 + 0.5 = 3.0
+    assert result[1]["cash_dividend"] == pytest.approx(3.0)
+    assert result[0]["stock_dividend"] == pytest.approx(0.1)
+
+
+@pytest.mark.asyncio
+async def test_get_etf_holdings_returns_empty_for_non_etf():
+    """Regular stock symbols short-circuit to empty without hitting FinMind."""
+    with patch.object(svc.finmind, "get_etf_holdings", new_callable=AsyncMock) as mock:
+        result = await svc.get_etf_holdings("2330")
+
+    assert result == {"as_of": None, "holdings": []}
+    mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_etf_holdings_picks_latest_snapshot_and_sorts():
+    raw = [
+        {"date": "2024-01-31", "stock_id": "2330", "stock_name": "台積電", "weight": 25.0},
+        {"date": "2024-01-31", "stock_id": "2317", "stock_name": "鴻海", "weight": 5.0},
+        {"date": "2024-01-31", "stock_id": "2454", "stock_name": "聯發科", "weight": 10.0},
+        # Older snapshot — should be ignored.
+        {"date": "2023-12-31", "stock_id": "2330", "stock_name": "台積電", "weight": 22.0},
+    ]
+    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc.finmind, "get_etf_holdings", new_callable=AsyncMock, return_value=raw):
+        result = await svc.get_etf_holdings("0050")
+
+    assert result["as_of"] == "2024-01-31"
+    weights = [h["weight"] for h in result["holdings"]]
+    # Sorted descending by weight
+    assert weights == [25.0, 10.0, 5.0]
+    assert result["holdings"][0]["symbol"] == "2330"
+
+
+@pytest.mark.asyncio
+async def test_get_etf_holdings_empty_when_finmind_returns_nothing():
+    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc.finmind, "get_etf_holdings", new_callable=AsyncMock, return_value=[]):
+        result = await svc.get_etf_holdings("00713")
+
+    assert result == {"as_of": None, "holdings": []}
+
+
+def test_normalize_quote_flags_etf():
+    """ETF symbols get is_etf=True, regular stocks get is_etf=False."""
+    raw = {"close": 100.0, "name_zh": "元大台灣高息低波"}
+    q = svc._normalize_quote("00713", raw)
+    assert q["is_etf"] is True
+
+    q2 = svc._normalize_quote("2330", raw)
+    assert q2["is_etf"] is False

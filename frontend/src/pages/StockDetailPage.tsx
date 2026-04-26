@@ -2,8 +2,8 @@ import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
-  BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  ReferenceLine, Cell,
+  BarChart, Bar, LineChart, Line, PieChart, Pie, XAxis, YAxis, Tooltip,
+  ResponsiveContainer, ReferenceLine, Cell, Legend,
 } from "recharts";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
@@ -17,7 +17,9 @@ type Period = "1d" | "5d" | "1mo" | "3mo" | "1y" | "5y";
 type Interval = "1m" | "5m" | "15m" | "1h" | "1d" | "1wk";
 
 type USTab = "chart" | "financials" | "options" | "news";
-type TWTab = "chart" | "health" | "valuation" | "institutional" | "margin" | "revenue" | "news";
+type TWTab = "chart" | "health" | "valuation" | "holdings" | "dividends" | "institutional" | "margin" | "revenue" | "news";
+
+const isTWETF = (symbol: string) => /^00\d{2,4}[A-Z]?$/.test(symbol);
 
 interface OptionRow {
   strike: number;
@@ -114,6 +116,24 @@ interface ValuationBandResponse {
   };
 }
 
+interface DividendRow {
+  date: string;
+  ex_date: string | null;
+  cash_dividend: number;
+  stock_dividend: number;
+}
+
+interface ETFHolding {
+  symbol: string;
+  name_zh: string;
+  weight: number;
+}
+
+interface ETFHoldingsResponse {
+  as_of: string | null;
+  holdings: ETFHolding[];
+}
+
 // ── API helpers ────────────────────────────────────────────────────
 
 const PERIOD_INTERVAL: Record<Period, Interval> = {
@@ -174,6 +194,12 @@ const fetchHealth = (sym: string) =>
 const fetchValuationBand = (sym: string, metric: "pe" | "pb") =>
   api.get<ValuationBandResponse>(`/tw/valuation-band/${sym}?metric=${metric}&years=5`)
     .then((r) => r.data);
+
+const fetchDividends = (sym: string) =>
+  api.get<DividendRow[]>(`/tw/dividends/${sym}`).then((r) => r.data);
+
+const fetchETFHoldings = (sym: string) =>
+  api.get<ETFHoldingsResponse>(`/tw/etf/${sym}/holdings`).then((r) => r.data);
 
 const fetchEarnings = (sym: string) =>
   api.get<{ earnings_date: string | null; eps_estimate: number | null; revenue_estimate: number | null }>(
@@ -1098,6 +1124,215 @@ function ValuationBandPanel({ symbol }: { symbol: string }) {
   );
 }
 
+// ── ETF holdings ──────────────────────────────────────────────────
+
+const PIE_COLORS = [
+  "#3b82f6", "#8b5cf6", "#ec4899", "#f59e0b", "#10b981",
+  "#06b6d4", "#6366f1", "#f43f5e", "#84cc16", "#eab308",
+];
+
+function HoldingsPanel({ symbol }: { symbol: string }) {
+  const { t } = useTranslation();
+  const { data, isLoading } = useQuery({
+    queryKey: ["etf-holdings", symbol],
+    queryFn: () => fetchETFHoldings(symbol),
+    staleTime: 6 * 3_600_000,
+  });
+
+  if (isLoading) return <Loading />;
+  if (!data || !data.holdings.length) {
+    return (
+      <div className="p-6 text-muted-foreground text-sm">
+        {t("stock.etf.no_holdings")}
+      </div>
+    );
+  }
+
+  const top10 = data.holdings.slice(0, 10);
+  const otherWeight = data.holdings.slice(10).reduce((s, h) => s + h.weight, 0);
+  const pieData = otherWeight > 0
+    ? [...top10.map((h) => ({ name: h.symbol, value: h.weight })),
+       { name: t("stock.etf.others"), value: Number(otherWeight.toFixed(2)) }]
+    : top10.map((h) => ({ name: h.symbol, value: h.weight }));
+
+  const top10Weight = top10.reduce((s, h) => s + h.weight, 0);
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <span>{t("stock.etf.as_of", { date: data.as_of ?? "—" })}</span>
+        <span>{t("stock.etf.top10_concentration")}: <span className="text-foreground font-medium">{top10Weight.toFixed(2)}%</span></span>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+        <div className="lg:col-span-2">
+          <ResponsiveContainer width="100%" height={280}>
+            <PieChart>
+              <Pie
+                data={pieData}
+                dataKey="value"
+                nameKey="name"
+                cx="50%"
+                cy="50%"
+                outerRadius={100}
+                innerRadius={45}
+                paddingAngle={1}
+              >
+                {pieData.map((_, i) => (
+                  <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                ))}
+              </Pie>
+              <Tooltip
+                contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
+                formatter={(v: number) => [`${v.toFixed(2)}%`, "weight"]}
+              />
+              <Legend wrapperStyle={{ fontSize: 11 }} iconSize={8} />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="lg:col-span-3 overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-border text-muted-foreground">
+                <th className="text-left py-2 pr-4 font-medium">#</th>
+                <th className="text-left py-2 pr-4 font-medium">{t("stock.etf.constituent")}</th>
+                <th className="text-left py-2 pr-4 font-medium">{t("market.table.name")}</th>
+                <th className="text-right py-2 px-2 font-medium">{t("stock.etf.weight")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.holdings.slice(0, 30).map((h, i) => (
+                <tr key={h.symbol} className="border-b border-border/30 hover:bg-accent/5">
+                  <td className="py-1.5 pr-4 text-muted-foreground">{i + 1}</td>
+                  <td className="py-1.5 pr-4 text-primary font-medium">{h.symbol}</td>
+                  <td className="py-1.5 pr-4 text-foreground">{h.name_zh || "—"}</td>
+                  <td className="text-right py-1.5 px-2 text-foreground font-medium">
+                    {h.weight.toFixed(2)}%
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Dividend history ──────────────────────────────────────────────
+
+function DividendsPanel({ symbol, currentPrice }: { symbol: string; currentPrice: number | null }) {
+  const { t } = useTranslation();
+  const { data = [], isLoading } = useQuery({
+    queryKey: ["dividends", symbol],
+    queryFn: () => fetchDividends(symbol),
+    staleTime: 6 * 3_600_000,
+  });
+
+  if (isLoading) return <Loading />;
+  if (!data.length) {
+    return <div className="p-6 text-muted-foreground text-sm">{t("stock.dividends.no_data")}</div>;
+  }
+
+  // Yearly aggregate. FinMind dates are typically YYYY-MM-DD; if year is
+  // ambiguous we treat the date prefix as the year bucket.
+  const byYear: Record<string, { cash: number; stock: number }> = {};
+  for (const r of data) {
+    const yr = (r.date || "").slice(0, 4);
+    if (!yr) continue;
+    if (!byYear[yr]) byYear[yr] = { cash: 0, stock: 0 };
+    byYear[yr].cash += r.cash_dividend;
+    byYear[yr].stock += r.stock_dividend;
+  }
+  const years = Object.keys(byYear).sort();
+  const chartData = years.map((y) => ({
+    year: y,
+    cash: Number(byYear[y].cash.toFixed(4)),
+    stock: Number(byYear[y].stock.toFixed(4)),
+  }));
+
+  const last5 = chartData.slice(-5);
+  const avgCash5 = last5.length
+    ? last5.reduce((s, r) => s + r.cash, 0) / last5.length
+    : 0;
+  const ttmYield = currentPrice && currentPrice > 0
+    ? (avgCash5 / currentPrice) * 100
+    : null;
+  const lastPayout = data[data.length - 1];
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="bg-background border border-border rounded p-3">
+          <div className="text-xs text-muted-foreground">{t("stock.dividends.last_payout")}</div>
+          <div className="text-lg font-semibold text-foreground">
+            {lastPayout ? lastPayout.cash_dividend.toFixed(3) : "—"}
+          </div>
+          {lastPayout?.ex_date && (
+            <div className="text-[10px] text-muted-foreground mt-0.5">{t("stock.dividends.ex_date")}: {lastPayout.ex_date}</div>
+          )}
+        </div>
+        <div className="bg-background border border-border rounded p-3">
+          <div className="text-xs text-muted-foreground">{t("stock.dividends.avg_5y")}</div>
+          <div className="text-lg font-semibold text-foreground">{avgCash5.toFixed(3)}</div>
+        </div>
+        <div className="bg-background border border-border rounded p-3">
+          <div className="text-xs text-muted-foreground">{t("stock.dividends.implied_yield")}</div>
+          <div className="text-lg font-semibold text-foreground">
+            {ttmYield == null ? "—" : `${ttmYield.toFixed(2)}%`}
+          </div>
+        </div>
+        <div className="bg-background border border-border rounded p-3">
+          <div className="text-xs text-muted-foreground">{t("stock.dividends.years_paid")}</div>
+          <div className="text-lg font-semibold text-foreground">{years.length}</div>
+        </div>
+      </div>
+
+      <ResponsiveContainer width="100%" height={240}>
+        <BarChart data={chartData} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
+          <XAxis dataKey="year" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} />
+          <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} width={40} />
+          <Tooltip
+            contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
+            formatter={(v: number) => [v.toFixed(3), "TWD/share"]}
+          />
+          <Legend wrapperStyle={{ fontSize: 11 }} iconSize={8} />
+          <Bar dataKey="cash" name={t("stock.dividends.cash")} fill="#22c55e" radius={[2, 2, 0, 0]} />
+          <Bar dataKey="stock" name={t("stock.dividends.stock")} fill="#f59e0b" radius={[2, 2, 0, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-border text-muted-foreground">
+              <th className="text-left py-2 pr-4 font-medium">{t("stock.dividends.announce_date")}</th>
+              <th className="text-left py-2 pr-4 font-medium">{t("stock.dividends.ex_date")}</th>
+              <th className="text-right py-2 px-2 font-medium">{t("stock.dividends.cash")} (TWD)</th>
+              <th className="text-right py-2 px-2 font-medium">{t("stock.dividends.stock")} (股)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...data].reverse().slice(0, 30).map((r, i) => (
+              <tr key={`${r.date}-${i}`} className="border-b border-border/30 hover:bg-accent/5">
+                <td className="py-1.5 pr-4 text-muted-foreground">{r.date}</td>
+                <td className="py-1.5 pr-4 text-muted-foreground">{r.ex_date ?? "—"}</td>
+                <td className="text-right py-1.5 px-2 text-green-400 font-medium">
+                  {r.cash_dividend ? r.cash_dividend.toFixed(3) : "—"}
+                </td>
+                <td className="text-right py-1.5 px-2 text-yellow-400">
+                  {r.stock_dividend ? r.stock_dividend.toFixed(3) : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // ── News feed ─────────────────────────────────────────────────────
 
 interface NewsItem {
@@ -1221,6 +1456,8 @@ export default function StockDetailPage() {
   const displayChange = liveChange ?? (quote?.change_pct as number | undefined);
   const isPositive = (displayChange ?? 0) >= 0;
 
+  const isETF = mkt === "TW" && (Boolean(quote?.is_etf) || isTWETF(sym));
+
   const showChart = mkt === "CRYPTO" ? true
     : mkt === "US" ? usTab === "chart" : twTab === "chart";
 
@@ -1243,6 +1480,11 @@ export default function StockDetailPage() {
               {mkt === "TW" && Boolean(quote?.exchange) && (
                 <span className="ml-2 text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded">
                   {String(quote?.exchange ?? "")}
+                </span>
+              )}
+              {isETF && (
+                <span className="ml-2 text-xs bg-amber-500/15 text-amber-500 px-1.5 py-0.5 rounded font-medium">
+                  ETF
                 </span>
               )}
             </p>
@@ -1276,11 +1518,21 @@ export default function StockDetailPage() {
                 come from CryptoPanic etc. but is out of scope (per plan). */}
             <TabButton active={true} label={t("stock.history")} onClick={() => {}} />
           </>
+        ) : isETF ? (
+          <>
+            <TabButton active={twTab === "chart"} label={t("stock.history")} onClick={() => setTwTab("chart")} />
+            <TabButton active={twTab === "holdings"} label={t("stock.etf.holdings_tab")} onClick={() => setTwTab("holdings")} />
+            <TabButton active={twTab === "dividends"} label={t("stock.dividends.tab")} onClick={() => setTwTab("dividends")} />
+            <TabButton active={twTab === "institutional"} label="法人買賣超" onClick={() => setTwTab("institutional")} />
+            <TabButton active={twTab === "margin"} label="融資融券" onClick={() => setTwTab("margin")} />
+            <TabButton active={twTab === "news"} label={t("stock.news")} onClick={() => setTwTab("news")} />
+          </>
         ) : (
           <>
             <TabButton active={twTab === "chart"} label={t("stock.history")} onClick={() => setTwTab("chart")} />
             <TabButton active={twTab === "health"} label={t("stock.health.tab")} onClick={() => setTwTab("health")} />
             <TabButton active={twTab === "valuation"} label={t("stock.valuation.tab")} onClick={() => setTwTab("valuation")} />
+            <TabButton active={twTab === "dividends"} label={t("stock.dividends.tab")} onClick={() => setTwTab("dividends")} />
             <TabButton active={twTab === "institutional"} label="法人買賣超" onClick={() => setTwTab("institutional")} />
             <TabButton active={twTab === "margin"} label="融資融券" onClick={() => setTwTab("margin")} />
             <TabButton active={twTab === "revenue"} label="月營收" onClick={() => setTwTab("revenue")} />
@@ -1397,6 +1649,16 @@ export default function StockDetailPage() {
           {twTab === "valuation" && (
             <div className="bg-card border border-border rounded-lg overflow-hidden">
               <ValuationBandPanel symbol={sym} />
+            </div>
+          )}
+          {twTab === "holdings" && (
+            <div className="bg-card border border-border rounded-lg overflow-hidden">
+              <HoldingsPanel symbol={sym} />
+            </div>
+          )}
+          {twTab === "dividends" && (
+            <div className="bg-card border border-border rounded-lg overflow-hidden">
+              <DividendsPanel symbol={sym} currentPrice={(quote?.price as number | undefined) ?? null} />
             </div>
           )}
           {twTab === "institutional" && (

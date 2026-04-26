@@ -116,6 +116,24 @@ async def valuation_band(
         raise HTTPException(status_code=502, detail=f"Data source error: {e}")
 
 
+@router.get("/dividends/{symbol}", response_model=list[dict])
+async def dividends(symbol: str, _: Auth):
+    """配息歷史 — works for both ordinary stocks and ETFs."""
+    try:
+        return await svc.get_dividends(symbol)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Data source error: {e}")
+
+
+@router.get("/etf/{symbol}/holdings")
+async def etf_holdings(symbol: str, _: Auth):
+    """ETF 持股明細 — latest snapshot of constituents and weights."""
+    try:
+        return await svc.get_etf_holdings(symbol)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Data source error: {e}")
+
+
 @router.get("/screener", response_model=list[TWScreenerItem])
 async def screener(
     _: Auth,

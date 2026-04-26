@@ -17,6 +17,7 @@ class TWQuoteResponse(BaseModel):
     ts: int                 # Unix ms UTC
     tz: str                 # "Asia/Taipei"
     is_market_open: bool
+    is_etf: bool = False
 
 
 class TWOHLCVBar(BaseModel):

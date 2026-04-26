@@ -126,3 +126,27 @@ async def get_balance_sheet(symbol: str, start_date: str = "2020-01-01") -> list
 
 async def get_cash_flow(symbol: str, start_date: str = "2020-01-01") -> list[dict[str, Any]]:
     return await _query("TaiwanStockCashFlowsStatement", symbol, start_date)
+
+
+# ── Dividends ─────────────────────────────────────────────────────
+
+async def get_dividends(symbol: str, start_date: str = "2018-01-01") -> list[dict[str, Any]]:
+    """
+    Cash + stock dividend history. Works for both ordinary stocks and ETFs
+    (ETFs use the same TaiwanStockDividend dataset). Field names FinMind
+    returns can vary by report year — we keep the raw rows and let the
+    service normalize.
+    """
+    return await _query("TaiwanStockDividend", symbol, start_date)
+
+
+# ── ETF holdings ──────────────────────────────────────────────────
+
+async def get_etf_holdings(symbol: str, start_date: str = "2024-01-01") -> list[dict[str, Any]]:
+    """
+    ETF underlying-stock weights (持股明細). FinMind exposes this under
+    the 付費專案 datasets, but the free tier returns the latest month
+    for most popular ETFs. Returns [] silently if the dataset is not
+    accessible — caller renders an empty state.
+    """
+    return await _query("TaiwanStockHoldingSharesPer", symbol, start_date)

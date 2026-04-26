@@ -495,3 +495,128 @@ async def test_screener_volume_sort_lifts_regular_stock_above_etf_glut():
         result = await svc.get_screener(limit=2)
 
     assert result[0]["symbol"] == "2330"
+
+
+# ── News pipeline (Google News RSS primary) ─────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_news_uses_google_when_yfinance_empty():
+    """Google News returns hits → yfinance fallback never called."""
+    google_items = [
+        {"title": "台積電 Q4 法說", "publisher": "經濟日報",
+         "link": "https://news.google.com/articles/abc",
+         "published_at": "2026-04-26T10:00:00+00:00", "thumbnail": None},
+    ]
+    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc, "_google_news_rss", new_callable=AsyncMock, return_value=google_items) as gmock, \
+         patch.object(svc, "_yfinance_news_fallback", new_callable=AsyncMock, return_value=[]) as yf_mock:
+        result = await svc.get_news("2330", limit=5)
+
+    assert result == google_items
+    gmock.assert_awaited_once()
+    yf_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_news_falls_back_to_yfinance_when_google_empty():
+    """Google empty → fall back to yfinance."""
+    yf_items = [{"title": "via yfinance", "publisher": "yf",
+                 "link": "https://example.com", "published_at": "",
+                 "thumbnail": None}]
+    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc, "_google_news_rss", new_callable=AsyncMock, return_value=[]), \
+         patch.object(svc, "_yfinance_news_fallback", new_callable=AsyncMock, return_value=yf_items):
+        result = await svc.get_news("2330", limit=5)
+
+    assert result == yf_items
+
+
+@pytest.mark.asyncio
+async def test_get_news_uses_cached_name_in_query():
+    """When a recent quote is cached, the news query includes the Chinese name."""
+    import json as _json
+    quote_cached = _json.dumps({"name_zh": "台積電", "price": 2185.0})
+    captured: dict = {}
+
+    async def _spy(query: str, limit: int = 10):
+        captured["query"] = query
+        return []
+
+    with patch.object(svc, "cache_get", new_callable=AsyncMock,
+                      side_effect=[None, quote_cached]), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc, "_google_news_rss", new=_spy), \
+         patch.object(svc, "_yfinance_news_fallback", new_callable=AsyncMock, return_value=[]):
+        await svc.get_news("2330", limit=5)
+
+    assert "2330" in captured["query"]
+    assert "台積電" in captured["query"]
+
+
+@pytest.mark.asyncio
+async def test_google_news_rss_parses_xml_correctly():
+    """Verify the RSS parser extracts title/link/pubDate/source."""
+    sample = """<?xml version="1.0"?>
+    <rss version="2.0">
+      <channel>
+        <item>
+          <title>台積電 Q4 法說會重點</title>
+          <link>https://news.google.com/articles/abc123</link>
+          <pubDate>Sat, 26 Apr 2026 10:00:00 GMT</pubDate>
+          <source url="https://money.udn.com">經濟日報</source>
+        </item>
+        <item>
+          <title>台積電董事會通過配息</title>
+          <link>https://news.google.com/articles/def456</link>
+          <pubDate>Fri, 25 Apr 2026 08:00:00 GMT</pubDate>
+          <source url="https://www.cnyes.com">鉅亨網</source>
+        </item>
+      </channel>
+    </rss>"""
+
+    class _MockResponse:
+        text = sample
+        def raise_for_status(self):
+            return None
+
+    class _MockClient:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_): return None
+        async def get(self, *_, **__): return _MockResponse()
+
+    with patch("httpx.AsyncClient", return_value=_MockClient()):
+        items = await svc._google_news_rss("2330 台積電", limit=10)
+
+    assert len(items) == 2
+    assert items[0]["title"] == "台積電 Q4 法說會重點"
+    assert items[0]["publisher"] == "經濟日報"
+    assert items[0]["link"].startswith("https://news.google.com/")
+    assert "2026-04-26" in items[0]["published_at"]
+    assert items[1]["publisher"] == "鉅亨網"
+
+
+@pytest.mark.asyncio
+async def test_google_news_rss_respects_limit():
+    sample_items = "".join(
+        f"<item><title>News {i}</title><link>https://x/{i}</link>"
+        f"<pubDate>Sat, 26 Apr 2026 10:00:00 GMT</pubDate></item>"
+        for i in range(20)
+    )
+    sample = f"<?xml version='1.0'?><rss><channel>{sample_items}</channel></rss>"
+
+    class _MockResponse:
+        text = sample
+        def raise_for_status(self): return None
+
+    class _MockClient:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_): return None
+        async def get(self, *_, **__): return _MockResponse()
+
+    with patch("httpx.AsyncClient", return_value=_MockClient()):
+        items = await svc._google_news_rss("test", limit=5)
+
+    assert len(items) == 5

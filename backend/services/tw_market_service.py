@@ -680,21 +680,62 @@ async def get_index() -> dict[str, Any]:
 TTL_NEWS = 5 * 60
 
 
-async def get_news(symbol: str, limit: int = 10) -> list[dict[str, Any]]:
-    """Fetch news for a TW stock via yfinance ({symbol}.TW format)."""
-    key = f"tw:news:{symbol.upper()}"
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+async def _google_news_rss(query: str, limit: int = 10) -> list[dict[str, Any]]:
+    """
+    Hit Google News RSS for TW-localized headlines. RSS XML is plain text,
+    no API key required. Each <item> has title / link / pubDate / source.
+    Links are Google News redirect URLs that resolve to the original article
+    when clicked.
+    """
+    import httpx
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
 
+    url = "https://news.google.com/rss/search"
+    params = {
+        "q":    query,
+        "hl":   "zh-TW",
+        "gl":   "TW",
+        "ceid": "TW:zh-Hant",
+    }
+    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as c:
+        r = await c.get(url, params=params)
+        r.raise_for_status()
+        xml_text = r.text
+
+    root = ET.fromstring(xml_text)
+    items: list[dict[str, Any]] = []
+    for el in root.findall(".//item")[:limit]:
+        title = (el.findtext("title") or "").strip()
+        link = (el.findtext("link") or "").strip()
+        pub_date_raw = el.findtext("pubDate") or ""
+        source_el = el.find("source")
+        publisher = source_el.text.strip() if (source_el is not None and source_el.text) else ""
+        try:
+            published_at = parsedate_to_datetime(pub_date_raw).isoformat()
+        except (TypeError, ValueError):
+            published_at = pub_date_raw
+        if not title or not link:
+            continue
+        items.append({
+            "title":        title,
+            "publisher":    publisher,
+            "link":         link,
+            "published_at": published_at,
+            "thumbnail":    None,
+        })
+    return items
+
+
+async def _yfinance_news_fallback(symbol: str, limit: int) -> list[dict[str, Any]]:
+    """Legacy yfinance path. Often returns [] for TW symbols."""
     import asyncio
     from datetime import datetime, timezone
     loop = asyncio.get_running_loop()
 
     def _fetch():
         import yfinance as yf
-        ticker_str = f"{symbol}.TW"
-        t = yf.Ticker(ticker_str)
+        t = yf.Ticker(f"{symbol}.TW")
         raw = t.news or []
         items = []
         for n in raw[:limit]:
@@ -703,20 +744,57 @@ async def get_news(symbol: str, limit: int = 10) -> list[dict[str, Any]]:
                 resolutions = t_data.get("resolutions", [])
                 thumbnail = resolutions[0].get("url") if resolutions else None
             items.append({
-                "title":     n.get("title", ""),
-                "publisher": n.get("publisher", ""),
-                "link":      n.get("link", ""),
+                "title":        n.get("title", ""),
+                "publisher":    n.get("publisher", ""),
+                "link":         n.get("link", ""),
                 "published_at": datetime.fromtimestamp(
                     n.get("providerPublishTime", 0), tz=timezone.utc
                 ).isoformat(),
-                "thumbnail": thumbnail,
+                "thumbnail":    thumbnail,
             })
         return items
 
-    result = await loop.run_in_executor(None, _fetch)
-    if result:
-        await cache_set(key, json.dumps(result), TTL_NEWS)
-    return result
+    return await loop.run_in_executor(None, _fetch)
+
+
+async def get_news(symbol: str, limit: int = 10) -> list[dict[str, Any]]:
+    """
+    TW news — Google News RSS (zh-TW) primary, yfinance fallback. yfinance's
+    .news attribute is empty for almost every TW ticker including 2330, so
+    we hit Google News which covers 鉅亨網 / 經濟日報 / 中央社 / MoneyDJ /
+    自由財經 etc. Query is `{symbol} {name_zh}` when we have a recent quote
+    cached, otherwise `{symbol} 台股`.
+    """
+    key = f"tw:news:{symbol.upper()}"
+    cached = await cache_get(key)
+    if cached:
+        return json.loads(cached)
+
+    name = ""
+    try:
+        q_cached = await cache_get(key_quote("tw", symbol))
+        if q_cached:
+            name = json.loads(q_cached).get("name_zh", "") or ""
+    except Exception:
+        pass
+
+    query = f"{symbol} {name}".strip() if name else f"{symbol} 台股"
+
+    items: list[dict[str, Any]] = []
+    try:
+        items = await _google_news_rss(query, limit=limit)
+    except Exception:
+        items = []
+
+    if not items:
+        try:
+            items = await _yfinance_news_fallback(symbol, limit)
+        except Exception:
+            items = []
+
+    if items:
+        await cache_set(key, json.dumps(items), TTL_NEWS)
+    return items
 
 
 # ── Valuation band (本益比 / 股價淨值比 河流圖) ──────────────────

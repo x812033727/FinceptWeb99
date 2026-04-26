@@ -131,6 +131,29 @@ async def delete_portfolio(portfolio_id: str, user_id: str, db: AsyncSession) ->
     return True
 
 
+async def update_portfolio(
+    portfolio_id: str, user_id: str, db: AsyncSession,
+    *,
+    name: str | None = None,
+    currency: str | None = None,
+) -> Portfolio | None:
+    """Rename a portfolio and/or change its base currency.
+
+    Changing currency does NOT retroactively re-stamp historical snapshots —
+    those keep the currency they were taken in. Going forward the new
+    currency drives FX conversion in get_portfolio_detail.
+    """
+    p = await get_portfolio(portfolio_id, user_id, db)
+    if not p:
+        return None
+    if name is not None:
+        p.name = name.strip() or p.name
+    if currency is not None:
+        p.currency = currency.upper()
+    await db.flush()
+    return p
+
+
 # ── Transactions ──────────────────────────────────────────────────
 
 async def add_transaction(
@@ -168,6 +191,81 @@ async def add_transaction(
     # Rebuild holding from all transactions
     await _rebuild_holding(portfolio_id, symbol.upper(), market.upper(), db)
     return tx
+
+
+async def update_transaction(
+    portfolio_id: str,
+    tx_id: str,
+    user_id: str,
+    db: AsyncSession,
+    *,
+    symbol: str | None = None,
+    market: str | None = None,
+    tx_type: str | None = None,
+    quantity: float | None = None,
+    price: float | None = None,
+    fx_rate: float | None = None,
+    tx_date: date | None = None,
+    notes: str | None = None,
+) -> Transaction | None:
+    """Patch fields on an existing transaction.
+
+    If symbol or market changed, both the OLD and NEW (symbol, market)
+    holdings are rebuilt — otherwise the old holding would still reflect
+    the now-removed transaction.
+    """
+    p = await get_portfolio(portfolio_id, user_id, db)
+    if not p:
+        return None
+    tx = await db.get(Transaction, UUID(tx_id))
+    if not tx or str(tx.portfolio_id) != portfolio_id:
+        return None
+
+    from models.portfolio import Market as MarketEnum
+    old_symbol = tx.symbol
+    old_market = tx.market.value
+
+    if symbol is not None:
+        tx.symbol = symbol.upper()
+    if market is not None:
+        tx.market = MarketEnum[market.upper()]
+    if tx_type is not None:
+        tx.tx_type = TransactionType[tx_type.lower()]
+    if quantity is not None:
+        tx.quantity = quantity
+    if price is not None:
+        tx.price = price
+    if fx_rate is not None:
+        tx.fx_rate = fx_rate
+    if tx_date is not None:
+        tx.tx_date = tx_date
+    if notes is not None:
+        tx.notes = notes
+    await db.flush()
+
+    await _rebuild_holding(portfolio_id, tx.symbol, tx.market.value, db)
+    if old_symbol != tx.symbol or old_market != tx.market.value:
+        await _rebuild_holding(portfolio_id, old_symbol, old_market, db)
+    return tx
+
+
+async def delete_transaction(
+    portfolio_id: str, tx_id: str, user_id: str, db: AsyncSession,
+) -> bool:
+    """Remove a transaction. Rebuilds the affected holding from remaining txs."""
+    p = await get_portfolio(portfolio_id, user_id, db)
+    if not p:
+        return False
+    tx = await db.get(Transaction, UUID(tx_id))
+    if not tx or str(tx.portfolio_id) != portfolio_id:
+        return False
+
+    symbol = tx.symbol
+    market = tx.market.value
+    await db.delete(tx)
+    await db.flush()
+    await _rebuild_holding(portfolio_id, symbol, market, db)
+    return True
 
 
 async def _rebuild_holding(portfolio_id: str, symbol: str, market: str, db: AsyncSession) -> None:

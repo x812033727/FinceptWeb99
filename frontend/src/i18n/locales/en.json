@@ -147,6 +147,9 @@
     "portfolio_name": "Portfolio name",
     "currency": "Currency",
     "create": "Create",
+    "edit_title": "Edit Portfolio",
+    "confirm_delete_portfolio": "Delete this portfolio? All holdings and transactions will be removed.",
+    "confirm_delete_tx": "Delete this transaction? The affected holding will be recomputed automatically.",
     "no_portfolios": "No portfolios yet",
     "select_portfolio": "Select portfolio",
     "summary": {
@@ -179,6 +182,7 @@
     "transactions": {
       "title": "Transactions",
       "add": "Add Transaction",
+      "edit": "Edit Transaction",
       "type": "Type",
       "buy": "Buy",
       "sell": "Sell",

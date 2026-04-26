@@ -147,6 +147,9 @@
     "portfolio_name": "組合名稱",
     "currency": "計價幣別",
     "create": "建立",
+    "edit_title": "編輯投資組合",
+    "confirm_delete_portfolio": "確定要刪除這個投資組合？所有持倉與交易紀錄都會一併移除。",
+    "confirm_delete_tx": "確定要刪除這筆交易？相關持倉會自動重算。",
     "no_portfolios": "尚未建立任何投資組合",
     "select_portfolio": "選擇投資組合",
     "summary": {
@@ -179,6 +182,7 @@
     "transactions": {
       "title": "交易紀錄",
       "add": "新增交易",
+      "edit": "編輯交易",
       "type": "類型",
       "buy": "買進",
       "sell": "賣出",

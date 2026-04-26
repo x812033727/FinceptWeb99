@@ -10,7 +10,10 @@ import {
   usePortfolioDetail,
   useCreatePortfolio,
   useDeletePortfolio,
+  useUpdatePortfolio,
   useAddTransaction,
+  useUpdateTransaction,
+  useDeleteTransaction,
   useOptimise,
 } from "@/hooks/usePortfolio";
 import HoldingsTable from "@/components/portfolio/HoldingsTable";
@@ -111,6 +114,137 @@ function CreatePortfolioModal({ onClose }: { onClose: () => void }) {
     </div>
   );
 }
+
+// ── Edit Portfolio modal (rename + change currency) ──────────────
+function EditPortfolioModal({
+  portfolioId, currentName, currentCurrency, onClose,
+}: { portfolioId: string; currentName: string; currentCurrency: string; onClose: () => void }) {
+  const { t } = useTranslation();
+  const update = useUpdatePortfolio(portfolioId);
+  const [name, setName] = useState(currentName);
+  const [currency, setCurrency] = useState(currentCurrency);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    const patch: { name?: string; currency?: string } = {};
+    if (name.trim() && name !== currentName) patch.name = name.trim();
+    if (currency !== currentCurrency) patch.currency = currency;
+    if (Object.keys(patch).length === 0) { onClose(); return; }
+    await update.mutateAsync(patch);
+    onClose();
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <form onSubmit={submit} className="bg-card border border-border rounded-lg p-6 w-full max-w-sm space-y-4">
+        <h3 className="text-foreground font-semibold">{t("portfolio.edit_title")}</h3>
+        <div>
+          <label className="block text-xs text-muted-foreground mb-1">{t("portfolio.portfolio_name")}</label>
+          <input
+            required
+            className="w-full px-3 py-1.5 rounded bg-input border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-muted-foreground mb-1">{t("portfolio.currency")}</label>
+          <select
+            className="w-full px-3 py-1.5 rounded bg-input border border-border text-sm text-foreground"
+            value={currency}
+            onChange={(e) => setCurrency(e.target.value)}
+          >
+            <option value="USD">USD</option>
+            <option value="TWD">TWD</option>
+          </select>
+        </div>
+        <div className="flex gap-3 justify-end">
+          <button type="button" onClick={onClose} className="px-4 py-1.5 text-sm text-muted-foreground hover:text-foreground">{t("common.cancel")}</button>
+          <button type="submit" disabled={update.isPending} className="px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:opacity-90 disabled:opacity-50">
+            {update.isPending ? t("common.saving") : t("common.save")}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+
+// ── Edit Transaction modal ───────────────────────────────────────
+function EditTransactionModal({
+  portfolioId, tx, onClose,
+}: { portfolioId: string; tx: TransactionRow; onClose: () => void }) {
+  const { t } = useTranslation();
+  const update = useUpdateTransaction(portfolioId);
+  const [form, setForm] = useState({
+    symbol: tx.symbol,
+    market: tx.market,
+    tx_type: tx.tx_type,
+    quantity: String(tx.quantity),
+    price: String(tx.price),
+    fx_rate: String(tx.fx_rate),
+    tx_date: tx.tx_date,
+    notes: tx.notes ?? "",
+  });
+  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    await update.mutateAsync({
+      txId: tx.id,
+      patch: {
+        symbol: form.symbol.toUpperCase(),
+        market: form.market,
+        tx_type: form.tx_type,
+        quantity: parseFloat(form.quantity),
+        price: parseFloat(form.price),
+        fx_rate: parseFloat(form.fx_rate),
+        tx_date: form.tx_date,
+        notes: form.notes || undefined,
+      },
+    });
+    onClose();
+  }
+
+  const input = "w-full px-3 py-1.5 rounded bg-input border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring";
+  const label = "block text-xs text-muted-foreground mb-1";
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <form onSubmit={submit} className="bg-card border border-border rounded-lg p-6 w-full max-w-md space-y-4">
+        <h3 className="text-foreground font-semibold">{t("portfolio.transactions.edit")}</h3>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className={label}>{t("alerts.symbol")}</label><input required className={input} value={form.symbol} onChange={set("symbol")} /></div>
+          <div><label className={label}>{t("alerts.market")}</label>
+            <select className={input} value={form.market} onChange={set("market")}>
+              <option value="US">US</option><option value="TW">TW</option><option value="CRYPTO">CRYPTO</option>
+            </select>
+          </div>
+          <div><label className={label}>{t("portfolio.transactions.type")}</label>
+            <select className={input} value={form.tx_type} onChange={set("tx_type")}>
+              <option value="buy">{t("portfolio.transactions.buy")}</option>
+              <option value="sell">{t("portfolio.transactions.sell")}</option>
+              <option value="dividend">Dividend</option>
+            </select>
+          </div>
+          <div><label className={label}>{t("portfolio.transactions.executed_at")}</label><input type="date" required className={input} value={form.tx_date} onChange={set("tx_date")} /></div>
+          <div><label className={label}>{t("portfolio.transactions.qty")}</label><input type="number" required min="0" step="any" className={input} value={form.quantity} onChange={set("quantity")} /></div>
+          <div><label className={label}>{t("portfolio.transactions.price")}</label><input type="number" required min="0" step="any" className={input} value={form.price} onChange={set("price")} /></div>
+          <div><label className={label}>FX Rate</label><input type="number" min="0" step="any" className={input} value={form.fx_rate} onChange={set("fx_rate")} /></div>
+          <div><label className={label}>Notes</label><input className={input} value={form.notes} onChange={set("notes")} /></div>
+        </div>
+        <div className="flex gap-3 justify-end">
+          <button type="button" onClick={onClose} className="px-4 py-1.5 text-sm text-muted-foreground hover:text-foreground">{t("common.cancel")}</button>
+          <button type="submit" disabled={update.isPending} className="px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:opacity-90 disabled:opacity-50">
+            {update.isPending ? t("common.saving") : t("common.save")}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 
 // ── Performance chart ─────────────────────────────────────────────
 
@@ -288,6 +422,8 @@ interface TransactionRow {
 
 function TransactionHistory({ portfolioId }: { portfolioId: string }) {
   const { t } = useTranslation();
+  const [editing, setEditing] = useState<TransactionRow | null>(null);
+  const deleteTx = useDeleteTransaction(portfolioId);
   const { data: txns = [], isLoading } = useQuery<TransactionRow[]>({
     queryKey: ["portfolio-transactions", portfolioId],
     queryFn: () =>
@@ -297,16 +433,16 @@ function TransactionHistory({ portfolioId }: { portfolioId: string }) {
 
   function handleExport() {
     exportCSV(
-      txns.map((t) => ({
-        date: t.tx_date,
-        symbol: t.symbol,
-        market: t.market,
-        type: t.tx_type,
-        quantity: t.quantity,
-        price: t.price,
-        fx_rate: t.fx_rate,
-        value: t.quantity * t.price,
-        notes: t.notes ?? "",
+      txns.map((tx) => ({
+        date: tx.tx_date,
+        symbol: tx.symbol,
+        market: tx.market,
+        type: tx.tx_type,
+        quantity: tx.quantity,
+        price: tx.price,
+        fx_rate: tx.fx_rate,
+        value: tx.quantity * tx.price,
+        notes: tx.notes ?? "",
       })),
       `transactions-${portfolioId}.csv`
     );
@@ -343,36 +479,59 @@ function TransactionHistory({ portfolioId }: { portfolioId: string }) {
                 <th className="text-right py-2 px-2 font-medium">{t("portfolio.transactions.price")}</th>
                 <th className="text-right py-2 px-2 font-medium">{t("portfolio.holdings.value")}</th>
                 <th className="text-left py-2 pl-4 font-medium">Notes</th>
+                <th className="px-2"></th>
               </tr>
             </thead>
             <tbody>
-              {txns.map((t) => (
-                <tr key={t.id} className="border-b border-border/30 hover:bg-accent/5">
-                  <td className="py-1.5 pr-4 text-muted-foreground">{t.tx_date}</td>
-                  <td className="py-1.5 px-2 font-medium text-primary">{t.symbol}</td>
-                  <td className="py-1.5 px-2 text-muted-foreground">{t.market}</td>
+              {txns.map((tx) => (
+                <tr key={tx.id} className="border-b border-border/30 hover:bg-accent/5 group">
+                  <td className="py-1.5 pr-4 text-muted-foreground">{tx.tx_date}</td>
+                  <td className="py-1.5 px-2 font-medium text-primary">{tx.symbol}</td>
+                  <td className="py-1.5 px-2 text-muted-foreground">{tx.market}</td>
                   <td className={`py-1.5 px-2 font-medium capitalize ${
-                    t.tx_type === "buy"      ? "text-green-400"
-                    : t.tx_type === "sell"   ? "text-red-400"
+                    tx.tx_type === "buy"      ? "text-green-400"
+                    : tx.tx_type === "sell"   ? "text-red-400"
                     : "text-amber-400"
-                  }`}>{t.tx_type}</td>
+                  }`}>{tx.tx_type}</td>
                   <td className="py-1.5 px-2 text-right text-foreground">
-                    {t.quantity.toLocaleString()}
+                    {tx.quantity.toLocaleString()}
                   </td>
                   <td className="py-1.5 px-2 text-right text-foreground">
-                    {t.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    {tx.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </td>
                   <td className="py-1.5 px-2 text-right text-muted-foreground">
-                    {(t.quantity * t.price).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    {(tx.quantity * tx.price).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                   </td>
                   <td className="py-1.5 pl-4 text-muted-foreground max-w-[160px] truncate">
-                    {t.notes ?? ""}
+                    {tx.notes ?? ""}
+                  </td>
+                  <td className="py-1.5 px-2 text-right whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={() => setEditing(tx)}
+                      className="text-muted-foreground hover:text-foreground mr-2"
+                      title={t("common.edit")}
+                    >✎</button>
+                    <button
+                      onClick={() => {
+                        if (confirm(t("portfolio.confirm_delete_tx"))) deleteTx.mutate(tx.id);
+                      }}
+                      className="text-muted-foreground hover:text-red-400"
+                      title={t("common.delete")}
+                    >×</button>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      )}
+
+      {editing && (
+        <EditTransactionModal
+          portfolioId={portfolioId}
+          tx={editing}
+          onClose={() => setEditing(null)}
+        />
       )}
     </div>
   );
@@ -385,6 +544,7 @@ export default function PortfolioPage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showAddTx, setShowAddTx] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
 
 
   const { data: detail, isFetching } = usePortfolioDetail(selected);
@@ -452,6 +612,7 @@ export default function PortfolioPage() {
           detail={detail}
           isFetching={isFetching}
           onAddTx={() => setShowAddTx(true)}
+          onEdit={() => setShowEdit(true)}
           onDelete={async () => {
             await deleteP.mutateAsync(activeId);
             setSelected(null);
@@ -470,6 +631,14 @@ export default function PortfolioPage() {
 
       {showCreate && <CreatePortfolioModal onClose={() => setShowCreate(false)} />}
       {showAddTx && activeId && <AddTransactionForm portfolioId={activeId} onClose={() => setShowAddTx(false)} />}
+      {showEdit && activeId && detail && (
+        <EditPortfolioModal
+          portfolioId={activeId}
+          currentName={detail.name}
+          currentCurrency={detail.currency}
+          onClose={() => setShowEdit(false)}
+        />
+      )}
     </div>
   );
 }
@@ -477,7 +646,7 @@ export default function PortfolioPage() {
 // ── Portfolio detail panel ────────────────────────────────────────
 function PortfolioDetail({
   portfolioId, detail, isFetching,
-  onAddTx, onDelete,
+  onAddTx, onEdit, onDelete,
   optimiseResult, optimisePending, onRunOptimise,
 }: any) {
   const { t } = useTranslation();
@@ -631,9 +800,17 @@ function PortfolioDetail({
         )}
       </div>
 
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-3">
         <button
-          onClick={onDelete}
+          onClick={onEdit}
+          className="text-xs text-muted-foreground hover:text-foreground"
+        >
+          {t("common.edit")}
+        </button>
+        <button
+          onClick={() => {
+            if (confirm(t("portfolio.confirm_delete_portfolio"))) onDelete();
+          }}
           className="text-xs text-negative/70 hover:text-negative"
         >
           {t("common.delete")}

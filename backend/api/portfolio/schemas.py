@@ -34,6 +34,39 @@ class TransactionCreate(BaseModel):
         return v.lower()
 
 
+class PortfolioUpdate(BaseModel):
+    """All fields optional — PATCH semantics. Empty body is a no-op."""
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+
+    @field_validator("currency")
+    @classmethod
+    def upper_currency(cls, v: str | None) -> str | None:
+        return v.upper() if v else v
+
+
+class TransactionUpdate(BaseModel):
+    """All fields optional — PATCH semantics."""
+    symbol: str | None = Field(default=None, min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    market: str | None = Field(default=None, pattern=r"^(US|TW|CRYPTO|us|tw|crypto)$")
+    tx_type: str | None = Field(default=None, pattern=r"^(buy|sell|dividend|BUY|SELL|DIVIDEND)$")
+    quantity: float | None = Field(default=None, gt=0)
+    price: float | None = Field(default=None, ge=0)
+    fx_rate: float | None = Field(default=None, gt=0)
+    tx_date: date | None = None
+    notes: str | None = Field(default=None, max_length=500)
+
+    @field_validator("market")
+    @classmethod
+    def upper_market(cls, v: str | None) -> str | None:
+        return v.upper() if v else v
+
+    @field_validator("tx_type")
+    @classmethod
+    def lower_tx_type(cls, v: str | None) -> str | None:
+        return v.lower() if v else v
+
+
 class HoldingResponse(BaseModel):
     id: str
     symbol: str

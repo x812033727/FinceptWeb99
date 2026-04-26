@@ -5,10 +5,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.portfolio.schemas import (
     PortfolioCreate,
     PortfolioListItem,
+    PortfolioUpdate,
     PerformancePoint,
     PortfolioSummary,
     TransactionCreate,
     TransactionResponse,
+    TransactionUpdate,
     OptimiseRequest,
     OptimiseResponse,
 )
@@ -46,6 +48,20 @@ async def delete_portfolio(portfolio_id: str, user: Auth, db: DB):
     deleted = await svc.delete_portfolio(portfolio_id, user["id"], db)
     if not deleted:
         raise HTTPException(status_code=404, detail="Portfolio not found")
+
+
+@router.patch("/{portfolio_id}", response_model=PortfolioListItem)
+async def update_portfolio(
+    portfolio_id: str, body: PortfolioUpdate, user: Auth, db: DB,
+):
+    """Rename a portfolio and/or change its base currency."""
+    p = await svc.update_portfolio(
+        portfolio_id, user["id"], db,
+        name=body.name, currency=body.currency,
+    )
+    if not p:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    return PortfolioListItem(id=p.id, name=p.name, currency=p.currency)
 
 
 @router.post("/{portfolio_id}/transaction", status_code=status.HTTP_201_CREATED)
@@ -100,3 +116,33 @@ async def performance(portfolio_id: str, user: Auth, db: DB, days: int = 90):
 async def list_transactions(portfolio_id: str, user: Auth, db: DB, limit: int = 200):
     """All transactions for a portfolio, newest first."""
     return await svc.get_transactions(portfolio_id, user["id"], db, limit=limit)
+
+
+@router.patch("/{portfolio_id}/transactions/{tx_id}", response_model=TransactionResponse)
+async def update_transaction(
+    portfolio_id: str, tx_id: str, body: TransactionUpdate, user: Auth, db: DB,
+):
+    """Edit fields on an existing transaction. Re-derives the affected
+    holding(s); if symbol/market changed, both old and new holdings rebuild."""
+    tx = await svc.update_transaction(
+        portfolio_id, tx_id, user["id"], db,
+        symbol=body.symbol,
+        market=body.market,
+        tx_type=body.tx_type,
+        quantity=body.quantity,
+        price=body.price,
+        fx_rate=body.fx_rate,
+        tx_date=body.tx_date,
+        notes=body.notes,
+    )
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    return tx
+
+
+@router.delete("/{portfolio_id}/transactions/{tx_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_transaction(portfolio_id: str, tx_id: str, user: Auth, db: DB):
+    """Remove one transaction; rebuilds the affected holding from remaining txs."""
+    deleted = await svc.delete_transaction(portfolio_id, tx_id, user["id"], db)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Transaction not found")

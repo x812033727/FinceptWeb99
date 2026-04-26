@@ -10,11 +10,14 @@ Reference:
 
 Kraken responses are wrapped in {error: [...], result: {...}}. We treat
 non-empty error arrays as failures and fall back to None.
+
+Bar shape matches the existing US (yfinance) / TW (TWSE) contract:
+  { time: <unix_ms_int>, open, high, low, close, volume }
+The frontend's CandlestickChart converts ms → seconds for lightweight-charts.
 """
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -140,7 +143,7 @@ async def get_history(
         try:
             ts, o, h, lo, c, _, vol, _ = row
             bars.append({
-                "date": datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat(),
+                "time": int(ts) * 1000,    # unix ms — matches yfinance/twse contract
                 "open": float(o),
                 "high": float(h),
                 "low": float(lo),

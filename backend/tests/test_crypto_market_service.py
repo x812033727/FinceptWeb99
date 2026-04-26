@@ -57,7 +57,8 @@ async def test_get_quote_unsupported_symbol_returns_stub_not_exception():
 
 @pytest.mark.asyncio
 async def test_get_history_cache_hit_skips_kraken():
-    cached_bars = json.dumps([{"date": "2026-04-01T00:00:00", "close": 90000}])
+    # Bar shape mirrors yfinance/twse: {time: <unix_ms>, open, high, low, close, volume}
+    cached_bars = json.dumps([{"time": 1714003600000, "close": 90000}])
     with patch.object(svc, "cache_get", AsyncMock(return_value=cached_bars)), \
          patch.object(svc, "_k_history", AsyncMock()) as mock_hist:
         result = await svc.get_history("BTC")
@@ -69,7 +70,7 @@ async def test_get_history_cache_hit_skips_kraken():
 
 @pytest.mark.asyncio
 async def test_get_history_cache_miss_calls_kraken_and_caches():
-    bars = [{"date": "2026-04-01T00:00:00", "close": 95000}]
+    bars = [{"time": 1714003600000, "close": 95000}]
     with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
          patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
          patch.object(svc, "_k_history", AsyncMock(return_value=bars)):

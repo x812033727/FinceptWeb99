@@ -159,7 +159,9 @@ async def test_get_history_parses_ohlc_rows(monkeypatch):
     assert bars[0]["open"] == 97000.0
     assert bars[0]["close"] == 97500.0
     assert bars[0]["volume"] == 100.5
-    assert bars[0]["date"].startswith("2024-")  # ts → ISO
+    # ts → unix ms (matches yfinance/twse contract that the chart expects)
+    assert bars[0]["time"] == 1714000000 * 1000
+    assert bars[1]["time"] == 1714003600 * 1000
 
 
 @pytest.mark.asyncio
@@ -171,7 +173,7 @@ async def test_get_history_caps_at_limit(monkeypatch):
     bars = await kc.get_history("BTC", interval="1m", limit=10)
     assert len(bars) == 10
     # Should be the last 10 bars, not the first 10
-    assert bars[-1]["date"] > bars[0]["date"]
+    assert bars[-1]["time"] > bars[0]["time"]
 
 
 @pytest.mark.asyncio

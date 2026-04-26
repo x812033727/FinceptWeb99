@@ -191,16 +191,23 @@ async def test_get_screener_does_not_cache_empty_result():
 
 @pytest.mark.asyncio
 async def test_get_screener_emits_static_fallback_when_yfinance_dead():
-    """No filters + yfinance unreachable + Polygon disabled → curated list."""
+    """No filters + yfinance unreachable + Polygon disabled → curated list.
+
+    Limit is bumped above 15 to clear the hoisted-ETF block at the top
+    (SPY, QQQ, IVV, ... — see sp500_universe._FALLBACK_UNIVERSE) and
+    confirm both flagship ETFs and mega-cap stocks come through.
+    """
     with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
          patch.object(svc, "cache_set", new_callable=AsyncMock), \
          patch.object(svc, "_use_polygon", return_value=False), \
          patch.object(svc, "_get_sp500_tickers", new_callable=AsyncMock, return_value=["AAPL"]), \
          patch.object(svc, "_screener_yfinance", new_callable=AsyncMock, return_value=[]):
-        result = await svc.get_screener(limit=10)
+        result = await svc.get_screener(limit=20)
 
-    # AAPL should be in the static fallback (top of the curated list).
     symbols = [r["symbol"] for r in result]
+    # SPY is hoisted to #1 so it survives any reasonable limit; AAPL
+    # leads the mega-cap section right after the ETF block.
+    assert "SPY" in symbols
     assert "AAPL" in symbols
     # All rows must satisfy the schema (price/change_pct/volume present).
     for r in result:

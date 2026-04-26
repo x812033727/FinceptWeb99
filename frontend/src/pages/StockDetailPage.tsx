@@ -251,7 +251,7 @@ function PeriodButton({ active, label, onClick }: { active: boolean; label: stri
   return (
     <button
       onClick={onClick}
-      className={`px-2.5 py-1 text-xs rounded transition-colors ${
+      className={`px-3 py-1.5 sm:px-2.5 sm:py-1 text-xs rounded transition-colors touch-manipulation ${
         active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
       }`}
     >

@@ -50,4 +50,20 @@
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
   }
+  /* Eliminate the 300 ms tap delay on legacy mobile browsers and let
+     the OS pick the most appropriate gesture handling for buttons /
+     interactive controls. Cheap to apply globally, no visual impact. */
+  button, a, [role="button"], input[type="submit"], input[type="button"] {
+    touch-action: manipulation;
+  }
+  /* Prevent iOS from auto-zooming form fields when the font-size is
+     below 16 px (terminal aesthetic uses text-xs / text-sm everywhere).
+     The scaling kicks in once the input is focused, so we only need
+     this on touch viewports. */
+  @media (max-width: 768px) {
+    input[type="text"], input[type="email"], input[type="password"],
+    input[type="number"], input[type="search"], textarea, select {
+      font-size: 16px;
+    }
+  }
 }

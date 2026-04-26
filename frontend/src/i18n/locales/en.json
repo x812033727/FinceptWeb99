@@ -388,7 +388,54 @@
     "provider": "Provider",
     "model": "Model",
     "overridden": "overridden",
-    "reset": "Reset"
+    "reset": "Reset",
+    "groups": {
+      "functional": {
+        "title": "CFA-style assistants",
+        "hint": "Standard financial workflows; pick these when no specific master is needed"
+      },
+      "value": {
+        "title": "Value investing legends",
+        "hint": "Hunting bargains, intrinsic value, margin of safety"
+      },
+      "growth": {
+        "title": "Quality + growth legends",
+        "hint": "Find great businesses, hold long; ROCE / moats / qualitative"
+      },
+      "contrarian": {
+        "title": "Contrarian + distressed legends",
+        "hint": "Market cycles, special situations, judgment at extremes"
+      },
+      "macro": {
+        "title": "Macro strategists",
+        "hint": "Macro regime, cross-asset allocation, central bank policy"
+      },
+      "quant": {
+        "title": "Quants",
+        "hint": "Factor analysis, statistical signals, data-only lens"
+      }
+    },
+    "agents": {
+      "market_analyst":    { "name": "Market Analyst", "description": "Technical + fundamental stock analysis, Buy/Hold/Sell view" },
+      "portfolio_advisor": { "name": "Portfolio Advisor", "description": "Allocation, rebalancing, CFA-grade multi-asset advice" },
+      "risk_manager":      { "name": "Risk Manager", "description": "VaR interpretation, stress testing, hedging, scenarios" },
+      "macro_analyst":     { "name": "Macro Analyst", "description": "Central banks, yield curves, geopolitics → market impact" },
+      "earnings_analyst":  { "name": "Earnings Analyst", "description": "DCF interpretation, earnings quality, accounting red flags" },
+      "trading_coach":     { "name": "Trading Coach", "description": "Educational: order types, backtesting, position sizing" },
+      "claude_research":   { "name": "Claude Research", "description": "Autonomous: calls DCF / VaR / backtest / SQL / web tools" },
+      "buffett":           { "name": "Warren Buffett", "description": "Moats, long horizons, owner mindset, circle of competence" },
+      "graham":            { "name": "Benjamin Graham", "description": "Margin of safety, Net-Net, defensive screens, value's dean" },
+      "munger":            { "name": "Charlie Munger", "description": "Mental models, invert always invert, qualitative analysis" },
+      "lynch":             { "name": "Peter Lynch", "description": "Buy what you know, PEG < 1, hunting tenbaggers" },
+      "fisher":            { "name": "Philip Fisher", "description": "Scuttlebutt method, 15 points, long-term growth" },
+      "smith":             { "name": "Terry Smith", "description": "ROCE 20%+ compounders; don't overpay, do nothing" },
+      "marks":             { "name": "Howard Marks", "description": "Second-level thinking, market cycles, risk-first" },
+      "klarman":           { "name": "Seth Klarman", "description": "Margin of safety, special situations, ultimate patience" },
+      "dalio":             { "name": "Ray Dalio", "description": "All-weather, debt cycles, four economic environments" },
+      "soros":             { "name": "George Soros", "description": "Reflexivity, macro hedges, asymmetric bets" },
+      "simons":            { "name": "Jim Simons", "description": "Pure quant: statistical signals, factors, out-of-sample" },
+      "asness":            { "name": "Cliff Asness", "description": "Factor portfolios: value + momentum + quality + risk parity" }
+    }
   },
   "usage": {
     "title": "LLM Usage",

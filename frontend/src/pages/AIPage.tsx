@@ -47,6 +47,20 @@ const providerColor: Record<string, string> = {
   claude_agent: "text-amber-300",
 };
 
+// Grouping for the persona sidebar — keeps the 19 personas scannable.
+// Source-of-truth lives in i18n keys (personas.groups.<id>.title / .hint) so
+// the labels translate; only the membership map is structural.
+// Unknown agent IDs (e.g. server adds a new persona) fall through to a
+// catch-all "其他" group so nothing silently disappears.
+const PERSONA_GROUPS: { id: string; agentIds: string[] }[] = [
+  { id: "functional", agentIds: ["market_analyst", "portfolio_advisor", "risk_manager", "macro_analyst", "earnings_analyst", "trading_coach", "claude_research"] },
+  { id: "value",      agentIds: ["buffett", "graham", "munger"] },
+  { id: "growth",     agentIds: ["lynch", "fisher", "smith"] },
+  { id: "contrarian", agentIds: ["marks", "klarman"] },
+  { id: "macro",      agentIds: ["dalio", "soros"] },
+  { id: "quant",      agentIds: ["simons", "asness"] },
+];
+
 function AgentCard({
   agent,
   selected,
@@ -56,6 +70,15 @@ function AgentCard({
   selected: boolean;
   onClick: () => void;
 }) {
+  const { t, i18n } = useTranslation();
+  // Localized name + description if i18n key exists; fall back to backend's
+  // agent.name / agent.description so a brand-new persona without a
+  // translation entry still shows up sensibly.
+  const nameKey = `personas.agents.${agent.id}.name`;
+  const descKey = `personas.agents.${agent.id}.description`;
+  const localName = i18n.exists(nameKey) ? t(nameKey) : agent.name;
+  const localDesc = i18n.exists(descKey) ? t(descKey) : agent.description;
+
   return (
     <button
       onClick={onClick}
@@ -65,8 +88,8 @@ function AgentCard({
           : "border-border bg-card hover:border-primary/40"
       }`}
     >
-      <div className="font-medium text-sm text-foreground">{agent.name}</div>
-      <div className="text-xs text-muted-foreground mt-0.5">{agent.description}</div>
+      <div className="font-medium text-sm text-foreground">{localName}</div>
+      <div className="text-xs text-muted-foreground mt-0.5 leading-snug">{localDesc}</div>
       <div className={`text-xs mt-1 ${providerColor[agent.default_provider] ?? "text-muted-foreground"}`}>
         {agent.default_provider}
       </div>
@@ -131,7 +154,7 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
 // ── main page ──────────────────────────────────────────────────────
 
 export default function AIPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const token = useAuthStore((s) => s.token);
   const role = useAuthStore((s) => s.user?.role);
   const location = useLocation();
@@ -334,15 +357,59 @@ export default function AIPage() {
         {isLoading ? (
           <p className="text-xs text-muted-foreground animate-pulse">{t("ai.loading")}</p>
         ) : (
-          <div className="space-y-2">
-            {agents.map((a) => (
-              <AgentCard
-                key={a.id}
-                agent={a}
-                selected={a.id === selectedAgent}
-                onClick={() => switchAgent(a.id)}
-              />
-            ))}
+          <div className="space-y-4">
+            {PERSONA_GROUPS.map((group) => {
+              // Match whichever of the group's agent IDs the backend actually
+              // returned (silently drop ones the server doesn't know about,
+              // so adding/removing personas server-side doesn't break the UI).
+              const groupAgents = group.agentIds
+                .map((id) => agents.find((a) => a.id === id))
+                .filter((a): a is AgentInfo => a !== undefined);
+              if (groupAgents.length === 0) return null;
+              return (
+                <div key={group.id} className="space-y-1.5">
+                  <div className="px-1">
+                    <div className="text-[11px] font-semibold text-foreground uppercase tracking-wide">
+                      {t(`personas.groups.${group.id}.title`)}
+                    </div>
+                    <div className="text-[10px] text-muted-foreground leading-snug mt-0.5">
+                      {t(`personas.groups.${group.id}.hint`)}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    {groupAgents.map((a) => (
+                      <AgentCard
+                        key={a.id}
+                        agent={a}
+                        selected={a.id === selectedAgent}
+                        onClick={() => switchAgent(a.id)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+            {/* Catch-all for any persona not in PERSONA_GROUPS (defensive — if
+                someone adds a new persona server-side without updating the
+                grouping it still appears here so the UI never silently hides
+                an option). */}
+            {(() => {
+              const grouped = new Set(PERSONA_GROUPS.flatMap((g) => g.agentIds));
+              const orphans = agents.filter((a) => !grouped.has(a.id));
+              if (orphans.length === 0) return null;
+              return (
+                <div className="space-y-1.5">
+                  <div className="px-1 text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+                    其他
+                  </div>
+                  <div className="space-y-1.5">
+                    {orphans.map((a) => (
+                      <AgentCard key={a.id} agent={a} selected={a.id === selectedAgent} onClick={() => switchAgent(a.id)} />
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
         <div className="mt-auto text-xs text-muted-foreground">
@@ -356,10 +423,18 @@ export default function AIPage() {
         <header className="border-b border-border px-6 py-3 flex items-center justify-between">
           <div>
             <span className="font-medium text-foreground text-sm">
-              {activeAgent?.name ?? t("ai.header_default")}
+              {activeAgent
+                ? (i18n.exists(`personas.agents.${activeAgent.id}.name`)
+                    ? t(`personas.agents.${activeAgent.id}.name`)
+                    : activeAgent.name)
+                : t("ai.header_default")}
             </span>
             {activeAgent && (
-              <span className="text-xs text-muted-foreground ml-2">{activeAgent.description}</span>
+              <span className="text-xs text-muted-foreground ml-2">
+                {i18n.exists(`personas.agents.${activeAgent.id}.description`)
+                  ? t(`personas.agents.${activeAgent.id}.description`)
+                  : activeAgent.description}
+              </span>
             )}
           </div>
           <div className="flex items-center gap-4">
@@ -397,7 +472,11 @@ export default function AIPage() {
             <div className="h-full flex items-center justify-center">
               <p className="text-sm text-muted-foreground">
                 {activeAgent
-                  ? t("ai.ask_placeholder", { agent: activeAgent.name })
+                  ? t("ai.ask_placeholder", {
+                      agent: i18n.exists(`personas.agents.${activeAgent.id}.name`)
+                        ? t(`personas.agents.${activeAgent.id}.name`)
+                        : activeAgent.name,
+                    })
                   : t("ai.select_to_begin")}
               </p>
             </div>

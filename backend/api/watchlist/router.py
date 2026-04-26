@@ -42,8 +42,8 @@ async def delete_watchlist(wid: str, user: CurrentUser, db: DB):
 
 @router.post("/{wid}/items", response_model=WatchlistItemOut, status_code=201)
 async def add_item(wid: str, body: WatchlistItemAdd, user: CurrentUser, db: DB):
-    if body.market.upper() not in ("US", "TW"):
-        raise HTTPException(status_code=400, detail="market must be US or TW")
+    # Pydantic regex on WatchlistItemAdd.market already constrains to
+    # (US|TW|CRYPTO) — no need to re-check here.
     try:
         item = await svc.add_item(db, user["id"], wid, body.symbol, body.market)
     except DuplicateWatchlistItem as exc:

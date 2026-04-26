@@ -16,6 +16,7 @@ class TransactionType(str, enum.Enum):
 class Market(str, enum.Enum):
     US = "US"
     TW = "TW"
+    CRYPTO = "CRYPTO"
 
 
 class Portfolio(Base):

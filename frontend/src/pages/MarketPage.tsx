@@ -33,6 +33,11 @@ async function fetchTWScreener(): Promise<ScreenerResult[]> {
   }));
 }
 
+async function fetchCryptoScreener(): Promise<ScreenerResult[]> {
+  const res = await api.get<ScreenerResult[]>("/crypto/screener?limit=20");
+  return res.data;
+}
+
 interface TWIndexResponse {
   index: string;
   value: number | null;
@@ -115,8 +120,11 @@ export default function MarketPage() {
 
   const { data: rows = [], isLoading } = useQuery({
     queryKey: ["screener", mkt],
-    queryFn: mkt === "US" ? () => fetchUSScreener(100) : fetchTWScreener,
-    staleTime: 60_000,
+    queryFn:
+      mkt === "US" ? () => fetchUSScreener(100)
+      : mkt === "CRYPTO" ? fetchCryptoScreener
+      : fetchTWScreener,
+    staleTime: mkt === "CRYPTO" ? 30_000 : 60_000,
   });
 
   const twIndexLabel = t("market.tw_index");
@@ -148,10 +156,14 @@ export default function MarketPage() {
       {/* header */}
       <div>
         <h1 className="text-2xl font-bold text-foreground">
-          {mkt === "US" ? t("market.us_title") : t("market.tw_title")}
+          {mkt === "US" ? t("market.us_title")
+            : mkt === "CRYPTO" ? t("market.crypto_title")
+            : t("market.tw_title")}
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          {mkt === "US" ? t("market.us_subtitle") : t("market.tw_subtitle")}
+          {mkt === "US" ? t("market.us_subtitle")
+            : mkt === "CRYPTO" ? t("market.crypto_subtitle")
+            : t("market.tw_subtitle")}
         </p>
       </div>
 

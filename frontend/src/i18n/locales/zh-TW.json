@@ -3,6 +3,7 @@
     "dashboard": "儀表板",
     "us_market": "美股",
     "tw_market": "台股",
+    "crypto": "加密貨幣",
     "screener": "篩選器",
     "watchlist": "自選股",
     "alerts": "價格警示",
@@ -93,6 +94,8 @@
     "us_search_placeholder": "搜尋代號或名稱…",
     "tw_search_placeholder": "搜尋股票代號或名稱…",
     "tw_index": "台灣加權指數",
+    "crypto_title": "加密貨幣",
+    "crypto_subtitle": "Kraken 報價（USD 計價，24/7 交易）",
     "indices": {
       "sp500": "S&P 500",
       "nasdaq100": "NASDAQ 100",

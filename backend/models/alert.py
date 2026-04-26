@@ -25,7 +25,7 @@ class PriceAlert(Base):
         nullable=False, index=True,
     )
     symbol: Mapped[str] = mapped_column(String(20), nullable=False)
-    market: Mapped[str] = mapped_column(String(4), nullable=False)
+    market: Mapped[str] = mapped_column(String(8), nullable=False)
     condition: Mapped[AlertCondition] = mapped_column(Enum(AlertCondition), nullable=False)
     target_price: Mapped[float] = mapped_column(Float, nullable=False)
     triggered: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

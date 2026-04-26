@@ -1,4 +1,4 @@
-export type Market = "US" | "TW";
+export type Market = "US" | "TW" | "CRYPTO";
 
 export interface OHLCVBar {
   time: string;      // "YYYY-MM-DD" for daily; Unix timestamp for intraday

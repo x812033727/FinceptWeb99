@@ -14,6 +14,7 @@ const NAV: NavItemDef[] = [
   { to: "/dashboard", labelKey: "nav.dashboard", icon: "⊞" },
   { to: "/market/US", labelKey: "nav.us_market", icon: "🇺🇸" },
   { to: "/market/TW", labelKey: "nav.tw_market", icon: "🇹🇼" },
+  { to: "/market/CRYPTO", labelKey: "nav.crypto", icon: "₿" },
   { to: "/screener", labelKey: "nav.screener", icon: "🔍" },
   { to: "/watchlist", labelKey: "nav.watchlist", icon: "⭐" },
   { to: "/alerts", labelKey: "nav.alerts", icon: "🔔" },

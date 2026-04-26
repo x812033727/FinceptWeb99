@@ -15,6 +15,7 @@ from api.ai_agents.router import router as ai_router
 from api.alerts.router import router as alerts_router
 from api.analytics.router import router as analytics_router
 from api.auth.router import router as auth_router
+from api.crypto_market.router import router as crypto_router
 from api.portfolio.router import router as portfolio_router
 from api.system.router import router as system_router
 from api.tw_market.router import router as tw_router
@@ -87,6 +88,7 @@ app.add_middleware(
 app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
 app.include_router(us_router, prefix="/api/us", tags=["US Market"])
 app.include_router(tw_router, prefix="/api/tw", tags=["TW Market"])
+app.include_router(crypto_router, prefix="/api/crypto", tags=["Crypto Market"])
 app.include_router(ws_router)
 app.include_router(portfolio_router, prefix="/api/portfolio", tags=["Portfolio"])
 app.include_router(analytics_router, prefix="/api/analytics", tags=["Analytics"])

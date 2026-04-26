@@ -37,7 +37,7 @@ FinceptWeb/
 │   │   ├── tw_market/    # TW quotes, history, institutional, margin, revenue, news
 │   │   ├── portfolio/    # Holdings, transactions, P&L, optimizer, performance snapshots
 │   │   ├── analytics/    # DCF, VaR, backtest
-│   │   ├── ai_agents/    # SSE streaming chat (6 CFA personas, 4 LLM providers)
+│   │   ├── ai_agents/    # SSE streaming chat (19 personas, 8 LLM providers)
 │   │   ├── watchlist/    # Multi-watchlist CRUD with live quote enrichment
 │   │   ├── alerts/       # Price alert CRUD + check-and-fire
 │   │   ├── system/       # /version — current vs GitHub latest release
@@ -149,11 +149,21 @@ FinceptWeb/
 - All heavy paths run in `ProcessPoolExecutor(max_workers=2)` with 30s timeout
 
 ### AI agents
-- 6 CFA personas: equity_analyst, risk_manager, portfolio_advisor,
-  macro_analyst, options_strategist, quant_researcher
-- LLM router: OpenAI / Anthropic / Gemini / Ollama
+- **19 personas** across two groups:
+  - 7 CFA-style functional: market_analyst, portfolio_advisor, risk_manager,
+    macro_analyst, earnings_analyst, trading_coach, claude_research
+  - 12 legendary investors: buffett, graham, munger (value); lynch, fisher,
+    smith (quality-growth); marks, klarman (contrarian); dalio, soros (macro);
+    simons, asness (quant)
+- LLM router supports **8 providers**: OpenAI / Anthropic / Gemini / Ollama /
+  MiniMax / Groq / DeepSeek / OpenRouter (the last 4 share an
+  `_openai_compat_tool_loop` helper) + Claude Agent (tool-use via SDK)
 - SSE streaming via FastAPI `StreamingResponse`
 - Redis daily quota (viewer: 5 req/day, analyst: 20 req/day)
+- Tool-use: `claude_agent` uses MCP via `claude-agent-sdk`; the four
+  OpenAI-compat providers use a shared toolset (`build_openai_compat_toolset`)
+  exposing get_quote / run_dcf / run_var / run_backtest / query_user_data —
+  only analyst/admin role gets tools, viewer falls back to plain chat
 
 ### Frontend
 - React 18 + TypeScript + Vite; TanStack Query (staleTime 15s)

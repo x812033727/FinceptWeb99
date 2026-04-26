@@ -69,6 +69,39 @@ async def stream_chat(
             max_turns=max_turns or settings.MINIMAX_MAX_TURNS,
         ):
             yield ev
+    elif prov == "groq":
+        async for ev in _groq_stream(
+            messages,
+            model or settings.GROQ_MODEL,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            tool_schemas=openai_tool_schemas,
+            tool_dispatch=openai_tool_dispatch,
+            max_turns=max_turns or settings.GROQ_MAX_TURNS,
+        ):
+            yield ev
+    elif prov == "deepseek":
+        async for ev in _deepseek_stream(
+            messages,
+            model or settings.DEEPSEEK_MODEL,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            tool_schemas=openai_tool_schemas,
+            tool_dispatch=openai_tool_dispatch,
+            max_turns=max_turns or settings.DEEPSEEK_MAX_TURNS,
+        ):
+            yield ev
+    elif prov == "openrouter":
+        async for ev in _openrouter_stream(
+            messages,
+            model or settings.OPENROUTER_MODEL,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            tool_schemas=openai_tool_schemas,
+            tool_dispatch=openai_tool_dispatch,
+            max_turns=max_turns or settings.OPENROUTER_MAX_TURNS,
+        ):
+            yield ev
     elif prov == "claude_agent":
         async for ev in _claude_agent_stream(
             messages,
@@ -438,6 +471,97 @@ async def _minimax_stream(
         tool_dispatch=tool_dispatch,
         max_turns=max_turns,
         provider_label="minimax",
+    ):
+        yield ev
+
+
+# ── Groq (OpenAI-compatible, very fast) ───────────────────────────
+
+async def _groq_stream(
+    messages: list[dict],
+    model: str,
+    *,
+    max_tokens: int,
+    temperature: float,
+    tool_schemas: list[dict] | None,
+    tool_dispatch: dict[str, Any] | None,
+    max_turns: int,
+) -> AsyncGenerator[dict, None]:
+    async for ev in _openai_compat_tool_loop(
+        base_url=settings.GROQ_HOST,
+        chat_path="/v1/chat/completions",
+        api_key=settings.GROQ_API_KEY,
+        model=model,
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        tool_schemas=tool_schemas,
+        tool_dispatch=tool_dispatch,
+        max_turns=max_turns,
+        provider_label="groq",
+    ):
+        yield ev
+
+
+# ── DeepSeek (OpenAI-compatible, cheap, strong reasoning) ─────────
+
+async def _deepseek_stream(
+    messages: list[dict],
+    model: str,
+    *,
+    max_tokens: int,
+    temperature: float,
+    tool_schemas: list[dict] | None,
+    tool_dispatch: dict[str, Any] | None,
+    max_turns: int,
+) -> AsyncGenerator[dict, None]:
+    async for ev in _openai_compat_tool_loop(
+        base_url=settings.DEEPSEEK_HOST,
+        chat_path="/v1/chat/completions",
+        api_key=settings.DEEPSEEK_API_KEY,
+        model=model,
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        tool_schemas=tool_schemas,
+        tool_dispatch=tool_dispatch,
+        max_turns=max_turns,
+        provider_label="deepseek",
+    ):
+        yield ev
+
+
+# ── OpenRouter (OpenAI-compatible meta-router; one key → 100+ models) ─
+
+async def _openrouter_stream(
+    messages: list[dict],
+    model: str,
+    *,
+    max_tokens: int,
+    temperature: float,
+    tool_schemas: list[dict] | None,
+    tool_dispatch: dict[str, Any] | None,
+    max_turns: int,
+) -> AsyncGenerator[dict, None]:
+    # OpenRouter uses Referer + Title headers (optional) for app analytics.
+    extra: dict[str, str] = {}
+    if settings.OPENROUTER_REFERER:
+        extra["HTTP-Referer"] = settings.OPENROUTER_REFERER
+    if settings.OPENROUTER_TITLE:
+        extra["X-Title"] = settings.OPENROUTER_TITLE
+    async for ev in _openai_compat_tool_loop(
+        base_url=settings.OPENROUTER_HOST,
+        chat_path="/v1/chat/completions",
+        api_key=settings.OPENROUTER_API_KEY,
+        model=model,
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        tool_schemas=tool_schemas,
+        tool_dispatch=tool_dispatch,
+        max_turns=max_turns,
+        provider_label="openrouter",
+        extra_headers=extra or None,
     ):
         yield ev
 

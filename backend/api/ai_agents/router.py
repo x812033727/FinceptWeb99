@@ -35,6 +35,17 @@ router = APIRouter()
 CurrentUser = Annotated[dict, Depends(require_viewer)]
 
 
+# Provider name → max_turns setting attribute. Each one talks OpenAI-compatible
+# chat completions and consumes the same `openai_tool_schemas` / `dispatch`
+# pair that build_openai_compat_toolset() returns.
+_OPENAI_COMPAT_PROVIDERS = {
+    "minimax": settings.MINIMAX_MAX_TURNS,
+    "groq": settings.GROQ_MAX_TURNS,
+    "deepseek": settings.DEEPSEEK_MAX_TURNS,
+    "openrouter": settings.OPENROUTER_MAX_TURNS,
+}
+
+
 # ── quota helpers ─────────────────────────────────────────────────
 
 async def _check_quota(user: dict) -> None:
@@ -127,11 +138,10 @@ async def chat(body: ChatRequest, user: CurrentUser):
         mcp_server = build_toolset(user["id"])
         allowed_tools = tool_names()
         max_turns = settings.CLAUDE_AGENT_MAX_TURNS
-    elif provider == "minimax":
-        # Tools are optional: viewers fall back to plain chat (no tool schemas
-        # passed). Only analyst/admin get the OpenAI-compat toolset since
-        # query_user_data reads the caller's data.
-        max_turns = settings.MINIMAX_MAX_TURNS
+    elif provider in _OPENAI_COMPAT_PROVIDERS:
+        # Tools are optional: viewers fall back to plain chat. Only analyst/admin
+        # get the OpenAI-compat toolset since query_user_data reads the caller's data.
+        max_turns = _OPENAI_COMPAT_PROVIDERS[provider]
         if user.get("role") in ("analyst", "admin"):
             from ai.tools.openai_compat import build_openai_compat_toolset
             openai_tool_schemas, openai_tool_dispatch = build_openai_compat_toolset(user["id"])

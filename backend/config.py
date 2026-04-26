@@ -60,13 +60,33 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
     OLLAMA_HOST: str = "http://localhost:11434"
-    DEFAULT_LLM_PROVIDER: str = "openai"  # openai | anthropic | gemini | ollama | minimax
+    DEFAULT_LLM_PROVIDER: str = "openai"  # openai | anthropic | gemini | ollama | minimax | groq | deepseek | openrouter
 
     # MiniMax (OpenAI-compatible chat completions + tool-use). Empty key disables the provider.
     MINIMAX_API_KEY: str = ""
     MINIMAX_HOST: str = "https://api.minimax.io"  # international; mainland: https://api.minimax.chat
     MINIMAX_MODEL: str = "MiniMax-M2.7"  # alts: MiniMax-M2.7-highspeed, abab6.5s-chat, abab6.5-chat, MiniMax-Text-01
     MINIMAX_MAX_TURNS: int = 6  # tool-loop ceiling so a misbehaving model can't burn the quota
+
+    # Groq (OpenAI-compatible; very fast inference). Empty key disables.
+    GROQ_API_KEY: str = ""
+    GROQ_HOST: str = "https://api.groq.com/openai"
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"  # alts: llama-3.1-70b-versatile, mixtral-8x7b-32768
+    GROQ_MAX_TURNS: int = 6
+
+    # DeepSeek (OpenAI-compatible; cheap, strong numerical reasoning). Empty key disables.
+    DEEPSEEK_API_KEY: str = ""
+    DEEPSEEK_HOST: str = "https://api.deepseek.com"
+    DEEPSEEK_MODEL: str = "deepseek-chat"  # alts: deepseek-reasoner (R1)
+    DEEPSEEK_MAX_TURNS: int = 6
+
+    # OpenRouter (OpenAI-compatible meta-router; one key, 100+ models). Empty key disables.
+    OPENROUTER_API_KEY: str = ""
+    OPENROUTER_HOST: str = "https://openrouter.ai/api"
+    OPENROUTER_MODEL: str = "openai/gpt-4o-mini"  # always model = "<provider>/<model>"
+    OPENROUTER_REFERER: str = ""  # optional HTTP-Referer for OpenRouter analytics
+    OPENROUTER_TITLE: str = ""    # optional X-Title for OpenRouter analytics
+    OPENROUTER_MAX_TURNS: int = 6
 
     # Claude Agent (tool-use via claude-agent-sdk). Off by default; analyst/admin only when on.
     CLAUDE_AGENT_ENABLED: bool = False

@@ -249,7 +249,11 @@ async def test_get_valuation_band_pe_basic():
         {"time": "2023-09-30", "close": 120.0},
         {"time": "2023-12-31", "close": 150.0},
     ]
+    # 6 quarterly EPS rows so every bar date has a full 4-quarter TTM
+    # available. Without the earliest row, 2023-06-30 would only see 3
+    # quarters and PE would be 100/6 ≈ 16.67 instead of 100/8 = 12.5.
     income = [
+        {"date": "2022-09-30", "type": "EPS", "value": 2.0},
         {"date": "2022-12-31", "type": "EPS", "value": 2.0},
         {"date": "2023-03-31", "type": "EPS", "value": 2.0},
         {"date": "2023-06-30", "type": "EPS", "value": 2.0},

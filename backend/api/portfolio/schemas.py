@@ -19,7 +19,8 @@ class TransactionCreate(BaseModel):
     tx_type: str = Field(..., pattern=r"^(buy|sell|dividend|BUY|SELL|DIVIDEND)$")
     quantity: float = Field(..., gt=0)
     price: float = Field(..., ge=0)
-    fx_rate: float = Field(default=1.0, gt=0)
+    # Allow None / 0 so the service auto-stamps the trade-day FX rate.
+    fx_rate: float | None = Field(default=None, ge=0)
     tx_date: date
     notes: str | None = Field(default=None, max_length=500)
 

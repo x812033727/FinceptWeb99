@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import date as _date
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from typing import Annotated
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -146,3 +148,27 @@ async def delete_transaction(portfolio_id: str, tx_id: str, user: Auth, db: DB):
     deleted = await svc.delete_transaction(portfolio_id, tx_id, user["id"], db)
     if not deleted:
         raise HTTPException(status_code=404, detail="Transaction not found")
+
+
+@router.get("/{portfolio_id}/fx-rate")
+async def fx_rate_for_transaction(
+    portfolio_id: str,
+    user: Auth,
+    db: DB,
+    market: str = Query(..., pattern=r"^(US|TW|CRYPTO|us|tw|crypto)$"),
+    tx_date: _date = Query(..., description="Trade date (YYYY-MM-DD)"),
+):
+    """Suggested per-unit fx_rate to stamp on a transaction in this
+    portfolio on the given date, so the frontend can pre-fill the FX
+    field. Returns 1.0 when no conversion is needed."""
+    p = await svc.get_portfolio(portfolio_id, user["id"], db)
+    if not p:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    rate = await svc.get_default_fx_rate(market, p.currency, tx_date)
+    return {
+        "portfolio_id":       portfolio_id,
+        "portfolio_currency": p.currency,
+        "market":             market.upper(),
+        "tx_date":            tx_date.isoformat(),
+        "fx_rate":            round(rate, 6),
+    }

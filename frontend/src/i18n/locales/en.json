@@ -255,6 +255,7 @@
       "price": "Price",
       "fee": "Fee",
       "executed_at": "Executed At",
+      "fx_rate": "FX",
       "no_transactions": "No transactions yet"
     },
     "optimizer": {

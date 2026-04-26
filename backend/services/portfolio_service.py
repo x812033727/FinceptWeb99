@@ -69,6 +69,46 @@ async def _get_twd_usd_rate() -> float:
     return _FX_HARD_FALLBACK
 
 
+async def _get_historical_twd_usd(d: date) -> float | None:
+    """
+    TWD per 1 USD on the given date. Hits FRED DEXTW with a small window
+    around the date and returns the last observation on or before `d`
+    (markets closed weekends/holidays so we walk back). Cached forever
+    keyed by date (the historical rate doesn't change once published).
+
+    Returns None if FRED is unreachable or has no observations yet.
+    """
+    key = f"fx:twd_usd:hist:{d.isoformat()}"
+    cached = await cache_get(key)
+    if cached:
+        try:
+            return float(cached)
+        except ValueError:
+            pass
+
+    # Look back 14 days so we always cross a real trading day even after
+    # long weekends or holidays.
+    start = (d - timedelta(days=14)).isoformat()
+    end = d.isoformat()
+    try:
+        from data.us.fred_connector import get_series
+        obs = await get_series("DEXTW", start_date=start, end_date=end)
+    except Exception:
+        obs = []
+
+    rate: float | None = None
+    for row in reversed(obs):
+        if row.get("value") is not None:
+            rate = float(row["value"])
+            break
+
+    if rate is not None:
+        # Long TTL — historical rates are immutable. 90 days is plenty
+        # given Redis eviction and lets old portfolios reload quickly.
+        await cache_set(key, str(rate), 90 * 86400)
+    return rate
+
+
 # Stablecoins peg-to-USD — treat as USD for portfolio valuation purposes.
 # Users entering USDT cost basis effectively means USD; we don't dynamically
 # track depeg events (that's a niche feature for stablecoin traders).
@@ -98,6 +138,43 @@ async def _to_portfolio_currency(amount: float, cost_currency: str, portfolio_cu
     if cost == "USD" and port == "TWD":
         return amount * twd_usd
     return amount   # unsupported pair — return as-is
+
+
+def _market_currency(market: str) -> str:
+    """Native trading currency for a given market."""
+    m = market.upper()
+    return "TWD" if m == "TW" else "USD"   # US + CRYPTO both quoted in USD
+
+
+async def get_default_fx_rate(market: str, portfolio_currency: str, tx_date: date) -> float:
+    """
+    Return the per-unit fx_rate to apply on a transaction so that
+    `price * quantity * fx_rate = cost in portfolio_currency`.
+
+      same currency       → 1.0 (no conversion)
+      USD trade, TWD port → historical TWD/USD on tx_date (≈ 32)
+      TWD trade, USD port → 1 / (historical TWD/USD on tx_date)
+      unsupported pair    → 1.0 (caller can override manually)
+
+    Falls through to the current rate if the historical lookup fails
+    (FRED outage, missing API key, very recent date with no obs yet).
+    """
+    src = _normalize_currency(_market_currency(market))
+    dst = _normalize_currency(portfolio_currency)
+    if src == dst:
+        return 1.0
+
+    rate = await _get_historical_twd_usd(tx_date)
+    if rate is None:
+        rate = await _get_twd_usd_rate()
+    if not rate or rate <= 0:
+        return 1.0
+
+    if src == "USD" and dst == "TWD":
+        return rate
+    if src == "TWD" and dst == "USD":
+        return 1.0 / rate
+    return 1.0
 
 
 # ── CRUD ──────────────────────────────────────────────────────────
@@ -164,7 +241,7 @@ async def add_transaction(
     tx_type: str,
     quantity: float,
     price: float,
-    fx_rate: float,
+    fx_rate: float | None,
     tx_date: date,
     notes: str | None,
     db: AsyncSession,
@@ -172,6 +249,12 @@ async def add_transaction(
     p = await get_portfolio(portfolio_id, user_id, db)
     if not p:
         raise ValueError("Portfolio not found")
+
+    # Auto-stamp the trade-day FX rate when the caller didn't pin one.
+    # `0` is treated the same as `None` (the legacy default in older
+    # forms) so historical converts even from those.
+    if fx_rate is None or fx_rate == 0:
+        fx_rate = await get_default_fx_rate(market, p.currency, tx_date)
 
     from models.portfolio import Market as MarketEnum
     tx = Transaction(
@@ -241,6 +324,15 @@ async def update_transaction(
         tx.tx_date = tx_date
     if notes is not None:
         tx.notes = notes
+
+    # If the caller changed tx_date or market without pinning a new
+    # fx_rate, refresh it from the historical rate so the cost basis
+    # stays consistent with the new trade-day.
+    if (tx_date is not None or market is not None) and fx_rate is None:
+        tx.fx_rate = await get_default_fx_rate(
+            tx.market.value, p.currency, tx.tx_date,
+        )
+
     await db.flush()
 
     await _rebuild_holding(portfolio_id, tx.symbol, tx.market.value, db)
@@ -316,6 +408,68 @@ async def _rebuild_holding(portfolio_id: str, symbol: str, market: str, db: Asyn
         db.add(h)
 
 
+async def _cost_value_in_portfolio_currency(
+    *,
+    portfolio_id: str,
+    symbol: str,
+    market: str,
+    portfolio_currency: str,
+    cost_currency: str,
+    db: AsyncSession,
+) -> float | None:
+    """
+    Replay this holding's transactions in chronological order, valuing
+    each buy at `price * qty * fx_rate` (the historical rate stored on
+    that transaction). Returns the remaining-shares cost basis in the
+    portfolio's currency.
+
+    Sells reduce the cost basis at the running average — the same
+    convention the in-memory rebuild uses. Returns None if the
+    transaction history is missing or the holding has zero remaining
+    shares (caller falls back to current-rate conversion).
+    """
+    from models.portfolio import Market as MarketEnum
+    txs = await db.scalars(
+        select(Transaction)
+        .where(
+            Transaction.portfolio_id == UUID(portfolio_id),
+            Transaction.symbol == symbol,
+            Transaction.market == MarketEnum[market],
+        )
+        .order_by(Transaction.tx_date, Transaction.created_at)
+    )
+    txs = list(txs)
+    if not txs:
+        return None
+
+    qty = 0.0
+    avg_pc = 0.0   # average cost per share, in portfolio currency
+    same_currency = (
+        _normalize_currency(cost_currency) == _normalize_currency(portfolio_currency)
+    )
+    for tx in txs:
+        tx_qty = float(tx.quantity)
+        tx_price = float(tx.price)
+        # If the trade currency matches the portfolio currency, skip the
+        # FX multiplier even when fx_rate happens to be != 1 (legacy
+        # data from before auto-stamping).
+        rate = 1.0 if same_currency else float(tx.fx_rate or 1.0)
+        if tx.tx_type == TransactionType.buy:
+            new_qty = qty + tx_qty
+            if new_qty <= 0:
+                continue
+            avg_pc = (avg_pc * qty + tx_price * tx_qty * rate) / new_qty
+            qty = new_qty
+        elif tx.tx_type == TransactionType.sell:
+            qty = max(0.0, qty - tx_qty)
+            if qty == 0:
+                avg_pc = 0.0
+
+    if qty <= 1e-9:
+        return None
+    return qty * avg_pc
+
+
 # ── P&L calculation ───────────────────────────────────────────────
 
 async def get_portfolio_detail(portfolio_id: str, user_id: str, db: AsyncSession) -> dict[str, Any]:
@@ -342,12 +496,24 @@ async def get_portfolio_detail(portfolio_id: str, user_id: str, db: AsyncSession
 
         qty = float(h.quantity)
         avg = float(h.avg_cost)
-        cost_val = qty * avg
         curr_val = qty * current_price
-
-        # Convert to portfolio currency
         curr_val_pc = await _to_portfolio_currency(curr_val, h.cost_currency, p.currency)
-        cost_val_pc = await _to_portfolio_currency(cost_val, h.cost_currency, p.currency)
+
+        # Cost basis uses each transaction's stored fx_rate (the rate on
+        # trade day) so cross-currency portfolios show what the holding
+        # actually cost at the time, not what it would cost if rebought
+        # today. Falls back to the cost-currency average × current FX
+        # when transactions for some reason have no usable fx_rate.
+        cost_val_pc = await _cost_value_in_portfolio_currency(
+            portfolio_id=str(h.portfolio_id),
+            symbol=h.symbol,
+            market=str(h.market.value),
+            portfolio_currency=p.currency,
+            cost_currency=h.cost_currency,
+            db=db,
+        )
+        if cost_val_pc is None:
+            cost_val_pc = await _to_portfolio_currency(qty * avg, h.cost_currency, p.currency)
 
         unrealized_pnl = curr_val_pc - cost_val_pc
         unrealized_pnl_pct = unrealized_pnl / cost_val_pc * 100 if cost_val_pc else 0.0

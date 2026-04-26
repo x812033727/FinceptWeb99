@@ -1,4 +1,4 @@
-import { useState, useRef, FormEvent } from "react";
+import { useEffect, useState, useRef, FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -22,6 +22,28 @@ import HoldingsTable from "@/components/portfolio/HoldingsTable";
 import AllocationPie from "@/components/portfolio/AllocationPie";
 import api from "@/lib/api";
 
+// ── Auto trade-day FX rate ────────────────────────────────────────
+//
+// When the user picks a foreign-currency stock and a transaction date,
+// the form auto-fills the FX field with the rate FRED reported on that
+// trade day so cost basis is denominated correctly. The user can still
+// override by editing the field; once they do, `userPinnedFx` flips to
+// true and we stop overwriting their value.
+async function fetchSuggestedFxRate(
+  portfolioId: string,
+  market: string,
+  txDate: string,
+): Promise<number | null> {
+  try {
+    const res = await api.get<{ fx_rate: number }>(
+      `/portfolio/${portfolioId}/fx-rate?market=${market}&tx_date=${txDate}`,
+    );
+    return res.data.fx_rate;
+  } catch {
+    return null;
+  }
+}
+
 // ── Add Transaction form ──────────────────────────────────────────
 function AddTransactionForm({ portfolioId, onClose }: { portfolioId: string; onClose: () => void }) {
   const { t } = useTranslation();
@@ -31,8 +53,22 @@ function AddTransactionForm({ portfolioId, onClose }: { portfolioId: string; onC
     quantity: "", price: "", fx_rate: "1",
     tx_date: new Date().toISOString().slice(0, 10), notes: "",
   });
-  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+  const [userPinnedFx, setUserPinnedFx] = useState(false);
+  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    if (k === "fx_rate") setUserPinnedFx(true);
     setForm((f) => ({ ...f, [k]: e.target.value }));
+  };
+
+  useEffect(() => {
+    if (userPinnedFx) return;
+    let cancelled = false;
+    (async () => {
+      const rate = await fetchSuggestedFxRate(portfolioId, form.market, form.tx_date);
+      if (cancelled || rate == null) return;
+      setForm((f) => ({ ...f, fx_rate: String(rate) }));
+    })();
+    return () => { cancelled = true; };
+  }, [portfolioId, form.market, form.tx_date, userPinnedFx]);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -188,8 +224,26 @@ function EditTransactionModal({
     tx_date: tx.tx_date,
     notes: tx.notes ?? "",
   });
-  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+  // Treat the existing tx.fx_rate as user-pinned — don't silently rewrite
+  // it with the suggested rate unless the user explicitly changes the
+  // market or tx_date (handled below).
+  const [userPinnedFx, setUserPinnedFx] = useState(true);
+  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    if (k === "fx_rate") setUserPinnedFx(true);
+    if (k === "market" || k === "tx_date") setUserPinnedFx(false);
     setForm((f) => ({ ...f, [k]: e.target.value }));
+  };
+
+  useEffect(() => {
+    if (userPinnedFx) return;
+    let cancelled = false;
+    (async () => {
+      const rate = await fetchSuggestedFxRate(portfolioId, form.market, form.tx_date);
+      if (cancelled || rate == null) return;
+      setForm((f) => ({ ...f, fx_rate: String(rate) }));
+    })();
+    return () => { cancelled = true; };
+  }, [portfolioId, form.market, form.tx_date, userPinnedFx]);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -733,6 +787,7 @@ function TransactionHistory({ portfolioId }: { portfolioId: string }) {
                 <th className="text-left py-2 px-2 font-medium">{t("portfolio.transactions.type")}</th>
                 <th className="text-right py-2 px-2 font-medium">{t("portfolio.transactions.qty")}</th>
                 <th className="text-right py-2 px-2 font-medium">{t("portfolio.transactions.price")}</th>
+                <th className="text-right py-2 px-2 font-medium">{t("portfolio.transactions.fx_rate")}</th>
                 <th className="text-right py-2 px-2 font-medium">{t("portfolio.holdings.value")}</th>
                 <th className="text-left py-2 pl-4 font-medium">Notes</th>
                 <th className="px-2"></th>
@@ -756,7 +811,10 @@ function TransactionHistory({ portfolioId }: { portfolioId: string }) {
                     {tx.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </td>
                   <td className="py-1.5 px-2 text-right text-muted-foreground">
-                    {(tx.quantity * tx.price).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    {tx.fx_rate === 1 ? "—" : tx.fx_rate.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })}
+                  </td>
+                  <td className="py-1.5 px-2 text-right text-muted-foreground">
+                    {(tx.quantity * tx.price * (tx.fx_rate || 1)).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                   </td>
                   <td className="py-1.5 pl-4 text-muted-foreground max-w-[160px] truncate">
                     {tx.notes ?? ""}

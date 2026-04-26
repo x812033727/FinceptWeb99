@@ -140,13 +140,21 @@ FinceptWeb/
 3. PostgreSQL (persistent holdings, transactions, watchlists, alerts)
 
 ### Market data waterfall
-- US: Polygon.io → yfinance (quote, history, fundamentals, options, news)
+- US: Polygon.io → yfinance → Stooq (quote, history, fundamentals, options, news)
 - US screener fallback chain: Polygon snapshot → `_screener_yfinance` (per-
   symbol `.info`, slow + frequently rate-limited) → curated `_FALLBACK_UNIVERSE`
-  enriched via `yfinance.get_batch_quotes()` (uses `yf.download()` chart
-  endpoint, far more rate-limit resilient than `.info`). Rows where every
-  price is 0 are NOT cached so the next request retries instead of locking
-  in 10 min of zeros.
+  enriched via `yfinance.get_batch_quotes()` (`yf.download()` chart endpoint,
+  more resilient than `.info`) → `stooq.get_batch_quotes()` (free CSV API,
+  Polish edge, immune to Yahoo's cloud-IP block). Rows where every price is
+  0 are NOT cached so the next request retries instead of locking in 10 min
+  of zeros.
+- Stooq is single-symbol-only (its comma-batch endpoint trips a "DNS
+  cache overflow" 503 anti-scrape) and rejects parallel calls (even 2 in
+  flight = 503), so `get_batch_quotes` walks the symbol list sequentially
+  with a 0.2s inter-request delay. ~5 syms/sec. Free, no API key. Field
+  set `f=sd2t2ohlcvp` returns `Prev` (previous close) so we get change%
+  without a separate history call. The history endpoint (`q/d/l/`) is
+  captcha-gated behind an apikey and not used.
 - TW: TWSE OpenAPI → FinMind → MOPS; BWIBBU_d for PE/PB/yield
 - Crypto: Kraken public REST (`get_quote`/`get_history`); Top 20 universe in
   `data/crypto/symbols.py`. USDT/USDC/DAI normalized to USD for FX

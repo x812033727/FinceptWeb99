@@ -14,6 +14,7 @@ import pytz
 from cache.redis_cache import cache_get, cache_set, key_quote, key_history, key_fundamentals
 from config import settings
 import data.us.polygon_connector as polygon
+import data.us.stooq_connector as stooq
 import data.us.yfinance_connector as yfinance
 from data.us.fred_connector import get_series, SERIES
 
@@ -55,13 +56,23 @@ async def get_quote(ticker: str) -> dict[str, Any]:
         try:
             raw = await yfinance.get_quote(ticker)
         except Exception:
-            # Both providers failed (Yahoo IP-blocked, Polygon quota, etc).
-            # Don't raise — fall through and return a zero-priced result so
-            # the API stays 200 and the frontend renders "0.00" instead of
-            # bubbling up as a 502 / blank "—". Don't cache the zero state.
             raw = {}
 
+    # Final fallback: when Polygon + yfinance (.info, fast_info, AND
+    # yf.download) all yield no price, try Stooq. Stooq is hosted in
+    # Europe and isn't subject to the same Yahoo cloud-IP blocks that
+    # bite us in some deployments.
+    if not raw.get("price"):
+        try:
+            stooq_raw = await stooq.get_quote(ticker)
+            if stooq_raw.get("price"):
+                raw = stooq_raw
+        except Exception:
+            pass
+
     result = _normalize_quote(ticker, raw)
+    # Don't cache the zero-state — keeps the next request retrying instead
+    # of locking in a failure for TTL_QUOTE seconds.
     if result.get("price"):
         await cache_set(key, json.dumps(result), TTL_QUOTE)
     return result
@@ -284,16 +295,18 @@ async def get_screener(
     # Static last-resort fallback: the yfinance .info path was also blocked
     # (Yahoo IP-bans cloud providers fairly often). Emit a curated symbol+
     # name list so the user at least sees a click-through list of US stocks.
-    # We still try yfinance's chart endpoint via get_batch_quotes — that
-    # endpoint is far more resilient to rate-limiting than .info, so prices
-    # usually come through even when the per-symbol info path doesn't.
-    # Skipped when filters were active — we can't honour PE/PB/sector
-    # without info — and when results were already populated.
+    # Try yfinance's chart endpoint first (yf.download), then Stooq's CSV
+    # endpoint (hosted in Europe, immune to Yahoo's cloud-IP block) when
+    # yfinance is fully unreachable. Skipped when filters were active —
+    # we can't honour PE/PB/sector without .info — and when results
+    # were already populated.
     if not results and not fundamental_filter and not min_market_cap and not min_volume:
         from data.us.sp500_universe import get_fallback_universe
         universe = get_fallback_universe()[:limit]
         symbols = [sym for sym, _ in universe]
         quotes = await yfinance.get_batch_quotes(symbols)
+        if not quotes:
+            quotes = await stooq.get_batch_quotes(symbols)
         results = [
             {
                 "symbol": sym, "market": "US", "name": name,

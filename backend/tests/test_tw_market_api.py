@@ -285,6 +285,50 @@ async def test_screener_forwards_filters(client: AsyncClient):
     assert kwargs["limit"] == 50
 
 
+@pytest.mark.asyncio
+async def test_screener_forwards_fundamental_filters(client: AsyncClient):
+    """PE/PB/yield filters from query string reach the service kwargs."""
+    h = await _auth_headers(client, "tw_scr_fund@example.com")
+    with patch("services.tw_market_service.get_screener", new_callable=AsyncMock) as mock:
+        mock.return_value = []
+        await client.get(
+            "/api/tw/screener?min_pe=5&max_pe=20&min_pb=0.5&max_pb=3"
+            "&min_dividend_yield=2.5",
+            headers=h,
+        )
+
+    _, kwargs = mock.call_args
+    assert kwargs["min_pe"] == pytest.approx(5.0)
+    assert kwargs["max_pe"] == pytest.approx(20.0)
+    assert kwargs["min_pb"] == pytest.approx(0.5)
+    assert kwargs["max_pb"] == pytest.approx(3.0)
+    assert kwargs["min_dividend_yield"] == pytest.approx(2.5)
+
+
+@pytest.mark.asyncio
+async def test_screener_returns_fundamental_fields(client: AsyncClient):
+    """Response shape carries pe_ratio / pb_ratio / dividend_yield / change_pct."""
+    h = await _auth_headers(client, "tw_scr_shape@example.com")
+    items = [
+        {
+            "symbol": "2330", "market": "TW", "exchange": "TWSE",
+            "name_zh": "台積電", "price": 820.0,
+            "change": 5.0, "change_pct": 0.61, "volume": 25_000_000,
+            "pe_ratio": 20.5, "pb_ratio": 6.1, "dividend_yield": 2.1,
+        },
+    ]
+    with patch("services.tw_market_service.get_screener", new_callable=AsyncMock) as mock:
+        mock.return_value = items
+        r = await client.get("/api/tw/screener?max_pe=30", headers=h)
+
+    assert r.status_code == 200
+    row = r.json()[0]
+    assert row["pe_ratio"] == pytest.approx(20.5)
+    assert row["pb_ratio"] == pytest.approx(6.1)
+    assert row["dividend_yield"] == pytest.approx(2.1)
+    assert row["change_pct"] == pytest.approx(0.61)
+
+
 # ── indices ───────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -354,4 +398,105 @@ async def test_search_returns_matches(client: AsyncClient):
 async def test_search_empty_query_rejected(client: AsyncClient):
     h = await _auth_headers(client, "tw_search_empty@example.com")
     r = await client.get("/api/tw/search?q=", headers=h)
+    assert r.status_code == 422
+
+
+# ── financial health ──────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_health_requires_auth(client: AsyncClient):
+    r = await client.get("/api/tw/health/2330")
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_health_response_shape(client: AsyncClient):
+    """Endpoint forwards `periods` and surfaces summary + lights."""
+    h = await _auth_headers(client, "tw_health@example.com")
+    payload = {
+        "symbol": "2330",
+        "market": "TW",
+        "periods": [
+            {"date": "2023-12-31", "revenue": 625529.0, "net_income": 230000.0,
+             "eps": 8.84, "gross_margin": 53.1, "operating_margin": 41.9,
+             "net_margin": 36.8, "debt_ratio": 32.0, "current_ratio": 2.5,
+             "operating_cf": 400000.0, "free_cf": 200000.0,
+             "total_equity": 2_500_000.0},
+        ],
+        "summary": {
+            "latest_roe": 28.5, "latest_debt_ratio": 32.0,
+            "latest_gross_margin": 53.1, "latest_net_margin": 36.8,
+            "revenue_yoy": 12.0, "cf_positive_streak_4q": 4,
+        },
+        "lights": {
+            "profitability": "green", "safety": "green",
+            "growth": "green", "cash_flow": "green",
+        },
+    }
+    with patch("services.tw_market_service.get_health", new_callable=AsyncMock) as mock:
+        mock.return_value = payload
+        r = await client.get("/api/tw/health/2330?periods=4", headers=h)
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["lights"]["profitability"] == "green"
+    assert body["summary"]["latest_roe"] == pytest.approx(28.5)
+    assert body["periods"][0]["gross_margin"] == pytest.approx(53.1)
+    mock.assert_awaited_once_with("2330", periods=4)
+
+
+@pytest.mark.asyncio
+async def test_health_periods_param_validated(client: AsyncClient):
+    h = await _auth_headers(client, "tw_health_bad@example.com")
+    r = await client.get("/api/tw/health/2330?periods=0", headers=h)
+    assert r.status_code == 422
+
+
+# ── valuation band ────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_valuation_band_requires_auth(client: AsyncClient):
+    r = await client.get("/api/tw/valuation-band/2330")
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_valuation_band_response_shape(client: AsyncClient):
+    h = await _auth_headers(client, "tw_band@example.com")
+    payload = {
+        "symbol": "2330",
+        "metric": "pe",
+        "series": [
+            {"date": "2023-12-31", "value": 18.5},
+            {"date": "2024-01-02", "value": 18.8},
+        ],
+        "stats": {
+            "mean": 18.5, "std": 1.0,
+            "min": 17.0, "max": 20.0,
+            "p10": 17.2, "p25": 17.8, "p50": 18.5, "p75": 19.2, "p90": 19.8,
+            "current": 18.8, "current_z": 0.3,
+        },
+    }
+    with patch("services.tw_market_service.get_valuation_band", new_callable=AsyncMock) as mock:
+        mock.return_value = payload
+        r = await client.get("/api/tw/valuation-band/2330?metric=pe&years=3", headers=h)
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["metric"] == "pe"
+    assert body["stats"]["current"] == pytest.approx(18.8)
+    mock.assert_awaited_once_with("2330", metric="pe", years=3)
+
+
+@pytest.mark.asyncio
+async def test_valuation_band_rejects_bad_metric(client: AsyncClient):
+    h = await _auth_headers(client, "tw_band_bad@example.com")
+    r = await client.get("/api/tw/valuation-band/2330?metric=bogus", headers=h)
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_valuation_band_rejects_years_out_of_range(client: AsyncClient):
+    h = await _auth_headers(client, "tw_band_yrs@example.com")
+    r = await client.get("/api/tw/valuation-band/2330?years=11", headers=h)
     assert r.status_code == 422

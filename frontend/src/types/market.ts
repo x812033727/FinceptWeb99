@@ -48,5 +48,8 @@ export interface ScreenerResult {
   volume: number;
   market_cap?: number;
   pe_ratio?: number;
+  pb_ratio?: number;
+  dividend_yield?: number;
+  exchange?: string;
   sector?: string;
 }

@@ -290,14 +290,294 @@ async def get_financials(symbol: str) -> list[dict[str, Any]]:
     return result
 
 
+# ── Financial health (財務體質) ───────────────────────────────────
+#
+# Pivots FinMind rows ({date, type, value}) into per-period dicts, then
+# derives margin / leverage / liquidity ratios and assigns red/yellow/green
+# lights for the four StatementDog-style categories.
+
+# FinMind type-field aliases — different report formats use different names.
+_INCOME_ALIASES = {
+    "revenue":         ("Revenue", "OperatingRevenue", "NetSales", "TotalRevenue"),
+    "gross_profit":    ("GrossProfit", "GrossProfitFromOperatingActivities"),
+    "operating_income": ("OperatingIncome", "OperatingProfit", "IncomeFromOperations"),
+    "net_income":      (
+        "NetIncome", "NetIncomeAttributableToOwnersOfParent",
+        "IncomeAfterTax", "ProfitAfterTax",
+    ),
+    "eps":             ("EPS", "BasicEPS", "EarningsPerShare"),
+}
+
+_BALANCE_ALIASES = {
+    "total_assets":         ("TotalAssets", "Assets"),
+    "total_liabilities":    ("TotalLiabilities", "Liabilities"),
+    "total_equity":         (
+        "Equity", "TotalEquity", "EquityAttributableToOwnersOfParent",
+    ),
+    "current_assets":       ("CurrentAssets",),
+    "current_liabilities":  ("CurrentLiabilities",),
+}
+
+_CASHFLOW_ALIASES = {
+    "operating_cf":  (
+        "CashFlowsFromOperatingActivities",
+        "NetCashProvidedByOperatingActivities",
+    ),
+    "investing_cf":  (
+        "CashFlowsFromInvestingActivities",
+        "NetCashUsedInInvestingActivities",
+    ),
+    "capex":         (
+        "AcquisitionOfPropertyPlantAndEquipment",
+        "PurchaseOfPropertyPlantAndEquipment",
+    ),
+}
+
+
+def _pivot_by_period(rows: list[dict]) -> dict[str, dict[str, float]]:
+    """{date: {type: value}}. Last-write-wins for duplicate (date,type)."""
+    out: dict[str, dict[str, float]] = {}
+    for r in rows:
+        d = r.get("date")
+        t = r.get("type")
+        v = r.get("value")
+        if not d or not t or v is None:
+            continue
+        try:
+            out.setdefault(d, {})[t] = float(v)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _pick(period: dict[str, float], names: tuple[str, ...]) -> float | None:
+    for n in names:
+        if n in period and period[n] is not None:
+            return period[n]
+    return None
+
+
+def _safe_div(a: float | None, b: float | None) -> float | None:
+    if a is None or b is None or b == 0:
+        return None
+    return a / b
+
+
+def _light(value: float | None, *, green: float, yellow: float, higher_better: bool = True) -> str:
+    """Map a metric to red/yellow/green. Thresholds in original units (eg 15 = 15%)."""
+    if value is None:
+        return "gray"
+    if higher_better:
+        if value >= green:
+            return "green"
+        if value >= yellow:
+            return "yellow"
+        return "red"
+    if value <= green:
+        return "green"
+    if value <= yellow:
+        return "yellow"
+    return "red"
+
+
+async def get_health(symbol: str, periods: int = 8) -> dict[str, Any]:
+    """
+    Returns a structured StatementDog-style financial-health snapshot:
+
+      {
+        "symbol": ...,
+        "periods":  [{"date", revenue, gross_margin, operating_margin,
+                      net_margin, debt_ratio, current_ratio, eps,
+                      operating_cf, free_cf}, ...],   # newest last
+        "summary":  {"latest_roe", "latest_debt_ratio",
+                     "revenue_yoy", "operating_cf_positive_streak"},
+        "lights":   {"profitability", "safety", "growth", "cash_flow"}
+      }
+    """
+    key = f"tw:health:{symbol}"
+    cached = await cache_get(key)
+    if cached:
+        return json.loads(cached)
+
+    try:
+        income_rows = await finmind.get_financials(symbol)
+    except Exception:
+        income_rows = []
+    try:
+        bs_rows = await finmind.get_balance_sheet(symbol)
+    except Exception:
+        bs_rows = []
+    try:
+        cf_rows = await finmind.get_cash_flow(symbol)
+    except Exception:
+        cf_rows = []
+
+    income = _pivot_by_period(income_rows)
+    bs     = _pivot_by_period(bs_rows)
+    cf     = _pivot_by_period(cf_rows)
+
+    all_dates = sorted(set(income) | set(bs) | set(cf))[-periods:]
+
+    out_periods: list[dict[str, Any]] = []
+    for d in all_dates:
+        ip = income.get(d, {})
+        bp = bs.get(d, {})
+        cp = cf.get(d, {})
+
+        revenue          = _pick(ip, _INCOME_ALIASES["revenue"])
+        gross_profit     = _pick(ip, _INCOME_ALIASES["gross_profit"])
+        operating_income = _pick(ip, _INCOME_ALIASES["operating_income"])
+        net_income       = _pick(ip, _INCOME_ALIASES["net_income"])
+        eps              = _pick(ip, _INCOME_ALIASES["eps"])
+
+        total_assets        = _pick(bp, _BALANCE_ALIASES["total_assets"])
+        total_liabilities   = _pick(bp, _BALANCE_ALIASES["total_liabilities"])
+        total_equity        = _pick(bp, _BALANCE_ALIASES["total_equity"])
+        current_assets      = _pick(bp, _BALANCE_ALIASES["current_assets"])
+        current_liabilities = _pick(bp, _BALANCE_ALIASES["current_liabilities"])
+
+        operating_cf = _pick(cp, _CASHFLOW_ALIASES["operating_cf"])
+        capex        = _pick(cp, _CASHFLOW_ALIASES["capex"])
+
+        gross_margin     = _safe_div(gross_profit, revenue)
+        operating_margin = _safe_div(operating_income, revenue)
+        net_margin       = _safe_div(net_income, revenue)
+        debt_ratio       = _safe_div(total_liabilities, total_assets)
+        current_ratio    = _safe_div(current_assets, current_liabilities)
+        free_cf          = (operating_cf + capex) if (operating_cf is not None and capex is not None) else None
+
+        out_periods.append({
+            "date":             d,
+            "revenue":          revenue,
+            "net_income":       net_income,
+            "eps":              eps,
+            "gross_margin":     round(gross_margin * 100, 2) if gross_margin is not None else None,
+            "operating_margin": round(operating_margin * 100, 2) if operating_margin is not None else None,
+            "net_margin":       round(net_margin * 100, 2) if net_margin is not None else None,
+            "debt_ratio":       round(debt_ratio * 100, 2) if debt_ratio is not None else None,
+            "current_ratio":    round(current_ratio, 2) if current_ratio is not None else None,
+            "operating_cf":     operating_cf,
+            "free_cf":          free_cf,
+            "total_equity":     total_equity,
+        })
+
+    # ── Summary metrics ─────────────────────────────────────────
+    latest = out_periods[-1] if out_periods else {}
+
+    # ROE on a TTM basis: sum of last 4 quarters' net income / latest equity.
+    ttm_net_income: float | None = None
+    last_4 = [p for p in out_periods[-4:] if p.get("net_income") is not None]
+    if len(last_4) >= 1:
+        ttm_net_income = sum(p["net_income"] for p in last_4)
+    latest_equity = latest.get("total_equity")
+    latest_roe = (
+        round(ttm_net_income / latest_equity * 100, 2)
+        if (ttm_net_income is not None and latest_equity)
+        else None
+    )
+
+    # Operating cash-flow positive streak in last 4 periods.
+    cf_streak = sum(
+        1 for p in out_periods[-4:]
+        if p.get("operating_cf") is not None and p["operating_cf"] > 0
+    )
+
+    # Revenue YoY: pull latest from the monthly_revenue series (already
+    # YoY-computed). Avoids re-deriving from quarterly snapshots.
+    revenue_yoy: float | None = None
+    try:
+        rev_rows = await get_revenue(symbol, months=3)
+        if rev_rows:
+            revenue_yoy = rev_rows[-1].get("revenue_yoy")
+    except Exception:
+        pass
+
+    summary = {
+        "latest_roe":       latest_roe,
+        "latest_debt_ratio": latest.get("debt_ratio"),
+        "latest_gross_margin": latest.get("gross_margin"),
+        "latest_net_margin": latest.get("net_margin"),
+        "revenue_yoy":      revenue_yoy,
+        "cf_positive_streak_4q": cf_streak,
+    }
+
+    # ── Traffic-light scoring ───────────────────────────────────
+    lights = {
+        "profitability": _light(latest_roe, green=15, yellow=5, higher_better=True),
+        "safety":        _light(latest.get("debt_ratio"), green=50, yellow=70, higher_better=False),
+        "growth":        _light(revenue_yoy, green=10, yellow=0, higher_better=True),
+        "cash_flow":     ("green" if cf_streak >= 4 else
+                          "yellow" if cf_streak >= 2 else
+                          "red" if out_periods else "gray"),
+    }
+
+    result = {
+        "symbol":  symbol,
+        "market":  "TW",
+        "periods": out_periods,
+        "summary": summary,
+        "lights":  lights,
+    }
+    await cache_set(key, json.dumps(result), TTL_FUNDAMENTALS)
+    return result
+
+
 # ── Screener ──────────────────────────────────────────────────────
+
+async def _get_all_valuations_cached() -> dict[str, dict[str, float | None]]:
+    """Bulk PE/PB/dividend_yield for every TWSE stock; cached 24h."""
+    key = "tw:valuations:all"
+    cached = await cache_get(key)
+    if cached:
+        return json.loads(cached)
+    try:
+        data = await twse.get_all_valuation_ratios()
+    except Exception:
+        data = {}
+    if data:
+        await cache_set(key, json.dumps(data), TTL_FUNDAMENTALS)
+    return data
+
+
+def _passes_fundamental_filters(
+    v: dict[str, float | None],
+    *,
+    min_pe: float | None,
+    max_pe: float | None,
+    min_pb: float | None,
+    max_pb: float | None,
+    min_dividend_yield: float | None,
+) -> bool:
+    pe = v.get("pe_ratio")
+    pb = v.get("pb_ratio")
+    dy = v.get("dividend_yield")
+    if min_pe is not None and (pe is None or pe < min_pe):
+        return False
+    if max_pe is not None and (pe is None or pe > max_pe):
+        return False
+    if min_pb is not None and (pb is None or pb < min_pb):
+        return False
+    if max_pb is not None and (pb is None or pb > max_pb):
+        return False
+    if min_dividend_yield is not None and (dy is None or dy < min_dividend_yield):
+        return False
+    return True
+
 
 async def get_screener(
     exchange: str | None = None,    # "TWSE" | "TPEx" | None (both)
     min_volume: int | None = None,
+    min_pe: float | None = None,
+    max_pe: float | None = None,
+    min_pb: float | None = None,
+    max_pb: float | None = None,
+    min_dividend_yield: float | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
-    key = f"tw:screener:{exchange}:{min_volume}:{limit}"
+    key = (
+        f"tw:screener:{exchange}:{min_volume}:"
+        f"{min_pe}:{max_pe}:{min_pb}:{max_pb}:{min_dividend_yield}:{limit}"
+    )
     cached = await cache_get(key)
     if cached:
         return json.loads(cached)
@@ -307,24 +587,50 @@ async def get_screener(
     except Exception:
         all_stocks = []
 
+    needs_valuations = any(
+        v is not None for v in (min_pe, max_pe, min_pb, max_pb, min_dividend_yield)
+    )
+    valuations = await _get_all_valuations_cached() if needs_valuations else {}
+
     result = []
     for s in all_stocks:
-        code = s.get("Code") or s.get("證券代號", "")
+        code = (s.get("Code") or s.get("證券代號") or "").strip()
         if not code:
             continue
         vol = twse._tw_int(s.get("成交股數") or s.get("TradeVolume", "0"))
         if min_volume and vol < min_volume:
             continue
-        exch = _exchange_map.get(code.strip(), "TWSE")
+        exch = _exchange_map.get(code, "TWSE")
         if exchange and exch != exchange:
             continue
+
+        v = valuations.get(code, {}) if valuations else {}
+        if needs_valuations and not _passes_fundamental_filters(
+            v,
+            min_pe=min_pe, max_pe=max_pe,
+            min_pb=min_pb, max_pb=max_pb,
+            min_dividend_yield=min_dividend_yield,
+        ):
+            continue
+
+        price = twse._tw_num(s.get("收盤價") or s.get("ClosingPrice"))
+        change = twse._tw_num(s.get("漲跌價差") or s.get("Change"))
+        change_pct = round(change / (price - change) * 100, 4) if (
+            change is not None and price is not None and (price - change)
+        ) else None
+
         result.append({
-            "symbol":   code.strip(),
-            "market":   "TW",
-            "exchange": exch,
-            "name_zh":  s.get("Name") or s.get("證券名稱", ""),
-            "price":    twse._tw_num(s.get("收盤價") or s.get("ClosingPrice")),
-            "volume":   vol,
+            "symbol":         code,
+            "market":         "TW",
+            "exchange":       exch,
+            "name_zh":        s.get("Name") or s.get("證券名稱", ""),
+            "price":          price,
+            "change":         change,
+            "change_pct":     change_pct,
+            "volume":         vol,
+            "pe_ratio":       v.get("pe_ratio") if v else None,
+            "pb_ratio":       v.get("pb_ratio") if v else None,
+            "dividend_yield": v.get("dividend_yield") if v else None,
         })
         if len(result) >= limit:
             break
@@ -386,4 +692,162 @@ async def get_news(symbol: str, limit: int = 10) -> list[dict[str, Any]]:
     result = await loop.run_in_executor(None, _fetch)
     if result:
         await cache_set(key, json.dumps(result), TTL_NEWS)
+    return result
+
+
+# ── Valuation band (本益比 / 股價淨值比 河流圖) ──────────────────
+#
+# Derived on-demand from existing inputs — daily price history + quarterly
+# EPS and total equity from FinMind. No daily snapshot table; the result
+# is cached 24h. This trades a slightly stale cache (refreshes once a
+# day) for zero schema/migration cost.
+
+TTL_VALUATION_BAND = 24 * 3600
+
+
+def _ttm_eps_at(period_end: str, eps_history: list[tuple[str, float]]) -> float | None:
+    """Sum EPS over the last ≤4 reported quarters with period-end ≤ given date."""
+    last_4 = [v for d, v in eps_history if d <= period_end][-4:]
+    return sum(last_4) if last_4 else None
+
+
+def _bvps_at(period_end: str,
+             equity_history: list[tuple[str, float]],
+             shares_history: list[tuple[str, float]]) -> float | None:
+    """Latest equity / latest shares-outstanding estimate ≤ given date."""
+    eq = next((v for d, v in reversed(equity_history) if d <= period_end), None)
+    sh = next((v for d, v in reversed(shares_history) if d <= period_end), None)
+    if eq is None or sh is None or sh <= 0:
+        return None
+    return eq / sh
+
+
+def _stats(values: list[float]) -> dict[str, float | None]:
+    if not values:
+        return {"mean": None, "std": None, "min": None, "max": None,
+                "p10": None, "p25": None, "p50": None, "p75": None, "p90": None}
+    sorted_v = sorted(values)
+    n = len(sorted_v)
+    mean = sum(sorted_v) / n
+    var = sum((v - mean) ** 2 for v in sorted_v) / n
+    std = var ** 0.5
+
+    def _pct(p: float) -> float:
+        if n == 1:
+            return sorted_v[0]
+        rank = p * (n - 1)
+        lo = int(rank)
+        frac = rank - lo
+        hi = min(lo + 1, n - 1)
+        return sorted_v[lo] * (1 - frac) + sorted_v[hi] * frac
+
+    return {
+        "mean": round(mean, 3),
+        "std":  round(std, 3),
+        "min":  round(sorted_v[0], 3),
+        "max":  round(sorted_v[-1], 3),
+        "p10":  round(_pct(0.10), 3),
+        "p25":  round(_pct(0.25), 3),
+        "p50":  round(_pct(0.50), 3),
+        "p75":  round(_pct(0.75), 3),
+        "p90":  round(_pct(0.90), 3),
+    }
+
+
+async def get_valuation_band(
+    symbol: str,
+    metric: str = "pe",       # "pe" | "pb"
+    years: int = 5,
+) -> dict[str, Any]:
+    """
+    Returns a daily PE or PB time series plus mean/std/percentile bands.
+    PE  = close / TTM EPS  (negative or zero EPS → series gap)
+    PB  = close / BVPS, where BVPS = total_equity / (NetIncome/EPS)
+    """
+    if metric not in ("pe", "pb"):
+        raise ValueError(f"metric must be 'pe' or 'pb', got {metric!r}")
+
+    key = f"tw:valuation_band:{symbol}:{metric}:{years}"
+    cached = await cache_get(key)
+    if cached:
+        return json.loads(cached)
+
+    # ── Inputs ──────────────────────────────────────────────────
+    bars = await get_history(symbol, months=years * 12)
+
+    income_rows  = []
+    balance_rows = []
+    try:
+        income_rows = await finmind.get_financials(symbol)
+    except Exception:
+        pass
+    if metric == "pb":
+        try:
+            balance_rows = await finmind.get_balance_sheet(symbol)
+        except Exception:
+            pass
+
+    income = _pivot_by_period(income_rows)
+    bs     = _pivot_by_period(balance_rows)
+
+    # Per-quarter EPS series (sorted ascending by date).
+    eps_history: list[tuple[str, float]] = sorted(
+        (d, _pick(p, _INCOME_ALIASES["eps"]))
+        for d, p in income.items()
+    )
+    eps_history = [(d, v) for d, v in eps_history if v is not None]
+
+    # Shares-outstanding series — derived as NetIncome / EPS where both
+    # are reported. Unit ends up as "shares" if both are in absolute units;
+    # since we only divide later by equity in the same unit system, the
+    # per-share metric is consistent regardless of whether values are
+    # stored in 千元 or 元 (units cancel as long as they match across rows).
+    shares_history: list[tuple[str, float]] = []
+    if metric == "pb":
+        for d, p in sorted(income.items()):
+            ni  = _pick(p, _INCOME_ALIASES["net_income"])
+            eps = _pick(p, _INCOME_ALIASES["eps"])
+            if ni is None or eps is None or eps == 0:
+                continue
+            shares_history.append((d, ni / eps))
+
+    equity_history: list[tuple[str, float]] = sorted(
+        (d, _pick(p, _BALANCE_ALIASES["total_equity"]))
+        for d, p in bs.items()
+    )
+    equity_history = [(d, v) for d, v in equity_history if v is not None]
+
+    # ── Build daily series ──────────────────────────────────────
+    series: list[dict[str, Any]] = []
+    for bar in bars:
+        d = bar.get("time")
+        close = bar.get("close")
+        if not d or close is None:
+            continue
+        if metric == "pe":
+            eps_ttm = _ttm_eps_at(d, eps_history)
+            value = (close / eps_ttm) if (eps_ttm is not None and eps_ttm > 0) else None
+        else:
+            bvps = _bvps_at(d, equity_history, shares_history)
+            value = (close / bvps) if (bvps is not None and bvps > 0) else None
+        series.append({"date": d, "value": round(value, 3) if value is not None else None})
+
+    # ── Stats over the non-null portion ─────────────────────────
+    values = [p["value"] for p in series if p["value"] is not None]
+    stats = _stats(values)
+    current = next((p["value"] for p in reversed(series) if p["value"] is not None), None)
+    current_z = (
+        round((current - stats["mean"]) / stats["std"], 3)
+        if (current is not None and stats["std"] and stats["std"] > 0)
+        else None
+    )
+
+    result = {
+        "symbol":  symbol,
+        "metric":  metric,
+        "series":  series,
+        "stats":   {**stats, "current": current, "current_z": current_z},
+    }
+    if values:
+        await cache_set(key, json.dumps(result), TTL_VALUATION_BAND)
     return result

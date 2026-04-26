@@ -12,7 +12,11 @@ import type { ScreenerResult, Market } from "@/types/market";
 interface Filters {
   market: Market;
   minMarketCap: string;
+  minPE: string;
   maxPE: string;
+  minPB: string;
+  maxPB: string;
+  minDivYield: string;
   minVolume: string;
   sector: string;
   minChangePct: string;
@@ -23,7 +27,11 @@ interface Filters {
 const DEFAULT_FILTERS: Filters = {
   market: "US",
   minMarketCap: "",
+  minPE: "",
   maxPE: "",
+  minPB: "",
+  maxPB: "",
+  minDivYield: "",
   minVolume: "",
   sector: "",
   minChangePct: "",
@@ -54,18 +62,41 @@ interface TWScreenerItem {
   exchange: string;
   name_zh: string;
   price: number | null;
+  change: number | null;
+  change_pct: number | null;
   volume: number;
+  pe_ratio: number | null;
+  pb_ratio: number | null;
+  dividend_yield: number | null;
 }
 
-async function fetchTWScreener(): Promise<ScreenerResult[]> {
-  const res = await api.get<TWScreenerItem[]>("/tw/screener?limit=500");
+async function fetchTWScreener(params: {
+  min_pe?: number;
+  max_pe?: number;
+  min_pb?: number;
+  max_pb?: number;
+  min_dividend_yield?: number;
+  min_volume?: number;
+}): Promise<ScreenerResult[]> {
+  const q = new URLSearchParams({ limit: "500" });
+  if (params.min_pe) q.set("min_pe", String(params.min_pe));
+  if (params.max_pe) q.set("max_pe", String(params.max_pe));
+  if (params.min_pb) q.set("min_pb", String(params.min_pb));
+  if (params.max_pb) q.set("max_pb", String(params.max_pb));
+  if (params.min_dividend_yield) q.set("min_dividend_yield", String(params.min_dividend_yield));
+  if (params.min_volume) q.set("min_volume", String(params.min_volume));
+  const res = await api.get<TWScreenerItem[]>(`/tw/screener?${q}`);
   return res.data.map((item) => ({
     symbol: item.symbol,
     market: "TW" as const,
     name: item.name_zh,
     price: item.price ?? 0,
-    change_pct: 0,
+    change_pct: item.change_pct ?? 0,
     volume: item.volume,
+    pe_ratio: item.pe_ratio ?? undefined,
+    pb_ratio: item.pb_ratio ?? undefined,
+    dividend_yield: item.dividend_yield ?? undefined,
+    exchange: item.exchange,
   }));
 }
 
@@ -119,9 +150,23 @@ export default function ScreenerPage() {
   }
 
   const { data: raw = [], isLoading, isFetching } = useQuery({
-    queryKey: ["screener-page", applied.market, applied.minMarketCap, applied.maxPE, applied.minVolume, applied.sector],
+    queryKey: [
+      "screener-page", applied.market,
+      applied.minMarketCap, applied.minPE, applied.maxPE,
+      applied.minPB, applied.maxPB, applied.minDivYield,
+      applied.minVolume, applied.sector,
+    ],
     queryFn: () => {
-      if (applied.market === "TW") return fetchTWScreener();
+      if (applied.market === "TW") {
+        return fetchTWScreener({
+          min_pe: applied.minPE ? Number(applied.minPE) : undefined,
+          max_pe: applied.maxPE ? Number(applied.maxPE) : undefined,
+          min_pb: applied.minPB ? Number(applied.minPB) : undefined,
+          max_pb: applied.maxPB ? Number(applied.maxPB) : undefined,
+          min_dividend_yield: applied.minDivYield ? Number(applied.minDivYield) : undefined,
+          min_volume: applied.minVolume ? Number(applied.minVolume) : undefined,
+        });
+      }
       return fetchUSScreener({
         min_market_cap: applied.minMarketCap ? Number(applied.minMarketCap) * 1e9 : undefined,
         max_pe: applied.maxPE ? Number(applied.maxPE) : undefined,
@@ -183,18 +228,43 @@ export default function ScreenerPage() {
             </div>
           </div>
 
-          <FilterInput
-            label={t("screener.min_market_cap")}
-            value={filters.minMarketCap}
-            onChange={(v) => setFilter("minMarketCap", v)}
-            placeholder="10"
-          />
+          {filters.market === "US" ? (
+            <FilterInput
+              label={t("screener.min_market_cap")}
+              value={filters.minMarketCap}
+              onChange={(v) => setFilter("minMarketCap", v)}
+              placeholder="10"
+            />
+          ) : (
+            <FilterInput
+              label={t("screener.min_pe")}
+              value={filters.minPE}
+              onChange={(v) => setFilter("minPE", v)}
+              placeholder="5"
+            />
+          )}
           <FilterInput
             label={t("screener.max_pe")}
             value={filters.maxPE}
             onChange={(v) => setFilter("maxPE", v)}
             placeholder="30"
           />
+          {filters.market === "TW" && (
+            <>
+              <FilterInput
+                label={t("screener.max_pb")}
+                value={filters.maxPB}
+                onChange={(v) => setFilter("maxPB", v)}
+                placeholder="3"
+              />
+              <FilterInput
+                label={t("screener.min_dividend_yield")}
+                value={filters.minDivYield}
+                onChange={(v) => setFilter("minDivYield", v)}
+                placeholder="3"
+              />
+            </>
+          )}
           <FilterInput
             label={t("market.table.volume")}
             value={filters.minVolume}
@@ -214,20 +284,20 @@ export default function ScreenerPage() {
             placeholder="10"
           />
 
-          {/* sector (US only) */}
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground">{t("market.table.sector")}</label>
-            <select
-              value={filters.sector}
-              onChange={(e) => setFilter("sector", e.target.value)}
-              disabled={filters.market === "TW"}
-              className="bg-background border border-border rounded px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:border-primary/50 disabled:opacity-40"
-            >
-              {US_SECTORS.map((s) => (
-                <option key={s} value={s}>{s || t("screener.all_sectors")}</option>
-              ))}
-            </select>
-          </div>
+          {filters.market === "US" && (
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">{t("market.table.sector")}</label>
+              <select
+                value={filters.sector}
+                onChange={(e) => setFilter("sector", e.target.value)}
+                className="bg-background border border-border rounded px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:border-primary/50"
+              >
+                {US_SECTORS.map((s) => (
+                  <option key={s} value={s}>{s || t("screener.all_sectors")}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <FilterInput
             label={t("common.search")}
@@ -265,9 +335,13 @@ export default function ScreenerPage() {
           <span className="font-medium text-right">{t("market.table.price")}</span>
           <span className="font-medium text-right">{t("market.table.change")}</span>
           <span className="font-medium text-right">{t("market.table.volume")}</span>
-          <span className="font-medium text-right">{t("market.table.market_cap")}</span>
+          <span className="font-medium text-right">
+            {applied.market === "TW" ? t("market.table.pb") : t("market.table.market_cap")}
+          </span>
           <span className="font-medium text-right">{t("market.table.pe")}</span>
-          <span className="font-medium pl-4">{t("market.table.sector")}</span>
+          <span className="font-medium pl-4 text-right">
+            {applied.market === "TW" ? t("market.table.dividend_yield") : t("market.table.sector")}
+          </span>
         </div>
 
         {isLoading ? (
@@ -280,6 +354,7 @@ export default function ScreenerPage() {
               {items.map((virtualRow) => {
                 const row = rows[virtualRow.index];
                 const pos = row.change_pct >= 0;
+                const isTW = applied.market === "TW";
                 return (
                   <div
                     key={virtualRow.key}
@@ -301,16 +376,22 @@ export default function ScreenerPage() {
                       {row.volume >= 1e6 ? `${(row.volume / 1e6).toFixed(1)}M` : row.volume >= 1e3 ? `${(row.volume / 1e3).toFixed(0)}K` : row.volume}
                     </span>
                     <span className="text-right text-sm text-muted-foreground">
-                      {row.market_cap
-                        ? row.market_cap >= 1e12
-                          ? `$${(row.market_cap / 1e12).toFixed(2)}T`
-                          : `$${(row.market_cap / 1e9).toFixed(1)}B`
-                        : "—"}
+                      {isTW
+                        ? (row.pb_ratio != null ? row.pb_ratio.toFixed(2) : "—")
+                        : (row.market_cap
+                            ? row.market_cap >= 1e12
+                              ? `$${(row.market_cap / 1e12).toFixed(2)}T`
+                              : `$${(row.market_cap / 1e9).toFixed(1)}B`
+                            : "—")}
                     </span>
                     <span className="text-right text-sm text-muted-foreground">
                       {row.pe_ratio ? row.pe_ratio.toFixed(1) : "—"}
                     </span>
-                    <span className="text-sm text-muted-foreground pl-4 truncate">{row.sector ?? "—"}</span>
+                    <span className="text-sm text-muted-foreground pl-4 truncate text-right">
+                      {isTW
+                        ? (row.dividend_yield != null ? `${row.dividend_yield.toFixed(2)}%` : "—")
+                        : (row.sector ?? "—")}
+                    </span>
                   </div>
                 );
               })}

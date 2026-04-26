@@ -118,3 +118,11 @@ async def get_monthly_revenue(symbol: str, start_date: str, end_date: str | None
 
 async def get_financials(symbol: str, start_date: str = "2020-01-01") -> list[dict[str, Any]]:
     return await _query("TaiwanStockFinancialStatements", symbol, start_date)
+
+
+async def get_balance_sheet(symbol: str, start_date: str = "2020-01-01") -> list[dict[str, Any]]:
+    return await _query("TaiwanStockBalanceSheet", symbol, start_date)
+
+
+async def get_cash_flow(symbol: str, start_date: str = "2020-01-01") -> list[dict[str, Any]]:
+    return await _query("TaiwanStockCashFlowsStatement", symbol, start_date)

@@ -74,7 +74,12 @@ class TWScreenerItem(BaseModel):
     exchange: str
     name_zh: str
     price: float | None
+    change: float | None = None
+    change_pct: float | None = None
     volume: int
+    pe_ratio: float | None = None
+    pb_ratio: float | None = None
+    dividend_yield: float | None = None     # %
 
 
 class TWIndexResponse(BaseModel):

@@ -91,15 +91,56 @@ async def financials(symbol: str, _: Auth):
         raise HTTPException(status_code=502, detail=f"Data source error: {e}")
 
 
+@router.get("/health/{symbol}")
+async def health(symbol: str, _: Auth, periods: int = Query(8, ge=1, le=20)):
+    """財務體質 — derived margins, leverage, liquidity ratios with red/yellow/green lights."""
+    try:
+        return await svc.get_health(symbol, periods=periods)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Data source error: {e}")
+
+
+@router.get("/valuation-band/{symbol}")
+async def valuation_band(
+    symbol: str,
+    _: Auth,
+    metric: str = Query("pe", pattern="^(pe|pb)$"),
+    years: int = Query(5, ge=1, le=10),
+):
+    """估值帶 (PE / PB band) — daily series + mean / std / percentile stats."""
+    try:
+        return await svc.get_valuation_band(symbol, metric=metric, years=years)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Data source error: {e}")
+
+
 @router.get("/screener", response_model=list[TWScreenerItem])
 async def screener(
     _: Auth,
     exchange: str | None = Query(None, description="TWSE | TPEx"),
     min_volume: int | None = Query(None, description="Minimum trading volume (shares)"),
+    min_pe: float | None = Query(None, description="Minimum P/E ratio (本益比)"),
+    max_pe: float | None = Query(None, description="Maximum P/E ratio (本益比)"),
+    min_pb: float | None = Query(None, description="Minimum P/B ratio (股價淨值比)"),
+    max_pb: float | None = Query(None, description="Maximum P/B ratio (股價淨值比)"),
+    min_dividend_yield: float | None = Query(
+        None, description="Minimum dividend yield % (殖利率)"
+    ),
     limit: int = Query(100, le=500),
 ):
     try:
-        return await svc.get_screener(exchange=exchange, min_volume=min_volume, limit=limit)
+        return await svc.get_screener(
+            exchange=exchange,
+            min_volume=min_volume,
+            min_pe=min_pe,
+            max_pe=max_pe,
+            min_pb=min_pb,
+            max_pb=max_pb,
+            min_dividend_yield=min_dividend_yield,
+            limit=limit,
+        )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Data source error: {e}")
 

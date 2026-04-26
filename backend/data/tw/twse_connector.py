@@ -269,3 +269,27 @@ async def get_valuation_ratios(symbol: str) -> dict[str, Any]:
         }
     except Exception:
         return {}
+
+
+async def get_all_valuation_ratios() -> dict[str, dict[str, float | None]]:
+    """
+    Bulk fetch latest 本益比/股價淨值比/殖利率 for every TWSE stock in one call.
+    Returns {symbol: {"pe_ratio", "pb_ratio", "dividend_yield"}}.
+
+    Used by the screener to avoid N+1 lookups; one TWSE token covers the
+    whole exchange. The endpoint without `stockNo` returns the day's full
+    cross-section.
+    """
+    data = await _get(f"{_BASE}/exchangeReport/BWIBBU_ALL")
+    rows = data if isinstance(data, list) else []
+    out: dict[str, dict[str, float | None]] = {}
+    for r in rows:
+        code = (r.get("Code") or r.get("證券代號") or "").strip()
+        if not code:
+            continue
+        out[code] = {
+            "pe_ratio":       _tw_num(r.get("PEratio") or r.get("本益比")),
+            "pb_ratio":       _tw_num(r.get("PBratio") or r.get("股價淨值比")),
+            "dividend_yield": _tw_num(r.get("DividendYield") or r.get("殖利率(%)")),
+        }
+    return out

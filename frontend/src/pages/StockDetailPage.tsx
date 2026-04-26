@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Cell,
+  BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  ReferenceLine, Cell,
 } from "recharts";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
@@ -16,7 +17,7 @@ type Period = "1d" | "5d" | "1mo" | "3mo" | "1y" | "5y";
 type Interval = "1m" | "5m" | "15m" | "1h" | "1d" | "1wk";
 
 type USTab = "chart" | "financials" | "options" | "news";
-type TWTab = "chart" | "institutional" | "margin" | "revenue" | "news";
+type TWTab = "chart" | "health" | "valuation" | "institutional" | "margin" | "revenue" | "news";
 
 interface OptionRow {
   strike: number;
@@ -55,6 +56,62 @@ interface RevenueRow {
   revenue: number;
   revenue_mom: number | null;
   revenue_yoy: number | null;
+}
+
+type Light = "green" | "yellow" | "red" | "gray";
+
+interface HealthPeriod {
+  date: string;
+  revenue: number | null;
+  net_income: number | null;
+  eps: number | null;
+  gross_margin: number | null;
+  operating_margin: number | null;
+  net_margin: number | null;
+  debt_ratio: number | null;
+  current_ratio: number | null;
+  operating_cf: number | null;
+  free_cf: number | null;
+  total_equity: number | null;
+}
+
+interface HealthResponse {
+  symbol: string;
+  market: "TW";
+  periods: HealthPeriod[];
+  summary: {
+    latest_roe: number | null;
+    latest_debt_ratio: number | null;
+    latest_gross_margin: number | null;
+    latest_net_margin: number | null;
+    revenue_yoy: number | null;
+    cf_positive_streak_4q: number;
+  };
+  lights: {
+    profitability: Light;
+    safety: Light;
+    growth: Light;
+    cash_flow: Light;
+  };
+}
+
+interface ValuationBandResponse {
+  symbol: string;
+  metric: "pe" | "pb";
+  series: { date: string; value: number | null }[];
+  stats: {
+    mean: number | null;
+    std: number | null;
+    min: number | null;
+    max: number | null;
+    p10: number | null;
+    p25: number | null;
+    p50: number | null;
+    p75: number | null;
+    p90: number | null;
+    current: number | null;
+    current_z: number | null;
+  };
 }
 
 // ── API helpers ────────────────────────────────────────────────────
@@ -110,6 +167,13 @@ const fetchMargin = (sym: string) =>
 
 const fetchRevenue = (sym: string) =>
   api.get<RevenueRow[]>(`/tw/revenue/${sym}?months=24`).then((r) => r.data);
+
+const fetchHealth = (sym: string) =>
+  api.get<HealthResponse>(`/tw/health/${sym}?periods=8`).then((r) => r.data);
+
+const fetchValuationBand = (sym: string, metric: "pe" | "pb") =>
+  api.get<ValuationBandResponse>(`/tw/valuation-band/${sym}?metric=${metric}&years=5`)
+    .then((r) => r.data);
 
 const fetchEarnings = (sym: string) =>
   api.get<{ earnings_date: string | null; eps_estimate: number | null; revenue_estimate: number | null }>(
@@ -672,6 +736,368 @@ function RevenuePanel({ symbol }: { symbol: string }) {
   );
 }
 
+// ── Financial health (財務體質) ────────────────────────────────────
+
+const LIGHT_CLASS: Record<Light, string> = {
+  green:  "bg-green-500",
+  yellow: "bg-yellow-500",
+  red:    "bg-red-500",
+  gray:   "bg-muted-foreground/40",
+};
+
+function LightDot({ light }: { light: Light }) {
+  return <span className={`inline-block w-2.5 h-2.5 rounded-full ${LIGHT_CLASS[light]}`} />;
+}
+
+function HealthSection({
+  title, light, children,
+}: { title: string; light: Light; children: React.ReactNode }) {
+  return (
+    <div className="bg-card border border-border rounded-lg p-4">
+      <div className="flex items-center gap-2 mb-3">
+        <LightDot light={light} />
+        <h4 className="text-sm font-semibold text-foreground">{title}</h4>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+const fmtPct1 = (n: number | null | undefined) =>
+  n == null ? "—" : `${n >= 0 ? "" : ""}${n.toFixed(2)}%`;
+
+function MetricSparkRow({
+  label, periods, accessor, suffix = "%",
+}: {
+  label: string;
+  periods: HealthPeriod[];
+  accessor: (p: HealthPeriod) => number | null;
+  suffix?: string;
+}) {
+  const values = periods.map(accessor);
+  const latest = values[values.length - 1];
+  const data = periods.map((p, i) => ({
+    date: p.date.slice(0, 7),
+    value: values[i],
+  }));
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-1">
+        <span className="text-xs text-muted-foreground">{label}</span>
+        <span className="text-sm font-medium text-foreground">
+          {latest == null ? "—" : `${latest.toFixed(2)}${suffix}`}
+        </span>
+      </div>
+      <ResponsiveContainer width="100%" height={42}>
+        <BarChart data={data} margin={{ left: 0, right: 0, top: 4, bottom: 0 }}>
+          <XAxis dataKey="date" hide />
+          <YAxis hide />
+          <Tooltip
+            contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
+            formatter={(v: number) => [`${v == null ? "—" : v.toFixed(2)}${suffix}`, label]}
+          />
+          <Bar dataKey="value" radius={[2, 2, 0, 0]}>
+            {data.map((d, i) => (
+              <Cell
+                key={i}
+                fill={d.value == null
+                  ? "hsl(var(--muted-foreground) / 0.2)"
+                  : d.value >= 0 ? "#22c55e" : "#ef4444"}
+              />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function HealthPanel({ symbol }: { symbol: string }) {
+  const { t } = useTranslation();
+  const { data, isLoading } = useQuery({
+    queryKey: ["health", symbol],
+    queryFn: () => fetchHealth(symbol),
+    staleTime: 6 * 3_600_000,    // 6 hours; quarterlies don't change often
+  });
+
+  if (isLoading) return <Loading />;
+  if (!data || !data.periods.length) {
+    return <div className="p-6 text-muted-foreground text-sm">{t("stock.health.no_data")}</div>;
+  }
+
+  const { periods, summary, lights } = data;
+
+  return (
+    <div className="p-4 space-y-4">
+      {/* summary strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="bg-background border border-border rounded p-3">
+          <div className="text-xs text-muted-foreground">ROE (TTM)</div>
+          <div className="text-lg font-semibold text-foreground">{fmtPct1(summary.latest_roe)}</div>
+        </div>
+        <div className="bg-background border border-border rounded p-3">
+          <div className="text-xs text-muted-foreground">{t("stock.health.debt_ratio")}</div>
+          <div className="text-lg font-semibold text-foreground">{fmtPct1(summary.latest_debt_ratio)}</div>
+        </div>
+        <div className="bg-background border border-border rounded p-3">
+          <div className="text-xs text-muted-foreground">{t("stock.health.gross_margin")}</div>
+          <div className="text-lg font-semibold text-foreground">{fmtPct1(summary.latest_gross_margin)}</div>
+        </div>
+        <div className="bg-background border border-border rounded p-3">
+          <div className="text-xs text-muted-foreground">{t("stock.health.revenue_yoy")}</div>
+          <div className={`text-lg font-semibold ${
+            summary.revenue_yoy == null ? "text-muted-foreground"
+            : summary.revenue_yoy >= 0 ? "text-green-400" : "text-red-400"
+          }`}>
+            {fmtPct1(summary.revenue_yoy)}
+          </div>
+        </div>
+      </div>
+
+      {/* four StatementDog sections */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <HealthSection title={t("stock.health.profitability")} light={lights.profitability}>
+          <div className="space-y-3">
+            <MetricSparkRow label={t("stock.health.gross_margin")} periods={periods} accessor={(p) => p.gross_margin} />
+            <MetricSparkRow label={t("stock.health.operating_margin")} periods={periods} accessor={(p) => p.operating_margin} />
+            <MetricSparkRow label={t("stock.health.net_margin")} periods={periods} accessor={(p) => p.net_margin} />
+          </div>
+        </HealthSection>
+
+        <HealthSection title={t("stock.health.safety")} light={lights.safety}>
+          <div className="space-y-3">
+            <MetricSparkRow label={t("stock.health.debt_ratio")} periods={periods} accessor={(p) => p.debt_ratio} />
+            <MetricSparkRow
+              label={t("stock.health.current_ratio")}
+              periods={periods}
+              accessor={(p) => p.current_ratio}
+              suffix="x"
+            />
+          </div>
+        </HealthSection>
+
+        <HealthSection title={t("stock.health.growth")} light={lights.growth}>
+          <MetricSparkRow
+            label={t("stock.health.eps")}
+            periods={periods}
+            accessor={(p) => p.eps}
+            suffix=""
+          />
+          <div className="mt-3 text-xs text-muted-foreground">
+            {t("stock.health.revenue_yoy")}:{" "}
+            <span className={`font-medium ${
+              summary.revenue_yoy == null ? ""
+              : summary.revenue_yoy >= 0 ? "text-green-400" : "text-red-400"
+            }`}>
+              {fmtPct1(summary.revenue_yoy)}
+            </span>
+          </div>
+        </HealthSection>
+
+        <HealthSection title={t("stock.health.cash_flow")} light={lights.cash_flow}>
+          <MetricSparkRow
+            label={t("stock.health.operating_cf")}
+            periods={periods}
+            accessor={(p) => p.operating_cf}
+            suffix=""
+          />
+          <MetricSparkRow
+            label={t("stock.health.free_cf")}
+            periods={periods}
+            accessor={(p) => p.free_cf}
+            suffix=""
+          />
+          <div className="mt-2 text-xs text-muted-foreground">
+            {t("stock.health.cf_streak", { count: summary.cf_positive_streak_4q })}
+          </div>
+        </HealthSection>
+      </div>
+
+      {/* per-period table */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-border text-muted-foreground">
+              <th className="text-left py-2 pr-4 font-medium">{t("stock.health.period")}</th>
+              <th className="text-right py-2 px-2 font-medium">{t("stock.health.gross_margin")}</th>
+              <th className="text-right py-2 px-2 font-medium">{t("stock.health.operating_margin")}</th>
+              <th className="text-right py-2 px-2 font-medium">{t("stock.health.net_margin")}</th>
+              <th className="text-right py-2 px-2 font-medium">{t("stock.health.debt_ratio")}</th>
+              <th className="text-right py-2 px-2 font-medium">EPS</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...periods].reverse().map((p) => (
+              <tr key={p.date} className="border-b border-border/30 hover:bg-accent/5">
+                <td className="py-1.5 pr-4 text-muted-foreground">{p.date}</td>
+                <td className="text-right py-1.5 px-2 text-foreground">{fmtPct1(p.gross_margin)}</td>
+                <td className="text-right py-1.5 px-2 text-foreground">{fmtPct1(p.operating_margin)}</td>
+                <td className="text-right py-1.5 px-2 text-foreground">{fmtPct1(p.net_margin)}</td>
+                <td className="text-right py-1.5 px-2 text-foreground">{fmtPct1(p.debt_ratio)}</td>
+                <td className="text-right py-1.5 px-2 text-foreground">{p.eps == null ? "—" : p.eps.toFixed(2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── Valuation band (PE / PB 河流圖) ────────────────────────────────
+
+function ValuationBandPanel({ symbol }: { symbol: string }) {
+  const { t } = useTranslation();
+  const [metric, setMetric] = useState<"pe" | "pb">("pe");
+  const { data, isLoading } = useQuery({
+    queryKey: ["valuation-band", symbol, metric],
+    queryFn: () => fetchValuationBand(symbol, metric),
+    staleTime: 6 * 3_600_000,
+  });
+
+  if (isLoading) return <Loading />;
+  if (!data || !data.series.length) {
+    return <div className="p-6 text-muted-foreground text-sm">{t("stock.valuation.no_data")}</div>;
+  }
+
+  const { series, stats } = data;
+  const filtered = series.filter((s) => s.value != null);
+  if (!filtered.length) {
+    return <div className="p-6 text-muted-foreground text-sm">{t("stock.valuation.no_data")}</div>;
+  }
+
+  // Sample to ~250 points so Recharts stays smooth on 5y of daily data.
+  const stride = Math.max(1, Math.floor(filtered.length / 250));
+  const chartData = filtered.filter((_, i) => i % stride === 0);
+
+  const mean = stats.mean ?? 0;
+  const std = stats.std ?? 0;
+  const bands = std > 0 ? [
+    { v: mean + 2 * std, label: "+2σ", color: "#ef4444" },
+    { v: mean + std,     label: "+1σ", color: "#f59e0b" },
+    { v: mean,           label: "μ",   color: "#6366f1" },
+    { v: mean - std,     label: "-1σ", color: "#10b981" },
+    { v: mean - 2 * std, label: "-2σ", color: "#22c55e" },
+  ] : [];
+
+  // Percentile of `current` against history.
+  let percentile: number | null = null;
+  if (stats.current != null) {
+    const sorted = [...filtered.map((s) => s.value as number)].sort((a, b) => a - b);
+    const lessEq = sorted.filter((v) => v <= (stats.current as number)).length;
+    percentile = (lessEq / sorted.length) * 100;
+  }
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex rounded border border-border overflow-hidden">
+          {(["pe", "pb"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => setMetric(m)}
+              className={`px-4 py-1.5 text-sm transition-colors ${
+                metric === m
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {m === "pe" ? t("stock.valuation.pe_band") : t("stock.valuation.pb_band")}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="bg-background border border-border rounded p-3">
+          <div className="text-xs text-muted-foreground">{t("stock.valuation.current")}</div>
+          <div className="text-lg font-semibold text-foreground">
+            {stats.current == null ? "—" : stats.current.toFixed(2)}
+          </div>
+        </div>
+        <div className="bg-background border border-border rounded p-3">
+          <div className="text-xs text-muted-foreground">{t("stock.valuation.mean")}</div>
+          <div className="text-lg font-semibold text-foreground">
+            {stats.mean == null ? "—" : stats.mean.toFixed(2)}
+          </div>
+        </div>
+        <div className="bg-background border border-border rounded p-3">
+          <div className="text-xs text-muted-foreground">{t("stock.valuation.z_score")}</div>
+          <div className={`text-lg font-semibold ${
+            stats.current_z == null ? "text-muted-foreground"
+            : stats.current_z > 1 ? "text-red-400"
+            : stats.current_z < -1 ? "text-green-400"
+            : "text-foreground"
+          }`}>
+            {stats.current_z == null ? "—" : stats.current_z.toFixed(2)}
+          </div>
+        </div>
+        <div className="bg-background border border-border rounded p-3">
+          <div className="text-xs text-muted-foreground">{t("stock.valuation.percentile")}</div>
+          <div className="text-lg font-semibold text-foreground">
+            {percentile == null ? "—" : `${percentile.toFixed(0)}%`}
+          </div>
+        </div>
+      </div>
+
+      <ResponsiveContainer width="100%" height={320}>
+        <LineChart data={chartData} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
+          <XAxis
+            dataKey="date"
+            tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
+            interval="preserveStartEnd"
+            minTickGap={40}
+          />
+          <YAxis
+            tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
+            width={45}
+            domain={["auto", "auto"]}
+          />
+          <Tooltip
+            contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
+            formatter={(v: number) => [v?.toFixed(2) ?? "—", metric.toUpperCase()]}
+          />
+          {bands.map((b) => (
+            <ReferenceLine
+              key={b.label}
+              y={b.v}
+              stroke={b.color}
+              strokeDasharray="4 4"
+              label={{ value: `${b.label} ${b.v.toFixed(1)}`, position: "right",
+                       fill: b.color, fontSize: 10 }}
+            />
+          ))}
+          <Line
+            type="monotone"
+            dataKey="value"
+            stroke="#3b82f6"
+            strokeWidth={1.5}
+            dot={false}
+            isAnimationActive={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
+        {([
+          ["min", t("stock.valuation.min")],
+          ["p25", "P25"],
+          ["p50", t("stock.valuation.median")],
+          ["p75", "P75"],
+          ["max", t("stock.valuation.max")],
+        ] as const).map(([k, label]) => (
+          <div key={k} className="bg-background border border-border rounded px-2 py-1.5 flex justify-between">
+            <span className="text-muted-foreground">{label}</span>
+            <span className="text-foreground font-medium">
+              {stats[k] == null ? "—" : (stats[k] as number).toFixed(2)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── News feed ─────────────────────────────────────────────────────
 
 interface NewsItem {
@@ -853,6 +1279,8 @@ export default function StockDetailPage() {
         ) : (
           <>
             <TabButton active={twTab === "chart"} label={t("stock.history")} onClick={() => setTwTab("chart")} />
+            <TabButton active={twTab === "health"} label={t("stock.health.tab")} onClick={() => setTwTab("health")} />
+            <TabButton active={twTab === "valuation"} label={t("stock.valuation.tab")} onClick={() => setTwTab("valuation")} />
             <TabButton active={twTab === "institutional"} label="法人買賣超" onClick={() => setTwTab("institutional")} />
             <TabButton active={twTab === "margin"} label="融資融券" onClick={() => setTwTab("margin")} />
             <TabButton active={twTab === "revenue"} label="月營收" onClick={() => setTwTab("revenue")} />
@@ -961,6 +1389,16 @@ export default function StockDetailPage() {
 
       {mkt === "TW" ? (
         <>
+          {twTab === "health" && (
+            <div className="bg-card border border-border rounded-lg overflow-hidden">
+              <HealthPanel symbol={sym} />
+            </div>
+          )}
+          {twTab === "valuation" && (
+            <div className="bg-card border border-border rounded-lg overflow-hidden">
+              <ValuationBandPanel symbol={sym} />
+            </div>
+          )}
           {twTab === "institutional" && (
             <div className="bg-card border border-border rounded-lg overflow-hidden">
               <InstitutionalPanel symbol={sym} />

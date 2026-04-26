@@ -165,12 +165,29 @@ _FALLBACK_UNIVERSE: list[tuple[str, str]] = [
     ("UBER", "Uber Technologies"), ("LYFT", "Lyft Inc."),
     ("DASH", "DoorDash Inc."), ("COIN", "Coinbase Global"),
     ("HOOD", "Robinhood Markets"), ("SOFI", "SoFi Technologies"),
-    # ── Index / sector ETFs commonly searched ────────────────────
-    ("SPY", "SPDR S&P 500 ETF"), ("QQQ", "Invesco QQQ Trust"),
-    ("DIA", "SPDR Dow Jones Industrial Average ETF"),
-    ("IWM", "iShares Russell 2000 ETF"),
-    ("VTI", "Vanguard Total Stock Market ETF"),
-    ("VOO", "Vanguard S&P 500 ETF"),
+    # ── Index ETFs ───────────────────────────────────────────────
+    ("SPY", "SPDR S&P 500 ETF"), ("IVV", "iShares Core S&P 500 ETF"),
+    ("VOO", "Vanguard S&P 500 ETF"), ("VTI", "Vanguard Total Stock Market ETF"),
+    ("QQQ", "Invesco QQQ Trust"), ("DIA", "SPDR Dow Jones Industrial Average ETF"),
+    ("IWM", "iShares Russell 2000 ETF"), ("MDY", "SPDR S&P MidCap 400 ETF"),
+    ("IJH", "iShares Core S&P Mid-Cap ETF"), ("IJR", "iShares Core S&P Small-Cap ETF"),
+    ("RSP", "Invesco S&P 500 Equal Weight ETF"),
+    # ── International equity ETFs ────────────────────────────────
+    ("VEA", "Vanguard FTSE Developed Markets ETF"),
+    ("VWO", "Vanguard FTSE Emerging Markets ETF"),
+    ("IEFA", "iShares Core MSCI EAFE ETF"),
+    ("IEMG", "iShares Core MSCI Emerging Markets ETF"),
+    ("EEM", "iShares MSCI Emerging Markets ETF"),
+    ("EFA", "iShares MSCI EAFE ETF"),
+    # ── Style / factor / dividend ETFs ───────────────────────────
+    ("VTV", "Vanguard Value ETF"), ("VUG", "Vanguard Growth ETF"),
+    ("VIG", "Vanguard Dividend Appreciation ETF"),
+    ("VYM", "Vanguard High Dividend Yield ETF"),
+    ("SCHD", "Schwab U.S. Dividend Equity ETF"),
+    ("DGRO", "iShares Core Dividend Growth ETF"),
+    ("JEPI", "JPMorgan Equity Premium Income ETF"),
+    ("JEPQ", "JPMorgan Nasdaq Equity Premium Income ETF"),
+    # ── Sector / thematic ETFs ───────────────────────────────────
     ("XLK", "Technology Select Sector SPDR Fund"),
     ("XLF", "Financial Select Sector SPDR Fund"),
     ("XLE", "Energy Select Sector SPDR Fund"),
@@ -182,12 +199,30 @@ _FALLBACK_UNIVERSE: list[tuple[str, str]] = [
     ("XLB", "Materials Select Sector SPDR Fund"),
     ("XLRE", "Real Estate Select Sector SPDR Fund"),
     ("XLC", "Communication Services Select Sector SPDR Fund"),
-    ("ARKK", "ARK Innovation ETF"), ("SMH", "VanEck Semiconductor ETF"),
+    ("VGT", "Vanguard Information Technology ETF"),
+    ("VNQ", "Vanguard Real Estate ETF"),
+    ("SMH", "VanEck Semiconductor ETF"),
+    ("SOXX", "iShares Semiconductor ETF"),
+    ("ARKK", "ARK Innovation ETF"),
+    # ── Leveraged / inverse (retail favorites) ───────────────────
+    ("TQQQ", "ProShares UltraPro QQQ"),
+    ("SQQQ", "ProShares UltraPro Short QQQ"),
+    ("SOXL", "Direxion Daily Semiconductor Bull 3x Shares"),
+    # ── Spot Bitcoin ETFs ────────────────────────────────────────
+    ("IBIT", "iShares Bitcoin Trust"),
+    ("FBTC", "Fidelity Wise Origin Bitcoin Fund"),
+    # ── Bond ETFs ────────────────────────────────────────────────
+    ("AGG", "iShares Core U.S. Aggregate Bond ETF"),
+    ("BND", "Vanguard Total Bond Market ETF"),
+    ("TLT", "iShares 20+ Year Treasury Bond ETF"),
+    ("IEF", "iShares 7-10 Year Treasury Bond ETF"),
+    ("SHY", "iShares 1-3 Year Treasury Bond ETF"),
+    ("LQD", "iShares iBoxx $ Investment Grade Corporate Bond ETF"),
+    ("HYG", "iShares iBoxx $ High Yield Corporate Bond ETF"),
+    ("MUB", "iShares National Muni Bond ETF"),
+    # ── Commodity ETFs ───────────────────────────────────────────
     ("GLD", "SPDR Gold Trust"), ("SLV", "iShares Silver Trust"),
-    ("USO", "United States Oil Fund"), ("TLT", "iShares 20+ Year Treasury Bond ETF"),
-    ("HYG", "iShares iBoxx High Yield Corporate Bond ETF"),
-    ("EEM", "iShares MSCI Emerging Markets ETF"),
-    ("EFA", "iShares MSCI EAFE ETF"),
+    ("USO", "United States Oil Fund"),
 ]
 
 # Symbols-only view kept for backwards compat with callers that just need

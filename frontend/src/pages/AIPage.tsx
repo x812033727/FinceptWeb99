@@ -319,7 +319,12 @@ export default function AIPage() {
     (useClaudeAgent && canUseClaudeAgent);
 
   return (
-    <div className="h-full bg-background flex">
+    // h-[calc(100vh-2.5rem)] = viewport minus AppLayout's 40px (h-10) topbar.
+    // h-full doesn't always resolve reliably through the AppLayout chain
+    // (flex-1 main → ErrorBoundary → AIPage), so we pin the height explicitly.
+    // overflow-hidden on the outer flex row prevents any vertical growth from
+    // children (long agent list, long chat history) from spilling onto body.
+    <div className="h-[calc(100vh-2.5rem)] bg-background flex overflow-hidden">
       {/* ── sidebar: agent selector ─────────────────────────────── */}
       <aside className="w-64 border-r border-border flex flex-col p-4 gap-3 shrink-0 overflow-y-auto">
         <div>

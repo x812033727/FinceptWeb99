@@ -47,6 +47,12 @@ async def _enrich_item(item: WatchlistItem) -> dict[str, Any]:
             out["price"] = q.get("price")
             out["change_pct"] = q.get("change_pct")
             out["name"] = q.get("name")
+        elif item.market == Market.CRYPTO:
+            from services.crypto_market_service import get_quote
+            q = await get_quote(item.symbol)
+            out["price"] = q.get("price")
+            out["change_pct"] = q.get("change_pct")
+            out["name"] = q.get("symbol")
         else:
             from services.tw_market_service import get_quote
             q = await get_quote(item.symbol)

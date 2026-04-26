@@ -80,6 +80,7 @@ function AddSymbolRow({ watchlistId }: { watchlistId: string }) {
       >
         <option value="US">US</option>
         <option value="TW">TW</option>
+        <option value="CRYPTO">CRYPTO</option>
       </select>
       <button
         type="submit"

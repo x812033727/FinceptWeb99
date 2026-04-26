@@ -63,16 +63,31 @@ const PERIOD_INTERVAL: Record<Period, Interval> = {
   "1d": "5m", "5d": "15m", "1mo": "1h", "3mo": "1d", "1y": "1d", "5y": "1wk",
 };
 
+// Crypto period → Kraken interval + bar limit. Kraken caps at 720 bars/req.
+const CRYPTO_PERIOD: Record<Period, { interval: string; limit: number }> = {
+  "1d": { interval: "5m", limit: 288 },
+  "5d": { interval: "15m", limit: 480 },
+  "1mo": { interval: "1h", limit: 720 },
+  "3mo": { interval: "4h", limit: 540 },
+  "1y": { interval: "1d", limit: 365 },
+  "5y": { interval: "1w", limit: 260 },
+};
+
 const fetchHistory = (mkt: Market, sym: string, period: Period) =>
   api.get<OHLCVBar[]>(
     mkt === "US"
       ? `/us/history/${sym}?period=${period}&interval=${PERIOD_INTERVAL[period]}`
-      : `/tw/history/${sym}?months=${period === "5y" ? 60 : period === "1y" ? 12 : 3}`
+      : mkt === "CRYPTO"
+        ? `/crypto/history/${sym}?interval=${CRYPTO_PERIOD[period].interval}&limit=${CRYPTO_PERIOD[period].limit}`
+        : `/tw/history/${sym}?months=${period === "5y" ? 60 : period === "1y" ? 12 : 3}`
   ).then((r) => r.data);
 
 const fetchQuote = (mkt: Market, sym: string) =>
-  api.get<Record<string, unknown>>(mkt === "US" ? `/us/quote/${sym}` : `/tw/quote/${sym}`)
-    .then((r) => r.data);
+  api.get<Record<string, unknown>>(
+    mkt === "US" ? `/us/quote/${sym}`
+      : mkt === "CRYPTO" ? `/crypto/quote/${sym}`
+      : `/tw/quote/${sym}`
+  ).then((r) => r.data);
 
 const fetchFundamentals = (mkt: Market, sym: string) =>
   api.get<Record<string, unknown>>(
@@ -753,7 +768,8 @@ export default function StockDetailPage() {
     queryKey: ["history", mkt, sym, period],
     queryFn: () => fetchHistory(mkt, sym, period),
     staleTime: 60_000,
-    enabled: mkt === "US" ? usTab === "chart" : twTab === "chart",
+    enabled: mkt === "CRYPTO" ? true
+      : mkt === "US" ? usTab === "chart" : twTab === "chart",
   });
 
   const { data: fundamentals } = useQuery({
@@ -779,7 +795,8 @@ export default function StockDetailPage() {
   const displayChange = liveChange ?? (quote?.change_pct as number | undefined);
   const isPositive = (displayChange ?? 0) >= 0;
 
-  const showChart = mkt === "US" ? usTab === "chart" : twTab === "chart";
+  const showChart = mkt === "CRYPTO" ? true
+    : mkt === "US" ? usTab === "chart" : twTab === "chart";
 
   return (
     <div className="p-6 space-y-5">
@@ -825,6 +842,13 @@ export default function StockDetailPage() {
             <TabButton active={usTab === "financials"} label={t("stock.fundamentals")} onClick={() => setUsTab("financials")} />
             <TabButton active={usTab === "options"} label={t("stock.options")} onClick={() => setUsTab("options")} />
             <TabButton active={usTab === "news"} label={t("stock.news")} onClick={() => setUsTab("news")} />
+          </>
+        ) : mkt === "CRYPTO" ? (
+          <>
+            {/* Crypto: only the chart tab makes sense — financials / options /
+                institutional / margin all assume an equity issuer. News could
+                come from CryptoPanic etc. but is out of scope (per plan). */}
+            <TabButton active={true} label={t("stock.history")} onClick={() => {}} />
           </>
         ) : (
           <>

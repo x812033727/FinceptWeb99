@@ -6,7 +6,7 @@ import api from "@/lib/api";
 interface Alert {
   id: string;
   symbol: string;
-  market: "US" | "TW";
+  market: "US" | "TW" | "CRYPTO";
   condition: "above" | "below";
   target_price: number;
   triggered: boolean;
@@ -16,7 +16,7 @@ interface Alert {
 
 interface AlertCreate {
   symbol: string;
-  market: "US" | "TW";
+  market: "US" | "TW" | "CRYPTO";
   condition: "above" | "below";
   target_price: number;
 }
@@ -84,10 +84,11 @@ export default function AlertsPage() {
             <select
               className="w-full bg-background border border-border rounded px-2 py-1.5 text-sm"
               value={form.market}
-              onChange={(e) => setForm((f) => ({ ...f, market: e.target.value as "US" | "TW" }))}
+              onChange={(e) => setForm((f) => ({ ...f, market: e.target.value as "US" | "TW" | "CRYPTO" }))}
             >
               <option value="US">US</option>
               <option value="TW">TW</option>
+              <option value="CRYPTO">CRYPTO</option>
             </select>
           </div>
           <div className="space-y-1">

@@ -8,7 +8,7 @@ import { useNotificationStore } from "@/store/notificationStore";
 import { useThemeStore } from "@/store/themeStore";
 import api from "@/lib/api";
 
-type SearchResult = { symbol: string; market: "US" | "TW" };
+type SearchResult = { symbol: string; market: "US" | "TW" | "CRYPTO" };
 
 function GlobalSearch() {
   const { t } = useTranslation();
@@ -31,13 +31,15 @@ function GlobalSearch() {
     }
     debounceRef.current = setTimeout(async () => {
       try {
-        const [usRes, twRes] = await Promise.allSettled([
-          api.get<SearchResult[]>(`/us/search?q=${encodeURIComponent(query)}&limit=7`),
-          api.get<SearchResult[]>(`/tw/search?q=${encodeURIComponent(query)}&limit=3`),
+        const [usRes, twRes, cryptoRes] = await Promise.allSettled([
+          api.get<SearchResult[]>(`/us/search?q=${encodeURIComponent(query)}&limit=6`),
+          api.get<SearchResult[]>(`/tw/search?q=${encodeURIComponent(query)}&limit=2`),
+          api.get<SearchResult[]>(`/crypto/search?q=${encodeURIComponent(query)}&limit=2`),
         ]);
         const combined: SearchResult[] = [
           ...(usRes.status === "fulfilled" ? usRes.value.data : []),
           ...(twRes.status === "fulfilled" ? twRes.value.data : []),
+          ...(cryptoRes.status === "fulfilled" ? cryptoRes.value.data : []),
         ];
         setResults(combined.slice(0, 10));
         setActiveIdx(0);

@@ -55,7 +55,7 @@ function AddTransactionForm({ portfolioId, onClose }: { portfolioId: string; onC
           <div><label className={label}>{t("alerts.symbol")}</label><input required className={input} value={form.symbol} onChange={set("symbol")} placeholder="AAPL / 2330" /></div>
           <div><label className={label}>{t("alerts.market")}</label>
             <select className={input} value={form.market} onChange={set("market")}>
-              <option value="US">US</option><option value="TW">TW</option>
+              <option value="US">US</option><option value="TW">TW</option><option value="CRYPTO">CRYPTO</option>
             </select>
           </div>
           <div><label className={label}>{t("portfolio.transactions.type")}</label>

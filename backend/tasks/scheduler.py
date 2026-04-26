@@ -12,6 +12,7 @@ scheduler = AsyncIOScheduler(timezone="UTC")
 def setup_jobs() -> None:
     from tasks.us_market_refresh import refresh_us_quotes, refresh_sp500_universe
     from tasks.tw_market_refresh import refresh_tw_quotes, refresh_tw_symbol_map
+    from tasks.crypto_market_refresh import refresh_crypto_quotes
 
     # ── US market quote polling ───────────────────────────────────
     # Every 10s during market hours; job itself checks and skips outside hours
@@ -51,6 +52,18 @@ def setup_jobs() -> None:
         id="tw_symbol_map",
         replace_existing=True,
         max_instances=1,
+    )
+
+    # ── Crypto market quote polling ───────────────────────────────
+    # Every 30s; 24/7, no trading-hours skip. Will be replaced by the
+    # Kraken WebSocket pump in Week 3 (then this becomes an idle no-op).
+    scheduler.add_job(
+        refresh_crypto_quotes,
+        trigger=IntervalTrigger(seconds=30),
+        id="crypto_quotes",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
     )
 
     # ── Portfolio EOD snapshots ───────────────────────────────────

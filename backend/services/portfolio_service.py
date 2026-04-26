@@ -23,6 +23,7 @@ from data.us.fred_connector import get_latest
 from models.portfolio import Holding, Portfolio, Transaction, TransactionType
 from services.us_market_service import get_quote as us_quote, get_history as us_history
 from services.tw_market_service import get_quote as tw_quote, get_history as tw_history
+from services.crypto_market_service import get_quote as crypto_quote, get_history as crypto_history
 
 logger = logging.getLogger(__name__)
 
@@ -68,14 +69,33 @@ async def _get_twd_usd_rate() -> float:
     return _FX_HARD_FALLBACK
 
 
+# Stablecoins peg-to-USD — treat as USD for portfolio valuation purposes.
+# Users entering USDT cost basis effectively means USD; we don't dynamically
+# track depeg events (that's a niche feature for stablecoin traders).
+_USD_STABLE_EQUIVALENTS = frozenset({"USD", "USDT", "USDC", "DAI", "BUSD", "TUSD"})
+
+
+def _normalize_currency(c: str) -> str:
+    """Map stablecoin tickers to their USD peg for FX conversion."""
+    c = c.upper()
+    return "USD" if c in _USD_STABLE_EQUIVALENTS else c
+
+
 async def _to_portfolio_currency(amount: float, cost_currency: str, portfolio_currency: str) -> float:
-    """Convert amount from cost_currency to portfolio_currency."""
-    if cost_currency == portfolio_currency:
+    """Convert amount from cost_currency to portfolio_currency.
+
+    Stablecoins (USDT/USDC/DAI/BUSD/TUSD) are treated as USD. Supported
+    real conversions: TWD ↔ USD via FRED DEXTW. Unsupported pairs return
+    the amount unchanged (logged at higher layers if needed).
+    """
+    cost = _normalize_currency(cost_currency)
+    port = _normalize_currency(portfolio_currency)
+    if cost == port:
         return amount
     twd_usd = await _get_twd_usd_rate()
-    if cost_currency == "TWD" and portfolio_currency == "USD":
+    if cost == "TWD" and port == "USD":
         return amount / twd_usd
-    if cost_currency == "USD" and portfolio_currency == "TWD":
+    if cost == "USD" and port == "TWD":
         return amount * twd_usd
     return amount   # unsupported pair — return as-is
 
@@ -211,8 +231,11 @@ async def get_portfolio_detail(portfolio_id: str, user_id: str, db: AsyncSession
     # Fetch current prices concurrently
     async def _enrich(h: Holding) -> dict:
         try:
-            if str(h.market.value) == "US":
+            mkt = str(h.market.value)
+            if mkt == "US":
                 q = await us_quote(h.symbol)
+            elif mkt == "CRYPTO":
+                q = await crypto_quote(h.symbol)
             else:
                 q = await tw_quote(h.symbol)
             current_price = q.get("price", 0)
@@ -288,8 +311,11 @@ async def optimise_portfolio(
     # Fetch 252 days of daily returns for each holding
     async def _get_returns(h: Holding) -> tuple[str, list[float]]:
         try:
-            if str(h.market.value) == "US":
+            mkt = str(h.market.value)
+            if mkt == "US":
                 bars = await us_history(h.symbol, period="1y", interval="1d")
+            elif mkt == "CRYPTO":
+                bars = await crypto_history(h.symbol, interval="1d", limit=365)
             else:
                 bars = await tw_history(h.symbol, months=12)
             closes = [b["close"] for b in bars if b.get("close")]

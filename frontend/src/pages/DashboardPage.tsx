@@ -104,6 +104,7 @@ export default function DashboardPage() {
   const cards = [
     { labelKey: "nav.us_market",  descKey: "dashboard.cards.us_market_desc",  icon: "🇺🇸", href: "/market/US" },
     { labelKey: "nav.tw_market",  descKey: "dashboard.cards.tw_market_desc",  icon: "🇹🇼", href: "/market/TW" },
+    { labelKey: "nav.crypto",     descKey: "dashboard.cards.crypto_desc",     icon: "₿",  href: "/market/CRYPTO" },
     { labelKey: "nav.screener",   descKey: "dashboard.cards.screener_desc",   icon: "🔍", href: "/screener" },
     { labelKey: "nav.watchlist",  descKey: "dashboard.cards.watchlist_desc",  icon: "⭐", href: "/watchlist" },
     { labelKey: "nav.portfolio",  descKey: "dashboard.cards.portfolio_desc",  icon: "📊", href: "/portfolio" },

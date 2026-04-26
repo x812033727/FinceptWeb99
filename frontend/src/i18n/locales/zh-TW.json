@@ -72,6 +72,7 @@
     "cards": {
       "us_market_desc": "S&P 500 即時報價與篩選",
       "tw_market_desc": "上市上櫃即時行情",
+      "crypto_desc": "Top 20 加密貨幣 24/7 行情",
       "screener_desc": "依任何指標篩選股票",
       "watchlist_desc": "即時追蹤關注標的",
       "portfolio_desc": "持倉、損益與最佳化",

@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI):
         await seed_admin(db)
 
     from tasks.scheduler import scheduler, setup_jobs
-    from api.websocket.manager import push_alert_to_user, start_pubsub_listener
+    from api.websocket.manager import push_alert_to_user, publish_update, start_pubsub_listener
     from services.notification_service import register_push_impl
 
     register_push_impl(push_alert_to_user)
@@ -54,9 +54,19 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     await start_pubsub_listener()
 
+    # Kraken WebSocket pump — sub-second crypto ticker stream into the
+    # internal pub/sub. Replaces the 30s scheduler poll for symbols clients
+    # are actively subscribed to (the scheduler poll stays as a safety net
+    # in case the pump is disconnected).
+    from data.crypto.kraken_ws import KrakenTickerPump
+    crypto_pump = KrakenTickerPump(publish_update)
+    crypto_pump.start()
+    app.state.crypto_pump = crypto_pump
+
     yield
 
     # ── Shutdown ─────────────────────────────────────────────────
+    await crypto_pump.stop()
     scheduler.shutdown(wait=False)
     await engine.dispose()
 

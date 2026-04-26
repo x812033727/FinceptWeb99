@@ -50,6 +50,9 @@ yfinance==0.2.43
 anthropic==0.97.0
 claude-agent-sdk==0.1.66  # in-process MCP server + streaming Claude tool-use
 
+# Crypto: Kraken WebSocket v2 client (outbound) for sub-second ticker streaming
+websockets==13.1
+
 # Observability
 prometheus-client==0.21.0
 python-json-logger==2.0.7

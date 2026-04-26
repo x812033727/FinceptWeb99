@@ -35,6 +35,7 @@ FinceptWeb/
 │   │   ├── auth/         # JWT login/register/refresh/logout, API keys
 │   │   ├── us_market/    # US quotes, history, fundamentals, options, macro, news, search
 │   │   ├── tw_market/    # TW quotes, history, institutional, margin, revenue, news
+│   │   ├── crypto_market/ # Kraken-backed Top 20 crypto: quote, history, screener, search
 │   │   ├── portfolio/    # Holdings, transactions, P&L, optimizer, performance snapshots
 │   │   ├── analytics/    # DCF, VaR, backtest
 │   │   ├── ai_agents/    # SSE streaming chat (19 personas, 8 LLM providers)
@@ -135,12 +136,20 @@ FinceptWeb/
 ### Market data waterfall
 - US: Polygon.io → yfinance (quote, history, fundamentals, options, news)
 - TW: TWSE OpenAPI → FinMind → MOPS; BWIBBU_d for PE/PB/yield
+- Crypto: Kraken public REST (`get_quote`/`get_history`); Top 20 universe in
+  `data/crypto/symbols.py`. USDT/USDC/DAI normalized to USD for FX
+  (`_normalize_currency` in `portfolio_service.py`)
 - Macro: FRED API (fed_funds_rate, cpi, gdp, yield curve, USD index, TWD/USD)
 
 ### WebSocket
 - Auth-first: client sends `{"action":"auth","token":"..."}` within 5s
 - Redis pub/sub fan-out; delta suppression (< 0.01% change skipped)
 - 30s heartbeat (ping/pong); per-user connection map for alert push
+- Crypto live: outbound `KrakenTickerPump` (`data/crypto/kraken_ws.py`)
+  connects to `wss://ws.kraken.com/v2`, subscribes to all Top 20 ticker
+  channels, forwards each tick into `publish_update` so existing client
+  WS subscribers see sub-second prices. Started in `main.py` lifespan;
+  reconnects with exponential backoff (1s → 2s → ... cap 60s)
 
 ### Analytics (heavy compute)
 - DCF: sensitivity grid 5×3 (WACC × growth), bull/base/bear scenarios

@@ -72,6 +72,7 @@
     "cards": {
       "us_market_desc": "S&P 500 quotes & screener",
       "tw_market_desc": "TW listed stocks live",
+      "crypto_desc": "Top 20 crypto, 24/7 streaming",
       "screener_desc": "Filter stocks by any metric",
       "watchlist_desc": "Track symbols with live prices",
       "portfolio_desc": "Holdings, P&L & optimizer",

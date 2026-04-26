@@ -29,6 +29,24 @@ _MAX_TICKERS = 505
 # tuples so the screener can emit a click-through list even when yfinance
 # is also unreachable (Yahoo IP-blocks cloud providers fairly often).
 _FALLBACK_UNIVERSE: list[tuple[str, str]] = [
+    # ── Headliner ETFs (kept at the top so they survive the
+    #    screener's `[:limit]` slice — the default frontend limit
+    #    is 50, far below where the full sector-grouped ETF block
+    #    starts) ─────────────────────────────────────────────────
+    ("SPY", "SPDR S&P 500 ETF"), ("QQQ", "Invesco QQQ Trust"),
+    ("IVV", "iShares Core S&P 500 ETF"),
+    ("VOO", "Vanguard S&P 500 ETF"),
+    ("VTI", "Vanguard Total Stock Market ETF"),
+    ("DIA", "SPDR Dow Jones Industrial Average ETF"),
+    ("IWM", "iShares Russell 2000 ETF"),
+    ("TQQQ", "ProShares UltraPro QQQ"),
+    ("SQQQ", "ProShares UltraPro Short QQQ"),
+    ("SOXL", "Direxion Daily Semiconductor Bull 3x Shares"),
+    ("SMH", "VanEck Semiconductor ETF"),
+    ("GLD", "SPDR Gold Trust"),
+    ("TLT", "iShares 20+ Year Treasury Bond ETF"),
+    ("IBIT", "iShares Bitcoin Trust"),
+    ("ARKK", "ARK Innovation ETF"),
     # ── Mega-cap tech ────────────────────────────────────────────
     ("AAPL", "Apple Inc."), ("MSFT", "Microsoft Corporation"),
     ("NVDA", "NVIDIA Corporation"), ("GOOGL", "Alphabet Inc. Class A"),
@@ -165,11 +183,8 @@ _FALLBACK_UNIVERSE: list[tuple[str, str]] = [
     ("UBER", "Uber Technologies"), ("LYFT", "Lyft Inc."),
     ("DASH", "DoorDash Inc."), ("COIN", "Coinbase Global"),
     ("HOOD", "Robinhood Markets"), ("SOFI", "SoFi Technologies"),
-    # ── Index ETFs ───────────────────────────────────────────────
-    ("SPY", "SPDR S&P 500 ETF"), ("IVV", "iShares Core S&P 500 ETF"),
-    ("VOO", "Vanguard S&P 500 ETF"), ("VTI", "Vanguard Total Stock Market ETF"),
-    ("QQQ", "Invesco QQQ Trust"), ("DIA", "SPDR Dow Jones Industrial Average ETF"),
-    ("IWM", "iShares Russell 2000 ETF"), ("MDY", "SPDR S&P MidCap 400 ETF"),
+    # ── Index ETFs (broad-market alts — flagships are at the top) ──
+    ("MDY", "SPDR S&P MidCap 400 ETF"),
     ("IJH", "iShares Core S&P Mid-Cap ETF"), ("IJR", "iShares Core S&P Small-Cap ETF"),
     ("RSP", "Invesco S&P 500 Equal Weight ETF"),
     # ── International equity ETFs ────────────────────────────────
@@ -201,27 +216,19 @@ _FALLBACK_UNIVERSE: list[tuple[str, str]] = [
     ("XLC", "Communication Services Select Sector SPDR Fund"),
     ("VGT", "Vanguard Information Technology ETF"),
     ("VNQ", "Vanguard Real Estate ETF"),
-    ("SMH", "VanEck Semiconductor ETF"),
     ("SOXX", "iShares Semiconductor ETF"),
-    ("ARKK", "ARK Innovation ETF"),
-    # ── Leveraged / inverse (retail favorites) ───────────────────
-    ("TQQQ", "ProShares UltraPro QQQ"),
-    ("SQQQ", "ProShares UltraPro Short QQQ"),
-    ("SOXL", "Direxion Daily Semiconductor Bull 3x Shares"),
-    # ── Spot Bitcoin ETFs ────────────────────────────────────────
-    ("IBIT", "iShares Bitcoin Trust"),
+    # ── Spot Bitcoin ETFs (IBIT is at the top) ───────────────────
     ("FBTC", "Fidelity Wise Origin Bitcoin Fund"),
-    # ── Bond ETFs ────────────────────────────────────────────────
+    # ── Bond ETFs (TLT is at the top) ────────────────────────────
     ("AGG", "iShares Core U.S. Aggregate Bond ETF"),
     ("BND", "Vanguard Total Bond Market ETF"),
-    ("TLT", "iShares 20+ Year Treasury Bond ETF"),
     ("IEF", "iShares 7-10 Year Treasury Bond ETF"),
     ("SHY", "iShares 1-3 Year Treasury Bond ETF"),
     ("LQD", "iShares iBoxx $ Investment Grade Corporate Bond ETF"),
     ("HYG", "iShares iBoxx $ High Yield Corporate Bond ETF"),
     ("MUB", "iShares National Muni Bond ETF"),
-    # ── Commodity ETFs ───────────────────────────────────────────
-    ("GLD", "SPDR Gold Trust"), ("SLV", "iShares Silver Trust"),
+    # ── Commodity ETFs (GLD is at the top) ───────────────────────
+    ("SLV", "iShares Silver Trust"),
     ("USO", "United States Oil Fund"),
 ]
 

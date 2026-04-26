@@ -42,11 +42,11 @@ async def _promote(db: AsyncSession, email: str, role: UserRole, client: AsyncCl
 @pytest.mark.asyncio
 async def test_refund_when_get_agent_raises(client: AsyncClient):
     """Pydantic validates `agent_id` against the agent registry, so a bogus
-    string is a 422. We instead mock `get_agent` to raise to exercise the
+    string is a 422. We instead mock the resolver to raise to exercise the
     400 branch which refunds the quota."""
     tok = await _register_login(client, "refund_get_agent_raises@test.com")
-    with patch("api.ai_agents.router.get_agent",
-               side_effect=ValueError("agent not found")), \
+    with patch("api.ai_agents.router.get_agent_resolved",
+               new=AsyncMock(side_effect=ValueError("agent not found"))), \
          patch("api.ai_agents.router._refund_quota", new_callable=AsyncMock) as refund:
         r = await client.post(
             "/api/ai/chat",

@@ -34,7 +34,7 @@ async def test_user(db_session):
     user = User(
         id=uuid.uuid4(),
         email=f"admin-{uuid.uuid4().hex[:8]}@example.com",
-        password_hash="x",
+        hashed_password="x",
         role=UserRole.admin,
         is_active=True,
     )

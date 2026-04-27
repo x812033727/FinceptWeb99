@@ -100,12 +100,14 @@ async def refresh_symbol_map() -> None:
 
 # ── Quote ─────────────────────────────────────────────────────────
 
-async def get_quote(symbol: str) -> dict[str, Any]:
-    key = key_quote("tw", symbol)
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+async def fetch_quote_waterfall(symbol: str) -> tuple[dict | None, str]:
+    """Run the TWSE realtime → FinMind 7-day fallback waterfall.
 
+    Returns (raw, source). Pulled out of get_quote() so the background
+    WS-publish task can reuse the same fallback chain — without this the
+    polling task only tried TWSE and gave up, freezing every subscriber's
+    live price whenever TWSE OpenAPI hiccupped.
+    """
     raw = None
     source = "unavailable"
     try:
@@ -140,6 +142,16 @@ async def get_quote(symbol: str) -> dict[str, Any]:
     if not raw:
         log.warning("tw.quote.all_sources_failed", extra={"symbol": symbol})
 
+    return raw, source
+
+
+async def get_quote(symbol: str) -> dict[str, Any]:
+    key = key_quote("tw", symbol)
+    cached = await cache_get(key)
+    if cached:
+        return json.loads(cached)
+
+    raw, source = await fetch_quote_waterfall(symbol)
     result = _normalize_quote(symbol, raw or {})
     result["data_source"] = source
     # Don't cache the zero-state (TWSE + FinMind both failed) — keeps the

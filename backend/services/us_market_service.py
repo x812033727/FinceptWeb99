@@ -64,12 +64,14 @@ def _use_polygon() -> bool:
 
 # ── Quote ─────────────────────────────────────────────────────────
 
-async def get_quote(ticker: str) -> dict[str, Any]:
-    key = key_quote("us", ticker)
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+async def fetch_quote_waterfall(ticker: str) -> tuple[dict[str, Any], str]:
+    """Run the Polygon → yfinance → Stooq waterfall and return (raw, source).
 
+    Pulled out of get_quote() so the background WS-publish task can reuse
+    the same fallback chain. Without this, the polling task only tried
+    the primary source and gave up — meaning a Polygon rate-limit pause
+    froze every subscriber's live price for the whole window.
+    """
     raw: dict[str, Any] = {}
     source = "unavailable"
     primary = "polygon" if _use_polygon() else "yfinance"
@@ -106,6 +108,16 @@ async def get_quote(ticker: str) -> dict[str, Any]:
     if not raw.get("price"):
         log.warning("us.quote.all_sources_failed", extra={"ticker": ticker})
 
+    return raw, source
+
+
+async def get_quote(ticker: str) -> dict[str, Any]:
+    key = key_quote("us", ticker)
+    cached = await cache_get(key)
+    if cached:
+        return json.loads(cached)
+
+    raw, source = await fetch_quote_waterfall(ticker)
     result = _normalize_quote(ticker, raw)
     result["data_source"] = source
     # Don't cache the zero-state — keeps the next request retrying instead

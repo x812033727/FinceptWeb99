@@ -9,9 +9,12 @@ import logging
 from api.websocket.manager import publish_update, _subscriptions
 from cache.redis_cache import cache_set, key_quote
 from services.tw_market_service import (
-    _is_tw_market_open, _normalize_quote, TTL_QUOTE, refresh_symbol_map,
+    TTL_QUOTE,
+    _is_tw_market_open,
+    _normalize_quote,
+    fetch_quote_waterfall,
+    refresh_symbol_map,
 )
-import data.tw.twse_connector as twse
 
 logger = logging.getLogger(__name__)
 
@@ -41,19 +44,24 @@ async def refresh_tw_quotes() -> None:
 
     async def _fetch_and_publish(sym: str) -> None:
         try:
-            raw = await twse.get_realtime_quote(sym)
+            # Use the shared waterfall (TWSE realtime → FinMind 7-day) — without
+            # this the polling task only tried TWSE and gave up, freezing
+            # every subscriber's live price whenever TWSE OpenAPI hiccupped.
+            raw, source = await fetch_quote_waterfall(sym)
             if not raw:
                 return
             result = _normalize_quote(sym, raw)
+            result["data_source"] = source
 
             await cache_set(key_quote("tw", sym), json.dumps(result), TTL_QUOTE)
             await publish_update(sym, "TW", {
-                "price":      result["price"],
-                "change":     result["change"],
-                "change_pct": result["change_pct"],
-                "volume":     result["volume"],
-                "ts":         result["ts"],
-                "tz":         "Asia/Taipei",
+                "price":       result["price"],
+                "change":      result["change"],
+                "change_pct":  result["change_pct"],
+                "volume":      result["volume"],
+                "ts":          result["ts"],
+                "tz":          "Asia/Taipei",
+                "data_source": source,
             })
 
             from db.session import AsyncSessionLocal

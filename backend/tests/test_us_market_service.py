@@ -165,6 +165,61 @@ async def test_get_screener_full_stooq_batch_for_warm_task():
 
 
 @pytest.mark.asyncio
+async def test_get_screener_skips_screener_yfinance_when_no_polygon_and_no_filter():
+    """Without Polygon AND without fundamental filters we MUST skip
+    `_screener_yfinance` (slow per-symbol .info calls that Yahoo
+    IP-blocks for 30 s+) and go straight to the universe path.
+    Otherwise the request hangs past the reverse-proxy timeout."""
+    universe = _fake_universe(50)
+    yfinance_screener_called = False
+
+    async def fake_screener_yfinance(*_a, **_kw):
+        nonlocal yfinance_screener_called
+        yfinance_screener_called = True
+        return []
+
+    with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
+         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "_screener_yfinance", new=fake_screener_yfinance), \
+         patch.object(svc, "_get_sp500_tickers", AsyncMock(return_value=[s for s, _ in universe])), \
+         patch("data.us.sp500_universe.get_fallback_universe", lambda: universe), \
+         patch.object(svc.yfinance, "get_batch_quotes", AsyncMock(return_value={})), \
+         patch.object(svc.stooq, "get_batch_quotes", AsyncMock(return_value={})):
+        rows = await svc.get_screener(limit=50)
+
+    assert yfinance_screener_called is False, \
+        "_screener_yfinance must NOT be called when no Polygon and no filter"
+    assert len(rows) == 50  # universe shells returned immediately
+
+
+@pytest.mark.asyncio
+async def test_get_screener_still_uses_yfinance_when_filter_active():
+    """When the caller asks for fundamental filters (PE / PB / sector /
+    market_cap / volume) we DO need _screener_yfinance — those fields
+    only come from yfinance.get_info."""
+    yfinance_screener_called = False
+
+    async def fake_screener_yfinance(*_a, **_kw):
+        nonlocal yfinance_screener_called
+        yfinance_screener_called = True
+        return [{"symbol": "AAPL", "market": "US", "name": "Apple",
+                 "price": 100, "change_pct": 1, "volume": 1000,
+                 "market_cap": 1e12, "pe_ratio": 25, "pb_ratio": 4,
+                 "dividend_yield": 0.5, "sector": "Tech"}]
+
+    with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
+         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "_screener_yfinance", new=fake_screener_yfinance), \
+         patch.object(svc, "_get_sp500_tickers", AsyncMock(return_value=["AAPL"])):
+        rows = await svc.get_screener(min_pe=10)
+
+    assert yfinance_screener_called is True
+    assert len(rows) == 1
+
+
+@pytest.mark.asyncio
 async def test_get_screener_caches_zero_price_rows_briefly():
     """When every quote provider is blocked we still cache the universe
     shell (price=0) for a short TTL so the next user sees something

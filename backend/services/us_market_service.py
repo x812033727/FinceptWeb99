@@ -302,7 +302,18 @@ async def get_screener(
     # Fall through to yfinance when Polygon isn't configured, when a
     # fundamental filter is active (Polygon's snapshot lacks those fields),
     # or when Polygon returned nothing (transient API failure or quota).
-    if not results:
+    #
+    # `_screener_yfinance` walks the S&P 500 list and calls `.info` per
+    # symbol — Yahoo IP-bans cloud providers there fairly often, and a
+    # blocked .info call can hang for 30 s+. With 100 symbols that easily
+    # blows past any reverse-proxy timeout, so we ONLY take that path when
+    # we genuinely need the per-symbol fundamental fields it returns.
+    # When there are no fundamental filters and Polygon isn't available,
+    # skip straight to the universe fallback below — same shape, no .info.
+    needs_fundamental_data = (
+        fundamental_filter or min_market_cap is not None or min_volume is not None
+    )
+    if not results and (_use_polygon() or needs_fundamental_data):
         tickers = await _get_sp500_tickers()
         results = await _screener_yfinance(
             tickers,

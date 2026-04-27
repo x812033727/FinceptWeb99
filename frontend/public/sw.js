@@ -8,7 +8,7 @@
  *  - Other JS/CSS:           Stale-while-revalidate.
  *  - HTML (SPA routes):      Network-first, fallback to cached "/".
  *  - Static assets:          Cache-first, long TTL.
- *  - API /api/* (read):      Network-first w/ 3 s timeout. Offline
+ *  - API /api/* (read):      Network-first w/ 10 s timeout. Offline
  *                            fallback only if cached response is < 5 min
  *                            old — financial data going stale silently
  *                            is worse than failing visibly.
@@ -80,10 +80,14 @@ self.addEventListener("fetch", (event) => {
     return; // let the network handle it
   }
 
-  // API routes: network-first with 3s timeout, fallback to cache
+  // API routes: network-first with 10s timeout, fallback to cache
   // (only if cache is fresh enough — see API_MAX_STALE_MS).
+  // 10s (vs the original 3s) is sized for slow mobile networks: a
+  // cold-cache /api/us/screener legitimately takes 5–7 s on 4G, and
+  // the previous 3 s ceiling was timing out → falling back to a
+  // cached all-zero response from a previous failed warm cycle.
   if (url.pathname.startsWith("/api/")) {
-    event.respondWith(networkFirstWithCache(request, API_CACHE, 3000));
+    event.respondWith(networkFirstWithCache(request, API_CACHE, 10000));
     return;
   }
 

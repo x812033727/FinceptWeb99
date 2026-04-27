@@ -27,6 +27,10 @@ class QuoteResponse(BaseModel):
     currency: str
     ts: int                 # Unix ms UTC
     is_market_open: bool
+    # Which upstream actually served this quote — lets the frontend mark
+    # rows that fell back to a slower / less complete provider, and
+    # surfaces "all sources blocked" as a distinct UI state.
+    data_source: str = "unavailable"
 
 
 class FundamentalsResponse(BaseModel):

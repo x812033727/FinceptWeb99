@@ -64,16 +64,16 @@ function MacroChart({
 }: {
   indicator: string; data: DataPoint[]; color: string; unit: string;
 }) {
+  const { t } = useTranslation();
   const clean = data
     .filter((d) => d.value != null)
     .map((d) => ({ date: d.date.slice(0, 7), value: d.value as number }))
-    .slice(-60);   // show last 5 years (monthly) or last 60 points
+    .slice(-60);
 
   if (!clean.length) {
     return (
       <div className="h-64 flex items-center justify-center text-muted-foreground text-sm">
-        {/* No data fallback (English left as-is — backend message) */}
-        No data — FRED API key not configured
+        {t("macro.no_data")}
       </div>
     );
   }

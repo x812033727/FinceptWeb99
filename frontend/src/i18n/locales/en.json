@@ -426,7 +426,8 @@
       "twd_usd": "TWD/USD"
     },
     "yield_curve_title": "Yield Curve",
-    "loading": "Loading…"
+    "loading": "Loading…",
+    "no_data": "No data available — FRED upstream and yfinance fallback both empty"
   },
   "llm_keys": {
     "title": "AI Model API Keys",

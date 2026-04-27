@@ -307,6 +307,18 @@ async def validate_key(provider: str, key: str) -> ValidationResult:
             return await _validate_gemini(key)
         if provider == "minimax":
             return await _validate_minimax(key)
+        if provider == "groq":
+            return await _validate_openai_compat(
+                key, settings.GROQ_HOST, label="groq",
+            )
+        if provider == "deepseek":
+            return await _validate_openai_compat(
+                key, settings.DEEPSEEK_HOST, label="deepseek",
+            )
+        if provider == "openrouter":
+            return await _validate_openai_compat(
+                key, settings.OPENROUTER_HOST, label="openrouter",
+            )
         return ValidationResult(False, f"validation not implemented for {provider}")
     except Exception as exc:
         logger.warning("llm_key.validate_failed",
@@ -391,3 +403,23 @@ async def _validate_minimax(key: str) -> ValidationResult:
     if r.status_code == 200:
         return ValidationResult(True, "OK")
     return ValidationResult(False, f"HTTP {r.status_code}: {r.text[:200]}")
+
+
+async def _validate_openai_compat(
+    key: str, host: str, *, label: str,
+) -> ValidationResult:
+    """Validate any OpenAI-compatible provider via GET /v1/models.
+
+    Groq, DeepSeek and OpenRouter all expose this endpoint with the same
+    Bearer-token contract as OpenAI, so a 200 response with a non-empty
+    `data` list confirms the key works without spending tokens.
+    """
+    base = host.rstrip("/")
+    async with httpx.AsyncClient(timeout=_VALIDATE_TIMEOUT) as client:
+        r = await client.get(
+            f"{base}/v1/models",
+            headers={"Authorization": f"Bearer {key}"},
+        )
+    if r.status_code == 200:
+        return ValidationResult(True, "OK")
+    return ValidationResult(False, f"{label} HTTP {r.status_code}: {r.text[:200]}")

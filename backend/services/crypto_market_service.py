@@ -14,12 +14,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any
 
 from cache.redis_cache import cache_get, cache_set, key_history, key_quote
 from data.crypto.kraken_connector import get_history as _k_history
 from data.crypto.kraken_connector import get_quote as _k_quote
 from data.crypto.symbols import TOP20
+
+log = logging.getLogger(__name__)
 
 TTL_QUOTE = 10
 TTL_HISTORY = 5 * 60
@@ -155,7 +158,8 @@ async def get_news(symbol: str, limit: int = 10) -> list[dict[str, Any]]:
 
     try:
         items = await _google_news_rss(query, limit=limit)
-    except Exception:
+    except Exception as exc:
+        log.warning("crypto.news.rss_failed", extra={"symbol": sym, "error": str(exc)})
         items = []
 
     if items:

@@ -426,7 +426,8 @@
       "twd_usd": "新台幣兌美元"
     },
     "yield_curve_title": "殖利率曲線",
-    "loading": "載入中…"
+    "loading": "載入中…",
+    "no_data": "暫無資料 — FRED 與 yfinance 備援皆為空"
   },
   "llm_keys": {
     "title": "AI 模型 API 金鑰",

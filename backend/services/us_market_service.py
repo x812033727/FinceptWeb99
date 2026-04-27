@@ -7,6 +7,7 @@ Rules:
   - Market-hours helper uses America/New_York tz
 """
 import json
+import logging
 from datetime import datetime, timezone, date, timedelta
 from typing import Any
 import pytz
@@ -17,6 +18,8 @@ import data.us.polygon_connector as polygon
 import data.us.stooq_connector as stooq
 import data.us.yfinance_connector as yfinance
 from data.us.fred_connector import get_series, SERIES
+
+log = logging.getLogger(__name__)
 
 _ET = pytz.timezone("America/New_York")
 
@@ -59,12 +62,22 @@ async def get_quote(ticker: str) -> dict[str, Any]:
         return json.loads(cached)
 
     raw: dict[str, Any] = {}
+    source = "unavailable"
+    primary = "polygon" if _use_polygon() else "yfinance"
     try:
         raw = await polygon.get_quote(ticker) if _use_polygon() else await yfinance.get_quote(ticker)
-    except Exception:
+        if raw.get("price"):
+            source = primary
+    except Exception as exc:
+        log.warning("us.quote.primary_failed",
+                    extra={"ticker": ticker, "source": primary, "error": str(exc)})
         try:
             raw = await yfinance.get_quote(ticker)
-        except Exception:
+            if raw.get("price"):
+                source = "yfinance"
+        except Exception as exc2:
+            log.warning("us.quote.yfinance_fallback_failed",
+                        extra={"ticker": ticker, "error": str(exc2)})
             raw = {}
 
     # Final fallback: when Polygon + yfinance (.info, fast_info, AND
@@ -76,10 +89,16 @@ async def get_quote(ticker: str) -> dict[str, Any]:
             stooq_raw = await stooq.get_quote(ticker)
             if stooq_raw.get("price"):
                 raw = stooq_raw
-        except Exception:
-            pass
+                source = "stooq"
+        except Exception as exc:
+            log.warning("us.quote.stooq_fallback_failed",
+                        extra={"ticker": ticker, "error": str(exc)})
+
+    if not raw.get("price"):
+        log.warning("us.quote.all_sources_failed", extra={"ticker": ticker})
 
     result = _normalize_quote(ticker, raw)
+    result["data_source"] = source
     # Don't cache the zero-state — keeps the next request retrying instead
     # of locking in a failure for TTL_QUOTE seconds.
     if result.get("price"):
@@ -122,12 +141,22 @@ async def get_history(ticker: str, period: str = "1y", interval: str = "1d") -> 
             bars = await polygon.get_aggs(ticker, from_date, to_date, timespan)
         else:
             bars = await yfinance.get_history(ticker, period=period, interval=interval)
-    except Exception:
-        bars = await yfinance.get_history(ticker, period=period, interval=interval)
+    except Exception as exc:
+        log.warning("us.history.primary_failed",
+                    extra={"ticker": ticker, "period": period, "interval": interval, "error": str(exc)})
+        try:
+            bars = await yfinance.get_history(ticker, period=period, interval=interval)
+        except Exception as exc2:
+            log.warning("us.history.yfinance_fallback_failed",
+                        extra={"ticker": ticker, "error": str(exc2)})
+            bars = []
 
     # Normalize time to "YYYY-MM-DD" string for daily, Unix ms for intraday
     result = _normalize_bars(bars, interval)
-    await cache_set(key, json.dumps(result), TTL_HISTORY)
+    # Skip cache when empty — avoids locking in 4h of nothing on transient
+    # upstream failure (matches the get_quote pattern).
+    if result:
+        await cache_set(key, json.dumps(result), TTL_HISTORY)
     return result
 
 
@@ -160,17 +189,30 @@ async def get_fundamentals(ticker: str) -> dict[str, Any]:
     if cached:
         return json.loads(cached)
 
+    info: dict[str, Any] = {}
     try:
         if _use_polygon():
             details = await polygon.get_ticker_details(ticker)
             result = _normalize_fundamentals_polygon(ticker, details)
         else:
-            raise Exception("no polygon key")
-    except Exception:
-        info = await yfinance.get_info(ticker)
+            raise RuntimeError("no polygon key")
+    except Exception as exc:
+        if _use_polygon():
+            log.warning("us.fundamentals.polygon_failed",
+                        extra={"ticker": ticker, "error": str(exc)})
+        try:
+            info = await yfinance.get_info(ticker)
+        except Exception as exc2:
+            log.warning("us.fundamentals.yfinance_failed",
+                        extra={"ticker": ticker, "error": str(exc2)})
+            info = {}
         result = _normalize_fundamentals_yf(ticker, info)
 
-    await cache_set(key, json.dumps(result), TTL_FUNDAMENTALS)
+    # Don't cache when we got nothing useful from yfinance either —
+    # otherwise the user is locked into 24h of empty fundamentals.
+    has_payload = bool(info) or result.get("market_cap") or result.get("pe_ratio")
+    if has_payload:
+        await cache_set(key, json.dumps(result), TTL_FUNDAMENTALS)
     return result
 
 
@@ -217,12 +259,24 @@ async def get_financials(ticker: str) -> dict[str, Any]:
             data = await polygon.get_financials(ticker)
             result = {"source": "polygon", "data": data}
         else:
-            raise Exception("no polygon key")
-    except Exception:
-        data = await yfinance.get_financials(ticker)
+            raise RuntimeError("no polygon key")
+    except Exception as exc:
+        if _use_polygon():
+            log.warning("us.financials.polygon_failed",
+                        extra={"ticker": ticker, "error": str(exc)})
+        try:
+            data = await yfinance.get_financials(ticker)
+        except Exception as exc2:
+            log.warning("us.financials.yfinance_failed",
+                        extra={"ticker": ticker, "error": str(exc2)})
+            data = {"income_statement": [], "balance_sheet": [], "cash_flow": []}
         result = {"source": "yfinance", **data}
 
-    await cache_set(key, json.dumps(result), TTL_FUNDAMENTALS)
+    payload = result.get("data") or any(
+        result.get(k) for k in ("income_statement", "balance_sheet", "cash_flow")
+    )
+    if payload:
+        await cache_set(key, json.dumps(result), TTL_FUNDAMENTALS)
     return result
 
 
@@ -238,7 +292,9 @@ async def get_options(ticker: str, expiration_date: str | None = None) -> list[d
     if _use_polygon():
         try:
             data = await polygon.get_options_chain(ticker, expiration_date)
-        except Exception:
+        except Exception as exc:
+            log.warning("us.options.polygon_failed",
+                        extra={"ticker": ticker, "expiry": expiration_date, "error": str(exc)})
             data = []
 
     # yfinance fallback covers the no-Polygon path AND the Polygon-failure path.
@@ -248,11 +304,15 @@ async def get_options(ticker: str, expiration_date: str | None = None) -> list[d
     if not data:
         try:
             data = await yfinance.get_options(ticker, expiration_date)
-        except Exception:
+        except Exception as exc:
+            log.warning("us.options.yfinance_failed",
+                        extra={"ticker": ticker, "expiry": expiration_date, "error": str(exc)})
             data = []
 
     if data:
         await cache_set(key, json.dumps(data), TTL_OPTIONS)
+    else:
+        log.info("us.options.empty", extra={"ticker": ticker, "expiry": expiration_date})
     return data
 
 
@@ -295,7 +355,8 @@ async def get_screener(
     if _use_polygon() and not fundamental_filter:
         try:
             snapshots = await polygon.get_snapshot_all()
-        except Exception:
+        except Exception as exc:
+            log.warning("us.screener.polygon_snapshot_failed", extra={"error": str(exc)})
             snapshots = []
         results = _filter_polygon_snapshots(snapshots, min_market_cap, min_volume, limit)
 
@@ -333,22 +394,35 @@ async def get_screener(
     # name list so the user at least sees a click-through list of US stocks.
     # Try yfinance's chart endpoint first (yf.download), then Stooq's CSV
     # endpoint (hosted in Europe, immune to Yahoo's cloud-IP block) when
-    # yfinance is fully unreachable. Skipped when filters were active —
-    # we can't honour PE/PB/sector without .info — and when results
-    # were already populated.
-    if not results and not fundamental_filter and not min_market_cap and not min_volume:
+    # yfinance is fully unreachable.
+    #
+    # Skipped only when fundamental filters were active — we can't honour
+    # PE / PB / sector / dividend yield without .info. min_market_cap is
+    # dropped here (batch quotes don't carry market cap) and min_volume is
+    # applied post-hoc since batch quotes do include daily volume — better
+    # to return a price-only universe than a blank page.
+    if not results and not fundamental_filter:
         from data.us.sp500_universe import get_fallback_universe
         universe = get_fallback_universe()[:limit]
         symbols = [sym for sym, _ in universe]
         quotes = await yfinance.get_batch_quotes(symbols)
         if not quotes:
+            log.warning("us.screener.batch_yfinance_empty",
+                        extra={"symbol_count": len(symbols)})
             # Cap the Stooq sync batch unless the caller is the background
             # warm task (which can afford to wait the full ~20s).
             stooq_targets = (
                 symbols if full_stooq_batch else symbols[:STOOQ_SYNC_BATCH_LIMIT]
             )
             quotes = await stooq.get_batch_quotes(stooq_targets)
-        results = [
+            if not quotes:
+                log.warning("us.screener.batch_stooq_empty",
+                            extra={"symbol_count": len(stooq_targets)})
+        if min_market_cap is not None:
+            log.info("us.screener.min_market_cap_dropped",
+                     extra={"min_market_cap": min_market_cap,
+                            "reason": "batch fallback has no market cap"})
+        rows = [
             {
                 "symbol": sym, "market": "US", "name": name,
                 "price": quotes.get(sym, {}).get("price", 0.0),
@@ -360,6 +434,9 @@ async def get_screener(
             }
             for sym, name in universe
         ]
+        if min_volume:
+            rows = [r for r in rows if (r["volume"] or 0) >= min_volume]
+        results = rows
 
     # Cache strategy:
     #   - rows with at least one real price ⇒ full TTL_SCREENER (10 min)
@@ -446,8 +523,9 @@ async def _screener_yfinance(
                 "dividend_yield": round(yield_pct, 3) if yield_pct is not None else None,
                 "sector": sec,
             })
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("us.screener.yfinance_info_failed",
+                        extra={"ticker": t, "error": str(exc)})
 
     # Process in batches of 20 to stay under rate limits
     batch_size = 20
@@ -471,7 +549,14 @@ async def get_macro_indicator(name: str) -> list[dict]:
     if cached:
         return json.loads(cached)
     data = await get_series(series_id)
-    await cache_set(key, json.dumps(data), TTL_HISTORY)
+    # Don't cache an empty series for 4h — without this, a single FRED
+    # outage (or a series with no yfinance fallback like CPI/GDP/UNRATE
+    # while the FRED key is unset) locks the user out of macro data for
+    # the rest of the TTL window.
+    if data:
+        await cache_set(key, json.dumps(data), TTL_HISTORY)
+    else:
+        log.warning("us.macro.empty_series", extra={"name": name, "series_id": series_id})
     return data
 
 

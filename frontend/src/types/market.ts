@@ -21,6 +21,9 @@ export interface QuoteResponse {
   currency: string;
   ts: string;       // ISO8601 UTC
   is_market_open: boolean;
+  // "polygon" | "yfinance" | "stooq" | "stale" | "unavailable" — emitted
+  // by the US backend so the UI can flag degraded / fully-blocked rows.
+  data_source?: string;
 }
 
 export interface FundamentalsResponse {

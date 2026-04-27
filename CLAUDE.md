@@ -47,18 +47,23 @@ FinceptWeb/
 │   │   ├── ai_agents/    # SSE streaming chat (19 personas, 8 LLM providers)
 │   │   ├── watchlist/    # Multi-watchlist CRUD with live quote enrichment
 │   │   ├── alerts/       # Price alert CRUD + check-and-fire
-│   │   ├── system/       # /version — current vs GitHub latest release
+│   │   ├── system/       # /version (GitHub latest) + /web-vital (Core Web Vitals → Prometheus)
 │   │   └── websocket/    # Auth-first WS, Redis pub/sub, delta suppression
 │   ├── ai/               # LLM router + agent persona definitions
 │   ├── analytics/        # Pure computation: dcf.py, risk.py, backtest.py
 │   ├── auth/             # JWT handler + role permissions
 │   ├── cache/            # Redis helpers (get/set/delete, key helpers)
 │   ├── data/
-│   │   ├── us/           # Polygon → yfinance waterfall; FRED connector
-│   │   └── tw/           # TWSE → FinMind → MOPS waterfall
+│   │   ├── us/           # Polygon → yfinance → Stooq waterfall; FRED macro
+│   │   ├── tw/           # TWSE → FinMind → MOPS waterfall
+│   │   └── crypto/       # Kraken REST connector + WS pump (kraken_ws.py) + Top 20 universe (symbols.py)
 │   ├── db/
-│   │   ├── migrations/   # Alembic versions (0001 initial, 0002 price_alerts,
-│   │   │                 #   0003 portfolio_snapshots, 0004 portfolio_snapshots → hypertable)
+│   │   ├── migrations/   # Alembic versions:
+│   │   │                 #   0001 initial · 0002 price_alerts ·
+│   │   │                 #   0003 portfolio_snapshots · 0004 → hypertable ·
+│   │   │                 #   0005 llm_provider_keys · 0006 persona_overrides ·
+│   │   │                 #   0007 user_llm_provider_keys · 0008 llm_usage_events ·
+│   │   │                 #   0009 crypto_market
 │   │   ├── base.py       # DeclarativeBase with naming convention
 │   │   ├── seed.py       # Admin user seed on first boot
 │   │   └── session.py    # Async engine + get_db dependency
@@ -66,33 +71,42 @@ FinceptWeb/
 │   │   └── metrics.py    # Prometheus middleware + /metrics endpoint
 │   ├── models/           # SQLAlchemy ORM: User, APIKey, Portfolio, Holding,
 │   │                     #   Transaction, PortfolioSnapshot, Watchlist,
-│   │                     #   WatchlistItem, PriceAlert
+│   │                     #   WatchlistItem, PriceAlert, LLMProviderKey,
+│   │                     #   UserLLMProviderKey, PersonaOverride, LLMUsageEvent
 │   ├── services/         # Business logic (cached, waterfall)
-│   │   ├── alert_service.py
-│   │   ├── analytics_service.py
-│   │   ├── portfolio_service.py
-│   │   ├── tw_market_service.py
-│   │   ├── us_market_service.py
-│   │   ├── version_service.py    # GitHub release polling + admin-triggered update
-│   │   └── watchlist_service.py
+│   │   ├── alert_service.py             # Price alert CRUD + check_and_fire
+│   │   ├── analytics_service.py         # DCF/VaR/backtest orchestration (ProcessPool)
+│   │   ├── crypto_market_service.py     # Kraken quote/history/screener (24/7)
+│   │   ├── llm_key_service.py           # DB-first LLM provider key mgmt (Fernet at rest)
+│   │   ├── llm_usage_service.py         # Token + cost tracking (RATE_TABLE)
+│   │   ├── notification_service.py      # Decoupled push dispatcher (WS-registered)
+│   │   ├── persona_override_service.py  # Per-persona LLM provider/model overrides
+│   │   ├── portfolio_service.py         # CRUD, P&L, multi-currency FX cache, optimiser
+│   │   ├── tw_market_service.py         # TW: TWSE → FinMind → MOPS; don't-cache-empty
+│   │   ├── us_market_service.py         # US: Polygon → yfinance → Stooq waterfall
+│   │   ├── version_service.py           # GitHub release polling + admin-triggered update
+│   │   └── watchlist_service.py         # CRUD + live quote enrichment
 │   ├── tasks/            # APScheduler jobs (US 10s, TW 60s, off-hours throttle)
 │   ├── tests/            # pytest — in-memory SQLite + AsyncMock Redis
-│   │   ├── test_admin_api.py       # 11 tests: stats, user list, role/active CRUD
-│   │   ├── test_alert_service.py   # 19 unit tests: CRUD + check_and_fire (pure)
-│   │   ├── test_alerts_api.py      # 6 HTTP tests: CRUD + auth (check_and_fire covered in test_alert_service.py)
-│   │   ├── test_analytics.py       # 25 unit tests: DCF, VaR, backtest (pure)
-│   │   ├── test_analytics_api.py   # 15 tests: DCF/VaR/backtest HTTP endpoints
-│   │   ├── test_analytics_service.py # 17 unit tests: DCF/VaR/backtest orchestration
-│   │   ├── test_auth_api.py        # 14 tests: register, login, refresh, API keys
-│   │   ├── test_portfolio_api.py   # 12 tests: portfolio + transaction CRUD
-│   │   ├── test_portfolio_extended.py # 14 tests: detail, performance, optimiser
-│   │   ├── test_portfolio_optimizer.py # 16 unit tests: mean-variance + frontier (pure)
-│   │   ├── test_portfolio_service_fx.py # 9 unit tests: FX cache + fallback (pure)
-│   │   ├── test_tw_market_api.py   # 25 tests: all TW market endpoints
-│   │   ├── test_us_market_api.py   # 21 tests: all US market endpoints
-│   │   ├── test_watchlist_api.py   # 7 tests: watchlist + item CRUD
-│   │   ├── test_watchlist_service.py # 16 unit tests: CRUD + enrichment (pure)
-│   │   └── test_websocket_manager.py # 15 tests: auth, delta suppression, alert fan-out
+│   │                     # 48 files, ~600 tests. Categories:
+│   │                     #   API HTTP   : test_*_api.py        (admin, auth, alerts,
+│   │                     #                                      analytics, portfolio,
+│   │                     #                                      tw_market 42, us_market 23,
+│   │                     #                                      watchlist)
+│   │                     #   Services   : test_*_service*.py   (alert, analytics,
+│   │                     #                                      crypto_market, portfolio,
+│   │                     #                                      tw_market_caching,
+│   │                     #                                      us_market, watchlist,
+│   │                     #                                      llm_key, llm_usage,
+│   │                     #                                      tw_health, version)
+│   │                     #   Connectors : test_*_connector.py  (yfinance, polygon, stooq,
+│   │                     #                                      fred, twse, finmind, mops,
+│   │                     #                                      kraken, kraken_ws)
+│   │                     #   AI / chat  : test_ai_agents, test_ai_quota_refund,
+│   │                     #                test_ai_tools, test_openai_compat_providers,
+│   │                     #                test_claude_agent_config, test_claude_agent_chat
+│   │                     #   Misc       : test_websocket_manager, test_web_vital_endpoint,
+│   │                     #                test_portfolio_optimizer, test_portfolio_service_fx
 │   ├── limiter.py        # slowapi Limiter (rate limiting on auth endpoints)
 │   ├── logging_config.py # JSON logging (prod) / plain text (debug)
 │   ├── config.py         # Pydantic Settings (env-driven)
@@ -104,21 +118,26 @@ FinceptWeb/
 │   └── src/
 │       ├── components/
 │       │   ├── charts/   # CandlestickChart (lightweight-charts v4, theme-aware)
-│       │   ├── layout/   # AppLayout (top bar + sidebar), Sidebar, NotificationBell
-│       │   └── portfolio/ # AllocationPie, HoldingsTable
+│       │   ├── layout/   # AppLayout, Sidebar (+ .test), UpdateBadge, NotificationBell
+│       │   ├── portfolio/ # AllocationPie, HoldingsTable (+ .test)
+│       │   └── (root)    # ErrorBoundary, Skeleton, Toaster (each + .test)
 │       ├── hooks/
 │       │   ├── useWebSocket.ts       # Singleton WS + useAlertSocket() hook
 │       │   ├── useWebSocket.test.ts  # 11 tests: connect, routing, alert, cleanup
 │       │   ├── usePortfolio.ts       # Portfolio CRUD + optimise mutations
-│       │   └── usePortfolio.test.ts  # 8 tests: query keys, enabled-gate, invalidation
+│       │   ├── usePortfolio.test.ts  # 8 tests: query keys, enabled-gate, invalidation
+│       │   └── useVersion.ts         # /api/system/version polling for UpdateBadge
 │       ├── pages/        # One file per route (13 pages)
 │       │   # AIPage, AdminPage, AlertsPage, AnalyticsPage, DashboardPage,
 │       │   # LoginPage, MacroPage, MarketPage, PortfolioPage, ScreenerPage,
 │       │   # SettingsPage, StockDetailPage, WatchlistPage
-│       ├── store/        # Zustand: authStore (+ .test), notificationStore, themeStore
+│       ├── store/        # Zustand. Each *Store.ts pairs with *Store.test.ts:
+│       │                 #   authStore, notificationStore, themeStore, toastStore
+│       │                 # Plain modules (no test): analytics, market, portfolio, system
 │       ├── test/         # Vitest setup (jsdom + RTL cleanup)
-│       ├── types/        # TypeScript interfaces (market, portfolio, analytics)
-│       └── lib/          # api.ts (+ .test: bearer/refresh/dedup), auth.ts (silentRefresh)
+│       ├── types/        # TypeScript interfaces (market, portfolio, analytics, system)
+│       └── lib/          # api.ts (+ .test: bearer/refresh/dedup), auth.ts (silentRefresh),
+│                         # webVitals.ts (+ .test) — Core Web Vitals → POST /api/system/web-vital
 ├── helm/fincept-web/     # Kubernetes Helm chart
 ├── docker/               # nginx.conf, redis.conf
 ├── .github/workflows/    # ci.yml (pytest + ruff + tsc + eslint + build)
@@ -140,7 +159,10 @@ FinceptWeb/
 3. PostgreSQL (persistent holdings, transactions, watchlists, alerts)
 
 ### Market data waterfall
-- US: Polygon.io → yfinance → Stooq (quote, history, fundamentals, options, news)
+- US: Polygon.io → yfinance → Stooq (quote, history, fundamentals, news).
+  Options chain is `Polygon → yfinance` only (Stooq has no options endpoint);
+  free-tier deployments without a Polygon key still serve chains via
+  `yfinance.get_options()` which exposes last_price / IV / OI per contract.
 - US screener fallback chain: Polygon snapshot → `_screener_yfinance` (per-
   symbol `.info`, slow + frequently rate-limited) → curated `_FALLBACK_UNIVERSE`
   enriched via `yfinance.get_batch_quotes()` (`yf.download()` chart endpoint,
@@ -155,7 +177,11 @@ FinceptWeb/
   set `f=sd2t2ohlcvp` returns `Prev` (previous close) so we get change%
   without a separate history call. The history endpoint (`q/d/l/`) is
   captcha-gated behind an apikey and not used.
-- TW: TWSE OpenAPI → FinMind → MOPS; BWIBBU_d for PE/PB/yield
+- TW: TWSE OpenAPI → FinMind → MOPS; BWIBBU_d for PE/PB/yield. Empty
+  results (both upstream sources failed) are NOT cached — mirrors the US
+  service so a transient TWSE+FinMind failure doesn't lock 60 s of zero
+  state. Applies to quote / history / institutional / margin / revenue /
+  fundamentals.
 - Crypto: Kraken public REST (`get_quote`/`get_history`); Top 20 universe in
   `data/crypto/symbols.py`. USDT/USDC/DAI normalized to USD for FX
   (`_normalize_currency` in `portfolio_service.py`)
@@ -193,13 +219,28 @@ FinceptWeb/
   OpenAI-compat providers use a shared toolset (`build_openai_compat_toolset`)
   exposing get_quote / run_dcf / run_var / run_backtest / query_user_data —
   only analyst/admin role gets tools, viewer falls back to plain chat
+- Claude Agent enable gate is `Settings.claude_agent_effective_enabled`,
+  which ANDs `CLAUDE_AGENT_ENABLED` (default `True`) with importability of
+  `claude_agent_sdk`. Deployments without the optional SDK degrade to a
+  503 with a clear message instead of crashing on import; installing the
+  SDK opts in for free without flag-flipping. The `web_fetch` tool is
+  hard-gated by `CLAUDE_AGENT_WEBFETCH_ALLOWLIST` (curated default covers
+  GitHub raw, Anthropic / FastAPI docs, FRED, SEC, Yahoo chart).
 
 ### Frontend
 - React 18 + TypeScript + Vite; TanStack Query (staleTime 15s)
 - lightweight-charts **v4** API (`chart.addCandlestickSeries()` — NOT v5)
 - TanStack Virtual for screener rows
-- Zustand for auth + notifications + theme
+- Zustand for auth + notifications + theme + toasts
 - PWA: manifest + service worker (cache-first static, network-first /api/)
+
+### Observability
+- Prometheus middleware (`middleware/metrics.py`) exposes `/metrics`,
+  protected by `METRICS_ALLOW_CIDRS` (loopback default) or `METRICS_AUTH_TOKEN`.
+- Core Web Vitals: `frontend/src/lib/webVitals.ts` reports CLS / LCP / FID /
+  INP / FCP / TTFB to `POST /api/system/web-vital`, which records them
+  as Prometheus histograms keyed by metric name + page route. Frontend
+  module is bundle-split so the `web-vitals` library doesn't bloat first paint.
 
 ## Running tests
 
@@ -223,9 +264,14 @@ compiled extension (`ModuleNotFoundError: No module named '_cffi_backend'`). Thi
 system-level environment issue, not a code defect. All tests pass in CI (ubuntu-latest with a
 full Python install).
 
-Locally-runnable pure unit tests (no jose/cryptography dependency): 102 tests across
-`test_analytics.py`, `test_analytics_service.py`, `test_portfolio_optimizer.py`,
-`test_portfolio_service_fx.py`, `test_watchlist_service.py`, `test_alert_service.py`.
+Locally-runnable pure unit tests (no jose/cryptography dependency, no `client` fixture):
+mock the data connectors + cache helpers and run independently. Examples include
+`test_analytics_service`, `test_portfolio_optimizer`, `test_portfolio_service_fx`,
+`test_watchlist_service`, `test_alert_service`, `test_us_market_service`,
+`test_tw_market_service_caching`, `test_crypto_market_service`, `test_version_service`,
+`test_claude_agent_config`, plus all `test_*_connector.py` files. Each new
+service-layer change should land with a matching `tests/test_*_service*.py` so the
+fix is covered without needing the full DB/Redis stack.
 
 ## Running lint / type-check
 

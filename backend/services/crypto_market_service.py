@@ -42,8 +42,10 @@ async def get_quote(symbol: str) -> dict[str, Any]:
         # Unknown / unsupported symbol — return a stub so the API endpoint
         # gives a clean 404 path rather than 500.
         return {"symbol": sym, "market": "CRYPTO", "price": None, "change_pct": None,
-                "currency": "USD", "error": "symbol not supported on Kraken"}
+                "currency": "USD", "error": "symbol not supported on Kraken",
+                "data_source": "unavailable"}
 
+    quote["data_source"] = "kraken"
     await cache_set(key, json.dumps(quote), TTL_QUOTE)
     return quote
 
@@ -80,11 +82,17 @@ async def get_screener(limit: int = 20) -> list[dict[str, Any]]:
             "volume": q.get("volume") or 0,
             "high_24h": q.get("high_24h"),
             "low_24h": q.get("low_24h"),
+            "data_source": "kraken",
         }
         for q in quotes if q.get("price") is not None
     ]
     rows.sort(key=lambda r: r["volume"], reverse=True)
-    await cache_set(key, json.dumps(rows), TTL_SCREENER)
+    # Don't cache when every Kraken call failed — otherwise a transient
+    # outage locks the user into 60 s of an empty grid.
+    if rows:
+        await cache_set(key, json.dumps(rows), TTL_SCREENER)
+    else:
+        log.warning("crypto.screener.all_quotes_failed")
     return rows[:limit]
 
 

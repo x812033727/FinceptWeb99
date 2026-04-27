@@ -124,6 +124,8 @@
     "source_badge": {
       "stooq_label": "Stooq",
       "stooq_tooltip": "Served by Stooq fallback (Yahoo blocked)",
+      "finmind_label": "EOD",
+      "finmind_tooltip": "Latest close from FinMind — TWSE realtime feed unavailable",
       "unavailable_label": "—",
       "unavailable_tooltip": "All upstream sources blocked; price unavailable"
     },

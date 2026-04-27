@@ -51,6 +51,18 @@ async def test_get_quote_unsupported_symbol_returns_stub_not_exception():
     assert result["price"] is None
     assert "error" in result
     assert result["market"] == "CRYPTO"
+    assert result["data_source"] == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_get_quote_cache_miss_tags_data_source_kraken():
+    fresh = {"symbol": "BTC", "market": "CRYPTO", "price": 99000.0,
+             "change_pct": 1.5, "volume": 100, "currency": "USD"}
+    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "_k_quote", AsyncMock(return_value=fresh)):
+        result = await svc.get_quote("BTC")
+    assert result["data_source"] == "kraken"
 
 
 # ── get_history ───────────────────────────────────────────────────

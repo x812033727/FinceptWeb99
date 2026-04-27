@@ -28,8 +28,9 @@ async function fetchTWScreener(): Promise<ScreenerResult[]> {
     market: "TW" as const,
     name: item.name_zh,
     price: item.price ?? 0,
-    change_pct: 0,
+    change_pct: item.change_pct ?? 0,
     volume: item.volume,
+    data_source: item.data_source,
   }));
 }
 
@@ -51,7 +52,9 @@ interface TWScreenerItem {
   exchange: string;
   name_zh: string;
   price: number | null;
+  change_pct?: number | null;
   volume: number;
+  data_source?: string;
 }
 
 async function fetchTWIndex(twIndexLabel: string): Promise<MarketIndex | null> {
@@ -84,9 +87,22 @@ function ChangeCell({ value }: { value: number | null | undefined }) {
 
 function DataSourceBadge({ source }: { source: string | undefined }) {
   const { t } = useTranslation();
-  // Only flag the rows the user actually needs to know about. polygon /
-  // yfinance is the steady-state path on free + paid tiers; chip would
-  // just be noise.
+  // Only flag the rows the user actually needs to know about. The
+  // steady-state sources (polygon, yfinance, twse, kraken) get no chip —
+  // would just be noise. We only badge degraded paths:
+  //   stooq    → US fallback when Yahoo is blocked
+  //   finmind  → TW fallback (yesterday's close while TWSE realtime is down)
+  //   unavailable → all upstreams blocked, row is a placeholder
+  if (source === "finmind") {
+    return (
+      <span
+        title={t("market.source_badge.finmind_tooltip")}
+        className="ml-1.5 text-[10px] uppercase font-medium px-1 py-px rounded bg-amber-500/10 text-amber-400 border border-amber-500/30"
+      >
+        {t("market.source_badge.finmind_label")}
+      </span>
+    );
+  }
   if (source === "stooq") {
     return (
       <span
@@ -221,8 +237,9 @@ export default function MarketPage() {
         </div>
       )}
 
-      {/* degraded-source banner — only when at least one row is fully blocked */}
-      {mkt === "US" && rows.some((r) => r.data_source === "unavailable") && (
+      {/* degraded-source banner — fires for any market where at least one
+          row is fully blocked. */}
+      {rows.some((r) => r.data_source === "unavailable") && (
         <div className="bg-amber-500/5 border border-amber-500/30 text-amber-300 rounded-lg px-3 py-2 text-xs sm:text-sm">
           {t("market.degraded_banner")}
         </div>

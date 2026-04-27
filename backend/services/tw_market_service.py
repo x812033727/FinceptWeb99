@@ -11,6 +11,7 @@ Timezone: Taiwan is UTC+8, no DST. All API responses are tagged with
 tz="Asia/Taipei" so the frontend can display correct local labels.
 """
 import json
+import logging
 import re
 from datetime import datetime, date, timedelta, timezone
 from typing import Any
@@ -25,6 +26,8 @@ from cache.redis_cache import (
 import data.tw.twse_connector as twse
 import data.tw.finmind_connector as finmind
 import data.tw.mops_connector as mops
+
+log = logging.getLogger(__name__)
 
 _TW = pytz.timezone("Asia/Taipei")
 
@@ -104,13 +107,20 @@ async def get_quote(symbol: str) -> dict[str, Any]:
         return json.loads(cached)
 
     raw = None
+    source = "unavailable"
     try:
         raw = await twse.get_realtime_quote(symbol)
-    except Exception:
-        pass
+        if raw:
+            source = "twse"
+    except Exception as exc:
+        log.warning("tw.quote.twse_failed",
+                    extra={"symbol": symbol, "error": str(exc)})
 
     if not raw:
-        # FinMind fallback: latest close from last 5 days
+        # FinMind fallback: latest close from last 5 days. This is end-of-day
+        # data, not realtime — the UI flags it via data_source="finmind" so
+        # the user knows they're looking at yesterday's close during market
+        # hours.
         try:
             start = (date.today() - timedelta(days=7)).isoformat()
             bars = await finmind.get_daily_ohlcv(symbol, start)
@@ -122,10 +132,16 @@ async def get_quote(symbol: str) -> dict[str, Any]:
                     "volume": latest["volume"],
                     "open": latest["open"], "high": latest["high"], "low": latest["low"],
                 }
-        except Exception:
-            pass
+                source = "finmind"
+        except Exception as exc:
+            log.warning("tw.quote.finmind_failed",
+                        extra={"symbol": symbol, "error": str(exc)})
+
+    if not raw:
+        log.warning("tw.quote.all_sources_failed", extra={"symbol": symbol})
 
     result = _normalize_quote(symbol, raw or {})
+    result["data_source"] = source
     # Don't cache the zero-state (TWSE + FinMind both failed) — keeps the
     # next request retrying instead of locking a 60-second blank quote.
     if result.get("price"):
@@ -636,7 +652,8 @@ async def get_screener(
 
     try:
         all_stocks = await twse.get_all_twse_symbols()
-    except Exception:
+    except Exception as exc:
+        log.warning("tw.screener.twse_symbols_failed", extra={"error": str(exc)})
         all_stocks = []
 
     # Sort by volume desc so the most-traded names surface first. The TWSE
@@ -696,11 +713,18 @@ async def get_screener(
             "pe_ratio":       v.get("pe_ratio") if v else None,
             "pb_ratio":       v.get("pb_ratio") if v else None,
             "dividend_yield": v.get("dividend_yield") if v else None,
+            "data_source":    "twse",
         })
         if len(result) >= limit:
             break
 
-    await cache_set(key, json.dumps(result), TTL_SCREENER)
+    # Don't cache an empty screener for 10 min — mirrors the US service so
+    # a transient TWSE OpenAPI failure doesn't lock the page into "no
+    # results" until the next background refresh.
+    if result:
+        await cache_set(key, json.dumps(result), TTL_SCREENER)
+    else:
+        log.warning("tw.screener.empty_result")
     return result
 
 

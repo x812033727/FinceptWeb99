@@ -18,6 +18,9 @@ class TWQuoteResponse(BaseModel):
     tz: str                 # "Asia/Taipei"
     is_market_open: bool
     is_etf: bool = False
+    # "twse" (realtime) | "finmind" (latest close fallback) | "unavailable".
+    # Same convention as the US QuoteResponse.data_source.
+    data_source: str = "unavailable"
 
 
 class TWOHLCVBar(BaseModel):
@@ -81,6 +84,10 @@ class TWScreenerItem(BaseModel):
     pe_ratio: float | None = None
     pb_ratio: float | None = None
     dividend_yield: float | None = None     # %
+    # Source the row came from. TW screener is single-upstream (TWSE
+    # OpenAPI) so this is "twse" or, on a transient TWSE outage, the
+    # endpoint returns an empty list rather than tagged-unavailable rows.
+    data_source: str = "twse"
 
 
 class TWIndexResponse(BaseModel):

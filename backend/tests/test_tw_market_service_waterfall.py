@@ -170,7 +170,32 @@ async def test_get_quote_returns_zero_dict_when_both_tiers_fail_and_does_not_cac
 
     assert out["symbol"] == "2330"
     assert out["price"] == 0
+    assert out["data_source"] == "unavailable"
     cache_set.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_quote_marks_data_source_twse_when_realtime_serves():
+    twse_payload = {"symbol": "2330", "name_zh": "台積電", "close": 785,
+                    "open": 780, "high": 790, "low": 775, "volume": 1000}
+    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc.twse, "get_realtime_quote", new=AsyncMock(return_value=twse_payload)):
+        out = await svc.get_quote("2330")
+    assert out["data_source"] == "twse"
+
+
+@pytest.mark.asyncio
+async def test_get_quote_marks_data_source_finmind_when_finmind_serves():
+    finmind_bars = [{"time": "2024-04-01", "open": 1, "high": 2, "low": 0,
+                     "close": 1.5, "volume": 100}]
+    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc.twse, "get_realtime_quote", new=AsyncMock(return_value=None)), \
+         patch.object(svc.finmind, "get_daily_ohlcv", new=AsyncMock(return_value=finmind_bars)):
+        out = await svc.get_quote("2330")
+    assert out["data_source"] == "finmind"
+    assert out["price"] == 1.5
 
 
 # ── get_history waterfall ─────────────────────────────────────────

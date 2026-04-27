@@ -124,6 +124,8 @@
     "source_badge": {
       "stooq_label": "Stooq",
       "stooq_tooltip": "由 Stooq 備援提供（Yahoo 被擋）",
+      "finmind_label": "昨收",
+      "finmind_tooltip": "顯示昨日收盤價（TWSE 即時報價暫時無法取得）",
       "unavailable_label": "—",
       "unavailable_tooltip": "所有資料源皆被擋，目前無法取得即時價格"
     },

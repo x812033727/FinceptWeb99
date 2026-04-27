@@ -63,16 +63,19 @@ async def _collect_sse(resp) -> list[dict]:
 
 @pytest.mark.asyncio
 async def test_claude_agent_disabled_returns_503(client: AsyncClient, db_session: AsyncSession):
+    from config import settings
     email = "ca_disabled@test.com"
     await _register_login(client, email)
     tok = await _promote(db_session, email, UserRole.analyst, client)
 
-    # feature flag defaults to False — no setup needed
-    r = await client.post("/api/ai/chat",
-        json={"agent_id": "claude_research",
-              "messages": [{"role": "user", "content": "hi"}]},
-        headers={"Authorization": f"Bearer {tok}"},
-    )
+    # Default flipped to True in PR #55 (auto-detect SDK); explicitly
+    # disable here to exercise the off-by-flag 503 path.
+    with patch.object(settings, "CLAUDE_AGENT_ENABLED", False):
+        r = await client.post("/api/ai/chat",
+            json={"agent_id": "claude_research",
+                  "messages": [{"role": "user", "content": "hi"}]},
+            headers={"Authorization": f"Bearer {tok}"},
+        )
     assert r.status_code == 503
     assert "disabled" in r.json()["detail"].lower()
 

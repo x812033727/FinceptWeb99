@@ -64,7 +64,10 @@ async def test_refund_when_claude_agent_disabled(client: AsyncClient, db_session
     await _register_login(client, email)
     tok = await _promote(db_session, email, UserRole.analyst, client)
 
-    with patch("api.ai_agents.router._refund_quota", new_callable=AsyncMock) as refund:
+    # CLAUDE_AGENT_ENABLED default flipped to True in PR #55; explicitly
+    # disable so we hit the 503 + refund branch.
+    with patch("api.ai_agents.router.settings.CLAUDE_AGENT_ENABLED", False), \
+         patch("api.ai_agents.router._refund_quota", new_callable=AsyncMock) as refund:
         r = await client.post(
             "/api/ai/chat",
             json={"agent_id": "claude_research",

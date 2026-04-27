@@ -281,6 +281,57 @@ async def test_get_quote_data_source_unavailable_when_all_fail():
 
 
 @pytest.mark.asyncio
+async def test_get_screener_marks_data_source_yfinance_when_batch_serves():
+    """Batch fallback rows that yfinance.get_batch_quotes actually filled
+    should be tagged `yfinance`; symbols that even Stooq couldn't price
+    are tagged `unavailable` so the UI can flag them."""
+    universe = _fake_universe(4)
+    quotes = {  # yfinance fills 2 of 4
+        "SYM000": {"price": 1.0, "change_pct": 0.0, "volume": 100},
+        "SYM002": {"price": 3.0, "change_pct": 0.0, "volume": 300},
+    }
+
+    with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
+         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "_screener_yfinance", AsyncMock(return_value=[])), \
+         patch.object(svc, "_get_sp500_tickers", AsyncMock(return_value=[s for s, _ in universe])), \
+         patch("data.us.sp500_universe.get_fallback_universe", lambda: universe), \
+         patch.object(svc.yfinance, "get_batch_quotes", AsyncMock(return_value=quotes)), \
+         patch.object(svc.stooq, "get_batch_quotes", AsyncMock(return_value={})):
+        rows = await svc.get_screener(limit=4)
+
+    by_sym = {r["symbol"]: r for r in rows}
+    assert by_sym["SYM000"]["data_source"] == "yfinance"
+    assert by_sym["SYM002"]["data_source"] == "yfinance"
+    assert by_sym["SYM001"]["data_source"] == "unavailable"
+    assert by_sym["SYM003"]["data_source"] == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_get_screener_marks_data_source_stooq_when_yfinance_blank():
+    """yfinance.get_batch_quotes returned nothing → we fell to Stooq.
+    Rows Stooq priced should now carry `stooq` so the UI badge fires."""
+    universe = _fake_universe(2)
+    stooq_quotes = {
+        "SYM000": {"price": 5.0, "change_pct": 0.1, "volume": 999},
+        "SYM001": {"price": 6.0, "change_pct": -0.1, "volume": 888},
+    }
+
+    with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
+         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "_screener_yfinance", AsyncMock(return_value=[])), \
+         patch.object(svc, "_get_sp500_tickers", AsyncMock(return_value=[s for s, _ in universe])), \
+         patch("data.us.sp500_universe.get_fallback_universe", lambda: universe), \
+         patch.object(svc.yfinance, "get_batch_quotes", AsyncMock(return_value={})), \
+         patch.object(svc.stooq, "get_batch_quotes", AsyncMock(return_value=stooq_quotes)):
+        rows = await svc.get_screener(limit=2)
+
+    assert all(r["data_source"] == "stooq" for r in rows)
+
+
+@pytest.mark.asyncio
 async def test_get_screener_caches_zero_price_rows_briefly():
     """When every quote provider is blocked we still cache the universe
     shell (price=0) for a short TTL so the next user sees something

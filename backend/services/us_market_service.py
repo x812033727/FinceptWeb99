@@ -405,6 +405,7 @@ async def get_screener(
         from data.us.sp500_universe import get_fallback_universe
         universe = get_fallback_universe()[:limit]
         symbols = [sym for sym, _ in universe]
+        batch_source = "yfinance"
         quotes = await yfinance.get_batch_quotes(symbols)
         if not quotes:
             log.warning("us.screener.batch_yfinance_empty",
@@ -415,6 +416,7 @@ async def get_screener(
                 symbols if full_stooq_batch else symbols[:STOOQ_SYNC_BATCH_LIMIT]
             )
             quotes = await stooq.get_batch_quotes(stooq_targets)
+            batch_source = "stooq"
             if not quotes:
                 log.warning("us.screener.batch_stooq_empty",
                             extra={"symbol_count": len(stooq_targets)})
@@ -422,18 +424,22 @@ async def get_screener(
             log.info("us.screener.min_market_cap_dropped",
                      extra={"min_market_cap": min_market_cap,
                             "reason": "batch fallback has no market cap"})
-        rows = [
-            {
+        rows = []
+        for sym, name in universe:
+            quote = quotes.get(sym)
+            rows.append({
                 "symbol": sym, "market": "US", "name": name,
-                "price": quotes.get(sym, {}).get("price", 0.0),
-                "change_pct": quotes.get(sym, {}).get("change_pct", 0.0),
-                "volume": quotes.get(sym, {}).get("volume", 0),
+                "price": (quote or {}).get("price", 0.0),
+                "change_pct": (quote or {}).get("change_pct", 0.0),
+                "volume": (quote or {}).get("volume", 0),
                 "market_cap": None, "pe_ratio": None,
                 "pb_ratio": None, "dividend_yield": None,
                 "sector": None,
-            }
-            for sym, name in universe
-        ]
+                # Symbols that the batch endpoint actually returned data for
+                # carry the upstream source; the rest are placeholder shells
+                # the page renders so the user gets a click-through list.
+                "data_source": batch_source if quote else "unavailable",
+            })
         if min_volume:
             rows = [r for r in rows if (r["volume"] or 0) >= min_volume]
         results = rows
@@ -464,6 +470,7 @@ def _filter_polygon_snapshots(snaps: list[dict], min_cap, min_vol, limit) -> lis
             "price": day.get("c", 0),
             "change_pct": s.get("todaysChangePerc", 0),
             "volume": vol,
+            "data_source": "polygon",
         })
     return out[:limit]
 
@@ -522,6 +529,7 @@ async def _screener_yfinance(
                 "pb_ratio": pb,
                 "dividend_yield": round(yield_pct, 3) if yield_pct is not None else None,
                 "sector": sec,
+                "data_source": "yfinance",
             })
         except Exception as exc:
             log.warning("us.screener.yfinance_info_failed",

@@ -82,6 +82,34 @@ function ChangeCell({ value }: { value: number | null | undefined }) {
   );
 }
 
+function DataSourceBadge({ source }: { source: string | undefined }) {
+  const { t } = useTranslation();
+  // Only flag the rows the user actually needs to know about. polygon /
+  // yfinance is the steady-state path on free + paid tiers; chip would
+  // just be noise.
+  if (source === "stooq") {
+    return (
+      <span
+        title={t("market.source_badge.stooq_tooltip")}
+        className="ml-1.5 text-[10px] uppercase font-medium px-1 py-px rounded bg-amber-500/10 text-amber-400 border border-amber-500/30"
+      >
+        {t("market.source_badge.stooq_label")}
+      </span>
+    );
+  }
+  if (source === "unavailable") {
+    return (
+      <span
+        title={t("market.source_badge.unavailable_tooltip")}
+        className="ml-1.5 text-[10px] uppercase font-medium px-1 py-px rounded bg-red-500/10 text-red-400 border border-red-500/30"
+      >
+        {t("market.source_badge.unavailable_label")}
+      </span>
+    );
+  }
+  return null;
+}
+
 function IndexCard({ idx }: { idx: MarketIndex }) {
   const pos = idx.change_pct >= 0;
   return (
@@ -193,6 +221,13 @@ export default function MarketPage() {
         </div>
       )}
 
+      {/* degraded-source banner — only when at least one row is fully blocked */}
+      {mkt === "US" && rows.some((r) => r.data_source === "unavailable") && (
+        <div className="bg-amber-500/5 border border-amber-500/30 text-amber-300 rounded-lg px-3 py-2 text-xs sm:text-sm">
+          {t("market.degraded_banner")}
+        </div>
+      )}
+
       {/* search + table */}
       <div className="bg-card border border-border rounded-lg overflow-hidden">
         <div className="px-4 py-3 border-b border-border">
@@ -244,7 +279,10 @@ export default function MarketPage() {
                     onClick={() => navigate(`/stock/${mkt}/${row.symbol}`)}
                     className="border-b border-border/40 hover:bg-accent/5 cursor-pointer transition-colors"
                   >
-                    <td className="px-3 sm:px-4 py-2.5 font-medium text-primary">{row.symbol}</td>
+                    <td className="px-3 sm:px-4 py-2.5 font-medium text-primary whitespace-nowrap">
+                      {row.symbol}
+                      <DataSourceBadge source={row.data_source} />
+                    </td>
                     <td className="px-3 sm:px-4 py-2.5 text-muted-foreground max-w-[120px] sm:max-w-[180px] truncate">{row.name}</td>
                     <td className="px-3 sm:px-4 py-2.5 text-right text-foreground tabular-nums">
                       {row.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}

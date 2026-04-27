@@ -55,4 +55,8 @@ export interface ScreenerResult {
   dividend_yield?: number;
   exchange?: string;
   sector?: string;
+  // "polygon" | "yfinance" | "stooq" | "unavailable" — set by the US
+  // backend to mark which upstream served the row. "unavailable" rows
+  // are universe placeholders (price=0) when every provider is blocked.
+  data_source?: string;
 }

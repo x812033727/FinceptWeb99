@@ -120,7 +120,14 @@
       "pb": "股價淨值比",
       "dividend_yield": "殖利率%",
       "sector": "產業"
-    }
+    },
+    "source_badge": {
+      "stooq_label": "Stooq",
+      "stooq_tooltip": "由 Stooq 備援提供（Yahoo 被擋）",
+      "unavailable_label": "—",
+      "unavailable_tooltip": "所有資料源皆被擋，目前無法取得即時價格"
+    },
+    "degraded_banner": "部分股票暫時無法從任何資料源取得即時報價，下方表格仍會顯示這些股票（價格以佔位符顯示）。"
   },
   "stock": {
     "income_statement": "損益表",

@@ -120,7 +120,14 @@
       "pb": "P/B",
       "dividend_yield": "Yield %",
       "sector": "Sector"
-    }
+    },
+    "source_badge": {
+      "stooq_label": "Stooq",
+      "stooq_tooltip": "Served by Stooq fallback (Yahoo blocked)",
+      "unavailable_label": "—",
+      "unavailable_tooltip": "All upstream sources blocked; price unavailable"
+    },
+    "degraded_banner": "Some rows could not be fetched from any provider — they are shown with a placeholder price."
   },
   "stock": {
     "income_statement": "Income Statement",

@@ -69,6 +69,11 @@ class ScreenerItem(BaseModel):
     pb_ratio: float | None = None
     dividend_yield: float | None = None       # in percent (3.5 = 3.5%)
     sector: str | None = None
+    # "polygon" | "yfinance" | "stooq" | "unavailable" — same convention
+    # as QuoteResponse.data_source. "unavailable" rows are universe
+    # placeholders (price=0) included so the page renders a clickable
+    # list when every upstream is blocked; the UI uses this to mark them.
+    data_source: str = "unavailable"
 
 
 class MacroDataPoint(BaseModel):

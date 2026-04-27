@@ -517,6 +517,13 @@ function OptionsPanel({ symbol }: { symbol: string }) {
             </tr>
           </thead>
           <tbody>
+            {filtered.length === 0 && (
+              <tr>
+                <td colSpan={9} className="py-6 text-center text-muted-foreground text-xs">
+                  No {optionType} contracts in this chain.
+                </td>
+              </tr>
+            )}
             {filtered.slice(0, 80).map((o, i) => (
               <tr key={i} className="border-b border-border/30 hover:bg-accent/5">
                 <td className="py-1.5 pr-3 text-muted-foreground">{o.expiration_date ?? "—"}</td>

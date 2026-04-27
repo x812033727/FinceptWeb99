@@ -450,6 +450,11 @@
     "invalid": "驗證失敗",
     "replace_placeholder": "輸入新 key 以覆蓋既有"
   },
+  "market_keys": {
+    "title": "市場資料 API 金鑰",
+    "subtitle": "設定付費 / 備援市場資料來源的 API key（DB 加密儲存,覆蓋 .env 預設值）",
+    "get_key": "申請免費金鑰"
+  },
   "my_keys": {
     "title": "我的 LLM API 金鑰",
     "subtitle": "個人 key 會優先於系統共用 key 與 .env，使用您自己的帳號計費",

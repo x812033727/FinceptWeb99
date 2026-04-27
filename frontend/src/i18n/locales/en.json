@@ -450,6 +450,11 @@
     "invalid": "Validation failed",
     "replace_placeholder": "Enter new key to replace"
   },
+  "market_keys": {
+    "title": "Market Data API Keys",
+    "subtitle": "Configure keys for paid market data fallbacks (encrypted in DB, overrides .env)",
+    "get_key": "Get a free key"
+  },
   "my_keys": {
     "title": "My LLM API Keys",
     "subtitle": "Personal keys take priority over system + .env so usage hits your own account",

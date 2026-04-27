@@ -13,6 +13,10 @@ drop-in addition. Empty key returns {} — the service waterfall treats
 that the same as a hard failure and either continues to the next tier
 or surfaces `data_source: "unavailable"`.
 
+The active key is resolved through `services.market_key_service.resolve_key`
+which prefers the admin-managed DB row, then the .env fallback. Cached
+for 60 s so the screener fan-out (25 in flight) doesn't hammer the DB.
+
 API doc: https://finnhub.io/docs/api/quote
 """
 from __future__ import annotations
@@ -23,8 +27,6 @@ from typing import Any
 
 import httpx
 
-from config import settings
-
 log = logging.getLogger(__name__)
 
 _QUOTE_URL = "https://finnhub.io/api/v1/quote"
@@ -32,8 +34,11 @@ _TIMEOUT = 8.0
 _CONCURRENCY = asyncio.Semaphore(4)
 
 
-def _enabled() -> bool:
-    return bool(settings.FINNHUB_API_KEY)
+async def _active_key() -> str:
+    """DB-managed key takes precedence over the env fallback. Resolved
+    inside `market_key_service` with a 60-s cache so this is cheap."""
+    from services.market_key_service import resolve_key
+    return await resolve_key("finnhub")
 
 
 def _row_to_quote(row: dict, ticker: str) -> dict[str, Any] | None:
@@ -67,12 +72,12 @@ def _row_to_quote(row: dict, ticker: str) -> dict[str, Any] | None:
     }
 
 
-async def _fetch_one(client: httpx.AsyncClient, ticker: str) -> dict | None:
+async def _fetch_one(client: httpx.AsyncClient, ticker: str, key: str) -> dict | None:
     async with _CONCURRENCY:
         try:
             r = await client.get(
                 _QUOTE_URL,
-                params={"symbol": ticker.upper(), "token": settings.FINNHUB_API_KEY},
+                params={"symbol": ticker.upper(), "token": key},
             )
             if r.status_code == 429:
                 # Free-plan rate-limit hit — back off and let the next tier
@@ -95,10 +100,11 @@ async def _fetch_one(client: httpx.AsyncClient, ticker: str) -> dict | None:
 async def get_quote(ticker: str) -> dict[str, Any]:
     """Single-symbol quote. Returns {} if Finnhub is disabled, the symbol
     is unknown, or the request fails."""
-    if not _enabled():
+    key = await _active_key()
+    if not key:
         return {}
     async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
-        row = await _fetch_one(c, ticker)
+        row = await _fetch_one(c, ticker, key)
     if not row:
         return {}
     quote = _row_to_quote(row, ticker)
@@ -109,13 +115,16 @@ async def get_batch_quotes(tickers: list[str]) -> dict[str, dict[str, Any]]:
     """Concurrent (capped at 4 in flight) per-symbol fan-out. ~25 symbols
     finishes in <2 s on a healthy plan. Symbols Finnhub can't price are
     simply absent from the result dict — same convention as Stooq."""
-    if not _enabled() or not tickers:
+    if not tickers:
+        return {}
+    key = await _active_key()
+    if not key:
         return {}
 
     out: dict[str, dict[str, Any]] = {}
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         async def _one(ticker: str) -> None:
-            row = await _fetch_one(client, ticker)
+            row = await _fetch_one(client, ticker, key)
             if not row:
                 return
             quote = _row_to_quote(row, ticker)

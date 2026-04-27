@@ -17,6 +17,7 @@ import models.user       # noqa: F401
 import models.portfolio  # noqa: F401
 import models.watchlist  # noqa: F401
 import models.alert      # noqa: F401
+import models.market_provider_key  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)

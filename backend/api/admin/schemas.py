@@ -57,6 +57,30 @@ class LLMKeyValidation(BaseModel):
     message: str
 
 
+# ── Market-data provider keys ────────────────────────────────────
+
+class MarketKeyInfo(BaseModel):
+    """Same shape as LLMKeyInfo, for keys consumed by data/* connectors
+    (Finnhub today; Polygon / FRED / FinMind are candidates for follow-up)."""
+    provider: str
+    has_key: bool
+    source: str  # "db" | "env" | "none"
+    masked: str
+    last_validated_at: datetime | None = None
+    last_validation_ok: bool | None = None
+    last_validation_message: str | None = None
+    updated_at: datetime | None = None
+
+
+class MarketKeyUpsert(BaseModel):
+    api_key: str  # plaintext; encrypted server-side
+
+
+class MarketKeyValidation(BaseModel):
+    ok: bool
+    message: str
+
+
 # ── Per-persona model routing ────────────────────────────────────
 
 class PersonaConfigOut(BaseModel):

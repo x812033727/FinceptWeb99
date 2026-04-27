@@ -12,7 +12,7 @@ httpx.AsyncClient is patched so no network is touched. Settings.FINNHUB_API_KEY
 is overridden per-test via patch.object on the connector's `settings` ref.
 """
 import json
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -55,12 +55,12 @@ def _install(responder):
     return patch.object(finnhub.httpx, "AsyncClient", lambda **_: fake), fake
 
 
-# ── _enabled gate ─────────────────────────────────────────────────
+# ── disabled gate ─────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_get_quote_returns_empty_when_disabled():
-    """Empty FINNHUB_API_KEY must short-circuit before any HTTP call."""
-    with patch.object(finnhub.settings, "FINNHUB_API_KEY", ""):
+    """Empty resolved key must short-circuit before any HTTP call."""
+    with patch.object(finnhub, "_active_key", AsyncMock(return_value="")):
         # If the connector tried to hit httpx, this would raise (no patch).
         result = await finnhub.get_quote("AAPL")
     assert result == {}
@@ -68,14 +68,16 @@ async def test_get_quote_returns_empty_when_disabled():
 
 @pytest.mark.asyncio
 async def test_get_batch_quotes_returns_empty_when_disabled():
-    with patch.object(finnhub.settings, "FINNHUB_API_KEY", ""):
+    with patch.object(finnhub, "_active_key", AsyncMock(return_value="")):
         result = await finnhub.get_batch_quotes(["AAPL", "MSFT"])
     assert result == {}
 
 
 @pytest.mark.asyncio
 async def test_get_batch_quotes_returns_empty_when_no_tickers():
-    with patch.object(finnhub.settings, "FINNHUB_API_KEY", "k"):
+    # No tickers ⇒ short-circuit even before resolving the key (avoid the
+    # DB / cache hit when the caller passes an empty list).
+    with patch.object(finnhub, "_active_key", AsyncMock(return_value="k")):
         result = await finnhub.get_batch_quotes([])
     assert result == {}
 
@@ -122,7 +124,7 @@ def test_row_to_quote_derives_change_when_only_pc_present():
 async def test_get_quote_returns_parsed_payload_on_success():
     payload = {"c": 182.5, "d": 1.2, "dp": 0.66, "h": 183, "l": 181, "o": 182, "pc": 181.3}
     patcher, _ = _install(lambda _sym: FakeResponse(payload))
-    with patch.object(finnhub.settings, "FINNHUB_API_KEY", "key"), patcher:
+    with patch.object(finnhub, "_active_key", AsyncMock(return_value="key")), patcher:
         result = await finnhub.get_quote("AAPL")
     assert result["symbol"] == "AAPL"
     assert result["price"] == 182.5
@@ -132,7 +134,7 @@ async def test_get_quote_returns_parsed_payload_on_success():
 async def test_get_quote_drops_unknown_symbol_zero_response():
     payload = {"c": 0, "d": 0, "dp": 0, "h": 0, "l": 0, "o": 0, "pc": 0}
     patcher, _ = _install(lambda _sym: FakeResponse(payload))
-    with patch.object(finnhub.settings, "FINNHUB_API_KEY", "key"), patcher:
+    with patch.object(finnhub, "_active_key", AsyncMock(return_value="key")), patcher:
         result = await finnhub.get_quote("FOOBAR")
     assert result == {}
 
@@ -142,7 +144,7 @@ async def test_get_quote_returns_empty_on_rate_limit():
     """HTTP 429 → empty dict so the service waterfall continues without
     holding the request open. Must not raise."""
     patcher, _ = _install(lambda _sym: FakeResponse({}, status_code=429))
-    with patch.object(finnhub.settings, "FINNHUB_API_KEY", "key"), patcher:
+    with patch.object(finnhub, "_active_key", AsyncMock(return_value="key")), patcher:
         result = await finnhub.get_quote("AAPL")
     assert result == {}
 
@@ -150,7 +152,7 @@ async def test_get_quote_returns_empty_on_rate_limit():
 @pytest.mark.asyncio
 async def test_get_quote_returns_empty_on_http_error():
     patcher, _ = _install(lambda _sym: FakeResponse({}, status_code=500))
-    with patch.object(finnhub.settings, "FINNHUB_API_KEY", "key"), patcher:
+    with patch.object(finnhub, "_active_key", AsyncMock(return_value="key")), patcher:
         result = await finnhub.get_quote("AAPL")
     assert result == {}
 
@@ -164,7 +166,7 @@ async def test_get_batch_quotes_merges_responses():
         "MSFT": {"c": 410, "pc": 405, "d": 5, "dp": 1.23, "h": 0, "l": 0, "o": 0},
     }
     patcher, _ = _install(lambda sym: FakeResponse(payloads[sym]))
-    with patch.object(finnhub.settings, "FINNHUB_API_KEY", "key"), patcher:
+    with patch.object(finnhub, "_active_key", AsyncMock(return_value="key")), patcher:
         out = await finnhub.get_batch_quotes(["AAPL", "MSFT"])
     assert set(out.keys()) == {"AAPL", "MSFT"}
     assert out["AAPL"]["price"] == 180
@@ -181,6 +183,6 @@ async def test_get_batch_quotes_skips_unknown_symbols():
         return FakeResponse({"c": 0, "pc": 0, "d": 0, "dp": 0, "h": 0, "l": 0, "o": 0})
 
     patcher, _ = _install(responder)
-    with patch.object(finnhub.settings, "FINNHUB_API_KEY", "key"), patcher:
+    with patch.object(finnhub, "_active_key", AsyncMock(return_value="key")), patcher:
         out = await finnhub.get_batch_quotes(["AAPL", "FAKE"])
     assert list(out.keys()) == ["AAPL"]

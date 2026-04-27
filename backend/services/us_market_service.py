@@ -6,6 +6,7 @@ Rules:
   - All timestamps returned as Unix ms UTC
   - Market-hours helper uses America/New_York tz
 """
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone, date, timedelta
@@ -38,6 +39,14 @@ TTL_SCREENER    = 10 * 60
 # (`tasks.us_market_refresh.refresh_us_screener`) refreshes the cache
 # every 5 min with the FULL universe so subsequent users hit the cache.
 STOOQ_SYNC_BATCH_LIMIT = 25
+
+# yfinance ships a single ThreadPoolExecutor with 8 worker threads
+# (data/us/yfinance_connector.py::_MAX_WORKERS). When _screener_yfinance
+# fans out 20 concurrent `.info` calls per batch they all submit to that
+# same pool, so an ad-hoc `/quote/AAPL` request lands behind the screener
+# queue and blocks for seconds. Cap the screener fan-out at 4 in flight
+# so half the yfinance pool stays free for live quote requests.
+_SCREENER_INFO_CONCURRENCY = asyncio.Semaphore(4)
 
 
 def _is_market_open() -> bool:
@@ -190,10 +199,12 @@ async def get_fundamentals(ticker: str) -> dict[str, Any]:
         return json.loads(cached)
 
     info: dict[str, Any] = {}
+    source = "unavailable"
     try:
         if _use_polygon():
             details = await polygon.get_ticker_details(ticker)
             result = _normalize_fundamentals_polygon(ticker, details)
+            source = "polygon"
         else:
             raise RuntimeError("no polygon key")
     except Exception as exc:
@@ -207,10 +218,13 @@ async def get_fundamentals(ticker: str) -> dict[str, Any]:
                         extra={"ticker": ticker, "error": str(exc2)})
             info = {}
         result = _normalize_fundamentals_yf(ticker, info)
+        if info:
+            source = "yfinance"
 
     # Don't cache when we got nothing useful from yfinance either —
     # otherwise the user is locked into 24h of empty fundamentals.
     has_payload = bool(info) or result.get("market_cap") or result.get("pe_ratio")
+    result["data_source"] = source
     if has_payload:
         await cache_set(key, json.dumps(result), TTL_FUNDAMENTALS)
     return result
@@ -488,52 +502,56 @@ async def _screener_yfinance(
     sector: str | None = None,
     limit: int = 100,
 ) -> list[dict]:
-    import asyncio
     results = []
 
     async def _fetch_one(t: str):
-        try:
-            info = await yfinance.get_info(t)
-            cap = info.get("marketCap", 0) or 0
-            pe = info.get("trailingPE")
-            pb = info.get("priceToBook")
-            # yfinance returns dividendYield as a fraction (0.025 = 2.5%);
-            # the screener filter and column are both in percent, so multiply.
-            raw_yield = info.get("dividendYield")
-            yield_pct = (raw_yield * 100) if raw_yield is not None else None
-            vol = info.get("volume", 0) or 0
-            sec = info.get("sector", "")
-            if min_cap and cap < min_cap:
-                return
-            if min_pe is not None and (pe is None or pe < min_pe):
-                return
-            if max_pe is not None and (pe is None or pe > max_pe):
-                return
-            if min_pb is not None and (pb is None or pb < min_pb):
-                return
-            if max_pb is not None and (pb is None or pb > max_pb):
-                return
-            if min_dividend_yield is not None and (yield_pct is None or yield_pct < min_dividend_yield):
-                return
-            if min_vol and vol < min_vol:
-                return
-            if sector and sector.lower() not in sec.lower():
-                return
-            results.append({
-                "symbol": t, "market": "US",
-                "name": info.get("longName") or info.get("shortName", t),
-                "price": info.get("currentPrice") or info.get("regularMarketPrice", 0),
-                "change_pct": info.get("regularMarketChangePercent", 0),
-                "volume": vol, "market_cap": cap,
-                "pe_ratio": pe,
-                "pb_ratio": pb,
-                "dividend_yield": round(yield_pct, 3) if yield_pct is not None else None,
-                "sector": sec,
-                "data_source": "yfinance",
-            })
-        except Exception as exc:
-            log.warning("us.screener.yfinance_info_failed",
-                        extra={"ticker": t, "error": str(exc)})
+        # See _SCREENER_INFO_CONCURRENCY comment: keep at most 4 .info
+        # calls in flight at once so half the yfinance ThreadPool stays
+        # free for ad-hoc /quote requests. The outer batch=20 still caps
+        # how many tickers we process per gather() round.
+        async with _SCREENER_INFO_CONCURRENCY:
+            try:
+                info = await yfinance.get_info(t)
+                cap = info.get("marketCap", 0) or 0
+                pe = info.get("trailingPE")
+                pb = info.get("priceToBook")
+                # yfinance returns dividendYield as a fraction (0.025 = 2.5%);
+                # the screener filter and column are both in percent, so multiply.
+                raw_yield = info.get("dividendYield")
+                yield_pct = (raw_yield * 100) if raw_yield is not None else None
+                vol = info.get("volume", 0) or 0
+                sec = info.get("sector", "")
+                if min_cap and cap < min_cap:
+                    return
+                if min_pe is not None and (pe is None or pe < min_pe):
+                    return
+                if max_pe is not None and (pe is None or pe > max_pe):
+                    return
+                if min_pb is not None and (pb is None or pb < min_pb):
+                    return
+                if max_pb is not None and (pb is None or pb > max_pb):
+                    return
+                if min_dividend_yield is not None and (yield_pct is None or yield_pct < min_dividend_yield):
+                    return
+                if min_vol and vol < min_vol:
+                    return
+                if sector and sector.lower() not in sec.lower():
+                    return
+                results.append({
+                    "symbol": t, "market": "US",
+                    "name": info.get("longName") or info.get("shortName", t),
+                    "price": info.get("currentPrice") or info.get("regularMarketPrice", 0),
+                    "change_pct": info.get("regularMarketChangePercent", 0),
+                    "volume": vol, "market_cap": cap,
+                    "pe_ratio": pe,
+                    "pb_ratio": pb,
+                    "dividend_yield": round(yield_pct, 3) if yield_pct is not None else None,
+                    "sector": sec,
+                    "data_source": "yfinance",
+                })
+            except Exception as exc:
+                log.warning("us.screener.yfinance_info_failed",
+                            extra={"ticker": t, "error": str(exc)})
 
     # Process in batches of 20 to stay under rate limits
     batch_size = 20
@@ -617,7 +635,6 @@ async def _google_news_rss(query: str, limit: int = 10) -> list[dict[str, Any]]:
 
 async def _yfinance_news_fallback(ticker: str, limit: int) -> list[dict[str, Any]]:
     """Legacy yfinance path. Fragile (Yahoo IP-blocks) but kept as last resort."""
-    import asyncio
     loop = asyncio.get_running_loop()
 
     def _fetch():
@@ -700,7 +717,6 @@ async def get_earnings(ticker: str) -> dict[str, Any]:
     if cached:
         return json.loads(cached)
 
-    import asyncio
     loop = asyncio.get_running_loop()
 
     def _fetch():

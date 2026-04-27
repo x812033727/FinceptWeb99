@@ -332,6 +332,67 @@ async def test_get_screener_marks_data_source_stooq_when_yfinance_blank():
 
 
 @pytest.mark.asyncio
+async def test_get_fundamentals_marks_data_source_yfinance():
+    """No Polygon key ⇒ yfinance.get_info served the payload ⇒ row carries
+    data_source="yfinance"."""
+    info = {"longName": "Apple", "sector": "Tech", "marketCap": 3e12,
+            "trailingPE": 30, "priceToBook": 40}
+    with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
+         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc.yfinance, "get_info", AsyncMock(return_value=info)):
+        result = await svc.get_fundamentals("AAPL")
+    assert result["data_source"] == "yfinance"
+    assert result["market_cap"] == 3e12
+
+
+@pytest.mark.asyncio
+async def test_get_fundamentals_marks_data_source_unavailable_when_both_fail():
+    """yfinance.get_info raised on top of no Polygon key ⇒ unavailable."""
+    with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
+         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
+         patch.object(svc.yfinance, "get_info",
+                      AsyncMock(side_effect=RuntimeError("blocked"))):
+        result = await svc.get_fundamentals("AAPL")
+    assert result["data_source"] == "unavailable"
+    # Empty payload should not be cached.
+    mock_set.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_screener_yfinance_concurrency_capped():
+    """At most _SCREENER_INFO_CONCURRENCY (4) `.info` calls may be in
+    flight simultaneously, even though the outer batch_size is 20.
+    Without this cap a screener pass starves the shared yfinance
+    ThreadPool and ad-hoc /quote requests stall behind it."""
+    in_flight = 0
+    peak = 0
+    lock = svc.asyncio.Lock()
+
+    async def slow_info(_t: str):
+        nonlocal in_flight, peak
+        async with lock:
+            in_flight += 1
+            peak = max(peak, in_flight)
+        await svc.asyncio.sleep(0.05)
+        async with lock:
+            in_flight -= 1
+        return {"marketCap": 1e12, "trailingPE": 20, "priceToBook": 5,
+                "regularMarketPrice": 100, "regularMarketChangePercent": 0.5,
+                "longName": "X", "sector": "Tech", "volume": 1_000_000}
+
+    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc.yfinance, "get_info", new=slow_info), \
+         patch.object(svc, "_get_sp500_tickers",
+                      AsyncMock(return_value=[f"T{i:02d}" for i in range(20)])):
+        await svc.get_screener(min_pe=1, limit=20)
+
+    assert peak <= 4, f"screener fan-out exceeded cap: peak={peak}"
+
+
+@pytest.mark.asyncio
 async def test_get_screener_caches_zero_price_rows_briefly():
     """When every quote provider is blocked we still cache the universe
     shell (price=0) for a short TTL so the next user sees something

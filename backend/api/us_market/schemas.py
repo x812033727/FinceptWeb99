@@ -49,6 +49,11 @@ class FundamentalsResponse(BaseModel):
     fifty_two_week_low: float | None = None
     description: str | None = None
     fetched_at: str
+    # Same convention as QuoteResponse / ScreenerItem.data_source:
+    # "polygon" | "yfinance" | "unavailable" tells the UI which upstream
+    # served the row, or "unavailable" when both providers were blocked
+    # (rare — get_fundamentals only caches non-empty payloads).
+    data_source: str = "unavailable"
 
 
 class FinancialsResponse(BaseModel):

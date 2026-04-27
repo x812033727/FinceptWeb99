@@ -40,6 +40,8 @@ export interface FundamentalsResponse {
   // TW-specific
   foreign_ownership_pct?: number;
   fetched_at: string;
+  // "polygon" | "yfinance" | "unavailable" — set by the US backend.
+  data_source?: string;
 }
 
 export interface ScreenerResult {

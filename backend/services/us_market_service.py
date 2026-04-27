@@ -315,9 +315,12 @@ async def get_options(ticker: str, expiration_date: str | None = None) -> list[d
         return json.loads(cached)
 
     data: list[dict[str, Any]] = []
+    source = "unavailable"
     if _use_polygon():
         try:
             data = await polygon.get_options_chain(ticker, expiration_date)
+            if data:
+                source = "polygon"
         except Exception as exc:
             log.warning("us.options.polygon_failed",
                         extra={"ticker": ticker, "expiry": expiration_date, "error": str(exc)})
@@ -330,10 +333,18 @@ async def get_options(ticker: str, expiration_date: str | None = None) -> list[d
     if not data:
         try:
             data = await yfinance.get_options(ticker, expiration_date)
+            if data:
+                source = "yfinance"
         except Exception as exc:
             log.warning("us.options.yfinance_failed",
                         extra={"ticker": ticker, "expiry": expiration_date, "error": str(exc)})
             data = []
+
+    # Stamp every contract row so the frontend can render a free-tier hint
+    # (data_source == "yfinance") or flag a Polygon-failure-degradation.
+    # setdefault keeps any per-row source the connector already set.
+    for row in data:
+        row.setdefault("data_source", source)
 
     if data:
         await cache_set(key, json.dumps(data), TTL_OPTIONS)

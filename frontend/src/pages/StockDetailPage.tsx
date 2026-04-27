@@ -35,6 +35,7 @@ interface OptionRow {
   implied_volatility?: number;
   delta?: number;
   gamma?: number;
+  data_source?: string;   // "polygon" | "yfinance" | "unavailable"
 }
 
 interface InstitutionalRow {
@@ -440,6 +441,7 @@ function IVSurface({ options, optionType }: { options: OptionRow[]; optionType: 
 // ── Options panel ─────────────────────────────────────────────────
 
 function OptionsPanel({ symbol }: { symbol: string }) {
+  const { t } = useTranslation();
   const [optionType, setOptionType] = useState<"call" | "put">("call");
   const [view, setView] = useState<"table" | "surface">("table");
 
@@ -455,9 +457,17 @@ function OptionsPanel({ symbol }: { symbol: string }) {
   // Get available expiry dates
   const expiries = [...new Set(options.map((o) => o.expiration_date).filter(Boolean))].sort();
   const filtered = options.filter((o) => o.contract_type?.toLowerCase() === optionType);
+  // Per-row tagging from the service layer. Polygon-served chains have
+  // bid/ask spreads; the yfinance fallback (free-tier default) doesn't.
+  const isYFinanceChain = options[0]?.data_source === "yfinance";
 
   return (
     <div className="p-4 space-y-4">
+      {isYFinanceChain && (
+        <div className="text-xs text-muted-foreground bg-muted/30 border border-border rounded px-3 py-2">
+          {t("stock.options_hint_yfinance")}
+        </div>
+      )}
       {/* controls */}
       <div className="flex items-center gap-3 flex-wrap">
         <div className="flex rounded border border-border overflow-hidden text-sm">
@@ -1426,6 +1436,10 @@ export default function StockDetailPage() {
   const [cryptoTab, setCryptoTab] = useState<CryptoTab>("chart");
   const [livePrice, setLivePrice] = useState<number | null>(null);
   const [liveChange, setLiveChange] = useState<number | null>(null);
+  // Latest data_source from the WS delta — overrides the REST snapshot's
+  // source so the hero badge updates as soon as the upstream changes
+  // mid-session (e.g. Polygon recovers, primary→fallback switch).
+  const [liveSource, setLiveSource] = useState<string | null>(null);
 
   const { data: quote } = useQuery({
     queryKey: ["quote", mkt, sym],
@@ -1455,9 +1469,10 @@ export default function StockDetailPage() {
   });
 
   useWebSocket(`${sym}:${mkt}`, (data: unknown) => {
-    const d = data as Record<string, number>;
-    if (d.price) setLivePrice(d.price);
-    if (d.change_pct !== undefined) setLiveChange(d.change_pct);
+    const d = data as Record<string, number | string>;
+    if (typeof d.price === "number" && d.price) setLivePrice(d.price);
+    if (typeof d.change_pct === "number") setLiveChange(d.change_pct);
+    if (typeof d.data_source === "string") setLiveSource(d.data_source);
   });
 
   const displayPrice = livePrice ?? (quote?.price as number | undefined);
@@ -1487,7 +1502,7 @@ export default function StockDetailPage() {
         <div className="min-w-0">
           <h1 className="text-xl sm:text-2xl font-bold text-foreground inline-flex items-center">
             {sym}
-            <DataSourceBadge source={quote?.data_source as string | undefined} />
+            <DataSourceBadge source={liveSource ?? (quote?.data_source as string | undefined)} />
           </h1>
           {Boolean(quote?.name || quote?.name_zh) && (
             <p className="text-xs sm:text-sm text-muted-foreground mt-0.5 truncate">

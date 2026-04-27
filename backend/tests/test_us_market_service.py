@@ -100,6 +100,38 @@ async def test_get_options_passes_expiration_date_through():
     my.assert_awaited_once_with("AAPL", "2025-06-20")
 
 
+@pytest.mark.asyncio
+async def test_get_options_tags_data_source_yfinance_when_no_polygon():
+    """Free-tier deployments (no Polygon key) get the yfinance chain. Each
+    row should carry data_source="yfinance" so the OptionsPanel can show
+    the bid/ask-spreads-unavailable hint."""
+    rows = [_yf_chain_row(200.0), _yf_chain_row(210.0, "put")]
+    with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
+         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc.yfinance, "get_options", AsyncMock(return_value=rows)):
+        result = await svc.get_options("AAPL")
+    assert all(r["data_source"] == "yfinance" for r in result)
+
+
+@pytest.mark.asyncio
+async def test_get_options_tags_data_source_polygon_when_polygon_serves():
+    """Paid-tier path: Polygon returned the chain ⇒ rows are tagged
+    "polygon" so the OptionsPanel does NOT render the free-tier hint."""
+    polygon_rows = [{"ticker": "AAPL250620C00200000", "underlying_ticker": "AAPL",
+                     "contract_type": "call", "expiration_date": "2025-06-20",
+                     "strike_price": 200.0}]
+    with patch.object(svc.settings, "POLYGON_API_KEY", "test-key"), \
+         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc.polygon, "get_options_chain",
+                      AsyncMock(return_value=polygon_rows)), \
+         patch.object(svc.yfinance, "get_options", AsyncMock()) as my:
+        result = await svc.get_options("AAPL")
+    my.assert_not_awaited()
+    assert all(r["data_source"] == "polygon" for r in result)
+
+
 # ── get_screener — Stooq batch cap (issue: /api/us/screener timeout) ──
 #
 # The default sync request path must NOT hand the entire 100-symbol

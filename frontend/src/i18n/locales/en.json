@@ -140,6 +140,7 @@
     "fundamentals": "Fundamentals",
     "history": "History",
     "options": "Options",
+    "options_hint_yfinance": "Free-tier chain via yfinance — last price, IV and open interest are live; bid/ask spreads not exposed by Polygon-free.",
     "news": "News",
     "open_chart": "Open Chart",
     "health": {

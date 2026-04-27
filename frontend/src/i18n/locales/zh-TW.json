@@ -140,6 +140,7 @@
     "fundamentals": "基本面",
     "history": "歷史走勢",
     "options": "選擇權",
+    "options_hint_yfinance": "免費 tier 由 yfinance 提供：最新成交價、IV、未平倉量為即時；買賣價差因 Polygon 免費版不公開、暫無資料。",
     "news": "相關新聞",
     "open_chart": "開啟K線圖",
     "health": {

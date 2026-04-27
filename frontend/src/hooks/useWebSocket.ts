@@ -1,7 +1,10 @@
 /**
  * Manages a single WebSocket connection per user session.
  * Components call subscribe(key, cb) / unsubscribe(key, cb) in useEffect.
- * Reconnects automatically with exponential backoff (1s → 2s → 4s → max 30s).
+ *
+ * Reconnect: exponential backoff 1s → 2s → 4s → max 30s, with ±25% jitter
+ * so a deploy / network blip that drops every client at once doesn't make
+ * them all retry on the same tick (thundering-herd → backend overload).
  *
  * key format: "SYMBOL:MARKET"  e.g. "AAPL:US" | "2330:TW"
  */
@@ -131,10 +134,13 @@ function connect(token: string): void {
     }
     notifyWsState(false);
     if (reconnectTimer) clearTimeout(reconnectTimer);
+    // ±25% jitter on the scheduled delay so a deploy that drops every
+    // client at once doesn't make them all retry on the same millisecond.
+    const jittered = reconnectDelay * (0.75 + Math.random() * 0.5);
     reconnectTimer = setTimeout(() => {
       const t = useAuthStore.getState().token;
       if (t) connect(t);
-    }, reconnectDelay);
+    }, jittered);
     reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
   };
 

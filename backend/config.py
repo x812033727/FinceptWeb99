@@ -92,18 +92,41 @@ class Settings(BaseSettings):
     # means "derive from JWT_SECRET_KEY" — see auth/llm_key_crypto.py.
     LLM_KEY_ENCRYPTION_KEY: str = ""
 
-    # Claude Agent (tool-use via claude-agent-sdk). Off by default; analyst/admin only when on.
-    CLAUDE_AGENT_ENABLED: bool = False
+    # Claude Agent (tool-use via claude-agent-sdk). Auto-disabled when the
+    # optional `claude-agent-sdk` package isn't importable so a deployment
+    # without the SDK never surfaces 500s — see `claude_agent_effective_enabled`.
+    # Analyst/admin role required regardless.
+    CLAUDE_AGENT_ENABLED: bool = True
     CLAUDE_AGENT_MODEL: str = "claude-sonnet-4-5-20250929"
     CLAUDE_AGENT_MAX_TURNS: int = 8
     CLAUDE_AGENT_TOOL_TIMEOUT_S: int = 30
     CLAUDE_AGENT_PYTHON_MEM_MB: int = 256
     CLAUDE_AGENT_PYTHON_CPU_S: int = 5
-    CLAUDE_AGENT_WEBFETCH_ALLOWLIST: str = ""  # comma-separated host allowlist; empty = block
+    # Hosts the `web_fetch` tool may reach. Curated default covers GitHub
+    # raw content, Anthropic + FastAPI docs, and the FRED / SEC / Yahoo
+    # public data hosts the agent commonly needs. Operators tighten or
+    # widen via env. Setting to an empty string still blocks all fetches.
+    CLAUDE_AGENT_WEBFETCH_ALLOWLIST: str = (
+        "raw.githubusercontent.com,api.github.com,docs.anthropic.com,"
+        "fastapi.tiangolo.com,api.stlouisfed.org,www.sec.gov,query1.finance.yahoo.com"
+    )
 
     @property
     def claude_agent_webfetch_hosts(self) -> list[str]:
         return [h.strip().lower() for h in self.CLAUDE_AGENT_WEBFETCH_ALLOWLIST.split(",") if h.strip()]
+
+    @property
+    def claude_agent_effective_enabled(self) -> bool:
+        """True iff the flag is on AND `claude_agent_sdk` is importable.
+
+        Operators can install the SDK to opt in without flipping any flag;
+        deployments that omit the optional dep degrade to 503 with a clear
+        message instead of crashing on import.
+        """
+        if not self.CLAUDE_AGENT_ENABLED:
+            return False
+        import importlib.util
+        return importlib.util.find_spec("claude_agent_sdk") is not None
 
     # Rate limits
     FINMIND_DAILY_REQUEST_LIMIT: int = 550  # conservative under free-tier 600

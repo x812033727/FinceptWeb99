@@ -271,6 +271,10 @@ async def test_trigger_update_not_configured(monkeypatch):
     monkeypatch.setattr(vs.settings, "UPDATE_COMMAND", "")
     result = await vs.trigger_update()
     assert result["status"] == "not_configured"
+    # Operators with an empty UPDATE_COMMAND get actionable guidance
+    # in the message — Docker Compose / kubectl / helm examples.
+    assert "docker" in result["message"].lower()
+    assert "kubectl" in result["message"].lower()
 
 
 @pytest.mark.asyncio

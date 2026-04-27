@@ -198,6 +198,61 @@ async def get_batch_quotes(tickers: list[str]) -> dict[str, dict[str, Any]]:
         return {}
 
 
+async def get_options(
+    ticker: str, expiration_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """Options chain via yfinance. Pulls calls + puts for one expiry (or all).
+
+    Returned rows match the polygon shape on the keys we care about
+    (ticker, contract_type, strike_price, expiration_date) plus market
+    data (last_price, volume, open_interest, implied_volatility) so the
+    frontend can render either source uniformly.
+    """
+    def _fetch():
+        t = yf.Ticker(ticker)
+        try:
+            expiries = list(t.options or ())
+        except Exception as exc:
+            log.warning("yfinance.options.expiries_failed",
+                        extra={"ticker": ticker, "error": str(exc)})
+            return []
+
+        if not expiries:
+            return []
+
+        targets = [expiration_date] if expiration_date else expiries
+        out: list[dict[str, Any]] = []
+        for exp in targets:
+            if exp not in expiries:
+                continue
+            try:
+                chain = t.option_chain(exp)
+            except Exception as exc:
+                log.warning("yfinance.options.chain_failed",
+                            extra={"ticker": ticker, "expiry": exp, "error": str(exc)})
+                continue
+            for ctype, df in (("call", chain.calls), ("put", chain.puts)):
+                if df is None or df.empty:
+                    continue
+                for _, row in df.iterrows():
+                    out.append({
+                        "ticker": str(row.get("contractSymbol", "")),
+                        "underlying_ticker": ticker.upper(),
+                        "contract_type": ctype,
+                        "expiration_date": exp,
+                        "strike_price": float(row["strike"]) if not pd.isna(row.get("strike")) else None,
+                        "last_price": float(row["lastPrice"]) if not pd.isna(row.get("lastPrice")) else None,
+                        "bid": float(row["bid"]) if not pd.isna(row.get("bid")) else None,
+                        "ask": float(row["ask"]) if not pd.isna(row.get("ask")) else None,
+                        "volume": int(row["volume"]) if not pd.isna(row.get("volume")) else 0,
+                        "open_interest": int(row["openInterest"]) if not pd.isna(row.get("openInterest")) else 0,
+                        "implied_volatility": float(row["impliedVolatility"]) if not pd.isna(row.get("impliedVolatility")) else None,
+                        "in_the_money": bool(row.get("inTheMoney", False)),
+                    })
+        return out
+    return await _run(_fetch)
+
+
 async def get_financials(ticker: str) -> dict[str, Any]:
     def _fetch():
         t = yf.Ticker(ticker)

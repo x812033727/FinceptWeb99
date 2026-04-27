@@ -225,11 +225,25 @@ async def get_options(ticker: str, expiration_date: str | None = None) -> list[d
     if cached:
         return json.loads(cached)
 
-    if not _use_polygon():
-        return []  # options require Polygon
+    data: list[dict[str, Any]] = []
+    if _use_polygon():
+        try:
+            data = await polygon.get_options_chain(ticker, expiration_date)
+        except Exception:
+            data = []
 
-    data = await polygon.get_options_chain(ticker, expiration_date)
-    await cache_set(key, json.dumps(data), TTL_OPTIONS)
+    # yfinance fallback covers the no-Polygon path AND the Polygon-failure path.
+    # yfinance's option_chain returns less metadata than Polygon's reference
+    # endpoint but includes live last_price / IV / OI which Polygon's free
+    # tier doesn't, so it's a useful primary source for retail users too.
+    if not data:
+        try:
+            data = await yfinance.get_options(ticker, expiration_date)
+        except Exception:
+            data = []
+
+    if data:
+        await cache_set(key, json.dumps(data), TTL_OPTIONS)
     return data
 
 

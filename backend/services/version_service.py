@@ -229,7 +229,13 @@ async def trigger_update() -> dict[str, Any]:
     if not argv:
         return {
             "status": STATUS_NOT_CONFIGURED,
-            "message": "UPDATE_COMMAND is empty. Set it in .env to enable one-click updates.",
+            "message": (
+                "UPDATE_COMMAND is empty. Set it in .env as a JSON list, e.g. "
+                'docker compose: UPDATE_COMMAND=["docker","compose","pull"] · '
+                'kubectl: UPDATE_COMMAND=["kubectl","rollout","restart","deployment/fincept-backend"] · '
+                'helm: UPDATE_COMMAND=["helm","upgrade","fincept","./helm/fincept-web"] · '
+                "or wrap multi-step updates in a script and add it to UPDATE_COMMAND_ALLOWLIST."
+            ),
         }
 
     program = argv[0]

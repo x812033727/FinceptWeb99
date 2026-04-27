@@ -143,9 +143,14 @@ async def chat(
     max_turns: int | None = None
 
     if provider == "claude_agent":
-        if not settings.CLAUDE_AGENT_ENABLED:
+        if not settings.claude_agent_effective_enabled:
             await _refund_quota(user)
-            raise HTTPException(status_code=503, detail="Claude Agent is disabled")
+            detail = (
+                "Claude Agent is disabled (CLAUDE_AGENT_ENABLED=false)"
+                if settings.CLAUDE_AGENT_ENABLED is False
+                else "Claude Agent unavailable: install the optional `claude-agent-sdk` package"
+            )
+            raise HTTPException(status_code=503, detail=detail)
         if user.get("role") not in ("analyst", "admin"):
             await _refund_quota(user)
             raise HTTPException(status_code=403, detail="Claude Agent requires analyst role")

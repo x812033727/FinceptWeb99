@@ -126,7 +126,10 @@ async def get_quote(symbol: str) -> dict[str, Any]:
             pass
 
     result = _normalize_quote(symbol, raw or {})
-    await cache_set(key, json.dumps(result), TTL_QUOTE)
+    # Don't cache the zero-state (TWSE + FinMind both failed) — keeps the
+    # next request retrying instead of locking a 60-second blank quote.
+    if result.get("price"):
+        await cache_set(key, json.dumps(result), TTL_QUOTE)
     return result
 
 
@@ -181,7 +184,8 @@ async def get_history(symbol: str, months: int = 12) -> list[dict[str, Any]]:
         except Exception:
             pass
 
-    await cache_set(key, json.dumps(bars), TTL_HISTORY)
+    if bars:
+        await cache_set(key, json.dumps(bars), TTL_HISTORY)
     return bars
 
 
@@ -211,7 +215,8 @@ async def get_institutional(symbol: str, days: int = 30) -> list[dict[str, Any]]
         except Exception:
             pass
 
-    await cache_set(key, json.dumps(result), TTL_INSTITUTIONAL)
+    if result:
+        await cache_set(key, json.dumps(result), TTL_INSTITUTIONAL)
     return result
 
 
@@ -237,7 +242,8 @@ async def get_margin(symbol: str, days: int = 30) -> list[dict[str, Any]]:
         except Exception:
             pass
 
-    await cache_set(key, json.dumps(result), TTL_MARGIN)
+    if result:
+        await cache_set(key, json.dumps(result), TTL_MARGIN)
     return result
 
 
@@ -264,7 +270,8 @@ async def get_revenue(symbol: str, months: int = 12) -> list[dict[str, Any]]:
         except Exception:
             pass
 
-    await cache_set(key, json.dumps(result), TTL_REVENUE)
+    if result:
+        await cache_set(key, json.dumps(result), TTL_REVENUE)
     return result
 
 
@@ -282,13 +289,17 @@ async def get_fundamentals(symbol: str) -> dict[str, Any]:
         "market": "TW",
         "exchange": get_exchange(symbol),
     }
+    have_ratios = False
     try:
         ratios = await twse.get_valuation_ratios(symbol)
-        result.update(ratios)
+        if ratios:
+            result.update(ratios)
+            have_ratios = True
     except Exception:
         pass
 
-    await cache_set(key, json.dumps(result), TTL_FUNDAMENTALS)
+    if have_ratios:
+        await cache_set(key, json.dumps(result), TTL_FUNDAMENTALS)
     return result
 
 

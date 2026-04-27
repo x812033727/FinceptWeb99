@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
 import type { Market, ScreenerResult } from "@/types/market";
+import { DataSourceBadge } from "@/components/DataSourceBadge";
 
 // ── types ──────────────────────────────────────────────────────────
 
@@ -85,46 +86,6 @@ function ChangeCell({ value }: { value: number | null | undefined }) {
   );
 }
 
-function DataSourceBadge({ source }: { source: string | undefined }) {
-  const { t } = useTranslation();
-  // Only flag the rows the user actually needs to know about. The
-  // steady-state sources (polygon, yfinance, twse, kraken) get no chip —
-  // would just be noise. We only badge degraded paths:
-  //   stooq    → US fallback when Yahoo is blocked
-  //   finmind  → TW fallback (yesterday's close while TWSE realtime is down)
-  //   unavailable → all upstreams blocked, row is a placeholder
-  if (source === "finmind") {
-    return (
-      <span
-        title={t("market.source_badge.finmind_tooltip")}
-        className="ml-1.5 text-[10px] uppercase font-medium px-1 py-px rounded bg-amber-500/10 text-amber-400 border border-amber-500/30"
-      >
-        {t("market.source_badge.finmind_label")}
-      </span>
-    );
-  }
-  if (source === "stooq") {
-    return (
-      <span
-        title={t("market.source_badge.stooq_tooltip")}
-        className="ml-1.5 text-[10px] uppercase font-medium px-1 py-px rounded bg-amber-500/10 text-amber-400 border border-amber-500/30"
-      >
-        {t("market.source_badge.stooq_label")}
-      </span>
-    );
-  }
-  if (source === "unavailable") {
-    return (
-      <span
-        title={t("market.source_badge.unavailable_tooltip")}
-        className="ml-1.5 text-[10px] uppercase font-medium px-1 py-px rounded bg-red-500/10 text-red-400 border border-red-500/30"
-      >
-        {t("market.source_badge.unavailable_label")}
-      </span>
-    );
-  }
-  return null;
-}
 
 function IndexCard({ idx }: { idx: MarketIndex }) {
   const pos = idx.change_pct >= 0;

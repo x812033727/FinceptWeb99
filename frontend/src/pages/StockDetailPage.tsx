@@ -8,6 +8,7 @@ import {
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
 import CandlestickChart from "@/components/charts/CandlestickChart";
+import { DataSourceBadge } from "@/components/DataSourceBadge";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import type { OHLCVBar, Market } from "@/types/market";
 
@@ -1484,7 +1485,10 @@ export default function StockDetailPage() {
 
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="text-xl sm:text-2xl font-bold text-foreground">{sym}</h1>
+          <h1 className="text-xl sm:text-2xl font-bold text-foreground inline-flex items-center">
+            {sym}
+            <DataSourceBadge source={quote?.data_source as string | undefined} />
+          </h1>
           {Boolean(quote?.name || quote?.name_zh) && (
             <p className="text-xs sm:text-sm text-muted-foreground mt-0.5 truncate">
               {String(quote?.name ?? quote?.name_zh ?? "")}

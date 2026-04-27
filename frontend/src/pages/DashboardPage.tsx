@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
+import { DataSourceBadge } from "@/components/DataSourceBadge";
 
 // ── Market indices ─────────────────────────────────────────────────
 
@@ -30,7 +31,10 @@ function IndexCard({ symbol, label }: { symbol: string; label: string }) {
       <div className={`text-sm font-medium mt-0.5 ${isPos ? "text-green-400" : "text-red-400"}`}>
         {changePct != null ? `${isPos ? "+" : ""}${changePct.toFixed(2)}%` : "—"}
       </div>
-      <div className="text-xs text-muted-foreground mt-1">{symbol}</div>
+      <div className="text-xs text-muted-foreground mt-1 inline-flex items-center">
+        {symbol}
+        <DataSourceBadge source={data?.data_source as string | undefined} />
+      </div>
     </Link>
   );
 }

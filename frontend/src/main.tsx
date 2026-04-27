@@ -35,3 +35,9 @@ if ("serviceWorker" in navigator && import.meta.env.PROD) {
     });
   });
 }
+
+// Core Web Vitals reporter — only in PROD so dev-build perf doesn't
+// pollute the Prometheus histograms with noisy numbers.
+if (import.meta.env.PROD) {
+  void import("@/lib/webVitals").then(({ registerWebVitals }) => registerWebVitals());
+}

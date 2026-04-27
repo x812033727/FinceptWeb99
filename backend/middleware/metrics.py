@@ -27,6 +27,24 @@ REQUEST_LATENCY = Histogram(
 )
 ACTIVE_REQUESTS = Gauge("http_active_requests", "Currently active HTTP requests")
 
+# ── Core Web Vitals (reported by the frontend) ────────────────────
+# LCP / INP / FCP / TTFB are time metrics in seconds; bucket
+# boundaries are tuned around Google's "Good / Needs improvement /
+# Poor" thresholds (e.g. LCP < 2.5 s "good", < 4 s "needs work").
+WEB_VITAL_SECONDS = Histogram(
+    "web_vital_seconds",
+    "Core Web Vitals time metrics reported by the browser",
+    ["name", "path"],
+    buckets=[0.05, 0.1, 0.2, 0.5, 1.0, 1.8, 2.5, 4.0, 6.0, 10.0],
+)
+# CLS is a unitless cumulative-shift score; "good" < 0.1, "poor" > 0.25.
+WEB_VITAL_SCORE = Histogram(
+    "web_vital_score",
+    "Core Web Vitals unitless score metrics reported by the browser",
+    ["name", "path"],
+    buckets=[0.01, 0.05, 0.1, 0.15, 0.25, 0.5, 1.0, 2.0],
+)
+
 # Normalize dynamic path segments to limit cardinality
 _NORMALIZATIONS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"^/api/(us|tw)/quote/[^/]+$"),       r"/api/\1/quote/{symbol}"),

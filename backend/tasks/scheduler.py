@@ -10,7 +10,11 @@ scheduler = AsyncIOScheduler(timezone="UTC")
 
 
 def setup_jobs() -> None:
-    from tasks.us_market_refresh import refresh_us_quotes, refresh_sp500_universe
+    from tasks.us_market_refresh import (
+        refresh_sp500_universe,
+        refresh_us_quotes,
+        refresh_us_screener,
+    )
     from tasks.tw_market_refresh import refresh_tw_quotes, refresh_tw_symbol_map
     from tasks.crypto_market_refresh import refresh_crypto_quotes
 
@@ -32,6 +36,19 @@ def setup_jobs() -> None:
         id="sp500_universe",
         replace_existing=True,
         max_instances=1,
+    )
+
+    # Screener cache warm — every 5 min. Runs the FULL waterfall
+    # (Polygon → yfinance → Stooq) including Stooq's slow ~20 s walk
+    # over the curated universe so user requests always hit a warm
+    # cache instead of timing out at the proxy.
+    scheduler.add_job(
+        refresh_us_screener,
+        trigger=IntervalTrigger(minutes=5),
+        id="us_screener_warm",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
     )
 
     # ── TW market quote polling ───────────────────────────────────

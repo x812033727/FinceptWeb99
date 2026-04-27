@@ -108,3 +108,28 @@ async def refresh_sp500_universe() -> None:
     """
     from data.us.sp500_universe import get_sp500_tickers
     await get_sp500_tickers(force_refresh=True)
+
+
+# ── Screener cache warm ────────────────────────────────────────────
+
+async def refresh_us_screener() -> None:
+    """Pre-warm the default `/api/us/screener?limit=100` cache.
+
+    The fully-fallback path (Polygon → yfinance → Stooq) takes 20+ s
+    when Yahoo blocks our cloud IPs and we have to walk the curated
+    universe through Stooq's single-stream CSV endpoint. That's longer
+    than any reverse-proxy timeout, so user requests would 503 even
+    though the data WOULD eventually arrive. Running the full waterfall
+    here on a 5-min schedule means request handlers always hit the
+    cached result.
+
+    `full_stooq_batch=True` overrides the request-path cap so this task
+    fills in the entire universe even when Stooq is the only working
+    source. Errors are swallowed — a missed tick just means the next
+    user-driven request triggers the (capped) sync fallback.
+    """
+    from services.us_market_service import get_screener
+    try:
+        await get_screener(limit=100, full_stooq_batch=True)
+    except Exception as exc:
+        logger.warning("US screener warm refresh failed: %s", exc)

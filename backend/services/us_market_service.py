@@ -27,6 +27,15 @@ TTL_FUNDAMENTALS = 24 * 3600
 TTL_OPTIONS     = 5 * 60
 TTL_SCREENER    = 10 * 60
 
+# Stooq's per-request 0.2s pacing means a batch of 100 symbols takes
+# ~20 seconds — longer than any sane reverse-proxy timeout. We cap the
+# synchronous request path to STOOQ_SYNC_BATCH_LIMIT symbols (~5 s
+# worst case) and let the rest come back as price=0 placeholders that
+# the frontend renders as "—". The background warm task
+# (`tasks.us_market_refresh.refresh_us_screener`) refreshes the cache
+# every 5 min with the FULL universe so subsequent users hit the cache.
+STOOQ_SYNC_BATCH_LIMIT = 25
+
 
 def _is_market_open() -> bool:
     now_et = datetime.now(_ET)
@@ -265,6 +274,8 @@ async def get_screener(
     min_volume: int | None = None,
     sector: str | None = None,
     limit: int = 100,
+    *,
+    full_stooq_batch: bool = False,
 ) -> list[dict[str, Any]]:
     key = (
         f"us:screener:{min_market_cap}:{min_pe}:{max_pe}:{min_pb}:{max_pb}:"
@@ -320,7 +331,12 @@ async def get_screener(
         symbols = [sym for sym, _ in universe]
         quotes = await yfinance.get_batch_quotes(symbols)
         if not quotes:
-            quotes = await stooq.get_batch_quotes(symbols)
+            # Cap the Stooq sync batch unless the caller is the background
+            # warm task (which can afford to wait the full ~20s).
+            stooq_targets = (
+                symbols if full_stooq_batch else symbols[:STOOQ_SYNC_BATCH_LIMIT]
+            )
+            quotes = await stooq.get_batch_quotes(stooq_targets)
         results = [
             {
                 "symbol": sym, "market": "US", "name": name,
@@ -334,12 +350,15 @@ async def get_screener(
             for sym, name in universe
         ]
 
-    # Don't cache empty results — keeps the next request retrying instead
-    # of locking in a failure for TTL_SCREENER seconds. Same goes for the
-    # curated-list fallback when every row has price=0 (batch quotes also
-    # blocked) — caching that would lock the user into the zero state.
-    if results and any(r.get("price") for r in results):
-        await cache_set(key, json.dumps(results), TTL_SCREENER)
+    # Cache strategy:
+    #   - rows with at least one real price ⇒ full TTL_SCREENER (10 min)
+    #   - rows with all prices = 0 (every quote provider blocked)
+    #     ⇒ short TTL so the page renders something fast but the next
+    #       background warm task still gets to refresh quickly.
+    #   - empty results ⇒ never cache.
+    if results:
+        ttl = TTL_SCREENER if any(r.get("price") for r in results) else 60
+        await cache_set(key, json.dumps(results), ttl)
     return results
 
 

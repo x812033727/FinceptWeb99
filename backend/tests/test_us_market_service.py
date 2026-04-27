@@ -305,11 +305,59 @@ async def test_get_quote_data_source_unavailable_when_all_fail():
          patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
          patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
          patch.object(svc.yfinance, "get_quote", AsyncMock(side_effect=RuntimeError("blocked"))), \
-         patch.object(svc.stooq, "get_quote", AsyncMock(side_effect=RuntimeError("blocked"))):
+         patch.object(svc.stooq, "get_quote", AsyncMock(side_effect=RuntimeError("blocked"))), \
+         patch.object(svc.finnhub, "get_quote", AsyncMock(return_value={})):
         result = await svc.get_quote("AAPL")
     assert result["data_source"] == "unavailable"
     assert result["price"] == 0
     mock_set.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_quote_falls_through_to_finnhub_when_others_blank():
+    """Polygon disabled, yfinance + Stooq both empty → Finnhub is the
+    last waterfall step. Tag must say `finnhub`."""
+    finnhub_quote = {
+        "symbol": "AAPL", "price": 200.0, "change": 1.0, "change_pct": 0.5,
+        "volume": 0, "open": 199, "high": 201, "low": 198,
+        "prev_close": 199.0, "market_cap": None,
+    }
+    with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
+         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc.yfinance, "get_quote", AsyncMock(return_value={})), \
+         patch.object(svc.stooq, "get_quote", AsyncMock(return_value={})), \
+         patch.object(svc.finnhub, "get_quote", AsyncMock(return_value=finnhub_quote)):
+        result = await svc.get_quote("AAPL")
+    assert result["data_source"] == "finnhub"
+    assert result["price"] == 200.0
+
+
+@pytest.mark.asyncio
+async def test_get_screener_falls_through_to_finnhub_batch():
+    """yfinance batch + Stooq batch both empty → screener falls through
+    to finnhub.get_batch_quotes and tags resulting rows `finnhub`."""
+    universe = _fake_universe(3)
+    finnhub_quotes = {
+        "SYM000": {"price": 50.0, "change_pct": 1.0, "volume": 100},
+        "SYM002": {"price": 70.0, "change_pct": 2.0, "volume": 300},
+    }
+
+    with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
+         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "_screener_yfinance", AsyncMock(return_value=[])), \
+         patch.object(svc, "_get_sp500_tickers", AsyncMock(return_value=[s for s, _ in universe])), \
+         patch("data.us.sp500_universe.get_fallback_universe", lambda: universe), \
+         patch.object(svc.yfinance, "get_batch_quotes", AsyncMock(return_value={})), \
+         patch.object(svc.stooq, "get_batch_quotes", AsyncMock(return_value={})), \
+         patch.object(svc.finnhub, "get_batch_quotes", AsyncMock(return_value=finnhub_quotes)):
+        rows = await svc.get_screener(limit=3)
+
+    by_sym = {r["symbol"]: r for r in rows}
+    assert by_sym["SYM000"]["data_source"] == "finnhub"
+    assert by_sym["SYM002"]["data_source"] == "finnhub"
+    assert by_sym["SYM001"]["data_source"] == "unavailable"
 
 
 @pytest.mark.asyncio

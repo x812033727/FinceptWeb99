@@ -76,8 +76,10 @@ async function fetchTWIndex(twIndexLabel: string): Promise<MarketIndex | null> {
 
 // ── sub-components ─────────────────────────────────────────────────
 
-function ChangeCell({ value }: { value: number | null | undefined }) {
-  if (value === null || value === undefined) return <span className="text-muted-foreground">—</span>;
+function ChangeCell({ value, unavailable }: { value: number | null | undefined; unavailable?: boolean }) {
+  if (unavailable || value === null || value === undefined) {
+    return <span className="text-muted-foreground">—</span>;
+  }
   const pos = value >= 0;
   return (
     <span className={pos ? "text-green-400" : "text-red-400"}>
@@ -87,16 +89,20 @@ function ChangeCell({ value }: { value: number | null | undefined }) {
 }
 
 
-function IndexCard({ idx }: { idx: MarketIndex }) {
+function IndexCard({ idx, unavailable }: { idx: MarketIndex; unavailable?: boolean }) {
   const pos = idx.change_pct >= 0;
   return (
     <div className="bg-card border border-border rounded-lg p-4">
       <div className="text-xs text-muted-foreground">{idx.name}</div>
       <div className="text-xl font-bold text-foreground mt-1">
-        {idx.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+        {unavailable
+          ? <span className="text-muted-foreground">—</span>
+          : idx.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}
       </div>
-      <div className={`text-sm font-medium ${pos ? "text-green-400" : "text-red-400"}`}>
-        {pos ? "+" : ""}{idx.change_pct.toFixed(2)}%
+      <div className={`text-sm font-medium ${unavailable ? "text-muted-foreground" : pos ? "text-green-400" : "text-red-400"}`}>
+        {unavailable
+          ? "—"
+          : `${pos ? "+" : ""}${idx.change_pct.toFixed(2)}%`}
       </div>
     </div>
   );
@@ -192,6 +198,7 @@ export default function MarketPage() {
               <IndexCard
                 key={symbol}
                 idx={{ symbol, name, price: row.price, change_pct: row.change_pct }}
+                unavailable={row.data_source === "unavailable"}
               />
             );
           })}
@@ -251,7 +258,9 @@ export default function MarketPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((row) => (
+                {filtered.map((row) => {
+                  const unavailable = row.data_source === "unavailable";
+                  return (
                   <tr
                     key={row.symbol}
                     onClick={() => navigate(`/stock/${mkt}/${row.symbol}`)}
@@ -263,13 +272,17 @@ export default function MarketPage() {
                     </td>
                     <td className="px-3 sm:px-4 py-2.5 text-muted-foreground max-w-[120px] sm:max-w-[180px] truncate">{row.name}</td>
                     <td className="px-3 sm:px-4 py-2.5 text-right text-foreground tabular-nums">
-                      {row.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      {unavailable
+                        ? <span className="text-muted-foreground">—</span>
+                        : row.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
                     <td className="px-3 sm:px-4 py-2.5 text-right tabular-nums">
-                      <ChangeCell value={row.change_pct} />
+                      <ChangeCell value={row.change_pct} unavailable={unavailable} />
                     </td>
                     <td className="hidden sm:table-cell px-3 sm:px-4 py-2.5 text-right text-muted-foreground tabular-nums">
-                      {row.volume >= 1e6
+                      {unavailable
+                        ? "—"
+                        : row.volume >= 1e6
                         ? `${(row.volume / 1e6).toFixed(1)}M`
                         : row.volume >= 1e3
                         ? `${(row.volume / 1e3).toFixed(0)}K`
@@ -289,7 +302,8 @@ export default function MarketPage() {
                       {row.sector ?? "—"}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
                 {filtered.length === 0 && (
                   <tr>
                     <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground text-sm">

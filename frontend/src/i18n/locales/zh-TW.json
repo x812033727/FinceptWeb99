@@ -75,6 +75,7 @@
     "latest_news": "最新消息",
     "market_news": "市場新聞",
     "loading_news": "載入新聞中…",
+    "no_news": "目前沒有可顯示的新聞",
     "cards": {
       "us_market_desc": "S&P 500 即時報價與篩選",
       "tw_market_desc": "上市上櫃即時行情",

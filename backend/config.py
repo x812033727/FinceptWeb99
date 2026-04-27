@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     POLYGON_API_KEY: str = ""
     YAHOO_FINANCE_ENABLED: bool = True
     FRED_API_KEY: str = ""
+    # Finnhub: 4th-tier fallback when Polygon / yfinance / Stooq all fail.
+    # Free tier is 60 req/min — plenty for the 25-symbol screener cap. Empty
+    # key disables the connector entirely (no degradation banner change).
+    FINNHUB_API_KEY: str = ""
 
     # TW market data
     FINMIND_TOKEN: str = ""

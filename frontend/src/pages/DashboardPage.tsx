@@ -18,6 +18,10 @@ function IndexCard({ symbol, label }: { symbol: string; label: string }) {
   const price = data?.price as number | undefined;
   const changePct = data?.change_pct as number | undefined;
   const isPos = (changePct ?? 0) >= 0;
+  // Backend returns data_source="unavailable" + price=0 when every
+  // upstream fails. Render that as "—" instead of a misleading
+  // 0.00 / +0.00% green pill that looks like the asset is at zero.
+  const unavailable = data?.data_source === "unavailable";
 
   return (
     <Link
@@ -26,10 +30,12 @@ function IndexCard({ symbol, label }: { symbol: string; label: string }) {
     >
       <div className="text-xs text-muted-foreground mb-1">{label}</div>
       <div className="text-lg font-bold text-foreground">
-        {price != null ? price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}
+        {!unavailable && price != null
+          ? price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          : "—"}
       </div>
-      <div className={`text-sm font-medium mt-0.5 ${isPos ? "text-green-400" : "text-red-400"}`}>
-        {changePct != null ? `${isPos ? "+" : ""}${changePct.toFixed(2)}%` : "—"}
+      <div className={`text-sm font-medium mt-0.5 ${unavailable ? "text-muted-foreground" : isPos ? "text-green-400" : "text-red-400"}`}>
+        {!unavailable && changePct != null ? `${isPos ? "+" : ""}${changePct.toFixed(2)}%` : "—"}
       </div>
       <div className="text-xs text-muted-foreground mt-1 inline-flex items-center">
         {symbol}
@@ -60,13 +66,16 @@ function RecentNews() {
     return <div className="text-xs text-muted-foreground animate-pulse">{t("dashboard.loading_news")}</div>;
   }
 
-  if (!items.length) return null;
-
   return (
     <div className="bg-card border border-border rounded-lg overflow-hidden">
       <div className="px-4 py-3 border-b border-border">
         <h2 className="text-sm font-medium text-foreground">{t("dashboard.market_news")}</h2>
       </div>
+      {!items.length ? (
+        <div className="px-4 py-6 text-xs text-muted-foreground text-center">
+          {t("dashboard.no_news")}
+        </div>
+      ) : (
       <div className="divide-y divide-border/50">
         {items.slice(0, 5).map((item, i) => (
           <a
@@ -88,6 +97,7 @@ function RecentNews() {
           </a>
         ))}
       </div>
+      )}
     </div>
   );
 }

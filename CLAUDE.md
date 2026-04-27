@@ -54,7 +54,7 @@ FinceptWeb/
 │   ├── auth/             # JWT handler + role permissions
 │   ├── cache/            # Redis helpers (get/set/delete, key helpers)
 │   ├── data/
-│   │   ├── us/           # Polygon → yfinance → Stooq waterfall; FRED macro
+│   │   ├── us/           # Polygon → yfinance → Stooq → Finnhub waterfall; FRED macro
 │   │   ├── tw/           # TWSE → FinMind → MOPS waterfall
 │   │   └── crypto/       # Kraken REST connector + WS pump (kraken_ws.py) + Top 20 universe (symbols.py)
 │   ├── db/
@@ -83,7 +83,7 @@ FinceptWeb/
 │   │   ├── persona_override_service.py  # Per-persona LLM provider/model overrides
 │   │   ├── portfolio_service.py         # CRUD, P&L, multi-currency FX cache, optimiser
 │   │   ├── tw_market_service.py         # TW: TWSE → FinMind → MOPS; don't-cache-empty
-│   │   ├── us_market_service.py         # US: Polygon → yfinance → Stooq waterfall
+│   │   ├── us_market_service.py         # US: Polygon → yfinance → Stooq → Finnhub waterfall
 │   │   ├── version_service.py           # GitHub release polling + admin-triggered update
 │   │   └── watchlist_service.py         # CRUD + live quote enrichment
 │   ├── tasks/            # APScheduler jobs (US 10s, TW 60s, off-hours throttle)
@@ -159,7 +159,13 @@ FinceptWeb/
 3. PostgreSQL (persistent holdings, transactions, watchlists, alerts)
 
 ### Market data waterfall
-- US: Polygon.io → yfinance → Stooq (quote, history, fundamentals, news).
+- US quote: Polygon.io → yfinance → Stooq → Finnhub. Finnhub is the
+  4th-tier fallback when both Yahoo and Stooq's Polish edge are
+  simultaneously blocked (free tier 60/min, US-east infra). Empty
+  `FINNHUB_API_KEY` skips the tier silently — the previous 3-tier
+  behaviour is preserved.
+- US history / fundamentals / news: Polygon → yfinance → Stooq. Finnhub
+  isn't wired into these because its free plan only exposes /quote.
   Options chain is `Polygon → yfinance` only (Stooq has no options endpoint);
   free-tier deployments without a Polygon key still serve chains via
   `yfinance.get_options()` which exposes last_price / IV / OI per contract.
@@ -167,9 +173,10 @@ FinceptWeb/
   symbol `.info`, slow + frequently rate-limited) → curated `_FALLBACK_UNIVERSE`
   enriched via `yfinance.get_batch_quotes()` (`yf.download()` chart endpoint,
   more resilient than `.info`) → `stooq.get_batch_quotes()` (free CSV API,
-  Polish edge, immune to Yahoo's cloud-IP block). Rows where every price is
-  0 are NOT cached so the next request retries instead of locking in 10 min
-  of zeros.
+  Polish edge, immune to Yahoo's cloud-IP block) → `finnhub.get_batch_quotes()`
+  (per-symbol REST, capped at 4 concurrent in flight). Rows where every
+  price is 0 are NOT cached so the next request retries instead of
+  locking in 10 min of zeros.
 - Stooq is single-symbol-only (its comma-batch endpoint trips a "DNS
   cache overflow" 503 anti-scrape) and rejects parallel calls (even 2 in
   flight = 503), so `get_batch_quotes` walks the symbol list sequentially
@@ -294,6 +301,7 @@ REDIS_URL=redis://localhost:6379
 JWT_SECRET_KEY=<min-32-char-secret>
 POLYGON_API_KEY=          # optional — falls back to yfinance
 FRED_API_KEY=             # optional — macro data
+FINNHUB_API_KEY=          # optional — 4th-tier US quote fallback (60/min free)
 FINMIND_TOKEN=            # optional — TW institutional data
 OPENAI_API_KEY=
 ANTHROPIC_API_KEY=

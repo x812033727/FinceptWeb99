@@ -9,12 +9,13 @@ POST   /api/watchlist/{wid}/items              add symbol
 DELETE /api/watchlist/{wid}/items/{item_id}    remove symbol
 """
 from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.watchlist.schemas import WatchlistCreate, WatchlistItemAdd, WatchlistOut, WatchlistItemOut
 from auth.permissions import require_viewer
 from db.session import get_db
+from limiter import limiter
 import services.watchlist_service as svc
 from services.watchlist_service import DuplicateWatchlistItem
 
@@ -29,19 +30,22 @@ async def list_watchlists(user: CurrentUser, db: DB):
 
 
 @router.post("", response_model=WatchlistOut, status_code=201)
-async def create_watchlist(body: WatchlistCreate, user: CurrentUser, db: DB):
+@limiter.limit("30/minute")
+async def create_watchlist(request: Request, body: WatchlistCreate, user: CurrentUser, db: DB):
     return await svc.create_watchlist(db, user["id"], body.name)
 
 
 @router.delete("/{wid}", status_code=204)
-async def delete_watchlist(wid: str, user: CurrentUser, db: DB):
+@limiter.limit("30/minute")
+async def delete_watchlist(request: Request, wid: str, user: CurrentUser, db: DB):
     ok = await svc.delete_watchlist(db, user["id"], wid)
     if not ok:
         raise HTTPException(status_code=404, detail="Watchlist not found")
 
 
 @router.post("/{wid}/items", response_model=WatchlistItemOut, status_code=201)
-async def add_item(wid: str, body: WatchlistItemAdd, user: CurrentUser, db: DB):
+@limiter.limit("60/minute")
+async def add_item(request: Request, wid: str, body: WatchlistItemAdd, user: CurrentUser, db: DB):
     # Pydantic regex on WatchlistItemAdd.market already constrains to
     # (US|TW|CRYPTO) — no need to re-check here.
     try:
@@ -54,7 +58,8 @@ async def add_item(wid: str, body: WatchlistItemAdd, user: CurrentUser, db: DB):
 
 
 @router.delete("/{wid}/items/{item_id}", status_code=204)
-async def remove_item(wid: str, item_id: str, user: CurrentUser, db: DB):
+@limiter.limit("60/minute")
+async def remove_item(request: Request, wid: str, item_id: str, user: CurrentUser, db: DB):
     ok = await svc.remove_item(db, user["id"], wid, item_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Item not found")

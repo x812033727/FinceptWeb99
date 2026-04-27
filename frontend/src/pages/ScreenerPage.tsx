@@ -524,6 +524,7 @@ export default function ScreenerPage() {
                 const row = rows[virtualRow.index];
                 const pos = row.change_pct >= 0;
                 const isTW = applied.market === "TW";
+                const unavailable = row.data_source === "unavailable";
                 return (
                   <div
                     key={virtualRow.key}
@@ -536,13 +537,17 @@ export default function ScreenerPage() {
                     <span className="font-medium text-primary text-sm">{row.symbol}</span>
                     <span className="text-muted-foreground text-sm truncate">{row.name}</span>
                     <span className="text-right text-sm text-foreground">
-                      {row.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      {unavailable
+                        ? <span className="text-muted-foreground">—</span>
+                        : row.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </span>
-                    <span className={`text-right text-sm ${pos ? "text-green-400" : "text-red-400"}`}>
-                      {pos ? "+" : ""}{row.change_pct.toFixed(2)}%
+                    <span className={`text-right text-sm ${unavailable ? "text-muted-foreground" : pos ? "text-green-400" : "text-red-400"}`}>
+                      {unavailable ? "—" : `${pos ? "+" : ""}${row.change_pct.toFixed(2)}%`}
                     </span>
                     <span className="text-right text-sm text-muted-foreground">
-                      {row.volume >= 1e6 ? `${(row.volume / 1e6).toFixed(1)}M` : row.volume >= 1e3 ? `${(row.volume / 1e3).toFixed(0)}K` : row.volume}
+                      {unavailable
+                        ? "—"
+                        : row.volume >= 1e6 ? `${(row.volume / 1e6).toFixed(1)}M` : row.volume >= 1e3 ? `${(row.volume / 1e3).toFixed(0)}K` : row.volume}
                     </span>
                     <span className="text-right text-sm text-muted-foreground">
                       {isTW

@@ -38,6 +38,9 @@ _last_prices: dict[WebSocket, PriceCache] = {}
 _ws_user: dict[WebSocket, str] = {}
 # user_id → set of websockets (multi-tab support)
 _user_ws: dict[str, set[WebSocket]] = {}
+# websocket → token expiry epoch (re-validated on every message; clients
+# can re-auth in-place by sending another {"action":"auth", "token": ...})
+_ws_token_exp: dict[WebSocket, float] = {}
 
 _listener_task: asyncio.Task | None = None
 AUTH_TIMEOUT = 5.0       # seconds to send auth message after connect
@@ -72,6 +75,7 @@ async def handle_market_ws(ws: WebSocket) -> None:
     user_id: str = payload.get("sub", "")
     _ws_user[ws] = user_id
     _user_ws.setdefault(user_id, set()).add(ws)
+    _ws_token_exp[ws] = float(payload.get("exp") or 0)
 
     heartbeat_task = asyncio.create_task(_heartbeat(ws))
 
@@ -89,6 +93,26 @@ async def handle_market_ws(ws: WebSocket) -> None:
                 continue
 
             action = msg.get("action")
+
+            # Allow re-auth (client refreshed access token) without
+            # forcing a reconnect. Anything else requires a non-expired
+            # token; otherwise close so the client knows to re-auth.
+            if action == "auth":
+                token = msg.get("token", "")
+                try:
+                    new_payload = decode_access_token(token)
+                except JWTError:
+                    await _safe_send(ws, {"type": "error", "code": "auth_failed"})
+                    continue
+                _ws_token_exp[ws] = float(new_payload.get("exp") or 0)
+                await _safe_send(ws, {"type": "auth_ok"})
+                continue
+
+            now_epoch = datetime.now(timezone.utc).timestamp()
+            if now_epoch >= _ws_token_exp.get(ws, 0):
+                await _safe_send(ws, {"type": "error", "code": "token_expired"})
+                await ws.close(code=4001, reason="Token expired")
+                break
 
             if action == "subscribe":
                 symbols: list[str] = msg.get("symbols", [])
@@ -114,6 +138,7 @@ async def handle_market_ws(ws: WebSocket) -> None:
         heartbeat_task.cancel()
         _subscriptions.pop(ws, None)
         _last_prices.pop(ws, None)
+        _ws_token_exp.pop(ws, None)
         uid = _ws_user.pop(ws, None)
         if uid and uid in _user_ws:
             _user_ws[uid].discard(ws)
@@ -194,9 +219,14 @@ async def _dispatch(payload: dict) -> None:
     """
     sub_key = f"{payload['symbol']}:{payload['market']}"
     dead: list[WebSocket] = []
+    now_epoch = datetime.now(timezone.utc).timestamp()
 
     for ws, subs in list(_subscriptions.items()):
         if sub_key not in subs:
+            continue
+        if now_epoch >= _ws_token_exp.get(ws, 0):
+            # Token expired — stop pushing passive updates. The next
+            # client message will close the socket cleanly.
             continue
 
         last = _last_prices[ws].get(sub_key)
@@ -226,13 +256,17 @@ async def push_alert_to_user(user_id: str, data: dict) -> None:
     """Push a fired alert directly to all WebSocket connections owned by user_id."""
     connections = list(_user_ws.get(user_id, set()))
     dead: list[WebSocket] = []
+    now_epoch = datetime.now(timezone.utc).timestamp()
     for ws in connections:
+        if now_epoch >= _ws_token_exp.get(ws, 0):
+            continue   # don't push to sockets whose access token has expired
         ok = await _safe_send(ws, data)
         if not ok:
             dead.append(ws)
     for ws in dead:
         _subscriptions.pop(ws, None)
         _last_prices.pop(ws, None)
+        _ws_token_exp.pop(ws, None)
         uid = _ws_user.pop(ws, None)
         if uid and uid in _user_ws:
             _user_ws[uid].discard(ws)

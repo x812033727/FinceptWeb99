@@ -12,7 +12,13 @@ export default function AllocationPie({ holdings }: Props) {
     .filter((h) => (h.weight_pct ?? 0) > 0)
     .map((h) => ({ name: `${h.symbol} (${h.market})`, value: h.weight_pct ?? 0 }));
 
-  if (!data.length) return null;
+  if (!data.length) {
+    return (
+      <div className="flex h-[260px] items-center justify-center text-sm text-muted-foreground">
+        No holdings to display
+      </div>
+    );
+  }
 
   return (
     <ResponsiveContainer width="100%" height={260}>

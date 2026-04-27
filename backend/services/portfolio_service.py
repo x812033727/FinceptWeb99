@@ -641,7 +641,7 @@ async def get_performance(
 
     portfolio = await get_portfolio(portfolio_id, user_id, db)
     if not portfolio:
-        return []
+        raise ValueError("Portfolio not found")
 
     cutoff = date.today() - timedelta(days=days)
     rows = list(
@@ -666,7 +666,7 @@ async def get_transactions(
 ) -> list[Transaction]:
     portfolio = await get_portfolio(portfolio_id, user_id, db)
     if not portfolio:
-        return []
+        raise ValueError("Portfolio not found")
     rows = await db.scalars(
         select(Transaction)
         .where(Transaction.portfolio_id == portfolio.id)

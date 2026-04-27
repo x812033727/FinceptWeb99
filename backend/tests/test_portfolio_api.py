@@ -185,6 +185,6 @@ async def test_transactions_not_accessible_by_other_user(client: AsyncClient):
     cr = await client.post("/api/portfolio", json={"name": "PrivateTx", "currency": "USD"}, headers=_auth(tok1))
     pid = cr.json()["id"]
     r = await client.get(f"/api/portfolio/{pid}/transactions", headers=_auth(tok2))
-    # Should return empty (portfolio not found for other user) not 500
-    assert r.status_code == 200
-    assert r.json() == []
+    # Other-owned portfolios are 404 (preserves the same not-leaking-existence
+    # semantic we use elsewhere — matches GET /api/portfolio/{id}).
+    assert r.status_code == 404

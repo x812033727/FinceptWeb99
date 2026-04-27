@@ -15,6 +15,7 @@ import pytz
 
 from cache.redis_cache import cache_get, cache_set, key_quote, key_history, key_fundamentals
 from config import settings
+import data.us.finnhub_connector as finnhub
 import data.us.polygon_connector as polygon
 import data.us.stooq_connector as stooq
 import data.us.yfinance_connector as yfinance
@@ -91,7 +92,7 @@ async def fetch_quote_waterfall(ticker: str) -> tuple[dict[str, Any], str]:
                         extra={"ticker": ticker, "error": str(exc2)})
             raw = {}
 
-    # Final fallback: when Polygon + yfinance (.info, fast_info, AND
+    # Tier 3 fallback: when Polygon + yfinance (.info, fast_info, AND
     # yf.download) all yield no price, try Stooq. Stooq is hosted in
     # Europe and isn't subject to the same Yahoo cloud-IP blocks that
     # bite us in some deployments.
@@ -103,6 +104,22 @@ async def fetch_quote_waterfall(ticker: str) -> tuple[dict[str, Any], str]:
                 source = "stooq"
         except Exception as exc:
             log.warning("us.quote.stooq_fallback_failed",
+                        extra={"ticker": ticker, "error": str(exc)})
+
+    # Tier 4 fallback: Finnhub. Different infra from both Yahoo (yfinance)
+    # and the Polish edge (Stooq), so when the upstream cluster blocks
+    # those two simultaneously this still pulls a real price. Free-tier
+    # 60/min is plenty for an ad-hoc per-symbol call. Skipped silently
+    # when FINNHUB_API_KEY is empty so deployments that haven't opted in
+    # behave identically to the previous 3-tier waterfall.
+    if not raw.get("price"):
+        try:
+            finnhub_raw = await finnhub.get_quote(ticker)
+            if finnhub_raw.get("price"):
+                raw = finnhub_raw
+                source = "finnhub"
+        except Exception as exc:
+            log.warning("us.quote.finnhub_fallback_failed",
                         extra={"ticker": ticker, "error": str(exc)})
 
     if not raw.get("price"):
@@ -457,6 +474,20 @@ async def get_screener(
             if not quotes:
                 log.warning("us.screener.batch_stooq_empty",
                             extra={"symbol_count": len(stooq_targets)})
+                # Final tier: Finnhub. Only triggers when both yfinance
+                # and Stooq returned nothing — same fan-out cap (25 in
+                # the sync path) so a 60/min free quota isn't blown
+                # in one request, and the background warm task using
+                # full_stooq_batch=True naturally sees the same fall-
+                # through with the full universe.
+                finnhub_targets = (
+                    symbols if full_stooq_batch else symbols[:STOOQ_SYNC_BATCH_LIMIT]
+                )
+                quotes = await finnhub.get_batch_quotes(finnhub_targets)
+                batch_source = "finnhub"
+                if not quotes:
+                    log.warning("us.screener.batch_finnhub_empty",
+                                extra={"symbol_count": len(finnhub_targets)})
         if min_market_cap is not None:
             log.info("us.screener.min_market_cap_dropped",
                      extra={"min_market_cap": min_market_cap,

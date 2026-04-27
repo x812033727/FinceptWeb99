@@ -1,10 +1,11 @@
 import uuid
 from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth.permissions import require_viewer
 from db.session import get_db
+from limiter import limiter
 from services.alert_service import AlertService
 from .schemas import AlertCreate, AlertOut
 
@@ -19,12 +20,14 @@ async def list_alerts(user: CurrentUser, db: DB):
 
 
 @router.post("", response_model=AlertOut, status_code=201)
-async def create_alert(body: AlertCreate, user: CurrentUser, db: DB):
+@limiter.limit("30/minute")
+async def create_alert(request: Request, body: AlertCreate, user: CurrentUser, db: DB):
     return await AlertService.create(db, uuid.UUID(user["id"]), body)
 
 
 @router.delete("/{alert_id}", status_code=204)
-async def delete_alert(alert_id: uuid.UUID, user: CurrentUser, db: DB):
+@limiter.limit("30/minute")
+async def delete_alert(request: Request, alert_id: uuid.UUID, user: CurrentUser, db: DB):
     ok = await AlertService.delete(db, uuid.UUID(user["id"]), alert_id)
     if not ok:
         raise HTTPException(404, "Alert not found")

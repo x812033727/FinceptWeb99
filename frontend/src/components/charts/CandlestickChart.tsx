@@ -160,5 +160,14 @@ export default function CandlestickChart({ bars, height = 360 }: Props) {
     chartRef.current?.timeScale().fitContent();
   }, [bars]);
 
-  return <div ref={containerRef} className="w-full" style={{ height }} />;
+  return (
+    <div className="relative w-full" style={{ height }}>
+      <div ref={containerRef} className="absolute inset-0" />
+      {!bars.length && (
+        <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground pointer-events-none">
+          No price data available
+        </div>
+      )}
+    </div>
+  );
 }

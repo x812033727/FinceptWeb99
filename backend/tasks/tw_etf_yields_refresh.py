@@ -28,7 +28,9 @@ import data.tw.finmind_connector as finmind
 logger = logging.getLogger(__name__)
 
 ETF_YIELDS_KEY = "tw:etf_yields_all"
+ETF_YIELDS_LAST_KEY = "tw:etf_yields_all:last_known"
 ETF_YIELDS_TTL = 24 * 3600
+ETF_YIELDS_LAST_TTL = 30 * 86400   # survives FinMind quota outages
 
 
 def _sum_recent_cash(divs: list[dict], cutoff: str) -> float:
@@ -93,10 +95,15 @@ async def refresh_tw_etf_yields(skip_if_cached: bool = False) -> None:
             yields[sym] = round(cash / price * 100, 2)
 
     if yields:
-        await cache_set(ETF_YIELDS_KEY, json.dumps(yields), ETF_YIELDS_TTL)
+        payload = json.dumps(yields)
+        await cache_set(ETF_YIELDS_KEY, payload, ETF_YIELDS_TTL)
+        await cache_set(ETF_YIELDS_LAST_KEY, payload, ETF_YIELDS_LAST_TTL)
         logger.info("ETF yield refresh: wrote yields for %d ETFs", len(yields))
     else:
-        logger.warning("ETF yield refresh: no yields computed")
+        # Don't overwrite; leave previous fresh cache (24h) and last-known
+        # (30d) intact so the screener keeps filtering ETFs through a
+        # transient FinMind / TWSE outage.
+        logger.warning("ETF yield refresh: no yields computed; keeping existing cache")
 
 
 async def warmup_tw_etf_yields() -> None:

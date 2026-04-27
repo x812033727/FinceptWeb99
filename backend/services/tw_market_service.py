@@ -577,13 +577,18 @@ async def get_health(symbol: str, periods: int = 8) -> dict[str, Any]:
 
 async def _get_etf_yields_cached() -> dict[str, float]:
     """TTM dividend yield for every TW ETF; populated by the daily
-    refresh_tw_etf_yields scheduler job. Empty dict on cold cache."""
-    cached = await cache_get("tw:etf_yields_all")
-    if cached:
+    refresh_tw_etf_yields scheduler job. Falls back to a 30-day
+    last-known-good copy so the screener keeps filtering ETFs through
+    transient FinMind quota / TWSE outages instead of silently dropping
+    every high-yield ETF from results."""
+    for key in ("tw:etf_yields_all", "tw:etf_yields_all:last_known"):
+        cached = await cache_get(key)
+        if not cached:
+            continue
         try:
             return json.loads(cached)
         except (TypeError, ValueError):
-            return {}
+            continue
     return {}
 
 

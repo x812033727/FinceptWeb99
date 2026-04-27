@@ -75,6 +75,7 @@
     "latest_news": "Latest News",
     "market_news": "Market News",
     "loading_news": "Loading news…",
+    "no_news": "No news available right now",
     "cards": {
       "us_market_desc": "S&P 500 quotes & screener",
       "tw_market_desc": "TW listed stocks live",

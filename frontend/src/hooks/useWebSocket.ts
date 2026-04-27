@@ -64,9 +64,21 @@ function subscribeSymbols(): void {
   sendJson({ action: "subscribe", symbols, markets });
 }
 
+function reauth(token: string): void {
+  // Backend WS now enforces the JWT exp on every message. When the
+  // 15-min access token rotates, push the new credential over the
+  // existing socket instead of forcing a full reconnect.
+  if (socket?.readyState === WebSocket.OPEN && token) {
+    sendJson({ action: "auth", token });
+  }
+}
+
 function connect(token: string): void {
   if (!token) return;
-  if (socket && socket.readyState !== WebSocket.CLOSED) return;
+  if (socket && socket.readyState !== WebSocket.CLOSED) {
+    reauth(token);
+    return;
+  }
 
   socket = new WebSocket(getWsUrl());
   authenticated = false;
@@ -118,6 +130,12 @@ function connect(token: string): void {
 
       if (msg.type === "alert") {
         alertCallbacks.forEach((cb) => cb(msg as AlertMessage));
+        return;
+      }
+
+      if (msg.type === "auth_ok") {
+        // Server accepted re-auth on an already-open socket. Subscriptions
+        // remain intact; nothing to do.
         return;
       }
     } catch {

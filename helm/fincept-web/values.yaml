@@ -85,11 +85,22 @@ env:
     DEBUG: "false"
     POLYGON_API_KEY: ""
     FRED_API_KEY: ""
+    FINNHUB_API_KEY: ""
     FINMIND_TOKEN: ""
     OPENAI_API_KEY: ""
     ANTHROPIC_API_KEY: ""
     GEMINI_API_KEY: ""
     OLLAMA_BASE_URL: "http://ollama:11434"
+    # OpenAI-compatible providers (share build_openai_compat_toolset).
+    # Empty key disables the provider; the AI router falls back to
+    # whichever providers are configured.
+    MINIMAX_API_KEY: ""
+    GROQ_API_KEY: ""
+    DEEPSEEK_API_KEY: ""
+    OPENROUTER_API_KEY: ""
+    # Claude Agent (tool-use via claude-agent-sdk). The SDK is optional;
+    # CLAUDE_AGENT_ENABLED=false hard-disables even if installed.
+    CLAUDE_AGENT_ENABLED: "true"
     JWT_SECRET_KEY: ""
     CORS_ORIGINS: "https://fincept.example.com"
 

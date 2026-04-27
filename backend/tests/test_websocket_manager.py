@@ -12,10 +12,17 @@ that blocks the integration-test client fixture locally.
 """
 import asyncio
 import json
+import time
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from api.websocket import manager as mgr
+
+
+def _far_future() -> float:
+    """Helper: a token expiry well past every test's runtime so the
+    manager's freshness check doesn't drop legitimately-connected sockets."""
+    return time.time() + 3600
 
 
 # ── Test double ───────────────────────────────────────────────────
@@ -43,11 +50,13 @@ def reset_manager_state():
     mgr._last_prices.clear()
     mgr._ws_user.clear()
     mgr._user_ws.clear()
+    mgr._ws_token_exp.clear()
     yield
     mgr._subscriptions.clear()
     mgr._last_prices.clear()
     mgr._ws_user.clear()
     mgr._user_ws.clear()
+    mgr._ws_token_exp.clear()
 
 
 # ── _authenticate ─────────────────────────────────────────────────
@@ -132,6 +141,7 @@ async def test_dispatch_sends_delta_to_subscriber():
     ws = FakeWS()
     mgr._subscriptions[ws] = {"AAPL:US"}
     mgr._last_prices[ws] = {}
+    mgr._ws_token_exp[ws] = _far_future()
 
     await mgr._dispatch({"symbol": "AAPL", "market": "US", "price": 180.0})
 
@@ -145,6 +155,7 @@ async def test_dispatch_skips_non_subscribers():
     ws = FakeWS()
     mgr._subscriptions[ws] = {"MSFT:US"}
     mgr._last_prices[ws] = {}
+    mgr._ws_token_exp[ws] = _far_future()
 
     await mgr._dispatch({"symbol": "AAPL", "market": "US", "price": 180.0})
 
@@ -157,6 +168,7 @@ async def test_dispatch_suppresses_tiny_change():
     ws = FakeWS()
     mgr._subscriptions[ws] = {"AAPL:US"}
     mgr._last_prices[ws] = {"AAPL:US": 180.0}
+    mgr._ws_token_exp[ws] = _far_future()
 
     # +0.001% change — below threshold
     await mgr._dispatch({"symbol": "AAPL", "market": "US", "price": 180.0018})
@@ -168,6 +180,7 @@ async def test_dispatch_sends_on_meaningful_change():
     ws = FakeWS()
     mgr._subscriptions[ws] = {"AAPL:US"}
     mgr._last_prices[ws] = {"AAPL:US": 180.0}
+    mgr._ws_token_exp[ws] = _far_future()
 
     # +0.5% change — well above threshold
     await mgr._dispatch({"symbol": "AAPL", "market": "US", "price": 180.90})
@@ -184,12 +197,33 @@ async def test_dispatch_prunes_dead_sockets():
     mgr._subscriptions[ws_dead] = {"AAPL:US"}
     mgr._last_prices[ws_ok] = {}
     mgr._last_prices[ws_dead] = {}
+    mgr._ws_token_exp[ws_ok] = _far_future()
+    mgr._ws_token_exp[ws_dead] = _far_future()
 
     await mgr._dispatch({"symbol": "AAPL", "market": "US", "price": 180.0})
 
     assert ws_ok in mgr._subscriptions
     assert ws_dead not in mgr._subscriptions
     assert ws_dead not in mgr._last_prices
+
+
+@pytest.mark.asyncio
+async def test_dispatch_skips_expired_token_subscriber():
+    """Sockets whose access token has expired should stop receiving deltas
+    even if their subscription is still registered."""
+    ws_fresh = FakeWS()
+    ws_expired = FakeWS()
+    mgr._subscriptions[ws_fresh] = {"AAPL:US"}
+    mgr._subscriptions[ws_expired] = {"AAPL:US"}
+    mgr._last_prices[ws_fresh] = {}
+    mgr._last_prices[ws_expired] = {}
+    mgr._ws_token_exp[ws_fresh] = _far_future()
+    mgr._ws_token_exp[ws_expired] = time.time() - 1  # expired a second ago
+
+    await mgr._dispatch({"symbol": "AAPL", "market": "US", "price": 180.0})
+
+    assert len(ws_fresh.sent) == 1
+    assert ws_expired.sent == []
 
 
 # ── push_alert_to_user ────────────────────────────────────────────
@@ -200,12 +234,30 @@ async def test_push_alert_fans_out_to_all_user_tabs():
     mgr._user_ws["user-1"] = {tab1, tab2}
     mgr._ws_user[tab1] = "user-1"
     mgr._ws_user[tab2] = "user-1"
+    mgr._ws_token_exp[tab1] = _far_future()
+    mgr._ws_token_exp[tab2] = _far_future()
 
     await mgr.push_alert_to_user("user-1", {"type": "alert", "symbol": "AAPL"})
 
     assert len(tab1.sent) == 1
     assert len(tab2.sent) == 1
     assert tab1.sent[0]["type"] == "alert"
+
+
+@pytest.mark.asyncio
+async def test_push_alert_skips_expired_token_tabs():
+    """A tab whose access token has expired should not receive alert pushes."""
+    tab_fresh, tab_expired = FakeWS(), FakeWS()
+    mgr._user_ws["user-1"] = {tab_fresh, tab_expired}
+    mgr._ws_user[tab_fresh] = "user-1"
+    mgr._ws_user[tab_expired] = "user-1"
+    mgr._ws_token_exp[tab_fresh] = _far_future()
+    mgr._ws_token_exp[tab_expired] = time.time() - 1
+
+    await mgr.push_alert_to_user("user-1", {"type": "alert"})
+
+    assert len(tab_fresh.sent) == 1
+    assert tab_expired.sent == []
 
 
 @pytest.mark.asyncio
@@ -226,6 +278,8 @@ async def test_push_alert_prunes_dead_sockets_and_cleans_user_index():
     mgr._ws_user[tab_dead] = "user-1"
     mgr._subscriptions[tab_dead] = {"AAPL:US"}
     mgr._last_prices[tab_dead] = {"AAPL:US": 180.0}
+    mgr._ws_token_exp[tab_ok] = _far_future()
+    mgr._ws_token_exp[tab_dead] = _far_future()
 
     await mgr.push_alert_to_user("user-1", {"type": "alert"})
 
@@ -241,6 +295,7 @@ async def test_push_alert_deletes_empty_user_bucket():
     only_tab = FakeWS(fail_on_send=True)
     mgr._user_ws["user-1"] = {only_tab}
     mgr._ws_user[only_tab] = "user-1"
+    mgr._ws_token_exp[only_tab] = _far_future()
 
     await mgr.push_alert_to_user("user-1", {"type": "alert"})
 

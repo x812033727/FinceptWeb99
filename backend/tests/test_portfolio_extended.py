@@ -165,14 +165,14 @@ async def test_portfolio_performance_requires_auth(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_portfolio_performance_wrong_user_returns_empty(client: AsyncClient):
+async def test_portfolio_performance_wrong_user_returns_404(client: AsyncClient):
     tok1 = await _register_and_login(client, "perf_u1@test.com")
     tok2 = await _register_and_login(client, "perf_u2@test.com")
     pid = await _create_portfolio(client, tok1, "PerfPrivate")
 
     r = await client.get(f"/api/portfolio/{pid}/performance", headers=_auth(tok2))
-    assert r.status_code == 200
-    assert r.json() == []
+    # Other-owned portfolios are 404 — matches the GET /{id} behaviour.
+    assert r.status_code == 404
 
 
 # ── portfolio optimiser ───────────────────────────────────────────

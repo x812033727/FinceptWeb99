@@ -47,6 +47,7 @@ FinceptWeb/
 │   │   ├── ai_agents/    # SSE streaming chat (19 personas, 8 LLM providers)
 │   │   ├── watchlist/    # Multi-watchlist CRUD with live quote enrichment
 │   │   ├── alerts/       # Price alert CRUD + check-and-fire
+│   │   ├── discussion/   # Multi-persona round-table discussions (SSE rounds + synthesizer)
 │   │   ├── system/       # /version (GitHub latest) + /web-vital (Core Web Vitals → Prometheus)
 │   │   └── websocket/    # Auth-first WS, Redis pub/sub, delta suppression
 │   ├── ai/               # LLM router + agent persona definitions
@@ -63,7 +64,11 @@ FinceptWeb/
 │   │   │                 #   0003 portfolio_snapshots · 0004 → hypertable ·
 │   │   │                 #   0005 llm_provider_keys · 0006 persona_overrides ·
 │   │   │                 #   0007 user_llm_provider_keys · 0008 llm_usage_events ·
-│   │   │                 #   0009 crypto_market
+│   │   │                 #   0009 crypto_market · 0010 market_provider_keys ·
+│   │   │                 #   0011 ohlcv_daily · 0012 quote_snapshots ·
+│   │   │                 #   0013 fundamentals_snapshots · 0014 news_articles ·
+│   │   │                 #   0015 discussions + news_articles.sentiment_* ·
+│   │   │                 #   0016 system_task_configs
 │   │   ├── base.py       # DeclarativeBase with naming convention
 │   │   ├── seed.py       # Admin user seed on first boot
 │   │   └── session.py    # Async engine + get_db dependency
@@ -72,21 +77,33 @@ FinceptWeb/
 │   ├── models/           # SQLAlchemy ORM: User, APIKey, Portfolio, Holding,
 │   │                     #   Transaction, PortfolioSnapshot, Watchlist,
 │   │                     #   WatchlistItem, PriceAlert, LLMProviderKey,
-│   │                     #   UserLLMProviderKey, PersonaOverride, LLMUsageEvent
+│   │                     #   UserLLMProviderKey, PersonaOverride, LLMUsageEvent,
+│   │                     #   MarketProviderKey, OhlcvDaily, QuoteSnapshot,
+│   │                     #   FundamentalsSnapshot, NewsArticle, Discussion,
+│   │                     #   DiscussionTurn, SystemTaskConfig
 │   ├── services/         # Business logic (cached, waterfall)
 │   │   ├── alert_service.py             # Price alert CRUD + check_and_fire
 │   │   ├── analytics_service.py         # DCF/VaR/backtest orchestration (ProcessPool)
 │   │   ├── crypto_market_service.py     # Kraken quote/history/screener (24/7)
+│   │   ├── discussion_service.py        # Round-table orchestrator: gather context,
+│   │   │                                #   run_round (SSE), synthesize_conclusion,
+│   │   │                                #   batch persona resolution, try/finally state
 │   │   ├── llm_key_service.py           # DB-first LLM provider key mgmt (Fernet at rest)
 │   │   ├── llm_usage_service.py         # Token + cost tracking (RATE_TABLE)
+│   │   ├── news_sentiment_service.py    # Hourly batch scoring + market/per-symbol
+│   │   │                                #   sentiment aggregators (used by discussion ctx)
 │   │   ├── notification_service.py      # Decoupled push dispatcher (WS-registered)
 │   │   ├── persona_override_service.py  # Per-persona LLM provider/model overrides
 │   │   ├── portfolio_service.py         # CRUD, P&L, multi-currency FX cache, optimiser
+│   │   ├── system_task_config_service.py # Admin LLM routing for background tasks
+│   │   │                                #   (news_sentiment, discussion_synthesizer)
 │   │   ├── tw_market_service.py         # TW: TWSE → FinMind → MOPS; don't-cache-empty
 │   │   ├── us_market_service.py         # US: Polygon → yfinance → Stooq → Finnhub waterfall
 │   │   ├── version_service.py           # GitHub release polling + admin-triggered update
 │   │   └── watchlist_service.py         # CRUD + live quote enrichment
-│   ├── tasks/            # APScheduler jobs (US 10s, TW 60s, off-hours throttle)
+│   ├── tasks/            # APScheduler jobs (US 10s, TW 60s, off-hours throttle).
+│   │                     # Discussion-adjacent: ingest_news_tw (hourly),
+│   │                     #   score_news_sentiment (every 30 min, fail-closed cap)
 │   ├── tests/            # pytest — in-memory SQLite + AsyncMock Redis
 │   │                     # 48 files, ~600 tests. Categories:
 │   │                     #   API HTTP   : test_*_api.py        (admin, auth, alerts,
@@ -234,6 +251,66 @@ FinceptWeb/
   hard-gated by `CLAUDE_AGENT_WEBFETCH_ALLOWLIST` (curated default covers
   GitHub raw, Anthropic / FastAPI docs, FRED, SEC, Yahoo chart).
 
+### Expert discussion subsystem
+- **Round-table debate** between N selected personas (2-8, capped). Each
+  round walks the roster in order; each persona reads the prior turns
+  and replies with structured `{stance: agree|dissent|supplement, content}`
+  JSON. Synthesizer at the end produces structured conclusion JSON
+  (recommended_symbols / reasoning / risks / time_horizon /
+  consensus_score).
+- Tables: `discussions` (topic, rules, persona_ids, status, conclusion),
+  `discussion_turns` (round, turn_index, persona_id, stance, content,
+  citations). Migration `0015_discussions.py`.
+- Service: `services/discussion_service.py` — CRUD, `gather_market_context`,
+  `run_round` async generator (try/finally guarantees status reset to
+  draft even on body exception), `synthesize_conclusion`,
+  `extract_focus_symbols` (regex pulls 4-6 digit TW codes from topic
+  → injects per-symbol news sentiment alongside market-wide aggregate).
+- API: `api/discussion/router.py` — `GET/POST/PATCH/DELETE /sessions`,
+  `POST /sessions/{id}/round` (SSE), `POST /sessions/{id}/conclude`.
+  Owner-scoped. Quota cost per round = `len(persona_ids)`. Mid-stream
+  failure / disconnect refunds `(cost - completed_personas)` so partial
+  rounds don't burn the full daily quota.
+- Per-persona LLM timeout: `DISCUSSION_PERSONA_TIMEOUT_SECONDS=60`.
+  Stuck provider → emit error event, persist placeholder, proceed.
+- Persona overrides batch-loaded once per round (`_resolve_persona_specs`)
+  so an 8-persona round costs 1 DB query for routing, not 8.
+
+### News sentiment scoring
+- Hourly APScheduler job `tasks/score_news_sentiment.py` picks up
+  `news_articles` rows with NULL `sentiment_score`, batches 20 per LLM
+  call, writes back `score ∈ [-1, +1]` + bucket label
+  (bullish ≥ 0.25, bearish ≤ -0.25, neutral otherwise) +
+  `sentiment_scored_at`.
+- Daily LLM-call hard cap via Redis counter
+  `sentiment:llm_calls:{YYYYMMDD}` (`SENTIMENT_DAILY_LLM_CALL_CAP=100`,
+  TTL 86400). **Fails closed on Redis outage** — skips the pass rather
+  than risking unbounded spend.
+- Discussion orchestrator reads aggregated sentiment via
+  `read_recent_market_sentiment` (market-wide, NULL symbol only) and
+  `read_symbol_sentiment` (per stock, used when topic mentions
+  specific codes). `gather_market_context` records connector errors
+  into `ctx["errors"]` so personas can mention "data was incomplete".
+
+### System task LLM routing
+- Admins pick the provider/model for each background system task
+  (currently `news_sentiment` + `discussion_synthesizer`) via the
+  AdminPage `SystemTasksCard`. Same shape as `persona_overrides` but
+  kept in a separate `system_task_configs` table (migration `0016`)
+  so the persona UI doesn't surface internal tasks as chattable agents.
+- Service: `services/system_task_config_service.py` — registry
+  (`_TASKS`), `list_tasks`, `upsert_override`, `delete_override`,
+  `resolve(task_id) → (provider, model)`, `test_task(task_id)`
+  (1-token "ping" for the AdminPage "Test" button).
+- Frontend `SystemTasksCard` query auto-refreshes every 30s so two
+  admins editing the same task don't drift on different versions.
+- Sentiment scorer + synthesizer call `resolve(...)` instead of
+  hard-coding the provider/model. Falls back to compiled-in default
+  when no override exists. Both record usage events under
+  `persona_id="_system:news_sentiment"` /
+  `_system:discussion_synthesizer` so background-task cost shows up
+  in `UsageCard`.
+
 ### Frontend
 - React 18 + TypeScript + Vite; TanStack Query (staleTime 15s)
 - lightweight-charts **v4** API (`chart.addCandlestickSeries()` — NOT v5)
@@ -307,6 +384,11 @@ OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
 GEMINI_API_KEY=
 OLLAMA_HOST=http://localhost:11434
+GROQ_API_KEY=                    # optional — fast OpenAI-compat (llama-3.3-70b etc)
+GROQ_MODEL=llama-3.3-70b-versatile
+DEEPSEEK_API_KEY=                # optional — deepseek-chat / deepseek-reasoner
+MINIMAX_API_KEY=                 # optional
+OPENROUTER_API_KEY=              # optional — multi-provider gateway
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=<password>
 DEBUG=false
@@ -315,7 +397,13 @@ GITHUB_OWNER=x812033727
 GITHUB_REPO=FinceptWeb
 UPDATE_CHECK_INTERVAL_HOURS=6
 UPDATE_COMMAND=                 # empty = /api/admin/update returns "not_configured"
+SENTIMENT_DAILY_LLM_CALL_CAP=100         # cap on background sentiment scorer LLM calls per UTC day
+DISCUSSION_PERSONA_TIMEOUT_SECONDS=60    # per-persona timeout in a discussion round
 ```
+
+Per-persona / per-system-task LLM provider+model can also be overridden
+at runtime via the AdminPage (`PersonasCard` and `SystemTasksCard`) —
+no env-var change required.
 
 ## Versioning
 
@@ -345,6 +433,20 @@ cd backend
 alembic upgrade head          # apply all migrations
 alembic revision -m "description" --autogenerate   # generate new migration
 ```
+
+## Post-deploy smoke test
+
+```bash
+SMOKE_EMAIL=admin@example.com SMOKE_PASSWORD=... \
+BACKEND_URL=https://fincept.example.com \
+python scripts/smoke_test_discussion.py
+```
+
+End-to-end walks login → create discussion → SSE round → verify status
+reset → conclude → cleanup. Uses real LLM calls so the deployment must
+have at least one provider key configured. Exits non-zero on any
+assertion failure — drop into a Kubernetes post-deploy hook or CI smoke
+job. See script docstring for `--personas`, `--keep`, `--timeout` flags.
 
 ## Deployment
 

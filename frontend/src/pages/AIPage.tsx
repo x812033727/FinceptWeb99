@@ -45,6 +45,10 @@ const providerColor: Record<string, string> = {
   gemini: "text-blue-400",
   ollama: "text-purple-400",
   claude_agent: "text-amber-300",
+  groq: "text-pink-400",
+  minimax: "text-cyan-400",
+  deepseek: "text-indigo-400",
+  openrouter: "text-rose-400",
 };
 
 // Grouping for the persona sidebar — keeps the 19 personas scannable.

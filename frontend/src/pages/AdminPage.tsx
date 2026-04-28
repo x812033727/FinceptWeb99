@@ -107,6 +107,12 @@ interface LLMKeyInfo {
   updated_at: string | null;
 }
 
+// Provider key-entry metadata. NOTE: this map deliberately lacks
+// `claude_agent` — that "provider" is just a routing flag for the
+// Claude Agent SDK (which itself uses ANTHROPIC_API_KEY). It appears in
+// `providerColor` further down because personas can default to it, but
+// there's no dedicated key to enter in `LLMKeysCard`. Same logic for
+// `ollama` (no API key, runs locally).
 const LLM_PROVIDER_LABELS: Record<string, { name: string; tagline: string; placeholder: string }> = {
   openai: {
     name: "ChatGPT (OpenAI)",

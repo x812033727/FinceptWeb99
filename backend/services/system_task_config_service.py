@@ -18,6 +18,7 @@ independently evolvable without a circular dep risk.
 """
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from dataclasses import dataclass
@@ -28,6 +29,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.system_task_config import SystemTaskConfig
 from models.user import User
+
+log = logging.getLogger(__name__)
 
 VALID_PROVIDERS = {
     "openai", "anthropic", "gemini", "ollama",
@@ -267,7 +270,15 @@ async def resolve(db: AsyncSession, task_id: str) -> tuple[str, str]:
     spec = get_spec(task_id)
     try:
         row = await db.get(SystemTaskConfig, task_id)
-    except Exception:
+    except Exception as exc:
+        # DB hiccup (connection drop, pool exhausted). Log so ops
+        # see it instead of silently always serving the default —
+        # but still return the default so a transient outage doesn't
+        # halt the background task.
+        log.warning(
+            "system_task_config.resolve_db_error_falling_back",
+            extra={"task_id": task_id, "error": str(exc)},
+        )
         return spec.default_provider, spec.default_model
     if row is None:
         return spec.default_provider, spec.default_model

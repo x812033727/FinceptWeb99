@@ -48,7 +48,12 @@ import time
 import httpx
 
 
-DEFAULT_TOPIC = "Smoke test: pick one TW short-term trade idea"
+# Default topic mentions a 4-digit TW code so `extract_focus_symbols`
+# fires on the smoke run and the per-symbol news sentiment branch of
+# `gather_market_context` actually gets exercised. If that branch
+# regresses (e.g. a `services.news_sentiment_service` rename), the
+# smoke test will fail post-deploy instead of hiding the breakage.
+DEFAULT_TOPIC = "Smoke test: 找 2330 短線買點 (default — feel free to override)"
 DEFAULT_RULES = "Each expert ≤ 80 chars. Cite at least one number."
 DEFAULT_PERSONAS = ["market_analyst", "trading_coach"]
 

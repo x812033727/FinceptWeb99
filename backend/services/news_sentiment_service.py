@@ -80,8 +80,6 @@ async def _can_make_llm_call(db: AsyncSession | None = None) -> bool:
     return count <= cap
 
 _BATCH_SIZE = 20
-_DEFAULT_PROVIDER = "anthropic"
-_DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 _MAX_AGE_DAYS_FOR_SCORING = 7
 
 

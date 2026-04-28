@@ -354,6 +354,46 @@ async def test_score_pending_records_usage_when_provider_emits_it(
 
 
 @pytest.mark.asyncio
+async def test_read_recent_market_sentiment_skips_unscored_rows(
+    db_session: AsyncSession,
+):
+    """Aggregation must filter out rows whose `sentiment_score IS NULL`.
+    The discussion orchestrator depends on this — otherwise an unscored
+    bullish-toned headline would silently distort context counts.
+
+    Rows are intentionally inserted with `published_at = 60 hours ago`
+    and queried with `max_age_hours=72` — the wide window includes them
+    but other tests in this file query with the default 24-h window so
+    these rows don't pollute the downstream `..._aggregates` test.
+    """
+    now = datetime.now(UTC)
+    old = now - timedelta(hours=60)
+    await insert_news_articles(db_session, [
+        # Scored row — should appear in the aggregation.
+        _row("scored 1", "https://example.com/skip_scored", symbol=None,
+             published_at=old),
+        # Unscored row — should be filtered out by the IS NOT NULL guard.
+        _row("unscored", "https://example.com/skip_unscored", symbol=None,
+             published_at=old - timedelta(hours=1)),
+    ])
+    rows = (await db_session.scalars(
+        select(NewsArticle).where(NewsArticle.link.like("https://example.com/skip_%"))
+    )).all()
+    by_link = {r.link: r for r in rows}
+    by_link["https://example.com/skip_scored"].sentiment_score = 0.6
+    by_link["https://example.com/skip_scored"].sentiment_label = "bullish"
+    by_link["https://example.com/skip_scored"].sentiment_scored_at = now
+    await db_session.commit()
+
+    out = await news_sentiment_service.read_recent_market_sentiment(
+        db_session, market="TW", limit=20, max_age_hours=72,
+    )
+    titles = [h["title"] for h in out["headlines"]]
+    assert "scored 1" in titles
+    assert "unscored" not in titles
+
+
+@pytest.mark.asyncio
 async def test_read_recent_market_sentiment_aggregates(db_session: AsyncSession):
     now = datetime.now(UTC)
     await insert_news_articles(db_session, [

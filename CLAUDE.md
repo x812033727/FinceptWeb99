@@ -106,16 +106,18 @@ FinceptWeb/
 │   │                     # Discussion-adjacent: ingest_news_tw (hourly),
 │   │                     #   score_news_sentiment (every 30 min, fail-closed cap)
 │   ├── tests/            # pytest — in-memory SQLite + AsyncMock Redis
-│   │                     # 48 files, ~600 tests. Categories:
+│   │                     # 70 files, ~700 tests. Categories:
 │   │                     #   API HTTP   : test_*_api.py        (admin, auth, alerts,
-│   │                     #                                      analytics, portfolio,
-│   │                     #                                      tw_market 42, us_market 23,
-│   │                     #                                      watchlist)
+│   │                     #                                      analytics, discussion,
+│   │                     #                                      portfolio, tw_market 42,
+│   │                     #                                      us_market 23, watchlist)
 │   │                     #   Services   : test_*_service*.py   (alert, analytics,
-│   │                     #                                      crypto_market, portfolio,
-│   │                     #                                      tw_market_caching,
-│   │                     #                                      us_market, watchlist,
-│   │                     #                                      llm_key, llm_usage,
+│   │                     #                                      crypto_market, discussion,
+│   │                     #                                      news_sentiment, portfolio,
+│   │                     #                                      runtime_config,
+│   │                     #                                      system_task_config,
+│   │                     #                                      tw_market_caching, us_market,
+│   │                     #                                      watchlist, llm_key, llm_usage,
 │   │                     #                                      tw_health, version)
 │   │                     #   Connectors : test_*_connector.py  (yfinance, polygon, stooq,
 │   │                     #                                      fred, twse, finmind, mops,

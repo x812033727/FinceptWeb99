@@ -35,6 +35,7 @@ from .schemas import (
     SystemStats,
     SystemTaskConfigOut,
     SystemTaskOverrideIn,
+    SystemTaskTestResult,
     UpdateResult,
     UsageBucketOut,
     UsageDayPoint,
@@ -218,6 +219,8 @@ def _system_task_to_schema(t: system_tasks.TaskConfig) -> SystemTaskConfigOut:
         effective_provider=t.effective_provider,
         effective_model=t.effective_model,
         is_overridden=t.is_overridden,
+        updated_at=t.updated_at,
+        updated_by_email=t.updated_by_email,
     )
 
 
@@ -247,6 +250,25 @@ async def delete_system_task_override(task_id: str, _: Admin, db: DB) -> None:
         await system_tasks.delete_override(db, task_id)
     except ValueError as exc:
         raise HTTPException(404, str(exc))
+
+
+@router.post(
+    "/system-tasks/{task_id}/test", response_model=SystemTaskTestResult,
+)
+async def test_system_task(
+    task_id: str, _: Admin, db: DB,
+) -> SystemTaskTestResult:
+    """Smoke-test the task's resolved provider/model with a 1-token ping.
+
+    Uses whatever override is currently saved (or the compiled default if
+    none). Surface this in the admin UI so operators can verify a fresh
+    API key + model combo works before relying on the next scheduled run.
+    """
+    try:
+        result = await system_tasks.test_task(db, task_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+    return SystemTaskTestResult(**result.__dict__)
 
 
 # ── LLM usage summary (admin-wide) ───────────────────────────────

@@ -379,6 +379,137 @@ async def test_synthesize_conclusion_handles_malformed_output(
     assert result["consensus_score"] == 0.0
 
 
+# ── focus symbol extraction (B5) ─────────────────────────────────
+
+
+def test_extract_focus_symbols_pulls_tw_codes():
+    out = discussion_service.extract_focus_symbols(
+        "找出 2330、2454 與 00878 短線買點"
+    )
+    assert "2330" in out
+    assert "2454" in out
+    assert "00878" in out
+
+
+def test_extract_focus_symbols_dedupes_and_caps():
+    out = discussion_service.extract_focus_symbols(
+        "2330 2330 2454 2317 1101 2412 1216 2882 2891"
+    )
+    assert len(out) <= discussion_service._MAX_FOCUS_SYMBOLS
+    assert len(out) == len(set(out))
+
+
+def test_extract_focus_symbols_empty_when_none():
+    assert discussion_service.extract_focus_symbols("純策略討論不提具體標的") == []
+
+
+@pytest.mark.asyncio
+async def test_gather_market_context_includes_per_symbol_block_when_focused(
+    db_session: AsyncSession,
+):
+    """When focus_symbols is supplied, per_symbol_news_sentiment gets the
+    aggregated rows for any symbol with scored news; symbols with no
+    scored news are simply omitted (not present as empty stubs)."""
+    from datetime import UTC, datetime
+    from sqlalchemy import select as _select
+    # Pre-import so patch() can find them — gather_market_context does
+    # local lazy imports and patching a not-yet-imported module fails.
+    import services.tw_market_service as _tw   # noqa: F401
+    from models.news_article import NewsArticle
+    from services.ingest.repository import NewsArticleRow, insert_news_articles
+
+    await insert_news_articles(db_session, [
+        NewsArticleRow(
+            market="TW", symbol="9999",
+            published_at=datetime.now(UTC),
+            title="9999 重大利多消息",
+            link="https://example.com/per_sym_a",
+            publisher="test", summary=None, payload=None, source="finmind",
+        ),
+    ])
+    row = await db_session.scalar(
+        _select(NewsArticle).where(NewsArticle.symbol == "9999")
+    )
+    row.sentiment_score = 0.7
+    row.sentiment_label = "bullish"
+    row.sentiment_scored_at = datetime.now(UTC)
+    await db_session.commit()
+
+    with patch.object(_tw, "get_screener", new=AsyncMock(return_value=[])), \
+         patch.object(_tw, "get_index", new=AsyncMock(return_value={})):
+        ctx = await discussion_service.gather_market_context(
+            db_session, focus_symbols=["9999", "8888"],
+        )
+
+    assert "per_symbol_news_sentiment" in ctx
+    assert "9999" in ctx["per_symbol_news_sentiment"]
+    # 8888 has no scored news → omitted
+    assert "8888" not in ctx["per_symbol_news_sentiment"]
+    block = ctx["per_symbol_news_sentiment"]["9999"]
+    assert block["bullish"] == 1
+    assert block["count"] == 1
+
+
+# ── persona timeout (C8) ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_run_round_persists_timeout_placeholder_and_continues(
+    db_session: AsyncSession, owner: User,
+):
+    """If a persona's stream takes longer than the configured timeout, we
+    persist a placeholder turn (stance=DEFAULT_STANCE, content mentions
+    timeout) and proceed to the next persona without aborting the round.
+
+    Simulates the timeout path by having the first persona's stream raise
+    TimeoutError directly — equivalent to what `asyncio.timeout()` would
+    raise but without abandoning a sleeping generator that could leave
+    the shared SQLite connection in a half-cancelled state.
+    """
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="topic",
+        rules="rules",
+        persona_ids=["buffett", "lynch"],
+    )
+
+    call_count = {"n": 0}
+
+    async def _timeout_then_ok(*_a, **_kw):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise TimeoutError("simulated timeout")
+        yield {"type": "delta", "text": '{"stance":"agree","content":"ok"}'}
+
+    with patch(
+        "services.discussion_service.stream_chat", side_effect=_timeout_then_ok,
+    ), patch(
+        "services.discussion_service.gather_market_context",
+        new=AsyncMock(return_value={"market": "TW"}),
+    ):
+        events = []
+        async for ev in discussion_service.run_round(
+            db_session, row, user_id=str(owner.id),
+        ):
+            events.append((ev.type, ev.payload))
+
+    types = [t for t, _ in events]
+    assert types.count("turn_end") == 2
+    assert any(t == "error" for t in types)
+
+    turns = (await db_session.scalars(
+        select(DiscussionTurn).where(DiscussionTurn.discussion_id == row.id)
+        .order_by(DiscussionTurn.turn_index)
+    )).all()
+    assert len(turns) == 2
+    assert (
+        "未回覆" in turns[0].content
+        or "中止" in turns[0].content
+        or "錯誤" in turns[0].content
+    )
+
+
 def test_safe_conclusion_clamps_consensus_and_caps_lists():
     raw = (
         '{"recommended_symbols": ["A","B","C","D","E","F","G"], '

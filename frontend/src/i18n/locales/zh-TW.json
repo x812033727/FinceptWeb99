@@ -416,6 +416,11 @@
     "agree_silent": "（同意先前共識，無補充）",
     "conclusion_title": "結論摘要",
     "conclusion_parse_error": "結論格式解析失敗，請重新彙整",
+    "export_markdown": "匯出 Markdown",
+    "ask_followup": "深入分析",
+    "click_for_deep_dive": "點擊向專家深入提問",
+    "followup_prompt_general": "請依據圓桌結論，給我詳細的進場條件、停損位置與部位大小建議。",
+    "followup_prompt_symbol": "請就 {{symbol}} 這檔，依據圓桌結論給我具體的進場條件、停損位置與部位大小建議。",
     "recommended_symbols": "推薦標的",
     "risks": "風險",
     "consensus": "共識度",
@@ -496,7 +501,14 @@
   "systemTasks": {
     "title": "背景任務 → LLM 對應",
     "subtitle": "為每個系統排程任務（新聞情緒、討論彙整等）選擇 provider/model；未覆寫則用程式內預設",
-    "task": "任務"
+    "task": "任務",
+    "test": "測試",
+    "test_hint": "用 1 個 token 測試這組 provider+model 是否能通",
+    "save_before_test": "請先儲存目前的選擇再測試",
+    "just_now": "剛剛",
+    "minutes_ago": "{{count}} 分鐘前",
+    "hours_ago": "{{count}} 小時前",
+    "days_ago": "{{count}} 天前"
   },
   "personas": {
     "title": "顧問人格 → 模型對應",

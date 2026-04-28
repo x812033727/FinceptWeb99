@@ -137,6 +137,18 @@ class Settings(BaseSettings):
     AI_REQUESTS_ANALYST_DAILY: int = 20
     AI_REQUESTS_VIEWER_DAILY: int = 5
 
+    # News sentiment scorer: hard cap on LLM calls per UTC day to bound cost.
+    # One call scores up to _BATCH_SIZE (20) headlines, so at the default
+    # cap of 100 the daily ceiling is ~2,000 articles — comfortably above
+    # FinMind's TW news firehose. Increase for multi-market deployments.
+    SENTIMENT_DAILY_LLM_CALL_CAP: int = 100
+
+    # Discussion: per-persona LLM timeout (seconds). When a single persona's
+    # turn doesn't complete in this window we abort it, persist a placeholder,
+    # and move on to the next persona — prevents one stuck provider from
+    # hanging the whole round indefinitely.
+    DISCUSSION_PERSONA_TIMEOUT_SECONDS: int = 60
+
     # Admin seed (optional — created on first boot)
     ADMIN_EMAIL: str = ""
     ADMIN_PASSWORD: str = ""

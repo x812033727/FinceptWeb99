@@ -226,6 +226,68 @@ async def test_score_pending_uses_admin_override(
 
 
 @pytest.mark.asyncio
+async def test_list_tasks_exposes_audit_fields_after_upsert(
+    db_session: AsyncSession, admin_user: User,
+):
+    await svc.upsert_override(
+        db_session, "news_sentiment", "openai", "gpt-4o-mini", admin_user.id,
+    )
+    rows = await svc.list_tasks(db_session)
+    by_id = {r.task_id: r for r in rows}
+    cfg = by_id["news_sentiment"]
+    assert cfg.is_overridden is True
+    assert cfg.updated_at is not None
+    assert cfg.updated_by_email == admin_user.email
+
+
+@pytest.mark.asyncio
+async def test_test_task_reports_ok_when_provider_returns_text(
+    db_session: AsyncSession,
+):
+    async def _fake_stream(*_a, **_kw):
+        yield {"type": "delta", "text": "pong"}
+
+    with patch("ai.llm_router.stream_chat", side_effect=_fake_stream):
+        result = await svc.test_task(db_session, "news_sentiment")
+
+    assert result.ok is True
+    assert result.sample_output == "pong"
+    assert result.error is None
+    assert result.latency_ms >= 0
+
+
+@pytest.mark.asyncio
+async def test_test_task_reports_error_on_provider_error_event(
+    db_session: AsyncSession,
+):
+    async def _failing_stream(*_a, **_kw):
+        yield {"type": "error", "message": "Invalid API key"}
+
+    with patch("ai.llm_router.stream_chat", side_effect=_failing_stream):
+        result = await svc.test_task(db_session, "news_sentiment")
+
+    assert result.ok is False
+    assert result.error == "Invalid API key"
+
+
+@pytest.mark.asyncio
+async def test_test_task_reports_empty_response_as_error(
+    db_session: AsyncSession,
+):
+    """An LLM that streams nothing (typical for missing API key path on
+    some providers) should be flagged as an error, not silent success."""
+    async def _empty_stream(*_a, **_kw):
+        if False:   # noqa: SIM108 — empty async generator
+            yield {}
+
+    with patch("ai.llm_router.stream_chat", side_effect=_empty_stream):
+        result = await svc.test_task(db_session, "news_sentiment")
+
+    assert result.ok is False
+    assert "empty" in (result.error or "").lower()
+
+
+@pytest.mark.asyncio
 async def test_synthesize_conclusion_uses_admin_override(
     db_session: AsyncSession, admin_user: User,
 ):

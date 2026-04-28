@@ -39,6 +39,7 @@ Design choices:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -53,9 +54,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai.agents import all_persona_ids, get_agent_resolved
 from ai.llm_router import stream_chat
+from config import settings
 from models.discussion import Discussion, DiscussionTurn
 
 log = logging.getLogger(__name__)
+
+# Recognises a 4-digit TW stock code as a standalone token. Used by
+# `gather_market_context` to optionally pull per-symbol news sentiment for
+# anything mentioned in the topic — discussion personas then see "this is
+# what 2330 specifically is being said about" instead of just market-wide
+# sentiment.
+_TW_SYMBOL_RE = re.compile(r"\b(\d{4,6})\b")
+_MAX_FOCUS_SYMBOLS = 5
 
 # ── tuning knobs ────────────────────────────────────────────────────
 
@@ -235,14 +245,37 @@ async def delete_discussion(
 # ── market context ──────────────────────────────────────────────────
 
 
+def extract_focus_symbols(text: str) -> list[str]:
+    """Pull TW stock codes (4-6 digit) out of free text. Deduped, capped
+    at `_MAX_FOCUS_SYMBOLS`. Used to enrich discussion context with
+    per-symbol news sentiment when the topic names specific stocks
+    ("找出 2330 / 2454 短線買點…")."""
+    seen: list[str] = []
+    for code in _TW_SYMBOL_RE.findall(text or ""):
+        if code not in seen:
+            seen.append(code)
+        if len(seen) >= _MAX_FOCUS_SYMBOLS:
+            break
+    return seen
+
+
 async def gather_market_context(
-    db: AsyncSession, *, market: str = "TW", top_n: int = _DEFAULT_TOP_MOVERS,
+    db: AsyncSession,
+    *,
+    market: str = "TW",
+    top_n: int = _DEFAULT_TOP_MOVERS,
+    focus_symbols: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build a structured snapshot of the market state for the personas.
 
     Each block degrades gracefully — if any data source is unavailable we
     return an empty list / None for that block instead of raising, so a
     transient outage doesn't block the discussion entirely.
+
+    `focus_symbols` (typically extracted from the discussion topic via
+    `extract_focus_symbols`) makes the context include per-symbol news
+    sentiment alongside the market-wide aggregate. Empty list / None
+    skips the per-symbol block.
     """
     ctx: dict[str, Any] = {
         "market": market,
@@ -251,6 +284,7 @@ async def gather_market_context(
         "top_losers": [],
         "index": None,
         "news_sentiment": None,
+        "per_symbol_news_sentiment": {},
     }
 
     # Top movers via the screener (TW-only for now; US fits later when we
@@ -279,6 +313,21 @@ async def gather_market_context(
         )
     except Exception as exc:
         log.warning("discussion.context.news_sentiment_failed", extra={"error": str(exc)})
+
+    if focus_symbols:
+        try:
+            from services.news_sentiment_service import read_symbol_sentiment
+            for sym in focus_symbols[:_MAX_FOCUS_SYMBOLS]:
+                rows = await read_symbol_sentiment(
+                    db, market=market, symbol=sym, limit=10, max_age_hours=72,
+                )
+                if rows:
+                    ctx["per_symbol_news_sentiment"][sym] = rows
+        except Exception as exc:
+            log.warning(
+                "discussion.context.per_symbol_sentiment_failed",
+                extra={"error": str(exc)},
+            )
 
     return ctx
 
@@ -414,10 +463,12 @@ async def run_round(
 
     yield TurnEvent("round_start", {"round": round_number})
 
-    context = await gather_market_context(db)
+    focus = extract_focus_symbols(discussion.topic)
+    context = await gather_market_context(db, focus_symbols=focus)
     yield TurnEvent("context", {"context": context})
 
     prior_turns = await get_turns(db, discussion_id=discussion.id)
+    persona_timeout = settings.DISCUSSION_PERSONA_TIMEOUT_SECONDS
 
     for idx, persona_id in enumerate(discussion.persona_ids):
         spec = await get_agent_resolved(db, persona_id)
@@ -429,33 +480,49 @@ async def run_round(
         })
 
         assembled = ""
+        # Wrap the persona's turn in asyncio.timeout so a single stuck
+        # provider can't hang the whole round indefinitely. On timeout we
+        # emit an error event, persist a placeholder turn, and proceed
+        # to the next persona — same pattern as an LLM error.
         try:
-            async for event in _ask_persona(
-                db,
-                persona_id=persona_id,
-                topic=discussion.topic,
-                rules=discussion.rules,
-                context=context,
-                prior_turns=prior_turns,
-                user_id=user_id,
-            ):
-                etype = event.get("type")
-                if etype == "delta":
-                    chunk = event.get("text", "")
-                    assembled += chunk
-                    yield TurnEvent("delta", {
-                        "round": round_number,
-                        "turn_index": idx,
-                        "persona_id": persona_id,
-                        "text": chunk,
-                    })
-                elif etype == "error":
-                    yield TurnEvent("error", {
-                        "message": event.get("message", "LLM error"),
-                        "persona_id": persona_id,
-                    })
-                    assembled = assembled or "（此輪因 LLM 錯誤未取得回覆）"
-                    break
+            async with asyncio.timeout(persona_timeout):
+                async for event in _ask_persona(
+                    db,
+                    persona_id=persona_id,
+                    topic=discussion.topic,
+                    rules=discussion.rules,
+                    context=context,
+                    prior_turns=prior_turns,
+                    user_id=user_id,
+                ):
+                    etype = event.get("type")
+                    if etype == "delta":
+                        chunk = event.get("text", "")
+                        assembled += chunk
+                        yield TurnEvent("delta", {
+                            "round": round_number,
+                            "turn_index": idx,
+                            "persona_id": persona_id,
+                            "text": chunk,
+                        })
+                    elif etype == "error":
+                        yield TurnEvent("error", {
+                            "message": event.get("message", "LLM error"),
+                            "persona_id": persona_id,
+                        })
+                        assembled = assembled or "（此輪因 LLM 錯誤未取得回覆）"
+                        break
+        except TimeoutError:
+            log.warning(
+                "discussion.turn.timeout",
+                extra={"persona_id": persona_id, "round": round_number,
+                       "timeout_s": persona_timeout},
+            )
+            yield TurnEvent("error", {
+                "message": f"persona timeout after {persona_timeout}s",
+                "persona_id": persona_id,
+            })
+            assembled = assembled or f"（此輪因 LLM {persona_timeout}s 內未回覆而中止）"
         except Exception as exc:
             log.exception("discussion.turn.failed",
                           extra={"persona_id": persona_id, "round": round_number})
@@ -602,7 +669,8 @@ async def synthesize_conclusion(
         provider = provider or r_provider
         model = model or r_model
     turns = await get_turns(db, discussion_id=discussion.id)
-    context = await gather_market_context(db)
+    focus = extract_focus_symbols(discussion.topic)
+    context = await gather_market_context(db, focus_symbols=focus)
 
     user_prompt = _SYNTHESIZER_USER_TEMPLATE.format(
         topic=discussion.topic,
@@ -616,6 +684,7 @@ async def synthesize_conclusion(
     ]
 
     assembled = ""
+    usage_seen: dict[str, int] | None = None
     try:
         async for event in stream_chat(
             messages=messages,
@@ -626,9 +695,15 @@ async def synthesize_conclusion(
             db=db,
             user_id=user_id,
         ):
-            if event.get("type") == "delta":
+            etype = event.get("type")
+            if etype == "delta":
                 assembled += event.get("text", "")
-            elif event.get("type") == "error":
+            elif etype == "usage":
+                usage_seen = {
+                    "prompt_tokens": int(event.get("prompt_tokens", 0)),
+                    "completion_tokens": int(event.get("completion_tokens", 0)),
+                }
+            elif etype == "error":
                 log.warning(
                     "discussion.synthesize.llm_error",
                     extra={"message": event.get("message")},
@@ -637,6 +712,18 @@ async def synthesize_conclusion(
     except Exception as exc:
         log.exception("discussion.synthesize.failed", extra={"id": str(discussion.id)})
         assembled = json.dumps({"reasoning": f"合成失敗：{exc}"})
+
+    if usage_seen is not None:
+        from services.llm_usage_service import record_usage
+        await record_usage(
+            db,
+            user_id=user_id,
+            provider=provider,
+            model=model,
+            persona_id="_system:discussion_synthesizer",
+            prompt_tokens=usage_seen["prompt_tokens"],
+            completion_tokens=usage_seen["completion_tokens"],
+        )
 
     conclusion = _safe_conclusion(assembled)
     discussion.conclusion = conclusion

@@ -193,6 +193,130 @@ async def test_score_pending_skips_when_all_scored(db_session: AsyncSession):
     mocked.assert_not_called()
 
 
+# ── per-symbol aggregator ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_read_symbol_sentiment_returns_none_when_no_scored_news(
+    db_session: AsyncSession,
+):
+    """A symbol with zero scored articles in the window returns None so
+    callers can omit the per-symbol block instead of rendering empty stubs."""
+    out = await news_sentiment_service.read_symbol_sentiment(
+        db_session, market="TW", symbol="ZZZZ",
+    )
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_read_symbol_sentiment_aggregates_for_one_symbol(
+    db_session: AsyncSession,
+):
+    now = datetime.now(UTC)
+    await insert_news_articles(db_session, [
+        _row("a1", "https://example.com/sym_a1",
+             symbol="SYMAGG", published_at=now - timedelta(hours=1)),
+        _row("a2", "https://example.com/sym_a2",
+             symbol="SYMAGG", published_at=now - timedelta(hours=2)),
+    ])
+    rows = (await db_session.scalars(
+        select(NewsArticle).where(NewsArticle.symbol == "SYMAGG")
+    )).all()
+    rows[0].sentiment_score = 0.6
+    rows[0].sentiment_label = "bullish"
+    rows[0].sentiment_scored_at = now
+    rows[1].sentiment_score = -0.5
+    rows[1].sentiment_label = "bearish"
+    rows[1].sentiment_scored_at = now
+    await db_session.commit()
+
+    out = await news_sentiment_service.read_symbol_sentiment(
+        db_session, market="TW", symbol="SYMAGG", limit=10, max_age_hours=24,
+    )
+    assert out is not None
+    assert out["bullish"] == 1
+    assert out["bearish"] == 1
+    assert out["count"] == 2
+    assert round(out["avg_score"], 2) == 0.05
+
+
+# ── daily LLM call cap (C7) ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_score_pending_respects_daily_cap(db_session: AsyncSession):
+    """Once SENTIMENT_DAILY_LLM_CALL_CAP is hit, no further LLM calls are
+    made and `cap_hit=1` is returned in the result."""
+    import services.news_sentiment_service as nss
+
+    await insert_news_articles(db_session, [
+        _row(f"capped news {i}",
+             f"https://example.com/cap_{i}",
+             symbol=f"CAPSYM_{i}")
+        for i in range(3)
+    ])
+
+    call_count = {"n": 0}
+
+    async def _counting_stream(*_a, **_kw):
+        call_count["n"] += 1
+        yield {"type": "delta", "text": "[]"}
+
+    # Force "no quota left" by patching _can_make_llm_call.
+    async def _always_full():
+        return False
+
+    with patch.object(nss, "_can_make_llm_call", side_effect=_always_full), \
+         patch.object(nss, "stream_chat", side_effect=_counting_stream):
+        result = await nss.score_pending(
+            db=db_session, batch_size=10, max_batches=3,
+        )
+
+    assert call_count["n"] == 0
+    assert result["cap_hit"] == 1
+    assert result["batches"] == 0
+
+
+@pytest.mark.asyncio
+async def test_score_pending_records_usage_when_provider_emits_it(
+    db_session: AsyncSession,
+):
+    """Verifies the sentiment scorer writes an llm_usage_events row tagged
+    `_system:news_sentiment` when the stream includes a usage event —
+    so admins see background-task cost in UsageCard."""
+    import services.news_sentiment_service as nss
+    from models.llm_usage_event import LLMUsageEvent
+
+    await insert_news_articles(db_session, [
+        _row("usage tracking news",
+             "https://example.com/usage_t",
+             symbol="USAGE_SYM"),
+    ])
+    inserted = await db_session.scalar(
+        select(NewsArticle).where(NewsArticle.symbol == "USAGE_SYM")
+    )
+
+    async def _stream_with_usage(*_a, **_kw):
+        yield {"type": "delta",
+               "text": f'[{{"id": {inserted.id}, "score": 0.5}}]'}
+        yield {"type": "usage", "prompt_tokens": 120, "completion_tokens": 30}
+
+    with patch.object(nss, "stream_chat", side_effect=_stream_with_usage):
+        await nss.score_pending(
+            db=db_session, batch_size=10, max_batches=1,
+            provider="openai", model="gpt-4o-mini",
+        )
+
+    rows = (await db_session.scalars(
+        select(LLMUsageEvent).where(
+            LLMUsageEvent.persona_id == "_system:news_sentiment"
+        )
+    )).all()
+    assert len(rows) == 1
+    assert rows[0].prompt_tokens == 120
+    assert rows[0].completion_tokens == 30
+
+
 @pytest.mark.asyncio
 async def test_read_recent_market_sentiment_aggregates(db_session: AsyncSession):
     now = datetime.now(UTC)

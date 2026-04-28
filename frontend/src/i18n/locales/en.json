@@ -416,6 +416,11 @@
     "agree_silent": "(Agrees with prior consensus, no additions)",
     "conclusion_title": "Conclusion",
     "conclusion_parse_error": "Conclusion parse failed, please re-synthesize",
+    "export_markdown": "Export Markdown",
+    "ask_followup": "Deep Dive",
+    "click_for_deep_dive": "Click to ask an expert about this symbol",
+    "followup_prompt_general": "Based on the round-table conclusion, give me concrete entry criteria, stop-loss levels, and position sizing.",
+    "followup_prompt_symbol": "Based on the round-table conclusion, give me concrete entry criteria, stop-loss levels, and position sizing for {{symbol}}.",
     "recommended_symbols": "Recommended",
     "risks": "Risks",
     "consensus": "Consensus",
@@ -496,7 +501,14 @@
   "systemTasks": {
     "title": "Background Tasks → LLM Routing",
     "subtitle": "Pick the provider/model for each scheduled system task (news sentiment, discussion synthesizer); unset rows use the compiled default",
-    "task": "Task"
+    "task": "Task",
+    "test": "Test",
+    "test_hint": "Send a 1-token ping to verify the chosen provider+model works",
+    "save_before_test": "Save the current choice before testing",
+    "just_now": "just now",
+    "minutes_ago": "{{count}}m ago",
+    "hours_ago": "{{count}}h ago",
+    "days_ago": "{{count}}d ago"
   },
   "personas": {
     "title": "Persona → Model Routing",

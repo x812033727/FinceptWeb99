@@ -18,13 +18,16 @@ independently evolvable without a circular dep risk.
 """
 from __future__ import annotations
 
+import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.system_task_config import SystemTaskConfig
+from models.user import User
 
 VALID_PROVIDERS = {
     "openai", "anthropic", "gemini", "ollama",
@@ -77,6 +80,21 @@ class TaskConfig:
     effective_provider: str
     effective_model: str
     is_overridden: bool
+    updated_at: datetime | None = None
+    updated_by_email: str | None = None
+
+
+@dataclass
+class TaskTestResult:
+    """Outcome of POST /admin/system-tasks/{id}/test — a one-shot ping
+    that proves the chosen provider/model + the resolved API key form a
+    working chain, without spending a real task call."""
+    ok: bool
+    provider: str
+    model: str
+    latency_ms: int
+    sample_output: str | None = None
+    error: str | None = None
 
 
 def known_task_ids() -> list[str]:
@@ -92,12 +110,25 @@ def get_spec(task_id: str) -> SystemTaskSpec:
 
 async def list_tasks(db: AsyncSession) -> list[TaskConfig]:
     """Return every registered task with its compiled default + currently
-    effective provider/model. Used by the admin UI roster."""
-    rows = (await db.execute(select(SystemTaskConfig))).scalars().all()
-    by_id = {r.task_id: r for r in rows}
+    effective provider/model. Used by the admin UI roster.
+
+    Includes `updated_at` + `updated_by_email` for any task that has an
+    override row, so the admin UI can show "last changed by foo@bar.com,
+    2h ago" inline. Outer-joining on users handles the case where the
+    original setter has been deleted (ondelete=SET NULL on the FK).
+    """
+    stmt = (
+        select(SystemTaskConfig, User.email)
+        .outerjoin(User, SystemTaskConfig.updated_by_id == User.id)
+    )
+    rows = list((await db.execute(stmt)).all())
+    by_id: dict[str, tuple[SystemTaskConfig, str | None]] = {
+        r[0].task_id: (r[0], r[1]) for r in rows
+    }
     out: list[TaskConfig] = []
     for tid, spec in _TASKS.items():
-        ov = by_id.get(tid)
+        entry = by_id.get(tid)
+        ov, email = (entry[0], entry[1]) if entry else (None, None)
         out.append(TaskConfig(
             task_id=tid,
             name=spec.name,
@@ -107,6 +138,8 @@ async def list_tasks(db: AsyncSession) -> list[TaskConfig]:
             effective_provider=ov.provider if ov else spec.default_provider,
             effective_model=ov.model if ov else spec.default_model,
             is_overridden=ov is not None,
+            updated_at=ov.updated_at if ov else None,
+            updated_by_email=email,
         ))
     return out
 
@@ -138,6 +171,14 @@ async def upsert_override(
         row.model = model.strip()
         row.updated_by_id = updated_by_id
     await db.commit()
+    # Re-fetch so server-side defaults / onupdate clauses (updated_at)
+    # populate before we read them — lazy attribute loading on a detached
+    # async row would trigger a greenlet error.
+    await db.refresh(row)
+    # Resolve the just-set updater's email by looking it up — avoids a
+    # round trip to fetch the full user object when the caller only has
+    # the ID. Falls back to None if the user vanished mid-flight.
+    email = await db.scalar(select(User.email).where(User.id == updated_by_id))
     return TaskConfig(
         task_id=task_id,
         name=spec.name,
@@ -147,6 +188,64 @@ async def upsert_override(
         effective_provider=row.provider,
         effective_model=row.model,
         is_overridden=True,
+        updated_at=row.updated_at,
+        updated_by_email=email,
+    )
+
+
+async def test_task(
+    db: AsyncSession, task_id: str,
+) -> TaskTestResult:
+    """One-shot ping of the task's effective LLM provider+model.
+
+    Sends a 1-token "ping" via stream_chat to validate the resolved API
+    key + provider routing actually work. Returns a `TaskTestResult` with
+    latency, sample output, or an error message — never raises so the
+    admin endpoint can always render a clean response.
+    """
+    from ai.llm_router import stream_chat   # local import to avoid cycle on cold start
+
+    get_spec(task_id)   # validation — raises ValueError on unknown task
+    provider, model = await resolve(db, task_id)
+
+    started = time.monotonic()
+    sample = ""
+    error: str | None = None
+    try:
+        async for event in stream_chat(
+            messages=[
+                {"role": "system", "content": "You are a sanity-check echo bot. Reply with the single word: pong."},
+                {"role": "user", "content": "ping"},
+            ],
+            provider=provider,
+            model=model,
+            max_tokens=8,
+            temperature=0.0,
+            db=db,
+        ):
+            etype = event.get("type")
+            if etype == "delta":
+                sample += event.get("text", "")
+            elif etype == "error":
+                error = str(event.get("message") or "provider error")
+                break
+    except Exception as exc:
+        error = str(exc)
+    latency_ms = int((time.monotonic() - started) * 1000)
+
+    sample = sample.strip()[:200] or None
+    if error is None and not sample:
+        # Provider returned no error and no content — likely a missing API key
+        # surfacing as an empty stream.
+        error = "empty response (likely missing or invalid API key)"
+
+    return TaskTestResult(
+        ok=error is None,
+        provider=provider,
+        model=model,
+        latency_ms=latency_ms,
+        sample_output=sample,
+        error=error,
     )
 
 

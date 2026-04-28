@@ -111,11 +111,22 @@ class SystemTaskConfigOut(BaseModel):
     effective_provider: str
     effective_model: str
     is_overridden: bool
+    updated_at: datetime | None = None
+    updated_by_email: str | None = None
 
 
 class SystemTaskOverrideIn(BaseModel):
     provider: str
     model: str
+
+
+class SystemTaskTestResult(BaseModel):
+    ok: bool
+    provider: str
+    model: str
+    latency_ms: int
+    sample_output: str | None = None
+    error: str | None = None
 
 
 # ── LLM usage summary ────────────────────────────────────────────

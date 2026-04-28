@@ -35,10 +35,33 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai.llm_router import stream_chat
+from cache.redis_cache import cache_incr
+from config import settings
 from db.session import AsyncSessionLocal
 from models.news_article import NewsArticle
 
 log = logging.getLogger(__name__)
+
+
+async def _can_make_llm_call() -> bool:
+    """Atomically reserve one LLM call against the daily cap.
+
+    Returns False once the day's cap is exhausted; the caller must stop.
+    The counter resets at UTC midnight via the 24h TTL set on the first
+    increment of the day. Redis outage falls open (returns True) — we
+    prefer occasional over-spend to halting the scorer entirely.
+    """
+    cap = settings.SENTIMENT_DAILY_LLM_CALL_CAP
+    if cap <= 0:
+        return True
+    today = datetime.now(UTC).strftime("%Y%m%d")
+    key = f"sentiment:llm_calls:{today}"
+    try:
+        count = await cache_incr(key, ttl_seconds=86400)
+    except Exception as exc:
+        log.warning("news_sentiment.cap_check_failed", extra={"error": str(exc)})
+        return True
+    return count <= cap
 
 _BATCH_SIZE = 20
 _DEFAULT_PROVIDER = "anthropic"
@@ -117,7 +140,12 @@ async def _score_batch(
     db: AsyncSession,
 ) -> list[_Scored]:
     """One LLM call per batch. Returns parsed Scored rows; missing /
-    malformed entries are silently dropped — the next pass retries."""
+    malformed entries are silently dropped — the next pass retries.
+
+    Token usage is recorded against `persona_id="_system:news_sentiment"`
+    so admins can see background-task cost in UsageCard alongside chat
+    usage.
+    """
     if not rows:
         return []
 
@@ -128,6 +156,7 @@ async def _score_batch(
     ]
 
     assembled = ""
+    usage_seen: dict[str, int] | None = None
     try:
         async for event in stream_chat(
             messages=messages,
@@ -137,9 +166,15 @@ async def _score_batch(
             temperature=0.0,
             db=db,
         ):
-            if event.get("type") == "delta":
+            etype = event.get("type")
+            if etype == "delta":
                 assembled += event.get("text", "")
-            elif event.get("type") == "error":
+            elif etype == "usage":
+                usage_seen = {
+                    "prompt_tokens": int(event.get("prompt_tokens", 0)),
+                    "completion_tokens": int(event.get("completion_tokens", 0)),
+                }
+            elif etype == "error":
                 log.warning(
                     "news_sentiment.llm_error",
                     extra={"message": event.get("message")},
@@ -148,6 +183,18 @@ async def _score_batch(
     except Exception as exc:
         log.warning("news_sentiment.stream_failed", extra={"error": str(exc)})
         return []
+
+    if usage_seen is not None:
+        from services.llm_usage_service import record_usage
+        await record_usage(
+            db,
+            user_id=None,
+            provider=provider,
+            model=model,
+            persona_id="_system:news_sentiment",
+            prompt_tokens=usage_seen["prompt_tokens"],
+            completion_tokens=usage_seen["completion_tokens"],
+        )
 
     parsed = _parse_response(assembled)
     by_id = {r.id: r for r in rows}
@@ -242,6 +289,7 @@ async def score_pending(
     considered = 0
     scored_count = 0
     batches_run = 0
+    cap_hit = False
     try:
         if provider is None or model is None:
             from services.system_task_config_service import resolve as _resolve_task
@@ -249,6 +297,13 @@ async def score_pending(
             provider = provider or r_provider
             model = model or r_model
         for _ in range(max_batches):
+            if not await _can_make_llm_call():
+                cap_hit = True
+                log.warning(
+                    "news_sentiment.daily_cap_hit",
+                    extra={"cap": settings.SENTIMENT_DAILY_LLM_CALL_CAP},
+                )
+                break
             rows = await _fetch_unscored(
                 session, limit=batch_size, max_age_days=max_age_days,
             )
@@ -270,6 +325,7 @@ async def score_pending(
             "considered": considered,
             "scored": scored_count,
             "batches": batches_run,
+            "cap_hit": int(cap_hit),
         }
     finally:
         if own_session:
@@ -330,6 +386,59 @@ async def read_recent_market_sentiment(
             {
                 "title": r.title,
                 "symbol": r.symbol,
+                "score": r.sentiment_score,
+                "label": r.sentiment_label,
+                "published_at": r.published_at.isoformat(),
+            }
+            for r in rows
+        ],
+    }
+
+
+async def read_symbol_sentiment(
+    db: AsyncSession,
+    *,
+    market: str,
+    symbol: str,
+    limit: int = 10,
+    max_age_hours: int = 72,
+) -> dict | None:
+    """Aggregate sentiment-scored news for a specific symbol over the last
+    `max_age_hours`. Returns None if no scored articles exist for the
+    symbol (so the caller can omit the per-symbol block instead of
+    rendering an empty stub).
+    """
+    cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
+    stmt = (
+        select(NewsArticle)
+        .where(
+            NewsArticle.market == market,
+            NewsArticle.symbol == symbol,
+            NewsArticle.published_at >= cutoff,
+            NewsArticle.sentiment_score.isnot(None),
+        )
+        .order_by(NewsArticle.published_at.desc())
+        .limit(limit)
+    )
+    rows = list((await db.scalars(stmt)).all())
+    if not rows:
+        return None
+    total = sum(r.sentiment_score or 0.0 for r in rows)
+    avg = total / len(rows)
+    counts = {"bullish": 0, "bearish": 0, "neutral": 0}
+    for r in rows:
+        label = r.sentiment_label or "neutral"
+        counts[label] = counts.get(label, 0) + 1
+    return {
+        "symbol": symbol,
+        "count": len(rows),
+        "avg_score": round(avg, 3),
+        "bullish": counts["bullish"],
+        "bearish": counts["bearish"],
+        "neutral": counts["neutral"],
+        "headlines": [
+            {
+                "title": r.title,
                 "score": r.sentiment_score,
                 "label": r.sentiment_label,
                 "published_at": r.published_at.isoformat(),

@@ -5,20 +5,23 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.system.router import VersionStatus
 from auth.permissions import require_admin
 from db.session import get_db
 from models.alert import PriceAlert
 from models.user import User, UserRole
 from models.watchlist import Watchlist
-from api.system.router import VersionStatus
 from services import llm_key_service as keys
+from services import llm_usage_service as usage
 from services import market_key_service as market_keys
 from services import persona_override_service as personas
-from services import llm_usage_service as usage
+from services.ingest import repository as ingest_repo
 from services.version_service import force_refresh_status, trigger_update
+
 from .schemas import (
     ActiveUpdate,
     AdminUserItem,
+    IngestHealthOut,
     LLMKeyInfo,
     LLMKeyUpsert,
     LLMKeyValidation,
@@ -223,6 +226,27 @@ async def admin_llm_usage(
     range_days = max(1, min(range_days, 365))
     summary = await usage.usage_summary(db, range_days=range_days)
     return _summary_to_schema(summary)
+
+
+# ── Scheduled ingest health ──────────────────────────────────────
+
+@router.get("/ingest/health", response_model=list[IngestHealthOut])
+async def ingest_health(_: Admin) -> list[IngestHealthOut]:
+    """Per-job snapshot for every scheduled ingest task.
+
+    State lives in Redis with a 7-day TTL; entries disappear after a
+    week of silence so a removed job doesn't linger forever.
+    """
+    return [
+        IngestHealthOut(
+            job_id=h.job_id,
+            last_run_at=h.last_run_at,
+            ok=h.ok,
+            row_count=h.row_count,
+            error=h.error,
+        )
+        for h in await ingest_repo.list_health()
+    ]
 
 
 @router.post("/llm-keys/{provider}/test", response_model=LLMKeyValidation)

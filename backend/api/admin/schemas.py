@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+
 from pydantic import BaseModel
 
 
@@ -126,3 +127,14 @@ class UsageSummaryOut(BaseModel):
     total_cost_usd: float
     by_provider: list[UsageBucketOut]
     by_day: list[UsageDayPoint]
+
+
+# ── Scheduled ingest health ──────────────────────────────────────
+
+class IngestHealthOut(BaseModel):
+    """One row per scheduled ingest job for the admin dashboard."""
+    job_id: str
+    last_run_at: str | None
+    ok: bool
+    row_count: int
+    error: str | None = None

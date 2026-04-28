@@ -10,13 +10,13 @@ scheduler = AsyncIOScheduler(timezone="UTC")
 
 
 def setup_jobs() -> None:
+    from tasks.crypto_market_refresh import refresh_crypto_quotes
+    from tasks.tw_market_refresh import refresh_tw_quotes, refresh_tw_symbol_map
     from tasks.us_market_refresh import (
         refresh_sp500_universe,
         refresh_us_quotes,
         refresh_us_screener,
     )
-    from tasks.tw_market_refresh import refresh_tw_quotes, refresh_tw_symbol_map
-    from tasks.crypto_market_refresh import refresh_crypto_quotes
 
     # ── US market quote polling ───────────────────────────────────
     # Every 10s during market hours; job itself checks and skips outside hours
@@ -91,6 +91,20 @@ def setup_jobs() -> None:
         refresh_crypto_quotes,
         trigger=IntervalTrigger(seconds=30),
         id="crypto_quotes",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # ── TW OHLCV → Postgres archive ───────────────────────────────
+    # Daily after TWSE close (14:30 Asia/Taipei = 06:30 UTC). Populates
+    # the ohlcv_daily table so the read path can serve K-lines from DB
+    # when both TWSE and FinMind are unavailable simultaneously.
+    from tasks.ingest_ohlcv_tw import run as run_ingest_ohlcv_tw
+    scheduler.add_job(
+        run_ingest_ohlcv_tw,
+        trigger=CronTrigger(hour=6, minute=30, timezone="UTC"),
+        id="ingest_ohlcv_tw",
         replace_existing=True,
         max_instances=1,
         coalesce=True,

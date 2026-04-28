@@ -13,19 +13,23 @@ tz="Asia/Taipei" so the frontend can display correct local labels.
 import json
 import logging
 import re
-from datetime import datetime, date, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytz
 
-from cache.redis_cache import (
-    cache_get, cache_set,
-    key_quote, key_history,
-    key_institutional, key_margin, key_revenue,
-)
-import data.tw.twse_connector as twse
 import data.tw.finmind_connector as finmind
 import data.tw.mops_connector as mops
+import data.tw.twse_connector as twse
+from cache.redis_cache import (
+    cache_get,
+    cache_set,
+    key_history,
+    key_institutional,
+    key_margin,
+    key_quote,
+    key_revenue,
+)
 
 log = logging.getLogger(__name__)
 
@@ -179,7 +183,7 @@ def _normalize_quote(symbol: str, raw: dict) -> dict[str, Any]:
         "high":          raw.get("high"),
         "low":           raw.get("low"),
         "currency":      "TWD",
-        "ts":            int(datetime.now(timezone.utc).timestamp() * 1000),
+        "ts":            int(datetime.now(UTC).timestamp() * 1000),
         "tz":            "Asia/Taipei",
         "is_market_open": _is_tw_market_open(),
         "is_etf":        is_etf(symbol),
@@ -188,33 +192,86 @@ def _normalize_quote(symbol: str, raw: dict) -> dict[str, Any]:
 
 # ── History ───────────────────────────────────────────────────────
 
+# Bars from the DB read tier are considered "fresh enough" if their most
+# recent ts is within this many calendar days of today. 5 days tolerates
+# weekends + a typical TW national holiday without falling through to
+# upstream unnecessarily.
+_DB_HISTORY_FRESHNESS_DAYS = 5
+
+
+def _db_bars_are_fresh(bars: list[dict[str, Any]], today: date) -> bool:
+    if not bars:
+        return False
+    last = bars[-1].get("time")
+    if not last:
+        return False
+    try:
+        last_date = date.fromisoformat(str(last)[:10])
+    except ValueError:
+        return False
+    return (today - last_date).days <= _DB_HISTORY_FRESHNESS_DAYS
+
+
 async def get_history(symbol: str, months: int = 12) -> list[dict[str, Any]]:
+    from services.ingest.repository import (
+        OhlcvBar,
+        read_ohlcv_range_autosession,
+        upsert_ohlcv_bars_autosession,
+    )
+
     key = key_history("tw", symbol, "1d")
     cached = await cache_get(key)
     if cached:
         return json.loads(cached)
 
-    bars: list[dict] = []
-    start = _start_date(months)
+    today = date.today()
+    start = today - timedelta(days=months * 30)
 
-    # Try TWSE month-by-month (going back `months` months)
+    # ── Tier 2: Postgres archive ────────────────────────────────
+    db_bars = await read_ohlcv_range_autosession("TW", symbol, start, today)
+    if _db_bars_are_fresh(db_bars, today):
+        await cache_set(key, json.dumps(db_bars), TTL_HISTORY)
+        return db_bars
+
+    # ── Tier 3: upstream waterfall (TWSE month-by-month → FinMind) ──
+    bars: list[dict] = []
     try:
         for i in range(months):
-            d = date.today().replace(day=1) - timedelta(days=i * 30)
+            d = today.replace(day=1) - timedelta(days=i * 30)
             month_bars = await twse.get_daily_ohlcv(symbol, d)
             bars = month_bars + bars
     except Exception:
         bars = []
 
+    upstream_source = "twse"
     if not bars:
         try:
-            bars = await finmind.get_daily_ohlcv(symbol, start)
+            bars = await finmind.get_daily_ohlcv(symbol, start.isoformat())
+            upstream_source = "finmind"
         except Exception:
             pass
 
     if bars:
         await cache_set(key, json.dumps(bars), TTL_HISTORY)
-    return bars
+        # Best-effort write-back into the archive so subsequent cache
+        # misses serve from DB and reduce upstream load.
+        ohlcv_bars = [
+            b for b in (
+                OhlcvBar.from_connector_row("TW", symbol, upstream_source, r)
+                for r in bars
+            )
+            if b is not None
+        ]
+        await upsert_ohlcv_bars_autosession(ohlcv_bars)
+        return bars
+
+    # ── Tier 4: stale DB beats nothing during full upstream outage ──
+    if db_bars:
+        log.info("tw.history.served_stale_db",
+                 extra={"symbol": symbol, "rows": len(db_bars)})
+        return db_bars
+
+    return []
 
 
 # ── Institutional investors ───────────────────────────────────────
@@ -769,9 +826,10 @@ async def _google_news_rss(query: str, limit: int = 10) -> list[dict[str, Any]]:
     Links are Google News redirect URLs that resolve to the original article
     when clicked.
     """
-    import httpx
     import xml.etree.ElementTree as ET
     from email.utils import parsedate_to_datetime
+
+    import httpx
 
     url = "https://news.google.com/rss/search"
     params = {
@@ -812,7 +870,7 @@ async def _google_news_rss(query: str, limit: int = 10) -> list[dict[str, Any]]:
 async def _yfinance_news_fallback(symbol: str, limit: int) -> list[dict[str, Any]]:
     """Legacy yfinance path. Often returns [] for TW symbols."""
     import asyncio
-    from datetime import datetime, timezone
+    from datetime import datetime
     loop = asyncio.get_running_loop()
 
     def _fetch():
@@ -830,7 +888,7 @@ async def _yfinance_news_fallback(symbol: str, limit: int) -> list[dict[str, Any
                 "publisher":    n.get("publisher", ""),
                 "link":         n.get("link", ""),
                 "published_at": datetime.fromtimestamp(
-                    n.get("providerPublishTime", 0), tz=timezone.utc
+                    n.get("providerPublishTime", 0), tz=UTC
                 ).isoformat(),
                 "thumbnail":    thumbnail,
             })

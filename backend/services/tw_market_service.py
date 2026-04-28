@@ -973,17 +973,32 @@ async def _yfinance_news_fallback(symbol: str, limit: int) -> list[dict[str, Any
 
 async def get_news(symbol: str, limit: int = 10) -> list[dict[str, Any]]:
     """
-    TW news — Google News RSS (zh-TW) primary, yfinance fallback. yfinance's
-    .news attribute is empty for almost every TW ticker including 2330, so
-    we hit Google News which covers 鉅亨網 / 經濟日報 / 中央社 / MoneyDJ /
-    自由財經 etc. Query is `{symbol} {name_zh}` when we have a recent quote
-    cached, otherwise `{symbol} 台股`.
+    TW news read tier:
+        Redis cache  →  DB (FinMind ingest archive)  →
+        Google News RSS (live scrape)  →  yfinance fallback
+
+    The DB tier serves recent FinMind articles populated by the hourly
+    `ingest_news_tw` cron — no upstream call needed for cache misses.
+    Google News RSS stays as the live scrape fallback because FinMind's
+    coverage tags articles by `stock_id` so per-symbol matching may
+    miss broad-market coverage.
     """
+    from services.ingest.repository import read_recent_news_autosession
+
     key = f"tw:news:{symbol.upper()}"
     cached = await cache_get(key)
     if cached:
         return json.loads(cached)
 
+    # ── Tier 2: Postgres archive ────────────────────────────────
+    db_items = await read_recent_news_autosession(
+        "TW", symbol=symbol.upper(), limit=limit, max_age_days=14,
+    )
+    if db_items:
+        await cache_set(key, json.dumps(db_items), TTL_NEWS)
+        return db_items
+
+    # ── Tier 3: live Google News RSS ────────────────────────────
     name = ""
     try:
         q_cached = await cache_get(key_quote("tw", symbol))

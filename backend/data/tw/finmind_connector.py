@@ -2,8 +2,9 @@
 FinMind connector — free tier: 600 req/day without token.
 Tracks usage in Redis; falls silent (returns []) when near the limit.
 """
-import httpx
 from typing import Any
+
+import httpx
 
 from cache.redis_cache import cache_incr, key_finmind_counter
 from config import settings
@@ -150,3 +151,30 @@ async def get_etf_holdings(symbol: str, start_date: str = "2024-01-01") -> list[
     accessible — caller renders an empty state.
     """
     return await _query("TaiwanStockHoldingSharesPer", symbol, start_date)
+
+
+# ── News ──────────────────────────────────────────────────────────
+
+async def get_news(start_date: str, symbol: str = "") -> list[dict[str, Any]]:
+    """
+    Taiwan stock news. `symbol=""` returns market-wide articles
+    (FinMind's data_id="" returns everyone's news in one call — a
+    huge quota saving versus per-symbol fan-out). Pass a specific
+    symbol when only that issuer's headlines are needed.
+
+    Returns [] silently when FinMind quota is exhausted; the daily
+    ingest task records this via `ingest_health` so operators can
+    see degraded mode in the admin dashboard.
+    """
+    rows = await _query("TaiwanStockNews", symbol, start_date)
+    return [
+        {
+            "title":        r.get("title", ""),
+            "link":         r.get("link", ""),
+            "source_name":  r.get("source", ""),
+            "description":  r.get("description", ""),
+            "published_at": r.get("date", ""),
+            "symbol":       r.get("stock_id", "") or None,
+        }
+        for r in rows
+    ]

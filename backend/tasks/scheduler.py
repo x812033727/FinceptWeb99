@@ -125,6 +125,20 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # ── TW news → Postgres archive ────────────────────────────────
+    # Hourly. One FinMind TaiwanStockNews call per hour returns the
+    # market-wide cross-section in a single request, so this stays
+    # well under FinMind's 600/day quota (~24 calls/day).
+    from tasks.ingest_news_tw import run as run_ingest_news_tw
+    scheduler.add_job(
+        run_ingest_news_tw,
+        trigger=IntervalTrigger(hours=1),
+        id="ingest_news_tw",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── TW quote_snapshots retention prune ────────────────────────
     # Daily at 03:00 UTC; deletes rows older than 30 days so the table
     # doesn't grow unbounded under busy WS subscriptions.

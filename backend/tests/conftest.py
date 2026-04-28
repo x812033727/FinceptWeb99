@@ -53,6 +53,7 @@ import models.fundamentals_snapshot  # noqa: E402,F401
 import models.llm_provider_key  # noqa: E402,F401
 import models.llm_usage_event  # noqa: E402,F401
 import models.market_provider_key  # noqa: E402,F401
+import models.news_article  # noqa: E402,F401
 import models.ohlcv_daily  # noqa: E402,F401
 import models.persona_override  # noqa: E402,F401
 import models.portfolio  # noqa: E402,F401

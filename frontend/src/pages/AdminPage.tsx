@@ -739,6 +739,97 @@ function MarketKeysCard() {
 }
 
 
+interface IngestHealth {
+  job_id: string;
+  last_run_at: string | null;
+  ok: boolean;
+  row_count: number;
+  error: string | null;
+}
+
+function timeAgo(iso: string | null): string {
+  if (!iso) return "—";
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "—";
+  const diffSec = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (diffSec < 60) return `${diffSec}s ago`;
+  if (diffSec < 3600) return `${Math.round(diffSec / 60)}m ago`;
+  if (diffSec < 86400) return `${Math.round(diffSec / 3600)}h ago`;
+  return `${Math.round(diffSec / 86400)}d ago`;
+}
+
+function IngestHealthCard() {
+  const { data: rows = [], isLoading } = useQuery<IngestHealth[]>({
+    queryKey: ["admin", "ingest-health"],
+    queryFn: () => api.get("/admin/ingest/health").then((r) => r.data),
+    refetchInterval: 60_000,
+  });
+
+  return (
+    <div className="bg-card border border-border rounded-lg p-4 space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-medium">Scheduled Ingest Health</h2>
+        <span className="text-[10px] text-muted-foreground">
+          refreshes every 60s
+        </span>
+      </div>
+
+      {isLoading ? (
+        <p className="text-xs text-muted-foreground animate-pulse">Loading…</p>
+      ) : rows.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          No ingest jobs have reported yet — first cron tick is pending.
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-border text-[10px] text-muted-foreground uppercase tracking-wider">
+                <th className="text-left py-1.5 pr-3">Job</th>
+                <th className="text-left py-1.5 pr-3">Status</th>
+                <th className="text-right py-1.5 pr-3">Rows</th>
+                <th className="text-left py-1.5 pr-3">Last Run</th>
+                <th className="text-left py-1.5">Error</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/40">
+              {rows.map((r) => (
+                <tr key={r.job_id}>
+                  <td className="py-1.5 pr-3 font-mono">{r.job_id}</td>
+                  <td className="py-1.5 pr-3">
+                    <span
+                      className={`px-1.5 py-0.5 rounded text-[10px] ${
+                        r.ok
+                          ? "bg-green-500/10 text-green-400 border border-green-500/30"
+                          : "bg-red-500/10 text-red-400 border border-red-500/30"
+                      }`}
+                    >
+                      {r.ok ? "ok" : "error"}
+                    </span>
+                  </td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">
+                    {r.row_count.toLocaleString()}
+                  </td>
+                  <td className="py-1.5 pr-3 text-muted-foreground">
+                    {timeAgo(r.last_run_at)}
+                  </td>
+                  <td
+                    className="py-1.5 text-muted-foreground truncate max-w-[24rem]"
+                    title={r.error ?? undefined}
+                  >
+                    {r.error ?? ""}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 export default function AdminPage() {
   const user = useAuthStore((s) => s.user);
   const navigate = useNavigate();
@@ -813,6 +904,8 @@ function AdminContent() {
       <MarketKeysCard />
 
       <UsageCard scope="admin" />
+
+      <IngestHealthCard />
 
       <PersonasCard />
 

@@ -4,8 +4,10 @@ Phase 1 covers OHLCV reads/writes plus a Redis-backed health snapshot
 the admin UI can poll. Schedulers write here; `tw_market_service` reads
 here as the new tier between Redis and the upstream waterfall.
 """
+import hashlib
 import json
 import logging
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -19,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cache.redis_cache import cache_get, cache_set, get_redis
 from db.session import AsyncSessionLocal
 from models.fundamentals_snapshot import FundamentalsSnapshot
+from models.news_article import NewsArticle
 from models.ohlcv_daily import OhlcvDaily
 from models.quote_snapshot import QuoteSnapshot
 
@@ -417,6 +420,158 @@ async def read_latest_fundamentals_autosession(
         log.warning("ingest.fundamentals.read_error",
                     extra={"market": market, "symbol": symbol, "error": str(exc)})
         return None
+
+
+# ── News articles ──────────────────────────────────────────────────
+
+# Strip whitespace + punctuation noise so the same article republished
+# with trailing dots / smart quotes still hashes identically.
+_NOISE_RE = re.compile(r"[\s　\.,;:!?。，！？“”‘’]+")
+
+
+def _normalize_title(title: str) -> str:
+    return _NOISE_RE.sub("", (title or "").lower())
+
+
+def _canonical_link(link: str) -> str:
+    """Strip query-string tracking params (utm_*, ref=...) so the same
+    article shared via different campaigns deduplicates correctly."""
+    if "?" not in link:
+        return link.strip()
+    base, _, qs = link.partition("?")
+    keep = [
+        kv for kv in qs.split("&")
+        if kv and not kv.split("=", 1)[0].lower().startswith(("utm_", "ref", "fbclid", "gclid"))
+    ]
+    return base + (("?" + "&".join(keep)) if keep else "")
+
+
+def compute_dedup_hash(title: str, link: str) -> str:
+    raw = _normalize_title(title) + "|" + _canonical_link(link)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class NewsArticleRow:
+    market: str
+    symbol: str | None
+    published_at: datetime
+    title: str
+    link: str
+    publisher: str | None
+    summary: str | None
+    payload: dict[str, Any] | None
+    source: str
+
+    @property
+    def dedup_hash(self) -> str:
+        return compute_dedup_hash(self.title, self.link)
+
+
+async def insert_news_articles(
+    db: AsyncSession, rows: Iterable[NewsArticleRow],
+) -> int:
+    """Bulk insert with on-conflict-do-nothing on `dedup_hash`. Returns
+    the number of input rows passed (not the number actually inserted —
+    duplicates are silently dropped at the DB layer)."""
+    payload = [
+        {
+            "market": r.market,
+            "symbol": r.symbol,
+            "published_at": r.published_at,
+            "title": r.title,
+            "link": r.link,
+            "publisher": r.publisher,
+            "summary": r.summary,
+            "payload": r.payload,
+            "source": r.source,
+            "dedup_hash": r.dedup_hash,
+        }
+        for r in rows
+        if r.title and r.link
+    ]
+    if not payload:
+        return 0
+
+    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
+    if dialect == "sqlite":
+        stmt = sqlite_insert(NewsArticle).values(payload)
+    else:
+        stmt = pg_insert(NewsArticle).values(payload)
+    stmt = stmt.on_conflict_do_nothing(index_elements=["dedup_hash"])
+    await db.execute(stmt)
+    await db.commit()
+    return len(payload)
+
+
+async def read_recent_news(
+    db: AsyncSession,
+    market: str,
+    *,
+    symbol: str | None = None,
+    limit: int = 20,
+    max_age_days: int = 30,
+) -> list[dict[str, Any]]:
+    """Return the most recent articles for `(market, symbol)` newer than
+    `max_age_days`. `symbol=None` matches market-wide articles
+    (NULL symbol) only; pass an explicit symbol to fetch per-symbol news.
+
+    Output shape mirrors `tw_market_service.get_news` so the caller can
+    return the list verbatim.
+    """
+    cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
+    stmt = (
+        select(NewsArticle)
+        .where(NewsArticle.market == market, NewsArticle.published_at >= cutoff)
+        .order_by(NewsArticle.published_at.desc())
+        .limit(limit)
+    )
+    if symbol is None:
+        stmt = stmt.where(NewsArticle.symbol.is_(None))
+    else:
+        stmt = stmt.where(NewsArticle.symbol == symbol)
+    rows = (await db.scalars(stmt)).all()
+    return [
+        {
+            "title":        r.title,
+            "publisher":    r.publisher or "",
+            "link":         r.link,
+            "published_at": r.published_at.isoformat(),
+            "thumbnail":    (r.payload or {}).get("thumbnail") if r.payload else None,
+            "data_source":  r.source,
+        }
+        for r in rows
+    ]
+
+
+async def insert_news_articles_autosession(rows: Iterable[NewsArticleRow]) -> int:
+    """Open own session + insert. Errors logged + swallowed."""
+    rows = list(rows)
+    if not rows:
+        return 0
+    try:
+        async with AsyncSessionLocal() as db:
+            return await insert_news_articles(db, rows)
+    except Exception as exc:
+        log.warning("ingest.news.write_error",
+                    extra={"market": rows[0].market, "count": len(rows), "error": str(exc)})
+        return 0
+
+
+async def read_recent_news_autosession(
+    market: str, *, symbol: str | None = None, limit: int = 20, max_age_days: int = 30,
+) -> list[dict[str, Any]]:
+    """Open own session + read. Errors logged; returns [] so the read
+    path falls through cleanly to upstream."""
+    try:
+        async with AsyncSessionLocal() as db:
+            return await read_recent_news(
+                db, market, symbol=symbol, limit=limit, max_age_days=max_age_days,
+            )
+    except Exception as exc:
+        log.warning("ingest.news.read_error",
+                    extra={"market": market, "symbol": symbol, "error": str(exc)})
+        return []
 
 
 # ── Health snapshot ────────────────────────────────────────────────

@@ -59,19 +59,19 @@ function readPieData(container: HTMLElement) {
 // ── Empty state ──────────────────────────────────────────────────
 
 describe("AllocationPie — empty state", () => {
-  it("renders nothing when there are no holdings", () => {
-    const { container } = render(<AllocationPie holdings={[]} />);
-    expect(container.firstChild).toBeNull();
+  it("renders the 'No holdings to display' placeholder when there are no holdings", () => {
+    const { getByText } = render(<AllocationPie holdings={[]} />);
+    expect(getByText("No holdings to display")).toBeInTheDocument();
   });
 
-  it("renders nothing when every holding has zero weight (e.g. fresh portfolio)", () => {
-    const { container } = render(
+  it("renders the placeholder when every holding has zero weight (e.g. fresh portfolio)", () => {
+    const { getByText } = render(
       <AllocationPie holdings={[
         makeHolding({ id: "a", weight_pct: 0 }),
         makeHolding({ id: "b", weight_pct: undefined }),
       ]} />
     );
-    expect(container.firstChild).toBeNull();
+    expect(getByText("No holdings to display")).toBeInTheDocument();
   });
 });
 

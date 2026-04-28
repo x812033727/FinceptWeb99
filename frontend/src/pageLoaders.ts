@@ -22,6 +22,7 @@ export const pageLoaders = {
   macro: () => import("@/pages/MacroPage"),
   watchlist: () => import("@/pages/WatchlistPage"),
   ai: () => import("@/pages/AIPage"),
+  discussion: () => import("@/pages/DiscussionPage"),
   alerts: () => import("@/pages/AlertsPage"),
   settings: () => import("@/pages/SettingsPage"),
   admin: () => import("@/pages/AdminPage"),
@@ -40,6 +41,7 @@ function loaderForPath(path: string): keyof typeof pageLoaders | undefined {
   if (path === "/macro") return "macro";
   if (path === "/watchlist") return "watchlist";
   if (path === "/ai") return "ai";
+  if (path === "/discussion") return "discussion";
   if (path === "/alerts") return "alerts";
   if (path === "/settings") return "settings";
   if (path === "/admin") return "admin";

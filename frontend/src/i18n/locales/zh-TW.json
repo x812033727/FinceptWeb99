@@ -11,6 +11,7 @@
     "analytics": "分析工具",
     "macro": "總體經濟",
     "ai": "AI 顧問",
+    "discussion": "專家討論",
     "settings": "設定",
     "admin": "管理後台",
     "sign_out": "登出"
@@ -395,6 +396,38 @@
       "result": "結果"
     },
     "disclaimer": "AI 回應僅供參考，並非投資建議。"
+  },
+  "discussion": {
+    "title": "專家圓桌",
+    "subtitle": "多位 AI 專家輪流發言、互相辯論",
+    "new": "新討論",
+    "empty": "尚無討論紀錄",
+    "topic_label": "討論主題",
+    "rules_label": "共同規則",
+    "personas_label": "出席專家",
+    "create": "建立討論",
+    "save_edits": "儲存修改",
+    "start_round": "開始第 1 輪",
+    "next_round": "進行第 {{round}} 輪",
+    "conclude": "彙整結論",
+    "intro": "從左側建立或選擇一場討論",
+    "click_to_start": "按上方「開始第 1 輪」讓專家開始發言",
+    "thinking": "思考中…",
+    "agree_silent": "（同意先前共識，無補充）",
+    "conclusion_title": "結論摘要",
+    "conclusion_parse_error": "結論格式解析失敗，請重新彙整",
+    "recommended_symbols": "推薦標的",
+    "risks": "風險",
+    "consensus": "共識度",
+    "horizon": "時間區間",
+    "horizon_short_term": "短線（1-2 週）",
+    "horizon_medium_term": "中線（1-3 月）",
+    "horizon_long_term": "長線（3 月以上）",
+    "status": {
+      "draft": "草稿",
+      "running": "進行中",
+      "done": "已結論"
+    }
   },
   "watchlist": {
     "title": "自選股",

@@ -4,6 +4,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     DateTime,
+    Float,
     Index,
     Integer,
     String,
@@ -23,12 +24,17 @@ class NewsArticle(Base):
     Dedup is enforced by a UNIQUE constraint on `dedup_hash`
     (sha256 of normalized title + canonical link) — re-running the
     ingest task is idempotent.
+
+    Sentiment fields are populated asynchronously by the hourly scoring
+    job (services/news_sentiment_service.py). Articles ingested before
+    the job ran read NULL until the next pass picks them up.
     """
     __tablename__ = "news_articles"
     __table_args__ = (
         UniqueConstraint("dedup_hash", name="uq_news_articles_dedup_hash"),
         Index("ix_news_articles_lookup", "market", "symbol", "published_at"),
         Index("ix_news_articles_published_at", "published_at"),
+        Index("ix_news_articles_sentiment_lookup", "market", "sentiment_scored_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -44,4 +50,9 @@ class NewsArticle(Base):
     dedup_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     ingested_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False,
+    )
+    sentiment_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sentiment_label: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    sentiment_scored_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
     )

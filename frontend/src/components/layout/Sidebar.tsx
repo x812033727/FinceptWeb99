@@ -23,6 +23,7 @@ const NAV: NavItemDef[] = [
   { to: "/analytics", labelKey: "nav.analytics", icon: "📐" },
   { to: "/macro", labelKey: "nav.macro", icon: "🌐" },
   { to: "/ai", labelKey: "nav.ai", icon: "🤖" },
+  { to: "/discussion", labelKey: "nav.discussion", icon: "💬" },
   { to: "/settings", labelKey: "nav.settings", icon: "⚙" },
 ];
 

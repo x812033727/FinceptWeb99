@@ -128,10 +128,10 @@ describe("Sidebar drawer state", () => {
 });
 
 describe("Sidebar nav items", () => {
-  it("renders the 12 base nav items (admin link hidden for non-admins)", () => {
+  it("renders the 13 base nav items (admin link hidden for non-admins)", () => {
     const { container } = renderSidebar(true);
     const links = container.querySelectorAll("a[data-to]");
-    expect(links).toHaveLength(12);
+    expect(links).toHaveLength(13);
     expect(container.querySelector('a[data-to="/admin"]')).toBeNull();
   });
 

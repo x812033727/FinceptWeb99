@@ -11,6 +11,7 @@
     "analytics": "Analytics",
     "macro": "Macro",
     "ai": "AI Agents",
+    "discussion": "Discussion",
     "settings": "Settings",
     "admin": "Admin",
     "sign_out": "Sign out"
@@ -395,6 +396,38 @@
       "result": "result"
     },
     "disclaimer": "AI responses are for informational purposes only and not financial advice."
+  },
+  "discussion": {
+    "title": "Expert Round-table",
+    "subtitle": "Multiple AI experts take turns and debate each other",
+    "new": "New Discussion",
+    "empty": "No discussions yet",
+    "topic_label": "Topic",
+    "rules_label": "Shared Rules",
+    "personas_label": "Participants",
+    "create": "Create Discussion",
+    "save_edits": "Save Edits",
+    "start_round": "Start Round 1",
+    "next_round": "Run Round {{round}}",
+    "conclude": "Synthesize Conclusion",
+    "intro": "Create or pick a discussion from the sidebar",
+    "click_to_start": "Click \"Start Round 1\" above to begin",
+    "thinking": "thinking…",
+    "agree_silent": "(Agrees with prior consensus, no additions)",
+    "conclusion_title": "Conclusion",
+    "conclusion_parse_error": "Conclusion parse failed, please re-synthesize",
+    "recommended_symbols": "Recommended",
+    "risks": "Risks",
+    "consensus": "Consensus",
+    "horizon": "Horizon",
+    "horizon_short_term": "Short-term (1-2 wk)",
+    "horizon_medium_term": "Medium-term (1-3 mo)",
+    "horizon_long_term": "Long-term (3+ mo)",
+    "status": {
+      "draft": "draft",
+      "running": "running",
+      "done": "done"
+    }
   },
   "watchlist": {
     "title": "Watchlist",

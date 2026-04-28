@@ -139,6 +139,22 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # ── News sentiment scoring ────────────────────────────────────
+    # Hourly: picks up news rows with NULL sentiment_score and runs them
+    # through Claude Haiku in batches. Cheap (one prompt scores 20
+    # headlines) and gives the discussion orchestrator pre-computed
+    # sentiment context. Job has its own Redis lock so two pods can't
+    # race the same rows.
+    from tasks.score_news_sentiment import run as run_score_news_sentiment
+    scheduler.add_job(
+        run_score_news_sentiment,
+        trigger=IntervalTrigger(minutes=30),
+        id="score_news_sentiment",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── TW quote_snapshots retention prune ────────────────────────
     # Daily at 03:00 UTC; deletes rows older than 30 days so the table
     # doesn't grow unbounded under busy WS subscriptions.

@@ -17,6 +17,7 @@ from api.alerts.router import router as alerts_router
 from api.analytics.router import router as analytics_router
 from api.auth.router import router as auth_router
 from api.crypto_market.router import router as crypto_router
+from api.discussion.router import router as discussion_router
 from api.portfolio.router import router as portfolio_router
 from api.system.router import router as system_router
 from api.tw_market.router import router as tw_router
@@ -129,6 +130,7 @@ app.include_router(ai_router, prefix="/api/ai", tags=["AI Agents"])
 app.include_router(watchlist_router, prefix="/api/watchlist", tags=["Watchlist"])
 app.include_router(alerts_router, prefix="/api/alerts", tags=["Alerts"])
 app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
+app.include_router(discussion_router, prefix="/api/discussion", tags=["Discussion"])
 app.include_router(system_router, prefix="/api/system", tags=["System"])
 
 

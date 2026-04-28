@@ -110,6 +110,21 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # ── TW fundamentals → Postgres archive ────────────────────────
+    # Daily 06:45 UTC (right after the OHLCV ingest at 06:30). Single
+    # TWSE BWIBBU_ALL call returns the full day's PE / PB / dividend
+    # yield cross-section, so this is cheap — no per-symbol fan-out and
+    # no quota pressure.
+    from tasks.ingest_fundamentals_tw import run as run_ingest_fundamentals_tw
+    scheduler.add_job(
+        run_ingest_fundamentals_tw,
+        trigger=CronTrigger(hour=6, minute=45, timezone="UTC"),
+        id="ingest_fundamentals_tw",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── TW quote_snapshots retention prune ────────────────────────
     # Daily at 03:00 UTC; deletes rows older than 30 days so the table
     # doesn't grow unbounded under busy WS subscriptions.

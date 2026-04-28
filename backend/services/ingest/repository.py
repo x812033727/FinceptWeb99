@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from cache.redis_cache import cache_get, cache_set, get_redis
 from db.session import AsyncSessionLocal
+from models.fundamentals_snapshot import FundamentalsSnapshot
 from models.ohlcv_daily import OhlcvDaily
 from models.quote_snapshot import QuoteSnapshot
 
@@ -283,6 +284,137 @@ async def read_latest_quote_autosession(
             )
     except Exception as exc:
         log.warning("ingest.quote_snapshot.read_error",
+                    extra={"market": market, "symbol": symbol, "error": str(exc)})
+        return None
+
+
+# ── Fundamentals snapshots ─────────────────────────────────────────
+
+@dataclass(frozen=True)
+class FundamentalsSnapshotRow:
+    market: str
+    symbol: str
+    as_of: date
+    pe_ratio: float | None
+    pb_ratio: float | None
+    dividend_yield: float | None
+    eps: float | None
+    revenue: float | None
+    payload: dict[str, Any] | None
+    source: str
+
+
+async def upsert_fundamentals_snapshots(
+    db: AsyncSession, rows: Iterable[FundamentalsSnapshotRow],
+) -> int:
+    """Bulk upsert. Returns number of input rows.
+
+    Re-running same day overwrites the row's price columns + source.
+    `ingested_at` is auto-refreshed via the column default on conflict.
+    """
+    payload = [
+        {
+            "market": r.market,
+            "symbol": r.symbol,
+            "as_of": r.as_of,
+            "pe_ratio": r.pe_ratio,
+            "pb_ratio": r.pb_ratio,
+            "dividend_yield": r.dividend_yield,
+            "eps": r.eps,
+            "revenue": r.revenue,
+            "payload": r.payload,
+            "source": r.source,
+        }
+        for r in rows
+    ]
+    if not payload:
+        return 0
+
+    update_cols = (
+        "pe_ratio", "pb_ratio", "dividend_yield", "eps", "revenue",
+        "payload", "source",
+    )
+    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
+    if dialect == "sqlite":
+        stmt = sqlite_insert(FundamentalsSnapshot).values(payload)
+    else:
+        stmt = pg_insert(FundamentalsSnapshot).values(payload)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["market", "symbol", "as_of"],
+        set_={k: getattr(stmt.excluded, k) for k in update_cols},
+    )
+    await db.execute(stmt)
+    await db.commit()
+    return len(payload)
+
+
+async def read_latest_fundamentals(
+    db: AsyncSession, market: str, symbol: str, *, max_age_days: int,
+) -> dict[str, Any] | None:
+    """Return the most recent snapshot if newer than `max_age_days`.
+
+    Output shape mirrors `tw_market_service.get_fundamentals` (PE / PB /
+    dividend_yield + symbol/market/exchange) so the caller can return it
+    almost verbatim.
+    """
+    cutoff = date.today() - timedelta(days=max_age_days)
+    stmt = (
+        select(FundamentalsSnapshot)
+        .where(
+            FundamentalsSnapshot.market == market,
+            FundamentalsSnapshot.symbol == symbol,
+            FundamentalsSnapshot.as_of >= cutoff,
+        )
+        .order_by(FundamentalsSnapshot.as_of.desc())
+        .limit(1)
+    )
+    row = await db.scalar(stmt)
+    if row is None:
+        return None
+    return {
+        "symbol":         row.symbol,
+        "market":         row.market,
+        "pe_ratio":       float(row.pe_ratio) if row.pe_ratio is not None else None,
+        "pb_ratio":       float(row.pb_ratio) if row.pb_ratio is not None else None,
+        "dividend_yield": float(row.dividend_yield) if row.dividend_yield is not None else None,
+        "eps":            float(row.eps) if row.eps is not None else None,
+        "revenue":        float(row.revenue) if row.revenue is not None else None,
+        "as_of":          row.as_of.isoformat(),
+        "data_source":    row.source,
+    }
+
+
+async def upsert_fundamentals_snapshots_autosession(
+    rows: Iterable[FundamentalsSnapshotRow],
+) -> int:
+    """Open a fresh session and upsert. Errors are caught + logged so
+    a Postgres outage in the read-path write-back never breaks the
+    request."""
+    rows = list(rows)
+    if not rows:
+        return 0
+    try:
+        async with AsyncSessionLocal() as db:
+            return await upsert_fundamentals_snapshots(db, rows)
+    except Exception as exc:
+        log.warning("ingest.fundamentals.write_error",
+                    extra={"market": rows[0].market, "count": len(rows), "error": str(exc)})
+        return 0
+
+
+async def read_latest_fundamentals_autosession(
+    market: str, symbol: str, *, max_age_days: int,
+) -> dict[str, Any] | None:
+    """Same as `read_latest_fundamentals` but opens its own session and
+    swallows DB errors so the read path falls through to upstream
+    cleanly when Postgres is unhealthy."""
+    try:
+        async with AsyncSessionLocal() as db:
+            return await read_latest_fundamentals(
+                db, market, symbol, max_age_days=max_age_days,
+            )
+    except Exception as exc:
+        log.warning("ingest.fundamentals.read_error",
                     extra={"market": market, "symbol": symbol, "error": str(exc)})
         return None
 

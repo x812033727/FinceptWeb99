@@ -382,29 +382,84 @@ async def get_revenue(symbol: str, months: int = 12) -> list[dict[str, Any]]:
 # ── Financials ────────────────────────────────────────────────────
 
 async def get_fundamentals(symbol: str) -> dict[str, Any]:
-    """PE, PB, dividend yield from TWSE BWIBBU_d + exchange info."""
+    """PE, PB, dividend yield from TWSE BWIBBU_d + exchange info.
+
+    Read tier: Redis → DB (within 7 days) → TWSE upstream → DB (any age).
+    The 7-day window matches BWIBBU's typical refresh cadence — older
+    rows are still better than blank state during a TWSE outage.
+    """
+    from services.ingest.repository import (
+        FundamentalsSnapshotRow,
+        read_latest_fundamentals_autosession,
+        upsert_fundamentals_snapshots_autosession,
+    )
+
     key = f"tw:fundamentals:{symbol}"
     cached = await cache_get(key)
     if cached:
         return json.loads(cached)
 
-    result: dict[str, Any] = {
+    base = {
         "symbol": symbol,
         "market": "TW",
         "exchange": get_exchange(symbol),
     }
+
+    # ── Tier 2: recent DB snapshot ─────────────────────────────────
+    db_snap = await read_latest_fundamentals_autosession(
+        "TW", symbol, max_age_days=7,
+    )
+    if db_snap is not None:
+        result = {**base, **{
+            "pe_ratio":       db_snap.get("pe_ratio"),
+            "pb_ratio":       db_snap.get("pb_ratio"),
+            "dividend_yield": db_snap.get("dividend_yield"),
+            "fetched_at":     db_snap.get("as_of"),
+            "data_source":    db_snap.get("data_source") or "db",
+        }}
+        await cache_set(key, json.dumps(result), TTL_FUNDAMENTALS)
+        return result
+
+    # ── Tier 3: TWSE upstream ──────────────────────────────────────
     have_ratios = False
     try:
         ratios = await twse.get_valuation_ratios(symbol)
         if ratios:
-            result.update(ratios)
+            base.update(ratios)
             have_ratios = True
     except Exception:
         pass
 
     if have_ratios:
-        await cache_set(key, json.dumps(result), TTL_FUNDAMENTALS)
-    return result
+        await cache_set(key, json.dumps(base), TTL_FUNDAMENTALS)
+        # Best-effort write-back so the next request serves from DB.
+        await upsert_fundamentals_snapshots_autosession([
+            FundamentalsSnapshotRow(
+                market="TW", symbol=symbol, as_of=date.today(),
+                pe_ratio=base.get("pe_ratio"),
+                pb_ratio=base.get("pb_ratio"),
+                dividend_yield=base.get("dividend_yield"),
+                eps=None, revenue=None, payload=None,
+                source="twse",
+            )
+        ])
+        return base
+
+    # ── Tier 4: stale DB beats nothing during a TWSE outage ────────
+    stale = await read_latest_fundamentals_autosession(
+        "TW", symbol, max_age_days=365,
+    )
+    if stale is not None:
+        log.info("tw.fundamentals.served_stale_db", extra={"symbol": symbol})
+        return {**base, **{
+            "pe_ratio":       stale.get("pe_ratio"),
+            "pb_ratio":       stale.get("pb_ratio"),
+            "dividend_yield": stale.get("dividend_yield"),
+            "fetched_at":     stale.get("as_of"),
+            "data_source":    "db_stale",
+        }}
+
+    return base
 
 
 async def get_financials(symbol: str) -> list[dict[str, Any]]:

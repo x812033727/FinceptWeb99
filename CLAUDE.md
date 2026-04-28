@@ -68,7 +68,8 @@ FinceptWeb/
 │   │   │                 #   0011 ohlcv_daily · 0012 quote_snapshots ·
 │   │   │                 #   0013 fundamentals_snapshots · 0014 news_articles ·
 │   │   │                 #   0015 discussions + news_articles.sentiment_* ·
-│   │   │                 #   0016 system_task_configs
+│   │   │                 #   0016 system_task_configs ·
+│   │   │                 #   0017 runtime_settings
 │   │   ├── base.py       # DeclarativeBase with naming convention
 │   │   ├── seed.py       # Admin user seed on first boot
 │   │   └── session.py    # Async engine + get_db dependency
@@ -291,6 +292,27 @@ FinceptWeb/
   `read_symbol_sentiment` (per stock, used when topic mentions
   specific codes). `gather_market_context` records connector errors
   into `ctx["errors"]` so personas can mention "data was incomplete".
+
+### Runtime tunables (env-var overrides)
+- A small subset of `.env` settings can be retuned at runtime via the
+  AdminPage `RuntimeTunablesCard`. Stored in `runtime_settings` (migration
+  `0017`); resolved through `services/runtime_config_service.py` with a
+  60 s Redis cache (cross-pod consistency without explicit invalidation,
+  except `upsert` / `delete_override` flush their key to make admin edits
+  immediate).
+- Currently exposed: `SENTIMENT_DAILY_LLM_CALL_CAP`,
+  `DISCUSSION_PERSONA_TIMEOUT_SECONDS`, `AI_REQUESTS_VIEWER_DAILY`,
+  `AI_REQUESTS_ANALYST_DAILY`, `FINMIND_DAILY_REQUEST_LIMIT`. Each has a
+  type + min/max bounds enforced at upsert time.
+- Adding a new tunable: register a `RuntimeSettingSpec` in `_REGISTRY`,
+  switch the call site `settings.X` → `await runtime_config.get_int("X")`.
+  The admin UI surfaces it automatically.
+- Hot-reload contract: edits propagate within 60 s across all pods via
+  Redis cache TTL; a cache `delete` on upsert makes them immediate on
+  the originating pod. Settings whose value is captured at module load
+  (e.g. `UPDATE_CHECK_INTERVAL_HOURS`, used in `IntervalTrigger`) are
+  intentionally NOT in the registry — would mislead admins about
+  effect.
 
 ### System task LLM routing
 - Admins pick the provider/model for each background system task

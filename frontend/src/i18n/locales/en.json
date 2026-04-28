@@ -498,6 +498,14 @@
     "subtitle": "Personal keys take priority over system + .env so usage hits your own account",
     "fallback_to_system": "using system"
   },
+  "runtimeTunables": {
+    "title": "Runtime Tunables",
+    "subtitle": "Env-var-equivalent settings tunable from the UI; edits propagate within 60 s without a restart",
+    "setting": "Setting",
+    "description": "Description",
+    "value": "Value",
+    "default": "default"
+  },
   "systemTasks": {
     "title": "Background Tasks → LLM Routing",
     "subtitle": "Pick the provider/model for each scheduled system task (news sentiment, discussion synthesizer); unset rows use the compiled default",

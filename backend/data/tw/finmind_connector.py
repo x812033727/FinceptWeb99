@@ -12,6 +12,20 @@ from config import settings
 _BASE = "https://api.finmindtrade.com/api/v4/data"
 
 
+async def _resolve_daily_limit() -> int:
+    """Look up the runtime-tunable FinMind daily cap. The resolver caches
+    in Redis for 60 s so a hot path doesn't pay a DB hit each call. Falls
+    back to the compiled-in setting on any error so a transient DB
+    outage doesn't break the connector."""
+    try:
+        from db.session import AsyncSessionLocal
+        from services.runtime_config_service import get_int as _get_int
+        async with AsyncSessionLocal() as db:
+            return await _get_int(db, "FINMIND_DAILY_REQUEST_LIMIT")
+    except Exception:
+        return settings.FINMIND_DAILY_REQUEST_LIMIT
+
+
 async def _query(dataset: str, data_id: str, start_date: str, end_date: str | None = None) -> list[dict[str, Any]]:
     """
     Check daily quota before hitting the API.
@@ -19,7 +33,7 @@ async def _query(dataset: str, data_id: str, start_date: str, end_date: str | No
     """
     # 86400s = 24h; counter auto-expires so no explicit reset needed
     count = await cache_incr(key_finmind_counter(), ttl_seconds=86400)
-    if count > settings.FINMIND_DAILY_REQUEST_LIMIT:
+    if count > await _resolve_daily_limit():
         return []
 
     params: dict = {

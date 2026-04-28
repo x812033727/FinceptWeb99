@@ -263,7 +263,7 @@ async def test_score_pending_respects_daily_cap(db_session: AsyncSession):
         yield {"type": "delta", "text": "[]"}
 
     # Force "no quota left" by patching _can_make_llm_call.
-    async def _always_full():
+    async def _always_full(*_a, **_kw):
         return False
 
     with patch.object(nss, "_can_make_llm_call", side_effect=_always_full), \

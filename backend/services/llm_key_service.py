@@ -42,6 +42,9 @@ SUPPORTED_PROVIDERS: tuple[str, ...] = (
     "anthropic",
     "gemini",
     "minimax",
+    "groq",
+    "deepseek",
+    "openrouter",
 )
 
 # Map provider → settings attribute fallback name

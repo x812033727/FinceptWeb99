@@ -50,13 +50,19 @@ _OPENAI_COMPAT_PROVIDERS = {
 
 # ── quota helpers ─────────────────────────────────────────────────
 
-async def _check_quota(user: dict) -> None:
+async def _check_quota(user: dict, db: AsyncSession) -> None:
     role = user.get("role", "viewer")
-    limit = (
-        settings.AI_REQUESTS_ANALYST_DAILY
+    limit_key = (
+        "AI_REQUESTS_ANALYST_DAILY"
         if role in ("analyst", "admin")
-        else settings.AI_REQUESTS_VIEWER_DAILY
+        else "AI_REQUESTS_VIEWER_DAILY"
     )
+    # Runtime-tunable via AdminPage; falls back to .env default on resolver failure.
+    try:
+        from services.runtime_config_service import get_int as _get_int
+        limit = await _get_int(db, limit_key)
+    except Exception:
+        limit = getattr(settings, limit_key)
     count = await cache_incr(key_ai_counter(user["id"]), ttl_seconds=86400)
     if count > limit:
         raise HTTPException(
@@ -106,7 +112,7 @@ async def chat(
     a JSON block. Pass `provider="claude_agent"` as override (or pick an
     agent whose default_provider is claude_agent) to enable tool-use.
     """
-    await _check_quota(user)
+    await _check_quota(user, db)
 
     try:
         agent = await get_agent_resolved(db, body.agent_id)

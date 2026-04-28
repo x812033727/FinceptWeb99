@@ -1,6 +1,8 @@
 import uuid
 from datetime import datetime
 
+from typing import Any
+
 from pydantic import BaseModel
 
 
@@ -127,6 +129,26 @@ class SystemTaskTestResult(BaseModel):
     latency_ms: int
     sample_output: str | None = None
     error: str | None = None
+
+
+# ── Runtime-tunable settings (env-var overrides) ─────────────────
+
+class RuntimeSettingOut(BaseModel):
+    key: str
+    type: str           # "int" | "float" | "bool" | "str"
+    name: str
+    description: str
+    min_value: float | int | None = None
+    max_value: float | int | None = None
+    default_value: Any
+    effective_value: Any
+    is_overridden: bool
+    updated_at: datetime | None = None
+    updated_by_email: str | None = None
+
+
+class RuntimeSettingIn(BaseModel):
+    value: Any
 
 
 # ── LLM usage summary ────────────────────────────────────────────

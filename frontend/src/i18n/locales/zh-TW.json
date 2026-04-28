@@ -498,6 +498,14 @@
     "subtitle": "個人 key 會優先於系統共用 key 與 .env，使用您自己的帳號計費",
     "fallback_to_system": "用系統設定"
   },
+  "runtimeTunables": {
+    "title": "Runtime 參數調整",
+    "subtitle": "從 .env 來的可調參數，編輯後 60 秒內生效；不需重啟後端",
+    "setting": "參數",
+    "description": "說明",
+    "value": "目前值",
+    "default": "預設"
+  },
   "systemTasks": {
     "title": "背景任務 → LLM 對應",
     "subtitle": "為每個系統排程任務（新聞情緒、討論彙整等）選擇 provider/model；未覆寫則用程式內預設",

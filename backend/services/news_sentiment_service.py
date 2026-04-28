@@ -43,19 +43,30 @@ from models.news_article import NewsArticle
 log = logging.getLogger(__name__)
 
 
-async def _can_make_llm_call() -> bool:
+async def _can_make_llm_call(db: AsyncSession | None = None) -> bool:
     """Atomically reserve one LLM call against the daily cap.
 
     Returns False once the day's cap is exhausted; the caller must stop.
     The counter resets at UTC midnight via the 24h TTL set on the first
     increment of the day.
 
+    Cap value is resolved at runtime via `runtime_config_service` so an
+    admin can retune `SENTIMENT_DAILY_LLM_CALL_CAP` from the UI without
+    redeploying. Falls back to the compiled-in default if the runtime
+    resolver fails for any reason.
+
     Fails *closed* on Redis outage — without the counter we can't enforce
     the cap, so we'd rather skip a scoring pass than risk spending an
-    unbounded amount during a multi-hour Redis incident. The next
-    scheduled run will retry once Redis recovers.
+    unbounded amount during a multi-hour Redis incident.
     """
     cap = settings.SENTIMENT_DAILY_LLM_CALL_CAP
+    if db is not None:
+        try:
+            from services.runtime_config_service import get_int as _get_int
+            cap = await _get_int(db, "SENTIMENT_DAILY_LLM_CALL_CAP")
+        except Exception as exc:
+            log.warning("news_sentiment.runtime_config_failed",
+                        extra={"error": str(exc)})
     if cap <= 0:
         return True
     today = datetime.now(UTC).strftime("%Y%m%d")
@@ -302,7 +313,7 @@ async def score_pending(
             provider = provider or r_provider
             model = model or r_model
         for _ in range(max_batches):
-            if not await _can_make_llm_call():
+            if not await _can_make_llm_call(session):
                 cap_hit = True
                 log.warning(
                     "news_sentiment.daily_cap_hit",

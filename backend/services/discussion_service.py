@@ -527,7 +527,14 @@ async def run_round(
         yield TurnEvent("context", {"context": context})
 
         prior_turns = await get_turns(db, discussion_id=discussion.id)
-        persona_timeout = settings.DISCUSSION_PERSONA_TIMEOUT_SECONDS
+        # Resolve persona timeout via the runtime config service so admins
+        # can retune it from the UI without redeploying. Falls back to
+        # the compiled-in setting on any resolver failure.
+        try:
+            from services.runtime_config_service import get_int as _get_int
+            persona_timeout = await _get_int(db, "DISCUSSION_PERSONA_TIMEOUT_SECONDS")
+        except Exception:
+            persona_timeout = settings.DISCUSSION_PERSONA_TIMEOUT_SECONDS
 
         # Batch-load persona overrides up front so the per-persona loop
         # doesn't make N round-trips to the persona_overrides table.

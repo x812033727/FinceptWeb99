@@ -57,20 +57,29 @@ CurrentUser = Annotated[dict, Depends(require_viewer)]
 # ── quota ──────────────────────────────────────────────────────────
 
 
-def _daily_limit(role: str) -> int:
-    if role in ("analyst", "admin"):
-        return settings.AI_REQUESTS_ANALYST_DAILY
-    return settings.AI_REQUESTS_VIEWER_DAILY
+async def _daily_limit(db: AsyncSession, role: str) -> int:
+    """Resolve the user's daily quota via runtime_config_service so an
+    admin can retune AI_REQUESTS_VIEWER_DAILY / ANALYST_DAILY from the
+    UI without redeploying. Falls back to the compiled default on any
+    resolver failure."""
+    key = "AI_REQUESTS_ANALYST_DAILY" if role in ("analyst", "admin") \
+        else "AI_REQUESTS_VIEWER_DAILY"
+    try:
+        from services.runtime_config_service import get_int as _get_int
+        return await _get_int(db, key)
+    except Exception:
+        return getattr(settings, key)
 
 
-async def _check_quota(user: dict, *, cost: int) -> None:
+async def _check_quota(user: dict, db: AsyncSession, *, cost: int) -> None:
     """Reserve `cost` requests against the daily counter atomically.
 
-    Done as a single `INCRBY` so two concurrent rounds can't both squeak
-    under the limit. If the post-increment count exceeds the cap we
-    refund and reject.
+    Done as a sequential INCR loop so two concurrent rounds can't both
+    squeak under the limit (the final new_count check rejects whichever
+    one crosses). If the post-increment count exceeds the cap we refund
+    and reject.
     """
-    limit = _daily_limit(user.get("role", "viewer"))
+    limit = await _daily_limit(db, user.get("role", "viewer"))
     new_count = 0
     for _ in range(cost):
         new_count = await cache_incr(key_ai_counter(user["id"]), ttl_seconds=86400)
@@ -246,7 +255,7 @@ async def run_round(
         )
 
     cost = len(row.persona_ids or [])
-    await _check_quota(user, cost=cost)
+    await _check_quota(user, db, cost=cost)
 
     async def event_stream() -> AsyncGenerator[bytes, None]:
         completed_personas = 0
@@ -298,7 +307,7 @@ async def conclude_session(
             detail="Cannot synthesize a conclusion before any round has run",
         )
 
-    await _check_quota(user, cost=1)
+    await _check_quota(user, db, cost=1)
     try:
         conclusion = await discussion_service.synthesize_conclusion(
             db, row, user_id=str(user["id"]),

@@ -1,7 +1,7 @@
 """ohlcv_daily — daily K-line archive table
 
-Revision ID: 0011
-Revises: 0010
+Revision ID: 0010
+Revises: 0009
 Create Date: 2026-04-28
 
 Phase 1 of the scheduled-fetch-into-Postgres subsystem (see plan):
@@ -25,8 +25,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0011"
-down_revision: str | None = "0010"
+revision: str = "0010"
+down_revision: str | None = "0009"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

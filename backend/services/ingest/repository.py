@@ -8,10 +8,10 @@ import json
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cache.redis_cache import cache_get, cache_set, get_redis
 from db.session import AsyncSessionLocal
 from models.ohlcv_daily import OhlcvDaily
+from models.quote_snapshot import QuoteSnapshot
 
 log = logging.getLogger(__name__)
 
@@ -171,6 +172,119 @@ async def read_ohlcv_range(
         }
         for r in rows
     ]
+
+
+# ── Quote snapshots ────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class QuoteSnapshotRow:
+    market: str
+    symbol: str
+    ts: datetime
+    last_price: float | None
+    change_pct: float | None
+    prev_close: float | None
+    volume: int | None
+    source: str
+
+
+async def insert_quote_snapshot(db: AsyncSession, snap: QuoteSnapshotRow) -> None:
+    """Insert one quote snapshot. Same (market, symbol, ts) is a no-op
+    instead of an error — the refresh task runs every 60 s and we'd
+    rather drop a duplicate than crash if two pods race the lock."""
+    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
+    row = {
+        "market": snap.market,
+        "symbol": snap.symbol,
+        "ts": snap.ts,
+        "last_price": snap.last_price,
+        "change_pct": snap.change_pct,
+        "prev_close": snap.prev_close,
+        "volume": snap.volume,
+        "source": snap.source,
+    }
+    if dialect == "sqlite":
+        stmt = sqlite_insert(QuoteSnapshot).values(row).on_conflict_do_nothing(
+            index_elements=["market", "symbol", "ts"],
+        )
+    else:
+        stmt = pg_insert(QuoteSnapshot).values(row).on_conflict_do_nothing(
+            index_elements=["market", "symbol", "ts"],
+        )
+    await db.execute(stmt)
+    await db.commit()
+
+
+async def read_latest_quote(
+    db: AsyncSession, market: str, symbol: str, *, max_age_seconds: int,
+) -> dict[str, Any] | None:
+    """Return the most recent snapshot for (market, symbol) if it's within
+    `max_age_seconds` of `now`. Returns None if no row found or stale.
+
+    Output shape matches `tw_market_service._normalize_quote` so the
+    caller can drop it straight into the response after attaching `tz`
+    and `is_market_open`.
+    """
+    cutoff = datetime.now(UTC).timestamp() - max_age_seconds
+    stmt = (
+        select(QuoteSnapshot)
+        .where(QuoteSnapshot.market == market, QuoteSnapshot.symbol == symbol)
+        .order_by(QuoteSnapshot.ts.desc())
+        .limit(1)
+    )
+    row = await db.scalar(stmt)
+    if row is None or row.ts.timestamp() < cutoff:
+        return None
+    return {
+        "symbol":      row.symbol,
+        "market":      row.market,
+        "price":       float(row.last_price) if row.last_price is not None else 0,
+        "change_pct":  float(row.change_pct) if row.change_pct is not None else None,
+        "prev_close":  float(row.prev_close) if row.prev_close is not None else None,
+        "volume":      int(row.volume) if row.volume is not None else 0,
+        "ts":          int(row.ts.timestamp() * 1000),
+        "data_source": row.source,
+    }
+
+
+async def prune_quote_snapshots(db: AsyncSession, *, older_than_days: int) -> int:
+    """Delete snapshots older than `older_than_days`. Returns deleted count."""
+    cutoff = datetime.now(UTC) - timedelta(days=older_than_days)
+    stmt = delete(QuoteSnapshot).where(QuoteSnapshot.ts < cutoff)
+    result = await db.execute(stmt)
+    await db.commit()
+    return result.rowcount or 0
+
+
+async def insert_quote_snapshot_autosession(snap: QuoteSnapshotRow) -> None:
+    """Same as `insert_quote_snapshot` but opens its own session.
+
+    Used by the TW refresh task which doesn't already have a session in
+    scope. DB errors are swallowed because the snapshot is best-effort —
+    the live WS push must not be blocked on a Postgres outage.
+    """
+    try:
+        async with AsyncSessionLocal() as db:
+            await insert_quote_snapshot(db, snap)
+    except Exception as exc:
+        log.warning("ingest.quote_snapshot.write_error",
+                    extra={"market": snap.market, "symbol": snap.symbol, "error": str(exc)})
+
+
+async def read_latest_quote_autosession(
+    market: str, symbol: str, *, max_age_seconds: int,
+) -> dict[str, Any] | None:
+    """Same as `read_latest_quote` but opens its own session and
+    swallows DB errors so the read path falls through cleanly to upstream."""
+    try:
+        async with AsyncSessionLocal() as db:
+            return await read_latest_quote(
+                db, market, symbol, max_age_seconds=max_age_seconds,
+            )
+    except Exception as exc:
+        log.warning("ingest.quote_snapshot.read_error",
+                    extra={"market": market, "symbol": symbol, "error": str(exc)})
+        return None
 
 
 # ── Health snapshot ────────────────────────────────────────────────

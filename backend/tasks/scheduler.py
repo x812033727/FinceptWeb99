@@ -110,6 +110,19 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # ── TW quote_snapshots retention prune ────────────────────────
+    # Daily at 03:00 UTC; deletes rows older than 30 days so the table
+    # doesn't grow unbounded under busy WS subscriptions.
+    from tasks.ingest_quotes_retention_tw import run as run_quotes_retention_tw
+    scheduler.add_job(
+        run_quotes_retention_tw,
+        trigger=CronTrigger(hour=3, minute=0, timezone="UTC"),
+        id="ingest_quotes_retention_tw",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── Portfolio EOD snapshots ───────────────────────────────────
     # Run at 23:00 UTC daily (after US + TW markets have both closed)
     from tasks.portfolio_snapshot import take_all_snapshots

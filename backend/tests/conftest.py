@@ -7,6 +7,7 @@ external services are needed in CI.
 # Must set env before any backend module is imported — config.py instantiates
 # Settings() at import time and validates JWT_SECRET_KEY strength.
 import os
+
 os.environ.setdefault("JWT_SECRET_KEY", "pytest-local-secret-key-32chars!!")
 
 # Swap passlib's bcrypt scheme for pbkdf2_sha256 in tests. bcrypt 3.2.2 pulls in
@@ -32,33 +33,39 @@ def _patched_cryptcontext_init(self, *args, **kwargs):
 _passlib_context.CryptContext.__init__ = _patched_cryptcontext_init
 
 import asyncio  # noqa: E402
+from unittest.mock import AsyncMock, patch  # noqa: E402
+
 import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
-from unittest.mock import AsyncMock, patch  # noqa: E402
-from httpx import AsyncClient, ASGITransport  # noqa: E402
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker  # noqa: E402
-
-from db.base import Base  # noqa: E402
-from db.session import get_db  # noqa: E402
+from httpx import ASGITransport, AsyncClient  # noqa: E402
+from sqlalchemy.ext.asyncio import (  # noqa: E402
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 # Import every model so Base.metadata.create_all registers the full schema.
 # Without this, tests that exercise one table transitively depend on another
 # model being imported by a sibling test — leading to FK-resolution failures
 # when tests run in isolation.
-import models.user              # noqa: E402,F401
-import models.portfolio         # noqa: E402,F401
-import models.watchlist         # noqa: E402,F401
-import models.alert             # noqa: E402,F401
-import models.llm_provider_key       # noqa: E402,F401
-import models.market_provider_key    # noqa: E402,F401
-import models.persona_override       # noqa: E402,F401
+import models.alert  # noqa: E402,F401
+import models.llm_provider_key  # noqa: E402,F401
+import models.llm_usage_event  # noqa: E402,F401
+import models.market_provider_key  # noqa: E402,F401
+import models.ohlcv_daily  # noqa: E402,F401
+import models.persona_override  # noqa: E402,F401
+import models.portfolio  # noqa: E402,F401
+import models.quote_snapshot  # noqa: E402,F401
+import models.user  # noqa: E402,F401
 import models.user_llm_provider_key  # noqa: E402,F401
-import models.llm_usage_event         # noqa: E402,F401
-import models.ohlcv_daily             # noqa: E402,F401
+import models.watchlist  # noqa: E402,F401
+from db.base import Base  # noqa: E402
+from db.session import get_db  # noqa: E402
 
 # Disable slowapi rate limiter — tests exercise endpoints in tight loops
 # and would otherwise trip the 5/min register cap, etc.
 from limiter import limiter  # noqa: E402
+
 limiter.enabled = False
 
 # ── in-memory SQLite engine ───────────────────────────────────────

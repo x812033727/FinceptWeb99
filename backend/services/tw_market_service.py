@@ -150,12 +150,31 @@ async def fetch_quote_waterfall(symbol: str) -> tuple[dict | None, str]:
 
 
 async def get_quote(symbol: str) -> dict[str, Any]:
+    from services.ingest.repository import read_latest_quote_autosession
+
     key = key_quote("tw", symbol)
     cached = await cache_get(key)
     if cached:
         return json.loads(cached)
 
     raw, source = await fetch_quote_waterfall(symbol)
+    if not raw:
+        # ── Tier 3: recent DB snapshot when upstream is fully down ──
+        # Refresh task writes one row per active symbol every minute, so
+        # a 5-minute window catches at most a few stale ticks during a
+        # transient TWSE+FinMind outage instead of returning blank state.
+        snap = await read_latest_quote_autosession("TW", symbol, max_age_seconds=300)
+        if snap is not None:
+            result = _normalize_quote(symbol, {
+                "close": snap["price"],
+                "volume": snap.get("volume", 0),
+                "prev_close": snap.get("prev_close"),
+            })
+            result["data_source"] = snap.get("data_source") or "db"
+            result["change_pct"] = snap.get("change_pct")
+            log.info("tw.quote.served_db_snapshot", extra={"symbol": symbol})
+            return result
+
     result = _normalize_quote(symbol, raw or {})
     result["data_source"] = source
     # Don't cache the zero-state (TWSE + FinMind both failed) — keeps the

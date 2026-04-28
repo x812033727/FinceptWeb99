@@ -5,9 +5,14 @@ Polls TWSE every 60 seconds during market hours (09:00-13:30 CST).
 import asyncio
 import json
 import logging
+from datetime import UTC, datetime
 
-from api.websocket.manager import publish_update, _subscriptions
+from api.websocket.manager import _subscriptions, publish_update
 from cache.redis_cache import cache_set, key_quote
+from services.ingest.repository import (
+    QuoteSnapshotRow,
+    insert_quote_snapshot_autosession,
+)
 from services.tw_market_service import (
     TTL_QUOTE,
     _is_tw_market_open,
@@ -54,6 +59,22 @@ async def refresh_tw_quotes() -> None:
             result["data_source"] = source
 
             await cache_set(key_quote("tw", sym), json.dumps(result), TTL_QUOTE)
+
+            # Persist to the quote_snapshots archive so the read path can
+            # serve a recent last-price during upstream outages, and the
+            # screener / analytics can query historical ticks. Best-effort:
+            # DB write failures must not block the WS publish below.
+            await insert_quote_snapshot_autosession(QuoteSnapshotRow(
+                market="TW",
+                symbol=sym,
+                ts=datetime.now(UTC),
+                last_price=result.get("price"),
+                change_pct=result.get("change_pct"),
+                prev_close=raw.get("prev_close") if raw else None,
+                volume=result.get("volume"),
+                source=source,
+            ))
+
             await publish_update(sym, "TW", {
                 "price":       result["price"],
                 "change":      result["change"],

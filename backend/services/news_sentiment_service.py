@@ -220,8 +220,8 @@ async def score_pending(
     db: AsyncSession | None = None,
     batch_size: int = _BATCH_SIZE,
     max_batches: int = 4,
-    provider: str = _DEFAULT_PROVIDER,
-    model: str = _DEFAULT_MODEL,
+    provider: str | None = None,
+    model: str | None = None,
     max_age_days: int = _MAX_AGE_DAYS_FOR_SCORING,
 ) -> dict[str, int]:
     """Score up to `batch_size * max_batches` unscored articles.
@@ -231,6 +231,11 @@ async def score_pending(
 
     `db` is optional — when None we open a session per call so the task
     file doesn't have to thread one through.
+
+    `provider` / `model` default to whatever the admin selected via the
+    `news_sentiment` system task config (falling back to the compiled-in
+    spec when no override exists). Pass explicit values only in tests
+    that want to bypass the resolver.
     """
     own_session = db is None
     session = db if db is not None else AsyncSessionLocal()
@@ -238,6 +243,11 @@ async def score_pending(
     scored_count = 0
     batches_run = 0
     try:
+        if provider is None or model is None:
+            from services.system_task_config_service import resolve as _resolve_task
+            r_provider, r_model = await _resolve_task(session, "news_sentiment")
+            provider = provider or r_provider
+            model = model or r_model
         for _ in range(max_batches):
             rows = await _fetch_unscored(
                 session, limit=batch_size, max_age_days=max_age_days,

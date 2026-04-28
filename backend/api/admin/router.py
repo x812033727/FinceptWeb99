@@ -15,6 +15,7 @@ from services import llm_key_service as keys
 from services import llm_usage_service as usage
 from services import market_key_service as market_keys
 from services import persona_override_service as personas
+from services import system_task_config_service as system_tasks
 from services.ingest import repository as ingest_repo
 from services.version_service import force_refresh_status, trigger_update
 
@@ -32,6 +33,8 @@ from .schemas import (
     PersonaOverrideIn,
     RoleUpdate,
     SystemStats,
+    SystemTaskConfigOut,
+    SystemTaskOverrideIn,
     UpdateResult,
     UsageBucketOut,
     UsageDayPoint,
@@ -201,6 +204,49 @@ async def upsert_persona_override(
 @router.delete("/personas/{persona_id}", status_code=204)
 async def delete_persona_override(persona_id: str, _: Admin, db: DB) -> None:
     await personas.delete_override(db, persona_id)
+
+
+# ── Per-task LLM routing (background system tasks) ───────────────
+
+def _system_task_to_schema(t: system_tasks.TaskConfig) -> SystemTaskConfigOut:
+    return SystemTaskConfigOut(
+        task_id=t.task_id,
+        name=t.name,
+        description=t.description,
+        default_provider=t.default_provider,
+        default_model=t.default_model,
+        effective_provider=t.effective_provider,
+        effective_model=t.effective_model,
+        is_overridden=t.is_overridden,
+    )
+
+
+@router.get("/system-tasks", response_model=list[SystemTaskConfigOut])
+async def list_system_tasks(_: Admin, db: DB) -> list[SystemTaskConfigOut]:
+    """List every background task that supports admin LLM routing, with
+    its compiled default and currently effective provider/model."""
+    return [_system_task_to_schema(t) for t in await system_tasks.list_tasks(db)]
+
+
+@router.put("/system-tasks/{task_id}", response_model=SystemTaskConfigOut)
+async def upsert_system_task_override(
+    task_id: str, body: SystemTaskOverrideIn, user: Admin, db: DB,
+) -> SystemTaskConfigOut:
+    try:
+        cfg = await system_tasks.upsert_override(
+            db, task_id, body.provider, body.model, uuid.UUID(user["id"]),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return _system_task_to_schema(cfg)
+
+
+@router.delete("/system-tasks/{task_id}", status_code=204)
+async def delete_system_task_override(task_id: str, _: Admin, db: DB) -> None:
+    try:
+        await system_tasks.delete_override(db, task_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
 
 
 # ── LLM usage summary (admin-wide) ───────────────────────────────

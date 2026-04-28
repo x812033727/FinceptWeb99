@@ -376,6 +376,128 @@ function PersonaRow({ p }: { p: PersonaConfig }) {
   );
 }
 
+// ── Background system tasks (LLM routing) ────────────────────────
+
+interface SystemTaskConfig {
+  task_id: string;
+  name: string;
+  description: string;
+  default_provider: string;
+  default_model: string;
+  effective_provider: string;
+  effective_model: string;
+  is_overridden: boolean;
+}
+
+function SystemTaskRow({ tcfg }: { tcfg: SystemTaskConfig }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const [provider, setProvider] = useState(tcfg.effective_provider);
+  const [model, setModel] = useState(tcfg.effective_model);
+  const dirty =
+    provider !== tcfg.effective_provider || model !== tcfg.effective_model;
+
+  const modelOptions = (() => {
+    const catalog = PROVIDER_MODELS[provider] ?? [];
+    return catalog.includes(model) ? catalog : [model, ...catalog].filter(Boolean);
+  })();
+
+  function changeProvider(next: string) {
+    setProvider(next);
+    const firstModel = PROVIDER_MODELS[next]?.[0] ?? "";
+    setModel(firstModel);
+  }
+
+  const save = useMutation({
+    mutationFn: () => api.put(`/admin/system-tasks/${tcfg.task_id}`, { provider, model }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "system-tasks"] }),
+  });
+
+  const reset = useMutation({
+    mutationFn: () => api.delete(`/admin/system-tasks/${tcfg.task_id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "system-tasks"] }),
+  });
+
+  // Filter out claude_agent — system tasks don't use the agent SDK / tools.
+  const taskProviders = VALID_PROVIDERS.filter((p) => p !== "claude_agent");
+
+  return (
+    <div className="grid grid-cols-[200px_140px_1fr_auto] items-start gap-2 py-2 border-b border-border/40 text-xs">
+      <div>
+        <div className="font-medium text-sm">{tcfg.name}</div>
+        <div className="text-[10px] text-muted-foreground leading-snug mt-0.5">
+          {tcfg.description}
+        </div>
+        {tcfg.is_overridden && (
+          <span className="inline-block mt-1 text-[9px] border border-amber-400/30 text-amber-400 bg-amber-400/10 px-1 rounded">
+            {t("personas.overridden")}
+          </span>
+        )}
+      </div>
+      <select
+        value={provider}
+        onChange={(e) => changeProvider(e.target.value)}
+        className="bg-background border border-border rounded px-2 py-1 text-xs"
+      >
+        {taskProviders.map((p) => <option key={p} value={p}>{p}</option>)}
+      </select>
+      <select
+        value={model}
+        onChange={(e) => setModel(e.target.value)}
+        className="bg-background border border-border rounded px-2 py-1 text-xs font-mono"
+      >
+        {modelOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+      </select>
+      <div className="flex gap-1">
+        <button
+          onClick={() => save.mutate()}
+          disabled={!dirty || save.isPending}
+          className="px-2.5 py-1 text-xs bg-primary text-primary-foreground rounded hover:opacity-90 disabled:opacity-30"
+        >
+          {save.isPending ? "…" : t("common.save")}
+        </button>
+        {tcfg.is_overridden && (
+          <button
+            onClick={() => reset.mutate()}
+            className="px-2.5 py-1 text-xs border border-border text-muted-foreground rounded hover:text-foreground"
+          >
+            {t("personas.reset")}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SystemTasksCard() {
+  const { t } = useTranslation();
+  const { data: list = [], isLoading } = useQuery<SystemTaskConfig[]>({
+    queryKey: ["admin", "system-tasks"],
+    queryFn: () => api.get("/admin/system-tasks").then((r) => r.data),
+  });
+
+  return (
+    <div className="bg-card border border-border rounded-lg p-4 space-y-2">
+      <div>
+        <p className="text-sm font-medium">{t("systemTasks.title")}</p>
+        <p className="text-xs text-muted-foreground mt-0.5">{t("systemTasks.subtitle")}</p>
+      </div>
+      {isLoading ? (
+        <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>
+      ) : (
+        <div className="grid grid-cols-[200px_140px_1fr_auto] gap-2 text-[10px] text-muted-foreground uppercase tracking-wider border-b border-border pb-1">
+          <span>{t("systemTasks.task")}</span>
+          <span>{t("personas.provider")}</span>
+          <span>{t("personas.model")}</span>
+          <span></span>
+        </div>
+      )}
+      {list.map((tcfg) => <SystemTaskRow key={tcfg.task_id} tcfg={tcfg} />)}
+    </div>
+  );
+}
+
+
 function PersonasCard() {
   const { t } = useTranslation();
   const { data: list = [], isLoading } = useQuery<PersonaConfig[]>({
@@ -908,6 +1030,8 @@ function AdminContent() {
       <IngestHealthCard />
 
       <PersonasCard />
+
+      <SystemTasksCard />
 
       {/* User table */}
       <div className="bg-card border border-border rounded-lg overflow-hidden">

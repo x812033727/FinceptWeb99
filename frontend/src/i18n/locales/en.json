@@ -493,6 +493,11 @@
     "subtitle": "Personal keys take priority over system + .env so usage hits your own account",
     "fallback_to_system": "using system"
   },
+  "systemTasks": {
+    "title": "Background Tasks → LLM Routing",
+    "subtitle": "Pick the provider/model for each scheduled system task (news sentiment, discussion synthesizer); unset rows use the compiled default",
+    "task": "Task"
+  },
   "personas": {
     "title": "Persona → Model Routing",
     "subtitle": "Override the default LLM provider/model per persona",

@@ -493,6 +493,11 @@
     "subtitle": "個人 key 會優先於系統共用 key 與 .env，使用您自己的帳號計費",
     "fallback_to_system": "用系統設定"
   },
+  "systemTasks": {
+    "title": "背景任務 → LLM 對應",
+    "subtitle": "為每個系統排程任務（新聞情緒、討論彙整等）選擇 provider/model；未覆寫則用程式內預設",
+    "task": "任務"
+  },
   "personas": {
     "title": "顧問人格 → 模型對應",
     "subtitle": "覆蓋每個 persona 的預設 LLM provider 與 model",

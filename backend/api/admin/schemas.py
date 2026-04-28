@@ -100,6 +100,24 @@ class PersonaOverrideIn(BaseModel):
     model: str
 
 
+# ── Background task model routing ─────────────────────────────────
+
+class SystemTaskConfigOut(BaseModel):
+    task_id: str
+    name: str
+    description: str
+    default_provider: str
+    default_model: str
+    effective_provider: str
+    effective_model: str
+    is_overridden: bool
+
+
+class SystemTaskOverrideIn(BaseModel):
+    provider: str
+    model: str
+
+
 # ── LLM usage summary ────────────────────────────────────────────
 
 class UsageBucketOut(BaseModel):

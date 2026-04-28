@@ -584,17 +584,23 @@ async def synthesize_conclusion(
     discussion: Discussion,
     *,
     user_id: str | None = None,
-    provider: str = "anthropic",
-    model: str = "claude-haiku-4-5-20251001",
+    provider: str | None = None,
+    model: str | None = None,
 ) -> dict[str, Any]:
     """Read every turn and produce a structured conclusion JSON. Stores
     the result on the Discussion row and flips status → done.
 
-    The synthesizer is intentionally a fixed model rather than one of
-    the persona LLMs — we want a neutral arbiter, not a re-skin of
-    Buffett or Soros. Provider is overridable so deployments without an
-    Anthropic key can swap to OpenAI.
+    The synthesizer is intentionally a fixed task (not one of the persona
+    LLMs) — we want a neutral arbiter, not a re-skin of Buffett or Soros.
+    Provider/model default to whatever the admin selected for the
+    `discussion_synthesizer` system task; pass explicit values in tests
+    or one-off calls to bypass the resolver.
     """
+    if provider is None or model is None:
+        from services.system_task_config_service import resolve as _resolve_task
+        r_provider, r_model = await _resolve_task(db, "discussion_synthesizer")
+        provider = provider or r_provider
+        model = model or r_model
     turns = await get_turns(db, discussion_id=discussion.id)
     context = await gather_market_context(db)
 

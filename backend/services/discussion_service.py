@@ -47,15 +47,18 @@ import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ai.agents import all_persona_ids, get_agent_resolved
+from ai.agents import all_persona_ids
 from ai.llm_router import stream_chat
 from config import settings
 from models.discussion import Discussion, DiscussionTurn
+
+if TYPE_CHECKING:
+    from ai.agents import AgentSpec
 
 log = logging.getLogger(__name__)
 
@@ -285,7 +288,19 @@ async def gather_market_context(
         "index": None,
         "news_sentiment": None,
         "per_symbol_news_sentiment": {},
+        # Each connector failure appends `{"source": "...", "error": "..."}`
+        # so the personas (and the synthesizer) can mention "context was
+        # incomplete" instead of confidently citing missing data. Logged
+        # at ERROR level too so ops actually see broken connectors.
+        "errors": [],
     }
+
+    def _record_error(source: str, exc: Exception) -> None:
+        log.error(
+            "discussion.context.connector_failed",
+            extra={"source": source, "error": str(exc)},
+        )
+        ctx["errors"].append({"source": source, "error": str(exc)})
 
     # Top movers via the screener (TW-only for now; US fits later when we
     # add the same shape to us_market_service).
@@ -298,13 +313,13 @@ async def gather_market_context(
             ctx["top_gainers"] = [_compact_screener_row(r) for r in scored[:top_n]]
             ctx["top_losers"] = [_compact_screener_row(r) for r in scored[-top_n:][::-1]]
         except Exception as exc:
-            log.warning("discussion.context.screener_failed", extra={"error": str(exc)})
+            _record_error("screener", exc)
 
         try:
             from services import tw_market_service
             ctx["index"] = await tw_market_service.get_index()
         except Exception as exc:
-            log.warning("discussion.context.index_failed", extra={"error": str(exc)})
+            _record_error("index", exc)
 
     try:
         from services.news_sentiment_service import read_recent_market_sentiment
@@ -312,7 +327,7 @@ async def gather_market_context(
             db, market=market, limit=20, max_age_hours=48,
         )
     except Exception as exc:
-        log.warning("discussion.context.news_sentiment_failed", extra={"error": str(exc)})
+        _record_error("news_sentiment", exc)
 
     if focus_symbols:
         try:
@@ -324,10 +339,7 @@ async def gather_market_context(
                 if rows:
                     ctx["per_symbol_news_sentiment"][sym] = rows
         except Exception as exc:
-            log.warning(
-                "discussion.context.per_symbol_sentiment_failed",
-                extra={"error": str(exc)},
-            )
+            _record_error("per_symbol_sentiment", exc)
 
     return ctx
 
@@ -401,10 +413,48 @@ def _parse_turn_response(raw: str) -> tuple[str, str]:
     return stance, content
 
 
+async def _resolve_persona_specs(
+    db: AsyncSession, persona_ids: list[str],
+) -> dict[str, "AgentSpec"]:
+    """Batch-load admin overrides for the entire roster in one DB round-trip,
+    then merge with compiled defaults. Replaces N per-persona
+    `get_agent_resolved` calls during a round.
+    """
+    from ai.agents import AgentSpec, get_agent
+    from models.persona_override import PersonaOverride
+
+    if not persona_ids:
+        return {}
+    rows = (await db.execute(
+        select(PersonaOverride).where(PersonaOverride.persona_id.in_(persona_ids))
+    )).scalars().all()
+    overrides = {r.persona_id: r for r in rows}
+
+    out: dict[str, AgentSpec] = {}
+    for pid in persona_ids:
+        try:
+            base = get_agent(pid)
+        except ValueError:
+            log.warning("discussion.persona.unknown", extra={"persona_id": pid})
+            continue
+        ov = overrides.get(pid)
+        if ov is None:
+            out[pid] = base
+        else:
+            out[pid] = AgentSpec(
+                name=base.name,
+                description=base.description,
+                system_prompt=base.system_prompt,
+                default_provider=ov.provider,
+                default_model=ov.model,
+            )
+    return out
+
+
 async def _ask_persona(
     db: AsyncSession,
     *,
-    persona_id: str,
+    spec: "AgentSpec",
     topic: str,
     rules: str,
     context: dict[str, Any],
@@ -413,8 +463,11 @@ async def _ask_persona(
 ) -> AsyncGenerator[dict, None]:
     """Yield raw stream events from one persona's turn. Caller assembles
     the deltas + parses the final JSON.
+
+    Takes a pre-resolved `AgentSpec` so callers can batch-load the
+    persona roster's overrides up-front (avoiding an N+1 round trip
+    inside the per-persona loop).
     """
-    spec = await get_agent_resolved(db, persona_id)
     user_prompt = _TURN_PROMPT_TEMPLATE.format(
         topic=topic,
         rules=rules,
@@ -463,106 +516,135 @@ async def run_round(
 
     yield TurnEvent("round_start", {"round": round_number})
 
-    focus = extract_focus_symbols(discussion.topic)
-    context = await gather_market_context(db, focus_symbols=focus)
-    yield TurnEvent("context", {"context": context})
+    # Try-finally guarantees status returns to DRAFT even if an
+    # unexpected exception fires below (e.g. a transient DB commit failure
+    # while persisting a turn). Without this the discussion would be
+    # permanently stuck in RUNNING and the router would reject every
+    # subsequent /round call.
+    try:
+        focus = extract_focus_symbols(discussion.topic)
+        context = await gather_market_context(db, focus_symbols=focus)
+        yield TurnEvent("context", {"context": context})
 
-    prior_turns = await get_turns(db, discussion_id=discussion.id)
-    persona_timeout = settings.DISCUSSION_PERSONA_TIMEOUT_SECONDS
+        prior_turns = await get_turns(db, discussion_id=discussion.id)
+        persona_timeout = settings.DISCUSSION_PERSONA_TIMEOUT_SECONDS
 
-    for idx, persona_id in enumerate(discussion.persona_ids):
-        spec = await get_agent_resolved(db, persona_id)
-        yield TurnEvent("turn_start", {
-            "round": round_number,
-            "turn_index": idx,
-            "persona_id": persona_id,
-            "persona_name": spec.name,
-        })
+        # Batch-load persona overrides up front so the per-persona loop
+        # doesn't make N round-trips to the persona_overrides table.
+        specs_by_id = await _resolve_persona_specs(db, list(discussion.persona_ids))
 
-        assembled = ""
-        # Wrap the persona's turn in asyncio.timeout so a single stuck
-        # provider can't hang the whole round indefinitely. On timeout we
-        # emit an error event, persist a placeholder turn, and proceed
-        # to the next persona — same pattern as an LLM error.
-        try:
-            async with asyncio.timeout(persona_timeout):
-                async for event in _ask_persona(
-                    db,
-                    persona_id=persona_id,
-                    topic=discussion.topic,
-                    rules=discussion.rules,
-                    context=context,
-                    prior_turns=prior_turns,
-                    user_id=user_id,
-                ):
-                    etype = event.get("type")
-                    if etype == "delta":
-                        chunk = event.get("text", "")
-                        assembled += chunk
-                        yield TurnEvent("delta", {
-                            "round": round_number,
-                            "turn_index": idx,
-                            "persona_id": persona_id,
-                            "text": chunk,
-                        })
-                    elif etype == "error":
-                        yield TurnEvent("error", {
-                            "message": event.get("message", "LLM error"),
-                            "persona_id": persona_id,
-                        })
-                        assembled = assembled or "（此輪因 LLM 錯誤未取得回覆）"
-                        break
-        except TimeoutError:
-            log.warning(
-                "discussion.turn.timeout",
-                extra={"persona_id": persona_id, "round": round_number,
-                       "timeout_s": persona_timeout},
+        for idx, persona_id in enumerate(discussion.persona_ids):
+            spec = specs_by_id.get(persona_id)
+            if spec is None:
+                # persona_id no longer recognised by ai.agents (shouldn't
+                # happen since personas are compiled-in, but defensive)
+                yield TurnEvent("error", {
+                    "message": f"unknown persona: {persona_id}",
+                    "persona_id": persona_id,
+                })
+                continue
+
+            yield TurnEvent("turn_start", {
+                "round": round_number,
+                "turn_index": idx,
+                "persona_id": persona_id,
+                "persona_name": spec.name,
+            })
+
+            assembled = ""
+            # Wrap the persona's turn in asyncio.timeout so a single stuck
+            # provider can't hang the whole round indefinitely. On timeout
+            # we emit an error event, persist a placeholder turn, and
+            # proceed to the next persona — same pattern as an LLM error.
+            try:
+                async with asyncio.timeout(persona_timeout):
+                    async for event in _ask_persona(
+                        db,
+                        spec=spec,
+                        topic=discussion.topic,
+                        rules=discussion.rules,
+                        context=context,
+                        prior_turns=prior_turns,
+                        user_id=user_id,
+                    ):
+                        etype = event.get("type")
+                        if etype == "delta":
+                            chunk = event.get("text", "")
+                            assembled += chunk
+                            yield TurnEvent("delta", {
+                                "round": round_number,
+                                "turn_index": idx,
+                                "persona_id": persona_id,
+                                "text": chunk,
+                            })
+                        elif etype == "error":
+                            yield TurnEvent("error", {
+                                "message": event.get("message", "LLM error"),
+                                "persona_id": persona_id,
+                            })
+                            assembled = assembled or "（此輪因 LLM 錯誤未取得回覆）"
+                            break
+            except TimeoutError:
+                log.warning(
+                    "discussion.turn.timeout",
+                    extra={"persona_id": persona_id, "round": round_number,
+                           "timeout_s": persona_timeout},
+                )
+                yield TurnEvent("error", {
+                    "message": f"persona timeout after {persona_timeout}s",
+                    "persona_id": persona_id,
+                })
+                assembled = assembled or f"（此輪因 LLM {persona_timeout}s 內未回覆而中止）"
+            except Exception as exc:
+                log.exception("discussion.turn.failed",
+                              extra={"persona_id": persona_id, "round": round_number})
+                yield TurnEvent("error", {
+                    "message": str(exc),
+                    "persona_id": persona_id,
+                })
+                assembled = assembled or "（此輪因例外中止）"
+
+            stance, content = _parse_turn_response(assembled)
+            turn_row = DiscussionTurn(
+                discussion_id=discussion.id,
+                round=round_number,
+                turn_index=idx,
+                persona_id=persona_id,
+                stance=stance,
+                content=content,
+                citations=None,
             )
-            yield TurnEvent("error", {
-                "message": f"persona timeout after {persona_timeout}s",
-                "persona_id": persona_id,
-            })
-            assembled = assembled or f"（此輪因 LLM {persona_timeout}s 內未回覆而中止）"
-        except Exception as exc:
-            log.exception("discussion.turn.failed",
-                          extra={"persona_id": persona_id, "round": round_number})
-            yield TurnEvent("error", {
-                "message": str(exc),
-                "persona_id": persona_id,
-            })
-            assembled = assembled or "（此輪因例外中止）"
+            db.add(turn_row)
+            await db.commit()
+            prior_turns.append(turn_row)
 
-        stance, content = _parse_turn_response(assembled)
-        turn_row = DiscussionTurn(
-            discussion_id=discussion.id,
-            round=round_number,
-            turn_index=idx,
-            persona_id=persona_id,
-            stance=stance,
-            content=content,
-            citations=None,
-        )
-        db.add(turn_row)
-        await db.commit()
-        prior_turns.append(turn_row)
+            yield TurnEvent("turn_end", {
+                "round": round_number,
+                "turn_index": idx,
+                "persona_id": persona_id,
+                "persona_name": spec.name,
+                "stance": stance,
+                "content": content,
+            })
 
-        yield TurnEvent("turn_end", {
+        yield TurnEvent("round_end", {
             "round": round_number,
-            "turn_index": idx,
-            "persona_id": persona_id,
-            "persona_name": spec.name,
-            "stance": stance,
-            "content": content,
+            "turn_count": len(discussion.persona_ids),
         })
-
-    discussion.status = STATUS_DRAFT  # ready for the next round
-    discussion.updated_at = datetime.now(UTC)
-    await db.commit()
-
-    yield TurnEvent("round_end", {
-        "round": round_number,
-        "turn_count": len(discussion.persona_ids),
-    })
+    finally:
+        # Always reset to DRAFT so the next round attempt isn't blocked
+        # by the router's "round in progress" guard. Wrap the commit in
+        # its own try because failing to reset status shouldn't bubble
+        # out and mask whatever exception the body raised.
+        try:
+            discussion.status = STATUS_DRAFT
+            discussion.updated_at = datetime.now(UTC)
+            await db.commit()
+        except Exception:
+            log.exception(
+                "discussion.run_round.status_reset_failed",
+                extra={"discussion_id": str(discussion.id)},
+            )
 
 
 # ── conclusion synthesizer ──────────────────────────────────────────

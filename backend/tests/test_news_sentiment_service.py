@@ -278,6 +278,24 @@ async def test_score_pending_respects_daily_cap(db_session: AsyncSession):
 
 
 @pytest.mark.asyncio
+async def test_can_make_llm_call_fails_closed_on_redis_error():
+    """Cap helper must return False when Redis is unavailable — without
+    the counter we can't enforce the cap, so the safer behaviour is to
+    skip the scoring pass rather than risk unbounded spending during a
+    multi-hour Redis incident."""
+    import services.news_sentiment_service as nss
+
+    async def _broken_incr(*_a, **_kw):
+        raise RuntimeError("redis down")
+
+    with patch("services.news_sentiment_service.cache_incr",
+               side_effect=_broken_incr):
+        ok = await nss._can_make_llm_call()
+
+    assert ok is False
+
+
+@pytest.mark.asyncio
 async def test_score_pending_records_usage_when_provider_emits_it(
     db_session: AsyncSession,
 ):

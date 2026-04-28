@@ -48,8 +48,12 @@ async def _can_make_llm_call() -> bool:
 
     Returns False once the day's cap is exhausted; the caller must stop.
     The counter resets at UTC midnight via the 24h TTL set on the first
-    increment of the day. Redis outage falls open (returns True) — we
-    prefer occasional over-spend to halting the scorer entirely.
+    increment of the day.
+
+    Fails *closed* on Redis outage — without the counter we can't enforce
+    the cap, so we'd rather skip a scoring pass than risk spending an
+    unbounded amount during a multi-hour Redis incident. The next
+    scheduled run will retry once Redis recovers.
     """
     cap = settings.SENTIMENT_DAILY_LLM_CALL_CAP
     if cap <= 0:
@@ -59,8 +63,9 @@ async def _can_make_llm_call() -> bool:
     try:
         count = await cache_incr(key, ttl_seconds=86400)
     except Exception as exc:
-        log.warning("news_sentiment.cap_check_failed", extra={"error": str(exc)})
-        return True
+        log.error("news_sentiment.cap_check_failed_fail_closed",
+                  extra={"error": str(exc)})
+        return False
     return count <= cap
 
 _BATCH_SIZE = 20

@@ -228,9 +228,11 @@ async def run_round(
     """Stream one round of the discussion as Server-Sent Events.
 
     Each persona-turn counts as one AI request. The full cost
-    (`len(persona_ids)`) is reserved up front; if any persona's stream
-    fails we keep what we charged because the partial round is still
-    persisted.
+    (`len(persona_ids)`) is reserved up front; we count `turn_end` events
+    as we stream them and refund the unconsumed remainder if the round
+    aborts early (LLM failure, persona timeout, client disconnect mid-
+    stream). Persisted partial turns stay — only the unspent quota is
+    returned.
     """
     row = await discussion_service.get_discussion(
         db, discussion_id=discussion_id, owner_id=_coerce_owner_uuid(user),
@@ -247,10 +249,13 @@ async def run_round(
     await _check_quota(user, cost=cost)
 
     async def event_stream() -> AsyncGenerator[bytes, None]:
+        completed_personas = 0
         try:
             async for ev in discussion_service.run_round(
                 db, row, user_id=str(user["id"]),
             ):
+                if ev.type == "turn_end":
+                    completed_personas += 1
                 payload = {"type": ev.type, **ev.payload}
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
         except Exception as exc:
@@ -259,6 +264,14 @@ async def run_round(
             err = json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False)
             yield f"data: {err}\n\n".encode()
         finally:
+            # Refund the personas that never produced a turn (LLM error
+            # before turn_end, client disconnected, exception bubbled up).
+            # Persisted turns keep their charge; the remainder goes back
+            # to the user's daily counter so a 5-persona round that died
+            # at persona 2 doesn't burn 5 credits.
+            unconsumed = cost - completed_personas
+            if unconsumed > 0:
+                await _refund(user, count=unconsumed)
             yield b"data: [DONE]\n\n"
 
     return StreamingResponse(

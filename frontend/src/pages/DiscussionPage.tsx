@@ -727,31 +727,45 @@ function ConclusionCard({
     });
   }
 
+  // When the synthesizer's output couldn't be parsed as JSON we treat
+  // the conclusion as degraded — paint the card red, hide the actions
+  // (export / deep-dive) so users don't accidentally rely on garbage,
+  // and prompt them to re-synthesize.
+  const hasError = !!conclusion._parse_error;
+  const cardClass = hasError
+    ? "bg-red-950/20 border border-red-800/60 rounded-lg p-4 mt-4"
+    : "bg-amber-950/20 border border-amber-800/50 rounded-lg p-4 mt-4";
+  const titleClass = hasError ? "text-sm font-semibold text-red-300" : "text-sm font-semibold text-amber-300";
+
   return (
-    <div className="bg-amber-950/20 border border-amber-800/50 rounded-lg p-4 mt-4">
+    <div className={cardClass}>
       <div className="flex items-center justify-between mb-2 gap-2">
-        <h3 className="text-sm font-semibold text-amber-300">
-          {t("discussion.conclusion_title")}
+        <h3 className={titleClass}>
+          {hasError
+            ? `⚠ ${t("discussion.conclusion_title")}`
+            : t("discussion.conclusion_title")}
         </h3>
-        <div className="flex gap-1.5 shrink-0">
-          <button
-            onClick={exportMarkdown}
-            className="px-2.5 py-1 text-xs border border-border text-muted-foreground rounded hover:text-foreground"
-          >
-            {t("discussion.export_markdown")}
-          </button>
-          {conclusion.recommended_symbols.length > 0 && (
+        {!hasError && (
+          <div className="flex gap-1.5 shrink-0">
             <button
-              onClick={() => askPersonaAbout()}
-              className="px-2.5 py-1 text-xs border border-amber-800/50 text-amber-300 rounded hover:bg-amber-900/30"
+              onClick={exportMarkdown}
+              className="px-2.5 py-1 text-xs border border-border text-muted-foreground rounded hover:text-foreground"
             >
-              {t("discussion.ask_followup")}
+              {t("discussion.export_markdown")}
             </button>
-          )}
-        </div>
+            {conclusion.recommended_symbols.length > 0 && (
+              <button
+                onClick={() => askPersonaAbout()}
+                className="px-2.5 py-1 text-xs border border-amber-800/50 text-amber-300 rounded hover:bg-amber-900/30"
+              >
+                {t("discussion.ask_followup")}
+              </button>
+            )}
+          </div>
+        )}
       </div>
-      {conclusion._parse_error ? (
-        <p className="text-xs text-red-400">{t("discussion.conclusion_parse_error")}</p>
+      {hasError ? (
+        <p className="text-xs text-red-300">{t("discussion.conclusion_parse_error")}</p>
       ) : (
         <>
           {conclusion.recommended_symbols.length > 0 && (

@@ -510,6 +510,119 @@ async def test_run_round_persists_timeout_placeholder_and_continues(
     )
 
 
+# ── status reset guarantee (#1 critical fix) ─────────────────────
+
+
+@pytest.mark.asyncio
+async def test_run_round_resets_status_to_draft_on_unexpected_exception(
+    db_session: AsyncSession, owner: User,
+):
+    """If the round body raises before completing all turns (e.g. a DB
+    commit blew up while persisting a turn), the discussion's status
+    must still be reset to DRAFT in the finally block — otherwise the
+    user is locked out of starting another round.
+    """
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="topic",
+        rules="rules",
+        persona_ids=["buffett", "lynch"],
+    )
+
+    async def _crash_on_context(*_a, **_kw):
+        raise RuntimeError("simulated crash before any persona ran")
+
+    # Patch gather_market_context to raise — the finally block should
+    # still reset status to DRAFT even though no turns persisted.
+    with patch(
+        "services.discussion_service.gather_market_context",
+        side_effect=_crash_on_context,
+    ):
+        with pytest.raises(RuntimeError):
+            async for _ in discussion_service.run_round(
+                db_session, row, user_id=str(owner.id),
+            ):
+                pass
+
+    # Refresh + assert: status is DRAFT, not stuck on RUNNING.
+    refreshed = await db_session.get(Discussion, row.id)
+    assert refreshed.status == discussion_service.STATUS_DRAFT
+
+
+# ── batch persona override loading (#4 major fix) ────────────────
+
+
+@pytest.mark.asyncio
+async def test_resolve_persona_specs_returns_compiled_defaults_without_overrides(
+    db_session: AsyncSession,
+):
+    """Bare metadata (no PersonaOverride rows) → every persona resolves
+    to its compiled-in default."""
+    specs = await discussion_service._resolve_persona_specs(
+        db_session, ["buffett", "lynch"],
+    )
+    from ai.agents import get_agent
+    assert specs["buffett"].default_provider == get_agent("buffett").default_provider
+    assert specs["lynch"].default_provider == get_agent("lynch").default_provider
+
+
+@pytest.mark.asyncio
+async def test_resolve_persona_specs_applies_overrides(
+    db_session: AsyncSession, owner: User,
+):
+    from models.persona_override import PersonaOverride
+    db_session.add(PersonaOverride(
+        persona_id="buffett", provider="openai", model="gpt-4o-mini",
+        updated_by_id=owner.id,
+    ))
+    await db_session.commit()
+
+    specs = await discussion_service._resolve_persona_specs(
+        db_session, ["buffett", "lynch"],
+    )
+    assert specs["buffett"].default_provider == "openai"
+    assert specs["buffett"].default_model == "gpt-4o-mini"
+    # name/description/system_prompt come from compiled spec
+    from ai.agents import get_agent
+    assert specs["buffett"].system_prompt == get_agent("buffett").system_prompt
+
+
+@pytest.mark.asyncio
+async def test_resolve_persona_specs_skips_unknown_persona(
+    db_session: AsyncSession,
+):
+    specs = await discussion_service._resolve_persona_specs(
+        db_session, ["buffett", "_not_a_persona_"],
+    )
+    assert "buffett" in specs
+    assert "_not_a_persona_" not in specs
+
+
+# ── connector errors surface in context (#7 minor fix) ───────────
+
+
+@pytest.mark.asyncio
+async def test_gather_market_context_records_connector_errors(
+    db_session: AsyncSession,
+):
+    """Broken connectors must populate `context.errors` so the personas
+    can mention "data was incomplete" instead of confidently citing
+    missing fields."""
+    import services.tw_market_service as _tw   # noqa: F401
+
+    async def _broken_screener(*_a, **_kw):
+        raise RuntimeError("polygon down")
+
+    with patch.object(_tw, "get_screener", side_effect=_broken_screener), \
+         patch.object(_tw, "get_index", new=AsyncMock(return_value={})):
+        ctx = await discussion_service.gather_market_context(db_session)
+
+    assert "errors" in ctx
+    sources = [e["source"] for e in ctx["errors"]]
+    assert "screener" in sources
+
+
 def test_safe_conclusion_clamps_consensus_and_caps_lists():
     raw = (
         '{"recommended_symbols": ["A","B","C","D","E","F","G"], '

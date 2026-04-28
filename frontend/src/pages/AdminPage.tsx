@@ -540,9 +540,16 @@ function SystemTaskRow({ tcfg }: { tcfg: SystemTaskConfig }) {
 
 function SystemTasksCard() {
   const { t } = useTranslation();
+  // staleTime + refetchInterval together so a second admin sees the
+  // first admin's edits within 30 s without needing a manual refresh —
+  // system_task_configs apply globally to the background scheduler, so
+  // letting two admins drift on different versions is a real bug.
   const { data: list = [], isLoading } = useQuery<SystemTaskConfig[]>({
     queryKey: ["admin", "system-tasks"],
     queryFn: () => api.get("/admin/system-tasks").then((r) => r.data),
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
   });
 
   return (

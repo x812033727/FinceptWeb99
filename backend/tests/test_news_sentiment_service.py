@@ -172,12 +172,30 @@ async def test_score_pending_skips_when_all_scored(db_session: AsyncSession):
         _row("已被打過分的舊新聞",
              "https://example.com/sent_done", symbol="DONE_1"),
     ])
+    # Stamp leftover rows' `sentiment_scored_at` so `_fetch_unscored`
+    # treats them as already-processed. The shared in-memory SQLite
+    # (StaticPool) means prior tests leave behind rows in the table,
+    # and without this CI's full-suite run sees ~3 leftovers and the
+    # "no LLM calls" assertion below fails.
+    #
+    # We deliberately leave `sentiment_score` NULL on the leftovers —
+    # downstream aggregator tests filter by `sentiment_score IS NOT
+    # NULL`, and over-stamping would cause them to over-count.
+    from sqlalchemy import update as _update
+    now = datetime.now(UTC)
+    await db_session.execute(
+        _update(NewsArticle)
+        .where(NewsArticle.sentiment_scored_at.is_(None))
+        .values(sentiment_scored_at=now)
+    )
+
+    # DONE_1 itself should look fully scored.
     row = await db_session.scalar(
         select(NewsArticle).where(NewsArticle.symbol == "DONE_1")
     )
     row.sentiment_score = 0.5
     row.sentiment_label = "bullish"
-    row.sentiment_scored_at = datetime.now(UTC)
+    row.sentiment_scored_at = now
     await db_session.commit()
 
     with patch(

@@ -34,13 +34,16 @@ def _subscribed_tw_symbols() -> set[str]:
     return symbols
 
 
-async def refresh_tw_quotes() -> None:
+async def refresh_tw_quotes(*, force: bool = False) -> None:
     """
-    Polling job — called every 60 seconds.
-    TWSE data is ~3-5 min delayed so 60s polling is sufficient.
-    Skips entirely outside market hours.
+    Polling job — called every 60 seconds during market hours.
+
+    `force=True` bypasses the market-hours gate; used by the EOD
+    refresh task (`refresh_tw_quotes_eod`) which fires once at 16:30
+    Asia/Taipei (3 h after close) so the cached quotes reflect the
+    final EOD prices instead of whatever was last seen at 13:30.
     """
-    if not _is_tw_market_open():
+    if not force and not _is_tw_market_open():
         return
 
     symbols = _subscribed_tw_symbols()
@@ -97,6 +100,18 @@ async def refresh_tw_quotes() -> None:
         await _fetch_and_publish(sym)
         # Small extra delay between symbols to be safe
         await asyncio.sleep(0.2)
+
+
+async def refresh_tw_quotes_eod() -> None:
+    """End-of-day refresh — called once at 16:30 Asia/Taipei (3 h
+    after TW close). Bypasses the market-hours gate that the live
+    polling job relies on, so the cached quote payload finally
+    reflects the post-close settled price instead of the last live
+    tick at 13:30. Without this, watchlist views opened at 17:00
+    would otherwise show 3.5 h-old data — fine while the live
+    polling is active, stale once the scheduler stops calling.
+    """
+    await refresh_tw_quotes(force=True)
 
 
 async def refresh_tw_symbol_map() -> None:

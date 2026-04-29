@@ -128,11 +128,15 @@ async def fetch_quote_waterfall(ticker: str) -> tuple[dict[str, Any], str]:
     return raw, source
 
 
-async def get_quote(ticker: str) -> dict[str, Any]:
+async def get_quote(ticker: str, *, bypass_cache: bool = False) -> dict[str, Any]:
+    """Read US quote. Hits Redis cache first unless `bypass_cache` is
+    set — caller forces a fresh upstream fetch when the user opens a
+    view that promises live prices (e.g. watchlist page on mount)."""
     key = key_quote("us", ticker)
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    if not bypass_cache:
+        cached = await cache_get(key)
+        if cached:
+            return json.loads(cached)
 
     raw, source = await fetch_quote_waterfall(ticker)
     result = _normalize_quote(ticker, raw)

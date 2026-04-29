@@ -62,6 +62,22 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # ── TW EOD quote refresh ─────────────────────────────────────
+    # 08:30 UTC = 16:30 Asia/Taipei (3 h after TW close at 13:30
+    # Taipei). Forces one final pass over WS-subscribed symbols so
+    # the Redis cache holds the post-close settled prices — without
+    # this, watchlist views opened in the evening serve the last
+    # tick from 13:30 until next morning's 09:00 polling resumes.
+    from tasks.tw_market_refresh import refresh_tw_quotes_eod
+    scheduler.add_job(
+        refresh_tw_quotes_eod,
+        trigger=CronTrigger(hour=8, minute=30, timezone="UTC"),
+        id="tw_quotes_eod",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # TW symbol→exchange map refresh — once daily at 07:00 UTC
     scheduler.add_job(
         refresh_tw_symbol_map,

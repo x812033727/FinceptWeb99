@@ -29,13 +29,16 @@ TTL_HISTORY = 5 * 60
 TTL_SCREENER = 60
 
 
-async def get_quote(symbol: str) -> dict[str, Any]:
-    """Spot quote for one canonical crypto symbol."""
+async def get_quote(symbol: str, *, bypass_cache: bool = False) -> dict[str, Any]:
+    """Spot quote for one canonical crypto symbol. Hits Redis cache
+    first unless `bypass_cache` is set — caller forces a fresh Kraken
+    REST fetch when the user opens a view that promises live prices."""
     sym = symbol.upper()
     key = key_quote("crypto", sym)
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    if not bypass_cache:
+        cached = await cache_get(key)
+        if cached:
+            return json.loads(cached)
 
     quote = await _k_quote(sym)
     if quote is None:

@@ -25,8 +25,15 @@ interface Watchlist {
 
 // ── API helpers ────────────────────────────────────────────────────
 
-const fetchWatchlists = () =>
-  api.get<Watchlist[]>("/watchlist").then((r) => r.data);
+// Pass `refresh=true` so the backend bypasses its Redis quote cache
+// and re-fetches each symbol from the upstream provider. Slower (5-10
+// s for a TW-heavy list because of TWSE's 1 req/s rate limit) but
+// gives the user fresh prices every time they open the page —
+// especially important off-hours when the live polling job is idle.
+const fetchWatchlists = (refresh: boolean = false) =>
+  api
+    .get<Watchlist[]>("/watchlist", { params: refresh ? { refresh: true } : {} })
+    .then((r) => r.data);
 
 const createWatchlist = (name: string) =>
   api.post<Watchlist>("/watchlist", { name }).then((r) => r.data);
@@ -200,10 +207,15 @@ function WatchlistCard({ wl }: { wl: Watchlist }) {
 export default function WatchlistPage() {
   const { t } = useTranslation();
   const qc = useQueryClient();
+  // `refetchOnMount: "always"` + the `?refresh=true` query param means
+  // every time the user navigates to 自選股, prices re-fetch from upstream.
+  // staleTime stays at 30 s so in-page mutations (add/remove symbol)
+  // don't trigger another round-trip when the cache is still warm.
   const { data: watchlists = [], isLoading } = useQuery({
     queryKey: ["watchlists"],
-    queryFn: fetchWatchlists,
+    queryFn: () => fetchWatchlists(true),
     staleTime: 30_000,
+    refetchOnMount: "always",
   });
 
   const [newName, setNewName] = useState("");

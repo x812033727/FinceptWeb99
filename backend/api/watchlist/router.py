@@ -9,7 +9,7 @@ POST   /api/watchlist/{wid}/items              add symbol
 DELETE /api/watchlist/{wid}/items/{item_id}    remove symbol
 """
 from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.watchlist.schemas import WatchlistCreate, WatchlistItemAdd, WatchlistOut, WatchlistItemOut
@@ -25,8 +25,20 @@ DB = Annotated[AsyncSession, Depends(get_db)]
 
 
 @router.get("", response_model=list[WatchlistOut])
-async def list_watchlists(user: CurrentUser, db: DB):
-    return await svc.list_watchlists(db, user["id"])
+async def list_watchlists(
+    user: CurrentUser,
+    db: DB,
+    refresh: Annotated[bool, Query(
+        description=(
+            "Force a fresh upstream quote fetch (bypasses Redis cache). "
+            "Frontend sets this on every watchlist page mount so users "
+            "see live prices even when the during-hours polling is idle "
+            "(e.g. TW after 13:30 Taipei). Slightly slower — N TWSE "
+            "calls @ 1 req/s in worst case."
+        ),
+    )] = False,
+):
+    return await svc.list_watchlists(db, user["id"], refresh=refresh)
 
 
 @router.post("", response_model=WatchlistOut, status_code=201)

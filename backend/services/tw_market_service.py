@@ -149,13 +149,19 @@ async def fetch_quote_waterfall(symbol: str) -> tuple[dict | None, str]:
     return raw, source
 
 
-async def get_quote(symbol: str) -> dict[str, Any]:
+async def get_quote(symbol: str, *, bypass_cache: bool = False) -> dict[str, Any]:
+    """Read TW quote. Hits Redis cache first unless `bypass_cache` is
+    set — caller asks for fresh data when the user explicitly opens
+    a view that promises live prices (e.g. watchlist page on mount).
+    Cache TTL is 15 s so the bypass mostly matters off-hours when the
+    cache otherwise persists for a full TTL."""
     from services.ingest.repository import read_latest_quote_autosession
 
     key = key_quote("tw", symbol)
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    if not bypass_cache:
+        cached = await cache_get(key)
+        if cached:
+            return json.loads(cached)
 
     raw, source = await fetch_quote_waterfall(symbol)
     if not raw:

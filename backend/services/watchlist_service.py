@@ -29,8 +29,17 @@ def _wl_to_dict(wl: Watchlist, items_out: list[dict]) -> dict:
     }
 
 
-async def _enrich_item(item: WatchlistItem) -> dict[str, Any]:
-    """Fetch live quote for a single watchlist item."""
+async def _enrich_item(
+    item: WatchlistItem, *, bypass_cache: bool = False,
+) -> dict[str, Any]:
+    """Fetch live quote for a single watchlist item.
+
+    `bypass_cache=True` forces an upstream re-fetch (Polygon / Kraken /
+    TWSE) instead of reading the Redis cache. The watchlist endpoint
+    forwards `?refresh=true` from the frontend so opening the
+    自選股 page always pulls fresh prices — useful in TW after-hours
+    when the live polling job has been idle since 13:30 Taipei.
+    """
     out: dict[str, Any] = {
         "id": str(item.id),
         "symbol": item.symbol,
@@ -43,19 +52,19 @@ async def _enrich_item(item: WatchlistItem) -> dict[str, Any]:
     try:
         if item.market == Market.US:
             from services.us_market_service import get_quote
-            q = await get_quote(item.symbol)
+            q = await get_quote(item.symbol, bypass_cache=bypass_cache)
             out["price"] = q.get("price")
             out["change_pct"] = q.get("change_pct")
             out["name"] = q.get("name")
         elif item.market == Market.CRYPTO:
             from services.crypto_market_service import get_quote
-            q = await get_quote(item.symbol)
+            q = await get_quote(item.symbol, bypass_cache=bypass_cache)
             out["price"] = q.get("price")
             out["change_pct"] = q.get("change_pct")
             out["name"] = q.get("symbol")
         else:
             from services.tw_market_service import get_quote
-            q = await get_quote(item.symbol)
+            q = await get_quote(item.symbol, bypass_cache=bypass_cache)
             out["price"] = q.get("price")
             out["change_pct"] = q.get("change_pct")
             out["name"] = q.get("name_zh")
@@ -66,7 +75,9 @@ async def _enrich_item(item: WatchlistItem) -> dict[str, Any]:
 
 # ── CRUD ───────────────────────────────────────────────────────────
 
-async def list_watchlists(db: AsyncSession, user_id: str) -> list[dict]:
+async def list_watchlists(
+    db: AsyncSession, user_id: str, *, refresh: bool = False,
+) -> list[dict]:
     uid = uuid.UUID(user_id)
     result = await db.execute(
         select(Watchlist)
@@ -77,7 +88,9 @@ async def list_watchlists(db: AsyncSession, user_id: str) -> list[dict]:
     watchlists = result.scalars().all()
     out = []
     for wl in watchlists:
-        items_out = await asyncio.gather(*[_enrich_item(i) for i in wl.items])
+        items_out = await asyncio.gather(
+            *[_enrich_item(i, bypass_cache=refresh) for i in wl.items]
+        )
         out.append(_wl_to_dict(wl, list(items_out)))
     return out
 

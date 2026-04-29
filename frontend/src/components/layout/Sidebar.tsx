@@ -86,7 +86,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
       />
 
       <aside
-        className={`fixed lg:sticky top-0 left-0 z-50 h-screen w-64 lg:w-52 shrink-0 border-r border-border bg-card flex flex-col transform transition-transform duration-200 lg:translate-x-0 ${
+        className={`fixed lg:sticky top-0 left-0 z-50 h-screen w-64 lg:w-44 shrink-0 border-r border-border bg-card flex flex-col transform transition-transform duration-200 lg:translate-x-0 ${
           open ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         }`}
       >

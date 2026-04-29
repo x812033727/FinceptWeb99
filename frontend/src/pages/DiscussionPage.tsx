@@ -718,7 +718,7 @@ export default function DiscussionPage() {
     <div className="h-[calc(100vh-2.5rem)] bg-background flex flex-col lg:flex-row overflow-hidden">
       {/* ── sidebar: session list + form ───────────────────────── */}
       <aside
-        className={`lg:w-80 border-b lg:border-b-0 lg:border-r border-border flex-col p-3 lg:p-4 gap-3 shrink-0 overflow-y-auto max-h-[28vh] lg:max-h-none ${
+        className={`lg:w-60 border-b lg:border-b-0 lg:border-r border-border flex-col p-3 lg:p-3 gap-3 shrink-0 overflow-y-auto max-h-[28vh] lg:max-h-none ${
           collapse.sidebar ? "hidden" : "flex"
         }`}
       >

@@ -719,6 +719,7 @@ async def run_round(
             })
 
             assembled = ""
+            usage_seen: dict[str, int] | None = None
             # Wrap the persona's turn in asyncio.timeout so a single stuck
             # provider can't hang the whole round indefinitely. On timeout
             # we emit an error event, persist a placeholder turn, and
@@ -753,6 +754,16 @@ async def run_round(
                                     "persona_id": persona_id,
                                     "text": visible,
                                 })
+                        elif etype == "usage":
+                            # Capture the provider's reported token counts
+                            # so we can write a per-persona LLMUsageEvent
+                            # row after the turn settles. Without this,
+                            # the bulk of discussion cost (N personas ×
+                            # rounds) was invisible in UsageCard.
+                            usage_seen = {
+                                "prompt_tokens": int(event.get("prompt_tokens", 0)),
+                                "completion_tokens": int(event.get("completion_tokens", 0)),
+                            }
                         elif etype == "error":
                             yield TurnEvent("error", {
                                 "message": event.get("message", "LLM error"),
@@ -806,6 +817,23 @@ async def run_round(
             db.add(turn_row)
             await db.commit()
             prior_turns.append(turn_row)
+
+            # Record the persona's LLM usage. Tagged with the actual
+            # persona_id (not "_system:..." like sentiment/synthesizer)
+            # so the admin UsageCard breakdown can attribute cost per
+            # persona/round. Skipped if the provider didn't emit a
+            # usage event (some openai-compat backends don't).
+            if usage_seen is not None:
+                from services.llm_usage_service import record_usage
+                await record_usage(
+                    db,
+                    user_id=user_id,
+                    provider=spec.default_provider,
+                    model=spec.default_model,
+                    persona_id=persona_id,
+                    prompt_tokens=usage_seen["prompt_tokens"],
+                    completion_tokens=usage_seen["completion_tokens"],
+                )
 
             yield TurnEvent("turn_end", {
                 "round": round_number,

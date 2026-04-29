@@ -776,6 +776,67 @@ async def test_gather_market_context_records_connector_errors(
     assert "screener" in sources
 
 
+@pytest.mark.asyncio
+async def test_run_round_records_per_persona_usage(
+    db_session: AsyncSession, owner: User,
+):
+    """Each persona's LLM call must produce an `LLMUsageEvent` row tagged
+    with that persona's ID — without this, the bulk of discussion cost
+    (N personas × rounds) was invisible in the admin UsageCard.
+
+    Stream emits a `usage` event after deltas, mimicking what
+    `ai/llm_router._anthropic_stream` / `_openai_stream` actually
+    yield in production.
+    """
+    from models.llm_usage_event import LLMUsageEvent
+
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="topic",
+        rules="rules",
+        persona_ids=["buffett", "lynch"],
+    )
+
+    call_n = {"i": 0}
+
+    async def _stream_with_usage(*_a, **_kw):
+        call_n["i"] += 1
+        # Different per-persona token counts so we can verify each
+        # one was independently recorded (not a single summed event).
+        prompt = 100 * call_n["i"]
+        completion = 30 * call_n["i"]
+        yield {"type": "delta",
+               "text": f'{{"stance":"agree","content":"persona {call_n["i"]}"}}'}
+        yield {"type": "usage",
+               "prompt_tokens": prompt, "completion_tokens": completion}
+
+    with patch(
+        "services.discussion_service.stream_chat", side_effect=_stream_with_usage,
+    ), patch(
+        "services.discussion_service.gather_market_context",
+        new=AsyncMock(return_value={"market": "TW"}),
+    ):
+        async for _ in discussion_service.run_round(
+            db_session, row, user_id=str(owner.id),
+        ):
+            pass
+
+    rows = (await db_session.scalars(
+        select(LLMUsageEvent)
+        .where(LLMUsageEvent.persona_id.in_(["buffett", "lynch"]))
+        .order_by(LLMUsageEvent.created_at)
+    )).all()
+    by_persona = {r.persona_id: r for r in rows}
+    assert "buffett" in by_persona
+    assert "lynch" in by_persona
+    # First call (buffett): 100 / 30. Second call (lynch): 200 / 60.
+    assert by_persona["buffett"].prompt_tokens == 100
+    assert by_persona["buffett"].completion_tokens == 30
+    assert by_persona["lynch"].prompt_tokens == 200
+    assert by_persona["lynch"].completion_tokens == 60
+
+
 def test_safe_conclusion_clamps_consensus_and_caps_lists():
     raw = (
         '{"recommended_symbols": ["A","B","C","D","E","F","G"], '

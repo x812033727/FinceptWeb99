@@ -26,3 +26,16 @@ async def get_db() -> AsyncSession:
         except Exception:
             await session.rollback()
             raise
+
+
+def get_db_session_factory():
+    """Return a callable that creates a fresh `AsyncSession`.
+
+    Used by detached background tasks (e.g. `asyncio.create_task` workers
+    that outlive the originating HTTP request) which need a session with
+    a lifetime independent of `Depends(get_db)`. The dependency form
+    lets tests substitute the in-memory test sessionmaker via
+    `app.dependency_overrides`, so background-task code can be exercised
+    against the same in-memory schema as the rest of the test suite.
+    """
+    return AsyncSessionLocal

@@ -47,7 +47,7 @@ from api.discussion.schemas import (
 from auth.permissions import require_viewer
 from cache.redis_cache import cache_decr, cache_incr, key_ai_counter
 from config import settings
-from db.session import AsyncSessionLocal, get_db
+from db.session import get_db, get_db_session_factory
 from models.discussion import Discussion
 from services import discussion_service
 
@@ -242,6 +242,9 @@ async def run_round(
     discussion_id: uuid.UUID,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
+    session_factory: Annotated[
+        type[AsyncSession], Depends(get_db_session_factory)
+    ],
 ):
     """Stream one round of the discussion as Server-Sent Events.
 
@@ -303,7 +306,7 @@ async def run_round(
     async def _run_in_background() -> None:
         completed = 0
         try:
-            async with AsyncSessionLocal() as bg_db:
+            async with session_factory() as bg_db:
                 bg_row = await discussion_service.get_discussion(
                     bg_db,
                     discussion_id=discussion_id,

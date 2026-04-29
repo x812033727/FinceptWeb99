@@ -65,7 +65,7 @@ import models.user  # noqa: E402,F401
 import models.user_llm_provider_key  # noqa: E402,F401
 import models.watchlist  # noqa: E402,F401
 from db.base import Base  # noqa: E402
-from db.session import get_db  # noqa: E402
+from db.session import get_db, get_db_session_factory  # noqa: E402
 
 # Disable slowapi rate limiter — tests exercise endpoints in tight loops
 # and would otherwise trip the 5/min register cap, etc.
@@ -77,7 +77,19 @@ limiter.enabled = False
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
-test_engine = create_async_engine(TEST_DB_URL, echo=False)
+from sqlalchemy.pool import StaticPool  # noqa: E402
+
+# StaticPool keeps a single connection alive for the engine's lifetime so
+# every session — including detached background tasks running concurrently
+# with the request's session — sees the same in-memory schema. Without it
+# each `TestSessionLocal()` checkout could land on a fresh aiosqlite
+# connection with its own (empty) in-memory DB.
+test_engine = create_async_engine(
+    TEST_DB_URL,
+    echo=False,
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
 TestSessionLocal = async_sessionmaker(test_engine, expire_on_commit=False)
 
 
@@ -128,7 +140,16 @@ async def client(db_session: AsyncSession):
     async def override_db():
         yield db_session
 
+    # Detached background tasks (e.g. discussion round runner) ask for a
+    # session factory via Depends(get_db_session_factory). Point them at
+    # the in-memory test sessionmaker so they hit the same schema as the
+    # rest of the test — without this the bg task crashes with "no such
+    # table" because production AsyncSessionLocal targets the real DB.
+    def override_session_factory():
+        return TestSessionLocal
+
     app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_db_session_factory] = override_session_factory
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"

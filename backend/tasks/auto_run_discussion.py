@@ -179,15 +179,38 @@ async def _do_run() -> int:
         await db.commit()
         discussion.auto_run = True
 
+        # Resolve the system-task LLM that all 8 personas will use
+        # for this auto-run. Admins set this in AdminPage →
+        # SystemTasksCard → "自動討論專家 LLM"; falling back to the
+        # SystemTaskSpec compiled defaults if no DB override exists.
+        # Routing all personas through one model gives admins a single
+        # cost knob — at 8 personas × 5 rounds = 40 calls/day, picking
+        # a cheap model matters.
+        from services.system_task_config_service import resolve as _resolve_task
+        persona_provider, persona_model = await _resolve_task(
+            db, "auto_run_discussion_persona",
+        )
+        log.info(
+            "auto_run_discussion.persona_llm_resolved",
+            extra={"provider": persona_provider, "model": persona_model},
+        )
+
         # Run N rounds sequentially. Each call is an async generator
         # that yields SSE events; we drain them — persistence happens
         # as side-effects inside run_round.
         for _round_idx in range(_AUTO_ROUNDS):
             async for _ev in discussion_service.run_round(
-                db, discussion, user_id=str(owner_id),
+                db, discussion,
+                user_id=str(owner_id),
+                provider_override=persona_provider,
+                model_override=persona_model,
             ):
                 pass
 
+        # Synthesizer keeps using its own SystemTaskConfig entry
+        # (`discussion_synthesizer`); no override needed here — its
+        # resolver path inside synthesize_conclusion already reads
+        # SystemTaskConfig directly.
         conclusion = await discussion_service.synthesize_conclusion(
             db, discussion, user_id=str(owner_id),
         )

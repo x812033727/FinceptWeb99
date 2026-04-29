@@ -70,6 +70,18 @@ _TASKS: dict[str, SystemTaskSpec] = {
         default_provider="anthropic",
         default_model="claude-haiku-4-5-20251001",
     ),
+    "auto_run_discussion_persona": SystemTaskSpec(
+        task_id="auto_run_discussion_persona",
+        name="自動討論專家 LLM",
+        description=(
+            "每天 08:00 Asia/Taipei 自動跑的圓桌討論裡，全部 8 位"
+            "專家統一改用這組 LLM。會覆蓋 PersonasCard 裡個別專家的"
+            "設定（只在 auto_run=True 的場次），讓系統管理者用單一旋鈕"
+            "控制每天的成本上限。手動建立的討論不受影響。"
+        ),
+        default_provider="anthropic",
+        default_model="claude-haiku-4-5-20251001",
+    ),
 }
 
 

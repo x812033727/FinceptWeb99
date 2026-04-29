@@ -308,6 +308,55 @@ async def test_runs_5_rounds_then_synthesize(
 
 
 @pytest.mark.asyncio
+async def test_passes_system_task_llm_override_to_run_round(
+    patch_session, db_session: AsyncSession, admin_user: User,
+):
+    """Auto-run resolves the `auto_run_discussion_persona` system-task
+    config and forwards the provider/model as a per-call override to
+    run_round so all 8 personas use the same LLM. Pinning this prevents
+    a regression where the cost knob silently slipped back to per-
+    persona default routing."""
+    from tasks import auto_run_discussion
+
+    captured_calls: list[dict] = []
+
+    async def _fake_run_round(*_a, **kwargs):
+        captured_calls.append(kwargs)
+        return
+        yield  # pragma: no cover
+
+    synth = AsyncMock(return_value={
+        "recommended_symbols": ["2330"],
+        "reasoning": "x",
+        "risks": [], "time_horizon": "short_term", "consensus_score": 0.5,
+    })
+
+    patches = _stub_lock_helpers() + [
+        patch("tasks.auto_run_discussion.is_today_likely_trading_day",
+              AsyncMock(return_value=True)),
+        patch.object(discussion_service, "run_round", _fake_run_round),
+        patch.object(discussion_service, "synthesize_conclusion", synth),
+        patch(
+            "services.system_task_config_service.resolve",
+            new=AsyncMock(return_value=("groq", "llama-3.3-70b-versatile")),
+        ),
+        patch("config.settings.ADMIN_EMAIL", "admin@example.com"),
+    ]
+    _enter_all(patches)
+    try:
+        await auto_run_discussion.run()
+    finally:
+        _exit_all(patches)
+
+    # All 5 round invocations must have received the override pulled
+    # from SystemTaskConfig.
+    assert len(captured_calls) == 5
+    for call_kwargs in captured_calls:
+        assert call_kwargs["provider_override"] == "groq"
+        assert call_kwargs["model_override"] == "llama-3.3-70b-versatile"
+
+
+@pytest.mark.asyncio
 async def test_filters_non_tw_symbols_from_logs(
     patch_session, db_session: AsyncSession, admin_user: User,
 ):

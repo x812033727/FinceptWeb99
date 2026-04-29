@@ -784,6 +784,8 @@ async def run_round(
     discussion: Discussion,
     *,
     user_id: str | None = None,
+    provider_override: str | None = None,
+    model_override: str | None = None,
 ) -> AsyncGenerator[TurnEvent, None]:
     """Run one full round of discussion. Each persona is queried in order;
     each persona's response is persisted as a `DiscussionTurn` row.
@@ -855,6 +857,25 @@ async def run_round(
         # Batch-load persona overrides up front so the per-persona loop
         # doesn't make N round-trips to the persona_overrides table.
         specs_by_id = await _resolve_persona_specs(db, list(discussion.persona_ids))
+        # System-task-level LLM override: when the auto-run scheduler
+        # passes (provider, model), every persona in this round is
+        # rebuilt to point at that one LLM. Lets admins set a single
+        # cheap model for the daily auto-run via SystemTasksCard
+        # without having to override each persona individually.
+        # PersonasCard overrides on individual personas are ignored
+        # for this run only.
+        if provider_override and model_override:
+            from ai.agents import AgentSpec
+            specs_by_id = {
+                pid: AgentSpec(
+                    name=spec.name,
+                    description=spec.description,
+                    system_prompt=spec.system_prompt,
+                    default_provider=provider_override,
+                    default_model=model_override,
+                )
+                for pid, spec in specs_by_id.items()
+            }
 
         for idx, persona_id in enumerate(discussion.persona_ids):
             spec = specs_by_id.get(persona_id)

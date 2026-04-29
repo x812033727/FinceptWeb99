@@ -62,6 +62,40 @@ const DEFAULT_RULES = [
   "5. 短線定義：5 個交易日內出場。",
 ].join("\n");
 
+// localStorage keys for "use my last-saved values as the defaults for
+// the next new discussion". Per-browser; clears with site data.
+const LS_TOPIC_KEY = "fincept.discussion.last_topic";
+const LS_RULES_KEY = "fincept.discussion.last_rules";
+
+function readDefaultTopic(): string {
+  try {
+    return localStorage.getItem(LS_TOPIC_KEY) ?? DEFAULT_TOPIC;
+  } catch {
+    return DEFAULT_TOPIC;
+  }
+}
+function readDefaultRules(): string {
+  try {
+    return localStorage.getItem(LS_RULES_KEY) ?? DEFAULT_RULES;
+  } catch {
+    return DEFAULT_RULES;
+  }
+}
+function rememberTopic(topic: string): void {
+  try {
+    localStorage.setItem(LS_TOPIC_KEY, topic);
+  } catch {
+    /* localStorage disabled (private mode, full quota) — silent */
+  }
+}
+function rememberRules(rules: string): void {
+  try {
+    localStorage.setItem(LS_RULES_KEY, rules);
+  } catch {
+    /* see rememberTopic */
+  }
+}
+
 const DEFAULT_PERSONAS = ["market_analyst", "trading_coach", "lynch", "simons"];
 
 const STANCE_BADGE: Record<Turn["stance"], { label: string; cls: string }> = {
@@ -147,8 +181,12 @@ export default function DiscussionPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // Local form state for the active session's editable fields.
-  const [topic, setTopic] = useState(DEFAULT_TOPIC);
-  const [rules, setRules] = useState(DEFAULT_RULES);
+  // Read the last-saved topic / rules from localStorage on mount so a
+  // new discussion picks up where the user left off. Falls back to the
+  // hardcoded DEFAULTs on first ever use (or if localStorage is
+  // disabled).
+  const [topic, setTopic] = useState(readDefaultTopic);
+  const [rules, setRules] = useState(readDefaultRules);
   const [personaIds, setPersonaIds] = useState<string[]>(DEFAULT_PERSONAS);
 
   // Streaming round state — appended to as the SSE arrives.
@@ -198,15 +236,23 @@ export default function DiscussionPage() {
     onSuccess: (row) => {
       queryClient.invalidateQueries({ queryKey: ["discussion-sessions"] });
       setSelectedId(row.id);
+      // Successful create implies the user is happy with these topic /
+      // rules — make them the defaults for the next "+ New Discussion".
+      rememberTopic(row.topic);
+      rememberRules(row.rules);
     },
   });
 
   const updateMut = useMutation({
     mutationFn: (body: { topic?: string; rules?: string; persona_ids?: string[] }) =>
       updateSession(selectedId!, body),
-    onSuccess: () => {
+    onSuccess: (row) => {
       queryClient.invalidateQueries({ queryKey: ["discussion-sessions"] });
       queryClient.invalidateQueries({ queryKey: ["discussion-session", selectedId] });
+      // Whatever the user just persisted becomes the default for the
+      // next new discussion.
+      rememberTopic(row.topic);
+      rememberRules(row.rules);
     },
   });
 
@@ -383,8 +429,10 @@ export default function DiscussionPage() {
         <button
           onClick={() => {
             setSelectedId(null);
-            setTopic(DEFAULT_TOPIC);
-            setRules(DEFAULT_RULES);
+            // "+ New Discussion" pulls from localStorage so the user's
+            // last-saved topic / rules are pre-filled.
+            setTopic(readDefaultTopic());
+            setRules(readDefaultRules());
             setPersonaIds(DEFAULT_PERSONAS);
             setStreamingTurns([]);
             setStreamError(null);

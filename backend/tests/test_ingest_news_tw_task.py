@@ -301,6 +301,29 @@ def test_format_finmind_error_generic_exception():
     assert "something else" in msg
 
 
+def test_format_finmind_error_400_with_free_level_body_picks_paid_hint():
+    """FinMind returns HTTP 400 with `msg: "Your level is free. Please
+    update your user level..."` when a free-tier token hits a paid
+    dataset. The body-aware hint must surface so operators don't waste
+    time re-checking their token (which is valid)."""
+    from tasks.ingest_news_tw import _format_finmind_error
+
+    msg = _format_finmind_error(_http_error(400, body={
+        "msg": "Your level is free. Please update your user level. "
+               "Detail information:https://finmindtrade.com/analysis/#/Sponsor/sponsor",
+        "status": 400,
+    }))
+    assert "400" in msg
+    assert "paid" in msg.lower()
+    assert "sponsor" in msg.lower()
+    # The static 400 hint mentions FINMIND_TOKEN — the body-aware one
+    # should win and not include that misleading guidance.
+    assert "empty/malformed FINMIND_TOKEN" not in msg
+    # Original FinMind message still surfaces so the operator sees
+    # exactly what the upstream said.
+    assert "Your level is free" in msg
+
+
 # ── backoff integration ───────────────────────────────────────────
 
 

@@ -53,7 +53,7 @@ _LOOKBACK_DAYS = 2   # FinMind returns articles published within range; 2 days
 
 
 _HTTP_HINTS: dict[int, str] = {
-    400: "FinMind rejected the request — usually empty or malformed FINMIND_TOKEN",
+    400: "FinMind rejected the request — empty/malformed FINMIND_TOKEN, or this dataset requires a paid sponsorship",
     401: "check FINMIND_TOKEN — invalid or missing",
     402: "FinMind dataset requires paid sponsorship",
     403: "FinMind token forbidden for this dataset",
@@ -64,28 +64,56 @@ _HTTP_HINTS: dict[int, str] = {
     504: "FinMind gateway timeout",
 }
 
+# Body-pattern → operator hint. FinMind sometimes returns HTTP 400 with the
+# real cause buried in the response body (e.g. free-tier accounts hitting
+# paid datasets like TaiwanStockNews). Body-aware hints take precedence over
+# the static status-code default so the message points at the actual fix.
+_BODY_HINTS: tuple[tuple[str, str], ...] = (
+    (
+        "level is free",
+        "TaiwanStockNews requires a paid FinMind sponsorship — free-tier "
+        "tokens cannot read this dataset. Upgrade at "
+        "https://finmindtrade.com/analysis/#/Sponsor/sponsor",
+    ),
+    (
+        "user level",
+        "FinMind account level is too low for this dataset — paid sponsorship required",
+    ),
+)
+
+
+def _pick_body_hint(body_text: str) -> str:
+    lowered = body_text.lower()
+    for needle, hint in _BODY_HINTS:
+        if needle in lowered:
+            return hint
+    return ""
+
 
 def _format_finmind_error(exc: BaseException) -> str:
     """Turn a raw exception into a one-line operator-friendly summary.
 
     Common HTTP statuses get a hint string suggesting the most likely
-    cause + remediation. Network / timeout / unknown errors fall back
-    to a typed prefix + the exception message so the source is still
-    obvious.
+    cause + remediation. Body-aware hints (e.g. "level is free") win
+    over the status-code default so a paid-dataset rejection isn't mis-
+    diagnosed as a malformed token. Network / timeout / unknown errors
+    fall back to a typed prefix + the exception message.
     """
     if isinstance(exc, httpx.HTTPStatusError):
         code = exc.response.status_code
         reason = exc.response.reason_phrase or "?"
-        hint = _HTTP_HINTS.get(code, "")
         body_msg = ""
+        body_text = ""
         try:
             body = exc.response.json()
             for key in ("msg", "message", "detail"):
                 if isinstance(body, dict) and body.get(key):
                     body_msg = f" — {body[key]}"
+                    body_text = str(body[key])
                     break
         except Exception:
             pass
+        hint = _pick_body_hint(body_text) or _HTTP_HINTS.get(code, "")
         suffix = f" ({hint})" if hint else ""
         return f"HTTP {code} {reason}{suffix}{body_msg}"
     if isinstance(exc, httpx.TimeoutException):

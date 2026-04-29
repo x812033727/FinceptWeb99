@@ -250,6 +250,78 @@ def test_parse_turn_response_falls_back_with_thinking_stripped_when_json_invalid
     assert "prose answer" in content
 
 
+def test_parse_turn_response_salvages_truncated_content_field():
+    """LLM hits `max_tokens` mid-content — JSON wrapper has no closing
+    `"}` so `_extract_json_object` returns None. The truncation salvage
+    path extracts the partial content + already-emitted stance instead
+    of dropping the user back to "raw JSON wrapper" view."""
+    raw = (
+        '{"stance":"supplement","content":"台積電2330短線看好，'
+        '建議分批進場到610元，停損點設在565元（-7%）。目標價'
+    )
+    stance, content = discussion_service._parse_turn_response(raw)
+    assert stance == "supplement"
+    # The persona's actual analysis comes through, not the JSON wrapper.
+    assert content.startswith("台積電2330短線看好")
+    assert "目標價" in content
+    assert '"stance"' not in content
+    assert '"content"' not in content
+
+
+def test_parse_turn_response_salvages_truncation_with_unknown_stance():
+    """If the LLM emitted an off-list stance before truncating, the
+    salvage path falls it back to DEFAULT_STANCE just like the regular
+    parse would for a complete message with a bad stance."""
+    raw = '{"stance":"abstain","content":"無法決定，等更多資料'
+    stance, content = discussion_service._parse_turn_response(raw)
+    assert stance == discussion_service.DEFAULT_STANCE
+    assert content == "無法決定，等更多資料"
+
+
+def test_parse_turn_response_salvages_truncation_decodes_escapes():
+    """Truncated content with JSON escape sequences (`\\n`, `\\\"`) gets
+    decoded to real characters so the persisted text is readable rather
+    than littered with backslashes."""
+    raw = (
+        '{"stance":"supplement","content":"第一段重點\\n\\n第二段重點：'
+        '引用Buffett \\"安全邊際\\" 概念，目前估值'
+    )
+    stance, content = discussion_service._parse_turn_response(raw)
+    assert stance == "supplement"
+    assert "第一段重點\n\n第二段重點" in content
+    assert '"安全邊際"' in content
+    # Trailing backslash-escape was clean, no garbage carried through.
+    assert content.endswith("目前估值")
+
+
+def test_parse_turn_response_salvages_truncation_drops_dangling_escape():
+    """If truncation lands mid-escape (lone `\\` at end), the decoder
+    drops the dangling backslash rather than carrying it through to the
+    rendered text."""
+    raw = '{"stance":"agree","content":"重點一是估值合理，重點二是\\'
+    _, content = discussion_service._parse_turn_response(raw)
+    assert not content.endswith("\\")
+    assert "重點一" in content
+    assert "重點二" in content
+
+
+def test_parse_turn_response_salvage_skipped_when_no_content_field():
+    """If the truncated text doesn't contain a `"content":"` opener at
+    all, the salvage path is skipped and we fall back to the raw-text
+    DEFAULT_STANCE behaviour — no false positives."""
+    raw = "Just some prose, no JSON wrapper at all."
+    stance, content = discussion_service._parse_turn_response(raw)
+    assert stance == discussion_service.DEFAULT_STANCE
+    assert content == raw
+
+
+def test_salvage_truncated_json_returns_none_without_content_opener():
+    out = discussion_service._salvage_truncated_json(
+        '{"stance":"agree","other":"value"'
+    )
+    assert out is None
+
+
 # ── persona validation ────────────────────────────────────────────
 
 

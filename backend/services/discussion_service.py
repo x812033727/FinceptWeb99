@@ -74,11 +74,12 @@ _MAX_FOCUS_SYMBOLS = 5
 
 _MAX_PERSONAS = 8           # safety cap so one discussion can't fan out 19 LLM calls/round
 _MIN_PERSONAS = 2
-# 1024 leaves room for reasoning models (deepseek-r1, gpt-o1, qwen-3) to spend
-# half their budget inside `<think>` and still emit complete JSON. With 600
-# the JSON often got truncated mid-string and we fell back to the raw-text
-# stance="supplement" path.
-_MAX_TURN_TOKENS = 1024
+# 2048 gives Chinese-output personas (BPE → ~3 tokens/char) ~600-700 chars of
+# analysis after a reasoning preamble. With 1024 we still saw truncation mid-
+# sentence on long-winded personas (Lynch / Buffett); the salvage path in
+# `_parse_turn_response` recovers the partial content but raising the cap
+# means it kicks in less often.
+_MAX_TURN_TOKENS = 2048
 _MAX_TOPIC_CHARS = 500
 _MAX_RULES_CHARS = 2000
 _MAX_HISTORY_TURNS = 30     # how many prior turns to feed the next persona
@@ -538,6 +539,86 @@ def _loads_lenient(text: str) -> Any:
     return json.loads(text, strict=False)
 
 
+# Matches the opening of a `"content": "` field. Used by the truncation
+# salvage path — the persona's content always lives behind this key in
+# our prompt template, so finding it gives us a reliable extraction
+# anchor when the JSON wrapper got cut off mid-string.
+_CONTENT_OPEN_RE = re.compile(r'"content"\s*:\s*"')
+_STANCE_RE = re.compile(r'"stance"\s*:\s*"([^"]*)"')
+
+# Standard JSON single-char escape map. `\u####` is handled inline
+# because it consumes a variable number of input characters.
+_JSON_ESCAPE_MAP = {
+    "n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f",
+    '"': '"', "\\": "\\", "/": "/",
+}
+
+
+def _decode_partial_json_string(s: str) -> str:
+    """Decode JSON escape sequences inside a string fragment that has
+    no closing quote (because the LLM hit max_tokens mid-content).
+    Stops at the first unescaped `"` (legitimate end) or end of input.
+    Drops a trailing partial escape (lone `\\` or incomplete `\\u####`)
+    so the rendered text doesn't carry a dangling backslash."""
+    out: list[str] = []
+    i = 0
+    n = len(s)
+    while i < n:
+        c = s[i]
+        if c == "\\":
+            if i + 1 >= n:
+                break
+            esc = s[i + 1]
+            mapped = _JSON_ESCAPE_MAP.get(esc)
+            if mapped is not None:
+                out.append(mapped)
+                i += 2
+                continue
+            if esc == "u":
+                if i + 6 > n:
+                    break
+                try:
+                    out.append(chr(int(s[i + 2:i + 6], 16)))
+                    i += 6
+                except ValueError:
+                    out.append(s[i:i + 2])
+                    i += 2
+                continue
+            out.append(esc)
+            i += 2
+        elif c == '"':
+            break
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def _salvage_truncated_json(text: str) -> tuple[str, str] | None:
+    """Recover (stance, content) from a JSON wrapper that got truncated
+    when the LLM hit max_tokens mid-string.
+
+    Triggered after `_extract_json_object` fails to find a balanced
+    `{...}` — the closing `}` never appeared because the model ran out
+    of budget while writing the content. The wrapper looks like
+    `{"stance":"supplement","content":"...partial text`. We pull stance
+    out by regex (it's a short word that almost always finishes before
+    truncation hits) and take everything after `"content":"` as the
+    content body, JSON-decoding the standard escapes so embedded `\\n`
+    becomes a real newline.
+
+    Returns None when neither a `"content":"` opener nor any sign of the
+    JSON wrapper is present — the caller falls back to raw-text mode.
+    """
+    content_match = _CONTENT_OPEN_RE.search(text)
+    if content_match is None:
+        return None
+    stance_match = _STANCE_RE.search(text[:content_match.start()])
+    stance = stance_match.group(1) if stance_match else DEFAULT_STANCE
+    content = _decode_partial_json_string(text[content_match.end():])
+    return stance, content
+
+
 def _parse_turn_response(raw: str) -> tuple[str, str]:
     """Return (stance, content). Falls back to (DEFAULT_STANCE, cleaned_raw)
     when the model drifts off JSON format — better to record the prose
@@ -550,27 +631,41 @@ def _parse_turn_response(raw: str) -> tuple[str, str]:
          Chinese content don't blow up json
       4. if that fails, salvage the first balanced `{...}` object from
          surrounding prose (handles "Here is my analysis: {...}" cases)
+      5. if no balanced object exists (LLM hit max_tokens mid-string so
+         the closing `"}` never arrived), regex-extract the partial
+         `content` field — keeps most of the persona's analysis instead
+         of surfacing the raw `{"stance":"...","content":"...` wrapper
+         to the user.
     """
     no_thinking = strip_think_blocks(raw)
     cleaned = _strip_code_fence(no_thinking)
-    data: Any
+    data: Any | None = None
     try:
         data = _loads_lenient(cleaned)
     except json.JSONDecodeError:
         salvaged = _extract_json_object(cleaned)
-        if salvaged is None:
-            return DEFAULT_STANCE, no_thinking.strip()
-        try:
-            data = _loads_lenient(salvaged)
-        except json.JSONDecodeError:
-            return DEFAULT_STANCE, no_thinking.strip()
-    if not isinstance(data, dict):
-        return DEFAULT_STANCE, no_thinking.strip()
-    stance = str(data.get("stance", "")).strip().lower()
-    if stance not in VALID_STANCES:
-        stance = DEFAULT_STANCE
-    content = str(data.get("content", "")).strip()
-    return stance, content
+        if salvaged is not None:
+            try:
+                data = _loads_lenient(salvaged)
+            except json.JSONDecodeError:
+                data = None
+    if isinstance(data, dict):
+        stance = str(data.get("stance", "")).strip().lower()
+        if stance not in VALID_STANCES:
+            stance = DEFAULT_STANCE
+        content = str(data.get("content", "")).strip()
+        return stance, content
+
+    truncated = _salvage_truncated_json(cleaned)
+    if truncated is not None:
+        stance, content = truncated
+        stance = stance.strip().lower()
+        if stance not in VALID_STANCES:
+            stance = DEFAULT_STANCE
+        content = content.strip()
+        if content:
+            return stance, content
+    return DEFAULT_STANCE, no_thinking.strip()
 
 
 async def _resolve_persona_specs(
@@ -903,35 +998,20 @@ def _format_transcript(turns: list[DiscussionTurn]) -> str:
 
 def _safe_conclusion(raw: str) -> dict[str, Any]:
     cleaned = _strip_code_fence(strip_think_blocks(raw))
-    data: Any
+    data: Any | None = None
     try:
         data = _loads_lenient(cleaned)
     except json.JSONDecodeError:
         salvaged = _extract_json_object(cleaned)
-        if salvaged is None:
-            return {
-                "recommended_symbols": [],
-                "reasoning": raw.strip()[:500] or "無法解析結論",
-                "risks": [],
-                "time_horizon": "short_term",
-                "consensus_score": 0.0,
-                "_parse_error": True,
-            }
-        try:
-            data = _loads_lenient(salvaged)
-        except json.JSONDecodeError:
-            return {
-                "recommended_symbols": [],
-                "reasoning": raw.strip()[:500] or "無法解析結論",
-                "risks": [],
-                "time_horizon": "short_term",
-                "consensus_score": 0.0,
-                "_parse_error": True,
-            }
+        if salvaged is not None:
+            try:
+                data = _loads_lenient(salvaged)
+            except json.JSONDecodeError:
+                data = None
     if not isinstance(data, dict):
         return {
             "recommended_symbols": [],
-            "reasoning": "無法解析結論",
+            "reasoning": raw.strip()[:500] or "無法解析結論",
             "risks": [],
             "time_horizon": "short_term",
             "consensus_score": 0.0,

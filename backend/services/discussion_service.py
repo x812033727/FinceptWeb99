@@ -341,15 +341,23 @@ async def force_reset_status(
     Used by the round route to recover a discussion stuck in RUNNING
     (e.g. previous attempt died before its finally-block reset, or the
     reset commit silently failed). Atomic SQL UPDATE so it can't be
-    affected by stale in-memory state.
+    affected by stale in-memory state. We manually mirror the new
+    values onto the in-memory entity instead of `db.refresh()` —
+    SQLAlchemy 2.0's ORM-level UPDATE with the default
+    `synchronize_session='auto'` may expunge the entity from the
+    session under PostgreSQL, after which `refresh()` raises
+    "Instance is not persistent within this Session".
     """
+    now = datetime.now(UTC)
     await db.execute(
         update(Discussion)
         .where(Discussion.id == discussion.id)
-        .values(status=STATUS_DRAFT, updated_at=datetime.now(UTC))
+        .values(status=STATUS_DRAFT, updated_at=now)
+        .execution_options(synchronize_session=False)
     )
     await db.commit()
-    await db.refresh(discussion)
+    discussion.status = STATUS_DRAFT
+    discussion.updated_at = now
 
 
 # ── market context ──────────────────────────────────────────────────
@@ -796,9 +804,10 @@ async def run_round(
     # silently (e.g. detached entity from a stale request, autoflush=False
     # interaction). Doing it as `UPDATE ... SET current_round =
     # current_round + 1 RETURNING current_round` is bulletproof: one
-    # round-trip, atomic, returns the new value directly. We then refresh
-    # the in-memory entity so subsequent reads (turn rows, status reset)
-    # see the latest state.
+    # round-trip, atomic, returns the new value directly. We mirror the
+    # new values onto the in-memory entity manually — `db.refresh()`
+    # would raise "Instance is not persistent" after an ORM update that
+    # SQLAlchemy 2.0 chose to synchronize via expunge under PostgreSQL.
     now = datetime.now(UTC)
     result = await db.execute(
         update(Discussion)
@@ -809,10 +818,13 @@ async def run_round(
             updated_at=now,
         )
         .returning(Discussion.current_round)
+        .execution_options(synchronize_session=False)
     )
     round_number = result.scalar_one()
     await db.commit()
-    await db.refresh(discussion)
+    discussion.current_round = round_number
+    discussion.status = STATUS_RUNNING
+    discussion.updated_at = now
     log.info(
         "discussion.round.started",
         extra={"discussion_id": str(discussion.id), "round": round_number},
@@ -999,13 +1011,16 @@ async def run_round(
         # silently the way an in-memory mutation can. Wrap in its own
         # try so a reset failure doesn't mask the body exception.
         try:
+            now = datetime.now(UTC)
             await db.execute(
                 update(Discussion)
                 .where(Discussion.id == discussion.id)
-                .values(status=STATUS_DRAFT, updated_at=datetime.now(UTC))
+                .values(status=STATUS_DRAFT, updated_at=now)
+                .execution_options(synchronize_session=False)
             )
             await db.commit()
-            await db.refresh(discussion)
+            discussion.status = STATUS_DRAFT
+            discussion.updated_at = now
             log.info(
                 "discussion.round.ended",
                 extra={

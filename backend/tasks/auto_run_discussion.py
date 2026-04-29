@@ -70,7 +70,16 @@ _AUTO_RULES = "\n".join([
     "4. 不得推薦未在「市場現況」的 top_gainers / top_losers 中出現的標的。",
     "5. 短線定義：5 個交易日內出場。",
 ])
-_AUTO_PERSONAS = ["market_analyst", "trading_coach", "lynch", "simons"]
+_AUTO_PERSONAS = [
+    "market_analyst",
+    "macro_analyst",
+    "earnings_analyst",
+    "trading_coach",
+    "lynch",
+    "soros",
+    "simons",
+    "asness",
+]
 
 
 async def run() -> None:

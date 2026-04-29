@@ -44,6 +44,13 @@ class DiscussionResponse(BaseModel):
     status: str
     current_round: int
     conclusion: dict[str, Any] | None = None
+    # Self-grading fields (migration 0018). All optional / default-None
+    # so legacy clients ignore them; frontend uses them to render the
+    # dynamic title (YYYYMMDD(syms)勝/敗) instead of the user-typed topic.
+    verdict: str | None = None
+    verdict_reason: str | None = None
+    verified_at: datetime | None = None
+    auto_run: bool = False
     created_at: datetime
     updated_at: datetime
 

@@ -191,3 +191,35 @@ def setup_jobs() -> None:
         max_instances=1,
         coalesce=True,
     )
+
+    # ── Auto-run discussion ───────────────────────────────────────
+    # Daily at 00:00 UTC = 08:00 Asia/Taipei (1h before TW market opens
+    # at 09:00 Taipei). Job creates a 5-round expert discussion under
+    # the admin user, runs it to completion, captures the synthesizer
+    # picks, and seeds verify_after_date so the verifier task can grade
+    # it 5 trading days later. Internal trading-day gate skips weekends.
+    from tasks.auto_run_discussion import run as run_auto_run_discussion
+    scheduler.add_job(
+        run_auto_run_discussion,
+        trigger=CronTrigger(hour=0, minute=0, timezone="UTC"),
+        id="auto_run_discussion",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # ── Verify discussion outcome ─────────────────────────────────
+    # Daily at 08:30 UTC = 16:30 Asia/Taipei (3h after TW market closes
+    # at 13:30 Taipei). Picks up auto-run rows whose 5-day window has
+    # elapsed and stamps `verdict` (win/loss/unverifiable) based on
+    # whether any recommended symbol's max(high) exceeded day1_open ×
+    # 1.03 inside the window.
+    from tasks.verify_discussion_outcome import run as run_verify_discussion
+    scheduler.add_job(
+        run_verify_discussion,
+        trigger=CronTrigger(hour=8, minute=30, timezone="UTC"),
+        id="verify_discussion_outcome",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )

@@ -132,6 +132,10 @@ def _to_response(d: Discussion) -> DiscussionResponse:
         status=d.status,
         current_round=d.current_round,
         conclusion=d.conclusion,
+        verdict=d.verdict,
+        verdict_reason=d.verdict_reason,
+        verified_at=d.verified_at,
+        auto_run=d.auto_run,
         created_at=d.created_at,
         updated_at=d.updated_at,
     )

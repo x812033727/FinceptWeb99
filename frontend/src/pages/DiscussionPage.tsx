@@ -41,6 +41,10 @@ interface Discussion {
   status: "draft" | "running" | "done";
   current_round: number;
   conclusion: Conclusion | null;
+  verdict?: "win" | "loss" | "unverifiable" | null;
+  verdict_reason?: string | null;
+  verified_at?: string | null;
+  auto_run?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -230,6 +234,64 @@ function formatDateLong(iso: string | undefined): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+// ── dynamic discussion title ──────────────────────────────────────
+// Once a discussion has been concluded (recommended_symbols populated)
+// the sidebar/title stops showing the user-typed topic and renders
+// `YYYYMMDD(sym1,sym2,sym3)` instead — that's what makes the auto-run
+// feed feel like a track record. The verdict suffix (勝/敗) lands
+// after the verifier task grades the row 5 trading days later.
+//
+// Date is formatted in Asia/Taipei because the discussion's "day 1"
+// is the TW trading day, not the browser-local one. A discussion
+// created at 23:00 UTC (07:00 next day in Taipei) belongs to that
+// next day's track record.
+
+function _formatTaipeiDateCompact(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  // en-CA gives YYYY-MM-DD; strip dashes for the compact YYYYMMDD form.
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Taipei",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+  return parts.replace(/-/g, "");
+}
+
+interface FormattedTitle {
+  text: string;
+  cls: string;
+}
+
+function formatDiscussionTitle(s: {
+  topic: string;
+  conclusion: Conclusion | null;
+  verdict?: "win" | "loss" | "unverifiable" | null;
+  created_at: string;
+}): FormattedTitle {
+  const syms = s.conclusion?.recommended_symbols ?? [];
+  if (!syms.length) {
+    // No conclusion yet (or synthesizer returned empty) — fall back
+    // to the user-typed topic so the row stays informative.
+    return { text: s.topic, cls: "text-foreground" };
+  }
+  const dateStr = _formatTaipeiDateCompact(s.created_at);
+  const symPart = syms.slice(0, 3).join(",");
+  let suffix = "";
+  let cls = "text-foreground";
+  if (s.verdict === "win") {
+    suffix = "勝";
+    cls = "text-green-500";
+  } else if (s.verdict === "loss") {
+    suffix = "敗";
+    cls = "text-red-500";
+  } else if (s.verdict === "unverifiable") {
+    cls = "text-muted-foreground";
+  }
+  return { text: `${dateStr}(${symPart})${suffix}`, cls };
 }
 
 // ── inline markdown renderer ──────────────────────────────────────
@@ -656,7 +718,14 @@ export default function DiscussionPage() {
                   : "hover:bg-accent/10 text-muted-foreground"
               }`}
             >
-              <div className="line-clamp-2 font-medium text-foreground">{s.topic}</div>
+              {(() => {
+                const tt = formatDiscussionTitle(s);
+                return (
+                  <div className={`line-clamp-2 font-bold ${tt.cls}`}>
+                    {tt.text}
+                  </div>
+                );
+              })()}
               <div className="mt-0.5 flex items-center gap-2 text-[10px]">
                 <span>{formatDateShort(s.updated_at || s.created_at)}</span>
                 <span>·</span>

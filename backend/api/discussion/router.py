@@ -25,6 +25,7 @@ also one request.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -46,13 +47,20 @@ from api.discussion.schemas import (
 from auth.permissions import require_viewer
 from cache.redis_cache import cache_decr, cache_incr, key_ai_counter
 from config import settings
-from db.session import get_db
+from db.session import AsyncSessionLocal, get_db
 from models.discussion import Discussion
 from services import discussion_service
 
 log = logging.getLogger(__name__)
 router = APIRouter()
 CurrentUser = Annotated[dict, Depends(require_viewer)]
+
+# Detached background tasks for in-flight rounds. Kept module-level so
+# tasks aren't garbage-collected when the originating request returns
+# its StreamingResponse — the SSE consumer might disconnect long before
+# the round actually completes, and we want the task to live until
+# `run_round` finishes persisting turns + status reset + refund.
+_BG_ROUND_TASKS: dict[uuid.UUID, asyncio.Task] = {}
 
 
 # ── quota ──────────────────────────────────────────────────────────
@@ -282,31 +290,84 @@ async def run_round(
     cost = len(row.persona_ids or [])
     await _check_quota(user, db, cost=cost)
 
-    async def event_stream() -> AsyncGenerator[bytes, None]:
-        completed_personas = 0
+    # Run the round as a detached asyncio task with its own DB session so
+    # the work survives client disconnect. The SSE response just observes
+    # the task's progress via an in-memory queue. If the user closes
+    # the browser mid-round, the SSE generator gets cancelled but the
+    # background task continues to completion — turns persist, status
+    # resets, quota refund fires.
+    queue: asyncio.Queue = asyncio.Queue()
+    owner_id = _coerce_owner_uuid(user)
+    user_id_str = str(user["id"])
+
+    async def _run_in_background() -> None:
+        completed = 0
         try:
-            async for ev in discussion_service.run_round(
-                db, row, user_id=str(user["id"]),
-            ):
-                if ev.type == "turn_end":
-                    completed_personas += 1
-                payload = {"type": ev.type, **ev.payload}
-                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
-        except Exception as exc:
-            log.exception("discussion.round.stream_failed",
-                          extra={"discussion_id": str(discussion_id)})
-            err = json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False)
-            yield f"data: {err}\n\n".encode()
+            async with AsyncSessionLocal() as bg_db:
+                bg_row = await discussion_service.get_discussion(
+                    bg_db,
+                    discussion_id=discussion_id,
+                    owner_id=owner_id,
+                )
+                if bg_row is None:
+                    queue.put_nowait(
+                        ("error", {"message": "Discussion not found"})
+                    )
+                    return
+                try:
+                    async for ev in discussion_service.run_round(
+                        bg_db, bg_row, user_id=user_id_str,
+                    ):
+                        if ev.type == "turn_end":
+                            completed += 1
+                        queue.put_nowait((ev.type, ev.payload))
+                except Exception as exc:
+                    log.exception(
+                        "discussion.round.background_failed",
+                        extra={"discussion_id": str(discussion_id)},
+                    )
+                    queue.put_nowait(("error", {"message": str(exc)}))
         finally:
-            # Refund the personas that never produced a turn (LLM error
-            # before turn_end, client disconnected, exception bubbled up).
-            # Persisted turns keep their charge; the remainder goes back
-            # to the user's daily counter so a 5-persona round that died
-            # at persona 2 doesn't burn 5 credits.
-            unconsumed = cost - completed_personas
+            # Refund happens in the background task so it fires whether
+            # or not the SSE consumer is still attached. Persisted turns
+            # keep their charge; only the unspent remainder is refunded.
+            unconsumed = cost - completed
             if unconsumed > 0:
-                await _refund(user, count=unconsumed)
+                try:
+                    await _refund(user, count=unconsumed)
+                except Exception:
+                    log.exception(
+                        "discussion.round.refund_failed",
+                        extra={"discussion_id": str(discussion_id)},
+                    )
+            queue.put_nowait(None)
+
+    task = asyncio.create_task(_run_in_background())
+    # Keep a reference so the task isn't garbage-collected mid-run.
+    # The done-callback removes the entry once the task settles.
+    _BG_ROUND_TASKS[discussion_id] = task
+
+    def _cleanup(_t: asyncio.Task) -> None:
+        _BG_ROUND_TASKS.pop(discussion_id, None)
+
+    task.add_done_callback(_cleanup)
+
+    async def event_stream() -> AsyncGenerator[bytes, None]:
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                etype, payload = item
+                data = {"type": etype, **payload}
+                yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
             yield b"data: [DONE]\n\n"
+        except asyncio.CancelledError:
+            log.info(
+                "discussion.sse.client_disconnect_task_continues",
+                extra={"discussion_id": str(discussion_id)},
+            )
+            raise
 
     return StreamingResponse(
         event_stream(),

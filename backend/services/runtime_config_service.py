@@ -104,13 +104,14 @@ _REGISTRY: dict[str, RuntimeSettingSpec] = {
         min_value=0,
         max_value=100_000,
     ),
-    "FINMIND_DAILY_REQUEST_LIMIT": RuntimeSettingSpec(
-        key="FINMIND_DAILY_REQUEST_LIMIT",
+    "FINMIND_HOURLY_REQUEST_LIMIT": RuntimeSettingSpec(
+        key="FINMIND_HOURLY_REQUEST_LIMIT",
         type="int",
-        name="FinMind daily request budget",
+        name="FinMind hourly request budget",
         description=(
-            "Conservative cap on FinMind API calls per UTC day. The free "
-            "tier is 600/day; we default to 550 to leave headroom for "
+            "Conservative cap on FinMind API calls per rolling hour. "
+            "FinMind's registered free tier is 600/hour (300/hour "
+            "anonymous); we default to 550 to leave headroom for "
             "incident retries."
         ),
         min_value=0,

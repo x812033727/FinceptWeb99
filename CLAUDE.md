@@ -304,7 +304,7 @@ FinceptWeb/
   immediate).
 - Currently exposed: `SENTIMENT_DAILY_LLM_CALL_CAP`,
   `DISCUSSION_PERSONA_TIMEOUT_SECONDS`, `AI_REQUESTS_VIEWER_DAILY`,
-  `AI_REQUESTS_ANALYST_DAILY`, `FINMIND_DAILY_REQUEST_LIMIT`. Each has a
+  `AI_REQUESTS_ANALYST_DAILY`, `FINMIND_HOURLY_REQUEST_LIMIT`. Each has a
   type + min/max bounds enforced at upsert time.
 - Adding a new tunable: register a `RuntimeSettingSpec` in `_REGISTRY`,
   switch the call site `settings.X` → `await runtime_config.get_int("X")`.

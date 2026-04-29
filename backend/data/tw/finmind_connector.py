@@ -1,6 +1,7 @@
 """
-FinMind connector — free tier: 600 req/day without token.
-Tracks usage in Redis; falls silent (returns []) when near the limit.
+FinMind connector — registered free tier: 600 req/HOUR (300/hr anonymous).
+Tracks usage in Redis with a 1-hour rolling window; falls silent (returns
+[]) when near the limit.
 """
 import logging
 from typing import Any
@@ -15,18 +16,18 @@ log = logging.getLogger(__name__)
 _BASE = "https://api.finmindtrade.com/api/v4/data"
 
 
-async def _resolve_daily_limit() -> int:
-    """Look up the runtime-tunable FinMind daily cap. The resolver caches
-    in Redis for 60 s so a hot path doesn't pay a DB hit each call. Falls
-    back to the compiled-in setting on any error so a transient DB
-    outage doesn't break the connector."""
+async def _resolve_hourly_limit() -> int:
+    """Look up the runtime-tunable FinMind per-hour cap. The resolver
+    caches in Redis for 60 s so a hot path doesn't pay a DB hit each
+    call. Falls back to the compiled-in setting on any error so a
+    transient DB outage doesn't break the connector."""
     try:
         from db.session import AsyncSessionLocal
         from services.runtime_config_service import get_int as _get_int
         async with AsyncSessionLocal() as db:
-            return await _get_int(db, "FINMIND_DAILY_REQUEST_LIMIT")
+            return await _get_int(db, "FINMIND_HOURLY_REQUEST_LIMIT")
     except Exception:
-        return settings.FINMIND_DAILY_REQUEST_LIMIT
+        return settings.FINMIND_HOURLY_REQUEST_LIMIT
 
 
 async def _get_token() -> str:
@@ -47,7 +48,7 @@ async def _get_token() -> str:
 
 async def _query(dataset: str, data_id: str, start_date: str, end_date: str | None = None) -> list[dict[str, Any]]:
     """
-    Check daily quota before hitting the API.
+    Check hourly quota before hitting the API.
     Returns [] when quota is exhausted so callers fall back to TWSE.
     """
     token = await _get_token()
@@ -60,9 +61,11 @@ async def _query(dataset: str, data_id: str, start_date: str, end_date: str | No
     if not token:
         log.debug("finmind.empty_token", extra={"dataset": dataset})
 
-    # 86400s = 24h; counter auto-expires so no explicit reset needed
-    count = await cache_incr(key_finmind_counter(), ttl_seconds=86400)
-    if count > await _resolve_daily_limit():
+    # 3600s = 1h. FinMind's actual rate limit is per-hour (600/hr for
+    # registered free tier, 300/hr anonymous), so the counter window
+    # has to match — a 24h TTL was wasting 24× the available budget.
+    count = await cache_incr(key_finmind_counter(), ttl_seconds=3600)
+    if count > await _resolve_hourly_limit():
         return []
 
     params: dict = {

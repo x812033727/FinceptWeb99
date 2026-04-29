@@ -70,9 +70,9 @@ def install_http(response):
 # ── _query: quota gate ───────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_query_returns_empty_when_daily_quota_exhausted():
+async def test_query_returns_empty_when_hourly_quota_exhausted():
     """Quota counter > limit → no HTTP request fires, [] returned."""
-    limit = finmind.settings.FINMIND_DAILY_REQUEST_LIMIT
+    limit = finmind.settings.FINMIND_HOURLY_REQUEST_LIMIT
 
     patcher_http, fake = install_http(FakeResponse({"status": 200, "data": [{"x": 1}]}))
     with patcher_http, patch.object(
@@ -87,7 +87,7 @@ async def test_query_returns_empty_when_daily_quota_exhausted():
 
 @pytest.mark.asyncio
 async def test_query_proceeds_when_quota_count_at_or_below_limit():
-    limit = finmind.settings.FINMIND_DAILY_REQUEST_LIMIT
+    limit = finmind.settings.FINMIND_HOURLY_REQUEST_LIMIT
     payload = {"status": 200, "data": [{"date": "2024-01-02", "close": 785}]}
 
     patcher_http, fake = install_http(FakeResponse(payload))
@@ -98,6 +98,20 @@ async def test_query_proceeds_when_quota_count_at_or_below_limit():
 
     assert out == [{"date": "2024-01-02", "close": 785}]
     assert len(fake.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_query_uses_one_hour_ttl_on_counter():
+    """Counter TTL must match FinMind's per-hour rate limit window
+    (3600s) — a 24h TTL would waste 24× the available budget."""
+    payload = {"status": 200, "data": []}
+    patcher_http, _ = install_http(FakeResponse(payload))
+    cache_mock = AsyncMock(return_value=1)
+    with patcher_http, patch.object(finmind, "cache_incr", cache_mock):
+        await finmind._query("TaiwanStockPrice", "2330", "2024-01-01")
+
+    _, kwargs = cache_mock.call_args
+    assert kwargs.get("ttl_seconds") == 3600
 
 
 # ── _query: API envelope behaviour ───────────────────────────────

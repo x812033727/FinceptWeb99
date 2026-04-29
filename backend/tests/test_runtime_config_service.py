@@ -51,7 +51,7 @@ def test_known_keys_includes_all_baseline_tunables():
     assert "DISCUSSION_PERSONA_TIMEOUT_SECONDS" in keys
     assert "AI_REQUESTS_VIEWER_DAILY" in keys
     assert "AI_REQUESTS_ANALYST_DAILY" in keys
-    assert "FINMIND_DAILY_REQUEST_LIMIT" in keys
+    assert "FINMIND_HOURLY_REQUEST_LIMIT" in keys
 
 
 def test_get_spec_unknown_raises():
@@ -182,7 +182,7 @@ async def test_list_settings_exposes_default_and_audit(
     assert cap.updated_at is not None
     assert cap.updated_by_email == admin_user.email
     # An untouched setting still appears with default + is_overridden=False
-    untouched = by_key["FINMIND_DAILY_REQUEST_LIMIT"]
+    untouched = by_key["FINMIND_HOURLY_REQUEST_LIMIT"]
     assert untouched.is_overridden is False
 
 

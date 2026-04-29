@@ -133,7 +133,7 @@ class Settings(BaseSettings):
         return importlib.util.find_spec("claude_agent_sdk") is not None
 
     # Rate limits
-    FINMIND_DAILY_REQUEST_LIMIT: int = 550  # conservative under free-tier 600
+    FINMIND_HOURLY_REQUEST_LIMIT: int = 550  # conservative under registered free-tier 600/hr
     AI_REQUESTS_ANALYST_DAILY: int = 20
     AI_REQUESTS_VIEWER_DAILY: int = 5
 

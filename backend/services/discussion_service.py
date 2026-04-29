@@ -74,10 +74,97 @@ _MAX_FOCUS_SYMBOLS = 5
 
 _MAX_PERSONAS = 8           # safety cap so one discussion can't fan out 19 LLM calls/round
 _MIN_PERSONAS = 2
-_MAX_TURN_TOKENS = 600      # plenty for 2-3 paragraphs in zh-TW; cuts runaway costs
+# 1024 leaves room for reasoning models (deepseek-r1, gpt-o1, qwen-3) to spend
+# half their budget inside `<think>` and still emit complete JSON. With 600
+# the JSON often got truncated mid-string and we fell back to the raw-text
+# stance="supplement" path.
+_MAX_TURN_TOKENS = 1024
 _MAX_TOPIC_CHARS = 500
 _MAX_RULES_CHARS = 2000
 _MAX_HISTORY_TURNS = 30     # how many prior turns to feed the next persona
+
+# Reasoning models surface their chain-of-thought wrapped in <think>...</think>
+# blocks. We strip these before parsing the persona's JSON reply so the
+# persisted turn content is clean, and a streaming-time filter (below)
+# prevents the thinking from flashing across the SSE channel either.
+_THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def strip_think_blocks(text: str) -> str:
+    """Remove every `<think>...</think>` block from `text`. Used to clean
+    LLM output before JSON parsing or display. Multi-line, case-insensitive,
+    leaves text outside the tags untouched."""
+    return _THINK_TAG_RE.sub("", text or "").strip()
+
+
+class _ThinkBlockFilter:
+    """Stateful streaming filter that drops text inside `<think>...</think>`
+    tags as deltas arrive. Keeps the raw model chunks out of the user-
+    visible SSE stream, so reasoning models don't flash hundreds of lines
+    of internal monologue across the chat UI before settling on the final
+    JSON.
+
+    Buffers up to 16 chars of trailing text in case the next chunk
+    completes a `<think>` opening tag straddling the boundary.
+    """
+
+    _OPEN = "<think>"
+    _CLOSE = "</think>"
+    _MAX_OPEN_LEN = len(_OPEN)
+    _MAX_CLOSE_LEN = len(_CLOSE)
+
+    def __init__(self) -> None:
+        self._in_think = False
+        self._buf = ""
+
+    def feed(self, chunk: str) -> str:
+        """Consume `chunk`; return the filtered text safe to forward."""
+        self._buf += chunk
+        out_parts: list[str] = []
+        while self._buf:
+            if self._in_think:
+                end = self._buf.find(self._CLOSE)
+                if end < 0:
+                    # Still inside thinking; hold last few chars in case
+                    # `</think>` straddles the next chunk boundary.
+                    keep = min(len(self._buf), self._MAX_CLOSE_LEN - 1)
+                    self._buf = self._buf[-keep:] if keep else ""
+                    break
+                self._in_think = False
+                self._buf = self._buf[end + self._MAX_CLOSE_LEN:]
+            else:
+                start = self._buf.find(self._OPEN)
+                if start < 0:
+                    # No `<think>` opener found. Emit everything except a
+                    # tail that is a *prefix* of `<think>` (e.g. `<thi`)
+                    # which might complete on the next chunk. A bare `<`
+                    # followed by unrelated text is fine to release.
+                    hold = 0
+                    max_check = min(len(self._buf), self._MAX_OPEN_LEN - 1)
+                    for i in range(max_check, 0, -1):
+                        if self._OPEN.startswith(self._buf[-i:]):
+                            hold = i
+                            break
+                    if hold:
+                        out_parts.append(self._buf[:-hold])
+                        self._buf = self._buf[-hold:]
+                    else:
+                        out_parts.append(self._buf)
+                        self._buf = ""
+                    break
+                out_parts.append(self._buf[:start])
+                self._in_think = True
+                self._buf = self._buf[start + self._MAX_OPEN_LEN:]
+        return "".join(out_parts)
+
+    def flush(self) -> str:
+        """Emit any held-over text once the stream is done. If we're still
+        inside a `<think>` block (model never closed it), drop the tail."""
+        if self._in_think:
+            self._buf = ""
+            return ""
+        out, self._buf = self._buf, ""
+        return out
 _DEFAULT_TOP_MOVERS = 8
 
 VALID_STANCES = ("agree", "dissent", "supplement")
@@ -363,13 +450,18 @@ def _compact_screener_row(r: dict[str, Any]) -> dict[str, Any]:
 
 _TURN_PROMPT_TEMPLATE = (
     "你正在參加一場專家圓桌討論。你的角色身份請依系統提示扮演。\n\n"
+    "## 語言規範（最重要）\n"
+    "整段 content **必須用繁體中文（台灣用語）**。\n"
+    "  - 用「漲停」不用「涨停」、用「資金」不用「资金」、用「電子」不用「电子」。\n"
+    "  - 金融術語照台灣慣用：殖利率 / 本益比 / 三大法人 / 月營收年增。\n"
+    "  - 不要混入簡體字，即使你的訓練資料偏向簡體也要轉繁。\n\n"
     "## 主題\n{topic}\n\n"
     "## 共同規則\n{rules}\n\n"
     "## 市場現況\n```json\n{context}\n```\n\n"
     "## 先前發言\n{history}\n\n"
     "## 你現在的任務\n"
     "依照你扮演的角色立場，閱讀上述資料與先前發言後，"
-    "輸出**合法 JSON**（不要包 markdown code fence）：\n"
+    "**直接輸出合法 JSON**（不要包 markdown code fence、不要在 JSON 之前或之後加任何解釋文字）：\n"
     '{{"stance": "agree|dissent|supplement", "content": "你的發言"}}\n\n'
     "stance 規則：\n"
     "  - agree：完全同意先前共識，無新內容可補充。content 可留空或一句話致意。\n"
@@ -396,16 +488,22 @@ def _strip_code_fence(text: str) -> str:
 
 
 def _parse_turn_response(raw: str) -> tuple[str, str]:
-    """Return (stance, content). Falls back to (DEFAULT_STANCE, raw) when
-    the model drifts off JSON format — better to record the prose than
-    to lose the turn entirely."""
-    cleaned = _strip_code_fence(raw)
+    """Return (stance, content). Falls back to (DEFAULT_STANCE, cleaned_raw)
+    when the model drifts off JSON format — better to record the prose
+    than to lose the turn entirely.
+
+    Strips reasoning-model `<think>...</think>` blocks first so the
+    persisted turn content is clean even if the model spent its whole
+    budget thinking.
+    """
+    no_thinking = strip_think_blocks(raw)
+    cleaned = _strip_code_fence(no_thinking)
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError:
-        return DEFAULT_STANCE, raw.strip()
+        return DEFAULT_STANCE, no_thinking.strip()
     if not isinstance(data, dict):
-        return DEFAULT_STANCE, raw.strip()
+        return DEFAULT_STANCE, no_thinking.strip()
     stance = str(data.get("stance", "")).strip().lower()
     if stance not in VALID_STANCES:
         stance = DEFAULT_STANCE
@@ -563,6 +661,13 @@ async def run_round(
             # provider can't hang the whole round indefinitely. On timeout
             # we emit an error event, persist a placeholder turn, and
             # proceed to the next persona — same pattern as an LLM error.
+            # Filter out `<think>...</think>` content as it streams so
+            # reasoning models (deepseek-r1, gpt-o1, qwen-3) don't flash
+            # internal monologue across the chat UI. The full unfiltered
+            # text is still kept in `assembled` so JSON parsing still
+            # sees what the model sent (and `_parse_turn_response` strips
+            # think blocks again for safety / persistence).
+            think_filter = _ThinkBlockFilter()
             try:
                 async with asyncio.timeout(persona_timeout):
                     async for event in _ask_persona(
@@ -578,12 +683,14 @@ async def run_round(
                         if etype == "delta":
                             chunk = event.get("text", "")
                             assembled += chunk
-                            yield TurnEvent("delta", {
-                                "round": round_number,
-                                "turn_index": idx,
-                                "persona_id": persona_id,
-                                "text": chunk,
-                            })
+                            visible = think_filter.feed(chunk)
+                            if visible:
+                                yield TurnEvent("delta", {
+                                    "round": round_number,
+                                    "turn_index": idx,
+                                    "persona_id": persona_id,
+                                    "text": visible,
+                                })
                         elif etype == "error":
                             yield TurnEvent("error", {
                                 "message": event.get("message", "LLM error"),
@@ -610,6 +717,19 @@ async def run_round(
                     "persona_id": persona_id,
                 })
                 assembled = assembled or "（此輪因例外中止）"
+
+            # Whether the stream finished cleanly, errored, or timed out,
+            # flush any text the think-filter is still buffering. If the
+            # tail is inside an open <think> block it gets dropped (the
+            # model never closed the tag, so we never want to show it).
+            tail = think_filter.flush()
+            if tail:
+                yield TurnEvent("delta", {
+                    "round": round_number,
+                    "turn_index": idx,
+                    "persona_id": persona_id,
+                    "text": tail,
+                })
 
             stance, content = _parse_turn_response(assembled)
             turn_row = DiscussionTurn(
@@ -660,7 +780,8 @@ async def run_round(
 _SYNTHESIZER_SYSTEM = (
     "你是一位資深投資組合經理，主持本場圓桌討論。"
     "你的任務是閱讀全部專家發言，整理出可執行的結論。"
-    "你不偏袒任何一位專家，而是從他們的共識與分歧中抓出最高勝率的觀點。"
+    "你不偏袒任何一位專家，而是從他們的共識與分歧中抓出最高勝率的觀點。\n"
+    "**所有輸出必須使用繁體中文（台灣用語）**，禁用簡體字。"
 )
 
 _SYNTHESIZER_USER_TEMPLATE = (
@@ -669,10 +790,10 @@ _SYNTHESIZER_USER_TEMPLATE = (
     "## 市場現況\n```json\n{context}\n```\n\n"
     "## 全部發言（依序）\n{transcript}\n\n"
     "## 任務\n"
-    "輸出**合法 JSON**（不要包 markdown code fence）：\n"
+    "**直接輸出合法 JSON**（不要包 markdown code fence、不要在 JSON 之前或之後加任何解釋）：\n"
     "{{\n"
     '  "recommended_symbols": ["代號1", "代號2", ...],   // 最多5檔，要有市場共識且風險可控\n'
-    '  "reasoning": "結論摘要（≤200字，引用至少2位專家）",\n'
+    '  "reasoning": "結論摘要（≤200字，繁體中文，引用至少2位專家）",\n'
     '  "risks": ["風險1", "風險2", ...],\n'
     '  "time_horizon": "short_term | medium_term | long_term",\n'
     '  "consensus_score": 0.0~1.0   // 0=完全分歧 1=完全共識\n'
@@ -691,7 +812,7 @@ def _format_transcript(turns: list[DiscussionTurn]) -> str:
 
 
 def _safe_conclusion(raw: str) -> dict[str, Any]:
-    cleaned = _strip_code_fence(raw)
+    cleaned = _strip_code_fence(strip_think_blocks(raw))
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError:

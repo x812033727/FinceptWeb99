@@ -64,6 +64,84 @@ def _stream_events_sequence(texts: list[str]):
     return _gen
 
 
+# ── strip_think_blocks ────────────────────────────────────────────
+
+
+def test_strip_think_blocks_removes_single_block():
+    raw = '<think>internal monologue</think>{"stance": "agree"}'
+    assert discussion_service.strip_think_blocks(raw) == '{"stance": "agree"}'
+
+
+def test_strip_think_blocks_handles_multiline():
+    raw = '<think>\nline 1\nline 2\n</think>\n\n{"stance": "agree"}'
+    assert discussion_service.strip_think_blocks(raw) == '{"stance": "agree"}'
+
+
+def test_strip_think_blocks_removes_multiple():
+    raw = '<think>a</think>before<think>b</think>after'
+    assert discussion_service.strip_think_blocks(raw) == "beforeafter"
+
+
+def test_strip_think_blocks_no_blocks_unchanged():
+    raw = "plain output, no thinking"
+    assert discussion_service.strip_think_blocks(raw) == "plain output, no thinking"
+
+
+def test_strip_think_blocks_unclosed_left_alone():
+    """Edge case: model emitted `<think>` but never closed it. Regex
+    won't match, so we leave the text alone — the streaming filter
+    handles the unclosed-tag case separately by dropping the tail."""
+    raw = "<think>never closed{...}"
+    assert discussion_service.strip_think_blocks(raw) == "<think>never closed{...}"
+
+
+# ── _ThinkBlockFilter (streaming filter) ─────────────────────────
+
+
+def test_think_filter_passes_clean_text_through():
+    f = discussion_service._ThinkBlockFilter()
+    assert f.feed("hello world") == "hello world"
+    assert f.flush() == ""
+
+
+def test_think_filter_drops_complete_block_in_one_chunk():
+    f = discussion_service._ThinkBlockFilter()
+    out = f.feed("before<think>HIDDEN</think>after")
+    assert out == "beforeafter"
+
+
+def test_think_filter_drops_block_split_across_chunks():
+    f = discussion_service._ThinkBlockFilter()
+    out1 = f.feed("be<thi")
+    out2 = f.feed("nk>HID")
+    out3 = f.feed("DEN</thi")
+    out4 = f.feed("nk>after")
+    assert (out1 + out2 + out3 + out4) == "beafter"
+
+
+def test_think_filter_drops_unclosed_tail():
+    """If the stream ends mid-think (model never closed the tag), the
+    held-back text is discarded on flush — better silent gap than
+    flashing chain-of-thought to the user."""
+    f = discussion_service._ThinkBlockFilter()
+    head = f.feed("intro<think>still thinking when stream died")
+    tail = f.flush()
+    assert head == "intro"
+    assert tail == ""
+
+
+def test_think_filter_holds_partial_open_tag_at_chunk_boundary():
+    """A bare `<` at end of a chunk could be the start of `<think>` —
+    don't emit it until we know."""
+    f = discussion_service._ThinkBlockFilter()
+    out1 = f.feed("text<")
+    out2 = f.feed("more")
+    # The "<" plus "more" doesn't form `<think>`, so the held char gets
+    # released as part of the next chunk.
+    assert "text" in out1 + out2
+    assert (out1 + out2) == "text<more"
+
+
 # ── parse helpers ─────────────────────────────────────────────────
 
 
@@ -95,6 +173,32 @@ def test_parse_turn_response_malformed_keeps_raw_text():
     stance, content = discussion_service._parse_turn_response(raw)
     assert stance == discussion_service.DEFAULT_STANCE
     assert content == raw
+
+
+def test_parse_turn_response_strips_think_block_before_json_parse():
+    """Reasoning models prefix their JSON with a `<think>...</think>` block.
+    The parser must strip it so the JSON is found, not lost behind a
+    DEFAULT_STANCE fallback."""
+    raw = (
+        "<think>\nLet me analyze the data...\nthe stock looks bullish.\n</think>\n\n"
+        '{"stance": "supplement", "content": "看好台積電"}'
+    )
+    stance, content = discussion_service._parse_turn_response(raw)
+    assert stance == "supplement"
+    assert content == "看好台積電"
+
+
+def test_parse_turn_response_falls_back_with_thinking_stripped_when_json_invalid():
+    """Even if JSON parse fails, the fallback content should be the
+    thinking-stripped text — not the raw prose with `<think>` noise."""
+    raw = (
+        "<think>I'm overthinking this</think>"
+        "I refuse to output JSON, here is my prose answer."
+    )
+    stance, content = discussion_service._parse_turn_response(raw)
+    assert stance == discussion_service.DEFAULT_STANCE
+    assert "<think>" not in content
+    assert "prose answer" in content
 
 
 # ── persona validation ────────────────────────────────────────────

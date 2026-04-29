@@ -210,16 +210,19 @@ async def test_round_returns_409_when_already_running(
 
 
 @pytest.mark.asyncio
-async def test_round_refunds_unconsumed_quota_on_persona_failure(
+async def test_round_refunds_unconsumed_quota_on_round_crash(
     client: AsyncClient,
 ):
-    """5-persona round, but the 2nd persona's stream raises. The 3 personas
-    that never produced turn_end should be refunded.
+    """If the round generator raises before any persona produces a turn,
+    every reserved persona-credit must be refunded.
 
-    Full charge = 5; turn_end count ≈ 2 (first persona OK, second yields
-    error event but still ends → counted; third aborts because of TimeoutError
-    before turn_end). We assert the refund helper was called with > 0 count.
-    """
+    A persona's own stream raising is NOT this scenario — `run_round`
+    catches per-persona exceptions and still emits a placeholder
+    `turn_end`, so those reserved credits are considered "consumed".
+    The refund path fires when the body itself crashes (e.g.
+    `gather_market_context` blew up before the persona loop even
+    started) — then no `turn_end` events arrive and the finally
+    block returns the full cost."""
     h = await _register(client, "disc_refund@example.com")
     create = await client.post(
         "/api/discussion/sessions",
@@ -231,24 +234,12 @@ async def test_round_refunds_unconsumed_quota_on_persona_failure(
     )
     discussion_id = create.json()["id"]
 
-    call_n = {"i": 0}
-
-    async def _flaky_stream(*_a, **_kw):
-        call_n["i"] += 1
-        if call_n["i"] == 1:
-            yield {"type": "delta", "text": '{"stance":"agree","content":"ok"}'}
-        else:
-            # Subsequent personas all fail with TimeoutError so run_round's
-            # timeout-handler emits an error event then a placeholder turn_end.
-            # Crucially we abort BEFORE turn_end gets emitted by raising —
-            # the router's refund counter only sees 1 completed.
-            raise RuntimeError("provider crash")
+    async def _broken_context(*_a, **_kw):
+        raise RuntimeError("market data unavailable")
 
     with patch(
-        "services.discussion_service.stream_chat", side_effect=_flaky_stream,
-    ), patch(
         "services.discussion_service.gather_market_context",
-        new=AsyncMock(return_value={"market": "TW"}),
+        side_effect=_broken_context,
     ), patch(
         "api.discussion.router._refund", new_callable=AsyncMock,
     ) as refund:
@@ -256,12 +247,12 @@ async def test_round_refunds_unconsumed_quota_on_persona_failure(
             f"/api/discussion/sessions/{discussion_id}/round", headers=h,
         )
 
+    # SSE response itself is 200 — the error is delivered as a `data:
+    # {"type":"error",...}` frame inside the stream, then [DONE].
     assert r.status_code == 200
-    # Refund was called and the count is > 0 (some personas didn't complete).
-    assert refund.await_count >= 1
-    refund_count = refund.await_args.kwargs.get("count")
-    assert refund_count is not None
-    assert refund_count > 0
+    # All 5 reserved credits refunded because no turn_end fired.
+    assert refund.await_count == 1
+    assert refund.await_args.kwargs.get("count") == 5
 
 
 # ── conclude endpoint ──────────────────────────────────────────────
@@ -311,17 +302,22 @@ async def test_conclude_refunds_quota_when_synthesize_raises(
     async def _boom(*_a, **_kw):
         raise RuntimeError("synthesizer crashed")
 
+    # The router's refund-then-raise pattern means the exception bubbles
+    # past FastAPI's default exception handler in TestClient mode (the
+    # AsyncClient against ASGI re-raises server exceptions unless
+    # configured otherwise). Wrap in pytest.raises so the assertion
+    # below — that refund DID run before the exception bubbled — still
+    # gets evaluated.
     with patch(
         "services.discussion_service.synthesize_conclusion", side_effect=_boom,
     ), patch(
         "api.discussion.router._refund", new_callable=AsyncMock,
     ) as refund:
-        r = await client.post(
-            f"/api/discussion/sessions/{discussion_id}/conclude", headers=h,
-        )
+        with pytest.raises(RuntimeError, match="synthesizer crashed"):
+            await client.post(
+                f"/api/discussion/sessions/{discussion_id}/conclude", headers=h,
+            )
 
-    # Endpoint propagates the 500 from the synthesizer; refund still ran.
-    assert r.status_code in (500, 502, 503)
     assert refund.await_count == 1
     assert refund.await_args.kwargs.get("count") == 1
 

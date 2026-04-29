@@ -18,7 +18,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cache.redis_cache import cache_get, cache_set, get_redis
+from cache.redis_cache import cache_delete, cache_get, cache_incr, cache_set, get_redis
 from db.session import AsyncSessionLocal
 from models.fundamentals_snapshot import FundamentalsSnapshot
 from models.news_article import NewsArticle
@@ -624,6 +624,99 @@ async def get_health(job_id: str) -> IngestHealth | None:
         row_count=int(data.get("row_count", 0)),
         error=data.get("error"),
     )
+
+
+# ── Failure backoff (per-job) ──────────────────────────────────────
+#
+# When an ingest task fails repeatedly (e.g. FinMind down, token
+# revoked) we want to back off from the upstream instead of hammering
+# it every cycle. Two Redis keys per job:
+#
+#   ingest:failures:{job_id}    integer counter (TTL 7d so a weekend
+#                               failure cluster ages out cleanly)
+#   ingest:backoff:{job_id}     marker key with TTL == backoff window;
+#                               while present, the task should skip
+#
+# Backoff schedule (exponential, hour-based, capped at 6h):
+#   1 fail  → 1 h
+#   2 fail  → 2 h
+#   3 fail  → 4 h
+#   4 fail+ → 6 h
+#
+# A successful run clears both keys via `clear_failures(job_id)`.
+
+_FAILURE_KEY_PREFIX = "ingest:failures:"
+_BACKOFF_KEY_PREFIX = "ingest:backoff:"
+_FAILURE_TTL = 7 * 24 * 3600
+_BACKOFF_MAX_SECONDS = 6 * 3600
+
+
+def _backoff_seconds_for(failures: int) -> int:
+    """Exponential 2^(N-1) hours, capped at 6 h. N=1 → 1h, N=4+ → 6h."""
+    if failures < 1:
+        return 0
+    return min(3600 * (2 ** (failures - 1)), _BACKOFF_MAX_SECONDS)
+
+
+async def record_failure(job_id: str) -> int:
+    """Bump the failure counter and arm the backoff window. Returns the
+    new failure count so callers can include it in their health string.
+    Falls back to 1 (and skips backoff) if Redis is unreachable — in that
+    case the next scheduled run will still try, mirroring the rest of the
+    cache layer's "fall open on Redis outage" pattern."""
+    try:
+        new_count = await cache_incr(
+            _FAILURE_KEY_PREFIX + job_id, ttl_seconds=_FAILURE_TTL,
+        )
+    except Exception as exc:
+        log.warning("ingest.backoff.incr_failed",
+                    extra={"job_id": job_id, "error": str(exc)})
+        return 1
+    backoff = _backoff_seconds_for(new_count)
+    if backoff > 0:
+        try:
+            await cache_set(_BACKOFF_KEY_PREFIX + job_id, "1", backoff)
+        except Exception as exc:
+            log.warning("ingest.backoff.set_failed",
+                        extra={"job_id": job_id, "error": str(exc)})
+    return int(new_count)
+
+
+async def clear_failures(job_id: str) -> None:
+    """Reset failure counter + arm. Called on a successful run so a job
+    that resumed working stops being throttled."""
+    for key in (_FAILURE_KEY_PREFIX + job_id, _BACKOFF_KEY_PREFIX + job_id):
+        try:
+            await cache_delete(key)
+        except Exception as exc:
+            log.warning("ingest.backoff.clear_failed",
+                        extra={"job_id": job_id, "key": key, "error": str(exc)})
+
+
+async def backoff_remaining_seconds(job_id: str) -> int:
+    """How many seconds until the backoff window expires. 0 means "go
+    ahead and run". Uses Redis TTL on the marker key."""
+    try:
+        r = await get_redis()
+        ttl = await r.ttl(_BACKOFF_KEY_PREFIX + job_id)
+    except Exception as exc:
+        log.warning("ingest.backoff.ttl_failed",
+                    extra={"job_id": job_id, "error": str(exc)})
+        return 0
+    return max(0, int(ttl)) if ttl is not None else 0
+
+
+async def get_failure_count(job_id: str) -> int:
+    try:
+        raw = await cache_get(_FAILURE_KEY_PREFIX + job_id)
+    except Exception:
+        return 0
+    if not raw:
+        return 0
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
 
 
 async def list_health() -> list[IngestHealth]:

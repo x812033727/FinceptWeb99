@@ -198,6 +198,71 @@ function usePersonaName(agents: AgentInfo[]) {
   };
 }
 
+// ── inline markdown renderer ──────────────────────────────────────
+// Personas are prompted to use `**...**` for key points (target prices,
+// stock codes, conclusions). We do a minimal split-and-render here
+// instead of pulling in react-markdown — bold is the only feature in
+// play, the input is already trusted (LLM-generated, server-side
+// parsed), and a 30-line tokenizer beats a ~50KB dependency for the
+// scope. Percentages and signed numbers are colored automatically as
+// a bonus so "+5.2%" / "-3.1%" pop visually.
+
+const _BOLD_RE = /\*\*([^*\n][^*\n]*?)\*\*/g;
+const _SIGNED_PCT_RE = /([+-]?\d+(?:\.\d+)?%)/g;
+
+function colorizeNumbers(text: string, baseKey: string): React.ReactNode[] {
+  // Returns an array of nodes where signed-percent tokens are wrapped
+  // in a colored span (green for +, red for -). Plain numbers are
+  // left alone — too noisy to color every digit.
+  const parts = text.split(_SIGNED_PCT_RE);
+  return parts.map((part, idx) => {
+    if (idx % 2 === 1) {
+      const positive = part.startsWith("+");
+      const negative = part.startsWith("-");
+      const cls = positive
+        ? "text-emerald-400"
+        : negative
+          ? "text-red-400"
+          : "";
+      return cls ? (
+        <span key={`${baseKey}-pct-${idx}`} className={cls}>
+          {part}
+        </span>
+      ) : (
+        part
+      );
+    }
+    return part;
+  });
+}
+
+function renderInlineMarkdown(text: string): React.ReactNode[] {
+  // Split on `**...**` matches; even-indexed pieces are plain text,
+  // odd-indexed pieces are the captured bold content. Preserves
+  // surrounding whitespace + non-bold text untouched.
+  const segments: React.ReactNode[] = [];
+  let cursor = 0;
+  let key = 0;
+  for (const match of text.matchAll(_BOLD_RE)) {
+    const start = match.index ?? 0;
+    if (start > cursor) {
+      segments.push(
+        ...colorizeNumbers(text.slice(cursor, start), `t-${key++}`),
+      );
+    }
+    segments.push(
+      <strong key={`b-${key++}`} className="font-semibold text-primary">
+        {colorizeNumbers(match[1], `bp-${key++}`)}
+      </strong>,
+    );
+    cursor = start + match[0].length;
+  }
+  if (cursor < text.length) {
+    segments.push(...colorizeNumbers(text.slice(cursor), `t-${key++}`));
+  }
+  return segments;
+}
+
 // ── main page ──────────────────────────────────────────────────────
 
 export default function DiscussionPage() {
@@ -795,7 +860,7 @@ export default function DiscussionPage() {
                     </span>
                   </div>
                   <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
-                    {body}
+                    {renderInlineMarkdown(body)}
                   </div>
                 </div>
               </div>
@@ -832,7 +897,7 @@ export default function DiscussionPage() {
                   <span className="animate-pulse">{t("discussion.thinking")}</span>
                 </div>
                 <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
-                  {streamBuffer}
+                  {renderInlineMarkdown(streamBuffer)}
                   <span className="inline-block w-1.5 h-3.5 bg-current ml-0.5 animate-pulse align-middle" />
                 </div>
               </div>
@@ -1039,7 +1104,7 @@ function ConclusionCard({
             </div>
           )}
           <p className="text-sm text-foreground mb-2 whitespace-pre-wrap">
-            {conclusion.reasoning}
+            {renderInlineMarkdown(conclusion.reasoning)}
           </p>
           {conclusion.risks.length > 0 && (
             <div className="mb-2">

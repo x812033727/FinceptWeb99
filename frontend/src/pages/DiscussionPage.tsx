@@ -241,6 +241,7 @@ export default function DiscussionPage() {
   const [streamingTurns, setStreamingTurns] = useState<Turn[]>([]);
   const [streamingPersona, setStreamingPersona] = useState<string | null>(null);
   const [streamBuffer, setStreamBuffer] = useState("");
+  const [streamingRound, setStreamingRound] = useState<number | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -264,6 +265,7 @@ export default function DiscussionPage() {
     setStreamingTurns([]);
     setStreamBuffer("");
     setStreamingPersona(null);
+    setStreamingRound(null);
     setStreamError(null);
   }, [detail]);
 
@@ -368,6 +370,7 @@ export default function DiscussionPage() {
     setStreamingTurns([]);
     setStreamBuffer("");
     setStreamingPersona(null);
+    setStreamingRound(null);
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -407,9 +410,13 @@ export default function DiscussionPage() {
           try {
             const obj = JSON.parse(payload);
             switch (obj.type) {
+              case "round_start":
+                setStreamingRound(obj.round);
+                break;
               case "turn_start":
                 currentBuffer = "";
                 setStreamingPersona(obj.persona_id);
+                if (typeof obj.round === "number") setStreamingRound(obj.round);
                 setStreamBuffer("");
                 break;
               case "delta":
@@ -448,10 +455,15 @@ export default function DiscussionPage() {
       }
     } finally {
       setIsStreaming(false);
+      setStreamingRound(null);
       // Refresh persisted turns from the server so the streaming overlay
-      // can be cleared without losing state on the next render.
-      queryClient.invalidateQueries({ queryKey: ["discussion-session", selectedId] });
-      queryClient.invalidateQueries({ queryKey: ["discussion-sessions"] });
+      // can be cleared without losing state on the next render. Use
+      // refetchQueries (not invalidateQueries) so the round counter +
+      // turn list update immediately even if a stale cache window keeps
+      // the query "fresh"; otherwise the sidebar can sit on R(N-1) until
+      // the user clicks elsewhere.
+      queryClient.refetchQueries({ queryKey: ["discussion-session", selectedId] });
+      queryClient.refetchQueries({ queryKey: ["discussion-sessions"] });
       setStreamingTurns([]);
     }
   }
@@ -758,41 +770,73 @@ export default function DiscussionPage() {
               tn.stance === "agree" && !tn.content.trim()
                 ? t("discussion.agree_silent")
                 : tn.content;
+            const prevRound = i > 0 ? transcript[i - 1].round : null;
+            const showRoundHeader = prevRound !== tn.round;
             return (
-              <div
-                key={`${tn.round}-${tn.turn_index}-${i}`}
-                className="bg-card border border-border rounded-lg p-3"
-              >
-                <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-                  <span className="font-medium text-foreground">
-                    {personaName(tn.persona_id)}
-                  </span>
-                  <span>·</span>
-                  <span>R{tn.round}</span>
-                  <span>·</span>
-                  <span className={`px-1.5 py-0.5 rounded border text-[10px] ${badge.cls}`}>
-                    {badge.label}
-                  </span>
-                </div>
-                <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
-                  {body}
+              <div key={`${tn.round}-${tn.turn_index}-${i}`}>
+                {showRoundHeader && (
+                  <div className="flex items-center gap-2 my-3 first:mt-0">
+                    <span className="text-[11px] font-semibold text-primary tracking-wider">
+                      {t("discussion.round_label", { round: tn.round })}
+                    </span>
+                    <span className="flex-1 h-px bg-border" />
+                  </div>
+                )}
+                <div className="bg-card border border-border rounded-lg p-3">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                    <span className="font-medium text-foreground">
+                      {personaName(tn.persona_id)}
+                    </span>
+                    <span>·</span>
+                    <span>R{tn.round}</span>
+                    <span>·</span>
+                    <span className={`px-1.5 py-0.5 rounded border text-[10px] ${badge.cls}`}>
+                      {badge.label}
+                    </span>
+                  </div>
+                  <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
+                    {body}
+                  </div>
                 </div>
               </div>
             );
           })}
           {isStreaming && streamingPersona && (
-            <div className="bg-card border border-primary/40 rounded-lg p-3">
-              <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-                <span className="font-medium text-primary">
-                  {personaName(streamingPersona)}
-                </span>
-                <span className="animate-pulse">{t("discussion.thinking")}</span>
+            <>
+              {/* When the streaming round hasn't appeared in the transcript
+                  yet (first persona of a fresh round), show the round
+                  header above the in-progress card so the user always
+                  knows which round is being generated. */}
+              {streamingRound !== null &&
+                (transcript.length === 0 ||
+                  transcript[transcript.length - 1].round !== streamingRound) && (
+                  <div className="flex items-center gap-2 my-3">
+                    <span className="text-[11px] font-semibold text-primary tracking-wider">
+                      {t("discussion.round_label", { round: streamingRound })}
+                    </span>
+                    <span className="flex-1 h-px bg-border" />
+                  </div>
+                )}
+              <div className="bg-card border border-primary/40 rounded-lg p-3">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                  <span className="font-medium text-primary">
+                    {personaName(streamingPersona)}
+                  </span>
+                  {streamingRound !== null && (
+                    <>
+                      <span>·</span>
+                      <span>R{streamingRound}</span>
+                    </>
+                  )}
+                  <span>·</span>
+                  <span className="animate-pulse">{t("discussion.thinking")}</span>
+                </div>
+                <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
+                  {streamBuffer}
+                  <span className="inline-block w-1.5 h-3.5 bg-current ml-0.5 animate-pulse align-middle" />
+                </div>
               </div>
-              <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
-                {streamBuffer}
-                <span className="inline-block w-1.5 h-3.5 bg-current ml-0.5 animate-pulse align-middle" />
-              </div>
-            </div>
+            </>
           )}
 
           {detail?.conclusion && (

@@ -413,6 +413,7 @@
     "show_menu": "顯示主選單",
     "start_round": "開始第 1 輪",
     "next_round": "進行第 {{round}} 輪",
+    "round_label": "第 {{round}} 輪",
     "conclude": "彙整結論",
     "intro": "從左側建立或選擇一場討論",
     "click_to_start": "按上方「開始第 1 輪」讓專家開始發言",

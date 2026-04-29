@@ -482,6 +482,74 @@ async def test_run_round_emits_full_event_sequence(
 
 
 @pytest.mark.asyncio
+async def test_run_round_increments_round_number_on_subsequent_calls(
+    db_session: AsyncSession, owner: User,
+):
+    """Two back-to-back calls to `run_round` must yield round=1 then round=2
+    in their event payloads, AND persist `current_round=2` on the
+    discussion. Regression test for the bug where the sidebar / turn cards
+    kept showing R1 across multiple rounds — would only catch a backend
+    increment failure (frontend cache invalidation is tested separately)."""
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="topic",
+        rules="rules",
+        persona_ids=["buffett", "lynch"],
+    )
+
+    replies_round_1 = [
+        '{"stance":"supplement","content":"r1-buffett"}',
+        '{"stance":"supplement","content":"r1-lynch"}',
+    ]
+    replies_round_2 = [
+        '{"stance":"supplement","content":"r2-buffett"}',
+        '{"stance":"supplement","content":"r2-lynch"}',
+    ]
+
+    with patch(
+        "services.discussion_service.gather_market_context",
+        new=AsyncMock(return_value={"market": "TW", "top_gainers": []}),
+    ):
+        with patch(
+            "services.discussion_service.stream_chat",
+            side_effect=_stream_events_sequence(replies_round_1),
+        ):
+            r1_events = []
+            async for ev in discussion_service.run_round(db_session, row, user_id=str(owner.id)):
+                r1_events.append((ev.type, ev.payload))
+
+        with patch(
+            "services.discussion_service.stream_chat",
+            side_effect=_stream_events_sequence(replies_round_2),
+        ):
+            r2_events = []
+            async for ev in discussion_service.run_round(db_session, row, user_id=str(owner.id)):
+                r2_events.append((ev.type, ev.payload))
+
+    r1_round_starts = [p for t, p in r1_events if t == "round_start"]
+    r2_round_starts = [p for t, p in r2_events if t == "round_start"]
+    assert r1_round_starts == [{"round": 1}]
+    assert r2_round_starts == [{"round": 2}]
+
+    r1_turn_ends = [p for t, p in r1_events if t == "turn_end"]
+    r2_turn_ends = [p for t, p in r2_events if t == "turn_end"]
+    assert all(p["round"] == 1 for p in r1_turn_ends), r1_turn_ends
+    assert all(p["round"] == 2 for p in r2_turn_ends), r2_turn_ends
+
+    refreshed = await db_session.get(Discussion, row.id)
+    assert refreshed.current_round == 2
+
+    persisted_rounds = sorted(
+        t.round
+        for t in (await db_session.scalars(
+            select(DiscussionTurn).where(DiscussionTurn.discussion_id == row.id)
+        )).all()
+    )
+    assert persisted_rounds == [1, 1, 2, 2]
+
+
+@pytest.mark.asyncio
 async def test_run_round_persists_partial_round_on_llm_error(
     db_session: AsyncSession, owner: User,
 ):

@@ -320,18 +320,31 @@ export default function DiscussionPage() {
 
   const personaName = usePersonaName(agents);
 
-  // When the user picks an existing session, hydrate the form fields from it.
+  // Reset all per-session streaming state when the user switches to a
+  // different discussion. Keyed on `selectedId` (not `detail`) so the
+  // optimistic cache mutations during a round don't nuke the streaming
+  // overlay mid-stream.
   useEffect(() => {
-    if (!detail) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setTopic(detail.topic);
-    setRules(detail.rules);
-    setPersonaIds(detail.persona_ids);
     setStreamingTurns([]);
     setStreamBuffer("");
     setStreamingPersona(null);
     setStreamingRound(null);
     setStreamError(null);
+  }, [selectedId]);
+
+  // Hydrate the editable form fields from the active session's detail
+  // exactly once per session pick. A ref guards against re-hydrating on
+  // every TanStack Query refetch (which would clobber whatever the user
+  // just typed into the textarea).
+  const hydratedForId = useRef<string | null>(null);
+  useEffect(() => {
+    if (!detail) return;
+    if (hydratedForId.current === detail.id) return;
+    hydratedForId.current = detail.id;
+    setTopic(detail.topic);
+    setRules(detail.rules);
+    setPersonaIds(detail.persona_ids);
   }, [detail]);
 
   useEffect(() => {
@@ -477,6 +490,30 @@ export default function DiscussionPage() {
             switch (obj.type) {
               case "round_start":
                 setStreamingRound(obj.round);
+                // Optimistically advance the cached `current_round` so the
+                // sidebar R-counter, the "Next round" button label, and the
+                // conclude button's enabled state all reflect the new round
+                // immediately — without waiting for the post-stream refetch
+                // (which can race / get blocked by a stale-window cache /
+                // fail silently on a slow network and leave the UI stuck
+                // at R1 with conclude disabled).
+                if (typeof obj.round === "number") {
+                  queryClient.setQueryData<DiscussionDetail | undefined>(
+                    ["discussion-session", selectedId],
+                    (old) => (old ? { ...old, current_round: obj.round } : old),
+                  );
+                  queryClient.setQueryData<Discussion[] | undefined>(
+                    ["discussion-sessions"],
+                    (old) =>
+                      old
+                        ? old.map((s) =>
+                            s.id === selectedId
+                              ? { ...s, current_round: obj.round }
+                              : s,
+                          )
+                        : old,
+                  );
+                }
                 break;
               case "turn_start":
                 currentBuffer = "";

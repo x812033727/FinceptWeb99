@@ -118,11 +118,20 @@ const DEFAULT_COLLAPSE: CollapseState = {
 function readCollapse(): CollapseState {
   try {
     const raw = localStorage.getItem(LS_COLLAPSE_KEY);
-    if (!raw) return DEFAULT_COLLAPSE;
-    return { ...DEFAULT_COLLAPSE, ...JSON.parse(raw) };
+    if (raw) return { ...DEFAULT_COLLAPSE, ...JSON.parse(raw) };
   } catch {
-    return DEFAULT_COLLAPSE;
+    // ignore — fall through to mobile-aware default
   }
+  // First-time visitors on a phone have ~600px of vertical space — the
+  // sidebar + topic + rules + personas all expanded would push the
+  // transcript off-screen. Default the heaviest sections closed on
+  // mobile so the discussion content is visible immediately. Tablet /
+  // desktop (≥ 1024px) keep the original "everything open" default.
+  const isMobile =
+    typeof window !== "undefined" && window.innerWidth < 1024;
+  return isMobile
+    ? { ...DEFAULT_COLLAPSE, sidebar: true, personas: true, rules: true }
+    : DEFAULT_COLLAPSE;
 }
 
 function rememberCollapse(s: CollapseState): void {
@@ -583,7 +592,7 @@ export default function DiscussionPage() {
     <div className="h-[calc(100vh-2.5rem)] bg-background flex flex-col lg:flex-row overflow-hidden">
       {/* ── sidebar: session list + form ───────────────────────── */}
       <aside
-        className={`lg:w-80 border-b lg:border-b-0 lg:border-r border-border flex-col p-3 lg:p-4 gap-3 shrink-0 overflow-y-auto max-h-[40vh] lg:max-h-none ${
+        className={`lg:w-80 border-b lg:border-b-0 lg:border-r border-border flex-col p-3 lg:p-4 gap-3 shrink-0 overflow-y-auto max-h-[28vh] lg:max-h-none ${
           collapse.sidebar ? "hidden" : "flex"
         }`}
       >
@@ -660,8 +669,11 @@ export default function DiscussionPage() {
             ? `›  ${t("discussion.menu")}`
             : `‹  ${t("discussion.menu")}`}
         </button>
-        {/* configuration panel */}
-        <div className="border-b border-border px-4 py-3 space-y-3 shrink-0 overflow-y-auto max-h-[60vh]">
+        {/* configuration panel — capped height so the transcript below
+             always has room. Mobile cap is tighter because the sidebar
+             above still claims up to 28vh, and the actions / streaming
+             cards need to stay visible. */}
+        <div className="border-b border-border px-4 py-3 space-y-3 shrink-0 overflow-y-auto max-h-[40vh] lg:max-h-[60vh]">
           <div>
             <div className="flex items-center justify-between gap-2">
               <button

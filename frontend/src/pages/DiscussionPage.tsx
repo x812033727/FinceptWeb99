@@ -96,6 +96,43 @@ function rememberRules(rules: string): void {
   }
 }
 
+// Per-section collapse state. Stored as a single JSON blob so adding a
+// new collapsible doesn't churn another LS key. Falls back to "everything
+// expanded" if storage is disabled / corrupt.
+const LS_COLLAPSE_KEY = "fincept.discussion.collapse";
+
+interface CollapseState {
+  topic: boolean;
+  rules: boolean;
+  personas: boolean;
+  sidebar: boolean;
+}
+
+const DEFAULT_COLLAPSE: CollapseState = {
+  topic: false,
+  rules: false,
+  personas: false,
+  sidebar: false,
+};
+
+function readCollapse(): CollapseState {
+  try {
+    const raw = localStorage.getItem(LS_COLLAPSE_KEY);
+    if (!raw) return DEFAULT_COLLAPSE;
+    return { ...DEFAULT_COLLAPSE, ...JSON.parse(raw) };
+  } catch {
+    return DEFAULT_COLLAPSE;
+  }
+}
+
+function rememberCollapse(s: CollapseState): void {
+  try {
+    localStorage.setItem(LS_COLLAPSE_KEY, JSON.stringify(s));
+  } catch {
+    /* private mode / quota — silent */
+  }
+}
+
 const DEFAULT_PERSONAS = ["market_analyst", "trading_coach", "lynch", "simons"];
 
 const STANCE_BADGE: Record<Turn["stance"], { label: string; cls: string }> = {
@@ -187,6 +224,17 @@ export default function DiscussionPage() {
   // disabled).
   const [topic, setTopic] = useState(readDefaultTopic);
   const [rules, setRules] = useState(readDefaultRules);
+
+  // Per-section collapse state, persisted to localStorage so the user's
+  // layout preference survives reload / new tab.
+  const [collapse, setCollapse] = useState<CollapseState>(readCollapse);
+  useEffect(() => {
+    rememberCollapse(collapse);
+  }, [collapse]);
+
+  function toggleCollapse(key: keyof CollapseState) {
+    setCollapse((prev) => ({ ...prev, [key]: !prev[key] }));
+  }
   const [personaIds, setPersonaIds] = useState<string[]>(DEFAULT_PERSONAS);
 
   // Streaming round state — appended to as the SSE arrives.
@@ -420,7 +468,11 @@ export default function DiscussionPage() {
   return (
     <div className="h-[calc(100vh-2.5rem)] bg-background flex flex-col lg:flex-row overflow-hidden">
       {/* ── sidebar: session list + form ───────────────────────── */}
-      <aside className="lg:w-80 border-b lg:border-b-0 lg:border-r border-border flex flex-col p-3 lg:p-4 gap-3 shrink-0 overflow-y-auto max-h-[40vh] lg:max-h-none">
+      <aside
+        className={`lg:w-80 border-b lg:border-b-0 lg:border-r border-border flex-col p-3 lg:p-4 gap-3 shrink-0 overflow-y-auto max-h-[40vh] lg:max-h-none ${
+          collapse.sidebar ? "hidden" : "flex"
+        }`}
+      >
         <div>
           <h2 className="text-sm font-semibold text-foreground">{t("discussion.title")}</h2>
           <p className="text-xs text-muted-foreground mt-0.5">{t("discussion.subtitle")}</p>
@@ -477,18 +529,43 @@ export default function DiscussionPage() {
 
       {/* ── main area ──────────────────────────────────────────── */}
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
+        {/* sidebar toggle — single chevron button at top-left of main
+            area. Click to hide / show the discussion list. State is
+            persisted so it survives reload. */}
+        <button
+          type="button"
+          onClick={() => toggleCollapse("sidebar")}
+          title={
+            collapse.sidebar
+              ? t("discussion.show_menu")
+              : t("discussion.hide_menu")
+          }
+          className="self-start mt-2 ml-2 px-1.5 py-0.5 text-[11px] text-muted-foreground border border-border rounded hover:border-primary/40 hover:text-foreground transition-colors"
+        >
+          {collapse.sidebar
+            ? `›  ${t("discussion.menu")}`
+            : `‹  ${t("discussion.menu")}`}
+        </button>
         {/* configuration panel */}
         <div className="border-b border-border px-4 py-3 space-y-3 shrink-0 overflow-y-auto max-h-[60vh]">
           <div>
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-foreground">
+            <div className="flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => toggleCollapse("topic")}
+                className="flex items-center gap-1.5 text-xs font-medium text-foreground hover:text-primary transition-colors"
+                aria-expanded={!collapse.topic}
+              >
+                <span className="text-[9px] text-muted-foreground w-2.5 inline-block">
+                  {collapse.topic ? "▶" : "▼"}
+                </span>
                 {t("discussion.topic_label")}
                 {topicDirty && (
-                  <span className="ml-1.5 text-[10px] text-amber-400">
+                  <span className="ml-1 text-[10px] text-amber-400">
                     {t("discussion.unsaved")}
                   </span>
                 )}
-              </label>
+              </button>
               {selectedId && isDraft && (
                 <button
                   onClick={saveTopic}
@@ -499,26 +576,42 @@ export default function DiscussionPage() {
                 </button>
               )}
             </div>
-            <textarea
-              value={topic}
-              onChange={(e) => setTopic(e.target.value)}
-              disabled={!isDraft || isStreaming}
-              rows={2}
-              maxLength={500}
-              className="w-full mt-1 resize-none bg-card border border-border rounded-md px-3 py-2 text-sm text-foreground focus:outline-none focus:border-primary/50 disabled:opacity-60"
-            />
+            {collapse.topic ? (
+              topic && (
+                <p className="mt-1 ml-4 text-[11px] text-muted-foreground line-clamp-1">
+                  {topic}
+                </p>
+              )
+            ) : (
+              <textarea
+                value={topic}
+                onChange={(e) => setTopic(e.target.value)}
+                disabled={!isDraft || isStreaming}
+                rows={2}
+                maxLength={500}
+                className="w-full mt-1 resize-none bg-card border border-border rounded-md px-3 py-2 text-sm text-foreground focus:outline-none focus:border-primary/50 disabled:opacity-60"
+              />
+            )}
           </div>
 
           <div>
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-foreground">
+            <div className="flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => toggleCollapse("rules")}
+                className="flex items-center gap-1.5 text-xs font-medium text-foreground hover:text-primary transition-colors"
+                aria-expanded={!collapse.rules}
+              >
+                <span className="text-[9px] text-muted-foreground w-2.5 inline-block">
+                  {collapse.rules ? "▶" : "▼"}
+                </span>
                 {t("discussion.rules_label")}
                 {rulesDirty && (
-                  <span className="ml-1.5 text-[10px] text-amber-400">
+                  <span className="ml-1 text-[10px] text-amber-400">
                     {t("discussion.unsaved")}
                   </span>
                 )}
-              </label>
+              </button>
               {selectedId && isDraft && (
                 <button
                   onClick={saveRules}
@@ -529,39 +622,57 @@ export default function DiscussionPage() {
                 </button>
               )}
             </div>
-            <textarea
-              value={rules}
-              onChange={(e) => setRules(e.target.value)}
-              disabled={!isDraft || isStreaming}
-              rows={5}
-              maxLength={2000}
-              className="w-full mt-1 resize-none bg-card border border-border rounded-md px-3 py-2 text-xs text-foreground font-mono focus:outline-none focus:border-primary/50 disabled:opacity-60"
-            />
+            {collapse.rules ? (
+              rules && (
+                <p className="mt-1 ml-4 text-[11px] text-muted-foreground line-clamp-1">
+                  {rules.split("\n")[0]}
+                </p>
+              )
+            ) : (
+              <textarea
+                value={rules}
+                onChange={(e) => setRules(e.target.value)}
+                disabled={!isDraft || isStreaming}
+                rows={5}
+                maxLength={2000}
+                className="w-full mt-1 resize-none bg-card border border-border rounded-md px-3 py-2 text-xs text-foreground font-mono focus:outline-none focus:border-primary/50 disabled:opacity-60"
+              />
+            )}
           </div>
 
           <div>
-            <label className="text-xs font-medium text-foreground">
+            <button
+              type="button"
+              onClick={() => toggleCollapse("personas")}
+              className="flex items-center gap-1.5 text-xs font-medium text-foreground hover:text-primary transition-colors"
+              aria-expanded={!collapse.personas}
+            >
+              <span className="text-[9px] text-muted-foreground w-2.5 inline-block">
+                {collapse.personas ? "▶" : "▼"}
+              </span>
               {t("discussion.personas_label")} ({personaIds.length})
-            </label>
-            <div className="mt-1 flex flex-wrap gap-1.5">
-              {agents.map((a) => {
-                const selected = personaIds.includes(a.id);
-                return (
-                  <button
-                    key={a.id}
-                    onClick={() => togglePersona(a.id)}
-                    disabled={!isDraft || isStreaming}
-                    className={`px-2 py-1 rounded text-[11px] border transition-colors disabled:opacity-60 ${
-                      selected
-                        ? "border-primary bg-primary/15 text-primary"
-                        : "border-border bg-card text-muted-foreground hover:border-primary/40"
-                    }`}
-                  >
-                    {personaName(a.id)}
-                  </button>
-                );
-              })}
-            </div>
+            </button>
+            {!collapse.personas && (
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {agents.map((a) => {
+                  const selected = personaIds.includes(a.id);
+                  return (
+                    <button
+                      key={a.id}
+                      onClick={() => togglePersona(a.id)}
+                      disabled={!isDraft || isStreaming}
+                      className={`px-2 py-1 rounded text-[11px] border transition-colors disabled:opacity-60 ${
+                        selected
+                          ? "border-primary bg-primary/15 text-primary"
+                          : "border-border bg-card text-muted-foreground hover:border-primary/40"
+                      }`}
+                    >
+                      {personaName(a.id)}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">

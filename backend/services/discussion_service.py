@@ -49,7 +49,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai.agents import all_persona_ids
@@ -770,11 +770,34 @@ async def run_round(
       - round_end    {round, turn_count}
       - error        {message}            (terminal)
     """
-    round_number = discussion.current_round + 1
-    discussion.status = STATUS_RUNNING
-    discussion.current_round = round_number
-    discussion.updated_at = datetime.now(UTC)
+    # Atomic SQL increment so the round counter can't drift from what's
+    # in the DB. The previous in-memory `discussion.current_round =
+    # round_number` + commit relied on SQLAlchemy attribute-tracking +
+    # session attachment + autoflush behaviour, all of which can fail
+    # silently (e.g. detached entity from a stale request, autoflush=False
+    # interaction). Doing it as `UPDATE ... SET current_round =
+    # current_round + 1 RETURNING current_round` is bulletproof: one
+    # round-trip, atomic, returns the new value directly. We then refresh
+    # the in-memory entity so subsequent reads (turn rows, status reset)
+    # see the latest state.
+    now = datetime.now(UTC)
+    result = await db.execute(
+        update(Discussion)
+        .where(Discussion.id == discussion.id)
+        .values(
+            current_round=Discussion.current_round + 1,
+            status=STATUS_RUNNING,
+            updated_at=now,
+        )
+        .returning(Discussion.current_round)
+    )
+    round_number = result.scalar_one()
     await db.commit()
+    await db.refresh(discussion)
+    log.info(
+        "discussion.round.started",
+        extra={"discussion_id": str(discussion.id), "round": round_number},
+    )
 
     yield TurnEvent("round_start", {"round": round_number})
 

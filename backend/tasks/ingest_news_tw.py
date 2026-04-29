@@ -53,6 +53,7 @@ _LOOKBACK_DAYS = 2   # FinMind returns articles published within range; 2 days
 
 
 _HTTP_HINTS: dict[int, str] = {
+    400: "FinMind rejected the request — usually empty or malformed FINMIND_TOKEN",
     401: "check FINMIND_TOKEN — invalid or missing",
     402: "FinMind dataset requires paid sponsorship",
     403: "FinMind token forbidden for this dataset",

@@ -238,6 +238,17 @@ def test_format_finmind_error_401_includes_token_hint():
     assert "FINMIND_TOKEN" in msg
 
 
+def test_format_finmind_error_400_mentions_empty_token():
+    """FinMind returns 400 (not 401) when the token is empty for paid
+    datasets like TaiwanStockNews — confusing default behaviour, so
+    our hint dict explicitly maps it to the FINMIND_TOKEN guidance."""
+    from tasks.ingest_news_tw import _format_finmind_error
+
+    msg = _format_finmind_error(_http_error(400, "Bad Request"))
+    assert "400" in msg
+    assert "FINMIND_TOKEN" in msg
+
+
 def test_format_finmind_error_402_mentions_paid_dataset():
     from tasks.ingest_news_tw import _format_finmind_error
 

@@ -2,12 +2,15 @@
 FinMind connector — free tier: 600 req/day without token.
 Tracks usage in Redis; falls silent (returns []) when near the limit.
 """
+import logging
 from typing import Any
 
 import httpx
 
 from cache.redis_cache import cache_incr, key_finmind_counter
 from config import settings
+
+log = logging.getLogger(__name__)
 
 _BASE = "https://api.finmindtrade.com/api/v4/data"
 
@@ -31,6 +34,14 @@ async def _query(dataset: str, data_id: str, start_date: str, end_date: str | No
     Check daily quota before hitting the API.
     Returns [] when quota is exhausted so callers fall back to TWSE.
     """
+    # Cheap log when token is empty so operators see the correlation
+    # in logs alongside any subsequent 400 / 401 from FinMind. Doesn't
+    # short-circuit because some datasets (free-tier OHLCV) genuinely
+    # work without a token; only paid ones (TaiwanStockNews etc.)
+    # reject.
+    if not settings.FINMIND_TOKEN:
+        log.debug("finmind.empty_token", extra={"dataset": dataset})
+
     # 86400s = 24h; counter auto-expires so no explicit reset needed
     count = await cache_incr(key_finmind_counter(), ttl_seconds=86400)
     if count > await _resolve_daily_limit():

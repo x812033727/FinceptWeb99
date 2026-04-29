@@ -333,6 +333,25 @@ async def delete_discussion(
     return True
 
 
+async def force_reset_status(
+    db: AsyncSession, discussion: Discussion,
+) -> None:
+    """Atomically reset a discussion's status to DRAFT.
+
+    Used by the round route to recover a discussion stuck in RUNNING
+    (e.g. previous attempt died before its finally-block reset, or the
+    reset commit silently failed). Atomic SQL UPDATE so it can't be
+    affected by stale in-memory state.
+    """
+    await db.execute(
+        update(Discussion)
+        .where(Discussion.id == discussion.id)
+        .values(status=STATUS_DRAFT, updated_at=datetime.now(UTC))
+    )
+    await db.commit()
+    await db.refresh(discussion)
+
+
 # ── market context ──────────────────────────────────────────────────
 
 
@@ -975,13 +994,25 @@ async def run_round(
         })
     finally:
         # Always reset to DRAFT so the next round attempt isn't blocked
-        # by the router's "round in progress" guard. Wrap the commit in
-        # its own try because failing to reset status shouldn't bubble
-        # out and mask whatever exception the body raised.
+        # by the router's "round in progress" guard. Use the same atomic
+        # SQL UPDATE pattern as round-start so the reset can't fail
+        # silently the way an in-memory mutation can. Wrap in its own
+        # try so a reset failure doesn't mask the body exception.
         try:
-            discussion.status = STATUS_DRAFT
-            discussion.updated_at = datetime.now(UTC)
+            await db.execute(
+                update(Discussion)
+                .where(Discussion.id == discussion.id)
+                .values(status=STATUS_DRAFT, updated_at=datetime.now(UTC))
+            )
             await db.commit()
+            await db.refresh(discussion)
+            log.info(
+                "discussion.round.ended",
+                extra={
+                    "discussion_id": str(discussion.id),
+                    "current_round": discussion.current_round,
+                },
+            )
         except Exception:
             log.exception(
                 "discussion.run_round.status_reset_failed",

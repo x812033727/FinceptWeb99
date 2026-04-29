@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -249,10 +250,34 @@ async def run_round(
     if row is None:
         raise HTTPException(status_code=404, detail="Discussion not found")
     if row.status == discussion_service.STATUS_RUNNING:
-        raise HTTPException(
-            status_code=409,
-            detail="A round is already in progress for this discussion",
+        # A previous round genuinely in progress would still be writing
+        # turns / the SSE stream would still be open. If the row is
+        # RUNNING but the most recent updated_at is far in the past,
+        # the previous attempt died (process restart, client disconnect
+        # before finally-block reset, status-reset commit failure) and
+        # the discussion is permanently stuck. Auto-recover: force-
+        # reset to DRAFT and let this request proceed.
+        last_update = row.updated_at
+        if last_update is not None and last_update.tzinfo is None:
+            last_update = last_update.replace(tzinfo=UTC)
+        stale = last_update is None or (
+            datetime.now(UTC) - last_update
+            > timedelta(seconds=settings.DISCUSSION_PERSONA_TIMEOUT_SECONDS * 2)
         )
+        if stale:
+            log.warning(
+                "discussion.round.auto_recover_stale",
+                extra={
+                    "discussion_id": str(discussion_id),
+                    "last_updated": str(row.updated_at),
+                },
+            )
+            await discussion_service.force_reset_status(db, row)
+        else:
+            raise HTTPException(
+                status_code=409,
+                detail="A round is already in progress for this discussion",
+            )
 
     cost = len(row.persona_ids or [])
     await _check_quota(user, db, cost=cost)

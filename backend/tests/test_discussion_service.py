@@ -807,6 +807,34 @@ async def test_run_round_persists_timeout_placeholder_and_continues(
 
 
 @pytest.mark.asyncio
+async def test_force_reset_status_unsticks_running_discussion(
+    db_session: AsyncSession, owner: User,
+):
+    """A discussion stuck in RUNNING (e.g. previous round died before
+    its finally-block reset) must be reset to DRAFT atomically so the
+    user can run another round. Pins the bug class where the in-memory
+    `discussion.status = STATUS_DRAFT` reset silently failed to commit
+    and left the row permanently in RUNNING."""
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="topic",
+        rules="rules",
+        persona_ids=["buffett", "lynch"],
+    )
+    row.status = discussion_service.STATUS_RUNNING
+    await db_session.commit()
+
+    await discussion_service.force_reset_status(db_session, row)
+
+    refreshed = await db_session.get(Discussion, row.id)
+    await db_session.refresh(refreshed)
+    assert refreshed.status == discussion_service.STATUS_DRAFT
+    # In-memory entity is also synced so subsequent reads see the new state.
+    assert row.status == discussion_service.STATUS_DRAFT
+
+
+@pytest.mark.asyncio
 async def test_run_round_resets_status_to_draft_on_unexpected_exception(
     db_session: AsyncSession, owner: User,
 ):

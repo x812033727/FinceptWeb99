@@ -51,6 +51,12 @@ class DiscussionResponse(BaseModel):
     verdict_reason: str | None = None
     verified_at: datetime | None = None
     auto_run: bool = False
+    # Per-symbol price snapshots so the frontend can render
+    # `4958:55/51 (-7.3%)` per recommended symbol without re-fetching
+    # the OHLCV bars. Captured by the verifier task once the 5-day
+    # window closes.
+    day1_open_prices: dict[str, float] | None = None
+    day5_close_prices: dict[str, float] | None = None
     created_at: datetime
     updated_at: datetime
 

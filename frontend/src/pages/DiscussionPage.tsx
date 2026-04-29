@@ -45,6 +45,8 @@ interface Discussion {
   verdict_reason?: string | null;
   verified_at?: string | null;
   auto_run?: boolean;
+  day1_open_prices?: Record<string, number> | null;
+  day5_close_prices?: Record<string, number> | null;
   created_at: string;
   updated_at: string;
 }
@@ -261,9 +263,33 @@ function _formatTaipeiDateCompact(iso: string): string {
   return parts.replace(/-/g, "");
 }
 
-interface FormattedTitle {
-  text: string;
+interface FormattedSymbolLine {
+  symbol: string;
+  open: number | null;
+  close: number | null;
+  gainPct: number | null;
   cls: string;
+}
+
+interface FormattedTitle {
+  // Single fallback line when there's no conclusion yet.
+  text?: string;
+  // Otherwise structured multi-line layout.
+  date?: string;
+  verdictMark?: string;       // "" / "勝" / "敗"
+  verdictCls?: string;        // text-green-500 etc.
+  lines?: FormattedSymbolLine[];
+}
+
+function _toFixedSmart(n: number): string {
+  // Show prices with up to 2 decimals, trimming trailing zeros so
+  // round-number TWSE prices read "55" not "55.00".
+  return Number.isInteger(n) ? n.toString() : (Math.round(n * 100) / 100).toString();
+}
+
+function _signedPct(n: number): string {
+  const sign = n >= 0 ? "+" : "";
+  return `${sign}${(n * 100).toFixed(1)}%`;
 }
 
 function formatDiscussionTitle(s: {
@@ -271,27 +297,40 @@ function formatDiscussionTitle(s: {
   conclusion: Conclusion | null;
   verdict?: "win" | "loss" | "unverifiable" | null;
   created_at: string;
+  day1_open_prices?: Record<string, number> | null;
+  day5_close_prices?: Record<string, number> | null;
 }): FormattedTitle {
   const syms = s.conclusion?.recommended_symbols ?? [];
   if (!syms.length) {
     // No conclusion yet (or synthesizer returned empty) — fall back
     // to the user-typed topic so the row stays informative.
-    return { text: s.topic, cls: "text-foreground" };
+    return { text: s.topic };
   }
-  const dateStr = _formatTaipeiDateCompact(s.created_at);
-  const symPart = syms.slice(0, 3).join(",");
-  let suffix = "";
-  let cls = "text-foreground";
-  if (s.verdict === "win") {
-    suffix = "勝";
-    cls = "text-green-500";
-  } else if (s.verdict === "loss") {
-    suffix = "敗";
-    cls = "text-red-500";
-  } else if (s.verdict === "unverifiable") {
-    cls = "text-muted-foreground";
-  }
-  return { text: `${dateStr}(${symPart})${suffix}`, cls };
+  const date = _formatTaipeiDateCompact(s.created_at);
+
+  let verdictMark = "";
+  let verdictCls = "text-foreground";
+  if (s.verdict === "win") { verdictMark = "勝"; verdictCls = "text-green-500"; }
+  else if (s.verdict === "loss") { verdictMark = "敗"; verdictCls = "text-red-500"; }
+  else if (s.verdict === "unverifiable") { verdictCls = "text-muted-foreground"; }
+
+  const opens = s.day1_open_prices ?? {};
+  const closes = s.day5_close_prices ?? {};
+  const lines: FormattedSymbolLine[] = syms.slice(0, 3).map((sym) => {
+    const open = sym in opens ? opens[sym] : null;
+    const close = sym in closes ? closes[sym] : null;
+    const gainPct =
+      open !== null && open > 0 && close !== null
+        ? (close - open) / open
+        : null;
+    let cls = "text-muted-foreground";
+    if (gainPct !== null) {
+      cls = gainPct >= 0 ? "text-green-500" : "text-red-500";
+    }
+    return { symbol: sym, open, close, gainPct, cls };
+  });
+
+  return { date, verdictMark, verdictCls, lines };
 }
 
 // ── inline markdown renderer ──────────────────────────────────────
@@ -720,9 +759,31 @@ export default function DiscussionPage() {
             >
               {(() => {
                 const tt = formatDiscussionTitle(s);
+                if (tt.text !== undefined) {
+                  // No conclusion yet — fall back to the user-typed topic.
+                  return (
+                    <div className="line-clamp-2 font-bold text-foreground">
+                      {tt.text}
+                    </div>
+                  );
+                }
+                // Conclusion present: date header + per-symbol lines.
                 return (
-                  <div className={`line-clamp-2 font-bold ${tt.cls}`}>
-                    {tt.text}
+                  <div className="space-y-0.5">
+                    <div className={`font-bold ${tt.verdictCls ?? ""}`}>
+                      {tt.date}
+                      {tt.verdictMark ? ` ${tt.verdictMark}` : ""}
+                    </div>
+                    {tt.lines?.map((ln) => (
+                      <div key={ln.symbol} className={`font-mono ${ln.cls}`}>
+                        {ln.symbol}:
+                        {ln.open !== null ? _toFixedSmart(ln.open) : "—"}
+                        /
+                        {ln.close !== null ? _toFixedSmart(ln.close) : "—"}
+                        {" "}
+                        ({ln.gainPct !== null ? _signedPct(ln.gainPct) : "—"})
+                      </div>
+                    ))}
                   </div>
                 );
               })()}

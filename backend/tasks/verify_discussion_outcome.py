@@ -162,6 +162,7 @@ async def _verify_one(db, d: Discussion) -> bool:
         return True
 
     day1_opens: dict[str, float] = dict(d.day1_open_prices or {})
+    day5_closes: dict[str, float] = dict(d.day5_close_prices or {})
     created_tw = to_tw_date(d.created_at)
 
     win_symbol: str | None = None
@@ -179,7 +180,10 @@ async def _verify_one(db, d: Discussion) -> bool:
             key=lambda b: b.get("time", ""),
         )
         window = future_bars[:_WINDOW_TRADING_DAYS]
-        if not window:
+        # Need the full 5-bar window before grading — a holiday inside
+        # the 5-day span means the 5th trading-day bar hasn't landed
+        # yet. The cron's daily cadence retries safely once it does.
+        if len(window) < _WINDOW_TRADING_DAYS:
             continue
 
         if sym not in day1_opens:
@@ -190,6 +194,16 @@ async def _verify_one(db, d: Discussion) -> bool:
         day1_open = day1_opens[sym]
         if day1_open <= 0:
             continue
+
+        # Capture the day-5 close once (lazy snapshot, same pattern as
+        # day1_open). Used by the frontend to render
+        # `4958:55/51 (-7.3%)` per symbol; pinning it here means the
+        # display value doesn't drift if the upstream connector later
+        # corrects the bar.
+        if sym not in day5_closes:
+            day5_close = _coerce_float(window[-1].get("close"))
+            if day5_close is not None and day5_close > 0:
+                day5_closes[sym] = day5_close
 
         highs = [
             h for h in (_coerce_float(b.get("high")) for b in window)
@@ -215,6 +229,7 @@ async def _verify_one(db, d: Discussion) -> bool:
             verdict="win",
             reason=f"{win_symbol} max high {(win_gain or 0) * 100:.1f}% over day1 open",
             day1_opens=day1_opens,
+            day5_closes=day5_closes,
         )
         return True
 
@@ -232,6 +247,7 @@ async def _verify_one(db, d: Discussion) -> bool:
             verdict="loss",
             reason=reason,
             day1_opens=day1_opens,
+            day5_closes=day5_closes,
         )
         return True
 
@@ -249,8 +265,10 @@ async def _set_verdict(
     verdict: str,
     reason: str,
     day1_opens: dict[str, float],
+    day5_closes: dict[str, float] | None = None,
 ) -> None:
     now = datetime.now(UTC)
+    closes = day5_closes if day5_closes is not None else {}
     await db.execute(
         update(Discussion)
         .where(Discussion.id == d.id)
@@ -259,6 +277,7 @@ async def _set_verdict(
             verdict_reason=reason,
             verified_at=now,
             day1_open_prices=day1_opens or None,
+            day5_close_prices=closes or None,
         )
         .execution_options(synchronize_session=False)
     )
@@ -269,6 +288,7 @@ async def _set_verdict(
     d.verdict_reason = reason
     d.verified_at = now
     d.day1_open_prices = day1_opens or None
+    d.day5_close_prices = closes or None
     log.info(
         "verify_discussion_outcome.verdict",
         extra={

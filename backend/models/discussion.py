@@ -83,6 +83,9 @@ class Discussion(Base):
     day1_open_prices: Mapped[dict[str, float] | None] = mapped_column(
         JSON, nullable=True,
     )
+    day5_close_prices: Mapped[dict[str, float] | None] = mapped_column(
+        JSON, nullable=True,
+    )
     verify_after_date: Mapped[date | None] = mapped_column(
         Date, nullable=True,
     )

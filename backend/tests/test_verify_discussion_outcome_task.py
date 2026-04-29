@@ -111,16 +111,24 @@ async def _make_pending(
     return d
 
 
-def _bars(start: date, n: int, *, open_: float, highs: list[float]) -> list[dict]:
-    """Synthesize OHLCV bars starting from `start`. `highs[i]` is the
-    high for day i; open stays constant (we only test open + high)."""
+def _bars(
+    start: date,
+    n: int,
+    *,
+    open_: float,
+    highs: list[float],
+    closes: list[float] | None = None,
+) -> list[dict]:
+    """Synthesize OHLCV bars starting from `start`. `highs[i]` and the
+    optional `closes[i]` drive what the verifier sees per day. Bars
+    used to test win/loss/defer paths."""
     return [
         {
             "time": (start + timedelta(days=i)).isoformat(),
             "open": open_,
             "high": highs[i],
             "low": open_ * 0.95,
-            "close": (open_ + highs[i]) / 2,
+            "close": closes[i] if closes is not None else (open_ + highs[i]) / 2,
             "volume": 10_000_000,
         }
         for i in range(n)
@@ -134,7 +142,7 @@ async def test_win_when_max_high_above_3pct(
     d = await _make_pending(db_session, owner.id, symbols=["2330"])
     created_date = d.created_at.date()
 
-    bars = _bars(created_date, 5, open_=100.0, highs=[100.5, 101.0, 103.5, 102.0, 102.5])
+    bars = _bars(created_date, 5, open_=100.0, highs=[100.5, 101.0, 103.5, 102.0, 102.5], closes=[100.2, 100.8, 102.5, 101.5, 102.0])
     patches = _stub_lock_helpers() + [
         patch("services.tw_market_service.get_history",
               AsyncMock(return_value=bars)),
@@ -151,6 +159,9 @@ async def test_win_when_max_high_above_3pct(
     assert refreshed.verdict == "win"
     assert "2330" in (refreshed.verdict_reason or "")
     assert refreshed.day1_open_prices == {"2330": 100.0}
+    # day-5 close is the LAST bar's close — used by the frontend to
+    # render `2330:100/102 (+2.0%)` in the sidebar.
+    assert refreshed.day5_close_prices == {"2330": 102.0}
 
 
 @pytest.mark.asyncio
@@ -258,6 +269,38 @@ async def test_defers_when_no_bars_yet(
     refreshed = await db_session.get(Discussion, d.id)
     await db_session.refresh(refreshed)
     assert refreshed.verdict is None
+
+
+@pytest.mark.asyncio
+async def test_defers_when_window_under_5_bars(
+    patch_session, db_session: AsyncSession, owner: User,
+):
+    """Holiday in the middle of the 5-day window → only 4 bars exist
+    when the verifier runs. Must defer (verdict=NULL) so the 5th
+    trading-day's bar can land before grading. Pinning this prevents
+    a regression where the verifier graded a partial window and locked
+    in a wrong answer."""
+    d = await _make_pending(db_session, owner.id, symbols=["2330"])
+    bars = _bars(d.created_at.date(), 4, open_=100.0,
+                 highs=[101, 102, 103, 104],
+                 closes=[100.5, 101.5, 102.5, 103.5])
+
+    patches = _stub_lock_helpers() + [
+        patch("services.tw_market_service.get_history",
+              AsyncMock(return_value=bars)),
+    ]
+    _enter_all(patches)
+    try:
+        from tasks import verify_discussion_outcome
+        await verify_discussion_outcome.run()
+    finally:
+        _exit_all(patches)
+
+    refreshed = await db_session.get(Discussion, d.id)
+    await db_session.refresh(refreshed)
+    assert refreshed.verdict is None
+    assert refreshed.day1_open_prices is None
+    assert refreshed.day5_close_prices is None
 
 
 @pytest.mark.asyncio

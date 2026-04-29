@@ -136,6 +136,8 @@ def _to_response(d: Discussion) -> DiscussionResponse:
         verdict_reason=d.verdict_reason,
         verified_at=d.verified_at,
         auto_run=d.auto_run,
+        day1_open_prices=d.day1_open_prices,
+        day5_close_prices=d.day5_close_prices,
         created_at=d.created_at,
         updated_at=d.updated_at,
     )

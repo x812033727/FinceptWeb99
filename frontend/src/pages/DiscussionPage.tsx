@@ -207,6 +207,31 @@ function usePersonaName(agents: AgentInfo[]) {
   };
 }
 
+// ── date formatting ────────────────────────────────────────────────
+// Discussions are snapshots of a market view. Showing when each was
+// captured matters more than the exact time — a re-evaluation a week
+// later may reach different conclusions even on the same topic.
+
+function formatDateShort(iso: string | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(undefined, { month: "numeric", day: "numeric" });
+}
+
+function formatDateLong(iso: string | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 // ── inline markdown renderer ──────────────────────────────────────
 // Personas are prompted to use `**...**` for key points (target prices,
 // stock codes, conclusions). We do a minimal split-and-render here
@@ -633,6 +658,8 @@ export default function DiscussionPage() {
             >
               <div className="line-clamp-2 font-medium text-foreground">{s.topic}</div>
               <div className="mt-0.5 flex items-center gap-2 text-[10px]">
+                <span>{formatDateShort(s.updated_at || s.created_at)}</span>
+                <span>·</span>
                 <span>R{s.current_round}</span>
                 <span>·</span>
                 <span>{s.persona_ids.length} 位專家</span>
@@ -871,6 +898,18 @@ export default function DiscussionPage() {
           {!selectedId && (
             <div className="h-full flex items-center justify-center">
               <p className="text-sm text-muted-foreground">{t("discussion.intro")}</p>
+            </div>
+          )}
+          {selectedId && detail && (
+            <div className="text-[11px] text-muted-foreground border-b border-border pb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span>
+                {t("discussion.created_at")}：{formatDateLong(detail.created_at)}
+              </span>
+              {detail.updated_at && detail.updated_at !== detail.created_at && (
+                <span>
+                  {t("discussion.updated_at")}：{formatDateLong(detail.updated_at)}
+                </span>
+              )}
             </div>
           )}
           {selectedId && transcript.length === 0 && !isStreaming && (

@@ -414,6 +414,8 @@
     "start_round": "Start Round 1",
     "next_round": "Run Round {{round}}",
     "round_label": "Round {{round}}",
+    "created_at": "Created",
+    "updated_at": "Last updated",
     "conclude": "Synthesize Conclusion",
     "intro": "Create or pick a discussion from the sidebar",
     "click_to_start": "Click \"Start Round 1\" above to begin",

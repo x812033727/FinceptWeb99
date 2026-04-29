@@ -6,4 +6,4 @@ the two are in sync. Bump here, then run:
     python scripts/sync-version.py
 """
 
-__version__ = "0.2.3"
+__version__ = "0.2.4"

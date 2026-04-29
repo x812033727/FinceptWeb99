@@ -407,6 +407,7 @@
     "personas_label": "Participants",
     "create": "Create Discussion",
     "save_edits": "Save Edits",
+    "unsaved": "(unsaved)",
     "start_round": "Start Round 1",
     "next_round": "Run Round {{round}}",
     "conclude": "Synthesize Conclusion",

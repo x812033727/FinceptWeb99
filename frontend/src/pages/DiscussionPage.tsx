@@ -251,6 +251,22 @@ export default function DiscussionPage() {
     updateMut.mutate({ topic, rules, persona_ids: personaIds });
   }
 
+  // Per-field saves so the user can commit just the topic edit without
+  // also locking in pending persona-toggle changes (and vice versa).
+  // Backend's PATCH endpoint accepts partial bodies — fields not in the
+  // payload stay untouched.
+  const topicDirty = !!selectedId && topic !== (detail?.topic ?? "");
+  const rulesDirty = !!selectedId && rules !== (detail?.rules ?? "");
+
+  function saveTopic() {
+    if (!selectedId || !topicDirty) return;
+    updateMut.mutate({ topic });
+  }
+  function saveRules() {
+    if (!selectedId || !rulesDirty) return;
+    updateMut.mutate({ rules });
+  }
+
   async function runRound() {
     if (!selectedId || isStreaming) return;
     setIsStreaming(true);
@@ -416,9 +432,25 @@ export default function DiscussionPage() {
         {/* configuration panel */}
         <div className="border-b border-border px-4 py-3 space-y-3 shrink-0 overflow-y-auto max-h-[60vh]">
           <div>
-            <label className="text-xs font-medium text-foreground">
-              {t("discussion.topic_label")}
-            </label>
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-medium text-foreground">
+                {t("discussion.topic_label")}
+                {topicDirty && (
+                  <span className="ml-1.5 text-[10px] text-amber-400">
+                    {t("discussion.unsaved")}
+                  </span>
+                )}
+              </label>
+              {selectedId && isDraft && (
+                <button
+                  onClick={saveTopic}
+                  disabled={!topicDirty || updateMut.isPending || isStreaming}
+                  className="px-2 py-0.5 text-[10px] border border-border rounded hover:border-primary/40 transition-colors disabled:opacity-30"
+                >
+                  {updateMut.isPending ? t("common.saving") : t("common.save")}
+                </button>
+              )}
+            </div>
             <textarea
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
@@ -430,9 +462,25 @@ export default function DiscussionPage() {
           </div>
 
           <div>
-            <label className="text-xs font-medium text-foreground">
-              {t("discussion.rules_label")}
-            </label>
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-medium text-foreground">
+                {t("discussion.rules_label")}
+                {rulesDirty && (
+                  <span className="ml-1.5 text-[10px] text-amber-400">
+                    {t("discussion.unsaved")}
+                  </span>
+                )}
+              </label>
+              {selectedId && isDraft && (
+                <button
+                  onClick={saveRules}
+                  disabled={!rulesDirty || updateMut.isPending || isStreaming}
+                  className="px-2 py-0.5 text-[10px] border border-border rounded hover:border-primary/40 transition-colors disabled:opacity-30"
+                >
+                  {updateMut.isPending ? t("common.saving") : t("common.save")}
+                </button>
+              )}
+            </div>
             <textarea
               value={rules}
               onChange={(e) => setRules(e.target.value)}

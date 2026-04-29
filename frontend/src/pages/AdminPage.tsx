@@ -958,6 +958,12 @@ const MARKET_PROVIDER_LABELS: Record<string, { name: string; tagline: string; pl
     placeholder: "c…",
     signupUrl: "https://finnhub.io/dashboard",
   },
+  finmind: {
+    name: "FinMind",
+    tagline: "TW news + institutional + monthly revenue · 600 req/day free",
+    placeholder: "eyJhbGc…",
+    signupUrl: "https://finmindtrade.com/",
+  },
 };
 
 function MarketKeyRow({ info }: { info: MarketKeyInfo }) {

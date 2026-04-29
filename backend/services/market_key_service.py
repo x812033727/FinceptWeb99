@@ -30,7 +30,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 import httpx
@@ -46,10 +46,11 @@ logger = logging.getLogger(__name__)
 # Providers exposed in the admin UI. Add new market connectors here as
 # they become DB-managed. Keeping it explicit avoids accidentally exposing
 # a typo'd provider name through the admin endpoint.
-SUPPORTED_PROVIDERS: tuple[str, ...] = ("finnhub",)
+SUPPORTED_PROVIDERS: tuple[str, ...] = ("finnhub", "finmind")
 
 _ENV_KEY_ATTR = {
     "finnhub": "FINNHUB_API_KEY",
+    "finmind": "FINMIND_TOKEN",
 }
 
 # In-process cache to avoid hitting the DB on every connector call. The
@@ -230,6 +231,8 @@ async def validate_key(provider: str, key: str) -> ValidationResult:
     try:
         if provider == "finnhub":
             return await _validate_finnhub(key)
+        if provider == "finmind":
+            return await _validate_finmind(key)
         return ValidationResult(False, f"validation not implemented for {provider}")
     except Exception as exc:
         logger.warning("market_key.validate_failed",
@@ -259,6 +262,43 @@ async def _validate_finnhub(key: str) -> ValidationResult:
         return ValidationResult(False, "key rejected (empty quote)")
     if r.status_code in (401, 403):
         return ValidationResult(False, "key rejected by Finnhub")
+    if r.status_code == 429:
+        return ValidationResult(False, "rate limit hit — try again shortly")
+    return ValidationResult(False, f"HTTP {r.status_code}: {r.text[:200]}")
+
+
+async def _validate_finmind(key: str) -> ValidationResult:
+    """Hit FinMind's `TaiwanStockPrice` (free-tier, used by the connector
+    itself) for 2330 over a 1-day window. A 200 with `data: [...]` and
+    `status == 200` confirms the token is honoured. A 400 typically
+    means malformed token; 401/402 means rejected; 429 is rate limit.
+    """
+    # 5 days back — falls within FinMind's free-tier window without
+    # needing TODAY's data (which may not be ready post-market-close).
+    start_date = (datetime.now(UTC).date() - timedelta(days=5)).isoformat()
+    async with httpx.AsyncClient(timeout=_VALIDATE_TIMEOUT) as client:
+        r = await client.get(
+            "https://api.finmindtrade.com/api/v4/data",
+            params={
+                "dataset": "TaiwanStockPrice",
+                "data_id": "2330",
+                "start_date": start_date,
+                "token": key,
+            },
+        )
+    if r.status_code == 200:
+        try:
+            payload = r.json()
+        except (ValueError, json.JSONDecodeError):
+            return ValidationResult(False, "non-JSON response")
+        if isinstance(payload, dict) and payload.get("status") == 200:
+            return ValidationResult(True, "OK")
+        msg = payload.get("msg", "") if isinstance(payload, dict) else ""
+        return ValidationResult(False, f"key rejected: {msg or 'unknown'}")
+    if r.status_code == 400:
+        return ValidationResult(False, "FinMind 400 — empty / malformed token")
+    if r.status_code in (401, 402, 403):
+        return ValidationResult(False, f"key rejected by FinMind (HTTP {r.status_code})")
     if r.status_code == 429:
         return ValidationResult(False, "rate limit hit — try again shortly")
     return ValidationResult(False, f"HTTP {r.status_code}: {r.text[:200]}")

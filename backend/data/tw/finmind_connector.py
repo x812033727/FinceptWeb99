@@ -29,17 +29,35 @@ async def _resolve_daily_limit() -> int:
         return settings.FINMIND_DAILY_REQUEST_LIMIT
 
 
+async def _get_token() -> str:
+    """Resolve the active FinMind token.
+
+    DB-managed value (AdminPage MarketKeysCard) wins; falls back to the
+    .env-supplied `settings.FINMIND_TOKEN` when no DB row exists, and to
+    `""` if even that's empty. Lifted to a module-level helper so unit
+    tests can patch it without triggering the heavy `services.market_key_
+    service` → `auth.llm_key_crypto` import chain.
+    """
+    try:
+        from services.market_key_service import resolve_key
+        return await resolve_key("finmind")
+    except Exception:
+        return settings.FINMIND_TOKEN or ""
+
+
 async def _query(dataset: str, data_id: str, start_date: str, end_date: str | None = None) -> list[dict[str, Any]]:
     """
     Check daily quota before hitting the API.
     Returns [] when quota is exhausted so callers fall back to TWSE.
     """
+    token = await _get_token()
+
     # Cheap log when token is empty so operators see the correlation
     # in logs alongside any subsequent 400 / 401 from FinMind. Doesn't
     # short-circuit because some datasets (free-tier OHLCV) genuinely
     # work without a token; only paid ones (TaiwanStockNews etc.)
     # reject.
-    if not settings.FINMIND_TOKEN:
+    if not token:
         log.debug("finmind.empty_token", extra={"dataset": dataset})
 
     # 86400s = 24h; counter auto-expires so no explicit reset needed
@@ -51,7 +69,7 @@ async def _query(dataset: str, data_id: str, start_date: str, end_date: str | No
         "dataset": dataset,
         "data_id": data_id,
         "start_date": start_date,
-        "token": settings.FINMIND_TOKEN,
+        "token": token,
     }
     if end_date:
         params["end_date"] = end_date

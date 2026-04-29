@@ -19,6 +19,16 @@ import pytest
 import data.tw.finmind_connector as finmind
 
 
+# Patch `_get_token` for every test in this module so the connector
+# doesn't transitively import `services.market_key_service` (which pulls
+# in `cryptography` and panics on this dev env's missing `_cffi_backend`).
+# Individual tests that care about token routing can override.
+@pytest.fixture(autouse=True)
+def _patch_get_token():
+    with patch.object(finmind, "_get_token", AsyncMock(return_value="test-token")):
+        yield
+
+
 # ── Test doubles for _query's HTTP layer ─────────────────────────
 
 class FakeResponse:

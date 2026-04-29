@@ -487,21 +487,83 @@ def _strip_code_fence(text: str) -> str:
     return fence.group(1).strip() if fence else text
 
 
+def _extract_json_object(text: str) -> str | None:
+    """Find the first balanced top-level `{...}` object in `text`.
+
+    Used as a salvage step when the model wraps its JSON in surrounding
+    prose ("Here is my analysis:\\n\\n{...}\\n\\nHope this helps.") —
+    naive `json.loads(text)` would fail because of the leading/trailing
+    text, but extracting the balanced object lets us still parse a
+    valid response.
+
+    Tracks string boundaries (so a `}` inside a JSON string doesn't
+    break balance) and escape sequences. Returns None if no balanced
+    object exists.
+    """
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if escape:
+            escape = False
+            continue
+        if in_string:
+            if c == "\\":
+                escape = True
+                continue
+            if c == '"':
+                in_string = False
+            continue
+        if c == '"':
+            in_string = True
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
+def _loads_lenient(text: str) -> Any:
+    """`json.loads(strict=False)` — allows literal control characters
+    (newlines, tabs) inside JSON strings. Necessary because LLMs often
+    emit Chinese content with real `\\n` newlines instead of escaped
+    `\\\\n`, which strict JSON would reject."""
+    return json.loads(text, strict=False)
+
+
 def _parse_turn_response(raw: str) -> tuple[str, str]:
     """Return (stance, content). Falls back to (DEFAULT_STANCE, cleaned_raw)
     when the model drifts off JSON format — better to record the prose
     than to lose the turn entirely.
 
-    Strips reasoning-model `<think>...</think>` blocks first so the
-    persisted turn content is clean even if the model spent its whole
-    budget thinking.
+    Parsing is layered to survive the most common LLM shape drifts:
+      1. strip `<think>...</think>` reasoning blocks
+      2. strip surrounding markdown code fence
+      3. parse with `strict=False` so embedded newlines / tabs in
+         Chinese content don't blow up json
+      4. if that fails, salvage the first balanced `{...}` object from
+         surrounding prose (handles "Here is my analysis: {...}" cases)
     """
     no_thinking = strip_think_blocks(raw)
     cleaned = _strip_code_fence(no_thinking)
+    data: Any
     try:
-        data = json.loads(cleaned)
+        data = _loads_lenient(cleaned)
     except json.JSONDecodeError:
-        return DEFAULT_STANCE, no_thinking.strip()
+        salvaged = _extract_json_object(cleaned)
+        if salvaged is None:
+            return DEFAULT_STANCE, no_thinking.strip()
+        try:
+            data = _loads_lenient(salvaged)
+        except json.JSONDecodeError:
+            return DEFAULT_STANCE, no_thinking.strip()
     if not isinstance(data, dict):
         return DEFAULT_STANCE, no_thinking.strip()
     stance = str(data.get("stance", "")).strip().lower()
@@ -813,17 +875,31 @@ def _format_transcript(turns: list[DiscussionTurn]) -> str:
 
 def _safe_conclusion(raw: str) -> dict[str, Any]:
     cleaned = _strip_code_fence(strip_think_blocks(raw))
+    data: Any
     try:
-        data = json.loads(cleaned)
+        data = _loads_lenient(cleaned)
     except json.JSONDecodeError:
-        return {
-            "recommended_symbols": [],
-            "reasoning": raw.strip()[:500] or "無法解析結論",
-            "risks": [],
-            "time_horizon": "short_term",
-            "consensus_score": 0.0,
-            "_parse_error": True,
-        }
+        salvaged = _extract_json_object(cleaned)
+        if salvaged is None:
+            return {
+                "recommended_symbols": [],
+                "reasoning": raw.strip()[:500] or "無法解析結論",
+                "risks": [],
+                "time_horizon": "short_term",
+                "consensus_score": 0.0,
+                "_parse_error": True,
+            }
+        try:
+            data = _loads_lenient(salvaged)
+        except json.JSONDecodeError:
+            return {
+                "recommended_symbols": [],
+                "reasoning": raw.strip()[:500] or "無法解析結論",
+                "risks": [],
+                "time_horizon": "short_term",
+                "consensus_score": 0.0,
+                "_parse_error": True,
+            }
     if not isinstance(data, dict):
         return {
             "recommended_symbols": [],

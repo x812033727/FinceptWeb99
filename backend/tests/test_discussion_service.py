@@ -14,6 +14,7 @@ suite doesn't reach out to TWSE / FinMind.
 """
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, patch
@@ -186,6 +187,54 @@ def test_parse_turn_response_strips_think_block_before_json_parse():
     stance, content = discussion_service._parse_turn_response(raw)
     assert stance == "supplement"
     assert content == "看好台積電"
+
+
+def test_parse_turn_response_handles_literal_newlines_in_content():
+    """LLMs (especially zh-TW reasoning models) frequently emit JSON
+    where the `content` string contains literal newline / tab characters
+    instead of `\\n` escapes. Strict JSON would reject these; the
+    `strict=False` path keeps the parse alive."""
+    raw = '{"stance": "supplement", "content": "第一段\n\n第二段\n\t縮排"}'
+    stance, content = discussion_service._parse_turn_response(raw)
+    assert stance == "supplement"
+    assert "第一段" in content
+    assert "第二段" in content
+
+
+def test_parse_turn_response_extracts_json_from_prose_prefix():
+    """Sometimes the model prefixes its JSON with prose explaining what
+    it's about to output. The salvage path extracts the balanced
+    object so we still get a clean stance + content."""
+    raw = (
+        "Here is my analysis of the situation:\n\n"
+        '{"stance": "dissent", "content": "I disagree with Buffett."}\n\n'
+        "Hope this helps!"
+    )
+    stance, content = discussion_service._parse_turn_response(raw)
+    assert stance == "dissent"
+    assert content == "I disagree with Buffett."
+
+
+def test_parse_turn_response_extracts_json_with_nested_braces_in_string():
+    """The salvage tracker must respect string boundaries — a `}` inside
+    a JSON string shouldn't close the outer object."""
+    raw = '{"stance": "supplement", "content": "use the formula x = {a + b}"}'
+    stance, content = discussion_service._parse_turn_response(raw)
+    assert stance == "supplement"
+    assert "{a + b}" in content
+
+
+def test_extract_json_object_returns_none_when_no_brace():
+    out = discussion_service._extract_json_object("plain text, no JSON here")
+    assert out is None
+
+
+def test_extract_json_object_handles_escaped_quotes():
+    """Escaped `\\"` inside a string must not toggle string mode."""
+    raw = 'prefix {"key": "value with \\"quotes\\" inside"} suffix'
+    out = discussion_service._extract_json_object(raw)
+    assert out is not None
+    assert json.loads(out, strict=False)["key"] == 'value with "quotes" inside'
 
 
 def test_parse_turn_response_falls_back_with_thinking_stripped_when_json_invalid():

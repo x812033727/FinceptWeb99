@@ -937,7 +937,7 @@ export default function DiscussionPage() {
                 )}
                 <div className="bg-card border border-border rounded-lg p-3">
                   <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-                    <span className="font-medium text-foreground">
+                    <span className="font-bold text-red-500">
                       {personaName(tn.persona_id)}
                     </span>
                     <span>·</span>
@@ -972,7 +972,7 @@ export default function DiscussionPage() {
                 )}
               <div className="bg-card border border-primary/40 rounded-lg p-3">
                 <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-                  <span className="font-medium text-primary">
+                  <span className="font-bold text-red-500">
                     {personaName(streamingPersona)}
                   </span>
                   {streamingRound !== null && (

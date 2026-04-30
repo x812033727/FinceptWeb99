@@ -122,6 +122,35 @@ async def test_enrich_item_quote_error_returns_none_fields(db_session: AsyncSess
     assert result["symbol"] == "FAKE"
     assert result["price"] is None
     assert result["change_pct"] is None
+
+
+@pytest.mark.asyncio
+async def test_enrich_item_surfaces_quoted_at_and_data_source(
+    db_session: AsyncSession,
+):
+    """The watchlist UI shows "資料時間 14:31" + a data-source badge so
+    users know whether they're looking at live, EOD, or stale data.
+    Both fields are forwarded from the quote service's `ts` (epoch ms)
+    + `data_source`."""
+    user = await _make_user(db_session)
+    wl = await _make_watchlist(db_session, user.id)
+    item = await _make_item(db_session, wl.id, "2330", Market.TW)
+
+    # 2026-04-30 06:31:00 UTC = 1746081060000 ms
+    mock_quote = {
+        "price": 610.0,
+        "change_pct": 0.5,
+        "name_zh": "台積電",
+        "ts": 1746081060000,
+        "data_source": "twse",
+    }
+    with patch("services.tw_market_service.get_quote", new_callable=AsyncMock) as m:
+        m.return_value = mock_quote
+        result = await _enrich_item(item)
+
+    assert result["data_source"] == "twse"
+    assert result["quoted_at"] is not None
+    assert result["quoted_at"].startswith("2026-04-30T06:31:00")
     assert result["name"] is None
 
 

@@ -91,6 +91,24 @@ def test_normalize_quote_change_pct_is_none_when_prev_close_missing():
     assert out["change_pct"] is None
 
 
+def test_normalize_quote_derives_prev_close_when_only_change_present():
+    """Regression: TWSE realtime returns `change` but no `prev_close`.
+    Before this fix change_pct fell out as None and the watchlist UI
+    showed a blank 漲跌 column. Now we derive prev_close = close -
+    change so change_pct can be computed."""
+    out = svc._normalize_quote("2330", {"close": 785, "change": 5})
+    assert out["change"] == 5
+    # prev_close should be 780 (785 - 5), so change_pct = 5/780*100
+    assert out["change_pct"] == round(5 / 780 * 100, 4)
+
+
+def test_normalize_quote_handles_negative_change_with_only_change_present():
+    out = svc._normalize_quote("2330", {"close": 600, "change": -10})
+    assert out["change"] == -10
+    # prev_close = 610, change_pct = -10/610*100
+    assert out["change_pct"] == round(-10 / 610 * 100, 4)
+
+
 def test_normalize_quote_marks_etf_correctly():
     assert svc._normalize_quote("0050", {})["is_etf"] is True
     assert svc._normalize_quote("2330", {})["is_etf"] is False
@@ -156,6 +174,52 @@ async def test_get_quote_falls_back_to_finmind_when_twse_raises():
          patch.object(svc.finmind, "get_daily_ohlcv", new=AsyncMock(return_value=finmind_bars)):
         out = await svc.get_quote("2330")
     assert out["price"] == 1.5
+
+
+@pytest.mark.asyncio
+async def test_finmind_fallback_computes_change_pct_from_prev_bar():
+    """Regression: FinMind EOD fallback used to set change=None and
+    omit prev_close, so the watchlist showed a blank 漲跌 column off-
+    hours. Now we read bars[-2].close as prev_close and compute the
+    delta — change_pct must come back populated."""
+    finmind_bars = [
+        {"time": "2024-04-01", "open": 778, "high": 782, "low": 776,
+         "close": 780, "volume": 800},
+        {"time": "2024-04-02", "open": 781, "high": 790, "low": 779,
+         "close": 785, "volume": 1000},
+    ]
+    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc.twse, "get_realtime_quote",
+                      new=AsyncMock(return_value=None)), \
+         patch.object(svc.finmind, "get_daily_ohlcv",
+                      new=AsyncMock(return_value=finmind_bars)):
+        out = await svc.get_quote("2330")
+
+    assert out["price"] == 785
+    assert out["change"] == 5  # 785 - 780
+    assert out["change_pct"] == round(5 / 780 * 100, 4)
+
+
+@pytest.mark.asyncio
+async def test_finmind_fallback_skips_change_pct_with_only_one_bar():
+    """Single FinMind bar — no prior day to subtract from. change /
+    change_pct stay None rather than crashing."""
+    finmind_bars = [
+        {"time": "2024-04-02", "open": 781, "high": 790, "low": 779,
+         "close": 785, "volume": 1000},
+    ]
+    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc.twse, "get_realtime_quote",
+                      new=AsyncMock(return_value=None)), \
+         patch.object(svc.finmind, "get_daily_ohlcv",
+                      new=AsyncMock(return_value=finmind_bars)):
+        out = await svc.get_quote("2330")
+
+    assert out["price"] == 785
+    assert out["change"] is None
+    assert out["change_pct"] is None
 
 
 @pytest.mark.asyncio

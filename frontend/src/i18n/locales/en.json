@@ -479,7 +479,9 @@
     "add_symbol": "Add Symbol",
     "remove": "Remove",
     "live_prices": "Live prices",
-    "delete_list": "Delete list"
+    "delete_list": "Delete list",
+    "last_quoted": "Quoted at",
+    "data_source": "Source"
   },
   "alerts": {
     "title": "Alerts",

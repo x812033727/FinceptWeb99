@@ -14,6 +14,8 @@ interface WatchlistItem {
   price: number | null;
   change_pct: number | null;
   name: string | null;
+  quoted_at: string | null;     // ISO 8601 of when the quote was fetched
+  data_source: string | null;   // "twse" | "finmind" | "db" | …
 }
 
 interface Watchlist {
@@ -100,6 +102,60 @@ function AddSymbolRow({ watchlistId }: { watchlistId: string }) {
     </form>
   );
 }
+
+// Pretty-print a UTC ISO timestamp as 本地時:分. Returns null when the
+// input is missing/unparseable so the caller can render "—".
+function _formatLocalTime(iso: string | null, lang: string): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleTimeString(lang, {
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+
+function WatchlistFreshnessFooter({ items }: { items: WatchlistItem[] }) {
+  const { t, i18n } = useTranslation();
+  // Use the most recent `quoted_at` across all rows — they're
+  // typically all fetched together, so picking the max gives the
+  // correct "fetched at" without picking up one stale per-row
+  // timestamp from a transient connector retry.
+  const latestIso = items.reduce<string | null>((acc, it) => {
+    if (!it.quoted_at) return acc;
+    if (!acc) return it.quoted_at;
+    return it.quoted_at > acc ? it.quoted_at : acc;
+  }, null);
+  const localTime = _formatLocalTime(latestIso, i18n.language);
+
+  // Distinct data sources — usually 1 ("twse" market hours,
+  // "finmind" off-hours, "db" during outage). Show all of them so
+  // the user knows when prices are EOD / stale.
+  const sources = Array.from(
+    new Set(
+      items
+        .map((it) => it.data_source)
+        .filter((s): s is string => Boolean(s)),
+    ),
+  );
+
+  return (
+    <div className="px-4 pt-1 pb-3 flex items-center gap-3 text-[10px] text-muted-foreground border-b border-border/30">
+      <span>
+        {t("watchlist.last_quoted")}：
+        <span className="text-foreground/80 font-mono">
+          {localTime ?? "—"}
+        </span>
+      </span>
+      {sources.length > 0 && (
+        <span>
+          {t("watchlist.data_source")}：
+          <span className="text-foreground/80">{sources.join(", ")}</span>
+        </span>
+      )}
+    </div>
+  );
+}
+
 
 function WatchlistCard({ wl }: { wl: Watchlist }) {
   const { t } = useTranslation();
@@ -192,6 +248,9 @@ function WatchlistCard({ wl }: { wl: Watchlist }) {
                 })}
               </tbody>
             </table>
+          )}
+          {wl.items.length > 0 && (
+            <WatchlistFreshnessFooter items={wl.items} />
           )}
           <div className="px-4 pb-4">
             <AddSymbolRow watchlistId={wl.id} />

@@ -479,7 +479,9 @@
     "add_symbol": "加入代號",
     "remove": "移除",
     "live_prices": "即時報價",
-    "delete_list": "刪除清單"
+    "delete_list": "刪除清單",
+    "last_quoted": "資料時間",
+    "data_source": "來源"
   },
   "alerts": {
     "title": "價格警示",

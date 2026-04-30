@@ -190,9 +190,22 @@ async def fetch_quote_waterfall(symbol: str) -> tuple[dict | None, str]:
             bars = await finmind.get_daily_ohlcv(symbol, start)
             if bars:
                 latest = bars[-1]
+                # Pull the prior-day close so change / change_pct can be
+                # computed downstream — without this the watchlist UI
+                # silently shows a blank 漲跌 column whenever TWSE
+                # realtime is unreachable and we fall through to FinMind.
+                prev_close = bars[-2]["close"] if len(bars) >= 2 else None
+                latest_close = latest["close"]
+                change = (
+                    latest_close - prev_close
+                    if (latest_close is not None and prev_close is not None)
+                    else None
+                )
                 raw = {
                     "symbol": symbol, "name_zh": "",
-                    "close": latest["close"], "change": None,
+                    "close": latest_close,
+                    "prev_close": prev_close,
+                    "change": change,
                     "volume": latest["volume"],
                     "open": latest["open"], "high": latest["high"], "low": latest["low"],
                 }
@@ -252,6 +265,13 @@ def _normalize_quote(symbol: str, raw: dict) -> dict[str, Any]:
     close = raw.get("close") or raw.get("price", 0) or 0
     prev  = raw.get("prev_close", 0) or 0
     chg   = raw.get("change") if raw.get("change") is not None else (close - prev if prev else None)
+    # TWSE realtime returns `change` but no `prev_close`. Without this
+    # back-fill the change_pct guard below trips and the watchlist /
+    # screener UI shows a blank 漲跌 column even when the price + raw
+    # change point both came back fine. Derive prev = close - change
+    # when we have the delta but not the baseline.
+    if chg is not None and not prev and close:
+        prev = close - chg
     chg_pct = round(chg / prev * 100, 4) if (chg is not None and prev) else None
     return {
         "symbol":        symbol,

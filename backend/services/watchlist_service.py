@@ -48,6 +48,12 @@ async def _enrich_item(
         "price": None,
         "change_pct": None,
         "name": None,
+        # Filled in below from the quote's `ts` field (set by each
+        # market service inside _normalize_quote at fetch time). Lets
+        # the watchlist UI render "資料時間 14:31" so the user knows
+        # whether they're looking at live, EOD, or stale-cache data.
+        "quoted_at": None,
+        "data_source": None,
     }
     try:
         if item.market == Market.US:
@@ -68,6 +74,18 @@ async def _enrich_item(
             out["price"] = q.get("price")
             out["change_pct"] = q.get("change_pct")
             out["name"] = q.get("name_zh")
+        # Common to all three markets — `ts` is millisecond UTC epoch
+        # set by the service's _normalize_quote at fetch time;
+        # `data_source` carries the upstream provider name so the
+        # frontend can show a stale-data warning when it's served from
+        # a DB snapshot (data_source="db") rather than live.
+        ts_ms = q.get("ts")
+        if isinstance(ts_ms, int):
+            from datetime import UTC, datetime
+            out["quoted_at"] = datetime.fromtimestamp(
+                ts_ms / 1000, tz=UTC,
+            ).isoformat()
+        out["data_source"] = q.get("data_source")
     except Exception:
         pass
     return out

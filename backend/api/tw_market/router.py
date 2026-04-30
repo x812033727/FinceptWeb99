@@ -176,6 +176,21 @@ async def indices(_: Auth):
         raise HTTPException(status_code=502, detail=f"Data source error: {e}")
 
 
+@router.get("/news/recent")
+async def news_recent(_: Auth, limit: int = Query(20, ge=1, le=50)):
+    """Market-wide TW news from the ingest archive — DB only, no live
+    upstream fallback. Returns articles with `symbol IS NULL` (so per-
+    symbol headlines don't crowd out broader market commentary) plus
+    sentiment_score / sentiment_label for the dashboard's coloured
+    badges. Empty list when the ingest task hasn't populated anything
+    yet (fresh deploy, FinMind paywall window before PR #128, etc.)."""
+    from services.ingest.repository import read_recent_news_autosession
+    return await read_recent_news_autosession(
+        "TW", symbol=None, limit=limit,
+        max_age_days=7, include_sentiment=True,
+    )
+
+
 @router.get("/news/{symbol}")
 async def news(symbol: str, _: Auth, limit: int = Query(10, le=30)):
     """Recent news headlines for a TW stock (via yfinance .TW suffix)."""

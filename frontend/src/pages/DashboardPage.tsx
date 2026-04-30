@@ -52,10 +52,66 @@ interface NewsItem {
   publisher: string;
   link: string;
   published_at: string;
+  // Sentiment fields are populated only by the TW news endpoint
+  // (`/tw/news/recent`). US news is read-through; sentiment scoring
+  // only runs on rows that the TW ingest task wrote into the DB.
+  sentiment_score?: number | null;
+  sentiment_label?: "bullish" | "bearish" | "neutral" | null;
+}
+
+const SENTIMENT_BADGE: Record<
+  NonNullable<NewsItem["sentiment_label"]>,
+  { label: string; cls: string }
+> = {
+  bullish: { label: "利多", cls: "bg-green-900/30 text-green-300 border-green-800/50" },
+  bearish: { label: "利空", cls: "bg-red-900/30 text-red-300 border-red-800/50" },
+  neutral: { label: "中性", cls: "bg-zinc-800/40 text-zinc-300 border-zinc-700/50" },
+};
+
+function NewsList({ items }: { items: NewsItem[] }) {
+  const { i18n } = useTranslation();
+  return (
+    <div className="divide-y divide-border/50">
+      {items.slice(0, 5).map((item, i) => {
+        const badge = item.sentiment_label
+          ? SENTIMENT_BADGE[item.sentiment_label]
+          : null;
+        return (
+          <a
+            key={i}
+            href={item.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-start gap-3 px-4 py-3 hover:bg-accent/5 transition-colors"
+          >
+            <div className="flex-1 min-w-0">
+              <p className="text-sm text-foreground leading-snug line-clamp-2">{item.title}</p>
+              <div className="mt-1 flex items-center gap-1.5 flex-wrap text-xs text-muted-foreground">
+                <span>{item.publisher}</span>
+                <span>·</span>
+                <span>
+                  {new Date(item.published_at).toLocaleDateString(i18n.language, {
+                    month: "short", day: "numeric",
+                  })}
+                </span>
+                {badge && (
+                  <span
+                    className={`px-1.5 py-0.5 rounded border text-[10px] ${badge.cls}`}
+                  >
+                    {badge.label}
+                  </span>
+                )}
+              </div>
+            </div>
+          </a>
+        );
+      })}
+    </div>
+  );
 }
 
 function RecentNews() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const { data: items = [], isLoading } = useQuery<NewsItem[]>({
     queryKey: ["news", "US", "SPY"],
     queryFn: () => api.get("/us/news/SPY").then((r) => r.data),
@@ -76,27 +132,39 @@ function RecentNews() {
           {t("dashboard.no_news")}
         </div>
       ) : (
-      <div className="divide-y divide-border/50">
-        {items.slice(0, 5).map((item, i) => (
-          <a
-            key={i}
-            href={item.link}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-start gap-3 px-4 py-3 hover:bg-accent/5 transition-colors"
-          >
-            <div className="flex-1 min-w-0">
-              <p className="text-sm text-foreground leading-snug line-clamp-2">{item.title}</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                {item.publisher} ·{" "}
-                {new Date(item.published_at).toLocaleDateString(i18n.language, {
-                  month: "short", day: "numeric",
-                })}
-              </p>
-            </div>
-          </a>
-        ))}
+        <NewsList items={items} />
+      )}
+    </div>
+  );
+}
+
+function RecentTWNews() {
+  const { t } = useTranslation();
+  const { data: items = [], isLoading } = useQuery<NewsItem[]>({
+    queryKey: ["news", "TW", "recent"],
+    // 5-min stale matches the ingest cadence (hourly) — UI doesn't
+    // need to refetch faster than the data can change.
+    queryFn: () => api.get("/tw/news/recent?limit=20").then((r) => r.data),
+    staleTime: 5 * 60_000,
+  });
+
+  if (isLoading) {
+    return <div className="text-xs text-muted-foreground animate-pulse">{t("dashboard.loading_news")}</div>;
+  }
+
+  return (
+    <div className="bg-card border border-border rounded-lg overflow-hidden">
+      <div className="px-4 py-3 border-b border-border">
+        <h2 className="text-sm font-medium text-foreground">
+          {t("dashboard.tw_market_news")}
+        </h2>
       </div>
+      {!items.length ? (
+        <div className="px-4 py-6 text-xs text-muted-foreground text-center">
+          {t("dashboard.no_news")}
+        </div>
+      ) : (
+        <NewsList items={items} />
       )}
     </div>
   );
@@ -178,9 +246,19 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <div>
-          <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">{t("dashboard.latest_news")}</h2>
-          <RecentNews />
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
+              {t("dashboard.latest_news")}
+            </h2>
+            <RecentNews />
+          </div>
+          <div>
+            <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
+              {t("dashboard.latest_tw_news")}
+            </h2>
+            <RecentTWNews />
+          </div>
         </div>
       </div>
     </div>

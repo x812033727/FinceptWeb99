@@ -419,6 +419,49 @@ async def test_news_empty_list(client: AsyncClient):
     assert r.json() == []
 
 
+@pytest.mark.asyncio
+async def test_news_recent_reads_market_wide_with_sentiment(client: AsyncClient):
+    """`/tw/news/recent` powers the dashboard card. Must hit the DB-only
+    path (not the live RSS waterfall) and forward sentiment fields."""
+    h = await _auth_headers(client, "tw_news_recent@example.com")
+    items = [
+        {
+            "title": "台股盤後 - 加權收漲",
+            "publisher": "鉅亨網",
+            "link": "https://example.com/a",
+            "published_at": "2026-04-30T05:00:00+00:00",
+            "thumbnail": None,
+            "data_source": "google_news_tw",
+            "sentiment_score": 0.42,
+            "sentiment_label": "bullish",
+        },
+    ]
+    with patch(
+        "services.ingest.repository.read_recent_news_autosession",
+        new_callable=AsyncMock,
+    ) as mock_read:
+        mock_read.return_value = items
+        r = await client.get("/api/tw/news/recent?limit=20", headers=h)
+
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) == 1
+    assert body[0]["sentiment_label"] == "bullish"
+    # Pin the call shape so the dashboard's "market-wide news only"
+    # contract isn't accidentally widened to per-symbol later.
+    kwargs = mock_read.await_args.kwargs
+    assert kwargs["symbol"] is None
+    assert kwargs["include_sentiment"] is True
+
+
+@pytest.mark.asyncio
+async def test_news_recent_clamps_limit(client: AsyncClient):
+    """Query string must enforce limit ≤ 50 (FastAPI Query bound)."""
+    h = await _auth_headers(client, "tw_news_recent_clamp@example.com")
+    r = await client.get("/api/tw/news/recent?limit=999", headers=h)
+    assert r.status_code == 422
+
+
 # ── search ────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

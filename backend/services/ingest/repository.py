@@ -520,13 +520,18 @@ async def read_recent_news(
     symbol: str | None = None,
     limit: int = 20,
     max_age_days: int = 30,
+    include_sentiment: bool = False,
 ) -> list[dict[str, Any]]:
     """Return the most recent articles for `(market, symbol)` newer than
     `max_age_days`. `symbol=None` matches market-wide articles
     (NULL symbol) only; pass an explicit symbol to fetch per-symbol news.
 
     Output shape mirrors `tw_market_service.get_news` so the caller can
-    return the list verbatim.
+    return the list verbatim. With `include_sentiment=True` each row
+    additionally carries `sentiment_score` (-1..+1 or None) and
+    `sentiment_label` (`bullish` / `bearish` / `neutral` or None) — used
+    by the dashboard's RecentTWNews card to render colored badges
+    without an extra round-trip.
     """
     cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
     stmt = (
@@ -540,8 +545,9 @@ async def read_recent_news(
     else:
         stmt = stmt.where(NewsArticle.symbol == symbol)
     rows = (await db.scalars(stmt)).all()
-    return [
-        {
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        item: dict[str, Any] = {
             "title":        r.title,
             "publisher":    r.publisher or "",
             "link":         r.link,
@@ -549,8 +555,11 @@ async def read_recent_news(
             "thumbnail":    (r.payload or {}).get("thumbnail") if r.payload else None,
             "data_source":  r.source,
         }
-        for r in rows
-    ]
+        if include_sentiment:
+            item["sentiment_score"] = r.sentiment_score
+            item["sentiment_label"] = r.sentiment_label
+        out.append(item)
+    return out
 
 
 async def insert_news_articles_autosession(rows: Iterable[NewsArticleRow]) -> int:
@@ -568,14 +577,21 @@ async def insert_news_articles_autosession(rows: Iterable[NewsArticleRow]) -> in
 
 
 async def read_recent_news_autosession(
-    market: str, *, symbol: str | None = None, limit: int = 20, max_age_days: int = 30,
+    market: str,
+    *,
+    symbol: str | None = None,
+    limit: int = 20,
+    max_age_days: int = 30,
+    include_sentiment: bool = False,
 ) -> list[dict[str, Any]]:
     """Open own session + read. Errors logged; returns [] so the read
     path falls through cleanly to upstream."""
     try:
         async with AsyncSessionLocal() as db:
             return await read_recent_news(
-                db, market, symbol=symbol, limit=limit, max_age_days=max_age_days,
+                db, market,
+                symbol=symbol, limit=limit, max_age_days=max_age_days,
+                include_sentiment=include_sentiment,
             )
     except Exception as exc:
         log.warning("ingest.news.read_error",

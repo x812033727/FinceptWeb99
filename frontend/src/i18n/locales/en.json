@@ -73,8 +73,10 @@
     "remaining": "remaining",
     "market_overview": "Market Overview",
     "quick_access": "Quick Access",
-    "latest_news": "Latest News",
+    "latest_news": "US News",
+    "latest_tw_news": "TW News",
     "market_news": "Market News",
+    "tw_market_news": "TW Market News",
     "loading_news": "Loading news…",
     "no_news": "No news available right now",
     "cards": {

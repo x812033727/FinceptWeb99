@@ -309,6 +309,12 @@ FinceptWeb/
 - Backoff path now preserves the most recent real error in the
   health row (`skipped (...; last: HTTP 429 ...)`) so admins can
   diagnose without clearing Redis to wait out the cooldown.
+- Dashboard surfaces ingest output via `GET /api/tw/news/recent`
+  (DB-only, market-wide rows with `symbol IS NULL` only) — the
+  `RecentTWNews` card on `DashboardPage` renders titles with
+  bullish/bearish/neutral sentiment badges from the same row's
+  `sentiment_label` column. The US `RecentNews` card stays read-
+  through against `/us/news/SPY` since US news isn't ingested.
 
 ### News sentiment scoring
 - Hourly APScheduler job `tasks/score_news_sentiment.py` picks up

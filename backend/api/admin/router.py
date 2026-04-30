@@ -1,7 +1,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +24,7 @@ from .schemas import (
     ActiveUpdate,
     AdminUserItem,
     IngestHealthOut,
+    IngestRetryResult,
     LLMKeyInfo,
     LLMKeyUpsert,
     LLMKeyValidation,
@@ -50,6 +51,9 @@ Admin = Annotated[dict, Depends(require_admin)]
 DB = Annotated[AsyncSession, Depends(get_db)]
 
 VALID_ROLES = {r.value for r in UserRole}
+RETRYABLE_INGEST_JOBS = {
+    "ingest_news_tw": "Taiwan news ingest",
+}
 
 
 @router.get("/stats", response_model=SystemStats)
@@ -364,6 +368,40 @@ async def ingest_health(_: Admin) -> list[IngestHealthOut]:
         )
         for h in await ingest_repo.list_health()
     ]
+
+
+async def _run_ingest_job_once(job_id: str) -> None:
+    if job_id == "ingest_news_tw":
+        from tasks.ingest_news_tw import run
+
+        await run()
+
+
+@router.post("/ingest/{job_id}/retry", response_model=IngestRetryResult)
+async def retry_ingest_job(
+    job_id: str, background_tasks: BackgroundTasks, _: Admin,
+) -> IngestRetryResult:
+    """Clear a job's Redis backoff and queue one immediate run.
+
+    The scheduled job still owns locking and health recording. This endpoint
+    only lets an operator retry after fixing the upstream cause instead of
+    waiting for the exponential backoff TTL to expire.
+    """
+    if job_id not in RETRYABLE_INGEST_JOBS:
+        raise HTTPException(404, f"ingest job is not retryable: {job_id}")
+
+    await ingest_repo.clear_failures(job_id)
+    await ingest_repo.record_health(
+        job_id,
+        ok=False,
+        row_count=0,
+        error="manual retry queued; previous backoff cleared",
+    )
+    background_tasks.add_task(_run_ingest_job_once, job_id)
+    return IngestRetryResult(
+        status="queued",
+        message=f"{RETRYABLE_INGEST_JOBS[job_id]} retry queued",
+    )
 
 
 @router.post("/llm-keys/{provider}/test", response_model=LLMKeyValidation)

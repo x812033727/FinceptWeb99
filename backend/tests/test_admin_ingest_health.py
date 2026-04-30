@@ -73,3 +73,59 @@ async def test_ingest_health_returns_empty_when_no_jobs(
 
     assert r.status_code == 200
     assert r.json() == []
+
+
+@pytest.mark.asyncio
+async def test_ingest_retry_requires_admin(client: AsyncClient):
+    token = await _register_login(client, "ingest_retry_viewer@test.com")
+    r = await client.post(
+        "/api/admin/ingest/ingest_news_tw/retry",
+        headers=_auth(token),
+    )
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_ingest_retry_unknown_job_404(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    email = "ingest_retry_unknown_admin@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client=client)
+
+    r = await client.post(
+        "/api/admin/ingest/not_a_real_job/retry",
+        headers=_auth(token),
+    )
+
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_ingest_retry_clears_backoff_and_queues_run(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    email = "ingest_retry_admin@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client=client)
+
+    with patch(
+        "services.ingest.repository.clear_failures",
+        AsyncMock(),
+    ) as clear_failures, patch(
+        "services.ingest.repository.record_health",
+        AsyncMock(),
+    ) as record_health, patch(
+        "api.admin.router._run_ingest_job_once",
+        AsyncMock(),
+    ) as retry_job:
+        r = await client.post(
+            "/api/admin/ingest/ingest_news_tw/retry",
+            headers=_auth(token),
+        )
+
+    assert r.status_code == 200
+    assert r.json()["status"] == "queued"
+    clear_failures.assert_awaited_once_with("ingest_news_tw")
+    record_health.assert_awaited_once()
+    retry_job.assert_awaited_once_with("ingest_news_tw")

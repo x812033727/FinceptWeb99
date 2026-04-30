@@ -34,6 +34,7 @@ from services.ingest.repository import (
     backoff_remaining_seconds,
     clear_failures,
     get_failure_count,
+    get_health,
     insert_news_articles,
     record_failure,
     record_health,
@@ -141,16 +142,24 @@ async def run() -> None:
         if remaining > 0:
             failures = await get_failure_count(JOB_ID)
             mins = max(1, remaining // 60)
+            previous = await get_health(JOB_ID)
+            last_error = (
+                previous.error
+                if previous and previous.error and not previous.error.startswith("skipped")
+                else None
+            )
+            error = (
+                f"skipped (backoff after {failures} failures, "
+                f"~{mins} min remaining)"
+            )
+            if last_error:
+                error = f"{error}; last error: {last_error}"
             log.info(
                 "ingest_news_tw.skipped_backoff",
                 extra={"failures": failures, "seconds_remaining": remaining},
             )
             await record_health(
-                JOB_ID, ok=False, row_count=0,
-                error=(
-                    f"skipped (backoff after {failures} failures, "
-                    f"~{mins} min remaining)"
-                ),
+                JOB_ID, ok=False, row_count=0, error=error,
             )
             return
 

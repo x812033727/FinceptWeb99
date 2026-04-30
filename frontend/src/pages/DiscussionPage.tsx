@@ -206,6 +206,24 @@ async function concludeSession(id: string): Promise<{ conclusion: Conclusion }> 
   return res.data;
 }
 
+interface RoundContextSnapshot {
+  round: number;
+  // The full gather_market_context dict — shape evolves as new
+  // blocks are added (international_sentiment, top_revenue_growers,
+  // …). We accept any so the UI doesn't need a TS type bump every
+  // time the backend grows a new field; component reads known keys
+  // defensively.
+  context: Record<string, unknown>;
+  captured_at: string;
+}
+
+async function fetchRoundContexts(id: string): Promise<RoundContextSnapshot[]> {
+  const res = await api.get<RoundContextSnapshot[]>(
+    `/discussion/sessions/${id}/contexts`,
+  );
+  return res.data;
+}
+
 interface AutoRunConfig {
   enabled: boolean;
   persona_ids: string[];
@@ -1377,6 +1395,9 @@ export default function DiscussionPage() {
           {detail?.conclusion && (
             <ConclusionCard detail={detail} personaName={personaName} />
           )}
+          {detail && (
+            <RoundContextsCard discussionId={detail.id} />
+          )}
           <div ref={bottomRef} />
         </div>
       </div>
@@ -1601,6 +1622,219 @@ function ConclusionCard({
             </span>
           </div>
         </>
+      )}
+    </div>
+  );
+}
+
+
+// ── round context replay card ─────────────────────────────────────
+// Surfaces the per-round `gather_market_context` snapshots persisted
+// by PR #135. Lets the user audit "what data the personas saw at
+// the time" instead of re-deriving from current market state.
+//
+// Each round renders a small headline summary (大盤 / 新聞 / 外資 /
+// 月營收) plus a collapsible raw-JSON block for power users / debug.
+// Initially collapsed — the section is opt-in audit material, not
+// primary reading on every visit.
+
+interface RoundCtxSummary {
+  taiex_value?: number | null;
+  taiex_history_change_pct?: number | null;
+  news_bullish?: number;
+  news_bearish?: number;
+  intl_bullish?: number;
+  intl_bearish?: number;
+  top_foreign_buyer?: { symbol: string; industry?: string | null; net?: number };
+  top_revenue_grower?: { symbol: string; industry?: string | null; yoy?: number };
+}
+
+function _summarizeContext(ctx: Record<string, unknown>): RoundCtxSummary {
+  const out: RoundCtxSummary = {};
+
+  const index = ctx.index as Record<string, unknown> | null | undefined;
+  if (index && typeof index === "object") {
+    const value = index.value;
+    if (typeof value === "number") out.taiex_value = value;
+    const history = index.history as Array<{ close?: number }> | undefined;
+    if (Array.isArray(history) && history.length >= 2) {
+      const first = history[0]?.close;
+      const last = history[history.length - 1]?.close;
+      if (typeof first === "number" && typeof last === "number" && first > 0) {
+        out.taiex_history_change_pct = (last - first) / first;
+      }
+    }
+  }
+
+  const news = ctx.news_sentiment as Record<string, unknown> | null | undefined;
+  if (news && typeof news === "object") {
+    if (typeof news.bullish === "number") out.news_bullish = news.bullish;
+    if (typeof news.bearish === "number") out.news_bearish = news.bearish;
+  }
+  const intl = ctx.international_sentiment as Record<string, unknown> | null | undefined;
+  if (intl && typeof intl === "object") {
+    if (typeof intl.bullish === "number") out.intl_bullish = intl.bullish;
+    if (typeof intl.bearish === "number") out.intl_bearish = intl.bearish;
+  }
+
+  const buyers = ctx.top_foreign_buyers as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(buyers) && buyers.length > 0) {
+    const top = buyers[0];
+    out.top_foreign_buyer = {
+      symbol: String(top.symbol ?? ""),
+      industry: (top.industry as string | undefined) ?? null,
+      net: typeof top.net_foreign_buy === "number" ? top.net_foreign_buy : undefined,
+    };
+  }
+
+  const growers = ctx.top_revenue_growers as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(growers) && growers.length > 0) {
+    const top = growers[0];
+    out.top_revenue_grower = {
+      symbol: String(top.symbol ?? ""),
+      industry: (top.industry as string | undefined) ?? null,
+      yoy: typeof top.revenue_yoy === "number" ? top.revenue_yoy : undefined,
+    };
+  }
+
+  return out;
+}
+
+function _formatCompactNumber(n: number): string {
+  // Foreign-buy volume is in shares; numbers like 12_345_678 are
+  // unreadable inline. Convert to 萬/億 (TW convention) so the
+  // headline stays terse.
+  const abs = Math.abs(n);
+  if (abs >= 1e8) return `${(n / 1e8).toFixed(2)} 億`;
+  if (abs >= 1e4) return `${(n / 1e4).toFixed(1)} 萬`;
+  return n.toLocaleString();
+}
+
+function RoundContextRow({ snap }: { snap: RoundContextSnapshot }) {
+  const { t, i18n } = useTranslation();
+  const [showJson, setShowJson] = useState(false);
+  const summary = useMemo(() => _summarizeContext(snap.context), [snap.context]);
+
+  const taiexLine = summary.taiex_value != null
+    ? `TAIEX ${_toFixedSmart(summary.taiex_value)}${
+        summary.taiex_history_change_pct != null
+          ? ` (${_signedPct(summary.taiex_history_change_pct)})`
+          : ""
+      }`
+    : null;
+
+  const newsLine = summary.news_bullish != null || summary.news_bearish != null
+    ? `${t("discussion.context_news_label")}：` +
+      `${t("discussion.context_bullish")} ${summary.news_bullish ?? 0} / ` +
+      `${t("discussion.context_bearish")} ${summary.news_bearish ?? 0}`
+    : null;
+
+  const buyerLine = summary.top_foreign_buyer
+    ? `${t("discussion.context_top_foreign")}：${summary.top_foreign_buyer.symbol}` +
+      (summary.top_foreign_buyer.industry
+        ? ` (${summary.top_foreign_buyer.industry})`
+        : "") +
+      (summary.top_foreign_buyer.net != null
+        ? ` ${_formatCompactNumber(summary.top_foreign_buyer.net)}`
+        : "")
+    : null;
+
+  const growerLine = summary.top_revenue_grower
+    ? `${t("discussion.context_top_revenue")}：${summary.top_revenue_grower.symbol}` +
+      (summary.top_revenue_grower.industry
+        ? ` (${summary.top_revenue_grower.industry})`
+        : "") +
+      (summary.top_revenue_grower.yoy != null
+        ? ` YoY ${_signedPct(summary.top_revenue_grower.yoy / 100)}`
+        : "")
+    : null;
+
+  return (
+    <div className="border border-border rounded p-2 space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-semibold text-primary">
+          {t("discussion.round_label", { round: snap.round })}
+        </span>
+        <span className="text-[10px] text-muted-foreground">
+          {new Date(snap.captured_at).toLocaleString(i18n.language, {
+            month: "2-digit", day: "2-digit",
+            hour: "2-digit", minute: "2-digit",
+          })}
+        </span>
+      </div>
+      <div className="space-y-0.5 text-[11px] text-foreground/80">
+        {taiexLine && <div>{taiexLine}</div>}
+        {newsLine && <div>{newsLine}</div>}
+        {buyerLine && <div>{buyerLine}</div>}
+        {growerLine && <div>{growerLine}</div>}
+      </div>
+      <button
+        type="button"
+        onClick={() => setShowJson((v) => !v)}
+        className="text-[10px] text-muted-foreground hover:text-primary"
+      >
+        {showJson
+          ? t("discussion.context_hide_json")
+          : t("discussion.context_show_json")}
+      </button>
+      {showJson && (
+        <pre className="mt-1 text-[10px] bg-card/40 border border-border rounded p-2 overflow-x-auto max-h-64 leading-tight">
+          {JSON.stringify(snap.context, null, 2)}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function RoundContextsCard({ discussionId }: { discussionId: string }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+
+  // Lazy-load the snapshots: don't burn the request until the user
+  // expands the card, since the JSON blob can be ~25KB and most
+  // visitors come to read the transcript, not audit the data.
+  const { data: snaps = [], isLoading } = useQuery<RoundContextSnapshot[]>({
+    queryKey: ["discussion-round-contexts", discussionId],
+    queryFn: () => fetchRoundContexts(discussionId),
+    enabled: open,
+    staleTime: 60_000,
+  });
+
+  return (
+    <div className="bg-card border border-border rounded-lg p-3 mt-4">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 w-full text-left text-xs font-medium text-foreground hover:text-primary transition-colors"
+        aria-expanded={open}
+      >
+        <span className="text-[9px] text-muted-foreground w-2.5 inline-block">
+          {open ? "▼" : "▶"}
+        </span>
+        {t("discussion.context_replay_title")}
+        {snaps.length > 0 && (
+          <span className="ml-auto text-[10px] text-muted-foreground">
+            {t("discussion.context_replay_count", { n: snaps.length })}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2">
+          <p className="text-[10px] text-muted-foreground leading-relaxed">
+            {t("discussion.context_replay_subtitle")}
+          </p>
+          {isLoading ? (
+            <p className="text-[10px] text-muted-foreground animate-pulse">
+              …
+            </p>
+          ) : snaps.length === 0 ? (
+            <p className="text-[10px] text-muted-foreground">
+              {t("discussion.context_replay_empty")}
+            </p>
+          ) : (
+            snaps.map((s) => <RoundContextRow key={s.round} snap={s} />)
+          )}
+        </div>
       )}
     </div>
   );

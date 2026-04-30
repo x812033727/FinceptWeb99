@@ -25,6 +25,7 @@ from models.news_article import NewsArticle
 from models.ohlcv_daily import OhlcvDaily
 from models.quote_snapshot import QuoteSnapshot
 from models.tw_chip_metrics import TwInstitutionalDaily, TwMarginDaily
+from models.tw_revenue_monthly import TwRevenueMonthly
 
 log = logging.getLogger(__name__)
 
@@ -397,6 +398,152 @@ async def read_top_foreign_buyers(
         by_symbol[r.symbol] = by_symbol.get(r.symbol, 0) + net
     ordered = sorted(by_symbol.items(), key=lambda kv: kv[1], reverse=True)
     return [{"symbol": sym, "net_foreign_buy": net} for sym, net in ordered[:limit]]
+
+
+# ── TW monthly revenue ─────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class RevenueMonthlyRow:
+    """One company's monthly revenue + growth percentages."""
+    market: str
+    symbol: str
+    ts: date
+    revenue: int | None
+    revenue_yoy: float | None
+    revenue_mom: float | None
+    source: str
+
+
+_REVENUE_FIELDS = (
+    "market", "symbol", "ts",
+    "revenue", "revenue_yoy", "revenue_mom",
+    "source",
+)
+
+
+async def upsert_revenue_monthly(
+    db: AsyncSession, rows: Iterable[RevenueMonthlyRow],
+) -> int:
+    """Bulk upsert. ON CONFLICT (market, symbol, ts) overwrites the
+    metric columns + source — re-pulling the same month after a
+    correction by FinMind / TWSE replaces the stale values."""
+    payload = [
+        {
+            "market":      r.market,
+            "symbol":      r.symbol,
+            "ts":          r.ts,
+            "revenue":     r.revenue,
+            "revenue_yoy": r.revenue_yoy,
+            "revenue_mom": r.revenue_mom,
+            "source":      r.source,
+        }
+        for r in rows
+    ]
+    if not payload:
+        return 0
+
+    update_cols = ("revenue", "revenue_yoy", "revenue_mom", "source")
+
+    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
+    if dialect == "sqlite":
+        stmt = sqlite_insert(TwRevenueMonthly).values(payload)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["market", "symbol", "ts"],
+            set_={k: getattr(stmt.excluded, k) for k in update_cols},
+        )
+    else:
+        stmt = pg_insert(TwRevenueMonthly).values(payload)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["market", "symbol", "ts"],
+            set_={k: getattr(stmt.excluded, k) for k in update_cols},
+        )
+    await db.execute(stmt)
+    await db.commit()
+    return len(payload)
+
+
+def _revenue_row_out(r: TwRevenueMonthly) -> dict[str, Any]:
+    """Output shape mirrors the FinMind connector — drop-in for
+    `tw_market_service.get_revenue` callers."""
+    return {
+        "date":        r.ts.isoformat(),
+        "symbol":      r.symbol,
+        "revenue":     int(r.revenue) if r.revenue is not None else 0,
+        "revenue_yoy": float(r.revenue_yoy) if r.revenue_yoy is not None else 0.0,
+        "revenue_mom": float(r.revenue_mom) if r.revenue_mom is not None else 0.0,
+    }
+
+
+async def read_revenue_range(
+    db: AsyncSession, market: str, symbol: str, start: date, end: date,
+) -> list[dict[str, Any]]:
+    stmt = (
+        select(TwRevenueMonthly)
+        .where(
+            TwRevenueMonthly.market == market,
+            TwRevenueMonthly.symbol == symbol,
+            TwRevenueMonthly.ts >= start,
+            TwRevenueMonthly.ts <= end,
+        )
+        .order_by(TwRevenueMonthly.ts.asc())
+    )
+    rows = (await db.scalars(stmt)).all()
+    return [_revenue_row_out(r) for r in rows]
+
+
+async def read_top_revenue_growers(
+    db: AsyncSession,
+    market: str = "TW",
+    *,
+    limit: int = 10,
+    asof: date | None = None,
+) -> list[dict[str, Any]]:
+    """Top-N TW symbols by latest reported month's YoY revenue growth.
+
+    "Latest month" = the most recent `ts` present for `market` in
+    `tw_revenue_monthly`. Returns an empty list when the archive has
+    nothing for the market. Skips rows with NULL `revenue_yoy` so a
+    company that just IPO'd (no prior year baseline) doesn't push a
+    real grower off the list.
+    """
+    asof_stmt = (
+        select(TwRevenueMonthly.ts)
+        .where(TwRevenueMonthly.market == market)
+        .order_by(TwRevenueMonthly.ts.desc())
+        .limit(1)
+    )
+    latest = await db.scalar(asof_stmt)
+    if latest is None:
+        return []
+    target = asof or latest
+
+    stmt = (
+        select(TwRevenueMonthly)
+        .where(
+            TwRevenueMonthly.market == market,
+            TwRevenueMonthly.ts == target,
+            TwRevenueMonthly.revenue_yoy.isnot(None),
+        )
+    )
+    rows = (await db.scalars(stmt)).all()
+    if not rows:
+        return []
+    rows_sorted = sorted(
+        rows,
+        key=lambda r: float(r.revenue_yoy) if r.revenue_yoy is not None else -1e9,
+        reverse=True,
+    )
+    return [
+        {
+            "symbol":      r.symbol,
+            "ts":          r.ts.isoformat(),
+            "revenue":     int(r.revenue) if r.revenue is not None else 0,
+            "revenue_yoy": float(r.revenue_yoy) if r.revenue_yoy is not None else None,
+            "revenue_mom": float(r.revenue_mom) if r.revenue_mom is not None else None,
+        }
+        for r in rows_sorted[:limit]
+    ]
 
 
 async def read_market_margin_balance_trend(

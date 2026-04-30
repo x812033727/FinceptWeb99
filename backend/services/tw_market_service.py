@@ -406,22 +406,45 @@ async def get_margin(symbol: str, days: int = 30) -> list[dict[str, Any]]:
 # ── Monthly revenue (月營收) ──────────────────────────────────────
 
 async def get_revenue(symbol: str, months: int = 12) -> list[dict[str, Any]]:
+    """月營收 read tier:
+        Redis cache  →  DB (tw_revenue_monthly, populated by the
+        daily FinMind market-wide ingest)  →  live FinMind per-
+        symbol  →  MOPS scrape (current month only).
+
+    DB tier saves the per-stock detail page and discussion
+    aggregator from burning FinMind quota every read. Sourced from
+    the same FinMind dataset, so DB and live values are equivalent.
+    """
+    from services.ingest.repository import read_revenue_range
+
     key = key_revenue(symbol)
     cached = await cache_get(key)
     if cached:
         return json.loads(cached)
 
-    start = _start_date(months)
+    today = date.today()
+    start = today - timedelta(days=months * 31)
+
+    # ── Tier 2: Postgres archive ────────────────────────────────
+    try:
+        from db.session import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            db_rows = await read_revenue_range(db, "TW", symbol, start, today)
+        if db_rows:
+            await cache_set(key, json.dumps(db_rows), TTL_REVENUE)
+            return db_rows
+    except Exception:
+        pass
+
     result: list[dict] = []
     try:
-        result = await finmind.get_monthly_revenue(symbol, start)
+        result = await finmind.get_monthly_revenue(symbol, start.isoformat())
     except Exception:
         pass
 
     if not result:
         # MOPS fallback: current month only
         try:
-            today = date.today()
             result = await mops.get_monthly_revenue(symbol, today.year, today.month)
         except Exception:
             pass

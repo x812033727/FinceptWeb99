@@ -420,6 +420,11 @@ async def gather_market_context(
         # to reason about empty per-market shapes.
         "top_foreign_buyers": [],
         "margin_balance_trend": None,
+        # `top_revenue_growers` is the ranked YoY revenue growth in
+        # the latest reported month (PR #133). Populated by
+        # `tasks/ingest_revenue_tw`; empty until the first ingest
+        # cycle finishes on a fresh deploy. TW-only.
+        "top_revenue_growers": [],
         # Each connector failure appends `{"source": "...", "error": "..."}`
         # so the personas (and the synthesizer) can mention "context was
         # incomplete" instead of confidently citing missing data. Logged
@@ -482,6 +487,14 @@ async def gather_market_context(
             )
         except Exception as exc:
             _record_error("margin_balance_trend", exc)
+
+        try:
+            from services.ingest.repository import read_top_revenue_growers
+            ctx["top_revenue_growers"] = await read_top_revenue_growers(
+                db, market="TW", limit=10,
+            )
+        except Exception as exc:
+            _record_error("top_revenue_growers", exc)
 
     try:
         from services.news_sentiment_service import read_recent_market_sentiment

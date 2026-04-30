@@ -73,7 +73,8 @@ FinceptWeb/
 │   │   │                 #   0017 runtime_settings ·
 │   │   │                 #   0018 discussion_verdict · 0019 discussion_day5_close ·
 │   │   │                 #   0020 discussion_auto_run_configs ·
-│   │   │                 #   0021 tw_institutional_daily + tw_margin_daily
+│   │   │                 #   0021 tw_institutional_daily + tw_margin_daily ·
+│   │   │                 #   0022 tw_revenue_monthly
 │   │   ├── base.py       # DeclarativeBase with naming convention
 │   │   ├── seed.py       # Admin user seed on first boot
 │   │   └── session.py    # Async engine + get_db dependency
@@ -364,6 +365,19 @@ FinceptWeb/
   market-wide margin + short balance). Wired into
   `gather_market_context` for `market='TW'` only — TWSE-specific
   data shouldn't bleed into a US discussion's prompt context.
+
+### TW monthly revenue ingest
+- Daily FinMind market-wide cron `tasks/ingest_revenue_tw.py` at
+  09:00 UTC pulls every listed company's monthly revenue (90-day
+  lookback so late filers + corrections land within a week of
+  publication) and upserts into `tw_revenue_monthly`. One FinMind
+  call (data_id="") returns the entire market — no per-symbol fan-
+  out, well below the free-tier hourly limit.
+- Read tier: `tw_market_service.get_revenue` consults Postgres
+  before falling through to live FinMind per-symbol → MOPS scrape.
+- Discussion context aggregator `read_top_revenue_growers` returns
+  the top-10 YoY revenue growers in the latest reported month.
+  Wired into `gather_market_context` for `market='TW'` only.
 
 ### News sentiment scoring
 - Hourly APScheduler job `tasks/score_news_sentiment.py` picks up

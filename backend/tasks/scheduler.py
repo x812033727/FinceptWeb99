@@ -210,6 +210,24 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # 月營收 (monthly revenue). TW securities law gives companies
+    # until the 10th of the following month to publish; running daily
+    # at 09:00 UTC picks up late filers + corrections continuously
+    # without needing a precise "everyone's filed" tick. Sits well
+    # after the post-close cluster so a slow upstream window doesn't
+    # pile this on top of the chip-metric / fundamentals tasks. One
+    # FinMind market-wide call (data_id="") returns every listed
+    # company's last 90 days.
+    from tasks.ingest_revenue_tw import run as run_ingest_revenue_tw
+    scheduler.add_job(
+        run_ingest_revenue_tw,
+        trigger=CronTrigger(hour=9, minute=0, timezone="UTC"),
+        id="ingest_revenue_tw",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── News sentiment scoring ────────────────────────────────────
     # Hourly: picks up news rows with NULL sentiment_score and runs them
     # through Claude Haiku in batches. Cheap (one prompt scores 20

@@ -161,6 +161,31 @@ async def get_monthly_revenue(symbol: str, start_date: str, end_date: str | None
     ]
 
 
+async def get_monthly_revenue_market_wide(
+    start_date: str, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """Pull TaiwanStockMonthRevenue with `data_id=""` to get every
+    company's monthly revenue in a single FinMind call. Saves ~2000×
+    quota vs per-symbol fan-out — used by the daily ingest task.
+
+    Each FinMind row carries its own `stock_id`, so we don't have to
+    thread a symbol through. Rows with missing stock_id are dropped
+    rather than poisoning the upsert with empty PKs.
+    """
+    rows = await _query("TaiwanStockMonthRevenue", "", start_date, end_date)
+    return [
+        {
+            "date":        r["date"],
+            "symbol":      r.get("stock_id", ""),
+            "revenue":     r.get("revenue", 0),           # 千元 NTD
+            "revenue_mom": r.get("revenue_month", 0),
+            "revenue_yoy": r.get("revenue_year", 0),
+        }
+        for r in rows
+        if r.get("stock_id")
+    ]
+
+
 # ── Financials ────────────────────────────────────────────────────
 
 async def get_financials(symbol: str, start_date: str = "2020-01-01") -> list[dict[str, Any]]:

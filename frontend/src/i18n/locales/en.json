@@ -138,6 +138,7 @@
     "degraded_banner": "Some rows could not be fetched from any provider — they are shown with a placeholder price."
   },
   "stock": {
+    "quoted_at": "Quoted at",
     "income_statement": "Income Statement",
     "balance_sheet": "Balance Sheet",
     "cash_flow": "Cash Flow",

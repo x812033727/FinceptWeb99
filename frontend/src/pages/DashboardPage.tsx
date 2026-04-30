@@ -8,6 +8,7 @@ import { DataSourceBadge } from "@/components/DataSourceBadge";
 // ── Market indices ─────────────────────────────────────────────────
 
 function IndexCard({ symbol, label }: { symbol: string; label: string }) {
+  const { i18n } = useTranslation();
   const { data } = useQuery({
     queryKey: ["quote", "US", symbol],
     queryFn: () => api.get<Record<string, unknown>>(`/us/quote/${symbol}`).then((r) => r.data),
@@ -22,6 +23,12 @@ function IndexCard({ symbol, label }: { symbol: string; label: string }) {
   // upstream fails. Render that as "—" instead of a misleading
   // 0.00 / +0.00% green pill that looks like the asset is at zero.
   const unavailable = data?.data_source === "unavailable";
+  const tsMs = data?.ts as number | undefined;
+  const localTime = (typeof tsMs === "number" && tsMs > 0)
+    ? new Date(tsMs).toLocaleTimeString(i18n.language, {
+        hour: "2-digit", minute: "2-digit",
+      })
+    : null;
 
   return (
     <Link
@@ -41,6 +48,11 @@ function IndexCard({ symbol, label }: { symbol: string; label: string }) {
         {symbol}
         <DataSourceBadge source={data?.data_source as string | undefined} />
       </div>
+      {localTime && (
+        <div className="text-[10px] text-muted-foreground/70 mt-0.5 tabular-nums">
+          {localTime}
+        </div>
+      )}
     </Link>
   );
 }

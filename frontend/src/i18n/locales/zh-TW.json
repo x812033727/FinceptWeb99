@@ -138,6 +138,7 @@
     "degraded_banner": "部分股票暫時無法從任何資料源取得即時報價，下方表格仍會顯示這些股票（價格以佔位符顯示）。"
   },
   "stock": {
+    "quoted_at": "資料時間",
     "income_statement": "損益表",
     "balance_sheet": "資產負債表",
     "cash_flow": "現金流量表",

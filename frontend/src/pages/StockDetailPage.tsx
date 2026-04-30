@@ -1424,7 +1424,7 @@ function NewsFeed({ symbol, market }: { symbol: string; market: "US" | "TW" | "C
 // ── main page ──────────────────────────────────────────────────────
 
 export default function StockDetailPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { market = "US", symbol = "" } = useParams<{ market: string; symbol: string }>();
   const navigate = useNavigate();
   const mkt = market.toUpperCase() as Market;
@@ -1440,6 +1440,11 @@ export default function StockDetailPage() {
   // source so the hero badge updates as soon as the upstream changes
   // mid-session (e.g. Polygon recovers, primary→fallback switch).
   const [liveSource, setLiveSource] = useState<string | null>(null);
+  // Latest quote timestamp (epoch ms). Lets the header show "資料時間
+  // HH:MM:SS" so users can tell if they're looking at fresh ticks vs
+  // a stale REST snapshot served during the WS connection's first
+  // 5-second auth handshake.
+  const [liveTs, setLiveTs] = useState<number | null>(null);
 
   const { data: quote } = useQuery({
     queryKey: ["quote", mkt, sym],
@@ -1473,6 +1478,7 @@ export default function StockDetailPage() {
     if (typeof d.price === "number" && d.price) setLivePrice(d.price);
     if (typeof d.change_pct === "number") setLiveChange(d.change_pct);
     if (typeof d.data_source === "string") setLiveSource(d.data_source);
+    if (typeof d.ts === "number") setLiveTs(d.ts);
   });
 
   const displayPrice = livePrice ?? (quote?.price as number | undefined);
@@ -1530,6 +1536,23 @@ export default function StockDetailPage() {
           <div className="text-[10px] sm:text-xs text-muted-foreground mt-0.5">
             {mkt === "TW" ? "TWD" : (quote?.currency as string ?? "USD")}
           </div>
+          {(() => {
+            // Prefer the WS-driven liveTs (sub-second freshness during
+            // an active session); fall back to the REST snapshot's `ts`
+            // (set inside _normalize_quote at fetch time). Hide the
+            // line entirely if neither path produced a number — better
+            // than rendering "—" next to a real-looking price.
+            const tsMs = liveTs ?? (quote?.ts as number | undefined);
+            if (typeof tsMs !== "number" || tsMs <= 0) return null;
+            const localTime = new Date(tsMs).toLocaleTimeString(i18n.language, {
+              hour: "2-digit", minute: "2-digit", second: "2-digit",
+            });
+            return (
+              <div className="text-[10px] text-muted-foreground/70 mt-0.5 tabular-nums">
+                {t("stock.quoted_at")}：{localTime}
+              </div>
+            );
+          })()}
         </div>
       </div>
 

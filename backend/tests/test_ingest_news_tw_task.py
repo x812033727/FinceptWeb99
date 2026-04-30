@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.news_article import NewsArticle
+from services.ingest.repository import IngestHealth
 
 
 @pytest.fixture
@@ -340,6 +341,8 @@ async def test_skips_work_when_backoff_active(patch_session):
                AsyncMock(return_value=3600)), \
          patch("tasks.ingest_news_tw.get_failure_count",
                AsyncMock(return_value=2)), \
+         patch("tasks.ingest_news_tw.get_health",
+               AsyncMock(return_value=None)), \
          patch("tasks.ingest_news_tw.finmind.get_news", AsyncMock()) as fm, \
          patch("tasks.ingest_news_tw.record_health", AsyncMock()) as health:
         await ingest_news_tw.run()
@@ -349,6 +352,37 @@ async def test_skips_work_when_backoff_active(patch_session):
     assert kwargs["ok"] is False
     assert "skipped" in kwargs["error"]
     assert "2 failures" in kwargs["error"]
+
+
+@pytest.mark.asyncio
+async def test_backoff_skip_preserves_last_real_error(patch_session):
+    """The admin UI should keep showing the root cause while backoff
+    counts down, instead of replacing it with a generic skipped message."""
+    from tasks import ingest_news_tw
+
+    previous = IngestHealth(
+        job_id="ingest_news_tw",
+        last_run_at="2026-04-30T00:00:00+00:00",
+        ok=False,
+        row_count=0,
+        error="HTTP 429 Too Many Requests (quota exhausted)",
+    )
+
+    with patch("tasks.ingest_news_tw.acquire_lock", AsyncMock(return_value=True)), \
+         patch("tasks.ingest_news_tw.release_lock", AsyncMock()), \
+         patch("tasks.ingest_news_tw.backoff_remaining_seconds",
+               AsyncMock(return_value=7200)), \
+         patch("tasks.ingest_news_tw.get_failure_count",
+               AsyncMock(return_value=3)), \
+         patch("tasks.ingest_news_tw.get_health",
+               AsyncMock(return_value=previous)), \
+         patch("tasks.ingest_news_tw.record_health", AsyncMock()) as health:
+        await ingest_news_tw.run()
+
+    err = health.await_args.kwargs["error"]
+    assert "skipped" in err
+    assert "3 failures" in err
+    assert "HTTP 429" in err
 
 
 @pytest.mark.asyncio

@@ -189,3 +189,8 @@ class IngestHealthOut(BaseModel):
     ok: bool
     row_count: int
     error: str | None = None
+
+
+class IngestRetryResult(BaseModel):
+    status: str
+    message: str

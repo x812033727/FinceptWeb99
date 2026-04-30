@@ -1131,6 +1131,13 @@ interface IngestHealth {
   error: string | null;
 }
 
+interface IngestRetryResult {
+  status: string;
+  message: string;
+}
+
+const RETRYABLE_INGEST_JOBS = new Set(["ingest_news_tw"]);
+
 function timeAgo(iso: string | null): string {
   if (!iso) return "—";
   const then = new Date(iso).getTime();
@@ -1143,11 +1150,18 @@ function timeAgo(iso: string | null): string {
 }
 
 function IngestHealthCard() {
+  const qc = useQueryClient();
   const { data: rows = [], isLoading } = useQuery<IngestHealth[]>({
     queryKey: ["admin", "ingest-health"],
     queryFn: () => api.get("/admin/ingest/health").then((r) => r.data),
     refetchInterval: 60_000,
   });
+  const retry = useMutation({
+    mutationFn: (jobId: string) =>
+      api.post<IngestRetryResult>(`/admin/ingest/${jobId}/retry`).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "ingest-health"] }),
+  });
+  const retryingJobId = retry.isPending ? retry.variables : null;
 
   return (
     <div className="bg-card border border-border rounded-lg p-4 space-y-3">
@@ -1157,6 +1171,12 @@ function IngestHealthCard() {
           refreshes every 60s
         </span>
       </div>
+      {retry.isSuccess && (
+        <p className="text-xs text-green-500">{retry.data.message}</p>
+      )}
+      {retry.isError && (
+        <p className="text-xs text-red-500">Retry request failed. Please try again.</p>
+      )}
 
       {isLoading ? (
         <p className="text-xs text-muted-foreground animate-pulse">Loading…</p>
@@ -1174,6 +1194,7 @@ function IngestHealthCard() {
                 <th className="text-right py-1.5 pr-3">Rows</th>
                 <th className="text-left py-1.5 pr-3">Last Run</th>
                 <th className="text-left py-1.5">Error</th>
+                <th className="text-right py-1.5 pl-3">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/40">
@@ -1202,6 +1223,21 @@ function IngestHealthCard() {
                     title={r.error ?? undefined}
                   >
                     {r.error ?? ""}
+                  </td>
+                  <td className="py-1.5 pl-3 text-right">
+                    {RETRYABLE_INGEST_JOBS.has(r.job_id) ? (
+                      <button
+                        type="button"
+                        disabled={retry.isPending}
+                        onClick={() => retry.mutate(r.job_id)}
+                        title="Clear backoff and queue one immediate run"
+                        className="px-2 py-1 rounded border border-border bg-background hover:bg-accent/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {retryingJobId === r.job_id ? "Retrying..." : "Retry now"}
+                      </button>
+                    ) : (
+                      <span className="text-muted-foreground">-</span>
+                    )}
                   </td>
                 </tr>
               ))}

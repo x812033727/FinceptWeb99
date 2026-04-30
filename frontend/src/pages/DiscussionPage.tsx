@@ -457,7 +457,7 @@ function AutoRunConfigCard({
   const [rules, setRules] = useState("");
   const [personaIds, setPersonaIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [showSaved, setShowSaved] = useState(false);
 
   // Hydrate form fields once when the server config arrives. A ref guards
   // against re-hydrating on every refetch (which would clobber whatever
@@ -476,10 +476,16 @@ function AutoRunConfigCard({
     mutationFn: saveAutoRunConfig,
     onSuccess: (row) => {
       queryClient.setQueryData(["discussion-auto-run-config"], row);
-      setSavedAt(Date.now());
+      setShowSaved(true);
       setError(null);
     },
   });
+
+  useEffect(() => {
+    if (!showSaved) return;
+    const timer = window.setTimeout(() => setShowSaved(false), 3000);
+    return () => window.clearTimeout(timer);
+  }, [showSaved]);
 
   function togglePersona(id: string) {
     setPersonaIds((prev) =>
@@ -508,10 +514,6 @@ function AutoRunConfigCard({
       rules: rules.trim(),
     });
   }
-
-  // "Saved" indicator stays visible for 3s after a successful save so the
-  // user gets a clear ack without a toast.
-  const showSaved = savedAt !== null && Date.now() - savedAt < 3000;
 
   return (
     <div className="border border-border rounded-md p-2 bg-card/40">

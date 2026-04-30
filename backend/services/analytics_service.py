@@ -15,8 +15,16 @@ from analytics.backtest import run_backtest
 from services.us_market_service import get_history as us_history, get_fundamentals as us_fundamentals
 from services.tw_market_service import get_history as tw_history
 
-_executor = ProcessPoolExecutor(max_workers=2)
+_executor: ProcessPoolExecutor | None = None
 _TIMEOUT = 30.0   # seconds max for heavy computations
+
+
+def _get_executor() -> ProcessPoolExecutor:
+    """Create the process pool lazily so importing this module stays lightweight."""
+    global _executor
+    if _executor is None:
+        _executor = ProcessPoolExecutor(max_workers=2)
+    return _executor
 
 
 # ── DCF ───────────────────────────────────────────────────────────
@@ -119,7 +127,7 @@ async def run_var_analysis(
         loop = asyncio.get_running_loop()
         results["monte_carlo"] = await asyncio.wait_for(
             loop.run_in_executor(
-                _executor,
+                _get_executor(),
                 var_monte_carlo, aligned, w, portfolio_value, confidence, horizon_days,
             ),
             timeout=_TIMEOUT,
@@ -184,7 +192,7 @@ async def run_backtest_analysis(
     loop = asyncio.get_running_loop()
     result = await asyncio.wait_for(
         loop.run_in_executor(
-            _executor,
+            _get_executor(),
             run_backtest, df, strategy, params, initial_capital,
         ),
         timeout=_TIMEOUT,

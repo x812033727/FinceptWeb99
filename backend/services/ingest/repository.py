@@ -192,6 +192,15 @@ class QuoteSnapshotRow:
     source: str
 
 
+def _utc_timestamp(value: datetime) -> float:
+    """SQLite drops tzinfo, but quote snapshot timestamps are stored as UTC."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    else:
+        value = value.astimezone(UTC)
+    return value.timestamp()
+
+
 async def insert_quote_snapshot(db: AsyncSession, snap: QuoteSnapshotRow) -> None:
     """Insert one quote snapshot. Same (market, symbol, ts) is a no-op
     instead of an error — the refresh task runs every 60 s and we'd
@@ -237,7 +246,7 @@ async def read_latest_quote(
         .limit(1)
     )
     row = await db.scalar(stmt)
-    if row is None or row.ts.timestamp() < cutoff:
+    if row is None or _utc_timestamp(row.ts) < cutoff:
         return None
     return {
         "symbol":      row.symbol,
@@ -246,7 +255,7 @@ async def read_latest_quote(
         "change_pct":  float(row.change_pct) if row.change_pct is not None else None,
         "prev_close":  float(row.prev_close) if row.prev_close is not None else None,
         "volume":      int(row.volume) if row.volume is not None else 0,
-        "ts":          int(row.ts.timestamp() * 1000),
+        "ts":          int(_utc_timestamp(row.ts) * 1000),
         "data_source": row.source,
     }
 

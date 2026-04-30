@@ -16,13 +16,17 @@ import asyncio
 import json
 import logging
 import os
-import resource
 import sys
 from typing import Any
 
 from claude_agent_sdk import SdkMcpTool, tool
 
 from config import settings
+
+if os.name == "posix":
+    import resource
+else:
+    resource = None
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +72,8 @@ print(json.dumps({"stdout": buf.getvalue()[:4000], "result": result, "error": er
 
 def _preexec():
     """Apply RLIMITs before the subprocess calls exec()."""
+    if resource is None:
+        return
     mem_bytes = settings.CLAUDE_AGENT_PYTHON_MEM_MB * 1024 * 1024
     cpu_s = settings.CLAUDE_AGENT_PYTHON_CPU_S
     resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))

@@ -37,24 +37,28 @@ FinceptWeb/
 │   │   ├── auth/         # JWT 登入／註冊／刷新／登出、API 金鑰
 │   │   ├── us_market/    # 美股報價、歷史、基本面、選擇權、總經、新聞
 │   │   ├── tw_market/    # 台股行情、歷史、法人、融資券、月營收、新聞
+│   │   ├── crypto_market/ # Kraken-backed crypto 報價、歷史、篩選與搜尋
 │   │   ├── portfolio/    # 持倉、交易紀錄、P&L、最佳化
 │   │   ├── analytics/    # DCF、VaR、策略回測
-│   │   ├── ai_agents/    # SSE 串流對話（6 CFA 人格、4 LLM 供應商）
+│   │   ├── ai_agents/    # SSE 串流對話（19 人格、8 LLM 供應商）
+│   │   ├── discussion/   # 多專家圓桌討論、背景回合、結論與 auto-run
 │   │   ├── watchlist/    # 多觀察清單 CRUD + 即時報價擴充
 │   │   ├── alerts/       # 價格警報 CRUD
+│   │   ├── system/       # 版本檢查、Core Web Vitals 回報
 │   │   └── websocket/    # Auth-first WS、Redis Pub/Sub、delta 抑制
 │   ├── ai/               # LLM 路由器 + 代理人人格定義
 │   ├── analytics/        # 純計算：dcf.py、risk.py、backtest.py
 │   ├── auth/             # JWT handler + 角色權限
 │   ├── cache/            # Redis helpers（get/set/delete、key helpers）
 │   ├── data/
-│   │   ├── us/           # Polygon → yfinance 瀑布；FRED 連接器
-│   │   └── tw/           # TWSE → FinMind → MOPS 瀑布
-│   ├── db/               # Alembic 遷移、引擎、seed
+│   │   ├── us/           # Polygon → yfinance → Stooq → Finnhub；FRED
+│   │   ├── tw/           # TWSE → FinMind → MOPS 瀑布
+│   │   └── crypto/       # Kraken REST / WebSocket 與 Top 20 universe
+│   ├── db/               # Alembic 0001-0020、引擎、seed
 │   ├── middleware/        # Prometheus metrics 中介層
 │   ├── models/           # SQLAlchemy ORM：User、Portfolio、Holding 等
-│   ├── services/         # 業務邏輯（快取、瀑布）
-│   ├── tasks/            # APScheduler 排程任務
+│   ├── services/         # 業務邏輯（快取、瀑布、LLM routing）
+│   ├── tasks/            # APScheduler：行情、ingest、討論 auto-run、驗證
 │   └── tests/            # pytest（in-memory SQLite + AsyncMock Redis）
 ├── frontend/             # React 18 + TypeScript + Vite
 │   ├── public/           # PWA：manifest、service worker、icon
@@ -64,8 +68,8 @@ FinceptWeb/
 │       │   ├── layout/   # AppLayout、Sidebar、NotificationBell
 │       │   └── portfolio/ # AllocationPie、HoldingsTable
 │       ├── hooks/        # useWebSocket、usePortfolio
-│       ├── pages/        # 每個路由一個檔案（共 13 頁）
-│       ├── store/        # Zustand：authStore、notificationStore、themeStore
+│       ├── pages/        # 每個路由一個檔案（共 14 頁）
+│       ├── store/        # Zustand：authStore、notificationStore、themeStore、toastStore
 │       ├── types/        # TypeScript 介面
 │       └── lib/          # api.ts（axios）、auth.ts（silentRefresh）
 ├── helm/fincept-web/     # Kubernetes Helm chart
@@ -83,8 +87,9 @@ FinceptWeb/
 | 📊 **CFA 級分析** | DCF 估值模型、投資組合最佳化（均值-變異數）、VaR（歷史／參數／Monte Carlo）、策略回測 |
 | 🇺🇸 **美股整合** | 即時報價、歷史 K 線、基本面、選擇權鏈、選股篩選器、S&P 500 搜尋、盈餘日期 |
 | 🇹🇼 **台股整合** | 上市櫃即時行情、法人買賣超、融資融券、月營收、財報（MOPS）、K 線圖 |
-| 🤖 **AI 代理人** | 6 位 CFA 人格（equity_analyst、risk_manager、portfolio_advisor、macro_analyst、options_strategist、quant_researcher）；支援 OpenAI、Anthropic、Gemini、Ollama |
-| 📈 **即時串流** | WebSocket（Auth-first）、Redis Pub/Sub 扇出、delta 抑制、30s 心跳 |
+| 🪙 **加密貨幣整合** | Kraken REST + WebSocket，Top 20 crypto 報價、歷史、篩選與搜尋 |
+| 🤖 **AI 代理人與討論** | 19 位人格、8 個 LLM provider、SSE 串流聊天、多專家圓桌討論、每日 per-user auto-run 與 5 日後自動驗證 |
+| 📈 **即時串流** | WebSocket（Auth-first）、Redis Pub/Sub 扇出、delta 抑制、30s 心跳；crypto 由 Kraken pump 推送 |
 | 🔬 **量化計算** | DCF 敏感度 5×3 網格、VaR Cholesky 相關、事件驅動回測（SMA crossover、RSI）|
 | 👥 **多用戶管理** | JWT（15min access + 7d refresh）、API 金鑰、三級角色（viewer / analyst / admin）|
 | 🐳 **容器化部署** | Docker Compose 一鍵啟動，Kubernetes Helm chart 水平擴展 |
@@ -270,6 +275,16 @@ GET  /api/tw/news/{symbol}           # 個股新聞
 GET  /api/tw/indices                 # 大盤指數
 ```
 
+### 加密貨幣
+
+```
+GET  /api/crypto/quote/{symbol}      # 即時報價（e.g., BTC）
+GET  /api/crypto/history/{symbol}    # 歷史 K 線
+GET  /api/crypto/screener            # Top 20 crypto 篩選器
+GET  /api/crypto/search              # 代號搜尋
+GET  /api/crypto/news/{symbol}       # 相關新聞
+```
+
 ### 投資組合
 
 ```
@@ -296,6 +311,17 @@ POST /api/analytics/backtest         # 策略回測（sma_crossover / rsi_mean_r
 POST /api/ai/chat                    # SSE 串流對話（指定 persona + provider）
 ```
 
+### 多專家討論
+
+```
+GET  /api/discussion/sessions        # 列出討論
+POST /api/discussion/sessions        # 建立討論
+POST /api/discussion/sessions/{id}/round     # 背景執行一輪專家發言（SSE）
+POST /api/discussion/sessions/{id}/conclude  # 產生結論
+GET  /api/discussion/auto-run/config # 讀取每日自動討論設定
+PUT  /api/discussion/auto-run/config # 更新 auto-run topic / rules / personas
+```
+
 ### 觀察清單 / 警報
 
 ```
@@ -308,6 +334,13 @@ POST /api/alerts                     # 建立警報
 DELETE /api/alerts/{id}              # 刪除警報
 ```
 
+### 系統
+
+```
+GET  /api/system/version             # 版本與 GitHub release 狀態
+POST /api/system/web-vital           # Core Web Vitals → Prometheus
+```
+
 ---
 
 ## 技術棧
@@ -317,13 +350,13 @@ DELETE /api/alerts/{id}              # 刪除警報
 | **後端框架** | FastAPI 0.110+、Python 3.11+ |
 | **資料庫** | PostgreSQL 15+（非同步，asyncpg）|
 | **快取** | Redis 7（報價 15s、歷史 4h、基本面 24h）|
-| **即時串流** | WebSocket（FastAPI 原生）+ Redis Pub/Sub |
-| **前端框架** | React 18、TypeScript、Vite |
+| **即時串流** | WebSocket（FastAPI 原生）+ Redis Pub/Sub + Kraken ticker pump |
+| **前端框架** | React 18、TypeScript、Vite 6 |
 | **UI 元件庫** | shadcn/ui、Tailwind CSS |
 | **圖表** | lightweight-charts v4、Recharts |
 | **狀態管理** | Zustand、TanStack Query |
 | **量化計算** | NumPy、Pandas、SciPy |
-| **排程** | APScheduler（US 10s / TW 60s）|
+| **排程** | APScheduler（US 10s、TW 60s、TW EOD、ingest、news sentiment、discussion auto-run / verifier）|
 | **認證** | JWT（python-jose）、slowapi 限速 |
 | **容器化** | Docker、Docker Compose、Kubernetes Helm |
 | **可觀測性** | Prometheus（/metrics）、JSON 結構化日誌 |
@@ -341,7 +374,7 @@ DELETE /api/alerts/{id}              # 刪除警報
 | **台股支援** | 無 | 完整支援（TWSE + FinMind + MOPS）|
 | **UI 存取** | 需安裝桌面客戶端 | 任何瀏覽器 |
 | **API 對外開放** | 無 | REST API + WebSocket |
-| **AI 代理人** | 無 | 6 CFA 人格（伺服器端，多人共用）|
+| **AI 代理人** | 無 | 19 人格、多 LLM provider、伺服器端多人共用 |
 | **效能** | 原生二進制，最快 | 受網路延遲影響，可水平擴展 |
 
 ---
@@ -358,7 +391,7 @@ DELETE /api/alerts/{id}              # 刪除警報
 | ✅ **完成** | Phase 5：APScheduler（美股 10s / 台股 60s、off-hours 節流）|
 | ✅ **完成** | Phase 6：投資組合管理（多幣別 P&L、均攤成本、均值-變異數最佳化）|
 | ✅ **完成** | Phase 7：CFA 分析引擎（DCF + 敏感度、VaR 三種方法、事件驅動回測）|
-| ✅ **完成** | Phase 8：AI 代理人（6 CFA 人格、OpenAI / Anthropic / Gemini / Ollama SSE）|
+| ✅ **完成** | Phase 8：AI 代理人（19 人格、多 LLM provider、SSE 串流）|
 | ✅ **完成** | Phase 9：完整 React UI（K 線圖、選股篩選器、個股詳情、Sidebar）|
 | ✅ **完成** | Phase 10：Docker 生產強化（多階段 build、nginx 限速、Redis 認證）|
 | ✅ **完成** | Phase 11：Kubernetes Helm chart（ingress、HPA、secrets）|
@@ -367,7 +400,7 @@ DELETE /api/alerts/{id}              # 刪除警報
 | ✅ **完成** | Phase 14：觀察清單多清單 CRUD + 即時報價擴充 |
 | ✅ **完成** | Phase 15：價格警報 CRUD + WebSocket 推送 |
 | ✅ **完成** | Phase 16：Admin 頁面（使用者管理、角色升降、系統統計）|
-| ✅ **完成** | Phase 17：AI 聊天頁面（SSE 串流、6 人格切換、4 LLM 供應商）|
+| ✅ **完成** | Phase 17：AI 聊天頁面（SSE 串流、人格切換、多 LLM 供應商）|
 | ✅ **完成** | Phase 18：Settings 頁面（個人資料、密碼、API 金鑰管理）|
 | ✅ **完成** | Phase 19：TanStack Virtual 選股篩選器（大量列渲染）|
 | ✅ **完成** | Phase 20：回測 UI（策略參數、股票曲線圖、指標表格）|
@@ -378,6 +411,10 @@ DELETE /api/alerts/{id}              # 刪除警報
 | ✅ **完成** | Phase 25：修正前端雙 /api 前綴錯誤、新增 analytics API 整合測試 |
 | ✅ **完成** | Phase 26：PortfolioPage 主題色修正、新增 portfolio 延伸整合測試 |
 | ✅ **完成** | Phase 27：CandlestickChart 主題感知修正、新增 US market API 整合測試 |
+| ✅ **完成** | Phase 28：Crypto market（Kraken REST / WS、Top 20 universe、watchlist enrichment）|
+| ✅ **完成** | Phase 29：資料歸檔（OHLCV、quote snapshots、fundamentals、news、sentiment scoring）|
+| ✅ **完成** | Phase 30：多專家 discussion（背景 round、結論 synthesizer、per-user auto-run、自動驗證）|
+| ✅ **完成** | Phase 31：系統版本檢查與 Core Web Vitals → Prometheus |
 | 🔄 **規劃中** | 選擇權鏈分析頁面、隱含波動率曲面 |
 | 🔄 **規劃中** | 台股 XBRL 財報深度整合 |
 | 🔄 **規劃中** | 多因子選股模型（ML）|

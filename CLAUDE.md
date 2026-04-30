@@ -108,7 +108,7 @@ FinceptWeb/
 │   │                     # Discussion-adjacent: ingest_news_tw (hourly),
 │   │                     #   score_news_sentiment (every 30 min, fail-closed cap)
 │   ├── tests/            # pytest — in-memory SQLite + AsyncMock Redis
-│   │                     # 70 files, ~700 tests. Categories:
+│   │                     # 74 files, 1082 tests. Categories:
 │   │                     #   API HTTP   : test_*_api.py        (admin, auth, alerts,
 │   │                     #                                      analytics, discussion,
 │   │                     #                                      portfolio, tw_market 42,
@@ -230,7 +230,8 @@ FinceptWeb/
 - DCF: sensitivity grid 5×3 (WACC × growth), bull/base/bear scenarios
 - VaR: historical / parametric / Monte Carlo (Cholesky correlation)
 - Backtest: SMA crossover + RSI strategies, event-driven
-- All heavy paths run in `ProcessPoolExecutor(max_workers=2)` with 30s timeout
+- Heavy VaR Monte Carlo / backtest paths run in a lazily-created
+  `ProcessPoolExecutor(max_workers=2)` with 30s timeout
 
 ### AI agents
 - **19 personas** across two groups:
@@ -380,11 +381,11 @@ npm run test:watch  # watch mode
 Backend tests use in-memory SQLite (aiosqlite) and AsyncMock Redis — no external services needed.
 Frontend tests use Vitest + jsdom; see `src/test/setup.ts` for global setup.
 
-**Note:** The `client`-fixture tests (`test_auth_api`, `test_portfolio_api`, etc.) produce
-`pyo3_runtime.PanicException` errors in this dev environment due to a missing `_cffi_backend`
-compiled extension (`ModuleNotFoundError: No module named '_cffi_backend'`). This is a
-system-level environment issue, not a code defect. All tests pass in CI (ubuntu-latest with a
-full Python install).
+**Note:** the full backend suite is expected to pass once
+`requirements.txt` + `requirements-dev.txt` are installed. Some Windows
+sandboxed shells block subprocess / multiprocessing primitives used by
+`python_exec` and analytics tests; run those tests outside that sandbox if you
+see `WinError 5` from process creation.
 
 Locally-runnable pure unit tests (no jose/cryptography dependency, no `client` fixture):
 mock the data connectors + cache helpers and run independently. Examples include

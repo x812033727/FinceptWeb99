@@ -472,8 +472,10 @@ async def gather_market_context(
         # no per-symbol cache key to populate — these are aggregates.
         try:
             from services.ingest.repository import read_top_foreign_buyers
-            ctx["top_foreign_buyers"] = await read_top_foreign_buyers(
-                db, market="TW", days=5, limit=10,
+            ctx["top_foreign_buyers"] = _tag_industry(
+                await read_top_foreign_buyers(
+                    db, market="TW", days=5, limit=10,
+                )
             )
         except Exception as exc:
             _record_error("top_foreign_buyers", exc)
@@ -490,8 +492,8 @@ async def gather_market_context(
 
         try:
             from services.ingest.repository import read_top_revenue_growers
-            ctx["top_revenue_growers"] = await read_top_revenue_growers(
-                db, market="TW", limit=10,
+            ctx["top_revenue_growers"] = _tag_industry(
+                await read_top_revenue_growers(db, market="TW", limit=10)
             )
         except Exception as exc:
             _record_error("top_revenue_growers", exc)
@@ -535,15 +537,48 @@ async def gather_market_context(
 def _compact_screener_row(r: dict[str, Any]) -> dict[str, Any]:
     """Strip the screener row to just the fields a persona needs, so the
     LLM prompt stays compact (300 rows × 12 fields fills the context fast)."""
+    from services import tw_market_service
+    sym = r.get("symbol")
     return {
-        "symbol": r.get("symbol"),
-        "name": r.get("name_zh") or r.get("name"),
+        "symbol": sym,
+        "name": r.get("name_zh") or r.get("name") or (
+            tw_market_service.get_company_name(sym) if sym else None
+        ),
+        "industry": tw_market_service.get_industry(sym) if sym else None,
         "price": r.get("price"),
         "change_pct": r.get("change_pct"),
         "volume": r.get("volume"),
         "pe": r.get("pe_ratio"),
         "yield": r.get("dividend_yield"),
     }
+
+
+def _tag_industry(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Enrich each row with `industry` + `name_zh` from the in-memory
+    company-info maps. Rows already carrying these keys are passed
+    through unchanged so callers that pre-tagged don't get clobbered.
+
+    Used for the chip-metric and revenue-grower aggregator outputs
+    so personas can see "外資買超 2330 (半導體業)" instead of just
+    "2330" — the industry tag turns a raw list of codes into
+    sector-flow analysis without an extra LLM tool call.
+    """
+    from services import tw_market_service
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        sym = r.get("symbol")
+        enriched = dict(r)
+        if sym:
+            if "industry" not in enriched or not enriched["industry"]:
+                ind = tw_market_service.get_industry(sym)
+                if ind:
+                    enriched["industry"] = ind
+            if "name_zh" not in enriched or not enriched["name_zh"]:
+                nm = tw_market_service.get_company_name(sym)
+                if nm:
+                    enriched["name_zh"] = nm
+        out.append(enriched)
+    return out
 
 
 # ── turn loop ───────────────────────────────────────────────────────

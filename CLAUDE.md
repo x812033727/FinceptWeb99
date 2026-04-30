@@ -366,6 +366,19 @@ FinceptWeb/
   `gather_market_context` for `market='TW'` only — TWSE-specific
   data shouldn't bleed into a US discussion's prompt context.
 
+### TW industry / company-name enrichment
+- The daily `tw_symbol_map` cron now populates two extra in-memory
+  maps from TWSE `t187ap03_L` (上市公司基本資料): `_industry_map`
+  (symbol → 產業別) and `_name_map` (symbol → 公司簡稱). Memory
+  resident — industry rarely changes, no DB needed.
+- Accessors: `tw_market_service.get_industry(symbol)` /
+  `get_company_name(symbol)`. API: `GET /api/tw/industry/{symbol}`.
+- `discussion_service._tag_industry` enriches `top_foreign_buyers`
+  / `top_revenue_growers` rows with `industry` + `name_zh` so
+  personas can do sector-flow analysis ("外資集中買超半導體業 X 億")
+  without an extra LLM tool call. `_compact_screener_row` (used
+  for `top_gainers` / `top_losers`) gets the same treatment.
+
 ### TW monthly revenue ingest
 - Daily FinMind market-wide cron `tasks/ingest_revenue_tw.py` at
   09:00 UTC pulls every listed company's monthly revenue (90-day

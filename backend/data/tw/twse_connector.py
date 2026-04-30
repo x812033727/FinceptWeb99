@@ -101,6 +101,30 @@ async def get_all_tpex_symbols() -> list[dict[str, Any]]:
     return data if isinstance(data, list) else []
 
 
+async def get_listed_company_industries() -> list[dict[str, Any]]:
+    """TWSE 上市公司基本資料 (`t187ap03_L`): symbol → 產業別 mapping.
+
+    Returns a normalised list of `{symbol, name_zh, industry}` rows
+    so callers don't have to know the upstream Chinese column names.
+    Used by the daily symbol-map refresh to populate an in-memory
+    industry map for context enrichment + per-stock detail.
+    """
+    data = await _get(f"{_BASE}/opendata/t187ap03_L")
+    rows = data if isinstance(data, list) else []
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        symbol = (r.get("公司代號") or r.get("Code") or "").strip()
+        name = (r.get("公司簡稱") or r.get("Name") or "").strip()
+        industry = (r.get("產業別") or r.get("IndustryName") or "").strip()
+        if symbol:
+            out.append({
+                "symbol":   symbol,
+                "name_zh":  name or None,
+                "industry": industry or None,
+            })
+    return out
+
+
 # ── Daily OHLCV ───────────────────────────────────────────────────
 
 async def get_daily_ohlcv(symbol: str, query_date: date | None = None) -> list[dict[str, Any]]:

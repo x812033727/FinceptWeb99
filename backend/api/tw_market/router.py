@@ -176,6 +176,24 @@ async def indices(_: Auth):
         raise HTTPException(status_code=502, detail=f"Data source error: {e}")
 
 
+@router.get("/industry/{symbol}")
+async def industry(symbol: str, _: Auth):
+    """Return cached industry + name for a TW symbol.
+
+    Backed by the in-memory `_industry_map` / `_name_map` populated
+    daily by the `tw_symbol_map` cron from TWSE `t187ap03_L`. Empty
+    fields when the symbol isn't recognised — frontend can fall
+    back to "—" rather than 404 since the endpoint is informational
+    enrichment, not a primary lookup.
+    """
+    sym = symbol.upper().strip()
+    return {
+        "symbol":   sym,
+        "industry": svc.get_industry(sym),
+        "name_zh":  svc.get_company_name(sym),
+    }
+
+
 @router.get("/news/recent")
 async def news_recent(_: Auth, limit: int = Query(20, ge=1, le=50)):
     """Market-wide TW news from the ingest archive — DB only, no live

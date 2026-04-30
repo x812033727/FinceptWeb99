@@ -45,6 +45,8 @@ TTL_SCREENER     = 10 * 60
 
 # In-process symbol→exchange map; refreshed by scheduler (Phase 5)
 _exchange_map: dict[str, str] = {}   # symbol → "TWSE" | "TPEx"
+_industry_map: dict[str, str] = {}   # symbol → 產業別 (e.g. "半導體業")
+_name_map: dict[str, str] = {}       # symbol → 公司簡稱 (e.g. "台積電")
 
 
 # TW ETFs are 4–6-digit codes that start with "00" (e.g. 0050, 0056,
@@ -81,25 +83,81 @@ def get_exchange(symbol: str) -> str:
 
 
 async def refresh_symbol_map() -> None:
-    """Called by scheduler daily. Builds symbol→exchange map."""
-    global _exchange_map
-    new_map: dict[str, str] = {}
+    """Called by scheduler daily. Refreshes three in-memory maps:
+
+      - `_exchange_map`: symbol → "TWSE" | "TPEx"
+      - `_industry_map`: symbol → 產業別 (e.g. "半導體業")
+      - `_name_map`: symbol → 公司簡稱 (e.g. "台積電")
+
+    Industry / name come from TWSE `t187ap03_L` for listed
+    companies. TPEx companies inherit industry from the upstream's
+    `MainSubject` / `IndustryName` column when present, else None.
+    Failures on any source are tolerated — partial maps are better
+    than blank state.
+    """
+    global _exchange_map, _industry_map, _name_map
+    new_exch: dict[str, str] = {}
+    new_industry: dict[str, str] = {}
+    new_name: dict[str, str] = {}
+
     try:
         for row in await twse.get_all_twse_symbols():
             code = row.get("Code") or row.get("證券代號", "")
             if code:
-                new_map[code.strip()] = "TWSE"
+                new_exch[code.strip()] = "TWSE"
     except Exception:
         pass
     try:
         for row in await twse.get_all_tpex_symbols():
-            code = row.get("SecuritiesCompanyCode") or row.get("代號", "")
-            if code:
-                new_map[code.strip()] = "TPEx"
+            code = (row.get("SecuritiesCompanyCode") or row.get("代號", "")).strip()
+            if not code:
+                continue
+            new_exch[code] = "TPEx"
+            ind = (row.get("MainSubject") or row.get("IndustryName") or "").strip()
+            if ind:
+                new_industry[code] = ind
+            nm = (row.get("CompanyName") or row.get("公司名稱") or "").strip()
+            if nm:
+                new_name[code] = nm
     except Exception:
         pass
-    if new_map:
-        _exchange_map = new_map
+
+    # Industry + name for TWSE-listed comes from t187ap03_L, which is
+    # richer than the daily-price endpoint used for the exchange tag
+    # alone. Ignore failure; map stays partial.
+    try:
+        for row in await twse.get_listed_company_industries():
+            sym = row.get("symbol", "").strip()
+            if not sym:
+                continue
+            ind = row.get("industry")
+            if ind:
+                new_industry[sym] = ind
+            nm = row.get("name_zh")
+            if nm:
+                new_name[sym] = nm
+    except Exception:
+        pass
+
+    if new_exch:
+        _exchange_map = new_exch
+    if new_industry:
+        _industry_map = new_industry
+    if new_name:
+        _name_map = new_name
+
+
+def get_industry(symbol: str) -> str | None:
+    """In-memory accessor — returns the cached industry for `symbol`,
+    or None if the map hasn't been populated for this code.
+    Refreshed daily by the `tw_symbol_map` cron via
+    `refresh_symbol_map()`."""
+    return _industry_map.get(symbol)
+
+
+def get_company_name(symbol: str) -> str | None:
+    """In-memory accessor — public-listed company short name."""
+    return _name_map.get(symbol)
 
 
 # ── Quote ─────────────────────────────────────────────────────────

@@ -105,7 +105,8 @@ FinceptWeb/
 │   │   ├── version_service.py           # GitHub release polling + admin-triggered update
 │   │   └── watchlist_service.py         # CRUD + live quote enrichment
 │   ├── tasks/            # APScheduler jobs (US 10s, TW 60s, off-hours throttle).
-│   │                     # Discussion-adjacent: ingest_news_tw (hourly),
+│   │                     # Discussion-adjacent: ingest_news_tw (hourly,
+│   │                     #   Google News RSS zh-TW since PR #128),
 │   │                     #   score_news_sentiment (every 30 min, fail-closed cap)
 │   ├── tests/            # pytest — in-memory SQLite + AsyncMock Redis
 │   │                     # 74 files, 1082 tests. Categories:
@@ -293,6 +294,21 @@ FinceptWeb/
   Config UI: `AutoRunConfigCard` at the top of `DiscussionPage`'s
   sidebar (collapsed by default).
   API: `GET/PUT /api/discussion/auto-run/config`.
+
+### TW news ingest
+- Hourly APScheduler job `tasks/ingest_news_tw.py` pulls TW market
+  news from Google News RSS (`hl=zh-TW&gl=TW&ceid=TW:zh-Hant`) — free,
+  no token, aggregates cnyes / 經濟日報 / 工商時報 / Yahoo TW / 鉅亨網.
+  Replaced FinMind's `TaiwanStockNews` (paid-only) which silently
+  rejected free-tier tokens. The FinMind connector is kept for
+  institutional / margin / revenue datasets that don't have the same
+  paywall. Per-article symbol tagging: regex first 4-6 digit code
+  out of the title — same pattern `extract_focus_symbols` uses, so a
+  discussion mentioning 2330 picks up titled coverage like
+  "台積電(2330)財報".
+- Backoff path now preserves the most recent real error in the
+  health row (`skipped (...; last: HTTP 429 ...)`) so admins can
+  diagnose without clearing Redis to wait out the cooldown.
 
 ### News sentiment scoring
 - Hourly APScheduler job `tasks/score_news_sentiment.py` picks up

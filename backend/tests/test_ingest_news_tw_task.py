@@ -1,4 +1,11 @@
-"""Tests for tasks.ingest_news_tw — the hourly TW news job."""
+"""Tests for tasks.ingest_news_tw — the hourly TW news job.
+
+After PR #128 the source switched from FinMind's `TaiwanStockNews`
+(paid-only) to Google News RSS zh-TW. Tests reflect the new shape:
+mock `google_news_tw.get_news` instead of `finmind.get_news`, error
+formatter has Google-News-specific HTTP hints, and the article rows
+write `source="google_news_tw"`.
+"""
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -23,14 +30,17 @@ def patch_session(db_session: AsyncSession):
         yield
 
 
-def _finmind_item(idx: int, *, symbol: str | None = None) -> dict:
+def _gn_item(idx: int, *, symbol: str | None = None) -> dict:
+    """Build a connector-shaped news dict mirroring what
+    `google_news_tw.get_news()` returns."""
     return {
-        "title": f"Headline IT{idx}",
-        "link": f"https://example.com/news/it{idx}",
-        "source_name": "鉅亨網",
-        "description": "summary text",
-        "published_at": "2026-04-28 10:00:00",   # Asia/Taipei naive
-        "symbol": symbol,
+        "title":        f"Headline IT{idx}",
+        "link":         f"https://news.google.com/articles/it{idx}",
+        "source_name":  "鉅亨網",
+        "description":  "summary text",
+        # ISO 8601 UTC — connector returns this format from RFC 822 input.
+        "published_at": "2026-04-28T02:00:00+00:00",
+        "symbol":       symbol,
     }
 
 
@@ -40,14 +50,14 @@ async def test_lock_held_skips_work(patch_session):
 
     with patch("tasks.ingest_news_tw.acquire_lock", AsyncMock(return_value=False)), \
          patch("tasks.ingest_news_tw.release_lock", AsyncMock()), \
-         patch("tasks.ingest_news_tw.finmind.get_news", AsyncMock()) as fm:
+         patch("tasks.ingest_news_tw.google_news_tw.get_news", AsyncMock()) as gn:
         await ingest_news_tw.run()
 
-    fm.assert_not_awaited()
+    gn.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_finmind_failure_records_unhealthy(patch_session):
+async def test_upstream_failure_records_unhealthy(patch_session):
     """Hard exception → record_health(ok=False) with formatted detail
     + failure-bookkeeping side-effect."""
     from tasks import ingest_news_tw
@@ -59,23 +69,21 @@ async def test_finmind_failure_records_unhealthy(patch_session):
          patch("tasks.ingest_news_tw.record_failure",
                AsyncMock(return_value=1)) as failures, \
          patch("tasks.ingest_news_tw.clear_failures", AsyncMock()), \
-         patch("tasks.ingest_news_tw.finmind.get_news",
-               AsyncMock(side_effect=RuntimeError("finmind 503"))), \
+         patch("tasks.ingest_news_tw.google_news_tw.get_news",
+               AsyncMock(side_effect=RuntimeError("rss 503"))), \
          patch("tasks.ingest_news_tw.record_health", AsyncMock()) as health:
         await ingest_news_tw.run()
 
     failures.assert_awaited_once()
     kwargs = health.await_args.kwargs
     assert kwargs["ok"] is False
-    # New format: "unexpected: finmind 503 (failure #1; auto-backoff armed)"
-    assert "finmind 503" in kwargs["error"]
+    assert "rss 503" in kwargs["error"]
     assert "failure #1" in kwargs["error"]
 
 
 @pytest.mark.asyncio
 async def test_empty_result_records_ok_zero(patch_session):
-    """Quota-exhausted FinMind returns []. The run should mark itself
-    healthy with row_count=0 — the cron successfully executed."""
+    """Empty RSS result → mark healthy with row_count=0."""
     from tasks import ingest_news_tw
 
     with patch("tasks.ingest_news_tw.acquire_lock", AsyncMock(return_value=True)), \
@@ -83,7 +91,8 @@ async def test_empty_result_records_ok_zero(patch_session):
          patch("tasks.ingest_news_tw.backoff_remaining_seconds",
                AsyncMock(return_value=0)), \
          patch("tasks.ingest_news_tw.clear_failures", AsyncMock()), \
-         patch("tasks.ingest_news_tw.finmind.get_news", AsyncMock(return_value=[])), \
+         patch("tasks.ingest_news_tw.google_news_tw.get_news",
+               AsyncMock(return_value=[])), \
          patch("tasks.ingest_news_tw.record_health", AsyncMock()) as health:
         await ingest_news_tw.run()
 
@@ -97,8 +106,8 @@ async def test_success_inserts_rows(patch_session, db_session: AsyncSession):
     from tasks import ingest_news_tw
 
     items = [
-        _finmind_item(101, symbol=None),       # market-wide
-        _finmind_item(102, symbol="2330"),      # per-symbol
+        _gn_item(101, symbol=None),       # market-wide
+        _gn_item(102, symbol="2330"),     # per-symbol
     ]
 
     with patch("tasks.ingest_news_tw.acquire_lock", AsyncMock(return_value=True)), \
@@ -106,32 +115,33 @@ async def test_success_inserts_rows(patch_session, db_session: AsyncSession):
          patch("tasks.ingest_news_tw.backoff_remaining_seconds",
                AsyncMock(return_value=0)), \
          patch("tasks.ingest_news_tw.clear_failures", AsyncMock()) as cleared, \
-         patch("tasks.ingest_news_tw.finmind.get_news", AsyncMock(return_value=items)), \
+         patch("tasks.ingest_news_tw.google_news_tw.get_news",
+               AsyncMock(return_value=items)), \
          patch("tasks.ingest_news_tw.record_health", AsyncMock()) as health:
         await ingest_news_tw.run()
 
-    # Successful run must clear any leftover backoff state.
     cleared.assert_awaited_once()
 
     rows = (await db_session.scalars(
         select(NewsArticle).where(
             NewsArticle.link.in_([
-                "https://example.com/news/it101",
-                "https://example.com/news/it102",
+                "https://news.google.com/articles/it101",
+                "https://news.google.com/articles/it102",
             ])
         )
     )).all()
     assert len(rows) == 2
 
     by_link = {r.link: r for r in rows}
-    market_wide = by_link["https://example.com/news/it101"]
+    market_wide = by_link["https://news.google.com/articles/it101"]
     assert market_wide.symbol is None
+    assert market_wide.source == "google_news_tw"
 
-    per_sym = by_link["https://example.com/news/it102"]
+    per_sym = by_link["https://news.google.com/articles/it102"]
     assert per_sym.symbol == "2330"
 
-    # FinMind times are Asia/Taipei naive — 10:00 CST = 02:00 UTC. SQLite
-    # drops tzinfo on read so we compare on the underlying wall-clock UTC.
+    # ISO 8601 UTC input → stored as the same UTC instant. SQLite
+    # drops tzinfo on read so we normalise before comparison.
     saved = per_sym.published_at
     if saved.tzinfo is not None:
         saved = saved.astimezone(UTC).replace(tzinfo=None)
@@ -147,14 +157,15 @@ async def test_rerun_dedupes(patch_session, db_session: AsyncSession):
     """Running twice with the same payload must not duplicate rows."""
     from tasks import ingest_news_tw
 
-    items = [_finmind_item(201, symbol="2330")]
+    items = [_gn_item(201, symbol="2330")]
 
     common = (
         patch("tasks.ingest_news_tw.acquire_lock", AsyncMock(return_value=True)),
         patch("tasks.ingest_news_tw.release_lock", AsyncMock()),
         patch("tasks.ingest_news_tw.backoff_remaining_seconds", AsyncMock(return_value=0)),
         patch("tasks.ingest_news_tw.clear_failures", AsyncMock()),
-        patch("tasks.ingest_news_tw.finmind.get_news", AsyncMock(return_value=items)),
+        patch("tasks.ingest_news_tw.google_news_tw.get_news",
+              AsyncMock(return_value=items)),
         patch("tasks.ingest_news_tw.record_health", AsyncMock()),
     )
     for ctx in common:
@@ -167,7 +178,9 @@ async def test_rerun_dedupes(patch_session, db_session: AsyncSession):
             ctx.__exit__(None, None, None)
 
     rows = (await db_session.scalars(
-        select(NewsArticle).where(NewsArticle.link == "https://example.com/news/it201")
+        select(NewsArticle).where(
+            NewsArticle.link == "https://news.google.com/articles/it201",
+        )
     )).all()
     assert len(rows) == 1
 
@@ -179,12 +192,12 @@ async def test_blank_published_at_falls_back_to_now(patch_session, db_session: A
     from tasks import ingest_news_tw
 
     items = [{
-        "title": "No date headline",
-        "link": "https://example.com/news/nodate",
-        "source_name": "鉅亨網",
-        "description": "",
+        "title":        "No date headline",
+        "link":         "https://news.google.com/articles/nodate",
+        "source_name":  "鉅亨網",
+        "description":  "",
         "published_at": "",
-        "symbol": "2330",
+        "symbol":       "2330",
     }]
 
     before = datetime.now(UTC)
@@ -193,18 +206,19 @@ async def test_blank_published_at_falls_back_to_now(patch_session, db_session: A
          patch("tasks.ingest_news_tw.backoff_remaining_seconds",
                AsyncMock(return_value=0)), \
          patch("tasks.ingest_news_tw.clear_failures", AsyncMock()), \
-         patch("tasks.ingest_news_tw.finmind.get_news", AsyncMock(return_value=items)), \
+         patch("tasks.ingest_news_tw.google_news_tw.get_news",
+               AsyncMock(return_value=items)), \
          patch("tasks.ingest_news_tw.record_health", AsyncMock()):
         await ingest_news_tw.run()
     after = datetime.now(UTC)
 
     row = await db_session.scalar(
-        select(NewsArticle).where(NewsArticle.link == "https://example.com/news/nodate")
+        select(NewsArticle).where(
+            NewsArticle.link == "https://news.google.com/articles/nodate",
+        )
     )
     assert row is not None
     saved = row.published_at
-    # SQLite strips tzinfo on read — normalize so we can compare against
-    # the UTC `before` / `after` bookends.
     if saved.tzinfo is None:
         saved = saved.replace(tzinfo=UTC)
     assert before - timedelta(seconds=1) <= saved <= after + timedelta(seconds=1)
@@ -213,116 +227,71 @@ async def test_blank_published_at_falls_back_to_now(patch_session, db_session: A
 # ── error formatting ──────────────────────────────────────────────
 
 
-def _http_error(status: int, reason: str = "", body: dict | None = None):
-    """Build a real httpx.HTTPStatusError so the formatter has all the
-    fields it would see in production. `reason_phrase` is read-only and
-    auto-derived from the status code, so the `reason` arg is unused."""
+def _http_error(status: int):
+    """Build an httpx.HTTPStatusError so the formatter has all the
+    fields it would see in production."""
     import httpx
-
-    del reason  # auto-derived from status by httpx
-    request = httpx.Request("GET", "https://api.finmindtrade.com/api/v4/data")
-    response = httpx.Response(
-        status_code=status,
-        request=request,
-        json=body if body is not None else {},
-    )
+    request = httpx.Request("GET", "https://news.google.com/rss/search")
+    response = httpx.Response(status_code=status, request=request)
     return httpx.HTTPStatusError(
         f"HTTP {status}", request=request, response=response,
     )
 
 
-def test_format_finmind_error_401_includes_token_hint():
-    from tasks.ingest_news_tw import _format_finmind_error
+def test_format_news_error_429_mentions_rate_limit():
+    from tasks.ingest_news_tw import _format_news_error
 
-    msg = _format_finmind_error(_http_error(401, "Unauthorized"))
-    assert "401" in msg
-    assert "FINMIND_TOKEN" in msg
-
-
-def test_format_finmind_error_400_mentions_empty_token():
-    """FinMind returns 400 (not 401) when the token is empty for paid
-    datasets like TaiwanStockNews — confusing default behaviour, so
-    our hint dict explicitly maps it to the FINMIND_TOKEN guidance."""
-    from tasks.ingest_news_tw import _format_finmind_error
-
-    msg = _format_finmind_error(_http_error(400, "Bad Request"))
-    assert "400" in msg
-    assert "FINMIND_TOKEN" in msg
-
-
-def test_format_finmind_error_402_mentions_paid_dataset():
-    from tasks.ingest_news_tw import _format_finmind_error
-
-    msg = _format_finmind_error(_http_error(402, "Payment Required"))
-    assert "402" in msg
-    assert "paid" in msg.lower()
-
-
-def test_format_finmind_error_429_mentions_quota():
-    from tasks.ingest_news_tw import _format_finmind_error
-
-    msg = _format_finmind_error(_http_error(429, "Too Many Requests"))
+    msg = _format_news_error(_http_error(429))
     assert "429" in msg
-    assert "quota" in msg.lower()
+    assert "rate-limit" in msg.lower()
 
 
-def test_format_finmind_error_includes_body_msg():
-    """FinMind sometimes returns `{"msg": "...", "status": 401}` in the
-    body — we surface the msg in the formatted error so operators see
-    the upstream's own explanation."""
-    from tasks.ingest_news_tw import _format_finmind_error
+def test_format_news_error_503_mentions_unavailable():
+    from tasks.ingest_news_tw import _format_news_error
 
-    msg = _format_finmind_error(
-        _http_error(401, "Unauthorized", body={"msg": "token is invalid"}),
-    )
-    assert "token is invalid" in msg
+    msg = _format_news_error(_http_error(503))
+    assert "503" in msg
+    assert "unavailable" in msg.lower()
 
 
-def test_format_finmind_error_timeout():
+def test_format_news_error_403_mentions_blocked():
+    from tasks.ingest_news_tw import _format_news_error
+
+    msg = _format_news_error(_http_error(403))
+    assert "403" in msg
+    assert ("blocked" in msg.lower() or "refused" in msg.lower())
+
+
+def test_format_news_error_unknown_status_falls_through():
+    """A status code without a hint still produces a readable message."""
+    from tasks.ingest_news_tw import _format_news_error
+
+    msg = _format_news_error(_http_error(418))
+    assert "418" in msg
+
+
+def test_format_news_error_timeout():
     import httpx
-    from tasks.ingest_news_tw import _format_finmind_error
+    from tasks.ingest_news_tw import _format_news_error
 
-    msg = _format_finmind_error(httpx.ReadTimeout("read timeout"))
+    msg = _format_news_error(httpx.ReadTimeout("read timeout"))
     assert "timeout" in msg.lower()
 
 
-def test_format_finmind_error_connect():
+def test_format_news_error_connect():
     import httpx
-    from tasks.ingest_news_tw import _format_finmind_error
+    from tasks.ingest_news_tw import _format_news_error
 
-    msg = _format_finmind_error(httpx.ConnectError("dns failure"))
+    msg = _format_news_error(httpx.ConnectError("dns failure"))
     assert "connect" in msg.lower()
 
 
-def test_format_finmind_error_generic_exception():
-    from tasks.ingest_news_tw import _format_finmind_error
+def test_format_news_error_generic_exception():
+    from tasks.ingest_news_tw import _format_news_error
 
-    msg = _format_finmind_error(RuntimeError("something else"))
+    msg = _format_news_error(RuntimeError("something else"))
     assert "unexpected" in msg
     assert "something else" in msg
-
-
-def test_format_finmind_error_400_with_free_level_body_picks_paid_hint():
-    """FinMind returns HTTP 400 with `msg: "Your level is free. Please
-    update your user level..."` when a free-tier token hits a paid
-    dataset. The body-aware hint must surface so operators don't waste
-    time re-checking their token (which is valid)."""
-    from tasks.ingest_news_tw import _format_finmind_error
-
-    msg = _format_finmind_error(_http_error(400, body={
-        "msg": "Your level is free. Please update your user level. "
-               "Detail information:https://finmindtrade.com/analysis/#/Sponsor/sponsor",
-        "status": 400,
-    }))
-    assert "400" in msg
-    assert "paid" in msg.lower()
-    assert "sponsor" in msg.lower()
-    # The static 400 hint mentions FINMIND_TOKEN — the body-aware one
-    # should win and not include that misleading guidance.
-    assert "empty/malformed FINMIND_TOKEN" not in msg
-    # Original FinMind message still surfaces so the operator sees
-    # exactly what the upstream said.
-    assert "Your level is free" in msg
 
 
 # ── backoff integration ───────────────────────────────────────────
@@ -331,8 +300,7 @@ def test_format_finmind_error_400_with_free_level_body_picks_paid_hint():
 @pytest.mark.asyncio
 async def test_skips_work_when_backoff_active(patch_session):
     """When backoff TTL > 0, the task records a 'skipped' health entry
-    and never calls FinMind. Operators see the cooldown counting down
-    in the admin UI's `last_run_at`."""
+    and never calls the upstream."""
     from tasks import ingest_news_tw
 
     with patch("tasks.ingest_news_tw.acquire_lock", AsyncMock(return_value=True)), \
@@ -343,11 +311,12 @@ async def test_skips_work_when_backoff_active(patch_session):
                AsyncMock(return_value=2)), \
          patch("tasks.ingest_news_tw.get_health",
                AsyncMock(return_value=None)), \
-         patch("tasks.ingest_news_tw.finmind.get_news", AsyncMock()) as fm, \
+         patch("tasks.ingest_news_tw.google_news_tw.get_news",
+               AsyncMock()) as gn, \
          patch("tasks.ingest_news_tw.record_health", AsyncMock()) as health:
         await ingest_news_tw.run()
 
-    fm.assert_not_awaited()
+    gn.assert_not_awaited()
     kwargs = health.await_args.kwargs
     assert kwargs["ok"] is False
     assert "skipped" in kwargs["error"]
@@ -365,7 +334,7 @@ async def test_backoff_skip_preserves_last_real_error(patch_session):
         last_run_at="2026-04-30T00:00:00+00:00",
         ok=False,
         row_count=0,
-        error="HTTP 429 Too Many Requests (quota exhausted)",
+        error="HTTP 429 Too Many Requests (Google News rate-limit)",
     )
 
     with patch("tasks.ingest_news_tw.acquire_lock", AsyncMock(return_value=True)), \
@@ -386,8 +355,38 @@ async def test_backoff_skip_preserves_last_real_error(patch_session):
 
 
 @pytest.mark.asyncio
-async def test_http_401_records_formatted_error_and_arms_backoff(patch_session):
-    """End-to-end: HTTP 401 from FinMind → formatted error string +
+async def test_backoff_skip_doesnt_recurse_on_skipped_error(patch_session):
+    """If the previous health row was itself a 'skipped' entry, don't
+    quote it as the 'last' error — that recurses skip → skip → skip."""
+    from tasks import ingest_news_tw
+
+    previous = IngestHealth(
+        job_id="ingest_news_tw",
+        last_run_at="2026-04-30T00:00:00+00:00",
+        ok=False,
+        row_count=0,
+        error="skipped (backoff after 3 failures, ~120 min remaining; last: HTTP 429 ...)",
+    )
+
+    with patch("tasks.ingest_news_tw.acquire_lock", AsyncMock(return_value=True)), \
+         patch("tasks.ingest_news_tw.release_lock", AsyncMock()), \
+         patch("tasks.ingest_news_tw.backoff_remaining_seconds",
+               AsyncMock(return_value=7200)), \
+         patch("tasks.ingest_news_tw.get_failure_count",
+               AsyncMock(return_value=3)), \
+         patch("tasks.ingest_news_tw.get_health",
+               AsyncMock(return_value=previous)), \
+         patch("tasks.ingest_news_tw.record_health", AsyncMock()) as health:
+        await ingest_news_tw.run()
+
+    err = health.await_args.kwargs["error"]
+    # Should not have nested "last: skipped..." string.
+    assert err.count("skipped") == 1
+
+
+@pytest.mark.asyncio
+async def test_http_429_records_formatted_error_and_arms_backoff(patch_session):
+    """End-to-end: HTTP 429 from Google News → formatted error string +
     record_failure called once."""
     from tasks import ingest_news_tw
 
@@ -398,16 +397,16 @@ async def test_http_401_records_formatted_error_and_arms_backoff(patch_session):
          patch("tasks.ingest_news_tw.record_failure",
                AsyncMock(return_value=3)) as record_fail, \
          patch("tasks.ingest_news_tw.clear_failures", AsyncMock()) as cleared, \
-         patch("tasks.ingest_news_tw.finmind.get_news",
-               AsyncMock(side_effect=_http_error(401, "Unauthorized"))), \
+         patch("tasks.ingest_news_tw.google_news_tw.get_news",
+               AsyncMock(side_effect=_http_error(429))), \
          patch("tasks.ingest_news_tw.record_health", AsyncMock()) as health:
         await ingest_news_tw.run()
 
     record_fail.assert_awaited_once()
     cleared.assert_not_awaited()
     err = health.await_args.kwargs["error"]
-    assert "401" in err
-    assert "FINMIND_TOKEN" in err
+    assert "429" in err
+    assert "rate-limit" in err.lower()
     assert "failure #3" in err
 
 
@@ -417,7 +416,7 @@ async def test_success_clears_backoff_state(patch_session, db_session: AsyncSess
     reset the failure counter so the task isn't throttled forever."""
     from tasks import ingest_news_tw
 
-    items = [_finmind_item(401, symbol=None)]
+    items = [_gn_item(401, symbol=None)]
 
     with patch("tasks.ingest_news_tw.acquire_lock", AsyncMock(return_value=True)), \
          patch("tasks.ingest_news_tw.release_lock", AsyncMock()), \
@@ -426,7 +425,7 @@ async def test_success_clears_backoff_state(patch_session, db_session: AsyncSess
          patch("tasks.ingest_news_tw.record_failure", AsyncMock()) as record_fail, \
          patch("tasks.ingest_news_tw.clear_failures",
                AsyncMock()) as cleared, \
-         patch("tasks.ingest_news_tw.finmind.get_news",
+         patch("tasks.ingest_news_tw.google_news_tw.get_news",
                AsyncMock(return_value=items)), \
          patch("tasks.ingest_news_tw.record_health", AsyncMock()):
         await ingest_news_tw.run()

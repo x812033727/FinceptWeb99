@@ -1,32 +1,37 @@
 """Hourly TW news ingest.
 
-Pulls market-wide news from FinMind (`TaiwanStockNews` with empty
-`data_id` returns the cross-section in one call — no per-symbol
-fan-out, ~24 calls/day, far below FinMind's 600/day quota). Articles
-are deduplicated via sha256(normalized title + canonical link) so
-re-running the task is idempotent.
+Pulls TW market news from Google News RSS (zh-TW edition) — free, no
+token, aggregates cnyes / 經濟日報 / 工商時報 / Yahoo TW / 鉅亨網 in one
+call. Replaces FinMind's `TaiwanStockNews` (paid-only) which was
+silently rejecting our free-tier token. The FinMind connector is kept
+for other datasets (institutional / margin / revenue) that don't have
+the same paywall.
 
-The market-wide pull captures both per-symbol articles (FinMind tags
-each row with `stock_id`) and unattached headlines. The repository's
-read path filters by symbol when present, by IS NULL when absent.
+Articles are deduplicated via sha256(normalized title + canonical link)
+so re-running the task is idempotent — the next hourly tick won't re-
+write yesterday's news. Fresh items get their per-symbol code regex'd
+out of the title (4-6 digit token) so per-symbol sentiment queries
+have something to read.
 
 Failure handling:
   - HTTP errors are formatted with status code + actionable hint
-    (`HTTP 401 (check FINMIND_TOKEN)`, `HTTP 402 (dataset paid only)`,
-    `HTTP 429 (quota exhausted)`) so operators see the cause without
-    digging into logs.
+    (`HTTP 429 (Google News rate-limit; back off)`, etc.) so operators
+    see the cause without digging into logs.
   - Repeated failures arm an exponential backoff (1h → 2h → 4h → 6h
     cap) so the task stops hammering a known-bad upstream every cycle.
     A successful run clears the backoff state.
+  - Backoff-skip ticks preserve the most recent real error in the
+    health row so admins can see *why* the job is in cooldown without
+    waiting for the window to expire.
 
 Multi-pod safe via Redis SET-NX lock.
 """
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import httpx
 
-import data.tw.finmind_connector as finmind
+import data.tw.google_news_tw_connector as google_news_tw
 from cache.redis_cache import acquire_lock, release_lock
 from db.session import AsyncSessionLocal
 from services.ingest.repository import (
@@ -46,77 +51,38 @@ JOB_ID = "ingest_news_tw"
 
 _LOCK_KEY = "lock:ingest_news_tw"
 _LOCK_TTL = 5 * 60   # 5 min — one bulk call typically completes in seconds
-_LOOKBACK_DAYS = 2   # FinMind returns articles published within range; 2 days
-                     # tolerates timezone offsets and overlap with prior runs
+_FETCH_LIMIT = 100   # Google News caps return at ~100 anyway
 
 
 # ── error formatting ──────────────────────────────────────────────
 
 
 _HTTP_HINTS: dict[int, str] = {
-    400: "FinMind rejected the request — empty/malformed FINMIND_TOKEN, or this dataset requires a paid sponsorship",
-    401: "check FINMIND_TOKEN — invalid or missing",
-    402: "FinMind dataset requires paid sponsorship",
-    403: "FinMind token forbidden for this dataset",
-    429: "FinMind quota exhausted — resets at UTC 00:00",
-    500: "FinMind upstream error",
-    502: "FinMind bad gateway",
-    503: "FinMind unavailable",
-    504: "FinMind gateway timeout",
+    400: "Google News rejected the request — query may be malformed",
+    403: "Google News refused — UA blocked or geo-restricted",
+    429: "Google News rate-limit — backoff and retry later",
+    500: "Google News upstream error",
+    502: "Google News bad gateway",
+    503: "Google News unavailable",
+    504: "Google News gateway timeout",
 }
 
-# Body-pattern → operator hint. FinMind sometimes returns HTTP 400 with the
-# real cause buried in the response body (e.g. free-tier accounts hitting
-# paid datasets like TaiwanStockNews). Body-aware hints take precedence over
-# the static status-code default so the message points at the actual fix.
-_BODY_HINTS: tuple[tuple[str, str], ...] = (
-    (
-        "level is free",
-        "TaiwanStockNews requires a paid FinMind sponsorship — free-tier "
-        "tokens cannot read this dataset. Upgrade at "
-        "https://finmindtrade.com/analysis/#/Sponsor/sponsor",
-    ),
-    (
-        "user level",
-        "FinMind account level is too low for this dataset — paid sponsorship required",
-    ),
-)
 
-
-def _pick_body_hint(body_text: str) -> str:
-    lowered = body_text.lower()
-    for needle, hint in _BODY_HINTS:
-        if needle in lowered:
-            return hint
-    return ""
-
-
-def _format_finmind_error(exc: BaseException) -> str:
+def _format_news_error(exc: BaseException) -> str:
     """Turn a raw exception into a one-line operator-friendly summary.
 
-    Common HTTP statuses get a hint string suggesting the most likely
-    cause + remediation. Body-aware hints (e.g. "level is free") win
-    over the status-code default so a paid-dataset rejection isn't mis-
-    diagnosed as a malformed token. Network / timeout / unknown errors
-    fall back to a typed prefix + the exception message.
+    Google News RSS doesn't return a structured error body the way a
+    JSON API does (it serves HTML or an error page on failure), so we
+    lean on the HTTP status code + a static hint dict. Network /
+    timeout / unknown errors fall back to a typed prefix + the
+    exception message.
     """
     if isinstance(exc, httpx.HTTPStatusError):
         code = exc.response.status_code
         reason = exc.response.reason_phrase or "?"
-        body_msg = ""
-        body_text = ""
-        try:
-            body = exc.response.json()
-            for key in ("msg", "message", "detail"):
-                if isinstance(body, dict) and body.get(key):
-                    body_msg = f" — {body[key]}"
-                    body_text = str(body[key])
-                    break
-        except Exception:
-            pass
-        hint = _pick_body_hint(body_text) or _HTTP_HINTS.get(code, "")
+        hint = _HTTP_HINTS.get(code, "")
         suffix = f" ({hint})" if hint else ""
-        return f"HTTP {code} {reason}{suffix}{body_msg}"
+        return f"HTTP {code} {reason}{suffix}"
     if isinstance(exc, httpx.TimeoutException):
         return f"timeout: {exc}"
     if isinstance(exc, httpx.ConnectError):
@@ -137,36 +103,39 @@ async def run() -> None:
     try:
         # Backoff gate: if the previous run set a cooldown window we
         # silently skip work but still record health so operators see
-        # the task is alive and counting down.
+        # the task is alive and counting down. Preserve the most
+        # recent actual failure error in the new health entry — without
+        # this, the IngestHealthCard masks the root cause behind a
+        # generic "skipped" message and operators have to clear Redis
+        # to see what's actually broken.
         remaining = await backoff_remaining_seconds(JOB_ID)
         if remaining > 0:
             failures = await get_failure_count(JOB_ID)
             mins = max(1, remaining // 60)
             previous = await get_health(JOB_ID)
-            last_error = (
-                previous.error
-                if previous and previous.error and not previous.error.startswith("skipped")
-                else None
-            )
-            error = (
-                f"skipped (backoff after {failures} failures, "
-                f"~{mins} min remaining)"
-            )
-            if last_error:
-                error = f"{error}; last error: {last_error}"
+            tail = ""
+            if previous and previous.error and "skipped" not in (previous.error or ""):
+                # Trim to keep the health row readable; full context
+                # is in the application logs.
+                last_err = previous.error[:200]
+                tail = f"; last: {last_err}"
             log.info(
                 "ingest_news_tw.skipped_backoff",
                 extra={"failures": failures, "seconds_remaining": remaining},
             )
             await record_health(
-                JOB_ID, ok=False, row_count=0, error=error,
+                JOB_ID, ok=False, row_count=0,
+                error=(
+                    f"skipped (backoff after {failures} failures, "
+                    f"~{mins} min remaining{tail})"
+                ),
             )
             return
 
         try:
             row_count = await _do_run()
         except Exception as exc:
-            detail = _format_finmind_error(exc)
+            detail = _format_news_error(exc)
             failures = await record_failure(JOB_ID)
             log.warning(
                 "ingest_news_tw.failed",
@@ -191,15 +160,11 @@ async def _do_run() -> int:
 
     Raises on hard failure (HTTP error, network, etc.) — the caller
     catches and arms backoff. Empty results are treated as success
-    with row_count=0 (means "FinMind responded but no fresh articles").
+    with row_count=0 ("RSS responded but parsed to nothing").
     """
-    start = (datetime.now(UTC).date() - timedelta(days=_LOOKBACK_DAYS)).isoformat()
-    items = await finmind.get_news(start_date=start)
+    items = await google_news_tw.get_news(limit=_FETCH_LIMIT)
 
     if not items:
-        # FinMind returned [] either because no fresh news in the window
-        # or because we hit our local quota guard. Both are non-fatal:
-        # don't bump the failure counter, just record the empty pass.
         return 0
 
     rows = [r for r in (_to_row(it) for it in items) if r is not None]
@@ -216,8 +181,10 @@ def _to_row(item: dict) -> NewsArticleRow | None:
 
     published_raw = item.get("published_at") or ""
     try:
-        # FinMind returns "YYYY-MM-DD HH:MM:SS" (UTC+8). Treat as UTC+8
-        # naive then convert to UTC for storage.
+        # Connector returns ISO 8601 UTC ("...+00:00") but tolerates
+        # mis-parsed pubDate strings flowing through unchanged. Cover
+        # both cases plus the date-only form so a malformed timestamp
+        # doesn't drop the article.
         if "T" in published_raw:
             published_at = datetime.fromisoformat(published_raw.replace("Z", "+00:00"))
         elif " " in published_raw:
@@ -225,9 +192,9 @@ def _to_row(item: dict) -> NewsArticleRow | None:
         else:
             published_at = datetime.fromisoformat(published_raw + "T00:00:00")
         if published_at.tzinfo is None:
-            # FinMind times are already in Asia/Taipei. Subtract 8h to
-            # store as UTC.
-            published_at = published_at.replace(tzinfo=UTC) - timedelta(hours=8)
+            published_at = published_at.replace(tzinfo=UTC)
+        else:
+            published_at = published_at.astimezone(UTC)
     except (TypeError, ValueError):
         published_at = datetime.now(UTC)
 
@@ -240,5 +207,5 @@ def _to_row(item: dict) -> NewsArticleRow | None:
         publisher=item.get("source_name") or None,
         summary=(item.get("description") or "").strip() or None,
         payload=None,
-        source="finmind",
+        source="google_news_tw",
     )

@@ -24,6 +24,7 @@ from models.fundamentals_snapshot import FundamentalsSnapshot
 from models.news_article import NewsArticle
 from models.ohlcv_daily import OhlcvDaily
 from models.quote_snapshot import QuoteSnapshot
+from models.tw_chip_metrics import TwInstitutionalDaily, TwMarginDaily
 
 log = logging.getLogger(__name__)
 
@@ -176,6 +177,278 @@ async def read_ohlcv_range(
         }
         for r in rows
     ]
+
+
+# ── TW chip metrics (法人 / 融資融券) ──────────────────────────────
+
+
+@dataclass(frozen=True)
+class InstitutionalDailyRow:
+    """法人買賣超 — fini / sitc / dealer buy + sell volumes."""
+    market: str
+    symbol: str
+    ts: date
+    fini_buy: int | None
+    fini_sell: int | None
+    sitc_buy: int | None
+    sitc_sell: int | None
+    dealer_buy: int | None
+    dealer_sell: int | None
+    source: str
+
+
+@dataclass(frozen=True)
+class MarginDailyRow:
+    """融資融券 — daily margin / short purchase + balance."""
+    market: str
+    symbol: str
+    ts: date
+    margin_purchase: int | None
+    margin_balance: int | None
+    short_sale: int | None
+    short_balance: int | None
+    source: str
+
+
+def _row_to_dict(row: Any, *, fields: tuple[str, ...]) -> dict[str, Any]:
+    """Coerce a dataclass / ORM row to a dict for bulk-insert."""
+    return {f: getattr(row, f) for f in fields}
+
+
+_INSTITUTIONAL_FIELDS = (
+    "market", "symbol", "ts",
+    "fini_buy", "fini_sell",
+    "sitc_buy", "sitc_sell",
+    "dealer_buy", "dealer_sell",
+    "source",
+)
+
+
+_MARGIN_FIELDS = (
+    "market", "symbol", "ts",
+    "margin_purchase", "margin_balance",
+    "short_sale", "short_balance",
+    "source",
+)
+
+
+async def upsert_institutional_daily(
+    db: AsyncSession, rows: Iterable[InstitutionalDailyRow],
+) -> int:
+    """Bulk upsert. ON CONFLICT (market, symbol, ts) updates the
+    metric columns + source so a re-ingest on the same day overwrites
+    stale values (e.g. when TWSE corrects a bar)."""
+    payload = [_row_to_dict(r, fields=_INSTITUTIONAL_FIELDS) for r in rows]
+    if not payload:
+        return 0
+
+    update_cols = (
+        "fini_buy", "fini_sell",
+        "sitc_buy", "sitc_sell",
+        "dealer_buy", "dealer_sell",
+        "source",
+    )
+
+    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
+    if dialect == "sqlite":
+        stmt = sqlite_insert(TwInstitutionalDaily).values(payload)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["market", "symbol", "ts"],
+            set_={k: getattr(stmt.excluded, k) for k in update_cols},
+        )
+    else:
+        stmt = pg_insert(TwInstitutionalDaily).values(payload)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["market", "symbol", "ts"],
+            set_={k: getattr(stmt.excluded, k) for k in update_cols},
+        )
+    await db.execute(stmt)
+    await db.commit()
+    return len(payload)
+
+
+async def upsert_margin_daily(
+    db: AsyncSession, rows: Iterable[MarginDailyRow],
+) -> int:
+    payload = [_row_to_dict(r, fields=_MARGIN_FIELDS) for r in rows]
+    if not payload:
+        return 0
+
+    update_cols = (
+        "margin_purchase", "margin_balance",
+        "short_sale", "short_balance",
+        "source",
+    )
+
+    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
+    if dialect == "sqlite":
+        stmt = sqlite_insert(TwMarginDaily).values(payload)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["market", "symbol", "ts"],
+            set_={k: getattr(stmt.excluded, k) for k in update_cols},
+        )
+    else:
+        stmt = pg_insert(TwMarginDaily).values(payload)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["market", "symbol", "ts"],
+            set_={k: getattr(stmt.excluded, k) for k in update_cols},
+        )
+    await db.execute(stmt)
+    await db.commit()
+    return len(payload)
+
+
+def _institutional_row_out(r: TwInstitutionalDaily) -> dict[str, Any]:
+    """Output shape mirrors the FinMind connector's per-symbol row so
+    `tw_market_service.get_institutional`'s callers don't care which
+    tier served them."""
+    return {
+        "date":        r.ts.isoformat(),
+        "symbol":      r.symbol,
+        "fini_buy":    int(r.fini_buy) if r.fini_buy is not None else 0,
+        "fini_sell":   int(r.fini_sell) if r.fini_sell is not None else 0,
+        "sitc_buy":    int(r.sitc_buy) if r.sitc_buy is not None else 0,
+        "sitc_sell":   int(r.sitc_sell) if r.sitc_sell is not None else 0,
+        "dealer_buy":  int(r.dealer_buy) if r.dealer_buy is not None else 0,
+        "dealer_sell": int(r.dealer_sell) if r.dealer_sell is not None else 0,
+    }
+
+
+def _margin_row_out(r: TwMarginDaily) -> dict[str, Any]:
+    return {
+        "date":            r.ts.isoformat(),
+        "symbol":          r.symbol,
+        "margin_purchase": int(r.margin_purchase) if r.margin_purchase is not None else 0,
+        "margin_balance":  int(r.margin_balance) if r.margin_balance is not None else 0,
+        "short_sale":      int(r.short_sale) if r.short_sale is not None else 0,
+        "short_balance":   int(r.short_balance) if r.short_balance is not None else 0,
+    }
+
+
+async def read_institutional_range(
+    db: AsyncSession, market: str, symbol: str, start: date, end: date,
+) -> list[dict[str, Any]]:
+    """Per-symbol date range, ordered ascending. Output shape mirrors
+    `data/tw/finmind_connector.get_institutional` so the read-tier
+    plumbs straight into `tw_market_service.get_institutional`."""
+    stmt = (
+        select(TwInstitutionalDaily)
+        .where(
+            TwInstitutionalDaily.market == market,
+            TwInstitutionalDaily.symbol == symbol,
+            TwInstitutionalDaily.ts >= start,
+            TwInstitutionalDaily.ts <= end,
+        )
+        .order_by(TwInstitutionalDaily.ts.asc())
+    )
+    rows = (await db.scalars(stmt)).all()
+    return [_institutional_row_out(r) for r in rows]
+
+
+async def read_margin_range(
+    db: AsyncSession, market: str, symbol: str, start: date, end: date,
+) -> list[dict[str, Any]]:
+    stmt = (
+        select(TwMarginDaily)
+        .where(
+            TwMarginDaily.market == market,
+            TwMarginDaily.symbol == symbol,
+            TwMarginDaily.ts >= start,
+            TwMarginDaily.ts <= end,
+        )
+        .order_by(TwMarginDaily.ts.asc())
+    )
+    rows = (await db.scalars(stmt)).all()
+    return [_margin_row_out(r) for r in rows]
+
+
+async def read_top_foreign_buyers(
+    db: AsyncSession,
+    market: str = "TW",
+    *,
+    days: int = 5,
+    limit: int = 10,
+    end: date | None = None,
+) -> list[dict[str, Any]]:
+    """Aggregate net foreign buy (`fini_buy - fini_sell`) over the
+    last `days` trading dates and return the top `limit` symbols.
+
+    Used by `discussion_service.gather_market_context` so personas
+    can reference "外資連 5 日買超 N 億" without burning an LLM tool
+    call on the raw rows. Returns an empty list when the table hasn't
+    been populated yet (fresh deploy, ingest task hasn't run yet).
+    """
+    end = end or date.today()
+    start = end - timedelta(days=days * 2)  # widen for weekend / holiday
+    stmt = (
+        select(TwInstitutionalDaily)
+        .where(
+            TwInstitutionalDaily.market == market,
+            TwInstitutionalDaily.ts >= start,
+            TwInstitutionalDaily.ts <= end,
+        )
+    )
+    rows = (await db.scalars(stmt)).all()
+    if not rows:
+        return []
+    by_symbol: dict[str, int] = {}
+    for r in rows:
+        net = (int(r.fini_buy or 0) - int(r.fini_sell or 0))
+        by_symbol[r.symbol] = by_symbol.get(r.symbol, 0) + net
+    ordered = sorted(by_symbol.items(), key=lambda kv: kv[1], reverse=True)
+    return [{"symbol": sym, "net_foreign_buy": net} for sym, net in ordered[:limit]]
+
+
+async def read_market_margin_balance_trend(
+    db: AsyncSession,
+    market: str = "TW",
+    *,
+    days: int = 5,
+    end: date | None = None,
+) -> dict[str, Any]:
+    """Aggregate market-wide margin balance over the last `days`. Used
+    by the discussion context as a leverage / retail-activity proxy
+    ("散戶融資餘額連續 X 日創高")."""
+    end = end or date.today()
+    start = end - timedelta(days=days * 2)
+    stmt = (
+        select(TwMarginDaily)
+        .where(
+            TwMarginDaily.market == market,
+            TwMarginDaily.ts >= start,
+            TwMarginDaily.ts <= end,
+        )
+    )
+    rows = (await db.scalars(stmt)).all()
+    if not rows:
+        return {
+            "as_of": None,
+            "total_margin_balance": 0,
+            "total_short_balance": 0,
+            "days_observed": 0,
+        }
+    by_date: dict[date, dict[str, int]] = {}
+    for r in rows:
+        bucket = by_date.setdefault(
+            r.ts, {"margin_balance": 0, "short_balance": 0},
+        )
+        bucket["margin_balance"] += int(r.margin_balance or 0)
+        bucket["short_balance"] += int(r.short_balance or 0)
+    if not by_date:
+        return {
+            "as_of": None,
+            "total_margin_balance": 0,
+            "total_short_balance": 0,
+            "days_observed": 0,
+        }
+    latest_date = max(by_date.keys())
+    latest = by_date[latest_date]
+    return {
+        "as_of": latest_date.isoformat(),
+        "total_margin_balance": latest["margin_balance"],
+        "total_short_balance": latest["short_balance"],
+        "days_observed": len(by_date),
+    }
 
 
 # ── Quote snapshots ────────────────────────────────────────────────

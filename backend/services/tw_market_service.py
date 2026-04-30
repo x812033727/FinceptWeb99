@@ -302,18 +302,47 @@ async def get_history(symbol: str, months: int = 12) -> list[dict[str, Any]]:
 # ── Institutional investors ───────────────────────────────────────
 
 async def get_institutional(symbol: str, days: int = 30) -> list[dict[str, Any]]:
+    """
+    法人買賣超 read tier:
+        Redis cache  →  DB (tw_institutional_daily, populated by
+        the daily TWSE ingest)  →  live FinMind per-symbol  →
+        live TWSE today-only fallback.
+
+    DB tier serves the typical 30-day query in one indexed range scan
+    so the per-stock detail page and the discussion subsystem don't
+    burn FinMind quota for every read.
+    """
+    from services.ingest.repository import read_institutional_range
+
     key = key_institutional(symbol)
     cached = await cache_get(key)
     if cached:
         return json.loads(cached)
 
+    today = date.today()
+    start = today - timedelta(days=days)
+
+    # ── Tier 2: Postgres archive ────────────────────────────────
+    try:
+        from db.session import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            db_rows = await read_institutional_range(
+                db, "TW", symbol, start, today,
+            )
+        if db_rows:
+            await cache_set(key, json.dumps(db_rows), TTL_INSTITUTIONAL)
+            return db_rows
+    except Exception:
+        # Fall through to live waterfall — never let DB outage hide
+        # data that the upstream can still produce.
+        pass
+
     result: list[dict] = []
 
     # TWSE returns all stocks for one day; we'd need to call per day
     # so default to FinMind which returns per-symbol range
-    start = (date.today() - timedelta(days=days)).isoformat()
     try:
-        result = await finmind.get_institutional(symbol, start)
+        result = await finmind.get_institutional(symbol, start.isoformat())
     except Exception:
         pass
 
@@ -333,15 +362,32 @@ async def get_institutional(symbol: str, days: int = 30) -> list[dict[str, Any]]
 # ── Margin balance ────────────────────────────────────────────────
 
 async def get_margin(symbol: str, days: int = 30) -> list[dict[str, Any]]:
+    """融資融券 read tier — same shape as `get_institutional`:
+    Redis → Postgres `tw_margin_daily` → FinMind → TWSE today-only.
+    """
+    from services.ingest.repository import read_margin_range
+
     key = key_margin(symbol)
     cached = await cache_get(key)
     if cached:
         return json.loads(cached)
 
-    start = (date.today() - timedelta(days=days)).isoformat()
+    today = date.today()
+    start = today - timedelta(days=days)
+
+    try:
+        from db.session import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            db_rows = await read_margin_range(db, "TW", symbol, start, today)
+        if db_rows:
+            await cache_set(key, json.dumps(db_rows), TTL_MARGIN)
+            return db_rows
+    except Exception:
+        pass
+
     result: list[dict] = []
     try:
-        result = await finmind.get_margin(symbol, start)
+        result = await finmind.get_margin(symbol, start.isoformat())
     except Exception:
         pass
 

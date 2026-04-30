@@ -410,6 +410,16 @@ async def gather_market_context(
         # the per-discussion-market aggregate. Lets a TW persona say
         # "FOMC 鷹派預期 → 對台股科技股不利" with actual data backing.
         "international_sentiment": None,
+        # TW-only chip-metric blocks (PR #131). `top_foreign_buyers`
+        # is the ranked net foreign buy over the last 5 trading days
+        # (positive = accumulation, negative = distribution). `margin
+        # _balance_trend` is the latest market-wide margin + short
+        # balance, used as a leverage / retail-activity proxy. Both
+        # are populated only when `market='TW'`; other markets keep
+        # them None so the discussion prompt template doesn't have
+        # to reason about empty per-market shapes.
+        "top_foreign_buyers": [],
+        "margin_balance_trend": None,
         # Each connector failure appends `{"source": "...", "error": "..."}`
         # so the personas (and the synthesizer) can mention "context was
         # incomplete" instead of confidently citing missing data. Logged
@@ -442,6 +452,29 @@ async def gather_market_context(
             ctx["index"] = await tw_market_service.get_index()
         except Exception as exc:
             _record_error("index", exc)
+
+        # Chip metrics — both blocks are best-effort. Empty result
+        # (cron hasn't run yet, fresh deploy) leaves the default and
+        # personas just won't reference foreign flow / margin. We
+        # don't push this through `tw_market_service` because there's
+        # no per-symbol cache key to populate — these are aggregates.
+        try:
+            from services.ingest.repository import read_top_foreign_buyers
+            ctx["top_foreign_buyers"] = await read_top_foreign_buyers(
+                db, market="TW", days=5, limit=10,
+            )
+        except Exception as exc:
+            _record_error("top_foreign_buyers", exc)
+
+        try:
+            from services.ingest.repository import (
+                read_market_margin_balance_trend,
+            )
+            ctx["margin_balance_trend"] = await read_market_margin_balance_trend(
+                db, market="TW", days=5,
+            )
+        except Exception as exc:
+            _record_error("margin_balance_trend", exc)
 
     try:
         from services.news_sentiment_service import read_recent_market_sentiment

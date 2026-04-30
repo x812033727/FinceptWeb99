@@ -792,6 +792,85 @@ async def test_gather_market_context_includes_international_sentiment(
     assert tw_block["bullish"] == 0
 
 
+@pytest.mark.asyncio
+async def test_gather_market_context_includes_chip_metrics_for_tw(
+    db_session: AsyncSession,
+):
+    """`top_foreign_buyers` + `margin_balance_trend` are populated for
+    market='TW' from the chip-metric daily archives. Other markets
+    keep them at the default empty/None so the prompt template
+    doesn't have to special-case missing TW data when the discussion
+    is e.g. US-focused."""
+    from datetime import date as _date
+    import services.tw_market_service as _tw   # noqa: F401
+    from services.ingest.repository import (
+        InstitutionalDailyRow,
+        MarginDailyRow,
+        upsert_institutional_daily,
+        upsert_margin_daily,
+    )
+
+    today = _date.today()
+    await upsert_institutional_daily(db_session, [
+        InstitutionalDailyRow(
+            market="TW", symbol="2330", ts=today,
+            fini_buy=100_000, fini_sell=20_000,
+            sitc_buy=1_000, sitc_sell=500,
+            dealer_buy=200, dealer_sell=100,
+            source="twse",
+        ),
+        InstitutionalDailyRow(
+            market="TW", symbol="2454", ts=today,
+            fini_buy=50_000, fini_sell=10_000,
+            sitc_buy=500, sitc_sell=200,
+            dealer_buy=100, dealer_sell=50,
+            source="twse",
+        ),
+    ])
+    await upsert_margin_daily(db_session, [
+        MarginDailyRow(
+            market="TW", symbol="2330", ts=today,
+            margin_purchase=5_000, margin_balance=20_000,
+            short_sale=1_000, short_balance=3_000,
+            source="twse",
+        ),
+    ])
+
+    with patch.object(_tw, "get_screener", new=AsyncMock(return_value=[])), \
+         patch.object(_tw, "get_index", new=AsyncMock(return_value={})):
+        ctx = await discussion_service.gather_market_context(
+            db_session, market="TW",
+        )
+
+    # 2330's net foreign buy (80k) > 2454's (40k), so 2330 leads.
+    assert ctx["top_foreign_buyers"][0]["symbol"] == "2330"
+    assert ctx["top_foreign_buyers"][0]["net_foreign_buy"] == 80_000
+
+    trend = ctx["margin_balance_trend"]
+    assert trend is not None
+    assert trend["total_margin_balance"] == 20_000
+    assert trend["total_short_balance"] == 3_000
+    assert trend["days_observed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_gather_market_context_skips_chip_metrics_for_non_tw(
+    db_session: AsyncSession,
+):
+    """Non-TW markets don't get chip-metric blocks populated — TWSE-
+    specific data shouldn't bleed into a US discussion's context."""
+    import services.tw_market_service as _tw   # noqa: F401
+
+    with patch.object(_tw, "get_screener", new=AsyncMock(return_value=[])), \
+         patch.object(_tw, "get_index", new=AsyncMock(return_value={})):
+        ctx = await discussion_service.gather_market_context(
+            db_session, market="US",
+        )
+
+    assert ctx["top_foreign_buyers"] == []
+    assert ctx["margin_balance_trend"] is None
+
+
 # ── persona timeout (C8) ─────────────────────────────────────────
 
 

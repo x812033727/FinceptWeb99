@@ -72,7 +72,8 @@ FinceptWeb/
 │   │   │                 #   0016 system_task_configs ·
 │   │   │                 #   0017 runtime_settings ·
 │   │   │                 #   0018 discussion_verdict · 0019 discussion_day5_close ·
-│   │   │                 #   0020 discussion_auto_run_configs
+│   │   │                 #   0020 discussion_auto_run_configs ·
+│   │   │                 #   0021 tw_institutional_daily + tw_margin_daily
 │   │   ├── base.py       # DeclarativeBase with naming convention
 │   │   ├── seed.py       # Admin user seed on first boot
 │   │   └── session.py    # Async engine + get_db dependency
@@ -332,6 +333,25 @@ FinceptWeb/
   US/SPY `RecentNews` read-through with a `RecentGlobalNews` card
   backed by this archive so the user sees the same data the personas
   do.
+
+### TW chip metrics ingest
+- Two daily TWSE one-shot crons (06:50 + 07:00 UTC, post-close):
+  `tasks/ingest_institutional_tw.py` writes 法人買賣超 (foreign /
+  SITC / dealer buy + sell volumes) into `tw_institutional_daily`,
+  and `tasks/ingest_margin_tw.py` writes 融資融券 (margin purchase +
+  balance, short sale + balance) into `tw_margin_daily`. Both use
+  TWSE's "all stocks for one day" endpoints — no per-symbol fan-out,
+  ~one HTTP call per cron per day.
+- Read tier: `tw_market_service.get_institutional` /
+  `get_margin` consult Postgres before falling through to FinMind
+  per-symbol → TWSE today-only. Saves FinMind quota on the typical
+  30-day query path used by the StockDetailPage.
+- Discussion context aggregators in `services/ingest/repository.py`:
+  `read_top_foreign_buyers` (top 10 net foreign buy over last 5
+  trading days) and `read_market_margin_balance_trend` (latest
+  market-wide margin + short balance). Wired into
+  `gather_market_context` for `market='TW'` only — TWSE-specific
+  data shouldn't bleed into a US discussion's prompt context.
 
 ### News sentiment scoring
 - Hourly APScheduler job `tasks/score_news_sentiment.py` picks up

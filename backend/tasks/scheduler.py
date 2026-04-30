@@ -170,6 +170,31 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # ── TW chip metrics ───────────────────────────────────────────
+    # Both fire post-close (TWSE close 13:30 Taipei = 05:30 UTC).
+    # Slightly staggered so a slow-but-not-yet-stuck TWSE doesn't
+    # have two parallel queries hammering it. One TWSE call covers
+    # the whole market in each task — no per-symbol fan-out.
+    from tasks.ingest_institutional_tw import run as run_ingest_institutional_tw
+    scheduler.add_job(
+        run_ingest_institutional_tw,
+        trigger=CronTrigger(hour=6, minute=50, timezone="UTC"),
+        id="ingest_institutional_tw",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    from tasks.ingest_margin_tw import run as run_ingest_margin_tw
+    scheduler.add_job(
+        run_ingest_margin_tw,
+        trigger=CronTrigger(hour=7, minute=0, timezone="UTC"),
+        id="ingest_margin_tw",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── News sentiment scoring ────────────────────────────────────
     # Hourly: picks up news rows with NULL sentiment_score and runs them
     # through Claude Haiku in batches. Cheap (one prompt scores 20

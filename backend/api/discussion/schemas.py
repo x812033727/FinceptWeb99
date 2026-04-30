@@ -83,3 +83,17 @@ class AutoRunConfigResponse(BaseModel):
     topic: str
     rules: str
     updated_at: datetime | None = None
+
+
+class ScoreboardRow(BaseModel):
+    symbol: str
+    day1_open: float | None
+    daily_closes: list[float | None]
+    change_pcts: list[float | None]
+    days_resolved: int
+
+
+class ScoreboardResponse(BaseModel):
+    discussion_id: uuid.UUID
+    created_at_tw_date: str
+    rows: list[ScoreboardRow]

@@ -1,0 +1,216 @@
+"""Per-discussion scoreboard service: D1-D5 daily close vs day-1 open.
+
+Builds the data behind the "對答案" UI on the discussion detail
+page. For each recommended symbol, walks the 5 trading days
+starting from the discussion's TW-local creation date and reports:
+
+  - day1_open: the open price on the first trading day at or after
+    creation. Pinned in `discussion.day1_open_prices` once captured
+    so a later upstream correction can't shift the baseline.
+  - daily_closes: list of 5 close prices (or None for unresolved
+    days when the cron caught the row before the window completed).
+  - change_pcts: list of `(close - day1_open) / day1_open` per day.
+  - days_resolved: count of non-None entries in daily_closes.
+
+Two entry points:
+
+  * `compute_scoreboard(db, discussion)` — pure read, returns the
+    structured dict without writing. Used by the API endpoint when
+    the persisted column is still NULL.
+
+  * `persist_scoreboard(db, discussion)` — calls compute, writes
+    `daily_close_prices` (and back-fills missing `day1_open_prices`
+    entries), commits. Returns True only when ALL symbols have
+    days_resolved=5 — the daily cron uses that signal to skip
+    fully-resolved rows on the next tick.
+
+Reads OHLCV from the DB archive (`ohlcv_daily`), which is populated
+by the daily TW EOD ingest. No live waterfall — fresh deploys with
+no archive simply return days_resolved=0 until ingest catches up.
+"""
+from __future__ import annotations
+
+import logging
+from datetime import date, timedelta
+from typing import Any
+
+from sqlalchemy import update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from models.discussion import Discussion
+from services.ingest.repository import read_ohlcv_range_autosession
+from services.tw_trading_calendar import to_tw_date
+
+log = logging.getLogger(__name__)
+
+WINDOW_DAYS = 5
+# Calendar-day lookahead from creation date to cover 5 trading days
+# plus weekends + the rare TW holiday week. ~2× the trading-day count
+# is the safe bound used by `verify_discussion_outcome`.
+_LOOKAHEAD_CALENDAR_DAYS = 14
+
+
+async def compute_scoreboard(
+    db: AsyncSession,  # noqa: ARG001 (sig kept symmetric with persist_)
+    discussion: Discussion,
+) -> dict[str, Any]:
+    """Read-only computation. See module docstring for the contract.
+
+    Returns the dict shape directly — no DB writes — so the API
+    endpoint can serve the on-demand path without a full session
+    factory.
+    """
+    syms = _recommended_symbols(discussion)
+    created_tw = to_tw_date(discussion.created_at)
+    cached_opens: dict[str, float] = dict(discussion.day1_open_prices or {})
+
+    rows: list[dict[str, Any]] = []
+    for sym in syms:
+        rows.append(
+            await _compute_for_symbol(
+                sym=sym,
+                created_tw=created_tw,
+                cached_open=cached_opens.get(sym),
+            )
+        )
+
+    return {
+        "discussion_id": str(discussion.id),
+        "created_at_tw_date": created_tw.isoformat(),
+        "rows": rows,
+    }
+
+
+async def persist_scoreboard(
+    db: AsyncSession, discussion: Discussion,
+) -> bool:
+    """Compute + persist. Returns True iff every recommended symbol
+    has all 5 days resolved (caller can use that as the
+    "skip-on-next-tick" signal).
+
+    Atomic SQL UPDATE matches the pattern used elsewhere in this
+    module's neighbours (`force_reset_status`, verifier writes) to
+    avoid the SQLAlchemy 2.0 expunge-on-ORM-update gotcha that
+    breaks `db.refresh(discussion)` under PostgreSQL.
+    """
+    payload = await compute_scoreboard(db, discussion)
+    rows = payload["rows"]
+
+    # Build the JSON column shape: {symbol: [c1, c2, c3, c4, c5]}.
+    daily: dict[str, list[float | None]] = {
+        r["symbol"]: r["daily_closes"] for r in rows
+    }
+    # Back-fill day1_open_prices for symbols the verifier hasn't
+    # touched yet (e.g. manual discussions) so the existing
+    # frontend `formatDiscussionTitle` rendering and the verdict
+    # task have a stable baseline once they look at this row.
+    existing_opens: dict[str, float] = dict(discussion.day1_open_prices or {})
+    for r in rows:
+        if r["day1_open"] is not None and r["symbol"] not in existing_opens:
+            existing_opens[r["symbol"]] = r["day1_open"]
+
+    await db.execute(
+        update(Discussion)
+        .where(Discussion.id == discussion.id)
+        .values(
+            daily_close_prices=daily,
+            day1_open_prices=existing_opens or None,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    await db.commit()
+    discussion.daily_close_prices = daily
+    discussion.day1_open_prices = existing_opens or None
+
+    fully_resolved = bool(rows) and all(
+        r["days_resolved"] == WINDOW_DAYS for r in rows
+    )
+    return fully_resolved
+
+
+# ── internals ──────────────────────────────────────────────────────
+
+
+def _recommended_symbols(discussion: Discussion) -> list[str]:
+    """Pull recommended_symbols out of the conclusion JSON, dedup +
+    strip. Returns [] for un-concluded discussions or malformed
+    conclusions (defensive — synthesizer guard already coerces but
+    this module shouldn't crash on a legacy row)."""
+    conclusion = discussion.conclusion or {}
+    raw = conclusion.get("recommended_symbols") or []
+    if not isinstance(raw, list):
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for s in raw:
+        sym = str(s).strip()
+        if sym and sym not in seen:
+            seen.add(sym)
+            out.append(sym)
+    return out
+
+
+async def _compute_for_symbol(
+    *,
+    sym: str,
+    created_tw: date,
+    cached_open: float | None,
+) -> dict[str, Any]:
+    """One symbol's scoreboard row. Reads OHLCV via the autosession
+    helper (closed inside repository.py) so we don't have to thread
+    a session through and risk holding it across the whole batch."""
+    end = created_tw + timedelta(days=_LOOKAHEAD_CALENDAR_DAYS)
+    bars: list[dict[str, Any]] = []
+    try:
+        bars = await read_ohlcv_range_autosession(
+            "TW", sym, created_tw, end,
+        )
+    except Exception as exc:
+        log.warning(
+            "scoreboard.ohlcv_read_failed",
+            extra={"symbol": sym, "error": str(exc)},
+        )
+        bars = []
+
+    # Filter to bars on or after the TW-local creation date. The
+    # repository helper already constrains by [start, end] but we
+    # re-check defensively in case a future repository change widens
+    # the bound semantics.
+    iso_start = created_tw.isoformat()
+    future = [b for b in bars if (b.get("time") or "") >= iso_start]
+    window = future[:WINDOW_DAYS]
+
+    day1_open: float | None = None
+    if window:
+        first_open = window[0].get("open")
+        if isinstance(first_open, (int, float)):
+            day1_open = float(first_open)
+    if cached_open is not None:
+        # Cached snapshot wins — stable baseline even when an
+        # upstream correction shifts the bar later.
+        day1_open = cached_open
+
+    daily_closes: list[float | None] = []
+    for i in range(WINDOW_DAYS):
+        if i < len(window):
+            c = window[i].get("close")
+            daily_closes.append(float(c) if isinstance(c, (int, float)) else None)
+        else:
+            daily_closes.append(None)
+
+    change_pcts: list[float | None] = []
+    for c in daily_closes:
+        if c is None or day1_open is None or day1_open <= 0:
+            change_pcts.append(None)
+        else:
+            change_pcts.append(round((c - day1_open) / day1_open, 6))
+
+    days_resolved = sum(1 for c in daily_closes if c is not None)
+
+    return {
+        "symbol": sym,
+        "day1_open": day1_open,
+        "daily_closes": daily_closes,
+        "change_pcts": change_pcts,
+        "days_resolved": days_resolved,
+    }

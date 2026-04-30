@@ -43,6 +43,8 @@ from api.discussion.schemas import (
     CreateDiscussionRequest,
     DiscussionDetailResponse,
     DiscussionResponse,
+    ScoreboardResponse,
+    ScoreboardRow,
     TurnResponse,
     UpdateDiscussionRequest,
 )
@@ -235,6 +237,44 @@ async def get_round_contexts(
         }
         for r in rows
     ]
+
+
+@router.get(
+    "/sessions/{discussion_id}/scoreboard",
+    response_model=ScoreboardResponse,
+)
+async def get_scoreboard(
+    discussion_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """D1-D5 daily close + change % vs day-1 open per recommended
+    symbol. Owner-scoped. Reads the persisted `daily_close_prices`
+    column when populated (filled in by the daily 09:30 UTC cron);
+    falls back to an on-demand compute against `ohlcv_daily` when
+    NULL so newly-concluded discussions show partial data
+    immediately instead of waiting a day."""
+    from services import discussion_scoreboard_service
+
+    row = await discussion_service.get_discussion(
+        db, discussion_id=discussion_id, owner_id=_coerce_owner_uuid(user),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Discussion not found")
+    if not row.conclusion:
+        raise HTTPException(
+            status_code=400,
+            detail="Discussion has no conclusion to score yet",
+        )
+
+    payload = await discussion_scoreboard_service.compute_scoreboard(
+        db, row,
+    )
+    return ScoreboardResponse(
+        discussion_id=row.id,
+        created_at_tw_date=payload["created_at_tw_date"],
+        rows=[ScoreboardRow(**r) for r in payload["rows"]],
+    )
 
 
 @router.patch("/sessions/{discussion_id}", response_model=DiscussionResponse)

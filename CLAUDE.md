@@ -75,7 +75,8 @@ FinceptWeb/
 │   │   │                 #   0020 discussion_auto_run_configs ·
 │   │   │                 #   0021 tw_institutional_daily + tw_margin_daily ·
 │   │   │                 #   0022 tw_revenue_monthly ·
-│   │   │                 #   0023 discussion_round_contexts
+│   │   │                 #   0023 discussion_round_contexts ·
+│   │   │                 #   0024 discussions.daily_close_prices
 │   │   ├── base.py       # DeclarativeBase with naming convention
 │   │   ├── seed.py       # Admin user seed on first boot
 │   │   └── session.py    # Async engine + get_db dependency
@@ -295,6 +296,21 @@ FinceptWeb/
   but non-fatal — round still completes. API:
   `GET /api/discussion/sessions/{id}/contexts` returns
   `[{round, context, captured_at}, ...]`, owner-scoped.
+- **Per-symbol scoreboard** (migration `0024`,
+  `services/discussion_scoreboard_service.py`): the
+  `discussions.daily_close_prices` JSON column carries
+  `{symbol: [d1, d2, d3, d4, d5]}` closes for each recommended
+  symbol so the discussion detail page can render a "對答案" card
+  showing day-1 open + 5 daily change %s. Daily cron
+  `tasks/score_discussion_outcomes.py` (09:30 UTC) scans concluded
+  discussions older than 7 days with NULL `daily_close_prices` and
+  fills the column from `ohlcv_daily`. Distinct from the verifier
+  (which only grades `auto_run=True` rows for win/loss): this
+  covers ALL concluded discussions (manual + auto-run). API:
+  `GET /api/discussion/sessions/{id}/scoreboard` returns the
+  computed payload — persisted column when present, on-demand
+  compute against `ohlcv_daily` when NULL so newly-concluded
+  discussions show partial data without waiting a day.
 - **Daily auto-run** (`tasks/auto_run_discussion.py`, cron 00:00 UTC):
   per-user opt-in via `discussion_auto_run_configs` (migration `0020`).
   Each user with `enabled=True` gets one `auto_run=True` discussion per

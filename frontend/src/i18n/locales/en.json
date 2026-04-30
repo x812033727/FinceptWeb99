@@ -469,7 +469,15 @@
     "context_top_foreign": "Top foreign buy",
     "context_top_revenue": "Top revenue",
     "context_show_json": "▸ Show JSON",
-    "context_hide_json": "▾ Hide JSON"
+    "context_hide_json": "▾ Hide JSON",
+    "scoreboard_title": "Scoreboard (D1-D5)",
+    "scoreboard_subtitle": "For each recommended symbol, the % change of each of the next 5 trading days' close vs the day-1 open. Refreshed daily at 09:30 UTC.",
+    "scoreboard_count": "{{n}} symbols",
+    "scoreboard_day1_open": "Open",
+    "scoreboard_pending": "{{resolved}}/5 days resolved — more data lands as the window completes",
+    "scoreboard_no_conclusion": "No conclusion yet — synthesize the discussion first",
+    "scoreboard_empty": "Conclusion has no recommended symbols",
+    "scoreboard_error": "Failed to load scoreboard"
   },
   "watchlist": {
     "title": "Watchlist",

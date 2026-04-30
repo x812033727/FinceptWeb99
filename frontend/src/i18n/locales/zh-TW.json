@@ -469,7 +469,15 @@
     "context_top_foreign": "外資首選",
     "context_top_revenue": "營收首選",
     "context_show_json": "▸ 完整 JSON",
-    "context_hide_json": "▾ 收合 JSON"
+    "context_hide_json": "▾ 收合 JSON",
+    "scoreboard_title": "對答案 (D1-D5 漲跌)",
+    "scoreboard_subtitle": "每個推薦標的，從討論建立日的開盤價開始算，未來 5 個交易日每天的收盤漲跌。每天 09:30 UTC 自動更新。",
+    "scoreboard_count": "{{n}} 檔",
+    "scoreboard_day1_open": "開盤",
+    "scoreboard_pending": "尚有 {{resolved}}/5 天有資料，等剩餘交易日後才會完整",
+    "scoreboard_no_conclusion": "此討論尚無結論摘要，先完成「彙整結論」才會有對答案",
+    "scoreboard_empty": "結論未推薦標的，無法對答案",
+    "scoreboard_error": "讀取對答案失敗"
   },
   "watchlist": {
     "title": "自選股",

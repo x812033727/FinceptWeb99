@@ -437,6 +437,91 @@ async def test_get_round_contexts_empty_for_legacy_discussion(
     assert r.json() == []
 
 
+# ── scoreboard endpoint (PR #140) ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_scoreboard_returns_400_when_no_conclusion(
+    client: AsyncClient,
+):
+    """Newly-created discussion has no conclusion yet — endpoint
+    bails with 400 rather than returning an empty rows list."""
+    h = await _register(client, "scoreboard_no_conc@example.com")
+    r = await client.post(
+        "/api/discussion/sessions",
+        headers=h,
+        json={"topic": "x", "rules": "y", "persona_ids": ["buffett", "lynch"]},
+    )
+    discussion_id = r.json()["id"]
+
+    r = await client.get(
+        f"/api/discussion/sessions/{discussion_id}/scoreboard",
+        headers=h,
+    )
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_get_scoreboard_owner_scoped_404_for_others(
+    client: AsyncClient,
+):
+    h_a = await _register(client, "scoreboard_a@example.com")
+    r = await client.post(
+        "/api/discussion/sessions",
+        headers=h_a,
+        json={"topic": "x", "rules": "y", "persona_ids": ["buffett", "lynch"]},
+    )
+    discussion_id = r.json()["id"]
+
+    h_b = await _register(client, "scoreboard_b@example.com")
+    r = await client.get(
+        f"/api/discussion/sessions/{discussion_id}/scoreboard",
+        headers=h_b,
+    )
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_scoreboard_returns_rows_when_concluded(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """Discussion with a conclusion → endpoint returns rows even
+    when the cron hasn't persisted `daily_close_prices` yet (the
+    on-demand compute path)."""
+    h = await _register(client, "scoreboard_ondemand@example.com")
+    r = await client.post(
+        "/api/discussion/sessions",
+        headers=h,
+        json={"topic": "x", "rules": "y", "persona_ids": ["buffett", "lynch"]},
+    )
+    discussion_id = r.json()["id"]
+
+    # Manually attach a conclusion so the endpoint considers it
+    # eligible — we don't need to actually run a round.
+    row = await db_session.scalar(
+        select(Discussion).where(Discussion.id == uuid.UUID(discussion_id))
+    )
+    row.conclusion = {
+        "recommended_symbols": ["2330"],
+        "reasoning": "x", "risks": [],
+        "time_horizon": "short_term", "consensus_score": 0.5,
+    }
+    await db_session.commit()
+
+    r = await client.get(
+        f"/api/discussion/sessions/{discussion_id}/scoreboard",
+        headers=h,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["discussion_id"] == discussion_id
+    assert isinstance(body["rows"], list)
+    assert len(body["rows"]) == 1
+    assert body["rows"][0]["symbol"] == "2330"
+    # No OHLCV pre-seeded → days_resolved=0 with all-None arrays.
+    assert body["rows"][0]["days_resolved"] == 0
+
+
 # ── User fixture for service-layer needs ───────────────────────────
 
 

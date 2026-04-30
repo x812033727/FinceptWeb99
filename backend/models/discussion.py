@@ -86,6 +86,15 @@ class Discussion(Base):
     day5_close_prices: Mapped[dict[str, float] | None] = mapped_column(
         JSON, nullable=True,
     )
+    # Per-symbol D1-D5 closes (PR #140) for the "對答案" scoreboard.
+    # Shape: {symbol: [d1, d2, d3, d4, d5]} where each slot is the
+    # day's close in TWD or NULL when the day hasn't resolved yet.
+    # Populated by `tasks.score_discussion_outcomes` once the 5-day
+    # window expires; left NULL for active discussions so the cron
+    # knows to retry on the next tick.
+    daily_close_prices: Mapped[dict[str, list[float | None]] | None] = mapped_column(
+        JSON, nullable=True,
+    )
     verify_after_date: Mapped[date | None] = mapped_column(
         Date, nullable=True,
     )

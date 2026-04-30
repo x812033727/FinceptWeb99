@@ -312,3 +312,21 @@ def setup_jobs() -> None:
         max_instances=1,
         coalesce=True,
     )
+
+    # ── Score discussion outcomes (D1-D5 closes) ──────────────────
+    # Daily at 09:30 UTC. Sibling of verify_discussion_outcome but
+    # populates the per-day close array (`daily_close_prices`) that
+    # backs the "對答案" UI on the discussion detail page. Runs an
+    # hour after verify so any day1_open captured by the verifier is
+    # already in place before we read it. Covers BOTH manual and
+    # auto-run discussions (vs verifier which only touches auto_run=
+    # True rows).
+    from tasks.score_discussion_outcomes import run as run_score_discussion_outcomes
+    scheduler.add_job(
+        run_score_discussion_outcomes,
+        trigger=CronTrigger(hour=9, minute=30, timezone="UTC"),
+        id="score_discussion_outcomes",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )

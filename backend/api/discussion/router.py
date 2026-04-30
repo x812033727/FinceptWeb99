@@ -207,6 +207,36 @@ async def get_session(
     return DiscussionDetailResponse(**base)
 
 
+@router.get("/sessions/{discussion_id}/contexts")
+async def get_round_contexts(
+    discussion_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Per-round context snapshots for replay/audit. Owner-scoped —
+    same access rule as the rest of the discussion endpoints. Returns
+    `[{round, context, captured_at}, ...]` ordered by round; an empty
+    list when the discussion was created before context-snapshot
+    persistence was wired in (PR #135) or the snapshot writes failed
+    silently."""
+    row = await discussion_service.get_discussion(
+        db, discussion_id=discussion_id, owner_id=_coerce_owner_uuid(user),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Discussion not found")
+    rows = await discussion_service.get_round_contexts(
+        db, discussion_id=row.id,
+    )
+    return [
+        {
+            "round":       r.round,
+            "context":     r.context,
+            "captured_at": r.captured_at,
+        }
+        for r in rows
+    ]
+
+
 @router.patch("/sessions/{discussion_id}", response_model=DiscussionResponse)
 async def update_session(
     discussion_id: uuid.UUID,

@@ -50,12 +50,15 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import delete, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai.agents import all_persona_ids
 from ai.llm_router import stream_chat
 from config import settings
 from models.discussion import Discussion, DiscussionTurn
+from models.discussion_round_context import DiscussionRoundContext
 
 if TYPE_CHECKING:
     from ai.agents import AgentSpec
@@ -281,6 +284,53 @@ async def get_turns(
         )
     )
     return list((await db.scalars(stmt)).all())
+
+
+async def get_round_contexts(
+    db: AsyncSession, *, discussion_id: uuid.UUID,
+) -> list[DiscussionRoundContext]:
+    """Per-round context snapshots for `discussion_id`, ascending."""
+    stmt = (
+        select(DiscussionRoundContext)
+        .where(DiscussionRoundContext.discussion_id == discussion_id)
+        .order_by(DiscussionRoundContext.round.asc())
+    )
+    return list((await db.scalars(stmt)).all())
+
+
+async def _upsert_round_context(
+    db: AsyncSession,
+    *,
+    discussion_id: uuid.UUID,
+    round_number: int,
+    context: dict[str, Any],
+) -> None:
+    """Persist the assembled context for one round. Idempotent on
+    (discussion_id, round) so a defensive re-write (e.g. a stuck
+    RUNNING row force-reset and re-run on the same round number)
+    overwrites instead of failing the whole round commit. Caller
+    is the only writer — `run_round` calls this once per round
+    after `gather_market_context` returns."""
+    payload = {
+        "discussion_id": discussion_id,
+        "round":         round_number,
+        "context":       context,
+    }
+    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
+    if dialect == "sqlite":
+        stmt = sqlite_insert(DiscussionRoundContext).values(payload)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["discussion_id", "round"],
+            set_={"context": stmt.excluded.context},
+        )
+    else:
+        stmt = pg_insert(DiscussionRoundContext).values(payload)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["discussion_id", "round"],
+            set_={"context": stmt.excluded.context},
+        )
+    await db.execute(stmt)
+    await db.commit()
 
 
 async def update_discussion(
@@ -950,6 +1000,27 @@ async def run_round(
     try:
         focus = extract_focus_symbols(discussion.topic)
         context = await gather_market_context(db, focus_symbols=focus)
+        # Snapshot the assembled context so re-opening the discussion
+        # later can show "what data the personas saw at the time".
+        # Failure to persist is non-fatal — we still want the round
+        # to proceed and the personas to reply; the missing snapshot
+        # just means this round won't be replayable from the archive.
+        try:
+            await _upsert_round_context(
+                db,
+                discussion_id=discussion.id,
+                round_number=round_number,
+                context=context,
+            )
+        except Exception as exc:
+            log.warning(
+                "discussion.round.context_snapshot_failed",
+                extra={
+                    "discussion_id": str(discussion.id),
+                    "round": round_number,
+                    "error": str(exc),
+                },
+            )
         yield TurnEvent("context", {"context": context})
 
         prior_turns = await get_turns(db, discussion_id=discussion.id)

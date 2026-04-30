@@ -74,7 +74,8 @@ FinceptWeb/
 │   │   │                 #   0018 discussion_verdict · 0019 discussion_day5_close ·
 │   │   │                 #   0020 discussion_auto_run_configs ·
 │   │   │                 #   0021 tw_institutional_daily + tw_margin_daily ·
-│   │   │                 #   0022 tw_revenue_monthly
+│   │   │                 #   0022 tw_revenue_monthly ·
+│   │   │                 #   0023 discussion_round_contexts
 │   │   ├── base.py       # DeclarativeBase with naming convention
 │   │   ├── seed.py       # Admin user seed on first boot
 │   │   └── session.py    # Async engine + get_db dependency
@@ -285,6 +286,15 @@ FinceptWeb/
   Stuck provider → emit error event, persist placeholder, proceed.
 - Persona overrides batch-loaded once per round (`_resolve_persona_specs`)
   so an 8-persona round costs 1 DB query for routing, not 8.
+- **Per-round context snapshots** (migration `0023`): `run_round`
+  upserts the assembled `gather_market_context` dict into
+  `discussion_round_contexts` (PK `(discussion_id, round)`) so re-
+  opening an old discussion can show "what data the personas saw at
+  the time" instead of re-running the aggregator (which would return
+  the *current* market state). Snapshot write failures are logged
+  but non-fatal — round still completes. API:
+  `GET /api/discussion/sessions/{id}/contexts` returns
+  `[{round, context, captured_at}, ...]`, owner-scoped.
 - **Daily auto-run** (`tasks/auto_run_discussion.py`, cron 00:00 UTC):
   per-user opt-in via `discussion_auto_run_configs` (migration `0020`).
   Each user with `enabled=True` gets one `auto_run=True` discussion per

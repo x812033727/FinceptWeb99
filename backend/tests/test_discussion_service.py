@@ -871,6 +871,175 @@ async def test_gather_market_context_skips_chip_metrics_for_non_tw(
     assert ctx["margin_balance_trend"] is None
 
 
+# ── round context snapshots (PR #135) ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_run_round_persists_context_snapshot(
+    db_session: AsyncSession, owner: User,
+):
+    """Each round writes its assembled context dict into
+    `discussion_round_contexts` keyed on (discussion_id, round) so
+    re-opening the discussion can replay 'what data the personas
+    saw at the time'."""
+    from models.discussion_round_context import DiscussionRoundContext
+
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="本週短線", rules="≤200字",
+        persona_ids=["buffett", "lynch"],
+    )
+
+    snapshot_ctx = {
+        "market": "TW",
+        "top_gainers": [{"symbol": "2330"}],
+        "captured_at": "2026-04-30T08:00:00+00:00",
+    }
+
+    replies = [
+        '{"stance":"supplement","content":"x"}',
+        '{"stance":"agree","content":""}',
+    ]
+    with patch(
+        "services.discussion_service.stream_chat",
+        side_effect=_stream_events_sequence(replies),
+    ), patch(
+        "services.discussion_service.gather_market_context",
+        new=AsyncMock(return_value=snapshot_ctx),
+    ):
+        async for _ in discussion_service.run_round(
+            db_session, row, user_id=str(owner.id),
+        ):
+            pass
+
+    snaps = (await db_session.scalars(
+        select(DiscussionRoundContext)
+        .where(DiscussionRoundContext.discussion_id == row.id)
+    )).all()
+    assert len(snaps) == 1
+    assert snaps[0].round == 1
+    assert snaps[0].context == snapshot_ctx
+
+
+@pytest.mark.asyncio
+async def test_run_round_snapshot_failure_does_not_abort_round(
+    db_session: AsyncSession, owner: User,
+):
+    """A flaky context snapshot write should NOT bring down the
+    round — personas still reply, turns still persist, status still
+    resets. Just the snapshot row is missing."""
+    from models.discussion_round_context import DiscussionRoundContext
+
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="x", rules="y",
+        persona_ids=["buffett", "lynch"],
+    )
+
+    replies = [
+        '{"stance":"supplement","content":"x"}',
+        '{"stance":"agree","content":""}',
+    ]
+    with patch(
+        "services.discussion_service.stream_chat",
+        side_effect=_stream_events_sequence(replies),
+    ), patch(
+        "services.discussion_service.gather_market_context",
+        new=AsyncMock(return_value={"market": "TW"}),
+    ), patch(
+        "services.discussion_service._upsert_round_context",
+        new=AsyncMock(side_effect=RuntimeError("disk full")),
+    ):
+        async for _ in discussion_service.run_round(
+            db_session, row, user_id=str(owner.id),
+        ):
+            pass
+
+    # Round still completed: turns persisted, status reset.
+    refreshed = await db_session.get(Discussion, row.id)
+    assert refreshed.status == discussion_service.STATUS_DRAFT
+    assert refreshed.current_round == 1
+    turns = await discussion_service.get_turns(db_session, discussion_id=row.id)
+    assert len(turns) == 2
+    # But the snapshot didn't land.
+    snaps = (await db_session.scalars(
+        select(DiscussionRoundContext)
+        .where(DiscussionRoundContext.discussion_id == row.id)
+    )).all()
+    assert snaps == []
+
+
+@pytest.mark.asyncio
+async def test_get_round_contexts_returns_ordered_snapshots(
+    db_session: AsyncSession, owner: User,
+):
+    """`get_round_contexts` returns snapshots ordered ascending by
+    round so the API endpoint can render them chronologically."""
+    from models.discussion_round_context import DiscussionRoundContext
+
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="x", rules="y",
+        persona_ids=["buffett", "lynch"],
+    )
+    # Seed two rounds out of order to verify the order_by clause.
+    db_session.add_all([
+        DiscussionRoundContext(
+            discussion_id=row.id, round=2,
+            context={"market": "TW", "round_marker": 2},
+        ),
+        DiscussionRoundContext(
+            discussion_id=row.id, round=1,
+            context={"market": "TW", "round_marker": 1},
+        ),
+    ])
+    await db_session.commit()
+
+    rows = await discussion_service.get_round_contexts(
+        db_session, discussion_id=row.id,
+    )
+    assert [r.round for r in rows] == [1, 2]
+    assert rows[0].context["round_marker"] == 1
+
+
+@pytest.mark.asyncio
+async def test_upsert_round_context_overwrites_on_duplicate(
+    db_session: AsyncSession, owner: User,
+):
+    """A second write for the same (discussion_id, round) overwrites
+    instead of failing — defensive against a stuck-RUNNING auto-
+    recover that re-fires run_round on the same round number."""
+    from models.discussion_round_context import DiscussionRoundContext
+
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="x", rules="y",
+        persona_ids=["buffett", "lynch"],
+    )
+
+    await discussion_service._upsert_round_context(
+        db_session,
+        discussion_id=row.id, round_number=1,
+        context={"v": 1},
+    )
+    await discussion_service._upsert_round_context(
+        db_session,
+        discussion_id=row.id, round_number=1,
+        context={"v": 2},
+    )
+
+    snaps = (await db_session.scalars(
+        select(DiscussionRoundContext)
+        .where(DiscussionRoundContext.discussion_id == row.id)
+    )).all()
+    assert len(snaps) == 1
+    assert snaps[0].context == {"v": 2}
+
+
 # ── persona timeout (C8) ─────────────────────────────────────────
 
 

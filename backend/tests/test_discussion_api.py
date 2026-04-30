@@ -353,6 +353,90 @@ async def test_patch_rejected_after_round(
     assert r.status_code == 400
 
 
+# ── round-context snapshots (PR #135) ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_round_contexts_returns_persisted_snapshots(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """End-to-end: create a discussion, seed a snapshot row directly,
+    GET /sessions/{id}/contexts returns it owner-scoped."""
+    from models.discussion_round_context import DiscussionRoundContext
+
+    h = await _register(client, "disc_ctx@example.com")
+    r = await client.post(
+        "/api/discussion/sessions",
+        headers=h,
+        json={
+            "topic": "x", "rules": "y",
+            "persona_ids": ["buffett", "lynch"],
+        },
+    )
+    discussion_id = r.json()["id"]
+
+    db_session.add(DiscussionRoundContext(
+        discussion_id=uuid.UUID(discussion_id),
+        round=1,
+        context={"market": "TW", "top_gainers": [{"symbol": "2330"}]},
+    ))
+    await db_session.commit()
+
+    r = await client.get(
+        f"/api/discussion/sessions/{discussion_id}/contexts",
+        headers=h,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) == 1
+    assert body[0]["round"] == 1
+    assert body[0]["context"]["top_gainers"][0]["symbol"] == "2330"
+
+
+@pytest.mark.asyncio
+async def test_get_round_contexts_owner_scoped_returns_404_for_others(
+    client: AsyncClient,
+):
+    h_a = await _register(client, "disc_ctx_a@example.com")
+    r = await client.post(
+        "/api/discussion/sessions",
+        headers=h_a,
+        json={"topic": "x", "rules": "y", "persona_ids": ["buffett", "lynch"]},
+    )
+    discussion_id = r.json()["id"]
+
+    h_b = await _register(client, "disc_ctx_b@example.com")
+    r = await client.get(
+        f"/api/discussion/sessions/{discussion_id}/contexts",
+        headers=h_b,
+    )
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_round_contexts_empty_for_legacy_discussion(
+    client: AsyncClient,
+):
+    """A discussion that has no snapshots (e.g. created before PR
+    #135 wired the writes, or all rounds' snapshot writes failed)
+    returns [] rather than 404 — the absence of snapshots isn't an
+    error condition."""
+    h = await _register(client, "disc_ctx_empty@example.com")
+    r = await client.post(
+        "/api/discussion/sessions",
+        headers=h,
+        json={"topic": "x", "rules": "y", "persona_ids": ["buffett", "lynch"]},
+    )
+    discussion_id = r.json()["id"]
+
+    r = await client.get(
+        f"/api/discussion/sessions/{discussion_id}/contexts",
+        headers=h,
+    )
+    assert r.status_code == 200
+    assert r.json() == []
+
+
 # ── User fixture for service-layer needs ───────────────────────────
 
 

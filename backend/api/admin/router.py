@@ -53,6 +53,12 @@ DB = Annotated[AsyncSession, Depends(get_db)]
 VALID_ROLES = {r.value for r in UserRole}
 RETRYABLE_INGEST_JOBS = {
     "ingest_news_tw": "Taiwan news ingest",
+    "ingest_news_international": "International news ingest",
+    "ingest_institutional_tw": "TW institutional flow",
+    "ingest_margin_tw": "TW margin balance",
+    "ingest_revenue_tw": "TW monthly revenue",
+    "ingest_taiex_history": "TAIEX daily history",
+    "score_discussion_outcomes": "Discussion D1-D5 scoreboard",
 }
 
 
@@ -371,9 +377,33 @@ async def ingest_health(_: Admin) -> list[IngestHealthOut]:
 
 
 async def _run_ingest_job_once(job_id: str) -> None:
+    """Dispatch a manual run for one whitelisted scheduled job.
+
+    Each entry in `RETRYABLE_INGEST_JOBS` must have a corresponding
+    branch here. The runner imports the task module lazily so a
+    manual-retry path that's never hit doesn't pay the import cost
+    on every admin request.
+    """
     if job_id == "ingest_news_tw":
         from tasks.ingest_news_tw import run
-
+        await run()
+    elif job_id == "ingest_news_international":
+        from tasks.ingest_news_international import run
+        await run()
+    elif job_id == "ingest_institutional_tw":
+        from tasks.ingest_institutional_tw import run
+        await run()
+    elif job_id == "ingest_margin_tw":
+        from tasks.ingest_margin_tw import run
+        await run()
+    elif job_id == "ingest_revenue_tw":
+        from tasks.ingest_revenue_tw import run
+        await run()
+    elif job_id == "ingest_taiex_history":
+        from tasks.ingest_taiex_history import run
+        await run()
+    elif job_id == "score_discussion_outcomes":
+        from tasks.score_discussion_outcomes import run
         await run()
 
 

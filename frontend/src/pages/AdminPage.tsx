@@ -1136,7 +1136,18 @@ interface IngestRetryResult {
   message: string;
 }
 
-const RETRYABLE_INGEST_JOBS = new Set(["ingest_news_tw"]);
+// Mirror of `RETRYABLE_INGEST_JOBS` in `backend/api/admin/router.py`.
+// Adding a job here without registering it backend-side just makes the
+// button render — the POST will 404. Keep the two sides in sync.
+const RETRYABLE_INGEST_JOBS = new Set([
+  "ingest_news_tw",
+  "ingest_news_international",
+  "ingest_institutional_tw",
+  "ingest_margin_tw",
+  "ingest_revenue_tw",
+  "ingest_taiex_history",
+  "score_discussion_outcomes",
+]);
 
 function timeAgo(iso: string | null): string {
   if (!iso) return "—";

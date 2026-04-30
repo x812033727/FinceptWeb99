@@ -129,3 +129,74 @@ async def test_ingest_retry_clears_backoff_and_queues_run(
     clear_failures.assert_awaited_once_with("ingest_news_tw")
     record_health.assert_awaited_once()
     retry_job.assert_awaited_once_with("ingest_news_tw")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("job_id", [
+    "ingest_news_tw",
+    "ingest_news_international",
+    "ingest_institutional_tw",
+    "ingest_margin_tw",
+    "ingest_revenue_tw",
+    "ingest_taiex_history",
+    "score_discussion_outcomes",
+])
+async def test_all_whitelisted_jobs_are_retryable(
+    job_id: str, client: AsyncClient, db_session: AsyncSession,
+):
+    """Pin the cross-side contract: every entry in
+    `RETRYABLE_INGEST_JOBS` must dispatch successfully via the
+    retry endpoint. Catches the case where a new entry is added
+    server-side but `_run_ingest_job_once` was forgotten — the
+    button would render but POST 404 silently."""
+    email = f"ingest_retry_param_{job_id}@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client=client)
+
+    with patch(
+        "services.ingest.repository.clear_failures", AsyncMock(),
+    ), patch(
+        "services.ingest.repository.record_health", AsyncMock(),
+    ), patch(
+        "api.admin.router._run_ingest_job_once", AsyncMock(),
+    ) as retry_job:
+        r = await client.post(
+            f"/api/admin/ingest/{job_id}/retry",
+            headers=_auth(token),
+        )
+
+    assert r.status_code == 200, f"job {job_id!r} returned {r.status_code}"
+    retry_job.assert_awaited_once_with(job_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("job_id", [
+    "ingest_news_tw",
+    "ingest_news_international",
+    "ingest_institutional_tw",
+    "ingest_margin_tw",
+    "ingest_revenue_tw",
+    "ingest_taiex_history",
+    "score_discussion_outcomes",
+])
+async def test_run_ingest_job_once_dispatches_each_id(job_id: str):
+    """The dispatcher itself must have a branch per whitelisted
+    job. Mocks the underlying task module's `run` so we don't fire
+    real HTTP / DB work — we just want to confirm the dispatcher
+    found the right module."""
+    from api.admin import router as admin_router
+
+    module_path = {
+        "ingest_news_tw": "tasks.ingest_news_tw",
+        "ingest_news_international": "tasks.ingest_news_international",
+        "ingest_institutional_tw": "tasks.ingest_institutional_tw",
+        "ingest_margin_tw": "tasks.ingest_margin_tw",
+        "ingest_revenue_tw": "tasks.ingest_revenue_tw",
+        "ingest_taiex_history": "tasks.ingest_taiex_history",
+        "score_discussion_outcomes": "tasks.score_discussion_outcomes",
+    }[job_id]
+
+    with patch(f"{module_path}.run", AsyncMock()) as task_run:
+        await admin_router._run_ingest_job_once(job_id)
+
+    task_run.assert_awaited_once()

@@ -80,6 +80,58 @@ Wikipedia GET per pod cold-start — fine. If you find yourself caching
 something where the cold-start cost compounds (e.g. per-symbol), promote it
 to Redis instead.
 
+## Runtime topology
+
+The FastAPI lifespan hook wires together four kinds of runtime work:
+
+| Layer | Entry point | Responsibility |
+|---|---|---|
+| REST API | `backend/main.py` router includes | Auth, market data, portfolio, analytics, AI, discussion, admin, system |
+| WebSocket | `api/websocket/*` | Auth-first client subscriptions, Redis Pub/Sub fan-out, alert pushes |
+| Scheduler | `tasks/scheduler.py` | Quote polling, TW archives, sentiment scoring, portfolio snapshots, discussion jobs |
+| Warmups / pumps | `main.py` lifespan tasks | TW symbol map + ETF yields, S&P 500 universe, Kraken ticker pump |
+
+Keep these entry points separate. Request handlers should not start long-lived
+jobs directly; use the scheduler for recurring work and the websocket manager
+for fan-out.
+
+## Background discussion jobs
+
+Discussion has two distinct execution modes:
+
+| Mode | Owner | Trigger | Notes |
+|---|---|---|---|
+| Manual rounds | Requesting user | `POST /api/discussion/sessions/{id}/round` | The route starts a background task and streams progress over SSE. If the browser disconnects, the producer task continues and persisted turns are visible on reload. |
+| Daily auto-run | Each opted-in user | `tasks/auto_run_discussion.py` at 00:00 UTC | Reads `discussion_auto_run_configs`; each enabled user gets one `auto_run=True` discussion per UTC day, owned by themselves. |
+| Outcome verification | Existing auto-run rows | `tasks/verify_discussion_outcome.py` at 08:30 UTC | Waits for a full 5-trading-day TW window, stores day1 open / day5 close snapshots, and stamps verdict. |
+
+This is intentionally per-user now. Do not reintroduce a single
+`ADMIN_EMAIL`-owned auto-run feed; that made successful jobs invisible to
+other admins because sidebar reads are owner-scoped.
+
+## Timestamp handling
+
+SQLite can return timezone-aware `DateTime(timezone=True)` columns as naive
+`datetime` objects. Repository code that compares stored quote timestamps to
+`datetime.now(UTC)` must treat naive DB values as UTC, not local time. This is
+why `services/ingest/repository.py` uses `_utc_timestamp()` for
+`quote_snapshots` freshness checks and response timestamps.
+
+Postgres/TimescaleDB remains the production target, but SQLite is the CI and
+local-test backend. Keep repository helpers portable unless a test explicitly
+marks a production-only path.
+
+## Process and subprocess boundaries
+
+Analytics CPU-heavy paths use a lazily-created `ProcessPoolExecutor`. The
+lazy creation is deliberate: importing `services.analytics_service` should not
+spawn multiprocessing pipes or worker state. This keeps unit-test collection
+and lightweight imports stable, especially on Windows.
+
+The `python_exec` AI tool is POSIX-hardened with `resource` limits when
+available. `resource` is Unix-only, so the module must remain importable on
+Windows and only attach `preexec_fn` when `os.name == "posix"`.
+
 ## Migration history
 
 Migrations under `backend/db/migrations/versions/` form a linear chain:
@@ -90,6 +142,22 @@ Migrations under `backend/db/migrations/versions/` form a linear chain:
 | 0002 | `0002_add_price_alerts.py` | price_alerts table |
 | 0003 | `0003_add_portfolio_snapshots.py` | portfolio_snapshots table |
 | 0004 | `0004_portfolio_snapshots_hypertable.py` | PK reshape + TimescaleDB hypertable conversion |
+| 0005 | `0005_llm_provider_keys.py` | admin-managed encrypted LLM provider keys |
+| 0006 | `0006_persona_overrides.py` | per-persona provider/model routing overrides |
+| 0007 | `0007_user_llm_provider_keys.py` | user-owned LLM provider keys |
+| 0008 | `0008_llm_usage_events.py` | LLM token/cost usage ledger |
+| 0009 | `0009_crypto_market.py` | crypto watchlist / market support |
+| 0010 | `0010_market_provider_keys.py` | market-data provider key storage and validation |
+| 0011 | `0011_ohlcv_daily.py` | archived daily OHLCV rows |
+| 0012 | `0012_quote_snapshots.py` | periodic quote snapshots for outage fallback and retention |
+| 0013 | `0013_fundamentals_snapshots.py` | archived fundamentals snapshots |
+| 0014 | `0014_news_articles.py` | persisted market/news article rows |
+| 0015 | `0015_discussions.py` | discussion sessions and turns, plus news sentiment columns |
+| 0016 | `0016_system_task_configs.py` | admin-controlled provider/model routing for scheduled tasks |
+| 0017 | `0017_runtime_settings.py` | runtime-configurable service settings |
+| 0018 | `0018_discussion_verdict.py` | auto-run outcome fields and verification scheduling |
+| 0019 | `0019_discussion_day5_close.py` | day5 close price snapshots for discussion verdict titles |
+| 0020 | `0020_discussion_auto_run_configs.py` | per-user daily auto-run discussion configuration |
 
 `portfolio_snapshots` PK is `(snapshot_date, id)` rather than `(id)` so it
 satisfies TimescaleDB's "partitioning column must be in every UNIQUE index"

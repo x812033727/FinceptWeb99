@@ -930,13 +930,42 @@ async def get_screener(
 
 # ── TAIEX index ───────────────────────────────────────────────────
 
-async def get_index() -> dict[str, Any]:
+async def get_index(*, history_days: int = 0) -> dict[str, Any]:
+    """TAIEX current quote, optionally with a recent daily history line.
+
+    `history_days=0` (default) preserves the legacy "single quote"
+    shape — Redis cache, one TWSE call. Pass a positive value to
+    additionally include `history` (a list of `{time, close}` rows
+    for the last N trading days) read from `ohlcv_daily` where
+    `_TAIEX` is populated by `tasks/ingest_taiex_history`. The
+    discussion subsystem uses `history_days=30` so personas can see
+    大盤型態 (e.g. "TAIEX 連跌 5 日近 5% 修正") with real numbers.
+
+    History is read from DB only — no live waterfall — so a fresh
+    deploy without ingest data returns `history=[]` rather than
+    burning a TWSE call per request.
+    """
     key = "tw:index:taiex"
     cached = await cache_get(key)
     if cached:
-        return json.loads(cached)
-    result = await twse.get_taiex()
-    await cache_set(key, json.dumps(result), TTL_QUOTE)
+        result = json.loads(cached)
+    else:
+        result = await twse.get_taiex()
+        await cache_set(key, json.dumps(result), TTL_QUOTE)
+
+    if history_days > 0:
+        from datetime import timedelta as _td
+        from services.ingest.repository import read_ohlcv_range_autosession
+        end = date.today()
+        start = end - _td(days=history_days * 2)  # widen for weekends
+        bars = await read_ohlcv_range_autosession(
+            "TW", "_TAIEX", start, end,
+        )
+        history = [
+            {"time": b["time"], "close": b["close"]}
+            for b in bars[-history_days:]
+        ]
+        result = {**result, "history": history}
     return result
 
 

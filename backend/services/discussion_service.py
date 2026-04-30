@@ -449,7 +449,14 @@ async def gather_market_context(
 
         try:
             from services import tw_market_service
-            ctx["index"] = await tw_market_service.get_index()
+            # 30-day TAIEX history alongside the current quote. Lets
+            # personas reference 大盤型態 ("TAIEX 連跌 5 日 -5%")
+            # without burning an LLM tool call. Backed by the
+            # `ingest_taiex_history` cron writing to ohlcv_daily under
+            # symbol='_TAIEX'; empty `history` on fresh deploys is
+            # fine — `get_index` returns DB-only for history so a
+            # missing archive doesn't fall through to a TWSE call.
+            ctx["index"] = await tw_market_service.get_index(history_days=30)
         except Exception as exc:
             _record_error("index", exc)
 

@@ -195,6 +195,21 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # TAIEX 大盤加權指數 daily history. One FMTQIK call per day
+    # returns the full month's index OHLC; idempotent UPSERT into
+    # ohlcv_daily under symbol='_TAIEX' so the existing read tier
+    # serves it. Stays after the chip-metric tasks so all post-close
+    # writes happen in one ~20-min window.
+    from tasks.ingest_taiex_history import run as run_ingest_taiex_history
+    scheduler.add_job(
+        run_ingest_taiex_history,
+        trigger=CronTrigger(hour=7, minute=10, timezone="UTC"),
+        id="ingest_taiex_history",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── News sentiment scoring ────────────────────────────────────
     # Hourly: picks up news rows with NULL sentiment_score and runs them
     # through Claude Haiku in batches. Cheap (one prompt scores 20

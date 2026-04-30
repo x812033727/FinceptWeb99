@@ -238,6 +238,55 @@ async def get_taiex() -> dict[str, Any]:
     return {}
 
 
+async def get_taiex_history(query_date: date | None = None) -> list[dict[str, Any]]:
+    """Daily TAIEX (大盤加權指數) closes for the month containing
+    `query_date`. Source: TWSE `FMTQIK` (台股大盤每日成交資訊) which
+    returns one row per trading day with open/high/low/close index
+    values plus the day's traded amount.
+
+    Output shape matches `OhlcvBar.from_connector_row` so a single
+    `_TAIEX` row per day can be upserted into `ohlcv_daily` next to
+    real stock OHLCV. `volume` carries the day's traded amount in
+    NTD (millions); the index has no share volume so we reuse the
+    field for "市場成交金額" — the persona-facing semantics still
+    line up ("how much money flowed today").
+    """
+    data = await _get(
+        f"{_BASE}/exchangeReport/FMTQIK",
+        params={"response": "json", "date": _twse_date(query_date)},
+    )
+    rows = data if isinstance(data, list) else []
+    result: list[dict[str, Any]] = []
+    for r in rows:
+        roc_date = r.get("日期", "")
+        parts = str(roc_date).split("/")
+        if len(parts) != 3:
+            continue
+        try:
+            ce_date = f"{int(parts[0]) + 1911}-{parts[1]}-{parts[2]}"
+        except (ValueError, TypeError):
+            continue
+
+        close = _tw_num(r.get("發行量加權股價指數"))
+        change = _tw_num(r.get("漲跌點數")) or 0.0
+        # FMTQIK only carries close + delta; reconstruct prev close as
+        # close - change. open / high / low aren't in this endpoint —
+        # we leave them as the close (good enough for a 30-day chart
+        # context, accepting the cost of no real intraday range).
+        result.append({
+            "time":   ce_date,
+            "open":   close,
+            "high":   close,
+            "low":    close,
+            "close":  close,
+            # 成交金額 (億) → reuse `volume` slot. Reader can rename
+            # downstream if needed — within `ohlcv_daily` this column
+            # is BigInteger, so it'll get truncated to int NTD-millions.
+            "volume": _tw_int(r.get("成交金額")),
+        })
+    return result
+
+
 # ── Valuation ratios: PE, PB, dividend yield ─────────────────────
 
 async def get_valuation_ratios(symbol: str) -> dict[str, Any]:

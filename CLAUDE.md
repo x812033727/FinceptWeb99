@@ -334,6 +334,18 @@ FinceptWeb/
   backed by this archive so the user sees the same data the personas
   do.
 
+### TAIEX history ingest
+- Daily TWSE one-shot cron `tasks/ingest_taiex_history.py` (07:10
+  UTC, post-close) pulls the current month's `FMTQIK` series and
+  upserts into `ohlcv_daily` under symbol `_TAIEX` (underscore
+  prefix marks synthetic / index rows). Reuses the existing
+  ohlcv_daily schema + read tier — no new table needed.
+- `tw_market_service.get_index(history_days=N)` returns the cached
+  current quote plus an N-day daily-close series from the archive.
+  `gather_market_context` calls it with `history_days=30` so TW
+  personas can reference 大盤型態 ("TAIEX 連跌 5 日 -5%") without
+  burning a tool call.
+
 ### TW chip metrics ingest
 - Two daily TWSE one-shot crons (06:50 + 07:00 UTC, post-close):
   `tasks/ingest_institutional_tw.py` writes 法人買賣超 (foreign /

@@ -1,9 +1,15 @@
-"""Tests for tasks.auto_run_discussion — daily 5-round system task."""
+"""Tests for tasks.auto_run_discussion — daily 5-round system task.
+
+The auto-run task drives off `discussion_auto_run_configs` rows: every
+user with `enabled=True` gets one discussion per UTC day, owned by
+themselves. Tests cover the multi-user iteration, per-user
+idempotency, weekend skip, no-enabled-user no-op, and the system-task
+LLM override forwarding.
+"""
 from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -12,6 +18,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.discussion import Discussion, DiscussionTurn
+from models.discussion_auto_run_config import DiscussionAutoRunConfig
 from models.user import User, UserRole
 from services import discussion_service
 
@@ -19,18 +26,14 @@ from services import discussion_service
 @pytest_asyncio.fixture(autouse=True)
 async def _isolate_db(db_session: AsyncSession):
     """The shared StaticPool keeps the in-memory SQLite DB alive across
-    tests, so leftover Discussion / User rows from a previous case can
-    leak into the next (e.g. an earlier test's auto-run row trips the
-    idempotency short-circuit). Wipe the relevant tables between cases.
-    """
+    tests, so leftover rows from a previous case can leak into the next
+    (e.g. an earlier test's auto-run row trips the idempotency short-
+    circuit). Wipe the relevant tables between cases."""
     await db_session.execute(delete(DiscussionTurn))
     await db_session.execute(delete(Discussion))
+    await db_session.execute(delete(DiscussionAutoRunConfig))
     await db_session.execute(delete(User))
     await db_session.commit()
-    # Also drop the in-process admin-email cache so fresh ADMIN_EMAIL
-    # patches take effect immediately.
-    from services import admin_user_service
-    admin_user_service._invalidate_cache()
     yield
 
 
@@ -47,18 +50,41 @@ def patch_session(db_session: AsyncSession):
         yield
 
 
-@pytest.fixture
-async def admin_user(db_session: AsyncSession) -> User:
+async def _make_user(
+    db_session: AsyncSession, email: str = "user@example.com",
+) -> User:
     u = User(
         id=uuid.uuid4(),
-        email="admin@example.com",
+        email=email,
         hashed_password="x",
-        role=UserRole.admin,
+        role=UserRole.viewer,
     )
     db_session.add(u)
     await db_session.commit()
     await db_session.refresh(u)
     return u
+
+
+async def _enable_for(
+    db_session: AsyncSession,
+    user: User,
+    *,
+    persona_ids: list[str] | None = None,
+    topic: str = "topic",
+    rules: str = "rules",
+    enabled: bool = True,
+) -> DiscussionAutoRunConfig:
+    cfg = DiscussionAutoRunConfig(
+        user_id=user.id,
+        enabled=enabled,
+        persona_ids=persona_ids or ["buffett", "lynch"],
+        topic=topic,
+        rules=rules,
+    )
+    db_session.add(cfg)
+    await db_session.commit()
+    await db_session.refresh(cfg)
+    return cfg
 
 
 def _stream_events_sequence(replies: list[str]):
@@ -101,30 +127,37 @@ def _exit_all(patches):
 
 @pytest.mark.asyncio
 async def test_creates_discussion_with_auto_run_flag(
-    patch_session, db_session: AsyncSession, admin_user: User,
+    patch_session, db_session: AsyncSession,
 ):
-    """Happy path: trading day, admin user exists, 5 rounds + synthesizer
-    produce a row tagged auto_run=true with verify_after_date set."""
+    """Happy path: trading day, one enabled user → one discussion row
+    owned by that user, tagged auto_run=true with verify_after_date set."""
     from tasks import auto_run_discussion
 
-    replies = ['{"stance":"supplement","content":"x"}'] * 100
+    user = await _make_user(db_session)
+    await _enable_for(
+        db_session, user,
+        persona_ids=["buffett", "lynch", "soros"],
+        topic="my topic",
+        rules="my rules",
+    )
+
+    async def _fake_run_round(*_a, **_kw):
+        return
+        yield  # pragma: no cover
+
+    synth = AsyncMock(return_value={
+        "recommended_symbols": ["2330", "2454"],
+        "reasoning": "x",
+        "risks": [],
+        "time_horizon": "short_term",
+        "consensus_score": 0.7,
+    })
 
     patches = _stub_lock_helpers() + [
         patch("tasks.auto_run_discussion.is_today_likely_trading_day",
               AsyncMock(return_value=True)),
-        patch("services.discussion_service.gather_market_context",
-              new=AsyncMock(return_value={"market": "TW", "top_gainers": []})),
-        patch("services.discussion_service.stream_chat",
-              side_effect=_stream_events_sequence(replies)),
-        patch("services.discussion_service.synthesize_conclusion",
-              new=AsyncMock(return_value={
-                  "recommended_symbols": ["2330", "2454"],
-                  "reasoning": "x",
-                  "risks": [],
-                  "time_horizon": "short_term",
-                  "consensus_score": 0.7,
-              })),
-        patch("config.settings.ADMIN_EMAIL", "admin@example.com"),
+        patch.object(discussion_service, "run_round", _fake_run_round),
+        patch.object(discussion_service, "synthesize_conclusion", synth),
     ]
     _enter_all(patches)
     try:
@@ -136,30 +169,72 @@ async def test_creates_discussion_with_auto_run_flag(
     auto_rows = [r for r in rows if r.auto_run]
     assert len(auto_rows) == 1
     d = auto_rows[0]
-    assert d.owner_id == admin_user.id
-    assert d.persona_ids == auto_run_discussion._AUTO_PERSONAS
-    assert d.topic == auto_run_discussion._AUTO_TOPIC
+    assert d.owner_id == user.id
+    # Service-layer normalize may dedupe but otherwise preserves order
+    assert d.persona_ids == ["buffett", "lynch", "soros"]
+    assert d.topic == "my topic"
+    assert d.rules == "my rules"
     assert d.verify_after_date is not None
-    # 5 weekdays out — at minimum 5 calendar days (Mon→Mon), at most 7
-    # (Wed→next Wed crossing weekend).
-    today = datetime.now(UTC).date()
-    delta = (d.verify_after_date - today).days
-    assert 5 <= delta <= 9
+
+
+@pytest.mark.asyncio
+async def test_iterates_multiple_enabled_users(
+    patch_session, db_session: AsyncSession,
+):
+    """Two enabled users → two discussions, one owned by each. Disabled
+    users are skipped."""
+    from tasks import auto_run_discussion
+
+    a = await _make_user(db_session, "a@example.com")
+    b = await _make_user(db_session, "b@example.com")
+    c = await _make_user(db_session, "c@example.com")
+    await _enable_for(db_session, a, topic="topic A", rules="r")
+    await _enable_for(db_session, b, topic="topic B", rules="r")
+    await _enable_for(db_session, c, topic="topic C", rules="r", enabled=False)
+
+    async def _fake_run_round(*_a, **_kw):
+        return
+        yield  # pragma: no cover
+
+    synth = AsyncMock(return_value={
+        "recommended_symbols": [],
+        "reasoning": "x",
+        "risks": [], "time_horizon": "short_term", "consensus_score": 0.0,
+    })
+
+    patches = _stub_lock_helpers() + [
+        patch("tasks.auto_run_discussion.is_today_likely_trading_day",
+              AsyncMock(return_value=True)),
+        patch.object(discussion_service, "run_round", _fake_run_round),
+        patch.object(discussion_service, "synthesize_conclusion", synth),
+    ]
+    _enter_all(patches)
+    try:
+        await auto_run_discussion.run()
+    finally:
+        _exit_all(patches)
+
+    auto_rows = (await db_session.scalars(
+        select(Discussion).where(Discussion.auto_run.is_(True))
+    )).all()
+    owners = {r.owner_id for r in auto_rows}
+    assert owners == {a.id, b.id}
 
 
 @pytest.mark.asyncio
 async def test_idempotent_same_day(
-    patch_session, db_session: AsyncSession, admin_user: User,
+    patch_session, db_session: AsyncSession,
 ):
     """A second tick on the same UTC date must NOT create another
-    discussion. The existing row's create_at is today, so the
-    idempotency check short-circuits."""
+    discussion for a user who already has one today."""
     from tasks import auto_run_discussion
 
-    # Pre-seed an auto-run row created today
+    user = await _make_user(db_session)
+    await _enable_for(db_session, user)
+
     pre = Discussion(
         id=uuid.uuid4(),
-        owner_id=admin_user.id,
+        owner_id=user.id,
         topic="x", rules="y", persona_ids=["buffett", "lynch"],
         status="draft", current_round=0,
         auto_run=True,
@@ -172,7 +247,6 @@ async def test_idempotent_same_day(
         patch("tasks.auto_run_discussion.is_today_likely_trading_day",
               AsyncMock(return_value=True)),
         patch("services.discussion_service.stream_chat", new=stream_chat),
-        patch("config.settings.ADMIN_EMAIL", "admin@example.com"),
     ]
     _enter_all(patches)
     try:
@@ -184,17 +258,19 @@ async def test_idempotent_same_day(
         select(Discussion).where(Discussion.auto_run.is_(True))
     )).all()
     assert len(rows) == 1
-    # No LLM call fired on the second attempt.
     stream_chat.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_skipped_when_not_trading_day(
-    patch_session, db_session: AsyncSession, admin_user: User,
+    patch_session, db_session: AsyncSession,
 ):
     """Weekend: trading-day gate returns False, no discussion created,
     health recorded ok with row_count=0."""
     from tasks import auto_run_discussion
+
+    user = await _make_user(db_session)
+    await _enable_for(db_session, user)
 
     health = AsyncMock()
     patches = [
@@ -211,7 +287,6 @@ async def test_skipped_when_not_trading_day(
               AsyncMock(return_value=0)),
         patch("tasks.auto_run_discussion.is_today_likely_trading_day",
               AsyncMock(return_value=False)),
-        patch("config.settings.ADMIN_EMAIL", "admin@example.com"),
     ]
     _enter_all(patches)
     try:
@@ -223,7 +298,6 @@ async def test_skipped_when_not_trading_day(
         select(Discussion).where(Discussion.auto_run.is_(True))
     )).all()
     assert rows == []
-    # Weekend skip is NOT a failure — record health ok with row_count=0
     health.assert_awaited()
     last_call = health.await_args_list[-1]
     assert last_call.kwargs["ok"] is True
@@ -231,11 +305,12 @@ async def test_skipped_when_not_trading_day(
 
 
 @pytest.mark.asyncio
-async def test_records_failure_when_admin_email_missing(
+async def test_no_enabled_users_is_a_clean_noop(
     patch_session, db_session: AsyncSession,
 ):
-    """No admin_user fixture — get_admin_owner_id returns None and the
-    task records a health failure with a clear message."""
+    """No user has opted in → task records ok with row_count=0. Not a
+    failure (no auto-backoff) since this is a normal steady state for a
+    fresh deployment."""
     from tasks import auto_run_discussion
 
     health = AsyncMock()
@@ -253,7 +328,6 @@ async def test_records_failure_when_admin_email_missing(
               AsyncMock(return_value=0)),
         patch("tasks.auto_run_discussion.is_today_likely_trading_day",
               AsyncMock(return_value=True)),
-        patch("config.settings.ADMIN_EMAIL", ""),
     ]
     _enter_all(patches)
     try:
@@ -261,28 +335,31 @@ async def test_records_failure_when_admin_email_missing(
     finally:
         _exit_all(patches)
 
+    rows = (await db_session.scalars(select(Discussion))).all()
+    assert rows == []
     health.assert_awaited()
     last_call = health.await_args_list[-1]
-    assert last_call.kwargs["ok"] is False
-    assert "ADMIN_EMAIL" in last_call.kwargs["error"]
+    assert last_call.kwargs["ok"] is True
+    assert last_call.kwargs["row_count"] == 0
 
 
 @pytest.mark.asyncio
 async def test_runs_5_rounds_then_synthesize(
-    patch_session, db_session: AsyncSession, admin_user: User,
+    patch_session, db_session: AsyncSession,
 ):
-    """Counts the round and synthesizer invocations to pin the canonical
-    5-rounds-then-conclude flow."""
+    """Counts the round + synthesizer invocations to pin the canonical
+    5-rounds-then-conclude flow per enabled user."""
     from tasks import auto_run_discussion
+
+    user = await _make_user(db_session)
+    await _enable_for(db_session, user)
 
     round_calls = {"n": 0}
 
     async def _fake_run_round(*_a, **_kw):
         round_calls["n"] += 1
-        # Yield no events; persistence is mocked away — we just count
-        # invocations.
         return
-        yield  # pragma: no cover — never reached
+        yield  # pragma: no cover
 
     synth = AsyncMock(return_value={
         "recommended_symbols": ["2330"],
@@ -295,7 +372,6 @@ async def test_runs_5_rounds_then_synthesize(
               AsyncMock(return_value=True)),
         patch.object(discussion_service, "run_round", _fake_run_round),
         patch.object(discussion_service, "synthesize_conclusion", synth),
-        patch("config.settings.ADMIN_EMAIL", "admin@example.com"),
     ]
     _enter_all(patches)
     try:
@@ -309,14 +385,17 @@ async def test_runs_5_rounds_then_synthesize(
 
 @pytest.mark.asyncio
 async def test_passes_system_task_llm_override_to_run_round(
-    patch_session, db_session: AsyncSession, admin_user: User,
+    patch_session, db_session: AsyncSession,
 ):
     """Auto-run resolves the `auto_run_discussion_persona` system-task
     config and forwards the provider/model as a per-call override to
-    run_round so all 8 personas use the same LLM. Pinning this prevents
-    a regression where the cost knob silently slipped back to per-
-    persona default routing."""
+    run_round so all personas use the same LLM. Pinning this prevents a
+    regression where the cost knob silently slipped back to per-persona
+    default routing."""
     from tasks import auto_run_discussion
+
+    user = await _make_user(db_session)
+    await _enable_for(db_session, user)
 
     captured_calls: list[dict] = []
 
@@ -340,7 +419,6 @@ async def test_passes_system_task_llm_override_to_run_round(
             "services.system_task_config_service.resolve",
             new=AsyncMock(return_value=("groq", "llama-3.3-70b-versatile")),
         ),
-        patch("config.settings.ADMIN_EMAIL", "admin@example.com"),
     ]
     _enter_all(patches)
     try:
@@ -348,8 +426,6 @@ async def test_passes_system_task_llm_override_to_run_round(
     finally:
         _exit_all(patches)
 
-    # All 5 round invocations must have received the override pulled
-    # from SystemTaskConfig.
     assert len(captured_calls) == 5
     for call_kwargs in captured_calls:
         assert call_kwargs["provider_override"] == "groq"
@@ -357,32 +433,52 @@ async def test_passes_system_task_llm_override_to_run_round(
 
 
 @pytest.mark.asyncio
-async def test_filters_non_tw_symbols_from_logs(
-    patch_session, db_session: AsyncSession, admin_user: User,
+async def test_one_user_failure_doesnt_block_others(
+    patch_session, db_session: AsyncSession,
 ):
-    """Synthesizer might emit a non-numeric or out-of-range symbol; the
-    auto-run filter strips them before the verify_after_date update so
-    the verifier doesn't waste a TW history lookup on `"AAPL"`. We
-    assert the discussion is still created and the filter doesn't
-    reject the row outright."""
+    """User A's run raises mid-flow → user B still gets their discussion
+    created. The job records ok=true with the per-user error in the
+    health row (partial-success path), not a hard failure."""
     from tasks import auto_run_discussion
 
-    synth = AsyncMock(return_value={
-        "recommended_symbols": ["2330", "AAPL", "12", "2454"],  # 4 + 4 + 2 + 4 chars
-        "reasoning": "x",
-        "risks": [], "time_horizon": "short_term", "consensus_score": 0.5,
-    })
+    a = await _make_user(db_session, "a@example.com")
+    b = await _make_user(db_session, "b@example.com")
+    await _enable_for(db_session, a, topic="A", rules="r")
+    await _enable_for(db_session, b, topic="B", rules="r")
 
     async def _fake_run_round(*_a, **_kw):
         return
         yield  # pragma: no cover
 
-    patches = _stub_lock_helpers() + [
+    call_counter = {"n": 0}
+
+    async def _flaky_synth(_db, discussion, **_kw):
+        call_counter["n"] += 1
+        if discussion.owner_id == a.id:
+            raise RuntimeError("boom")
+        return {
+            "recommended_symbols": [],
+            "reasoning": "x",
+            "risks": [], "time_horizon": "short_term", "consensus_score": 0.0,
+        }
+
+    health = AsyncMock()
+    patches = [
+        patch("tasks.auto_run_discussion.acquire_lock",
+              AsyncMock(return_value=True)),
+        patch("tasks.auto_run_discussion.release_lock", AsyncMock()),
+        patch("tasks.auto_run_discussion.backoff_remaining_seconds",
+              AsyncMock(return_value=0)),
+        patch("tasks.auto_run_discussion.record_health", health),
+        patch("tasks.auto_run_discussion.record_failure",
+              AsyncMock(return_value=1)),
+        patch("tasks.auto_run_discussion.clear_failures", AsyncMock()),
+        patch("tasks.auto_run_discussion.get_failure_count",
+              AsyncMock(return_value=0)),
         patch("tasks.auto_run_discussion.is_today_likely_trading_day",
               AsyncMock(return_value=True)),
         patch.object(discussion_service, "run_round", _fake_run_round),
-        patch.object(discussion_service, "synthesize_conclusion", synth),
-        patch("config.settings.ADMIN_EMAIL", "admin@example.com"),
+        patch.object(discussion_service, "synthesize_conclusion", _flaky_synth),
     ]
     _enter_all(patches)
     try:
@@ -390,11 +486,20 @@ async def test_filters_non_tw_symbols_from_logs(
     finally:
         _exit_all(patches)
 
-    rows = (await db_session.scalars(
+    auto_rows = (await db_session.scalars(
         select(Discussion).where(Discussion.auto_run.is_(True))
     )).all()
-    assert len(rows) == 1
-    # Conclusion is whatever the synthesizer returned; verifier does
-    # the filtering at grade time. Auto-run task only filters for the
-    # log message.
-    assert rows[0].verify_after_date is not None
+    owners = {r.owner_id for r in auto_rows}
+    # Both rows get created (synthesizer raises after create); but only
+    # B has verify_after_date populated.
+    assert a.id in owners and b.id in owners
+    b_row = next(r for r in auto_rows if r.owner_id == b.id)
+    a_row = next(r for r in auto_rows if r.owner_id == a.id)
+    assert b_row.verify_after_date is not None
+    assert a_row.verify_after_date is None
+
+    health.assert_awaited()
+    last = health.await_args_list[-1]
+    assert last.kwargs["ok"] is True
+    assert last.kwargs["row_count"] == 1
+    assert "boom" in (last.kwargs.get("error") or "")

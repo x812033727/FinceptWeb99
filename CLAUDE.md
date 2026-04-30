@@ -69,7 +69,9 @@ FinceptWeb/
 │   │   │                 #   0013 fundamentals_snapshots · 0014 news_articles ·
 │   │   │                 #   0015 discussions + news_articles.sentiment_* ·
 │   │   │                 #   0016 system_task_configs ·
-│   │   │                 #   0017 runtime_settings
+│   │   │                 #   0017 runtime_settings ·
+│   │   │                 #   0018 discussion_verdict · 0019 discussion_day5_close ·
+│   │   │                 #   0020 discussion_auto_run_configs
 │   │   ├── base.py       # DeclarativeBase with naming convention
 │   │   ├── seed.py       # Admin user seed on first boot
 │   │   └── session.py    # Async engine + get_db dependency
@@ -278,6 +280,18 @@ FinceptWeb/
   Stuck provider → emit error event, persist placeholder, proceed.
 - Persona overrides batch-loaded once per round (`_resolve_persona_specs`)
   so an 8-persona round costs 1 DB query for routing, not 8.
+- **Daily auto-run** (`tasks/auto_run_discussion.py`, cron 00:00 UTC):
+  per-user opt-in via `discussion_auto_run_configs` (migration `0020`).
+  Each user with `enabled=True` gets one `auto_run=True` discussion per
+  UTC day, owned by themselves so it surfaces in their own owner-scoped
+  sidebar. Topic / rules / persona roster are user-supplied (no
+  fallback default). Per-user idempotency: a second tick on the same
+  UTC date sees the existing row and skips. One user's failure doesn't
+  block others — partial runs report `ok=true row_count=<successes>`
+  with the per-user error in the health row's error column.
+  Config UI: `AutoRunConfigCard` at the top of `DiscussionPage`'s
+  sidebar (collapsed by default).
+  API: `GET/PUT /api/discussion/auto-run/config`.
 
 ### News sentiment scoring
 - Hourly APScheduler job `tasks/score_news_sentiment.py` picks up

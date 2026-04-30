@@ -68,3 +68,18 @@ class DiscussionDetailResponse(DiscussionResponse):
 class ConclusionResponse(BaseModel):
     discussion_id: uuid.UUID
     conclusion: dict[str, Any]
+
+
+class AutoRunConfigRequest(BaseModel):
+    enabled: bool
+    persona_ids: list[str] = Field(min_length=2, max_length=8)
+    topic: str = Field(min_length=1, max_length=500)
+    rules: str = Field(min_length=1, max_length=2000)
+
+
+class AutoRunConfigResponse(BaseModel):
+    enabled: bool
+    persona_ids: list[str]
+    topic: str
+    rules: str
+    updated_at: datetime | None = None

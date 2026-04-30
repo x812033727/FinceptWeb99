@@ -18,6 +18,7 @@ import models.portfolio  # noqa: F401
 import models.watchlist  # noqa: F401
 import models.alert      # noqa: F401
 import models.market_provider_key  # noqa: F401
+import models.discussion_auto_run_config  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)

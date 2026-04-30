@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
+import { formatQuoteFreshness } from "@/lib/freshness";
 
 // ── types ──────────────────────────────────────────────────────────
 
@@ -103,17 +104,6 @@ function AddSymbolRow({ watchlistId }: { watchlistId: string }) {
   );
 }
 
-// Pretty-print a UTC ISO timestamp as 本地時:分. Returns null when the
-// input is missing/unparseable so the caller can render "—".
-function _formatLocalTime(iso: string | null, lang: string): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleTimeString(lang, {
-    hour: "2-digit", minute: "2-digit",
-  });
-}
-
 function WatchlistFreshnessFooter({ items }: { items: WatchlistItem[] }) {
   const { t, i18n } = useTranslation();
   // Use the most recent `quoted_at` across all rows — they're
@@ -125,7 +115,8 @@ function WatchlistFreshnessFooter({ items }: { items: WatchlistItem[] }) {
     if (!acc) return it.quoted_at;
     return it.quoted_at > acc ? it.quoted_at : acc;
   }, null);
-  const localTime = _formatLocalTime(latestIso, i18n.language);
+  const tsMs = latestIso ? new Date(latestIso).getTime() : null;
+  const localTime = formatQuoteFreshness(tsMs, i18n.language);
 
   // Distinct data sources — usually 1 ("twse" market hours,
   // "finmind" off-hours, "db" during outage). Show all of them so

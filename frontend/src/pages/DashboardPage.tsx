@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
+import { formatQuoteFreshness } from "@/lib/freshness";
 import { DataSourceBadge } from "@/components/DataSourceBadge";
 
 // ── Market indices ─────────────────────────────────────────────────
@@ -24,11 +25,9 @@ function IndexCard({ symbol, label }: { symbol: string; label: string }) {
   // 0.00 / +0.00% green pill that looks like the asset is at zero.
   const unavailable = data?.data_source === "unavailable";
   const tsMs = data?.ts as number | undefined;
-  const localTime = (typeof tsMs === "number" && tsMs > 0)
-    ? new Date(tsMs).toLocaleTimeString(i18n.language, {
-        hour: "2-digit", minute: "2-digit",
-      })
-    : null;
+  // Date-aware: "14:31" today, "4/29 14:31" any earlier day. Stops
+  // weekend / off-hours views from looking like live prices.
+  const localTime = formatQuoteFreshness(tsMs ?? null, i18n.language);
 
   return (
     <Link

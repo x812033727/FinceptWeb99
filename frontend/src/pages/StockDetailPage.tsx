@@ -7,6 +7,7 @@ import {
 } from "recharts";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
+import { formatQuoteFreshness } from "@/lib/freshness";
 import CandlestickChart from "@/components/charts/CandlestickChart";
 import { DataSourceBadge } from "@/components/DataSourceBadge";
 import { useWebSocket } from "@/hooks/useWebSocket";
@@ -1541,12 +1542,15 @@ export default function StockDetailPage() {
             // an active session); fall back to the REST snapshot's `ts`
             // (set inside _normalize_quote at fetch time). Hide the
             // line entirely if neither path produced a number — better
-            // than rendering "—" next to a real-looking price.
+            // than rendering "—" next to a real-looking price. Date
+            // prefix ("M/D HH:MM:SS") appears only when the quote
+            // isn't from today, so off-hours / weekend views aren't
+            // ambiguous about which day the price belongs to.
             const tsMs = liveTs ?? (quote?.ts as number | undefined);
-            if (typeof tsMs !== "number" || tsMs <= 0) return null;
-            const localTime = new Date(tsMs).toLocaleTimeString(i18n.language, {
-              hour: "2-digit", minute: "2-digit", second: "2-digit",
-            });
+            const localTime = formatQuoteFreshness(
+              tsMs ?? null, i18n.language, { seconds: true },
+            );
+            if (!localTime) return null;
             return (
               <div className="text-[10px] text-muted-foreground/70 mt-0.5 tabular-nums">
                 {t("stock.quoted_at")}：{localTime}

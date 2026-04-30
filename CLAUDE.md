@@ -42,6 +42,7 @@ FinceptWeb/
 │   │   ├── us_market/    # US quotes, history, fundamentals, options, macro, news, search
 │   │   ├── tw_market/    # TW quotes, history, institutional, margin, revenue, news
 │   │   ├── crypto_market/ # Kraken-backed Top 20 crypto: quote, history, screener, search
+│   │   ├── global_market/ # International news (Fed / FOMC / global macro, market='GLOBAL')
 │   │   ├── portfolio/    # Holdings, transactions, P&L, optimizer, performance snapshots
 │   │   ├── analytics/    # DCF, VaR, backtest
 │   │   ├── ai_agents/    # SSE streaming chat (19 personas, 8 LLM providers)
@@ -313,8 +314,24 @@ FinceptWeb/
   (DB-only, market-wide rows with `symbol IS NULL` only) — the
   `RecentTWNews` card on `DashboardPage` renders titles with
   bullish/bearish/neutral sentiment badges from the same row's
-  `sentiment_label` column. The US `RecentNews` card stays read-
-  through against `/us/news/SPY` since US news isn't ingested.
+  `sentiment_label` column.
+
+### International news ingest
+- Sibling cron `tasks/ingest_news_international.py` runs hourly under
+  the same Google News RSS zh-TW pipeline but with a Fed / FOMC / 美股 /
+  global macro query, writing rows under `market='GLOBAL'`. Symbol
+  tags are explicitly stripped (`symbol=NULL` for every row) — the TW
+  connector's 4-digit regex would mis-tag years like "2026" as TW
+  stock codes and poison `read_symbol_sentiment` lookups. API:
+  `GET /api/global/news/recent`.
+- `discussion_service.gather_market_context` injects an
+  `international_sentiment` block alongside `news_sentiment` (read via
+  `read_recent_market_sentiment(market="GLOBAL")`), regardless of the
+  discussion's primary market — Fed policy is relevant to TW personas
+  just as much as US ones. The DashboardPage replaces the previous
+  US/SPY `RecentNews` read-through with a `RecentGlobalNews` card
+  backed by this archive so the user sees the same data the personas
+  do.
 
 ### News sentiment scoring
 - Hourly APScheduler job `tasks/score_news_sentiment.py` picks up

@@ -743,6 +743,55 @@ async def test_gather_market_context_includes_per_symbol_block_when_focused(
     assert block["count"] == 1
 
 
+@pytest.mark.asyncio
+async def test_gather_market_context_includes_international_sentiment(
+    db_session: AsyncSession,
+):
+    """`international_sentiment` block is populated from market='GLOBAL'
+    rows regardless of the discussion's primary market — so a TW
+    persona can reason about Fed / FOMC context that the
+    `ingest_news_international` cron writes."""
+    from datetime import UTC, datetime
+    from sqlalchemy import select as _select
+    import services.tw_market_service as _tw   # noqa: F401
+    from models.news_article import NewsArticle
+    from services.ingest.repository import NewsArticleRow, insert_news_articles
+
+    await insert_news_articles(db_session, [
+        NewsArticleRow(
+            market="GLOBAL", symbol=None,
+            published_at=datetime.now(UTC),
+            title="聯準會連三降息 美股收高",
+            link="https://example.com/intl-1",
+            publisher="鉅亨網", summary=None, payload=None,
+            source="google_news_intl",
+        ),
+    ])
+    row = await db_session.scalar(
+        _select(NewsArticle).where(NewsArticle.market == "GLOBAL")
+    )
+    row.sentiment_score = 0.6
+    row.sentiment_label = "bullish"
+    row.sentiment_scored_at = datetime.now(UTC)
+    await db_session.commit()
+
+    with patch.object(_tw, "get_screener", new=AsyncMock(return_value=[])), \
+         patch.object(_tw, "get_index", new=AsyncMock(return_value={})):
+        ctx = await discussion_service.gather_market_context(db_session)
+
+    assert "international_sentiment" in ctx
+    block = ctx["international_sentiment"]
+    assert block is not None
+    assert block["bullish"] == 1
+    assert any("聯準會" in h["title"] for h in block["headlines"])
+    # The TW market_news block should NOT pick up the GLOBAL row even
+    # when the GLOBAL row is the only news in the DB — different market
+    # codes mean different aggregation buckets.
+    tw_block = ctx["news_sentiment"]
+    assert tw_block is not None
+    assert tw_block["bullish"] == 0
+
+
 # ── persona timeout (C8) ─────────────────────────────────────────
 
 

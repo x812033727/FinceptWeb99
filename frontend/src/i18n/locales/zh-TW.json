@@ -75,8 +75,10 @@
     "quick_access": "快速進入",
     "latest_news": "美股新聞",
     "latest_tw_news": "台股新聞",
+    "latest_global_news": "國際財經",
     "market_news": "市場新聞",
     "tw_market_news": "台股市場新聞",
+    "global_market_news": "國際財經（聯準會 / 美股 / 全球）",
     "loading_news": "載入新聞中…",
     "no_news": "目前沒有可顯示的新聞",
     "cards": {

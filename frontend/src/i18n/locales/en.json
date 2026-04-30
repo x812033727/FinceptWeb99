@@ -75,8 +75,10 @@
     "quick_access": "Quick Access",
     "latest_news": "US News",
     "latest_tw_news": "TW News",
+    "latest_global_news": "International",
     "market_news": "Market News",
     "tw_market_news": "TW Market News",
+    "global_market_news": "International (Fed / US / Global)",
     "loading_news": "Loading news…",
     "no_news": "No news available right now",
     "cards": {

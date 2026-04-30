@@ -155,6 +155,21 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # Same Google News RSS pipeline, zh-TW edition, but the query
+    # targets Fed / FOMC / 美股 / 國際財經 and rows are stored under
+    # market='GLOBAL'. Lets discussion personas reason about Fed
+    # policy / global macro alongside TW market context. Hourly to
+    # match the TW cadence.
+    from tasks.ingest_news_international import run as run_ingest_news_intl
+    scheduler.add_job(
+        run_ingest_news_intl,
+        trigger=IntervalTrigger(hours=1),
+        id="ingest_news_international",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── News sentiment scoring ────────────────────────────────────
     # Hourly: picks up news rows with NULL sentiment_score and runs them
     # through Claude Haiku in batches. Cheap (one prompt scores 20

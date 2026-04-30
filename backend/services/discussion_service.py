@@ -403,6 +403,13 @@ async def gather_market_context(
         "index": None,
         "news_sentiment": None,
         "per_symbol_news_sentiment": {},
+        # International / cross-market news (Fed, FOMC, US markets,
+        # global macro) translated into Chinese — populated by the
+        # `ingest_news_international` cron writing rows under
+        # `market='GLOBAL'`. Distinct from `news_sentiment` which is
+        # the per-discussion-market aggregate. Lets a TW persona say
+        # "FOMC 鷹派預期 → 對台股科技股不利" with actual data backing.
+        "international_sentiment": None,
         # Each connector failure appends `{"source": "...", "error": "..."}`
         # so the personas (and the synthesizer) can mention "context was
         # incomplete" instead of confidently citing missing data. Logged
@@ -443,6 +450,19 @@ async def gather_market_context(
         )
     except Exception as exc:
         _record_error("news_sentiment", exc)
+
+    # International macro context — same reader, different market code.
+    # Always pulled regardless of `market` arg because Fed / global
+    # macro is relevant to TW personas just as much as US ones. Empty
+    # block (zeros + empty headlines list) when ingest hasn't run yet,
+    # which the personas already know to interpret as "no signal".
+    try:
+        from services.news_sentiment_service import read_recent_market_sentiment
+        ctx["international_sentiment"] = await read_recent_market_sentiment(
+            db, market="GLOBAL", limit=20, max_age_hours=48,
+        )
+    except Exception as exc:
+        _record_error("international_sentiment", exc)
 
     if focus_symbols:
         try:

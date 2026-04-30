@@ -110,11 +110,11 @@ function NewsList({ items }: { items: NewsItem[] }) {
   );
 }
 
-function RecentNews() {
+function RecentGlobalNews() {
   const { t } = useTranslation();
   const { data: items = [], isLoading } = useQuery<NewsItem[]>({
-    queryKey: ["news", "US", "SPY"],
-    queryFn: () => api.get("/us/news/SPY").then((r) => r.data),
+    queryKey: ["news", "GLOBAL", "recent"],
+    queryFn: () => api.get("/global/news/recent?limit=20").then((r) => r.data),
     staleTime: 5 * 60_000,
   });
 
@@ -125,7 +125,9 @@ function RecentNews() {
   return (
     <div className="bg-card border border-border rounded-lg overflow-hidden">
       <div className="px-4 py-3 border-b border-border">
-        <h2 className="text-sm font-medium text-foreground">{t("dashboard.market_news")}</h2>
+        <h2 className="text-sm font-medium text-foreground">
+          {t("dashboard.global_market_news")}
+        </h2>
       </div>
       {!items.length ? (
         <div className="px-4 py-6 text-xs text-muted-foreground text-center">
@@ -249,15 +251,15 @@ export default function DashboardPage() {
         <div className="space-y-4">
           <div>
             <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
-              {t("dashboard.latest_news")}
-            </h2>
-            <RecentNews />
-          </div>
-          <div>
-            <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
               {t("dashboard.latest_tw_news")}
             </h2>
             <RecentTWNews />
+          </div>
+          <div>
+            <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
+              {t("dashboard.latest_global_news")}
+            </h2>
+            <RecentGlobalNews />
           </div>
         </div>
       </div>

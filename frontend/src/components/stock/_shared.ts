@@ -171,13 +171,21 @@ export const fmtK = (n: number) => formatCompact(n);
 
 // ── API fetchers ─────────────────────────────────────────────────
 
+// TW data is daily-only — no intraday endpoint exists. The
+// StockDetailPage period selector hides `1d` / `5d` for TW so this
+// map only needs to cover the month-based ranges. Defensive fallback
+// to 3 months if a future caller passes an unmapped period.
+const TW_PERIOD_MONTHS: Record<Period, number> = {
+  "1d": 1, "5d": 1, "1mo": 1, "3mo": 3, "1y": 12, "5y": 60,
+};
+
 export const fetchHistory = (mkt: Market, sym: string, period: Period) =>
   api.get<OHLCVBar[]>(
     mkt === "US"
       ? `/us/history/${sym}?period=${period}&interval=${PERIOD_INTERVAL[period]}`
       : mkt === "CRYPTO"
         ? `/crypto/history/${sym}?interval=${CRYPTO_PERIOD[period].interval}&limit=${CRYPTO_PERIOD[period].limit}`
-        : `/tw/history/${sym}?months=${period === "5y" ? 60 : period === "1y" ? 12 : 3}`
+        : `/tw/history/${sym}?months=${TW_PERIOD_MONTHS[period]}`
   ).then((r) => r.data);
 
 export const fetchQuote = (mkt: Market, sym: string) =>

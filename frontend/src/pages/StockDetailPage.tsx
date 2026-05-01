@@ -208,7 +208,12 @@ export default function StockDetailPage() {
           {/* chart */}
           <div className="lg:col-span-3 bg-card border border-border rounded-lg overflow-hidden">
             <div className="flex items-center gap-1 px-4 pt-3 pb-2 border-b border-border">
-              {(["1d", "5d", "1mo", "3mo", "1y", "5y"] as Period[]).map((p) => (
+              {/* TW data is daily-only (no intraday endpoint) — hide
+                  `1d` / `5d` so the buttons can't render dead. US +
+                  Crypto get the full range. */}
+              {((mkt === "TW"
+                ? ["1mo", "3mo", "1y", "5y"]
+                : ["1d", "5d", "1mo", "3mo", "1y", "5y"]) as Period[]).map((p) => (
                 <PeriodButton key={p} active={p === period} label={p} onClick={() => setPeriod(p)} />
               ))}
             </div>

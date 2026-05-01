@@ -1532,7 +1532,7 @@ export default function StockDetailPage() {
             {displayPrice !== undefined ? fmt(displayPrice) : "—"}
           </div>
           <div className={`text-xs sm:text-sm font-medium tabular-nums ${isPositive ? "text-green-400" : "text-red-400"}`}>
-            {displayChange !== undefined ? fmtPct(displayChange) : "—"}
+            {displayChange !== undefined ? fmtPct(displayChange, true) : "—"}
           </div>
           <div className="text-[10px] sm:text-xs text-muted-foreground mt-0.5">
             {mkt === "TW" ? "TWD" : (quote?.currency as string ?? "USD")}

@@ -394,6 +394,48 @@ async def test_read_recent_market_sentiment_skips_unscored_rows(
 
 
 @pytest.mark.asyncio
+async def test_read_recent_market_sentiment_includes_symbol_tagged_rows(
+    db_session: AsyncSession,
+):
+    """Regression: Google News TW headlines almost always include a 4-6
+    digit stock code, and `ingest_news_tw`'s symbol-tagger writes that
+    code into `NewsArticle.symbol`. A previous `symbol IS NULL` filter
+    was excluding ~99% of TW news from the market-wide aggregator,
+    leaving the discussion orchestrator with empty `news_sentiment`.
+    Each headline now contributes regardless of symbol; the headline
+    payload still carries `symbol` so the persona can disambiguate
+    "2330 法說" from a broad-market story."""
+    now = datetime.now(UTC)
+    await insert_news_articles(db_session, [
+        _row("台積電(2330) 法說會優於預期", "https://example.com/tag_a",
+             symbol="2330", published_at=now - timedelta(hours=1)),
+        _row("外資連 3 日賣超台股", "https://example.com/tag_b",
+             symbol=None, published_at=now - timedelta(hours=2)),
+    ])
+    rows = (await db_session.scalars(
+        select(NewsArticle).where(NewsArticle.link.like("https://example.com/tag_%"))
+    )).all()
+    for r in rows:
+        r.sentiment_score = 0.5
+        r.sentiment_label = "bullish"
+        r.sentiment_scored_at = now
+    await db_session.commit()
+
+    out = await news_sentiment_service.read_recent_market_sentiment(
+        db_session, market="TW", limit=10, max_age_hours=24,
+    )
+    titles = [h["title"] for h in out["headlines"]]
+    assert "台積電(2330) 法說會優於預期" in titles
+    assert "外資連 3 日賣超台股" in titles
+    assert out["bullish"] == 2
+    # `symbol` field is preserved per-headline so the LLM can tell
+    # which is per-stock and which is broad-market.
+    by_title = {h["title"]: h for h in out["headlines"]}
+    assert by_title["台積電(2330) 法說會優於預期"]["symbol"] == "2330"
+    assert by_title["外資連 3 日賣超台股"]["symbol"] is None
+
+
+@pytest.mark.asyncio
 async def test_read_recent_market_sentiment_aggregates(db_session: AsyncSession):
     now = datetime.now(UTC)
     await insert_news_articles(db_session, [

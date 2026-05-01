@@ -696,6 +696,26 @@ def test_extract_focus_symbols_empty_when_none():
     assert discussion_service.extract_focus_symbols("純策略討論不提具體標的") == []
 
 
+def test_is_speculative_etf_flags_leveraged_inverse_futures_only():
+    """`top_gainers` must not include 2x leveraged / inverse / futures-
+    tracking ETFs — they mean-revert the next session and persuade the
+    persona to recommend tomorrow's reversal candidate. Plain ETFs and
+    ordinary stocks must pass through unchanged."""
+    is_spec = discussion_service._is_speculative_etf
+    # Drop these
+    assert is_spec("00715L") is True   # 2x leveraged Brent oil
+    assert is_spec("00642U") is True   # S&P oil futures
+    assert is_spec("00632R") is True   # 元大台灣 50 反 1
+    # Keep these
+    assert is_spec("0050") is False    # plain index ETF
+    assert is_spec("00878") is False   # dividend ETF
+    assert is_spec("2330") is False    # ordinary stock
+    assert is_spec("00713B") is False  # bond ETF — not speculative
+    # Defensive: non-string / None must not crash
+    assert is_spec(None) is False
+    assert is_spec(2330) is False
+
+
 @pytest.mark.asyncio
 async def test_gather_market_context_includes_per_symbol_block_when_focused(
     db_session: AsyncSession,

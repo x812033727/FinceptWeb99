@@ -520,7 +520,11 @@ async def gather_market_context(
         try:
             from services import tw_market_service
             rows = await tw_market_service.get_screener(limit=200, min_volume=1_000_000)
-            scored = [r for r in rows if isinstance(r.get("change_pct"), (int, float))]
+            scored = [
+                r for r in rows
+                if isinstance(r.get("change_pct"), (int, float))
+                and not _is_speculative_etf(r.get("symbol"))
+            ]
             scored.sort(key=lambda r: r["change_pct"], reverse=True)
             ctx["top_gainers"] = [_compact_screener_row(r) for r in scored[:top_n]]
             ctx["top_losers"] = [_compact_screener_row(r) for r in scored[-top_n:][::-1]]
@@ -667,6 +671,25 @@ async def gather_market_context(
             _record_error("per_symbol_sentiment", exc)
 
     return ctx
+
+
+# TW listed leveraged / inverse / futures-tracking ETFs encode the
+# kind in the trailing letter of the 5-digit code:
+#   L = 2x leveraged (`00715L` 期街口布蘭特正 2)
+#   U = futures-tracking (`00642U` 期元大 S&P 石油)
+#   R = inverse (`00632R` 元大台灣 50 反 1)
+# These products mean-revert hard the day after a spike, so them
+# topping `top_gainers` consistently mis-leads personas into
+# recommending tomorrow's reversal candidate. Plain index / dividend
+# ETFs (`0050` `0056` `00878`) and ordinary stocks (`2330`) keep the
+# trailing-digit-only shape and pass the filter.
+_TW_SPECULATIVE_ETF_RE = re.compile(r"^\d{4,5}[LUR]$")
+
+
+def _is_speculative_etf(symbol: Any) -> bool:
+    if not isinstance(symbol, str):
+        return False
+    return bool(_TW_SPECULATIVE_ETF_RE.match(symbol))
 
 
 def _compact_screener_row(r: dict[str, Any]) -> dict[str, Any]:

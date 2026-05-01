@@ -362,14 +362,24 @@ async def read_recent_market_sentiment(
     limit: int = 20,
     max_age_hours: int = 48,
 ) -> dict:
-    """Aggregate sentiment-scored market-wide news for the discussion
-    orchestrator to inject as context.
+    """Aggregate sentiment-scored news for the discussion orchestrator
+    to inject as context.
+
+    Pulls **all** sentiment-scored news for the market, not just
+    `symbol IS NULL` rows. The earlier filter was theoretically clean
+    (per-symbol sentiment is not the same as market sentiment) but in
+    practice broke the feature: Google News TW headlines almost always
+    include a 4-6 digit stock code, so `ingest_news_tw`'s symbol-tagger
+    set `symbol` on ~99% of rows, leaving the market-wide aggregator
+    with nothing to read. Each headline still carries its `symbol`
+    field so the persona can tell `2330 法說` from a broad-market
+    headline; the LLM does the disambiguation, not the SQL filter.
 
     Returns:
         {
           "avg_score": float,
           "bullish": int, "bearish": int, "neutral": int,
-          "headlines": [{"title", "score", "label", "published_at"}],
+          "headlines": [{"title", "symbol", "score", "label", "published_at"}],
         }
     """
     cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
@@ -377,9 +387,6 @@ async def read_recent_market_sentiment(
         select(NewsArticle)
         .where(
             NewsArticle.market == market,
-            NewsArticle.symbol.is_(None),   # market-wide news only — averaging
-                                            # per-symbol news into "market sentiment"
-                                            # is a category error
             NewsArticle.published_at >= cutoff,
             NewsArticle.sentiment_score.isnot(None),
         )

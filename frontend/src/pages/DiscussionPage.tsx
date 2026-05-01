@@ -336,9 +336,13 @@ function _formatTaipeiDateCompact(iso: string): string {
 
 interface FormattedSymbolLine {
   symbol: string;
-  open: number | null;
-  close: number | null;
-  gainPct: number | null;
+  // 5-element array: D1-D5 change % vs day-1 open. NULL slots for
+  // unresolved days (the discussion is still mid-window) or rows
+  // missing a day-1 open.
+  changePcts: (number | null)[];
+  // Whole-row colour. Green if any day's close beat day-1 open by
+  // ≥3% (mirrors the verdict's max-high-vs-day1_open × 1.03 rule
+  // but on close instead of intraday high). Red otherwise.
   cls: string;
 }
 
@@ -397,26 +401,40 @@ function formatDiscussionTitle(s: {
 
   const opens = s.day1_open_prices ?? {};
   const closes_legacy = s.day5_close_prices ?? {};
-  // Scoreboard column wins when present — its latest non-null entry
-  // is always at least as fresh as `day5_close_prices` and resolves
-  // partial windows (D1-D2 only) that the verifier would otherwise
-  // leave blank until D5 lands. Legacy fallback covers old auto-run
-  // rows the scoreboard cron hasn't touched yet.
+  // Scoreboard column drives the per-day strip. Legacy
+  // `day5_close_prices` only covers a single bar (D5), so for old
+  // auto-run rows the scoreboard cron hasn't touched, only the
+  // last cell of the strip is filled.
   const closes_daily = s.daily_close_prices ?? {};
+  const WIN_THRESHOLD = 0.03;
   const lines: FormattedSymbolLine[] = syms.slice(0, 3).map((sym) => {
     const open = sym in opens ? opens[sym] : null;
-    const close =
-      _latestNonNull(closes_daily[sym]) ??
-      (sym in closes_legacy ? closes_legacy[sym] : null);
-    const gainPct =
-      open !== null && open > 0 && close !== null
-        ? (close - open) / open
-        : null;
-    let cls = "text-muted-foreground";
-    if (gainPct !== null) {
-      cls = gainPct >= 0 ? "text-green-500" : "text-red-500";
+    // Build the 5-day close array. Prefer the scoreboard's per-day
+    // entries; fall back to a sparse [None × 4, day5_close] when
+    // only the legacy column is populated.
+    let dailyCloses: (number | null)[] | null = closes_daily[sym] ?? null;
+    if (!dailyCloses && sym in closes_legacy) {
+      dailyCloses = [null, null, null, null, closes_legacy[sym]];
     }
-    return { symbol: sym, open, close, gainPct, cls };
+    const safeDailyCloses = dailyCloses ?? [null, null, null, null, null];
+    const changePcts: (number | null)[] = safeDailyCloses.map((c) =>
+      c !== null && open !== null && open > 0 ? (c - open) / open : null,
+    );
+    // Win = any day's close ≥ +3% over day-1 open. Mirrors the
+    // verdict task's threshold (which uses max-high instead of
+    // close, so this is slightly stricter — close needs to hold,
+    // not just touch).
+    const maxPct = changePcts.reduce<number | null>(
+      (acc, p) => (p !== null && (acc === null || p > acc) ? p : acc),
+      null,
+    );
+    const cls =
+      maxPct === null
+        ? "text-muted-foreground"
+        : maxPct >= WIN_THRESHOLD
+          ? "text-green-500"
+          : "text-red-500";
+    return { symbol: sym, changePcts, cls };
   });
 
   return { date, verdictMark, verdictCls, lines };
@@ -1089,12 +1107,13 @@ export default function DiscussionPage() {
                     </div>
                     {tt.lines?.map((ln) => (
                       <div key={ln.symbol} className={`font-mono ${ln.cls}`}>
-                        {ln.symbol}:
-                        {ln.open !== null ? _toFixedSmart(ln.open) : "—"}
-                        /
-                        {ln.close !== null ? _toFixedSmart(ln.close) : "—"}
-                        {" "}
-                        ({ln.gainPct !== null ? _signedPct(ln.gainPct) : "—"})
+                        {ln.symbol}:{" "}
+                        {ln.changePcts.map((p, i) => (
+                          <span key={i}>
+                            {p !== null ? _signedPct(p) : "—"}
+                            {i < ln.changePcts.length - 1 ? "/" : ""}
+                          </span>
+                        ))}
                       </div>
                     ))}
                   </div>

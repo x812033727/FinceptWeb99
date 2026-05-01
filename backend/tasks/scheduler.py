@@ -275,6 +275,24 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # TAIEX TR (含息報酬指數). FinMind sponsor-tier; pulls trailing
+    # 400 days every tick (cheap, idempotent UPSERT). 15:30 Taipei
+    # (07:30 UTC), 20 min after `ingest_taiex_history` so neither
+    # shares the same TWSE quiet window. Archive lands under the
+    # synthetic symbol `_TAIEX_TR` in `ohlcv_daily` — same layout
+    # as `_TAIEX` from PR #132.
+    from tasks.ingest_taiex_tr_history import (
+        run as run_ingest_taiex_tr_history,
+    )
+    scheduler.add_job(
+        run_ingest_taiex_tr_history,
+        trigger=CronTrigger(hour=7, minute=30, timezone="UTC"),
+        id="ingest_taiex_tr_history",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── News sentiment scoring ────────────────────────────────────
     # Hourly: picks up news rows with NULL sentiment_score and runs them
     # through Claude Haiku in batches. Cheap (one prompt scores 20

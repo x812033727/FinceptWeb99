@@ -557,6 +557,19 @@ async def get_history(symbol: str, months: int = 12) -> list[dict[str, Any]]:
     today = date.today()
     start = today - timedelta(days=months * 30)
 
+    # Synthetic indices (`_TAIEX`, `_TAIEX_TR`) live only in the
+    # `ohlcv_daily` archive — they're populated by dedicated cron
+    # jobs, not the per-symbol upstream waterfall. Falling through
+    # to TWSE / FinMind for these would 404 (TWSE OpenAPI doesn't
+    # accept index codes via `STOCK_DAY`, FinMind's per-symbol
+    # `TaiwanStockPrice` doesn't either). Short-circuit + return
+    # whatever's in the archive.
+    if symbol.startswith("_"):
+        index_bars = await read_ohlcv_range_autosession("TW", symbol, start, today)
+        if index_bars:
+            await cache_set(key, json.dumps(index_bars), TTL_HISTORY)
+        return index_bars
+
     # ── Tier 2: Postgres archive ────────────────────────────────
     db_bars = await read_ohlcv_range_autosession("TW", symbol, start, today)
     if _db_bars_are_fresh(db_bars, today):

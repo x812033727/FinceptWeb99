@@ -224,8 +224,10 @@ function PortfolioDetail({
             </div>
           </div>
 
-          {/* Performance chart */}
-          <PerformanceChart portfolioId={portfolioId} />
+          {/* Performance chart — benchmark switches with currency
+              (TWD → TAIEX TR, USD/other → SPY). PR #191 fixed the
+              prior SPY-everywhere default. */}
+          <PerformanceChart portfolioId={portfolioId} currency={detail.currency} />
 
       {/* Expert evaluation — pick a persona, get an in-place AI review */}
       <ExpertEvaluationCard portfolioId={portfolioId} detail={detail} />

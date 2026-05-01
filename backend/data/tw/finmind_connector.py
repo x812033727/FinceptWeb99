@@ -224,6 +224,43 @@ async def get_etf_holdings(symbol: str, start_date: str = "2024-01-01") -> list[
     return await _query("TaiwanStockHoldingSharesPer", symbol, start_date)
 
 
+# ── Total return index (含息報酬指數) ────────────────────────────
+
+async def get_taiex_total_return_index(
+    start_date: str, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """`TaiwanStockTotalReturnIndex` (TAIEX TR variant `IR0001` —
+    台灣加權股價報酬指數). Unlike the price-only TAIEX archived under
+    `_TAIEX` in `ohlcv_daily`, this version reinvests dividends, so
+    long-window comparisons against a TW portfolio are meaningfully
+    closer to apples-to-apples.
+
+    Sponsor-tier dataset. One call per ingest tick covers the whole
+    archive; we run it daily.
+
+    Output is shaped to match `OhlcvBar.from_connector_row` so the
+    cron can upsert into `ohlcv_daily` under the synthetic symbol
+    `_TAIEX_TR` (mirrors how PR #132 stores `_TAIEX`).
+    """
+    rows = await _query("TaiwanStockTotalReturnIndex", "IR0001", start_date, end_date)
+    return [
+        {
+            "time":   r.get("date"),
+            # Index has no real OHL — flatten everything to close.
+            # Same shape choice as `_TAIEX` price index.
+            "open":   r.get("price") or r.get("close"),
+            "high":   r.get("price") or r.get("close"),
+            "low":    r.get("price") or r.get("close"),
+            "close":  r.get("price") or r.get("close"),
+            # Volume is not meaningful for an index; reuse the slot
+            # for the day's traded amount if FinMind exposes it.
+            "volume": r.get("trading_volume") or 0,
+        }
+        for r in rows
+        if r.get("date") and (r.get("price") or r.get("close"))
+    ]
+
+
 # ── Government bank daily flow (八大行庫) ─────────────────────────
 
 async def get_government_bank_flow_market_wide(

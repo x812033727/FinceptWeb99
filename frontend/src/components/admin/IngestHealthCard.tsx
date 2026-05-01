@@ -73,6 +73,7 @@ const RETRYABLE_INGEST_JOBS = new Set([
   "ingest_buyback_tw",
   "ingest_govt_bank_flow_tw",
   "ingest_taiex_history",
+  "ingest_taiex_tr_history",
   "score_discussion_outcomes",
 ]);
 
@@ -112,8 +113,12 @@ const JOB_META: Record<string, JobMeta> = {
     schedule_zh: "每天 15:00 (台北)",
   },
   ingest_taiex_history: {
-    description_zh: "TAIEX 大盤指數每日歷史線",
+    description_zh: "TAIEX 大盤指數每日歷史線（價格指數）",
     schedule_zh: "每天 15:10 (台北)",
+  },
+  ingest_taiex_tr_history: {
+    description_zh: "TAIEX 含息報酬指數（FinMind sponsor — TWD portfolio benchmark 用）",
+    schedule_zh: "每天 15:30 (台北)",
   },
   ingest_revenue_tw: {
     description_zh: "台股月營收（FinMind 全市場一次抓，sponsor tier）",

@@ -1162,11 +1162,32 @@ function timeAgo(iso: string | null): string {
 
 function IngestHealthCard() {
   const qc = useQueryClient();
-  const { data: rows = [], isLoading } = useQuery<IngestHealth[]>({
+  const { data: serverRows = [], isLoading } = useQuery<IngestHealth[]>({
     queryKey: ["admin", "ingest-health"],
     queryFn: () => api.get("/admin/ingest/health").then((r) => r.data),
     refetchInterval: 60_000,
   });
+  // Union with the whitelist so newly-deployed jobs that haven't
+  // hit their first cron tick yet still appear in the table — admin
+  // can fire the first run manually via "Retry now" instead of
+  // waiting for 09:30 UTC for the row to materialise. Placeholder
+  // rows have `last_run_at=null` which renders as "—" via timeAgo().
+  const rows: IngestHealth[] = (() => {
+    const seen = new Set(serverRows.map((r) => r.job_id));
+    const placeholders: IngestHealth[] = [];
+    for (const jobId of RETRYABLE_INGEST_JOBS) {
+      if (!seen.has(jobId)) {
+        placeholders.push({
+          job_id: jobId,
+          last_run_at: null,
+          ok: false,
+          row_count: 0,
+          error: null,
+        });
+      }
+    }
+    return [...serverRows, ...placeholders];
+  })();
   const retry = useMutation({
     mutationFn: (jobId: string) =>
       api.post<IngestRetryResult>(`/admin/ingest/${jobId}/retry`).then((r) => r.data),
@@ -1209,18 +1230,29 @@ function IngestHealthCard() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border/40">
-              {rows.map((r) => (
+              {rows.map((r) => {
+                // Three-state badge: ok / error / pending. `last_run_at
+                // === null` means the job has never actually run, so a
+                // red "error" pill would be misleading — it's just
+                // never-run-yet (e.g. a newly-deployed cron before the
+                // first scheduled tick).
+                const neverRun = r.last_run_at === null;
+                const badgeCls = neverRun
+                  ? "bg-muted/30 text-muted-foreground border border-border"
+                  : r.ok
+                    ? "bg-green-500/10 text-green-400 border border-green-500/30"
+                    : "bg-red-500/10 text-red-400 border border-red-500/30";
+                const badgeText = neverRun
+                  ? "pending"
+                  : r.ok ? "ok" : "error";
+                return (
                 <tr key={r.job_id}>
                   <td className="py-1.5 pr-3 font-mono">{r.job_id}</td>
                   <td className="py-1.5 pr-3">
                     <span
-                      className={`px-1.5 py-0.5 rounded text-[10px] ${
-                        r.ok
-                          ? "bg-green-500/10 text-green-400 border border-green-500/30"
-                          : "bg-red-500/10 text-red-400 border border-red-500/30"
-                      }`}
+                      className={`px-1.5 py-0.5 rounded text-[10px] ${badgeCls}`}
                     >
-                      {r.ok ? "ok" : "error"}
+                      {badgeText}
                     </span>
                   </td>
                   <td className="py-1.5 pr-3 text-right tabular-nums">
@@ -1251,7 +1283,8 @@ function IngestHealthCard() {
                     )}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

@@ -1,9 +1,10 @@
 """Tests for tasks.score_discussion_outcomes.
 
 Verifies the daily-cron filtering rules: only concluded
-discussions, only those with NULL daily_close_prices, only those
-older than the 7-day age threshold get processed. Per-row failures
-are isolated.
+discussions get touched; never-scored rows process at any age;
+recent rows (≤14 days) re-process even when already scored so
+partial windows fill in as more bars land; old already-scored
+rows stay skipped. Per-row failures are isolated.
 """
 from __future__ import annotations
 
@@ -100,9 +101,10 @@ async def test_skips_unconcluded_and_already_scored(
     user = await _user(db_session, "score-skip@example.com")
     # Skip: no conclusion
     await _disc(db_session, user.id, age_days=10, conclusion=None)
-    # Skip: already scored
+    # Skip: already scored AND past the 14-day refresh window —
+    # stable historical row, no point re-processing.
     await _disc(
-        db_session, user.id, age_days=10,
+        db_session, user.id, age_days=30,
         conclusion={"recommended_symbols": ["2330"]},
         daily_close_prices={"2330": [600, 601, 602, 603, 604]},
     )
@@ -147,21 +149,24 @@ async def test_skips_unconcluded_and_already_scored(
 
 
 @pytest.mark.asyncio
-async def test_skips_recent_rows(
+async def test_processes_recent_rows_even_when_already_scored(
     patch_session, db_session: AsyncSession,
 ):
-    """Rows newer than the 7-day age threshold get skipped — wait
-    one more day rather than write a partial scoreboard the cron
-    has to overwrite."""
+    """Recently created rows (within the 14-day refresh window)
+    re-process even when daily_close_prices is already populated.
+    Reason: each new tick may have additional bars available, so
+    the saved scoreboard could be stale (e.g. only D1-D2 written
+    yesterday, D3 today)."""
     from tasks import score_discussion_outcomes
 
     user = await _user(db_session, "score-recent@example.com")
-    await _disc(
+    recent = await _disc(
         db_session, user.id, age_days=2,
         conclusion={"recommended_symbols": ["2330"]},
+        daily_close_prices={"2330": [600, 601, None, None, None]},
     )
 
-    persist = AsyncMock(return_value=True)
+    persist = AsyncMock(return_value=False)
     with patch(
         "tasks.score_discussion_outcomes.acquire_lock",
         AsyncMock(return_value=True),
@@ -180,7 +185,50 @@ async def test_skips_recent_rows(
     ):
         await score_discussion_outcomes.run()
 
-    persist.assert_not_awaited()
+    persist.assert_awaited_once()
+    args = persist.await_args.args
+    assert args[1].id == recent.id
+
+
+@pytest.mark.asyncio
+async def test_processes_brand_new_unscored_recent_row(
+    patch_session, db_session: AsyncSession,
+):
+    """The case the user actually hit: fresh discussion (~2 days
+    old), no scoreboard yet. Cron used to skip these via a 7-day
+    age filter; now it processes them so manual `Retry now` from
+    the AdminPage actually populates daily_close_prices for new
+    rows."""
+    from tasks import score_discussion_outcomes
+
+    user = await _user(db_session, "score-fresh@example.com")
+    fresh = await _disc(
+        db_session, user.id, age_days=2,
+        conclusion={"recommended_symbols": ["2330"]},
+    )
+
+    persist = AsyncMock(return_value=False)
+    with patch(
+        "tasks.score_discussion_outcomes.acquire_lock",
+        AsyncMock(return_value=True),
+    ), patch(
+        "tasks.score_discussion_outcomes.release_lock", AsyncMock(),
+    ), patch(
+        "tasks.score_discussion_outcomes.backoff_remaining_seconds",
+        AsyncMock(return_value=0),
+    ), patch(
+        "tasks.score_discussion_outcomes.clear_failures", AsyncMock(),
+    ), patch(
+        "tasks.score_discussion_outcomes.record_health", AsyncMock(),
+    ), patch(
+        "services.discussion_scoreboard_service.persist_scoreboard",
+        persist,
+    ):
+        await score_discussion_outcomes.run()
+
+    persist.assert_awaited_once()
+    args = persist.await_args.args
+    assert args[1].id == fresh.id
 
 
 @pytest.mark.asyncio

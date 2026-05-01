@@ -45,7 +45,12 @@ JOB_ID = "score_discussion_outcomes"
 
 _LOCK_KEY = "lock:score_discussion_outcomes"
 _LOCK_TTL = 10 * 60   # plenty of headroom for ~hundreds of pending rows
-_AGE_THRESHOLD_DAYS = 7
+# Re-process recently created rows even when their daily_close_prices
+# column is already populated — additional bars may have landed since
+# the previous tick, so the saved scoreboard could be stale (e.g. only
+# D1-D2 written yesterday, D3 available today). Older rows that were
+# already fully resolved are stable and stay skipped.
+_REFRESH_WINDOW_DAYS = 14
 
 
 async def run() -> None:
@@ -94,17 +99,35 @@ async def run() -> None:
 
 
 async def _do_run() -> tuple[int, list[str]]:
-    cutoff = datetime.now(UTC) - timedelta(days=_AGE_THRESHOLD_DAYS)
+    """Process every concluded discussion that needs (re)scoring.
+
+    Two conditions trigger work:
+      1. `daily_close_prices IS NULL` — the row has never been
+         scored. Always process regardless of age.
+      2. `created_at >= now - REFRESH_WINDOW_DAYS` — recently
+         created rows may have new bars landing each day, so
+         re-process to refresh partial windows. Old already-scored
+         rows (>14 days) are stable; skip them.
+
+    The `created_at <= now - 7 days` age cutoff used to live here
+    as an optimisation (skip "still in progress" rows) but it had
+    the side effect of preventing manual `Retry now` from filling
+    in fresh discussions — partial windows were better than NULL.
+    """
+    refresh_floor = datetime.now(UTC) - timedelta(days=_REFRESH_WINDOW_DAYS)
     scored = 0
     errors: list[str] = []
 
     async with AsyncSessionLocal() as db:
+        from sqlalchemy import or_
         stmt = (
             select(Discussion)
             .where(
                 Discussion.conclusion.isnot(None),
-                Discussion.daily_close_prices.is_(None),
-                Discussion.created_at <= cutoff,
+                or_(
+                    Discussion.daily_close_prices.is_(None),
+                    Discussion.created_at >= refresh_floor,
+                ),
             )
             .order_by(Discussion.created_at.asc())
         )
@@ -113,11 +136,9 @@ async def _do_run() -> tuple[int, list[str]]:
         for row in rows:
             try:
                 # Returns True iff every symbol got 5 days resolved —
-                # but we persist regardless. Partial windows (e.g. the
-                # discussion straddled an unusually long holiday) write
+                # but we persist regardless. Partial windows write
                 # whatever they have so the UI shows partial data; the
-                # column stays NULL only when there isn't a single bar
-                # yet, which keeps the cron pulling on later ticks.
+                # next tick fills in additional days as bars land.
                 fully = await discussion_scoreboard_service.persist_scoreboard(
                     db, row,
                 )

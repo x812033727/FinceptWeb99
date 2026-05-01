@@ -6,6 +6,10 @@ import { useAuthStore } from "@/store/authStore";
 import { useCheckForUpdates, useTriggerUpdate, useVersion } from "@/hooks/useVersion";
 import api from "@/lib/api";
 import { CollapsibleHeader, useCollapsible } from "@/components/Collapsible";
+import type {
+  SystemTaskConfig,
+  SystemTaskTestResult,
+} from "@/types/discussion";
 
 // `useCollapsible` + `CollapsibleHeader` moved to
 // `@/components/Collapsible` so DiscussionPage / StockDetailPage /
@@ -415,27 +419,9 @@ function PersonaRow({ p }: { p: PersonaConfig }) {
 
 // ── Background system tasks (LLM routing) ────────────────────────
 
-interface SystemTaskConfig {
-  task_id: string;
-  name: string;
-  description: string;
-  default_provider: string;
-  default_model: string;
-  effective_provider: string;
-  effective_model: string;
-  is_overridden: boolean;
-  updated_at: string | null;
-  updated_by_email: string | null;
-}
-
-interface SystemTaskTestResult {
-  ok: boolean;
-  provider: string;
-  model: string;
-  latency_ms: number;
-  sample_output: string | null;
-  error: string | null;
-}
+// SystemTaskConfig + SystemTaskTestResult moved to
+// `@/types/discussion` so the upcoming AdminPage card extraction
+// (Tier 3 A1) can split sub-components without re-declaring types.
 
 function SystemTaskRow({ tcfg }: { tcfg: SystemTaskConfig }) {
   const { t } = useTranslation();

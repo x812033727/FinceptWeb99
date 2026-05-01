@@ -4,60 +4,17 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import api, { notifyRateLimited } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
-
-// ── types ──────────────────────────────────────────────────────────
-
-interface AgentInfo {
-  id: string;
-  name: string;
-  description: string;
-  default_provider: string;
-}
-
-interface Turn {
-  id: number;
-  round: number;
-  turn_index: number;
-  persona_id: string;
-  stance: "agree" | "dissent" | "supplement";
-  content: string;
-  created_at: string;
-}
-
-interface Conclusion {
-  recommended_symbols: string[];
-  reasoning: string;
-  risks: string[];
-  time_horizon: "short_term" | "medium_term" | "long_term";
-  consensus_score: number;
-  _parse_error?: boolean;
-}
-
-interface Discussion {
-  id: string;
-  topic: string;
-  rules: string;
-  persona_ids: string[];
-  status: "draft" | "running" | "done";
-  current_round: number;
-  conclusion: Conclusion | null;
-  verdict?: "win" | "loss" | "unverifiable" | null;
-  verdict_reason?: string | null;
-  verified_at?: string | null;
-  auto_run?: boolean;
-  day1_open_prices?: Record<string, number> | null;
-  day5_close_prices?: Record<string, number> | null;
-  // PR #140 scoreboard column. Latest non-null entry feeds the
-  // sidebar title's close slot so partial-window discussions
-  // (D1-D2 only) update immediately instead of waiting for D5.
-  daily_close_prices?: Record<string, (number | null)[]> | null;
-  created_at: string;
-  updated_at: string;
-}
-
-interface DiscussionDetail extends Discussion {
-  turns: Turn[];
-}
+import type {
+  AgentInfo,
+  AutoRunConfig,
+  Conclusion,
+  Discussion,
+  DiscussionDetail,
+  RoundContextSnapshot,
+  ScoreboardResponse,
+  ScoreboardRow,
+  Turn,
+} from "@/types/discussion";
 
 // ── defaults ──────────────────────────────────────────────────────
 
@@ -210,17 +167,6 @@ async function concludeSession(id: string): Promise<{ conclusion: Conclusion }> 
   return res.data;
 }
 
-interface RoundContextSnapshot {
-  round: number;
-  // The full gather_market_context dict — shape evolves as new
-  // blocks are added (international_sentiment, top_revenue_growers,
-  // …). We accept any so the UI doesn't need a TS type bump every
-  // time the backend grows a new field; component reads known keys
-  // defensively.
-  context: Record<string, unknown>;
-  captured_at: string;
-}
-
 async function fetchRoundContexts(id: string): Promise<RoundContextSnapshot[]> {
   const res = await api.get<RoundContextSnapshot[]>(
     `/discussion/sessions/${id}/contexts`,
@@ -228,33 +174,11 @@ async function fetchRoundContexts(id: string): Promise<RoundContextSnapshot[]> {
   return res.data;
 }
 
-interface ScoreboardRow {
-  symbol: string;
-  day1_open: number | null;
-  daily_closes: (number | null)[];
-  change_pcts: (number | null)[];
-  days_resolved: number;
-}
-
-interface ScoreboardResponse {
-  discussion_id: string;
-  created_at_tw_date: string;
-  rows: ScoreboardRow[];
-}
-
 async function fetchScoreboard(id: string): Promise<ScoreboardResponse> {
   const res = await api.get<ScoreboardResponse>(
     `/discussion/sessions/${id}/scoreboard`,
   );
   return res.data;
-}
-
-interface AutoRunConfig {
-  enabled: boolean;
-  persona_ids: string[];
-  topic: string;
-  rules: string;
-  updated_at: string | null;
 }
 
 async function fetchAutoRunConfig(): Promise<AutoRunConfig> {

@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -39,6 +38,12 @@ from cache.redis_cache import cache_incr
 from config import settings
 from db.session import AsyncSessionLocal
 from models.news_article import NewsArticle
+from services.llm_parsing_utils import (
+    extract_json_object,
+    loads_lenient,
+    strip_code_fence,
+    strip_think_blocks,
+)
 
 log = logging.getLogger(__name__)
 
@@ -123,23 +128,27 @@ def _format_items(rows: list[NewsArticle]) -> str:
     return "[\n" + ",\n".join(lines) + "\n]"
 
 
-def _strip_code_fence(text: str) -> str:
-    """LLMs sometimes wrap JSON in ```json ... ``` despite being told not to."""
-    text = text.strip()
-    fence = re.match(r"^```(?:json)?\s*\n(.*?)\n```\s*$", text, re.DOTALL)
-    if fence:
-        return fence.group(1).strip()
-    return text
-
-
 def _parse_response(text: str) -> list[dict]:
-    """Return the parsed JSON array or [] on any malformed output."""
-    cleaned = _strip_code_fence(text)
+    """Return the parsed JSON array or [] on any malformed output.
+
+    Uses the shared lenient parser so the same `// 註解` / trailing-comma /
+    full-width-brace dialects we handle for the discussion synthesizer
+    don't silently brick a sentiment batch (which used to drop the entire
+    20-article window when one model emitted a stray comment)."""
+    cleaned = strip_code_fence(strip_think_blocks(text))
     try:
-        data = json.loads(cleaned)
+        data = loads_lenient(cleaned)
     except json.JSONDecodeError:
-        log.warning("news_sentiment.parse_failed", extra={"raw": cleaned[:200]})
-        return []
+        salvaged = extract_json_object(cleaned) if cleaned else None
+        if salvaged is not None:
+            try:
+                data = loads_lenient(salvaged)
+            except json.JSONDecodeError:
+                log.warning("news_sentiment.parse_failed", extra={"raw": cleaned[:200]})
+                return []
+        else:
+            log.warning("news_sentiment.parse_failed", extra={"raw": cleaned[:200]})
+            return []
     if not isinstance(data, list):
         log.warning("news_sentiment.unexpected_shape", extra={"type": type(data).__name__})
         return []

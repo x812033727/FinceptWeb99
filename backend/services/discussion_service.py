@@ -88,17 +88,18 @@ _MAX_RULES_CHARS = 2000
 _MAX_HISTORY_TURNS = 30     # how many prior turns to feed the next persona
 
 # Reasoning models surface their chain-of-thought wrapped in <think>...</think>
-# blocks. We strip these before parsing the persona's JSON reply so the
-# persisted turn content is clean, and a streaming-time filter (below)
-# prevents the thinking from flashing across the SSE channel either.
-_THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
-
-
-def strip_think_blocks(text: str) -> str:
-    """Remove every `<think>...</think>` block from `text`. Used to clean
-    LLM output before JSON parsing or display. Multi-line, case-insensitive,
-    leaves text outside the tags untouched."""
-    return _THINK_TAG_RE.sub("", text or "").strip()
+# blocks. `strip_think_blocks` removes them post-hoc; `_ThinkBlockFilter`
+# below does the same as a streaming filter for SSE so the thinking never
+# flashes across the chat UI in the first place.
+# Both `strip_think_blocks` and the JSON-parse helpers live in
+# `services.llm_parsing_utils` so other LLM-fed pipelines (news sentiment
+# scorer, future tasks) reuse the same tolerant parser.
+from services.llm_parsing_utils import (  # noqa: E402
+    extract_json_object as _extract_json_object,
+    loads_lenient as _loads_lenient,
+    strip_code_fence as _strip_code_fence,
+    strip_think_blocks,
+)
 
 
 class _ThinkBlockFilter:
@@ -672,140 +673,6 @@ def _format_history(prior_turns: list[DiscussionTurn]) -> str:
         body = t.content.strip() or "（同意，無補充）"
         lines.append(f"- 第{t.round}輪 · {t.persona_id} · {t.stance}：{body}")
     return "\n".join(lines)
-
-
-def _strip_code_fence(text: str) -> str:
-    text = text.strip()
-    fence = re.match(r"^```(?:json)?\s*\n(.*?)\n```\s*$", text, re.DOTALL)
-    return fence.group(1).strip() if fence else text
-
-
-def _extract_json_object(text: str) -> str | None:
-    """Find the first balanced top-level `{...}` object in `text`.
-
-    Used as a salvage step when the model wraps its JSON in surrounding
-    prose ("Here is my analysis:\\n\\n{...}\\n\\nHope this helps.") —
-    naive `json.loads(text)` would fail because of the leading/trailing
-    text, but extracting the balanced object lets us still parse a
-    valid response.
-
-    Tracks string boundaries (so a `}` inside a JSON string doesn't
-    break balance) and escape sequences. Returns None if no balanced
-    object exists.
-    """
-    start = text.find("{")
-    if start < 0:
-        return None
-    depth = 0
-    in_string = False
-    escape = False
-    for i in range(start, len(text)):
-        c = text[i]
-        if escape:
-            escape = False
-            continue
-        if in_string:
-            if c == "\\":
-                escape = True
-                continue
-            if c == '"':
-                in_string = False
-            continue
-        if c == '"':
-            in_string = True
-            continue
-        if c == "{":
-            depth += 1
-        elif c == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:i + 1]
-    return None
-
-
-_TRAILING_COMMA_RE = re.compile(r',(\s*[}\]])')
-
-
-def _strip_json_comments(text: str) -> str:
-    """Remove ``//`` line comments and ``/* … */`` block comments while
-    preserving content inside JSON string literals. A naive regex pass
-    would also chew up legitimate ``//`` chars in URL-shaped string
-    values (``"https://example.com"``).
-    """
-    out: list[str] = []
-    i = 0
-    n = len(text)
-    in_string = False
-    escape = False
-    while i < n:
-        c = text[i]
-        if in_string:
-            out.append(c)
-            if escape:
-                escape = False
-            elif c == "\\":
-                escape = True
-            elif c == '"':
-                in_string = False
-            i += 1
-            continue
-        if c == '"':
-            in_string = True
-            out.append(c)
-            i += 1
-            continue
-        if c == "/" and i + 1 < n and text[i + 1] == "/":
-            j = text.find("\n", i + 2)
-            i = n if j < 0 else j  # drop to EOL (keep the newline itself)
-            continue
-        if c == "/" and i + 1 < n and text[i + 1] == "*":
-            j = text.find("*/", i + 2)
-            i = n if j < 0 else j + 2
-            continue
-        out.append(c)
-        i += 1
-    return "".join(out)
-
-
-def _strip_json_relaxed(text: str) -> str:
-    """Defang the three JSON-like dialects LLMs emit when they get
-    creative with our synthesizer prompt:
-
-      1. ``// 註解`` line comments — copied verbatim from the prompt
-         template's range hints (`// 最多5檔`, `// 0=完全分歧`).
-      2. ``/* … */`` block comments.
-      3. Trailing commas before ``}`` or ``]``.
-
-    Plus normalize Chinese full-width braces / brackets to ASCII so a
-    model that helpfully Sinicized the structure markers still parses.
-    """
-    text = _strip_json_comments(text)
-    text = _TRAILING_COMMA_RE.sub(r"\1", text)
-    text = (
-        text
-        .replace("｛", "{").replace("｝", "}")
-        .replace("［", "[").replace("］", "]")
-        .replace("，", ",").replace("：", ":")
-    )
-    return text
-
-
-def _loads_lenient(text: str) -> Any:
-    """Tolerant JSON loader for synthesizer / persona outputs.
-
-    Layered fallbacks:
-      - `json.loads(strict=False)` first — allows literal control chars
-        inside strings (LLMs often emit real `\\n` newlines in Chinese
-        content; strict JSON would reject).
-      - On `JSONDecodeError`, run `_strip_json_relaxed` (comments,
-        trailing commas, full-width braces) and retry. Without this
-        an extra `// 註解` carried over from the prompt template
-        bricks the synthesizer with `parse_error`.
-    """
-    try:
-        return json.loads(text, strict=False)
-    except json.JSONDecodeError:
-        return json.loads(_strip_json_relaxed(text), strict=False)
 
 
 # Matches the opening of a `"content": "` field. Used by the truncation

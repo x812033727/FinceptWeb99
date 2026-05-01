@@ -1,0 +1,228 @@
+/**
+ * Shared types, API fetchers, and formatter aliases used by every
+ * panel in the StockDetailPage extraction.
+ *
+ * Keeping these in one module (rather than colocating with each
+ * panel) means a panel addition just imports — no risk of the new
+ * panel re-declaring a slightly different `RevenueRow` shape than
+ * what the backend returns.
+ */
+import api from "@/lib/api";
+import {
+  formatCompact,
+  formatNumber,
+  formatPct as formatPct_,
+} from "@/lib/formatters";
+import type { OHLCVBar, Market } from "@/types/market";
+
+// ── period / interval ─────────────────────────────────────────────
+
+export type Period = "1d" | "5d" | "1mo" | "3mo" | "1y" | "5y";
+export type Interval = "1m" | "5m" | "15m" | "1h" | "1d" | "1wk";
+
+export const PERIOD_INTERVAL: Record<Period, Interval> = {
+  "1d": "5m", "5d": "15m", "1mo": "1h", "3mo": "1d", "1y": "1d", "5y": "1wk",
+};
+
+// Crypto period → Kraken interval + bar limit. Kraken caps at 720 bars/req.
+export const CRYPTO_PERIOD: Record<Period, { interval: string; limit: number }> = {
+  "1d": { interval: "5m", limit: 288 },
+  "5d": { interval: "15m", limit: 480 },
+  "1mo": { interval: "1h", limit: 720 },
+  "3mo": { interval: "4h", limit: 540 },
+  "1y": { interval: "1d", limit: 365 },
+  "5y": { interval: "1w", limit: 260 },
+};
+
+// ── tab unions ────────────────────────────────────────────────────
+
+export type USTab = "chart" | "financials" | "options" | "news";
+export type TWTab = "chart" | "health" | "valuation" | "holdings" | "dividends" | "institutional" | "margin" | "revenue" | "news";
+export type CryptoTab = "chart" | "news";
+
+// ── data shapes ───────────────────────────────────────────────────
+
+export interface OptionRow {
+  strike: number;
+  expiration_date?: string;
+  contract_type: string;
+  bid?: number;
+  ask?: number;
+  last_price?: number;
+  volume?: number;
+  open_interest?: number;
+  implied_volatility?: number;
+  delta?: number;
+  gamma?: number;
+  data_source?: string;
+}
+
+export interface InstitutionalRow {
+  date: string;
+  fini_buy: number;
+  fini_sell: number;
+  sitc_buy: number;
+  sitc_sell: number;
+  dealer_buy: number;
+  dealer_sell: number;
+}
+
+export interface MarginRow {
+  date: string;
+  margin_purchase: number;
+  margin_balance: number;
+  short_sale: number;
+  short_balance: number;
+}
+
+export interface RevenueRow {
+  date: string;
+  revenue: number;
+  revenue_mom: number | null;
+  revenue_yoy: number | null;
+}
+
+export type Light = "green" | "yellow" | "red" | "gray";
+
+export interface HealthPeriod {
+  date: string;
+  revenue: number | null;
+  net_income: number | null;
+  eps: number | null;
+  gross_margin: number | null;
+  operating_margin: number | null;
+  net_margin: number | null;
+  debt_ratio: number | null;
+  current_ratio: number | null;
+  operating_cf: number | null;
+  free_cf: number | null;
+  total_equity: number | null;
+}
+
+export interface HealthResponse {
+  symbol: string;
+  market: "TW";
+  periods: HealthPeriod[];
+  summary: {
+    latest_roe: number | null;
+    latest_debt_ratio: number | null;
+    latest_gross_margin: number | null;
+    latest_net_margin: number | null;
+    revenue_yoy: number | null;
+    cf_positive_streak_4q: number;
+  };
+  lights: {
+    profitability: Light;
+    safety: Light;
+    growth: Light;
+    cash_flow: Light;
+  };
+}
+
+export interface ValuationBandResponse {
+  symbol: string;
+  metric: "pe" | "pb";
+  series: { date: string; value: number | null }[];
+  stats: {
+    mean: number | null;
+    std: number | null;
+    min: number | null;
+    max: number | null;
+    p10: number | null;
+    p25: number | null;
+    p50: number | null;
+    p75: number | null;
+    p90: number | null;
+    current: number | null;
+    current_z: number | null;
+  };
+}
+
+export interface DividendRow {
+  date: string;
+  ex_date: string | null;
+  cash_dividend: number;
+  stock_dividend: number;
+}
+
+export interface ETFHolding {
+  symbol: string;
+  name_zh: string;
+  weight: number;
+}
+
+export interface ETFHoldingsResponse {
+  as_of: string | null;
+  holdings: ETFHolding[];
+}
+
+// ── helpers ──────────────────────────────────────────────────────
+
+export const isTWETF = (symbol: string) => /^00\d{2,4}[A-Z]?$/.test(symbol);
+
+// Thin aliases over `@/lib/formatters` — keep call-site shape stable
+// across panels so PR #156's `+993%` regression cannot recur.
+export const fmt = (n: number | null | undefined, d = 2) => formatNumber(n, d);
+export const fmtPct = (n: number | null | undefined, alreadyPct = true) =>
+  formatPct_(n, { alreadyPct });
+export const fmtPct1 = (n: number | null | undefined) =>
+  formatPct_(n, { signed: false });
+export const fmtK = (n: number) => formatCompact(n);
+
+// ── API fetchers ─────────────────────────────────────────────────
+
+export const fetchHistory = (mkt: Market, sym: string, period: Period) =>
+  api.get<OHLCVBar[]>(
+    mkt === "US"
+      ? `/us/history/${sym}?period=${period}&interval=${PERIOD_INTERVAL[period]}`
+      : mkt === "CRYPTO"
+        ? `/crypto/history/${sym}?interval=${CRYPTO_PERIOD[period].interval}&limit=${CRYPTO_PERIOD[period].limit}`
+        : `/tw/history/${sym}?months=${period === "5y" ? 60 : period === "1y" ? 12 : 3}`
+  ).then((r) => r.data);
+
+export const fetchQuote = (mkt: Market, sym: string) =>
+  api.get<Record<string, unknown>>(
+    mkt === "US" ? `/us/quote/${sym}`
+      : mkt === "CRYPTO" ? `/crypto/quote/${sym}`
+      : `/tw/quote/${sym}`
+  ).then((r) => r.data);
+
+export const fetchFundamentals = (mkt: Market, sym: string) =>
+  api.get<Record<string, unknown>>(
+    mkt === "US" ? `/us/fundamentals/${sym}` : `/tw/fundamentals/${sym}`
+  ).then((r) => r.data);
+
+export const fetchFinancials = (sym: string) =>
+  api.get<{ symbol: string; source: string; data: unknown }>(`/us/financials/${sym}`)
+    .then((r) => r.data);
+
+export const fetchOptions = (sym: string, expiry?: string) =>
+  api.get<OptionRow[]>(`/us/options/${sym}${expiry ? `?expiration_date=${expiry}` : ""}`)
+    .then((r) => r.data);
+
+export const fetchInstitutional = (sym: string) =>
+  api.get<InstitutionalRow[]>(`/tw/institutional/${sym}?days=60`).then((r) => r.data);
+
+export const fetchMargin = (sym: string) =>
+  api.get<MarginRow[]>(`/tw/margin/${sym}?days=60`).then((r) => r.data);
+
+export const fetchRevenue = (sym: string) =>
+  api.get<RevenueRow[]>(`/tw/revenue/${sym}?months=24`).then((r) => r.data);
+
+export const fetchHealth = (sym: string) =>
+  api.get<HealthResponse>(`/tw/health/${sym}?periods=8`).then((r) => r.data);
+
+export const fetchValuationBand = (sym: string, metric: "pe" | "pb") =>
+  api.get<ValuationBandResponse>(`/tw/valuation-band/${sym}?metric=${metric}&years=5`)
+    .then((r) => r.data);
+
+export const fetchDividends = (sym: string) =>
+  api.get<DividendRow[]>(`/tw/dividends/${sym}`).then((r) => r.data);
+
+export const fetchETFHoldings = (sym: string) =>
+  api.get<ETFHoldingsResponse>(`/tw/etf/${sym}/holdings`).then((r) => r.data);
+
+export const fetchEarnings = (sym: string) =>
+  api.get<{ earnings_date: string | null; eps_estimate: number | null; revenue_estimate: number | null }>(
+    `/us/earnings/${sym}`
+  ).then((r) => r.data);

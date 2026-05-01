@@ -7,7 +7,12 @@ export function AddTransactionForm({ portfolioId, onClose }: { portfolioId: stri
   const { t } = useTranslation();
   const add = useAddTransaction(portfolioId);
   const [form, setForm] = useState({
-    symbol: "", market: "US", tx_type: "buy",
+    // No market default — picking the wrong market silently flips the
+    // holding's `cost_currency` (TW→TWD vs US/Crypto→USD), which then
+    // skips FX conversion on every detail-page load. Visible regression:
+    // "I bought 00878 at 23.5 NTD but the page shows it as $23.5 USD."
+    // Force a deliberate choice; submit stays disabled until set.
+    symbol: "", market: "", tx_type: "buy",
     quantity: "", price: "", fx_rate: "",
     tx_date: new Date().toISOString().slice(0, 10), notes: "",
   });
@@ -30,6 +35,7 @@ export function AddTransactionForm({ portfolioId, onClose }: { portfolioId: stri
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (!form.market) return;
     // Empty string → send null so the backend auto-stamps the historical
     // rate. Sending 0 or NaN would be rejected by Pydantic.
     const fx = form.fx_rate.trim() === "" ? null : parseFloat(form.fx_rate);
@@ -56,7 +62,8 @@ export function AddTransactionForm({ portfolioId, onClose }: { portfolioId: stri
         <div className="grid grid-cols-2 gap-3">
           <div><label className={label}>{t("alerts.symbol")}</label><input required className={input} value={form.symbol} onChange={set("symbol")} placeholder="AAPL / 2330" /></div>
           <div><label className={label}>{t("alerts.market")}</label>
-            <select className={input} value={form.market} onChange={set("market")}>
+            <select required className={input} value={form.market} onChange={set("market")}>
+              <option value="" disabled>{t("portfolio.transactions.market_pick")}</option>
               <option value="US">US</option><option value="TW">TW</option><option value="CRYPTO">CRYPTO</option>
             </select>
           </div>
@@ -73,7 +80,7 @@ export function AddTransactionForm({ portfolioId, onClose }: { portfolioId: stri
         </div>
         <div className="flex gap-3 justify-end">
           <button type="button" onClick={onClose} className="px-4 py-1.5 text-sm text-muted-foreground hover:text-foreground">{t("common.cancel")}</button>
-          <button type="submit" disabled={add.isPending} className="px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:opacity-90 disabled:opacity-50">
+          <button type="submit" disabled={add.isPending || !form.market} className="px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:opacity-90 disabled:opacity-50">
             {add.isPending ? t("common.saving") : t("common.add")}
           </button>
         </div>

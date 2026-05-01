@@ -271,6 +271,7 @@
       "title": "Transactions",
       "add": "Add Transaction",
       "edit": "Edit Transaction",
+      "market_pick": "Pick a market",
       "type": "Type",
       "buy": "Buy",
       "sell": "Sell",

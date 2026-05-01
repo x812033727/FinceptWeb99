@@ -142,6 +142,7 @@ def _to_response(d: Discussion) -> DiscussionResponse:
         auto_run=d.auto_run,
         day1_open_prices=d.day1_open_prices,
         day5_close_prices=d.day5_close_prices,
+        daily_close_prices=d.daily_close_prices,
         created_at=d.created_at,
         updated_at=d.updated_at,
     )

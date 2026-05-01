@@ -47,6 +47,10 @@ interface Discussion {
   auto_run?: boolean;
   day1_open_prices?: Record<string, number> | null;
   day5_close_prices?: Record<string, number> | null;
+  // PR #140 scoreboard column. Latest non-null entry feeds the
+  // sidebar title's close slot so partial-window discussions
+  // (D1-D2 only) update immediately instead of waiting for D5.
+  daily_close_prices?: Record<string, (number | null)[]> | null;
   created_at: string;
   updated_at: string;
 }
@@ -359,6 +363,15 @@ function _signedPct(n: number): string {
   return `${sign}${(n * 100).toFixed(1)}%`;
 }
 
+function _latestNonNull(arr: (number | null)[] | undefined | null): number | null {
+  if (!arr) return null;
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const v = arr[i];
+    if (v != null) return v;
+  }
+  return null;
+}
+
 function formatDiscussionTitle(s: {
   topic: string;
   conclusion: Conclusion | null;
@@ -366,6 +379,7 @@ function formatDiscussionTitle(s: {
   created_at: string;
   day1_open_prices?: Record<string, number> | null;
   day5_close_prices?: Record<string, number> | null;
+  daily_close_prices?: Record<string, (number | null)[]> | null;
 }): FormattedTitle {
   const syms = s.conclusion?.recommended_symbols ?? [];
   if (!syms.length) {
@@ -382,10 +396,18 @@ function formatDiscussionTitle(s: {
   else if (s.verdict === "unverifiable") { verdictCls = "text-muted-foreground"; }
 
   const opens = s.day1_open_prices ?? {};
-  const closes = s.day5_close_prices ?? {};
+  const closes_legacy = s.day5_close_prices ?? {};
+  // Scoreboard column wins when present — its latest non-null entry
+  // is always at least as fresh as `day5_close_prices` and resolves
+  // partial windows (D1-D2 only) that the verifier would otherwise
+  // leave blank until D5 lands. Legacy fallback covers old auto-run
+  // rows the scoreboard cron hasn't touched yet.
+  const closes_daily = s.daily_close_prices ?? {};
   const lines: FormattedSymbolLine[] = syms.slice(0, 3).map((sym) => {
     const open = sym in opens ? opens[sym] : null;
-    const close = sym in closes ? closes[sym] : null;
+    const close =
+      _latestNonNull(closes_daily[sym]) ??
+      (sym in closes_legacy ? closes_legacy[sym] : null);
     const gainPct =
       open !== null && open > 0 && close !== null
         ? (close - open) / open

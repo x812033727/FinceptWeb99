@@ -57,6 +57,12 @@ class DiscussionResponse(BaseModel):
     # window closes.
     day1_open_prices: dict[str, float] | None = None
     day5_close_prices: dict[str, float] | None = None
+    # Per-day closes from the scoreboard cron (PR #140). Shape:
+    # `{symbol: [d1, d2, d3, d4, d5]}` with NULL slots for unresolved
+    # days. Surfaced so the sidebar title can render the latest
+    # non-null close even before D5 lands, instead of showing `—/—`
+    # until the full window completes.
+    daily_close_prices: dict[str, list[float | None]] | None = None
     created_at: datetime
     updated_at: datetime
 

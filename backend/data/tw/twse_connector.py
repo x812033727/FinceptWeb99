@@ -18,6 +18,14 @@ logger = logging.getLogger(__name__)
 
 _BASE = "https://openapi.twse.com.tw/v1"
 _TPEX_BASE = "https://www.tpex.org.tw/openapi/v1"
+# TWSE retired the OpenAPI surface for `/fund/T86` (institutional buy/sell)
+# around 2026-04. It now 302s to /404.html. The legacy site at
+# `www.twse.com.tw` still serves the same data with a different envelope
+# (`{stat, fields, data}` rather than a flat array of dicts) — we point
+# institutional fetches there and unwrap the table on the way in. Keep
+# this as a separate constant so the next OpenAPI endpoint that gets
+# retired can opt-in by swapping its base.
+_LEGACY_BASE = "https://www.twse.com.tw"
 
 # Global token bucket (Redis): ~0.91 tokens/sec, capacity 1.
 _BUCKET_KEY = "ratelimit:twse"
@@ -200,21 +208,51 @@ async def get_realtime_quote(symbol: str) -> dict[str, Any] | None:
 
 # ── Institutional investors (法人買賣超) ──────────────────────────
 
+def _unwrap_legacy_table(payload: Any) -> list[dict[str, Any]]:
+    """The legacy `www.twse.com.tw` endpoints return a `{stat, fields,
+    data}` envelope where `data` is a list of positional rows. Convert
+    to the flat list-of-dicts shape the OpenAPI variant used so the
+    rest of the connector pipeline doesn't need to know which surface
+    it came from. Returns `[]` on weekends / holidays / failed queries
+    (`stat != "OK"` or fields/data missing)."""
+    if not isinstance(payload, dict):
+        return []
+    if payload.get("stat") != "OK":
+        return []
+    fields = payload.get("fields") or []
+    data = payload.get("data") or []
+    if not isinstance(fields, list) or not isinstance(data, list):
+        return []
+    return [
+        {fields[i]: row[i] for i in range(min(len(fields), len(row)))}
+        for row in data
+        if isinstance(row, list)
+    ]
+
+
 async def get_institutional(query_date: date | None = None) -> list[dict[str, Any]]:
     """
     All stocks' institutional buy/sell for one date.
-    Endpoint: /fund/T86
+
+    TWSE retired the OpenAPI variant (`/v1/fund/T86`) around 2026-04 —
+    it now 302s to /404.html. We hit the legacy site instead, which
+    still serves the same dataset behind a `{stat, fields, data}`
+    table envelope (unwrapped via :func:`_unwrap_legacy_table`).
     """
-    data = await _get(
-        f"{_BASE}/fund/T86",
+    raw = await _get(
+        f"{_LEGACY_BASE}/fund/T86",
         params={"response": "json", "date": _twse_date(query_date), "selectType": "ALLBUT0999"},
     )
-    rows = data if isinstance(data, list) else []
+    rows = _unwrap_legacy_table(raw)
+    # Defensive backwards-compatibility: if a future caller sends us
+    # back a plain list of dicts (e.g. an OpenAPI revival), accept it.
+    if not rows and isinstance(raw, list):
+        rows = raw
     result = []
     for r in rows:
         result.append({
-            "symbol":       r.get("證券代號", "").strip(),
-            "name_zh":      r.get("證券名稱", "").strip(),
+            "symbol":       (r.get("證券代號") or "").strip(),
+            "name_zh":      (r.get("證券名稱") or "").strip(),
             "fini_buy":     _tw_int(r.get("外陸資買進股數(不含外資自營商)")),
             "fini_sell":    _tw_int(r.get("外陸資賣出股數(不含外資自營商)")),
             "sitc_buy":     _tw_int(r.get("投信買進股數")),

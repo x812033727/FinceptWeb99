@@ -212,7 +212,73 @@ async def test_get_realtime_quote_returns_none_on_non_list_payload():
 # ── Institutional / margin ────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_get_institutional_parses_chinese_field_names():
+async def test_get_institutional_parses_legacy_envelope():
+    """The legacy `www.twse.com.tw/fund/T86` endpoint returns
+    `{stat, fields, data}` with positional rows. Connector must unwrap
+    via `_unwrap_legacy_table` and produce the canonical output shape."""
+    payload = {
+        "stat": "OK",
+        "date": "20260430",
+        "fields": [
+            "證券代號", "證券名稱",
+            "外陸資買進股數(不含外資自營商)", "外陸資賣出股數(不含外資自營商)",
+            "外陸資買賣超股數(不含外資自營商)",
+            "外資自營商買進股數", "外資自營商賣出股數", "外資自營商買賣超股數",
+            "投信買進股數", "投信賣出股數", "投信買賣超股數",
+            "自營商買賣超股數",
+            "自營商買進股數(自行買賣)", "自營商賣出股數(自行買賣)", "自營商買賣超股數(自行買賣)",
+            "自營商買進股數(避險)", "自營商賣出股數(避險)", "自營商買賣超股數(避險)",
+            "三大法人買賣超股數",
+        ],
+        "data": [
+            [
+                "2330", "台積電",
+                "1,000,000", "500,000", "500,000",
+                "0", "0", "0",
+                "200,000", "100,000", "100,000",
+                "30,000",
+                "50,000", "20,000", "30,000",
+                "0", "0", "0",
+                "630,000",
+            ],
+        ],
+    }
+    patcher, _ = install_get(payload)
+    with patcher:
+        rows = await twse.get_institutional()
+
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["symbol"] == "2330"
+    assert r["name_zh"] == "台積電"
+    assert r["fini_buy"] == 1_000_000
+    assert r["fini_sell"] == 500_000
+    assert r["sitc_buy"] == 200_000
+    assert r["sitc_sell"] == 100_000
+    assert r["dealer_buy"] == 50_000
+    assert r["dealer_sell"] == 20_000
+
+
+@pytest.mark.asyncio
+async def test_get_institutional_returns_empty_on_holiday():
+    """Weekend / holiday queries come back as `stat != "OK"` (e.g.
+    "很抱歉，沒有符合條件的資料!"). Must yield [] instead of raising
+    so the cron records ok=true row_count=0 and doesn't arm backoff."""
+    payload = {
+        "stat": "很抱歉，沒有符合條件的資料!",
+        "date": "20260503",  # Sunday
+    }
+    patcher, _ = install_get(payload)
+    with patcher:
+        rows = await twse.get_institutional()
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_get_institutional_accepts_legacy_dict_array_passthrough():
+    """Defensive backwards compat: if a future TWSE rev returns a
+    plain list of dicts again, the parser still handles it (mirrors
+    the pre-2026-04 OpenAPI shape)."""
     payload = [
         {
             "證券代號": "2330", "證券名稱": "台積電",
@@ -227,12 +293,23 @@ async def test_get_institutional_parses_chinese_field_names():
         rows = await twse.get_institutional()
 
     assert len(rows) == 1
-    r = rows[0]
-    assert r["symbol"] == "2330"
-    assert r["fini_buy"] == 1_000_000
-    assert r["fini_sell"] == 500_000
-    assert r["sitc_buy"] == 200_000
-    assert r["dealer_buy"] == 50_000
+    assert rows[0]["fini_buy"] == 1_000_000
+
+
+def test_unwrap_legacy_table_handles_malformed_payloads():
+    """Defensive parsing: every shape the legacy site can plausibly
+    return must produce [] rather than raise."""
+    assert twse._unwrap_legacy_table(None) == []
+    assert twse._unwrap_legacy_table([1, 2, 3]) == []
+    assert twse._unwrap_legacy_table({}) == []
+    assert twse._unwrap_legacy_table({"stat": "OK"}) == []
+    assert twse._unwrap_legacy_table({"stat": "OK", "fields": "bad", "data": []}) == []
+    # short row vs long fields — pair what we can, drop the tail
+    assert twse._unwrap_legacy_table({
+        "stat": "OK",
+        "fields": ["a", "b", "c"],
+        "data": [["1", "2"]],
+    }) == [{"a": "1", "b": "2"}]
 
 
 @pytest.mark.asyncio

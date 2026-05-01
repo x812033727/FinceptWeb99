@@ -60,7 +60,7 @@ async def get_history(
     symbol: str, interval: str = "1d", limit: int = 365,
 ) -> list[dict[str, Any]]:
     sym = symbol.upper()
-    key = key_history("crypto", sym, interval)
+    key = key_history("crypto", sym, interval, range_token=str(limit))
     cached = await cache_get(key)
     if cached:
         return json.loads(cached)

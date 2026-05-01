@@ -549,7 +549,7 @@ async def get_history(symbol: str, months: int = 12) -> list[dict[str, Any]]:
         upsert_ohlcv_bars_autosession,
     )
 
-    key = key_history("tw", symbol, "1d")
+    key = key_history("tw", symbol, "1d", range_token=f"{months}mo")
     cached = await cache_get(key)
     if cached:
         return json.loads(cached)

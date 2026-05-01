@@ -158,8 +158,15 @@ async def ping() -> bool:
 def key_quote(market: str, symbol: str) -> str:
     return f"{market}:quote:{symbol}:realtime"
 
-def key_history(market: str, symbol: str, interval: str) -> str:
-    return f"{market}:history:{symbol}:{interval}"
+def key_history(market: str, symbol: str, interval: str, range_token: str = "") -> str:
+    """`range_token` distinguishes requests that share an `interval` but
+    cover different ranges (e.g. US `3mo` and `1y` both use `interval=1d`,
+    TW `1mo / 3mo / 1y / 5y` all use the daily archive). Without it, the
+    cache for one range serves the wrong data to the next range. Default
+    empty string preserves the previous key shape for callers that pass
+    a unique interval per range (e.g. crypto)."""
+    suffix = f":{range_token}" if range_token else ""
+    return f"{market}:history:{symbol}:{interval}{suffix}"
 
 def key_fundamentals(market: str, symbol: str) -> str:
     return f"{market}:fundamentals:{symbol}:snapshot"

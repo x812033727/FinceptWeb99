@@ -187,7 +187,7 @@ def _normalize_quote(ticker: str, raw: dict) -> dict[str, Any]:
 # ── History ───────────────────────────────────────────────────────
 
 async def get_history(ticker: str, period: str = "1y", interval: str = "1d") -> list[dict[str, Any]]:
-    key = key_history("us", ticker, interval)
+    key = key_history("us", ticker, interval, range_token=period)
     cached = await cache_get(key)
     if cached:
         return json.loads(cached)

@@ -1,68 +1,16 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useAuthStore } from "@/store/authStore";
 import { useCheckForUpdates, useTriggerUpdate, useVersion } from "@/hooks/useVersion";
 import api from "@/lib/api";
+import { CollapsibleHeader, useCollapsible } from "@/components/Collapsible";
 
-// Per-card collapse state, persisted to localStorage so admins keep
-// their layout preference across reloads / new tabs. Each card calls
-// `useCollapsible("admin.<id>")` and threads the resulting toggle
-// into a `<CollapsibleHeader>` at the top of its body — clicking
-// the header chevron flips open/closed and saves the new state.
-function useCollapsible(storageKey: string, defaultOpen = true) {
-  const [open, setOpen] = useState<boolean>(() => {
-    try {
-      const raw = localStorage.getItem(storageKey);
-      if (raw === "0") return false;
-      if (raw === "1") return true;
-    } catch {
-      /* private mode / quota — fall through to default */
-    }
-    return defaultOpen;
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem(storageKey, open ? "1" : "0");
-    } catch {
-      /* see above */
-    }
-  }, [storageKey, open]);
-  return { open, toggle: () => setOpen((v) => !v) };
-}
-
-function CollapsibleHeader({
-  open, toggle, title, subtitle, headerRight,
-}: {
-  open: boolean;
-  toggle: () => void;
-  title: ReactNode;
-  subtitle?: ReactNode;
-  headerRight?: ReactNode;
-}) {
-  return (
-    <div className="flex items-start gap-2">
-      <button
-        type="button"
-        onClick={toggle}
-        aria-expanded={open}
-        className="flex-1 flex items-start gap-2 text-left hover:opacity-80 transition-opacity"
-      >
-        <span className="text-[10px] text-muted-foreground w-3 inline-block pt-1">
-          {open ? "▼" : "▶"}
-        </span>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium">{title}</p>
-          {subtitle && (
-            <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>
-          )}
-        </div>
-      </button>
-      {headerRight && <div className="shrink-0">{headerRight}</div>}
-    </div>
-  );
-}
+// `useCollapsible` + `CollapsibleHeader` moved to
+// `@/components/Collapsible` so DiscussionPage / StockDetailPage /
+// PortfolioPage's future card extractions can reuse the localStorage-
+// persisted toggle without copy-paste.
 
 interface AdminUser {
   id: string;

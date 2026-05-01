@@ -189,6 +189,37 @@ async def test_paywall_response_is_marked_skipped(patch_session):
 
 
 @pytest.mark.asyncio
+async def test_http_422_is_marked_skipped(patch_session):
+    """FinMind v4 doesn't expose `TaiwanStockBuyBack` — every call
+    returns 422. Treat as a known-permanent state so manual retries
+    via the admin button don't keep arming auto-backoff."""
+    from tasks import ingest_buyback_tw
+
+    record_failure_mock = AsyncMock()
+    clear_failures_mock = AsyncMock()
+    health_mock = AsyncMock()
+    with patch("tasks.ingest_buyback_tw.acquire_lock",
+               AsyncMock(return_value=True)), \
+         patch("tasks.ingest_buyback_tw.release_lock", AsyncMock()), \
+         patch("tasks.ingest_buyback_tw.backoff_remaining_seconds",
+               AsyncMock(return_value=0)), \
+         patch("tasks.ingest_buyback_tw.record_failure", record_failure_mock), \
+         patch("tasks.ingest_buyback_tw.clear_failures", clear_failures_mock), \
+         patch("tasks.ingest_buyback_tw.record_health", health_mock), \
+         patch("tasks.ingest_buyback_tw.finmind.get_buyback_market_wide",
+               AsyncMock(side_effect=_http_status_error(422, "dataset_id is invalid"))):
+        await ingest_buyback_tw.run()
+
+    record_failure_mock.assert_not_called()
+    clear_failures_mock.assert_awaited_once()
+    kwargs = health_mock.await_args.kwargs
+    assert kwargs["ok"] is False
+    assert "skipped" in kwargs["error"].lower()
+    assert "422" in kwargs["error"]
+    assert "auto-backoff armed" not in kwargs["error"]
+
+
+@pytest.mark.asyncio
 async def test_genuine_outage_arms_backoff(patch_session):
     from tasks import ingest_buyback_tw
     record_failure_mock = AsyncMock(return_value=1)

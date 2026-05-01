@@ -157,6 +157,29 @@ async def run() -> None:
                     ),
                 )
                 return
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 422:
+                # FinMind v4 doesn't expose a `TaiwanStockBuyBack` dataset —
+                # every call returns 422 Unprocessable Entity. Treat as a
+                # known-permanent state (same as paywall) so manual retries
+                # via the admin button don't keep arming auto-backoff.
+                # If FinMind ever adds the dataset this branch will stop
+                # firing on its own.
+                await clear_failures(JOB_ID)
+                log.info(
+                    "ingest_buyback_tw.dataset_missing",
+                    extra={"upstream_message": body_msg},
+                )
+                await record_health(
+                    JOB_ID, ok=False, row_count=0,
+                    error=(
+                        "skipped: FinMind v4 has no TaiwanStockBuyBack "
+                        "dataset (HTTP 422). Cron is intentionally "
+                        "unscheduled; revive in scheduler.py once FinMind "
+                        "publishes the dataset."
+                        + (f" Upstream message: {body_msg}" if body_msg else "")
+                    ),
+                )
+                return
             detail = _format_error(exc)
             failures = await record_failure(JOB_ID)
             log.warning(

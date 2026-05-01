@@ -88,24 +88,36 @@ FinceptWeb/
 │   │                     #   UserLLMProviderKey, PersonaOverride, LLMUsageEvent,
 │   │                     #   MarketProviderKey, OhlcvDaily, QuoteSnapshot,
 │   │                     #   FundamentalsSnapshot, NewsArticle, Discussion,
-│   │                     #   DiscussionTurn, SystemTaskConfig
+│   │                     #   DiscussionTurn, DiscussionAutoRunConfig,
+│   │                     #   DiscussionRoundContext, SystemTaskConfig,
+│   │                     #   RuntimeSetting, TwInstitutionalDaily,
+│   │                     #   TwMarginDaily, TwRevenueMonthly
 │   ├── services/         # Business logic (cached, waterfall)
 │   │   ├── alert_service.py             # Price alert CRUD + check_and_fire
 │   │   ├── analytics_service.py         # DCF/VaR/backtest orchestration (ProcessPool)
 │   │   ├── crypto_market_service.py     # Kraken quote/history/screener (24/7)
+│   │   ├── discussion_auto_run_config_service.py # Per-user opt-in for daily auto-run
+│   │   ├── discussion_scoreboard_service.py # D1-D5 close array per recommended symbol
 │   │   ├── discussion_service.py        # Round-table orchestrator: gather context,
 │   │   │                                #   run_round (SSE), synthesize_conclusion,
 │   │   │                                #   batch persona resolution, try/finally state
 │   │   ├── llm_key_service.py           # DB-first LLM provider key mgmt (Fernet at rest)
+│   │   ├── llm_parsing_utils.py         # Shared LLM-output JSON parser (// 註解,
+│   │   │                                #   trailing comma, full-width brace, <think>);
+│   │   │                                #   used by synthesizer + sentiment scorer
 │   │   ├── llm_usage_service.py         # Token + cost tracking (RATE_TABLE)
+│   │   ├── market_key_service.py        # DB-first market provider key (FRED, FinMind,
+│   │   │                                #   Polygon, Finnhub) + admin Test button
 │   │   ├── news_sentiment_service.py    # Hourly batch scoring + market/per-symbol
 │   │   │                                #   sentiment aggregators (used by discussion ctx)
 │   │   ├── notification_service.py      # Decoupled push dispatcher (WS-registered)
 │   │   ├── persona_override_service.py  # Per-persona LLM provider/model overrides
 │   │   ├── portfolio_service.py         # CRUD, P&L, multi-currency FX cache, optimiser
+│   │   ├── runtime_config_service.py    # Hot-reloadable settings (RuntimeTunablesCard)
 │   │   ├── system_task_config_service.py # Admin LLM routing for background tasks
 │   │   │                                #   (news_sentiment, discussion_synthesizer)
 │   │   ├── tw_market_service.py         # TW: TWSE → FinMind → MOPS; don't-cache-empty
+│   │   ├── tw_trading_calendar.py       # TW market-hours / business-day helpers
 │   │   ├── us_market_service.py         # US: Polygon → yfinance → Stooq → Finnhub waterfall
 │   │   ├── version_service.py           # GitHub release polling + admin-triggered update
 │   │   └── watchlist_service.py         # CRUD + live quote enrichment
@@ -114,7 +126,7 @@ FinceptWeb/
 │   │                     #   Google News RSS zh-TW since PR #128),
 │   │                     #   score_news_sentiment (every 30 min, fail-closed cap)
 │   ├── tests/            # pytest — in-memory SQLite + AsyncMock Redis
-│   │                     # 74 files, 1082 tests. Categories:
+│   │                     # 88 files, 1227 tests. Categories:
 │   │                     #   API HTTP   : test_*_api.py        (admin, auth, alerts,
 │   │                     #                                      analytics, discussion,
 │   │                     #                                      portfolio, tw_market 42,

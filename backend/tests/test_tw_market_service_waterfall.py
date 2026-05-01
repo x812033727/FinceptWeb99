@@ -443,3 +443,64 @@ async def test_get_fundamentals_caches_when_ratios_present():
 
     assert out["pe_ratio"] == 21.0
     cache_set.assert_called_once()
+
+
+# ── DB snapshot tier sanity ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_db_snapshot_tier_drops_stale_implausible_change_pct():
+    """Regression: rows in `quote_snapshots` written before the sanity
+    bound (PR #142) carry +992% / +996% values from when the upstream
+    bug was firing. The DB-tier fallback used to read those rows
+    verbatim and serve the junk back to the UI whenever upstream
+    was briefly unreachable. Now the snapshot's stored `change_pct`
+    is re-sanitised — implausible values become None."""
+    bad_snap = {
+        "price": 347.5,
+        "volume": 24_628_405,
+        "prev_close": None,
+        "data_source": "twse",
+        "change_pct": 996.84,   # legacy junk
+    }
+    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc.twse, "get_realtime_quote",
+                      new=AsyncMock(return_value=None)), \
+         patch.object(svc.finmind, "get_daily_ohlcv",
+                      new=AsyncMock(return_value=[])), \
+         patch(
+             "services.ingest.repository.read_latest_quote_autosession",
+             new=AsyncMock(return_value=bad_snap),
+         ):
+        out = await svc.get_quote("2455")
+
+    assert out["price"] == 347.5
+    # Implausible stored value MUST get filtered to None.
+    assert out["change_pct"] is None
+
+
+@pytest.mark.asyncio
+async def test_db_snapshot_tier_keeps_plausible_change_pct():
+    """Don't be over-zealous — a stored ±5% snapshot value (a real
+    move from before upstream went out) should still come through."""
+    good_snap = {
+        "price": 100.0,
+        "volume": 12_000,
+        "prev_close": 95.24,
+        "data_source": "twse",
+        "change_pct": 5.0,
+    }
+    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc.twse, "get_realtime_quote",
+                      new=AsyncMock(return_value=None)), \
+         patch.object(svc.finmind, "get_daily_ohlcv",
+                      new=AsyncMock(return_value=[])), \
+         patch(
+             "services.ingest.repository.read_latest_quote_autosession",
+             new=AsyncMock(return_value=good_snap),
+         ):
+        out = await svc.get_quote("2330")
+
+    assert out["change_pct"] == 5.0

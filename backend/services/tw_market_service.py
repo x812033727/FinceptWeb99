@@ -248,7 +248,15 @@ async def get_quote(symbol: str, *, bypass_cache: bool = False) -> dict[str, Any
                 "prev_close": snap.get("prev_close"),
             })
             result["data_source"] = snap.get("data_source") or "db"
-            result["change_pct"] = snap.get("change_pct")
+            # Re-validate the snapshot's stored change_pct: rows
+            # written before the sanity bound landed (PR #142) carry
+            # the +992% / +996% junk values that motivated the bound
+            # in the first place. Without this re-check the snapshot
+            # tier silently leaks them back to the UI whenever upstream
+            # is briefly unreachable.
+            result["change_pct"] = _sanitize_change_pct(
+                symbol, snap.get("change_pct"),
+            )
             log.info("tw.quote.served_db_snapshot", extra={"symbol": symbol})
             return result
 
@@ -259,6 +267,32 @@ async def get_quote(symbol: str, *, bypass_cache: bool = False) -> dict[str, Any
     if result.get("price"):
         await cache_set(key, json.dumps(result), TTL_QUOTE)
     return result
+
+
+# Single source of truth for the daily-move sanity bound. TW stocks
+# have a ±10% legal limit; resumed-trading after halt + IPO day can
+# exceed that, but nothing legal breaks ±30%. Anything beyond is
+# upstream junk (observed on KY-listed stocks where TWSE puts the
+# prior-day close in the `Change` field; FinMind fallbacks where
+# split-adjusted historicals mismatch with current un-adjusted; and
+# stale `quote_snapshots` rows written before this guard was added).
+# Returns None when `chg_pct` is implausible so callers replace the
+# value with NULL rather than render +992% headlines.
+_DAILY_MOVE_MAX_PCT = 30.0
+
+
+def _sanitize_change_pct(
+    symbol: str, chg_pct: float | None,
+) -> float | None:
+    if chg_pct is None:
+        return None
+    if abs(chg_pct) > _DAILY_MOVE_MAX_PCT:
+        log.warning(
+            "tw.quote.change_pct_out_of_bounds",
+            extra={"symbol": symbol, "change_pct": chg_pct},
+        )
+        return None
+    return chg_pct
 
 
 def _normalize_quote(symbol: str, raw: dict) -> dict[str, Any]:
@@ -273,25 +307,12 @@ def _normalize_quote(symbol: str, raw: dict) -> dict[str, Any]:
     if chg is not None and not prev and close:
         prev = close - chg
     chg_pct = round(chg / prev * 100, 4) if (chg is not None and prev) else None
-    # Sanity bound. TW stocks have ±10% daily limit-up/down. Resumed
-    # trading after a halt or first-day-of-IPO can exceed that, but
-    # nothing legal exceeds ±30% in a single day. When the computed
-    # pct is wildly outside that range, the upstream is reporting
-    # something other than today's delta — observed on KY-listed
-    # stocks where TWSE returns yesterday's close in the `Change`
-    # field, and on FinMind fallbacks where split-adjusted historicals
-    # mismatch with current un-adjusted prices. Drop the bad values
-    # rather than display a +992% headline.
-    if chg_pct is not None and abs(chg_pct) > 30:
-        log.warning(
-            "tw.quote.change_pct_out_of_bounds",
-            extra={
-                "symbol": symbol, "close": close,
-                "change": chg, "change_pct": chg_pct,
-            },
-        )
+    chg_pct = _sanitize_change_pct(symbol, chg_pct)
+    if chg_pct is None:
+        # Drop the raw delta too — keeping `change` populated while
+        # `change_pct` is None would let the screener render an
+        # un-percentaged delta that doesn't match the rest of the row.
         chg = None
-        chg_pct = None
     return {
         "symbol":        symbol,
         "market":        "TW",
@@ -1020,13 +1041,13 @@ async def get_screener(
         change_pct = round(change / (price - change) * 100, 4) if (
             change is not None and price is not None and (price - change)
         ) else None
-        # Same sanity bound as `_normalize_quote` — see that function's
-        # docstring for context. Keeps the screener from surfacing
-        # impossible moves like +992% when an upstream row's `Change`
-        # field carries the wrong semantics for KY-listed companies.
-        if change_pct is not None and abs(change_pct) > 30:
+        # Reuse the shared sanity bound (`_sanitize_change_pct`). Drop
+        # both `change` and `change_pct` together so the rendered row
+        # stays consistent rather than showing a raw delta with no %.
+        sanitized = _sanitize_change_pct(code, change_pct)
+        if sanitized is None and change_pct is not None:
             change = None
-            change_pct = None
+        change_pct = sanitized
 
         result.append({
             "symbol":         code,

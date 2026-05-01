@@ -1,186 +1,226 @@
+"""Unit tests for `data.tw.mops_connector.get_monthly_revenue_recent`.
+
+The connector hits the new MOPS SPA backend at
+`mops.interinfo.com.tw:8443/mops/api/t05st10_ifrs`. We mock httpx
+at the connector's import-site so no network is touched and pin both
+the canonical happy-path shape and every defensive branch (HTTP
+errors, MOPS `code != 200`, nested `result.data` vs flat list,
+ROC-vs-CE year handling, comma-separated revenue strings, missing /
+malformed dates).
 """
-Unit tests for data.tw.mops_connector.
+from __future__ import annotations
 
-MOPS is the third tier of the TW monthly-revenue waterfall (TWSE →
-FinMind → MOPS). It scrapes HTML rather than calling a JSON API, so
-the test surface centres on:
+from unittest.mock import AsyncMock, MagicMock, patch
 
-  - The CE→ROC year conversion baked into the POST payload
-    (year - 1911) and the zero-padded month string.
-  - HTML table parsing — `<table class="hasBorder">` gone missing
-    (page layout change), rows shorter than 3 cells, and the comma-
-    separated revenue numbers MOPS returns.
-
-httpx.AsyncClient is mocked at the module's import-site so no network
-is hit and we can shape the HTML body per-test.
-"""
-from unittest.mock import patch
-
+import httpx
 import pytest
 
 import data.tw.mops_connector as mops
 
 
-# ── Test doubles ──────────────────────────────────────────────────
+# ── helpers ───────────────────────────────────────────────────────
 
-class FakeResponse:
-    def __init__(self, text: str, status_code: int = 200):
-        self.text = text
-        self.status_code = status_code
+def _mock_post(json_body: dict | None = None, *, status_code: int = 200,
+               raise_exc: BaseException | None = None):
+    """Patch `httpx.AsyncClient` at the connector's import-site.
+    Returns a context manager that, when entered, makes
+    `AsyncClient().post(...)` produce the configured response (or raise
+    `raise_exc` instead of returning)."""
+    response = MagicMock()
+    response.status_code = status_code
+    response.json = MagicMock(return_value=json_body or {})
 
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            raise Exception(f"HTTP {self.status_code}")
+    if raise_exc is not None:
+        post = AsyncMock(side_effect=raise_exc)
+    else:
+        post = AsyncMock(return_value=response)
 
-
-class FakeClient:
-    def __init__(self, response):
-        self.response = response
-        self.posts: list[tuple[str, dict, dict]] = []
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_):
-        return None
-
-    async def post(self, url, data=None, headers=None):
-        self.posts.append((url, data or {}, headers or {}))
-        return self.response
+    fake_client = MagicMock()
+    fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+    fake_client.__aexit__ = AsyncMock(return_value=False)
+    fake_client.post = post
+    return patch.object(mops.httpx, "AsyncClient", lambda **_: fake_client), post
 
 
-def install_client(response):
-    fake = FakeClient(response)
-    return patch.object(mops.httpx, "AsyncClient", lambda **_: fake), fake
-
-
-# ── Helpers for HTML payloads ────────────────────────────────────
-
-def html_with_revenue_rows(*revenues: str) -> str:
-    """Build a minimal MOPS-shaped page with a `<table class="hasBorder">`
-    containing one data row per revenue value (column 2 is the revenue
-    field per the connector's hard-coded `cells[2]` index)."""
-    body_rows = "".join(
-        f"<tr><td>2024/04</td><td>foo</td><td>{rev}</td><td>x</td></tr>"
-        for rev in revenues
-    )
-    return (
-        "<html><body>"
-        "<table class=\"hasBorder\">"
-        "<tr><th>月份</th><th>產業</th><th>營收</th><th>備註</th></tr>"
-        f"{body_rows}"
-        "</table></body></html>"
-    )
-
-
-# ── Payload wiring ───────────────────────────────────────────────
+# ── happy path ────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_get_monthly_revenue_converts_ce_year_to_roc_in_payload():
-    """CE year 2024 → ROC 113 in the POST form data; month is the
-    zero-padded two-digit string."""
-    patcher, fake = install_client(FakeResponse(html_with_revenue_rows("0")))
+async def test_parses_canonical_payload_with_english_keys():
+    """The cleanest shape the SPA backend returns: `result.data` is a
+    list of dicts with English keys + ROC year."""
+    payload = {
+        "code": 200,
+        "message": "ok",
+        "result": {
+            "data": [
+                {"year": "114", "month": "04", "revenue": "1,234,567",
+                 "revenueYoy": "12.5", "revenueMom": "-3.2"},
+                {"year": "114", "month": "03", "revenue": "1,100,000",
+                 "revenueYoy": "8.0", "revenueMom": "1.1"},
+            ],
+        },
+    }
+    patcher, _ = _mock_post(payload)
     with patcher:
-        await mops.get_monthly_revenue("2330", 2024, 4)
+        rows = await mops.get_monthly_revenue_recent("2330")
 
-    _, data, _ = fake.posts[0]
-    assert data["year"] == "113"
-    assert data["month"] == "04"
-    assert data["co_id"] == "2330"
+    assert len(rows) == 2
+    assert rows[0]["symbol"] == "2330"
+    # ROC 114 → CE 2025
+    assert rows[0]["date"] == "2025-04-01"
+    assert rows[0]["revenue"] == 1_234_567
+    assert rows[0]["revenue_yoy"] == 12.5
+    assert rows[0]["revenue_mom"] == -3.2
 
 
 @pytest.mark.asyncio
-async def test_get_monthly_revenue_zero_pads_single_digit_month():
-    """Months 1-9 must come back as `01`-`09`."""
-    patcher, fake = install_client(FakeResponse(html_with_revenue_rows("0")))
+async def test_accepts_flat_result_list_shape():
+    """Some report variants put rows directly under `result` instead
+    of `result.data`. Connector tolerates both."""
+    payload = {
+        "code": 200,
+        "result": [
+            {"year": "2025", "month": "04", "revenue": "500000"},
+        ],
+    }
+    patcher, _ = _mock_post(payload)
     with patcher:
-        await mops.get_monthly_revenue("2330", 2024, 7)
-    assert fake.posts[0][1]["month"] == "07"
+        rows = await mops.get_monthly_revenue_recent("2454")
+    # year was already CE — no ROC offset applied
+    assert rows == [{
+        "symbol": "2454", "date": "2025-04-01",
+        "revenue": 500_000, "revenue_yoy": None, "revenue_mom": None,
+    }]
 
 
 @pytest.mark.asyncio
-async def test_get_monthly_revenue_uses_post_with_form_content_type():
-    """MOPS rejects requests without the form-encoded Content-Type
-    header. Pin it down so a future refactor doesn't drop it."""
-    patcher, fake = install_client(FakeResponse(html_with_revenue_rows("0")))
+async def test_handles_yymm_combined_year_month_field():
+    """The legacy MOPS report shape sometimes carries (year, month) as
+    a single `yymm` string (`"11404"` = ROC 114 / month 04)."""
+    payload = {
+        "code": 200,
+        "result": {"data": [{"yymm": "11404", "revenue": "9,000"}]},
+    }
+    patcher, _ = _mock_post(payload)
     with patcher:
-        await mops.get_monthly_revenue("2330", 2024, 4)
-    _, _, headers = fake.posts[0]
-    assert headers.get("Content-Type") == "application/x-www-form-urlencoded"
+        rows = await mops.get_monthly_revenue_recent("1101")
+    assert len(rows) == 1
+    assert rows[0]["date"] == "2025-04-01"
+    assert rows[0]["revenue"] == 9_000
 
 
-# ── Parsing ──────────────────────────────────────────────────────
+# ── error / no-data branches ──────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_get_monthly_revenue_parses_comma_separated_revenue():
-    patcher, _ = install_client(FakeResponse(html_with_revenue_rows("12,345,678")))
+async def test_returns_empty_list_on_406_no_data():
+    """`code: 406` is MOPS for "查無相符資料" — newly-listed companies
+    or ones that haven't filed for the period yet. NOT an error,
+    return [] silently (no log spam)."""
+    payload = {"code": 406, "message": "查無相符資料", "result": None}
+    patcher, _ = _mock_post(payload)
     with patcher:
-        out = await mops.get_monthly_revenue("2330", 2024, 4)
-
-    assert len(out) == 1
-    row = out[0]
-    assert row["symbol"] == "2330"
-    assert row["date"] == "2024-04-01"
-    assert row["revenue"] == 12_345_678  # comma stripped, parsed as int
-    assert row["source"] == "mops"
+        rows = await mops.get_monthly_revenue_recent("9999")
+    assert rows == []
 
 
 @pytest.mark.asyncio
-async def test_get_monthly_revenue_returns_zero_for_non_digit_revenue():
-    """If the revenue cell contains a placeholder (`-`, blank, or any
-    non-digit string), the connector returns 0 rather than raising."""
-    patcher, _ = install_client(FakeResponse(html_with_revenue_rows("--")))
+async def test_returns_empty_list_on_http_500():
+    payload = {"code": 500, "message": "傳入參數異常", "result": None}
+    patcher, _ = _mock_post(payload, status_code=500)
     with patcher:
-        out = await mops.get_monthly_revenue("2330", 2024, 4)
-    assert out[0]["revenue"] == 0
+        rows = await mops.get_monthly_revenue_recent("2330")
+    assert rows == []
 
 
 @pytest.mark.asyncio
-async def test_get_monthly_revenue_returns_empty_when_table_missing():
-    """MOPS occasionally returns an error page or a captcha page that
-    has no `<table class="hasBorder">`. Connector returns []."""
-    patcher, _ = install_client(FakeResponse("<html><body>session expired</body></html>"))
+async def test_returns_empty_list_on_connection_error():
+    """Per-symbol timeouts / connect errors must not propagate. The
+    cron iterates over 1700+ symbols; one transport failure must not
+    abort the batch."""
+    patcher, _ = _mock_post(raise_exc=httpx.ConnectTimeout("timeout"))
     with patcher:
-        out = await mops.get_monthly_revenue("2330", 2024, 4)
-    assert out == []
+        rows = await mops.get_monthly_revenue_recent("2330")
+    assert rows == []
 
 
 @pytest.mark.asyncio
-async def test_get_monthly_revenue_skips_rows_with_fewer_than_three_cells():
-    """A summary or separator row with only 1-2 cells must not crash
-    the parser. Real data rows in the same table still flow through."""
-    html = (
-        "<html><body><table class=\"hasBorder\">"
-        "<tr><th>h</th></tr>"
-        "<tr><td>summary</td><td>row</td></tr>"  # 2 cells — skipped
-        "<tr><td>2024/04</td><td>foo</td><td>1,000</td><td>x</td></tr>"
-        "</table></body></html>"
-    )
-    patcher, _ = install_client(FakeResponse(html))
+async def test_returns_empty_list_on_html_response_with_200():
+    """Under load MOPS sometimes returns the SPA HTML even with HTTP
+    200 — `r.json()` raises ValueError. Don't crash."""
+    response = MagicMock()
+    response.status_code = 200
+    response.json = MagicMock(side_effect=ValueError("not json"))
+
+    fake_client = MagicMock()
+    fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+    fake_client.__aexit__ = AsyncMock(return_value=False)
+    fake_client.post = AsyncMock(return_value=response)
+    with patch.object(mops.httpx, "AsyncClient", lambda **_: fake_client):
+        rows = await mops.get_monthly_revenue_recent("2330")
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_skips_unparseable_rows_in_otherwise_good_payload():
+    """One bad row shouldn't poison the whole batch."""
+    payload = {
+        "code": 200,
+        "result": {"data": [
+            {"year": "114", "month": "04", "revenue": "1,000"},
+            {"year": "bad", "month": "??"},
+            {"year": "114", "month": "03", "revenue": "950"},
+            "not-a-dict",
+            {"year": "114", "month": "13", "revenue": "1"},  # invalid month
+        ]},
+    }
+    patcher, _ = _mock_post(payload)
     with patcher:
-        out = await mops.get_monthly_revenue("2330", 2024, 4)
-    assert len(out) == 1
-    assert out[0]["revenue"] == 1000
+        rows = await mops.get_monthly_revenue_recent("2330")
+    assert len(rows) == 2
+    assert {r["date"] for r in rows} == {"2025-04-01", "2025-03-01"}
 
 
-@pytest.mark.asyncio
-async def test_get_monthly_revenue_handles_multiple_data_rows():
-    patcher, _ = install_client(FakeResponse(
-        html_with_revenue_rows("1,000", "2,000", "3,000")
-    ))
-    with patcher:
-        out = await mops.get_monthly_revenue("2330", 2024, 4)
-    assert [r["revenue"] for r in out] == [1000, 2000, 3000]
-    # Every row carries the same date/symbol/source — the table is
-    # one stock's history grid.
-    assert all(r["symbol"] == "2330" for r in out)
-    assert all(r["date"] == "2024-04-01" for r in out)
+# ── small parsing helpers ─────────────────────────────────────────
+
+def test_to_int_strips_commas_and_handles_blanks():
+    assert mops._to_int("1,234,567") == 1_234_567
+    assert mops._to_int("0") == 0
+    assert mops._to_int("") is None
+    assert mops._to_int("--") is None
+    assert mops._to_int(None) is None
+    assert mops._to_int("not a number") is None
 
 
-@pytest.mark.asyncio
-async def test_get_monthly_revenue_propagates_http_errors():
-    """503 / 4xx from MOPS bubbles up so the service-layer waterfall
-    can fall back to its prior tier or surface a 502 to the client."""
-    patcher, _ = install_client(FakeResponse("err", status_code=503))
-    with patcher, pytest.raises(Exception):
-        await mops.get_monthly_revenue("2330", 2024, 4)
+def test_to_float_handles_pct_suffix_and_blanks():
+    assert mops._to_float("12.5") == 12.5
+    assert mops._to_float("12.5%") == 12.5
+    assert mops._to_float("-3.2") == -3.2
+    assert mops._to_float("") is None
+    assert mops._to_float("N/A") is None
+
+
+def test_normalize_row_returns_none_on_missing_date_pieces():
+    out = mops._normalize_row("2330", {"revenue": "1000"})
+    assert out is None
+
+
+def test_normalize_row_keeps_ce_years_unchanged():
+    """Year >= 1900 means CE — don't accidentally double-offset to
+    something like 3936 (1925 + 1911)."""
+    out = mops._normalize_row("2330", {"year": "2025", "month": "04",
+                                       "revenue": "1,000"})
+    assert out is not None
+    assert out["date"] == "2025-04-01"
+
+
+def test_normalize_row_handles_alternate_revenue_field_names():
+    out = mops._normalize_row("2330", {
+        "year": "114", "month": "04",
+        "currentMonthRevenue": "5,000",
+        "yoyChange": "10",
+        "momChange": "-2",
+    })
+    assert out is not None
+    assert out["revenue"] == 5_000
+    assert out["revenue_yoy"] == 10.0
+    assert out["revenue_mom"] == -2.0

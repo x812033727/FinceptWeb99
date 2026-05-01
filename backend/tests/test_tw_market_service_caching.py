@@ -93,7 +93,7 @@ async def test_get_revenue_empty_not_cached():
     with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
          patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
          patch.object(svc.finmind, "get_monthly_revenue", AsyncMock(return_value=[])), \
-         patch.object(svc.mops, "get_monthly_revenue", AsyncMock(return_value=[])):
+         patch.object(svc.mops, "get_monthly_revenue_recent", AsyncMock(return_value=[])):
         result = await svc.get_revenue("2330")
 
     mock_set.assert_not_awaited()

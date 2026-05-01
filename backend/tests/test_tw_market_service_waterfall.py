@@ -410,7 +410,7 @@ async def test_get_revenue_uses_finmind_when_available():
     with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
          patch.object(svc, "cache_set", new_callable=AsyncMock), \
          patch.object(svc.finmind, "get_monthly_revenue", new=AsyncMock(return_value=finmind_rows)), \
-         patch.object(svc.mops, "get_monthly_revenue", new_callable=AsyncMock) as mops_mock:
+         patch.object(svc.mops, "get_monthly_revenue_recent", new_callable=AsyncMock) as mops_mock:
         out = await svc.get_revenue("2330")
 
     assert out == finmind_rows
@@ -423,7 +423,7 @@ async def test_get_revenue_falls_back_to_mops_html_scrape_when_finmind_fails():
     with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
          patch.object(svc, "cache_set", new_callable=AsyncMock), \
          patch.object(svc.finmind, "get_monthly_revenue", new=AsyncMock(side_effect=RuntimeError("quota"))), \
-         patch.object(svc.mops, "get_monthly_revenue", new=AsyncMock(return_value=mops_rows)):
+         patch.object(svc.mops, "get_monthly_revenue_recent", new=AsyncMock(return_value=mops_rows)):
         out = await svc.get_revenue("2330")
     assert out == mops_rows
 

@@ -211,13 +211,33 @@ def setup_jobs() -> None:
     )
 
     # 月營收 (monthly revenue). TW securities law gives companies
-    # until the 10th of the following month to publish; running daily
-    # at 09:00 UTC picks up late filers + corrections continuously
-    # without needing a precise "everyone's filed" tick. Sits well
-    # after the post-close cluster so a slow upstream window doesn't
-    # pile this on top of the chip-metric / fundamentals tasks. One
-    # FinMind market-wide call (data_id="") returns every listed
-    # company's last 90 days.
+    # until the 10th of the following month to publish; we re-pull
+    # continuously to catch late filers + corrections without needing
+    # a precise "everyone's filed" tick.
+    #
+    # Hourly slow per-symbol fan-out via MOPS (`mops.interinfo.com.tw`):
+    # FinMind paywalled the market-wide one-call query in 2026-04
+    # (PR #183 added a fail-soft handler), and the new MOPS SPA
+    # backend doesn't expose an "all-stocks-one-call" endpoint, so the
+    # cron runs hourly and processes a slice of ~75 symbols per tick.
+    # The full ~1700-symbol universe refreshes every ~22h — well inside
+    # the monthly publication cadence.
+    from tasks.ingest_revenue_tw_slow import run as run_ingest_revenue_tw_slow
+    scheduler.add_job(
+        run_ingest_revenue_tw_slow,
+        trigger=IntervalTrigger(hours=1),
+        id="ingest_revenue_tw_slow",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Legacy FinMind market-wide cron stays scheduled (daily, cheap)
+    # so the IngestHealthCard surfaces a clear "still paywalled"
+    # signal — the moment FinMind un-paywalls or an admin pays the
+    # sponsor tier, the row flips back to ok=True without us needing
+    # to re-add the job. Both crons write to the same upsert path so
+    # there's no duplicate-row risk.
     from tasks.ingest_revenue_tw import run as run_ingest_revenue_tw
     scheduler.add_job(
         run_ingest_revenue_tw,

@@ -748,9 +748,11 @@ async def get_revenue(symbol: str, months: int = 12) -> list[dict[str, Any]]:
         pass
 
     if not result:
-        # MOPS fallback: current month only
+        # MOPS fallback: hits the new SPA backend for whatever monthly
+        # history that server feels like returning (typically trailing
+        # 12-24 months in one call).
         try:
-            result = await mops.get_monthly_revenue(symbol, today.year, today.month)
+            result = await mops.get_monthly_revenue_recent(symbol)
         except Exception:
             pass
 

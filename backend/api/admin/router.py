@@ -56,7 +56,8 @@ RETRYABLE_INGEST_JOBS = {
     "ingest_news_international": "International news ingest",
     "ingest_institutional_tw": "TW institutional flow",
     "ingest_margin_tw": "TW margin balance",
-    "ingest_revenue_tw": "TW monthly revenue",
+    "ingest_revenue_tw": "TW monthly revenue (FinMind, paywalled)",
+    "ingest_revenue_tw_slow": "TW monthly revenue (MOPS slow per-symbol)",
     "ingest_taiex_history": "TAIEX daily history",
     "score_discussion_outcomes": "Discussion D1-D5 scoreboard",
 }
@@ -398,6 +399,9 @@ async def _run_ingest_job_once(job_id: str) -> None:
         await run()
     elif job_id == "ingest_revenue_tw":
         from tasks.ingest_revenue_tw import run
+        await run()
+    elif job_id == "ingest_revenue_tw_slow":
+        from tasks.ingest_revenue_tw_slow import run
         await run()
     elif job_id == "ingest_taiex_history":
         from tasks.ingest_taiex_history import run

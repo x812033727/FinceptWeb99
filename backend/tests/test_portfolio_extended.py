@@ -101,6 +101,33 @@ async def test_portfolio_detail_with_holding(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_portfolio_detail_does_not_500_when_one_holding_quote_explodes(client: AsyncClient):
+    """A single holding's quote-or-FX failure must NOT 500 the whole
+    detail load. Regression: pre-fix a stray exception inside `_enrich`
+    propagated through `asyncio.gather` and broke the entire page —
+    the user reported a blank PortfolioPage backed by a 500 response.
+    Now the failed holding lands as a degraded row (current_price =
+    avg_cost, P&L = 0) and the rest of the portfolio still renders.
+    """
+    token = await _register_and_login(client, "pd_resilient@test.com")
+    pid = await _create_portfolio(client, token, "ResilientFund")
+    await _add_buy(client, token, pid, "AAPL", 180.0, 10)
+
+    with patch("services.portfolio_service.us_quote",
+               new=AsyncMock(side_effect=RuntimeError("upstream chaos"))):
+        r = await client.get(f"/api/portfolio/{pid}", headers=_auth(token))
+
+    assert r.status_code == 200, f"500 leaked: {r.text}"
+    holdings = r.json()["holdings"]
+    assert len(holdings) == 1
+    h = holdings[0]
+    # Degraded fallback: price falls back to avg_cost, P&L is zero.
+    assert abs(h["current_price"] - 180.0) < 0.01
+    assert abs(h["unrealized_pnl"]) < 0.01
+    assert abs(h["unrealized_pnl_pct"]) < 0.01
+
+
+@pytest.mark.asyncio
 async def test_portfolio_detail_requires_auth(client: AsyncClient):
     await _register_and_login(client, "pd_auth@test.com")
     import uuid

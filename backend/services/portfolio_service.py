@@ -501,6 +501,45 @@ async def get_portfolio_detail(portfolio_id: str, user_id: str, db: AsyncSession
     # Fetch current prices concurrently
     async def _enrich(h: Holding) -> dict:
         try:
+            return await _enrich_one(h, p)
+        except Exception:
+            # A single holding's failure (quote upstream blew up, FX
+            # lookup raised, transaction replay hit a bad row, …) used
+            # to propagate through asyncio.gather and 500 the entire
+            # portfolio detail load. Log the symbol + traceback and
+            # return a degraded row so the rest of the portfolio still
+            # renders. Caller treats `current_price = avg_cost` as
+            # "no live quote available".
+            logger.exception(
+                "portfolio.enrich_holding_failed",
+                extra={
+                    "portfolio_id": portfolio_id,
+                    "symbol": h.symbol,
+                    "market": str(h.market.value),
+                },
+            )
+            qty = float(h.quantity)
+            avg = float(h.avg_cost)
+            try:
+                cost_pc = await _to_portfolio_currency(qty * avg, h.cost_currency, p.currency)
+            except Exception:
+                cost_pc = qty * avg
+            return {
+                "id": str(h.id),
+                "symbol": h.symbol,
+                "market": str(h.market.value),
+                "quantity": qty,
+                "avg_cost": avg,
+                "cost_currency": h.cost_currency,
+                "current_price": avg,   # degraded — no live quote
+                "current_value": round(cost_pc, 2),
+                "cost_value": round(cost_pc, 2),
+                "unrealized_pnl": 0.0,
+                "unrealized_pnl_pct": 0.0,
+            }
+
+    async def _enrich_one(h: Holding, p: Portfolio) -> dict:
+        try:
             mkt = str(h.market.value)
             if mkt == "US":
                 q = await us_quote(h.symbol)

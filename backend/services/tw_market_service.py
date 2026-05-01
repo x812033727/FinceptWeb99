@@ -233,7 +233,23 @@ async def _resolve_prev_close(
     last2 = await _archive_last2_closes(symbol)
     if not last2:
         return None
-    latest_close = last2[-1][1]
+    latest_date_iso, latest_close = last2[-1]
+    # ETFs that recently went ex-distribution (e.g. 00713 dropping from
+    # ~73 to ~53) leave the cron's last-ingested bar far older than today,
+    # so comparing today's 52.85 against months-old 73.71 yields a -28%
+    # headline. When the archive's latest bar is more than a week old,
+    # treat it as stale and return None — the caller falls through to
+    # upstream's `change` field (with the existing ±30% sanity bound).
+    try:
+        latest_date = date.fromisoformat(str(latest_date_iso)[:10])
+    except (TypeError, ValueError):
+        return None
+    if (date.today() - latest_date).days > 7:
+        log.warning(
+            "tw.quote.archive_stale",
+            extra={"symbol": symbol, "latest_archive_date": latest_date_iso},
+        )
+        return None
     same_session = (
         upstream_close is not None
         and abs(float(upstream_close) - latest_close) < 0.01

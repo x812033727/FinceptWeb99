@@ -16,7 +16,7 @@ tests — this file pins down the orchestration: try-except chain
 order, which fallback runs when the primary errors vs returns empty,
 and the consistent "don't cache zero/empty results" rule.
 """
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -530,6 +530,7 @@ async def test_fetch_quote_waterfall_backfills_prev_close_from_archive():
         "open": 321.0, "high": 347.5, "low": 321.0,
         "volume": 24_628_405,
     }
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
     with patch.object(svc, "cache_get",
                       new=AsyncMock(return_value=None)), \
          patch.object(svc, "cache_set",
@@ -541,7 +542,7 @@ async def test_fetch_quote_waterfall_backfills_prev_close_from_archive():
              new=AsyncMock(return_value=[
                  # Yesterday's close — archive truth, not the +315
                  # garbage TWSE handed us in `change`.
-                 {"time": "2026-04-29", "open": 320, "high": 322,
+                 {"time": yesterday, "open": 320, "high": 322,
                   "low": 318, "close": 321.5, "volume": 1_000_000},
              ]),
          ):
@@ -563,8 +564,9 @@ async def test_get_quote_uses_archive_baseline_for_change_pct():
         "volume": 24_628_405,
         "open": 321.0, "high": 347.5, "low": 321.0,
     }
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
     archive_bars = [
-        {"time": "2026-04-29", "open": 320, "high": 322,
+        {"time": yesterday, "open": 320, "high": 322,
          "low": 318, "close": 321.5, "volume": 1_000_000},
     ]
     with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
@@ -607,12 +609,14 @@ async def test_resolve_prev_close_weekend_skips_back_one_session():
     close matches the archive's latest bar, the displayed close IS
     the most recent archived session, so prev should be the bar
     BEFORE that (Thursday)."""
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    today_iso = date.today().isoformat()
     archive_bars = [
         # Thursday's bar
-        {"time": "2026-04-30", "open": 575, "high": 580,
+        {"time": yesterday, "open": 575, "high": 580,
          "low": 573, "close": 575, "volume": 1_000_000},
         # Friday's bar — TWSE on Saturday returns this same close
-        {"time": "2026-05-01", "open": 576, "high": 582,
+        {"time": today_iso, "open": 576, "high": 582,
          "low": 575, "close": 580, "volume": 1_200_000},
     ]
     with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
@@ -634,10 +638,12 @@ async def test_resolve_prev_close_intraday_uses_archive_latest():
     """Mid-market view: TWSE serves a fresh tick (e.g. 583) that
     differs from archive's latest (Friday's 580). The "previous"
     is then archive's latest."""
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    today_iso = date.today().isoformat()
     archive_bars = [
-        {"time": "2026-04-30", "open": 575, "high": 580,
+        {"time": yesterday, "open": 575, "high": 580,
          "low": 573, "close": 575, "volume": 1_000_000},
-        {"time": "2026-05-01", "open": 576, "high": 582,
+        {"time": today_iso, "open": 576, "high": 582,
          "low": 575, "close": 580, "volume": 1_200_000},
     ]
     with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
@@ -663,10 +669,12 @@ async def test_get_quote_does_not_show_zero_pct_on_weekend():
         # No `change` in this stale payload — TWSE serves an empty
         # delta on a closed market day too.
     }
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    today_iso = date.today().isoformat()
     archive_bars = [
-        {"time": "2026-04-30", "open": 575, "high": 580,
+        {"time": yesterday, "open": 575, "high": 580,
          "low": 573, "close": 575, "volume": 1_000_000},
-        {"time": "2026-05-01", "open": 576, "high": 582,
+        {"time": today_iso, "open": 576, "high": 582,
          "low": 575, "close": 580, "volume": 1_200_000},
     ]
     with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
@@ -684,3 +692,49 @@ async def test_get_quote_does_not_show_zero_pct_on_weekend():
     assert out["change"] == 5.0
     assert out["change_pct"] == round(5 / 575 * 100, 4)
     assert out["change_pct"] != 0.0
+
+
+@pytest.mark.asyncio
+async def test_resolve_prev_close_rejects_stale_archive():
+    """Stale-archive guard: an ETF that recently went ex-distribution
+    can leave the cron's last-ingested bar months behind today's price
+    (e.g. 00713 archive 73.71 vs today's 52.85). Returning that bar as
+    `prev` produces a -28% headline that's pure cron-lag artefact, not
+    a real session move.
+
+    When the latest archived bar is >7 days old, the resolver returns
+    None so the caller falls through to upstream's `change` field
+    (still bounded by the ±30% sanity check in `_sanitize_change_pct`).
+    """
+    stale_date = (date.today() - timedelta(days=30)).isoformat()
+    archive_bars = [
+        {"time": stale_date, "open": 72, "high": 74,
+         "low": 73, "close": 73.71, "volume": 1_000_000},
+    ]
+    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch(
+             "services.ingest.repository.read_ohlcv_range_autosession",
+             new=AsyncMock(return_value=archive_bars),
+         ):
+        out = await svc._resolve_prev_close("00713", upstream_close=52.85)
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_prev_close_accepts_fresh_archive():
+    """Sanity: a same-day archive bar still flows through the resolver
+    (this is the common intraday case)."""
+    fresh_date = date.today().isoformat()
+    archive_bars = [
+        {"time": fresh_date, "open": 575, "high": 582,
+         "low": 573, "close": 580, "volume": 1_200_000},
+    ]
+    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch(
+             "services.ingest.repository.read_ohlcv_range_autosession",
+             new=AsyncMock(return_value=archive_bars),
+         ):
+        out = await svc._resolve_prev_close("2330", upstream_close=583.0)
+    assert out == 580.0

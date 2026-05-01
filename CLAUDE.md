@@ -54,7 +54,10 @@ FinceptWeb/
 │   ├── ai/               # LLM router + agent persona definitions
 │   ├── analytics/        # Pure computation: dcf.py, risk.py, backtest.py
 │   ├── auth/             # JWT handler + role permissions
-│   ├── cache/            # Redis helpers (get/set/delete, key helpers)
+│   ├── cache/            # Redis helpers (get/set/delete, key helpers).
+│   │                     #   `cache_ttls.py` is the single source of truth
+│   │                     #   for all TTL constants (TTL_QUOTE_*, TTL_HISTORY_*,
+│   │                     #   TTL_FUNDAMENTALS, TTL_NEWS, TTL_FX_*, …)
 │   ├── data/
 │   │   ├── us/           # Polygon → yfinance → Stooq → Finnhub waterfall; FRED macro
 │   │   ├── tw/           # TWSE → FinMind → MOPS waterfall
@@ -93,6 +96,8 @@ FinceptWeb/
 │   │                     #   RuntimeSetting, TwInstitutionalDaily,
 │   │                     #   TwMarginDaily, TwRevenueMonthly
 │   ├── services/         # Business logic (cached, waterfall)
+│   │   ├── _quote_helpers.py            # Shared market-quote sanitizer (±30%
+│   │   │                                #   daily-move bound, used by TW + US)
 │   │   ├── alert_service.py             # Price alert CRUD + check_and_fire
 │   │   ├── analytics_service.py         # DCF/VaR/backtest orchestration (ProcessPool)
 │   │   ├── crypto_market_service.py     # Kraken quote/history/screener (24/7)
@@ -125,8 +130,15 @@ FinceptWeb/
 │   │                     # Discussion-adjacent: ingest_news_tw (hourly,
 │   │                     #   Google News RSS zh-TW since PR #128),
 │   │                     #   score_news_sentiment (every 30 min, fail-closed cap)
-│   ├── tests/            # pytest — in-memory SQLite + AsyncMock Redis
-│   │                     # 88 files, 1227 tests. Categories:
+│   ├── tests/            # pytest — in-memory SQLite + AsyncMock Redis.
+│   │                     # Two autouse fixtures (PR #162) keep tests
+│   │                     # isolated: `_override_async_session_local`
+│   │                     # monkeypatches every module's `AsyncSessionLocal`
+│   │                     # at start, and `_truncate_db_between_tests`
+│   │                     # `DELETE FROM` every table at end so cross-test
+│   │                     # pollution from `*_autosession` writes is
+│   │                     # impossible.
+│   │                     # 90 files, 1242 tests. Categories:
 │   │                     #   API HTTP   : test_*_api.py        (admin, auth, alerts,
 │   │                     #                                      analytics, discussion,
 │   │                     #                                      portfolio, tw_market 42,
@@ -157,26 +169,53 @@ FinceptWeb/
 │   ├── public/           # PWA: manifest.webmanifest, sw.js, icons
 │   └── src/
 │       ├── components/
+│       │   ├── admin/    # 8 admin cards extracted from AdminPage (PR #172):
+│       │   │             #   SystemUpdate, LLMKeys, MarketKeys, Personas,
+│       │   │             #   SystemTasks, RuntimeTunables, Usage, IngestHealth.
+│       │   │             #   `_providerModels.ts` shares the LLM catalog.
 │       │   ├── charts/   # CandlestickChart (lightweight-charts v4, theme-aware)
+│       │   ├── discussion/ # 4 cards from DiscussionPage (PR #175):
+│       │   │             #   AutoRunConfigCard, ConclusionCard,
+│       │   │             #   RoundContextsCard, ScoreboardCard. `_helpers.tsx`
+│       │   │             #   has formatters + summarizeContext + API fetchers.
 │       │   ├── layout/   # AppLayout, Sidebar (+ .test), UpdateBadge, NotificationBell
-│       │   ├── portfolio/ # AllocationPie, HoldingsTable (+ .test)
-│       │   └── (root)    # ErrorBoundary, Skeleton, Toaster (each + .test)
+│       │   ├── portfolio/ # AllocationPie, HoldingsTable (+ .test) plus 7 sub-
+│       │   │             #   components from PortfolioPage (PR #174):
+│       │   │             #   AddTransactionForm, EditTransactionModal,
+│       │   │             #   Create/Edit PortfolioModal, ExpertEvaluationCard,
+│       │   │             #   PerformanceChart, TransactionHistory.
+│       │   ├── stock/    # 10 panels from StockDetailPage (PR #173):
+│       │   │             #   Financials, Options (+ inline IVSurface),
+│       │   │             #   Institutional, Margin, Revenue, Health,
+│       │   │             #   ValuationBand, Holdings, Dividends, NewsFeed.
+│       │   │             #   `_shared.ts` carries types + fetchers + formatters.
+│       │   └── (root)    # Collapsible (+ .test, PR #168), ErrorBoundary,
+│       │                 #   Skeleton, Toaster, DataSourceBadge (each + .test)
 │       ├── hooks/
 │       │   ├── useWebSocket.ts       # Singleton WS + useAlertSocket() hook
 │       │   ├── useWebSocket.test.ts  # 11 tests: connect, routing, alert, cleanup
 │       │   ├── usePortfolio.ts       # Portfolio CRUD + optimise mutations
 │       │   ├── usePortfolio.test.ts  # 8 tests: query keys, enabled-gate, invalidation
 │       │   └── useVersion.ts         # /api/system/version polling for UpdateBadge
-│       ├── pages/        # One file per route (13 pages)
-│       │   # AIPage, AdminPage, AlertsPage, AnalyticsPage, DashboardPage,
-│       │   # LoginPage, MacroPage, MarketPage, PortfolioPage, ScreenerPage,
-│       │   # SettingsPage, StockDetailPage, WatchlistPage
+│       ├── pages/        # One file per route (13 pages). Most are now thin
+│       │                 # composition shells after the Tier-3 page split
+│       │                 # (PRs #172-#175); business components live under
+│       │                 # `components/{admin,stock,portfolio,discussion}/`.
+│       │   # AIPage, AdminPage (233 LOC), AlertsPage, AnalyticsPage, DashboardPage,
+│       │   # LoginPage, MacroPage, MarketPage, PortfolioPage (310 LOC), ScreenerPage,
+│       │   # SettingsPage, StockDetailPage (359 LOC), WatchlistPage
+│       │   # DiscussionPage (787 LOC — keeps the SSE state machine + transcript)
 │       ├── store/        # Zustand. Each *Store.ts pairs with *Store.test.ts:
 │       │                 #   authStore, notificationStore, themeStore, toastStore
 │       │                 # Plain modules (no test): analytics, market, portfolio, system
 │       ├── test/         # Vitest setup (jsdom + RTL cleanup)
-│       ├── types/        # TypeScript interfaces (market, portfolio, analytics, system)
+│       ├── types/        # TypeScript interfaces — market, portfolio, analytics,
+│       │                 # system, **discussion** (PR #171: shared types for
+│       │                 # AgentInfo, Discussion, Conclusion, ScoreboardRow, etc.)
 │       └── lib/          # api.ts (+ .test: bearer/refresh/dedup), auth.ts (silentRefresh),
+│                         # formatters.ts (+ .test, PR #166: shared formatPct /
+│                         #   formatNumber / formatCompact — defaults match
+│                         #   backend percent-units convention),
 │                         # webVitals.ts (+ .test) — Core Web Vitals → POST /api/system/web-vital
 ├── helm/fincept-web/     # Kubernetes Helm chart
 ├── docker/               # nginx.conf, redis.conf
@@ -195,7 +234,9 @@ FinceptWeb/
 
 ### Caching (3-tier)
 1. In-process (module-level dicts for symbol maps, S&P 500 list)
-2. Redis (quotes 15s, history 4h, fundamentals 24h, screener 10m, news 5m)
+2. Redis (quotes 15s, history 4h, fundamentals 24h, screener 10m, news 5m).
+   All TTL constants live in `backend/cache/cache_ttls.py` — tune there
+   instead of editing call sites.
 3. PostgreSQL (persistent holdings, transactions, watchlists, alerts)
 
 ### Market data waterfall

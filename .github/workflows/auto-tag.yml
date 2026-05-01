@@ -1,0 +1,107 @@
+name: Auto-tag mainline
+
+# When a PR merges into the mainline branch and bumps
+# backend/_version.py, automatically create + push a matching `vX.Y.Z`
+# tag. The tag push then triggers `.github/workflows/release.yml`
+# which creates the GitHub Release that the in-app UpdateBadge polls
+# via `/api/system/version`.
+#
+# Net effect on the deploy flow:
+#
+#   merge PR → mainline push → this job runs → tag push → release.yml
+#   runs → GitHub Release exists → UpdateBadge sees an update → admin
+#   clicks "Update now" → UPDATE_COMMAND pulls + restarts the stack.
+#
+# Idempotent: if the tag already exists (e.g. someone tagged manually
+# before this workflow ran, or the same merge gets replayed) we
+# silently skip rather than failing the job.
+
+on:
+  push:
+    branches:
+      - claude/create-terminal-documentation-iBmfW
+    # Only run when the version file changes — avoids spending CI
+    # minutes on every refactor / docs PR. Path filters apply to the
+    # files changed in the push event, not the repo as a whole.
+    paths:
+      - backend/_version.py
+
+# `contents: write` is needed to push the tag back. No other scopes
+# required; this workflow does not touch issues / PRs / releases
+# directly (release.yml owns release creation).
+permissions:
+  contents: write
+
+jobs:
+  auto-tag:
+    name: Tag matching version from backend/_version.py
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        # Need full history so we can check whether the tag already
+        # exists across all refs, not just the current commit.
+        with:
+          fetch-depth: 0
+          # Use the default GITHUB_TOKEN (which has contents:write
+          # via the permissions block above) so the resulting tag
+          # push triggers the downstream release.yml workflow.
+          # NOTE: a tag pushed by GITHUB_TOKEN does NOT automatically
+          # trigger another workflow under default repo settings; it
+          # needs a PAT or the repo's "Allow GitHub Actions to create
+          # PRs / push to protected branches" + "trigger workflows
+          # from workflow runs" toggle. release.yml runs on tag push
+          # which is a separate workflow file, not a recursive run of
+          # this one — but the chain only fires if the repo allows
+          # token-pushed tags to trigger workflows. If release.yml
+          # doesn't fire, swap GITHUB_TOKEN for a PAT named
+          # RELEASE_TOKEN under repo Secrets.
+
+      - name: Extract __version__
+        id: version
+        run: |
+          set -euo pipefail
+          PY_VERSION=$(python -c "import re; t=open('backend/_version.py').read(); print(re.search(r'__version__\s*=\s*[\"\\'](.+?)[\"\\']', t).group(1))")
+          echo "version=$PY_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$PY_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Detected backend/_version.py = $PY_VERSION → tag v$PY_VERSION"
+
+      - name: Skip if tag already exists
+        id: check
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          # Check both local refs (after the deep fetch above) and
+          # the remote, in case the tag was created out-of-band.
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null \
+             || git ls-remote --tags origin "${TAG}" | grep -q "${TAG}$"; then
+            echo "Tag ${TAG} already exists; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify package.json mirrors the version
+        if: steps.check.outputs.skip != 'true'
+        # CI's existing `version-sync` job in ci.yml already enforces
+        # this on every PR; re-running here as a safety check so we
+        # never tag a state where backend and frontend have drifted.
+        run: python scripts/sync-version.py --check
+
+      - name: Create + push tag
+        if: steps.check.outputs.skip != 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Identify the bot author for the tag object so it shows up
+          # cleanly in the GitHub UI rather than as the last human
+          # author of the merge commit.
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Lightweight tag pointing at the merge commit on mainline.
+          # release.yml only checks the tag name + repo state, doesn't
+          # need annotated tag metadata.
+          git tag "$TAG"
+          git push origin "$TAG"
+          echo "Pushed $TAG → release.yml will pick it up."

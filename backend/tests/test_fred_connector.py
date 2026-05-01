@@ -7,9 +7,12 @@ which the connector translates to None. The latest-value lookup also
 needs to skip those Nones to find the most recent real reading.
 
 httpx.AsyncClient is mocked at the module's import-site so no
-network. settings.FRED_API_KEY is set per-test as needed.
+network. The active FRED key is resolved per-test by patching
+`services.market_key_service.resolve_key` (PR #149 moved key
+resolution off `settings.FRED_API_KEY` into the DB-managed
+`market_provider_keys` table).
 """
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -56,9 +59,25 @@ def install_client(response):
 
 
 def with_api_key(value: str = "test-key"):
-    """Patch settings.FRED_API_KEY for tests that exercise the
-    "key configured" branch."""
-    return patch.object(fred.settings, "FRED_API_KEY", value)
+    """Patch the resolved FRED key for tests that exercise the
+    "key configured" branch.
+
+    `get_series` does `from services.market_key_service import resolve_key`
+    inline, so patch that source attribute (it's the resolution call site
+    every invocation re-imports against)."""
+    return patch(
+        "services.market_key_service.resolve_key",
+        new=AsyncMock(return_value=value),
+    )
+
+
+def with_no_api_key():
+    """Same shape as `with_api_key` but resolves to empty string —
+    matches the "no key configured" yfinance-fallback path."""
+    return patch(
+        "services.market_key_service.resolve_key",
+        new=AsyncMock(return_value=""),
+    )
 
 
 # ── SERIES map (frozen contract) ──────────────────────────────────
@@ -79,14 +98,17 @@ def test_series_map_exposes_core_macro_indicators():
 async def test_get_series_returns_empty_when_api_key_not_configured_and_no_fallback():
     """No key + no yfinance fallback (CPI is an economic release, not a
     market quote) → connector returns []."""
-    with patch.object(fred.settings, "FRED_API_KEY", ""):
+    with with_no_api_key():
         out = await fred.get_series("CPIAUCSL")
     assert out == []
 
 
 @pytest.mark.asyncio
 async def test_get_series_returns_empty_when_api_key_is_none_and_no_fallback():
-    with patch.object(fred.settings, "FRED_API_KEY", None):
+    with patch(
+        "services.market_key_service.resolve_key",
+        new=AsyncMock(return_value=None),
+    ):
         out = await fred.get_series("UNRATE")
     assert out == []
 
@@ -103,7 +125,7 @@ async def test_get_series_falls_back_to_yfinance_when_no_key_and_series_is_trada
         {"time": 1_704_067_200_000, "open": 4.20, "high": 4.30, "low": 4.10, "close": 4.25, "volume": 0},
         {"time": 1_706_745_600_000, "open": 4.25, "high": 4.35, "low": 4.20, "close": 4.32, "volume": 0},
     ]
-    with patch.object(fred.settings, "FRED_API_KEY", ""), \
+    with with_no_api_key(), \
          patch.object(fred.yfinance, "get_history", new=lambda *a, **k: _coro(fake_bars)) as _:
         out = await fred.get_series("DGS10")
 
@@ -118,7 +140,7 @@ async def test_get_series_no_fallback_for_economic_releases():
     """CPI, Unemployment, GDP, T10Y2Y, DGS2 have no Yahoo equivalent
     so they correctly return [] when FRED is missing."""
     for series in ("CPIAUCSL", "UNRATE", "GDP", "T10Y2Y", "DGS2"):
-        with patch.object(fred.settings, "FRED_API_KEY", ""):
+        with with_no_api_key():
             out = await fred.get_series(series)
         assert out == [], f"{series} should not have a fallback"
 
@@ -129,7 +151,7 @@ async def test_get_series_yfinance_fallback_skips_rows_with_null_close():
         {"time": 1_704_067_200_000, "open": None, "high": None, "low": None, "close": None, "volume": 0},
         {"time": 1_706_745_600_000, "open": 100.0, "high": 102.0, "low": 99.0, "close": 101.0, "volume": 0},
     ]
-    with patch.object(fred.settings, "FRED_API_KEY", ""), \
+    with with_no_api_key(), \
          patch.object(fred.yfinance, "get_history", new=lambda *a, **k: _coro(fake_bars)):
         out = await fred.get_series("DTWEXBGS")
 
@@ -144,7 +166,7 @@ async def test_get_series_yfinance_fallback_swallows_errors():
     async def _raise(*_a, **_kw):
         raise RuntimeError("yahoo blocked")
 
-    with patch.object(fred.settings, "FRED_API_KEY", ""), \
+    with with_no_api_key(), \
          patch.object(fred.yfinance, "get_history", new=_raise):
         out = await fred.get_series("DEXTW")
     assert out == []
@@ -289,7 +311,7 @@ async def test_get_latest_returns_none_when_series_is_empty():
 async def test_get_latest_returns_none_when_api_key_missing_and_no_fallback():
     """Empty key + no yfinance fallback (CPI is an economic release, not
     a market quote) → get_latest returns None without hitting the network."""
-    with patch.object(fred.settings, "FRED_API_KEY", ""):
+    with with_no_api_key():
         latest = await fred.get_latest("CPIAUCSL")
     assert latest is None
 
@@ -302,7 +324,7 @@ async def test_get_latest_uses_yfinance_fallback_when_api_key_missing():
         {"time": 1_704_067_200_000, "open": 100.0, "high": 102.0, "low": 99.0, "close": 100.5, "volume": 0},
         {"time": 1_706_745_600_000, "open": 100.5, "high": 103.0, "low": 99.5, "close": 102.0, "volume": 0},
     ]
-    with patch.object(fred.settings, "FRED_API_KEY", ""), \
+    with with_no_api_key(), \
          patch.object(fred.yfinance, "get_history", new=lambda *a, **k: _coro(fake_bars)):
         latest = await fred.get_latest("DTWEXBGS")
     assert latest == 102.0

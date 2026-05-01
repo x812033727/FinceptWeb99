@@ -65,6 +65,7 @@ RETRYABLE_INGEST_JOBS = {
     "ingest_risk_signals_tw": "TW risk signals (disposition / suspended / day-trading)",
     "ingest_holdings_aggregates_tw": "TW holdings + market-institutional aggregates",
     "score_discussion_outcomes": "Discussion D1-D5 scoreboard",
+    "score_news_sentiment": "News sentiment scoring (LLM)",
 }
 
 
@@ -428,6 +429,9 @@ async def _run_ingest_job_once(job_id: str) -> None:
         await run()
     elif job_id == "score_discussion_outcomes":
         from tasks.score_discussion_outcomes import run
+        await run()
+    elif job_id == "score_news_sentiment":
+        from tasks.score_news_sentiment import run
         await run()
 
 

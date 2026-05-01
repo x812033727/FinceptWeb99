@@ -87,6 +87,7 @@ const RETRYABLE_INGEST_JOBS = new Set([
   "ingest_risk_signals_tw",
   "ingest_holdings_aggregates_tw",
   "score_discussion_outcomes",
+  "score_news_sentiment",
 ]);
 
 // Per-job metadata for the IngestHealthCard. `schedule_zh` is mirrored

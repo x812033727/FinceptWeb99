@@ -326,24 +326,8 @@ async def test_genuine_outage_still_arms_backoff(patch_session):
     assert "skipped" not in kwargs["error"].lower()
 
 
-# ── _looks_like_paywall unit ──────────────────────────────────────
-
-def test_paywall_detector_is_case_insensitive():
-    from tasks.ingest_revenue_tw import _looks_like_paywall
-    assert _looks_like_paywall("YOUR LEVEL IS REGISTER")
-    assert _looks_like_paywall("Your Level is Register. Please update")
-    assert _looks_like_paywall("please update your user level")
-
-
-def test_paywall_detector_matches_sponsor_phrasing():
-    from tasks.ingest_revenue_tw import _looks_like_paywall
-    assert _looks_like_paywall("This dataset requires paid sponsor")
-    assert _looks_like_paywall("Sponsor only")
-
-
-def test_paywall_detector_does_not_match_generic_400():
-    from tasks.ingest_revenue_tw import _looks_like_paywall
-    assert not _looks_like_paywall("")
-    assert not _looks_like_paywall("Bad request")
-    assert not _looks_like_paywall("invalid date format")
-    assert not _looks_like_paywall("token expired")
+# Detector-level unit tests (`_looks_like_paywall`,
+# `_extract_body_message`, `is_paywall_response`) live in
+# `test_finmind_paywall.py` since PR #188 — the helpers moved to
+# `data.tw.finmind_paywall` so other FinMind cron tasks can adopt
+# the same fail-soft pattern without re-implementing.

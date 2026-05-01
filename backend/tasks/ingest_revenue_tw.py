@@ -48,27 +48,13 @@ _LOCK_KEY = "lock:ingest_revenue_tw"
 _LOCK_TTL = 10 * 60   # one FinMind call + bulk write
 _LOOKBACK_DAYS = 90
 
-# Phrases FinMind returns in the response body when the requesting
-# token is on a tier that doesn't have access to the dataset. As of
-# 2026-04 the market-wide `TaiwanStockMonthRevenue` query (`data_id=""`)
-# is sponsor-only, even though per-symbol queries still work for the
-# free tier. We match against these substrings so a paywall is treated
-# as a known-permanent skip rather than a transient failure (no
-# auto-backoff arm, no nag-the-admin red-error noise).
-_PAYWALL_HINTS = (
-    "your level is register",
-    "please update your user level",
-    "requires paid",
-    "sponsor",
+# Paywall detection lives in `data.tw.finmind_paywall` so all
+# FinMind-backed crons (ingest_ohlcv_tw, tw_etf_yields_refresh, …)
+# can opt into the same fail-soft path with a one-line check.
+from data.tw.finmind_paywall import (  # noqa: E402
+    extract_body_message as _extract_body_message,
+    looks_like_paywall as _looks_like_paywall,
 )
-
-
-class FinMindPaywallError(Exception):
-    """Raised when the upstream response identifies the failure as
-    a tier / paywall mismatch rather than an outage. Carries the
-    original message body so the health record can quote it
-    verbatim — operators recognise FinMind's wording on sight."""
-
 
 _HTTP_HINTS: dict[int, str] = {
     400: "FinMind rejected the request (likely paywalled dataset or malformed token)",
@@ -83,29 +69,15 @@ _HTTP_HINTS: dict[int, str] = {
 }
 
 
-def _looks_like_paywall(body_msg: str) -> bool:
-    if not body_msg:
-        return False
-    needle = body_msg.lower()
-    return any(hint in needle for hint in _PAYWALL_HINTS)
-
-
 def _format_error(exc: BaseException) -> str:
     if isinstance(exc, httpx.HTTPStatusError):
         code = exc.response.status_code
         reason = exc.response.reason_phrase or "?"
-        body_msg = ""
-        try:
-            body = exc.response.json()
-            for key in ("msg", "message", "detail"):
-                if isinstance(body, dict) and body.get(key):
-                    body_msg = f" — {body[key]}"
-                    break
-        except Exception:
-            pass
+        body_msg = _extract_body_message(exc)
+        body_suffix = f" — {body_msg}" if body_msg else ""
         hint = _HTTP_HINTS.get(code, "")
-        suffix = f" ({hint})" if hint else ""
-        return f"HTTP {code} {reason}{suffix}{body_msg}"
+        hint_suffix = f" ({hint})" if hint else ""
+        return f"HTTP {code} {reason}{hint_suffix}{body_suffix}"
     if isinstance(exc, httpx.TimeoutException):
         return f"timeout: {exc}"
     if isinstance(exc, httpx.ConnectError):
@@ -113,27 +85,6 @@ def _format_error(exc: BaseException) -> str:
     if isinstance(exc, httpx.HTTPError):
         return f"http error: {exc}"
     return f"unexpected: {exc}"
-
-
-def _extract_body_message(exc: BaseException) -> str:
-    """Pull the FinMind body's `msg` / `message` / `detail` out of an
-    `HTTPStatusError`. Returns "" when the body isn't JSON or none of
-    the expected keys are present. Used to spot the paywall without
-    pattern-matching against the formatted-error string (which can
-    drift)."""
-    if not isinstance(exc, httpx.HTTPStatusError):
-        return ""
-    try:
-        body = exc.response.json()
-    except Exception:
-        return ""
-    if not isinstance(body, dict):
-        return ""
-    for key in ("msg", "message", "detail"):
-        v = body.get(key)
-        if isinstance(v, str) and v:
-            return v
-    return ""
 
 
 async def run() -> None:

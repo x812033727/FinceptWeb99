@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
-import { UsageCard } from "./AdminPage";
+import { UsageCard } from "@/components/admin/UsageCard";
 
 interface UserProfile {
   id: string;

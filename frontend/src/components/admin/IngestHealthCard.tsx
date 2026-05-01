@@ -69,12 +69,12 @@ const JOB_META: Record<string, JobMeta> = {
     schedule_zh: "每天 15:10 (台北)",
   },
   ingest_revenue_tw: {
-    description_zh: "台股月營收（FinMind 全市場一次抓 — 2026-04 起 paywall, fail-soft）",
+    description_zh: "台股月營收（FinMind 全市場一次抓，sponsor tier）",
     schedule_zh: "每天 17:00 (台北)",
   },
   ingest_revenue_tw_slow: {
-    description_zh: "台股月營收（MOPS per-symbol slow fan-out, ~75 隻/小時, 22h 跑完全市場）",
-    schedule_zh: "每 1 小時",
+    description_zh: "台股月營收（MOPS per-symbol fallback, 預設關閉；FinMind 出問題時手動重啟）",
+    schedule_zh: "停用中",
   },
   ingest_quotes_retention_tw: {
     description_zh: "台股 quote_snapshots 30 日保留（清舊資料）",

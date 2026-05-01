@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import api, { notifyRateLimited } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
+import type { AgentInfo } from "@/types/discussion";
 
 // In-place AI evaluation of the active portfolio. Lets the user pick
 // any of the 19 personas (Buffett / Lynch / Dalio / quant / functional
@@ -14,13 +15,6 @@ import { useAuthStore } from "@/store/authStore";
 //
 // Quota: each evaluation = 1 AI request, identical to a normal chat
 // turn.
-
-interface AgentInfo {
-  id: string;
-  name: string;
-  description: string;
-  default_provider: string;
-}
 
 interface InlineToolCall {
   id: string;

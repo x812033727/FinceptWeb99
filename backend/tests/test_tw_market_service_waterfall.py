@@ -586,7 +586,7 @@ async def test_get_quote_uses_archive_baseline_for_change_pct():
 
 
 @pytest.mark.asyncio
-async def test_resolve_prev_close_from_archive_returns_none_for_unknown_symbol():
+async def test_resolve_prev_close_returns_none_for_unknown_symbol():
     """No bars in archive → None → caller falls back to upstream's
     own `change` field. Doesn't crash, doesn't leak stale cache."""
     with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
@@ -595,5 +595,92 @@ async def test_resolve_prev_close_from_archive_returns_none_for_unknown_symbol()
              "services.ingest.repository.read_ohlcv_range_autosession",
              new=AsyncMock(return_value=[]),
          ):
-        out = await svc._resolve_prev_close_from_archive("9999")
+        out = await svc._resolve_prev_close("9999", upstream_close=580.0)
     assert out is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_prev_close_weekend_skips_back_one_session():
+    """Saturday view: TWSE keeps serving Friday's close. Without
+    the upstream-vs-archive comparison we'd return Friday's archive
+    bar as `prev` — close == prev → 漲幅 0%. The fix: when upstream's
+    close matches the archive's latest bar, the displayed close IS
+    the most recent archived session, so prev should be the bar
+    BEFORE that (Thursday)."""
+    archive_bars = [
+        # Thursday's bar
+        {"time": "2026-04-30", "open": 575, "high": 580,
+         "low": 573, "close": 575, "volume": 1_000_000},
+        # Friday's bar — TWSE on Saturday returns this same close
+        {"time": "2026-05-01", "open": 576, "high": 582,
+         "low": 575, "close": 580, "volume": 1_200_000},
+    ]
+    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch(
+             "services.ingest.repository.read_ohlcv_range_autosession",
+             new=AsyncMock(return_value=archive_bars),
+         ):
+        # Upstream close = 580 (Friday's, which TWSE will keep
+        # serving on Saturday). Same as archive's latest → resolver
+        # walks back one session.
+        out = await svc._resolve_prev_close("2330", upstream_close=580.0)
+    # Thursday's close, NOT Friday's. Otherwise change_pct = 0.
+    assert out == 575.0
+
+
+@pytest.mark.asyncio
+async def test_resolve_prev_close_intraday_uses_archive_latest():
+    """Mid-market view: TWSE serves a fresh tick (e.g. 583) that
+    differs from archive's latest (Friday's 580). The "previous"
+    is then archive's latest."""
+    archive_bars = [
+        {"time": "2026-04-30", "open": 575, "high": 580,
+         "low": 573, "close": 575, "volume": 1_000_000},
+        {"time": "2026-05-01", "open": 576, "high": 582,
+         "low": 575, "close": 580, "volume": 1_200_000},
+    ]
+    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch(
+             "services.ingest.repository.read_ohlcv_range_autosession",
+             new=AsyncMock(return_value=archive_bars),
+         ):
+        out = await svc._resolve_prev_close("2330", upstream_close=583.0)
+    # Friday's close — last completed session before today's live tick.
+    assert out == 580.0
+
+
+@pytest.mark.asyncio
+async def test_get_quote_does_not_show_zero_pct_on_weekend():
+    """End-to-end: TWSE returns Friday's stale close on Saturday;
+    archive has Thu+Fri. Result must be Friday's session move
+    (Thu→Fri), not 0%."""
+    twse_payload = {
+        "symbol": "2330", "name_zh": "台積電",
+        "close": 580.0, "open": 576.0, "high": 582.0, "low": 575.0,
+        "volume": 1_200_000,
+        # No `change` in this stale payload — TWSE serves an empty
+        # delta on a closed market day too.
+    }
+    archive_bars = [
+        {"time": "2026-04-30", "open": 575, "high": 580,
+         "low": 573, "close": 575, "volume": 1_000_000},
+        {"time": "2026-05-01", "open": 576, "high": 582,
+         "low": 575, "close": 580, "volume": 1_200_000},
+    ]
+    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc.twse, "get_realtime_quote",
+                      new=AsyncMock(return_value=twse_payload)), \
+         patch(
+             "services.ingest.repository.read_ohlcv_range_autosession",
+             new=AsyncMock(return_value=archive_bars),
+         ):
+        out = await svc.get_quote("2330")
+
+    assert out["price"] == 580.0
+    # Real Friday-session move: 580 - 575 = 5, +0.87%
+    assert out["change"] == 5.0
+    assert out["change_pct"] == round(5 / 575 * 100, 4)
+    assert out["change_pct"] != 0.0

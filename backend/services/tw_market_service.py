@@ -162,57 +162,90 @@ def get_company_name(symbol: str) -> str | None:
 
 # ── Quote ─────────────────────────────────────────────────────────
 
-async def _resolve_prev_close_from_archive(symbol: str) -> float | None:
-    """Read the prior trading day's close for `symbol` from
-    `ohlcv_daily`, cached in Redis 4h.
+async def _archive_last2_closes(symbol: str) -> list[tuple[str, float]]:
+    """Return up to the last 2 (date, close) pairs from `ohlcv_daily`,
+    ascending. Cached in Redis 4h. Empty list when the archive has
+    nothing for the symbol.
 
-    TWSE's STOCK_DAY_ALL endpoint reliably returns today's close +
-    `Change` field, but `Change` carries the wrong semantics for a
-    handful of symbols (notably KY-listed companies — observed on
-    4958, 2455). Computing change_pct from the upstream `change`
-    surfaces +992% / +996% headlines. The fix: use yesterday's close
-    from our own archive as the baseline, then derive change =
-    today_close - yesterday_close. Always correct, always agrees
-    with the candlestick chart's prior bar.
-
-    Returns None when the archive has no bars before today (fresh
-    deploy, never-ingested symbol). Caller falls through to the
-    upstream's reported change in that case.
+    Caller decides which one is "prev_close" by comparing the
+    upstream's currently-reported close — see `_resolve_prev_close`.
     """
-    cache_key = f"tw:prev_close:{symbol}"
+    cache_key = f"tw:archive_last2:{symbol}"
     cached = await cache_get(cache_key)
     if cached is not None:
         try:
-            return float(cached)
-        except (TypeError, ValueError):
+            data = json.loads(cached)
+            return [(d, float(c)) for d, c in data]
+        except (TypeError, ValueError, json.JSONDecodeError):
             pass
     try:
         from services.ingest.repository import read_ohlcv_range_autosession
         today = date.today()
-        start = today - timedelta(days=10)
+        start = today - timedelta(days=14)
         bars = await read_ohlcv_range_autosession("TW", symbol, start, today)
     except Exception as exc:
         log.warning(
             "tw.quote.prev_close_lookup_failed",
             extra={"symbol": symbol, "error": str(exc)},
         )
+        return []
+    cleaned: list[tuple[str, float]] = []
+    for b in bars:
+        ts = b.get("time")
+        cl = b.get("close")
+        if ts is None or cl is None:
+            continue
+        try:
+            cleaned.append((str(ts), float(cl)))
+        except (TypeError, ValueError):
+            continue
+    if not cleaned:
+        return []
+    last2 = cleaned[-2:]
+    await cache_set(
+        cache_key,
+        json.dumps([[d, c] for d, c in last2]),
+        4 * 3600,
+    )
+    return last2
+
+
+async def _resolve_prev_close(
+    symbol: str, upstream_close: float | None,
+) -> float | None:
+    """Pick the correct prior-session close from the archive.
+
+    The right "prev" depends on whether `upstream_close` represents
+    a live tick from today's session OR a stale snapshot of the last
+    closed session (weekends, holidays, pre-market):
+
+      - upstream_close ≈ archive[-1].close → upstream is serving
+        the same close as the latest archived session. The "previous"
+        relative to that displayed close is `archive[-2]`.
+      - upstream_close differs → upstream has a fresh tick that
+        hasn't landed in archive yet (today's intraday). `archive[-1]`
+        IS the previous session's close.
+
+    Without this distinction, a Saturday view would show 漲幅 0%
+    because TWSE keeps serving Friday's close and we'd compare it
+    against Friday's archive bar.
+    """
+    last2 = await _archive_last2_closes(symbol)
+    if not last2:
         return None
-    today_iso = today.isoformat()
-    prior = [b for b in bars if (b.get("time") or "") < today_iso]
-    if not prior:
+    latest_close = last2[-1][1]
+    same_session = (
+        upstream_close is not None
+        and abs(float(upstream_close) - latest_close) < 0.01
+    )
+    if same_session and len(last2) >= 2:
+        return last2[-2][1]
+    if same_session:
+        # Only one bar in archive AND it matches upstream → no prior
+        # session available; caller falls through to upstream's
+        # `change` field (or stays None).
         return None
-    last_close = prior[-1].get("close")
-    if last_close is None:
-        return None
-    try:
-        value = float(last_close)
-    except (TypeError, ValueError):
-        return None
-    # 4h TTL: prior-day close is stable once the day is over, but
-    # capping at 4h gives us a self-healing window if a holiday-week
-    # ingest mis-fires (next refresh re-reads from archive).
-    await cache_set(cache_key, str(value), 4 * 3600)
-    return value
+    return latest_close
 
 
 async def fetch_quote_waterfall(symbol: str) -> tuple[dict | None, str]:
@@ -279,7 +312,20 @@ async def fetch_quote_waterfall(symbol: str) -> tuple[dict | None, str]:
     # been bandaging with sanity bounds is the symptom of trusting
     # that field for stocks where TWSE serves it incorrectly.
     if not raw.get("prev_close"):
-        prev = await _resolve_prev_close_from_archive(symbol)
+        # Pass upstream's close so the resolver can tell whether this
+        # is a fresh intraday tick (use archive[-1] as prev) vs a
+        # stale weekend/holiday snapshot of the last session (use
+        # archive[-2] as prev). Without the comparison, weekend
+        # views would show 漲幅 0% — TWSE serves Friday's close on
+        # Saturday and we'd compare it against Friday's archive bar.
+        upstream_close = raw.get("close")
+        try:
+            upstream_close_f = (
+                float(upstream_close) if upstream_close is not None else None
+            )
+        except (TypeError, ValueError):
+            upstream_close_f = None
+        prev = await _resolve_prev_close(symbol, upstream_close_f)
         if prev is not None:
             raw["prev_close"] = prev
 

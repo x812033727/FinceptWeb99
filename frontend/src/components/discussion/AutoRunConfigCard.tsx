@@ -1,0 +1,217 @@
+import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { AgentInfo, AutoRunConfig } from "@/types/discussion";
+import { fetchAutoRunConfig, saveAutoRunConfig } from "./_helpers";
+
+// Sits at the top of the sidebar. Lets each user opt themselves into
+// the daily 00:00 UTC scheduler and pick their own topic / rules /
+// persona roster.
+export function AutoRunConfigCard({
+  agents,
+  collapsed,
+  onToggleCollapse,
+  personaName,
+}: {
+  agents: AgentInfo[];
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+  personaName: (id: string) => string;
+}) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+
+  const { data: cfg, isLoading, isError } = useQuery<AutoRunConfig>({
+    queryKey: ["discussion-auto-run-config"],
+    queryFn: fetchAutoRunConfig,
+  });
+
+  const [enabled, setEnabled] = useState(false);
+  const [topic, setTopic] = useState("");
+  const [rules, setRules] = useState("");
+  const [personaIds, setPersonaIds] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [showSaved, setShowSaved] = useState(false);
+
+  // Hydrate form fields once when the server config arrives. A ref guards
+  // against re-hydrating on every refetch (which would clobber whatever
+  // the user just typed).
+  const hydratedRef = useRef(false);
+  useEffect(() => {
+    if (!cfg || hydratedRef.current) return;
+    hydratedRef.current = true;
+    setEnabled(cfg.enabled);
+    setTopic(cfg.topic);
+    setRules(cfg.rules);
+    setPersonaIds(cfg.persona_ids);
+  }, [cfg]);
+
+  const saveMut = useMutation({
+    mutationFn: saveAutoRunConfig,
+    onSuccess: (row) => {
+      queryClient.setQueryData(["discussion-auto-run-config"], row);
+      setShowSaved(true);
+      setError(null);
+    },
+  });
+
+  useEffect(() => {
+    if (!showSaved) return;
+    const timer = window.setTimeout(() => setShowSaved(false), 3000);
+    return () => window.clearTimeout(timer);
+  }, [showSaved]);
+
+  function togglePersona(id: string) {
+    setPersonaIds((prev) =>
+      prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id],
+    );
+  }
+
+  function handleSave() {
+    if (personaIds.length < 2 || personaIds.length > 8) {
+      setError(t("discussion.auto_run_validation_personas"));
+      return;
+    }
+    if (!topic.trim()) {
+      setError(t("discussion.auto_run_validation_topic"));
+      return;
+    }
+    if (!rules.trim()) {
+      setError(t("discussion.auto_run_validation_rules"));
+      return;
+    }
+    setError(null);
+    saveMut.mutate({
+      enabled,
+      persona_ids: personaIds,
+      topic: topic.trim(),
+      rules: rules.trim(),
+    });
+  }
+
+  return (
+    <div className="border border-border rounded-md p-2 bg-card/40">
+      <button
+        type="button"
+        onClick={onToggleCollapse}
+        className="flex items-center gap-1.5 w-full text-left text-xs font-medium text-foreground hover:text-primary transition-colors"
+        aria-expanded={!collapsed}
+      >
+        <span className="text-[9px] text-muted-foreground w-2.5 inline-block">
+          {collapsed ? "▶" : "▼"}
+        </span>
+        {t("discussion.auto_run_title")}
+        {cfg?.enabled && (
+          <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-green-900/30 text-green-300 border border-green-800/50">
+            ON
+          </span>
+        )}
+      </button>
+
+      {!collapsed && (
+        <div className="mt-2 space-y-2">
+          <p className="text-[10px] text-muted-foreground leading-relaxed">
+            {t("discussion.auto_run_subtitle")}
+          </p>
+
+          {isLoading ? (
+            <p className="text-[10px] text-muted-foreground animate-pulse">
+              …
+            </p>
+          ) : isError ? (
+            <p className="text-[10px] text-red-400">
+              {t("discussion.auto_run_load_failed")}
+            </p>
+          ) : (
+            <>
+              <label className="flex items-center gap-2 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={enabled}
+                  onChange={(e) => setEnabled(e.target.checked)}
+                  className="accent-primary"
+                />
+                <span>{t("discussion.auto_run_enabled")}</span>
+              </label>
+
+              <div>
+                <label className="text-[11px] text-muted-foreground">
+                  {t("discussion.auto_run_topic_label")}
+                </label>
+                <textarea
+                  value={topic}
+                  onChange={(e) => setTopic(e.target.value)}
+                  rows={2}
+                  maxLength={500}
+                  placeholder={t("discussion.auto_run_topic_placeholder")}
+                  className="w-full mt-0.5 resize-none bg-card border border-border rounded px-2 py-1 text-[11px] text-foreground focus:outline-none focus:border-primary/50"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-muted-foreground">
+                  {t("discussion.auto_run_rules_label")}
+                </label>
+                <textarea
+                  value={rules}
+                  onChange={(e) => setRules(e.target.value)}
+                  rows={4}
+                  maxLength={2000}
+                  placeholder={t("discussion.auto_run_rules_placeholder")}
+                  className="w-full mt-0.5 resize-none bg-card border border-border rounded px-2 py-1 text-[11px] text-foreground font-mono focus:outline-none focus:border-primary/50"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-muted-foreground">
+                  {t("discussion.auto_run_personas_label")} ({personaIds.length})
+                </label>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {agents.map((a) => {
+                    const selected = personaIds.includes(a.id);
+                    return (
+                      <button
+                        key={a.id}
+                        type="button"
+                        onClick={() => togglePersona(a.id)}
+                        className={`px-1.5 py-0.5 rounded text-[10px] border transition-colors ${
+                          selected
+                            ? "border-primary bg-primary/15 text-primary"
+                            : "border-border bg-card text-muted-foreground hover:border-primary/40"
+                        }`}
+                      >
+                        {personaName(a.id)}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {error && (
+                <p className="text-[10px] text-red-400">{error}</p>
+              )}
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={saveMut.isPending}
+                  className="px-2.5 py-1 rounded text-[11px] bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+                >
+                  {saveMut.isPending
+                    ? t("common.saving")
+                    : t("discussion.auto_run_save")}
+                </button>
+                {showSaved && (
+                  <span className="text-[10px] text-green-400">
+                    ✓ {t("discussion.auto_run_saved")}
+                  </span>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

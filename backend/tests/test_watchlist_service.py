@@ -136,7 +136,10 @@ async def test_enrich_item_surfaces_quoted_at_and_data_source(
     wl = await _make_watchlist(db_session, user.id)
     item = await _make_item(db_session, wl.id, "2330", Market.TW)
 
-    # 2026-04-30 06:31:00 UTC = 1746081060000 ms
+    # 2025-05-01 06:31:00 UTC = 1746081060000 ms (actual decoded value
+    # — the original comment claimed 2026-04-30 but the math doesn't
+    # match; what matters is the round-trip from epoch ms back to ISO
+    # is correct, regardless of which calendar day it lands on).
     mock_quote = {
         "price": 610.0,
         "change_pct": 0.5,
@@ -150,8 +153,33 @@ async def test_enrich_item_surfaces_quoted_at_and_data_source(
 
     assert result["data_source"] == "twse"
     assert result["quoted_at"] is not None
-    assert result["quoted_at"].startswith("2026-04-30T06:31:00")
-    assert result["name"] is None
+    assert result["quoted_at"].startswith("2025-05-01T06:31:00")
+    # TW market reads `name_zh` from the quote into `name`.
+    assert result["name"] == "台積電"
+
+
+@pytest.mark.asyncio
+async def test_enrich_item_returns_blank_quote_when_upstream_raises(
+    db_session: AsyncSession,
+):
+    """A single watchlist item's quote fetch failure must NOT propagate
+    out of `_enrich_item` and break `list_watchlists`'s gather. The
+    item should land with `price=None / change_pct=None / data_source=None`
+    so the rest of the watchlist still renders."""
+    user = await _make_user(db_session)
+    wl = await _make_watchlist(db_session, user.id, "Resilient")
+    item = await _make_item(db_session, wl.id, "2330", Market.TW)
+
+    with patch(
+        "services.tw_market_service.get_quote",
+        new=AsyncMock(side_effect=RuntimeError("upstream chaos")),
+    ):
+        result = await _enrich_item(item)
+
+    assert result["symbol"] == "2330"
+    assert result["price"] is None
+    assert result["change_pct"] is None
+    assert result["data_source"] is None
 
 
 # ── create_watchlist ─────────────────────────────────────────────────

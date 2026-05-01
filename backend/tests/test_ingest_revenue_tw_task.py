@@ -208,3 +208,142 @@ async def test_top_revenue_growers_aggregator(db_session: AsyncSession):
     top = await read_top_revenue_growers(db_session, market="TW", limit=10)
     assert [r["symbol"] for r in top] == ["2454", "2330"]
     assert top[0]["revenue_yoy"] == 42.5
+
+
+# ── paywall fail-soft path ────────────────────────────────────────
+
+def _http_status_error(status_code: int, body_msg: str) -> Exception:
+    """Build an `httpx.HTTPStatusError` whose `response.json()` returns
+    `{"msg": body_msg}`. Mirrors what FinMind actually emits when the
+    request token is on a tier that doesn't have access to the
+    requested dataset."""
+    import httpx
+    request = httpx.Request("GET", "https://api.finmindtrade.com/api/v4/data")
+    response = httpx.Response(
+        status_code,
+        request=request,
+        json={"msg": body_msg, "status": status_code},
+    )
+    return httpx.HTTPStatusError(
+        f"HTTP {status_code}", request=request, response=response,
+    )
+
+
+@pytest.mark.asyncio
+async def test_paywall_response_is_marked_skipped_not_failure(patch_session):
+    """As of 2026-04 FinMind moved the market-wide
+    `TaiwanStockMonthRevenue` query to paid-sponsor-only. The
+    response is HTTP 400 with body `{"msg": "Your level is register.
+    Please update your user level. ..."}`. Treat it as a known-permanent
+    skip: clear failures (no nag-the-admin auto-backoff banner),
+    don't bump the failure counter, and write a `skipped: ...` health
+    record that quotes the upstream message verbatim so an operator
+    instantly recognises FinMind's wording."""
+    from tasks import ingest_revenue_tw
+
+    body_msg = (
+        "Your level is register. Please update your user level. "
+        "Detail information: https://finmindtrade.com/analysis/#/Sponsor/sponsor"
+    )
+    record_health_mock = AsyncMock()
+    record_failure_mock = AsyncMock()
+    clear_failures_mock = AsyncMock()
+    with patch(
+        "tasks.ingest_revenue_tw.acquire_lock",
+        AsyncMock(return_value=True),
+    ), patch(
+        "tasks.ingest_revenue_tw.release_lock", AsyncMock(),
+    ), patch(
+        "tasks.ingest_revenue_tw.backoff_remaining_seconds",
+        AsyncMock(return_value=0),
+    ), patch(
+        "tasks.ingest_revenue_tw.record_failure", record_failure_mock,
+    ), patch(
+        "tasks.ingest_revenue_tw.clear_failures", clear_failures_mock,
+    ), patch(
+        "tasks.ingest_revenue_tw.record_health", record_health_mock,
+    ), patch(
+        "tasks.ingest_revenue_tw.finmind.get_monthly_revenue_market_wide",
+        AsyncMock(side_effect=_http_status_error(400, body_msg)),
+    ):
+        await ingest_revenue_tw.run()
+
+    # Did NOT bump failure counter — paywall is permanent state, not transient.
+    record_failure_mock.assert_not_called()
+    # DID clear failures — even if a previous tick had armed backoff,
+    # the paywall path resets it so the admin's "Retry now" stops
+    # surfacing a stale "auto-backoff armed" banner.
+    clear_failures_mock.assert_awaited_once()
+    # Health row says skipped + quotes upstream verbatim.
+    record_health_mock.assert_awaited_once()
+    kwargs = record_health_mock.await_args.kwargs
+    assert kwargs["ok"] is False
+    assert kwargs["row_count"] == 0
+    assert "skipped" in kwargs["error"].lower()
+    assert "paywalled" in kwargs["error"].lower()
+    assert "your level is register" in kwargs["error"].lower()
+    # No "auto-backoff armed" wording — that's reserved for transient
+    # outages; admins shouldn't be misled into thinking this will
+    # self-recover on retry.
+    assert "auto-backoff armed" not in kwargs["error"]
+
+
+@pytest.mark.asyncio
+async def test_genuine_outage_still_arms_backoff(patch_session):
+    """Sanity check: a 503 / generic transient failure still uses the
+    record_failure + auto-backoff path. Only the paywall message
+    diverts to skip-mode."""
+    from tasks import ingest_revenue_tw
+
+    record_health_mock = AsyncMock()
+    record_failure_mock = AsyncMock(return_value=1)
+    clear_failures_mock = AsyncMock()
+    with patch(
+        "tasks.ingest_revenue_tw.acquire_lock",
+        AsyncMock(return_value=True),
+    ), patch(
+        "tasks.ingest_revenue_tw.release_lock", AsyncMock(),
+    ), patch(
+        "tasks.ingest_revenue_tw.backoff_remaining_seconds",
+        AsyncMock(return_value=0),
+    ), patch(
+        "tasks.ingest_revenue_tw.record_failure", record_failure_mock,
+    ), patch(
+        "tasks.ingest_revenue_tw.clear_failures", clear_failures_mock,
+    ), patch(
+        "tasks.ingest_revenue_tw.record_health", record_health_mock,
+    ), patch(
+        "tasks.ingest_revenue_tw.finmind.get_monthly_revenue_market_wide",
+        AsyncMock(side_effect=_http_status_error(503, "FinMind unavailable")),
+    ):
+        await ingest_revenue_tw.run()
+
+    record_failure_mock.assert_awaited_once()
+    clear_failures_mock.assert_not_called()
+    kwargs = record_health_mock.await_args.kwargs
+    assert kwargs["ok"] is False
+    assert "auto-backoff armed" in kwargs["error"]
+    assert "skipped" not in kwargs["error"].lower()
+
+
+# ── _looks_like_paywall unit ──────────────────────────────────────
+
+def test_paywall_detector_is_case_insensitive():
+    from tasks.ingest_revenue_tw import _looks_like_paywall
+    assert _looks_like_paywall("YOUR LEVEL IS REGISTER")
+    assert _looks_like_paywall("Your Level is Register. Please update")
+    assert _looks_like_paywall("please update your user level")
+
+
+def test_paywall_detector_matches_sponsor_phrasing():
+    from tasks.ingest_revenue_tw import _looks_like_paywall
+    assert _looks_like_paywall("This dataset requires paid sponsor")
+    assert _looks_like_paywall("Sponsor only")
+
+
+def test_paywall_detector_does_not_match_generic_400():
+    from tasks.ingest_revenue_tw import _looks_like_paywall
+    assert not _looks_like_paywall("")
+    assert not _looks_like_paywall("Bad request")
+    assert not _looks_like_paywall("invalid date format")
+    assert not _looks_like_paywall("token expired")

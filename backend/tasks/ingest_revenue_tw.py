@@ -48,9 +48,30 @@ _LOCK_KEY = "lock:ingest_revenue_tw"
 _LOCK_TTL = 10 * 60   # one FinMind call + bulk write
 _LOOKBACK_DAYS = 90
 
+# Phrases FinMind returns in the response body when the requesting
+# token is on a tier that doesn't have access to the dataset. As of
+# 2026-04 the market-wide `TaiwanStockMonthRevenue` query (`data_id=""`)
+# is sponsor-only, even though per-symbol queries still work for the
+# free tier. We match against these substrings so a paywall is treated
+# as a known-permanent skip rather than a transient failure (no
+# auto-backoff arm, no nag-the-admin red-error noise).
+_PAYWALL_HINTS = (
+    "your level is register",
+    "please update your user level",
+    "requires paid",
+    "sponsor",
+)
+
+
+class FinMindPaywallError(Exception):
+    """Raised when the upstream response identifies the failure as
+    a tier / paywall mismatch rather than an outage. Carries the
+    original message body so the health record can quote it
+    verbatim — operators recognise FinMind's wording on sight."""
+
 
 _HTTP_HINTS: dict[int, str] = {
-    400: "FinMind rejected the request — empty/malformed FINMIND_TOKEN",
+    400: "FinMind rejected the request (likely paywalled dataset or malformed token)",
     401: "check FINMIND_TOKEN — invalid or missing",
     402: "FinMind dataset requires paid sponsorship",
     403: "FinMind token forbidden for this dataset",
@@ -60,6 +81,13 @@ _HTTP_HINTS: dict[int, str] = {
     503: "FinMind unavailable",
     504: "FinMind gateway timeout",
 }
+
+
+def _looks_like_paywall(body_msg: str) -> bool:
+    if not body_msg:
+        return False
+    needle = body_msg.lower()
+    return any(hint in needle for hint in _PAYWALL_HINTS)
 
 
 def _format_error(exc: BaseException) -> str:
@@ -85,6 +113,27 @@ def _format_error(exc: BaseException) -> str:
     if isinstance(exc, httpx.HTTPError):
         return f"http error: {exc}"
     return f"unexpected: {exc}"
+
+
+def _extract_body_message(exc: BaseException) -> str:
+    """Pull the FinMind body's `msg` / `message` / `detail` out of an
+    `HTTPStatusError`. Returns "" when the body isn't JSON or none of
+    the expected keys are present. Used to spot the paywall without
+    pattern-matching against the formatted-error string (which can
+    drift)."""
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return ""
+    try:
+        body = exc.response.json()
+    except Exception:
+        return ""
+    if not isinstance(body, dict):
+        return ""
+    for key in ("msg", "message", "detail"):
+        v = body.get(key)
+        if isinstance(v, str) and v:
+            return v
+    return ""
 
 
 async def run() -> None:
@@ -113,6 +162,32 @@ async def run() -> None:
         try:
             row_count = await _do_run()
         except Exception as exc:
+            body_msg = _extract_body_message(exc)
+            if _looks_like_paywall(body_msg):
+                # Paywall is a known-permanent state, not an outage.
+                # Don't arm auto-backoff and don't bump the failure
+                # counter — both would imply this can recover by
+                # itself, which it can't. Reset prior arm so the
+                # admin's "Retry now" button doesn't surface a stale
+                # backoff banner.
+                await clear_failures(JOB_ID)
+                log.warning(
+                    "ingest_revenue_tw.paywalled",
+                    extra={"upstream_message": body_msg},
+                )
+                await record_health(
+                    JOB_ID, ok=False, row_count=0,
+                    error=(
+                        "skipped: FinMind paywalled this dataset "
+                        "(TaiwanStockMonthRevenue market-wide query "
+                        "needs paid sponsor tier as of 2026-04). "
+                        "Existing tw_revenue_monthly rows preserved; "
+                        "discussion `top_revenue_growers` block keeps "
+                        "the most recent successful pull. "
+                        f"Upstream message: {body_msg}"
+                    ),
+                )
+                return
             detail = _format_error(exc)
             failures = await record_failure(JOB_ID)
             log.warning(

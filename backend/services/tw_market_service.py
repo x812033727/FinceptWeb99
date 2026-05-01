@@ -273,6 +273,25 @@ def _normalize_quote(symbol: str, raw: dict) -> dict[str, Any]:
     if chg is not None and not prev and close:
         prev = close - chg
     chg_pct = round(chg / prev * 100, 4) if (chg is not None and prev) else None
+    # Sanity bound. TW stocks have ±10% daily limit-up/down. Resumed
+    # trading after a halt or first-day-of-IPO can exceed that, but
+    # nothing legal exceeds ±30% in a single day. When the computed
+    # pct is wildly outside that range, the upstream is reporting
+    # something other than today's delta — observed on KY-listed
+    # stocks where TWSE returns yesterday's close in the `Change`
+    # field, and on FinMind fallbacks where split-adjusted historicals
+    # mismatch with current un-adjusted prices. Drop the bad values
+    # rather than display a +992% headline.
+    if chg_pct is not None and abs(chg_pct) > 30:
+        log.warning(
+            "tw.quote.change_pct_out_of_bounds",
+            extra={
+                "symbol": symbol, "close": close,
+                "change": chg, "change_pct": chg_pct,
+            },
+        )
+        chg = None
+        chg_pct = None
     return {
         "symbol":        symbol,
         "market":        "TW",
@@ -1001,6 +1020,13 @@ async def get_screener(
         change_pct = round(change / (price - change) * 100, 4) if (
             change is not None and price is not None and (price - change)
         ) else None
+        # Same sanity bound as `_normalize_quote` — see that function's
+        # docstring for context. Keeps the screener from surfacing
+        # impossible moves like +992% when an upstream row's `Change`
+        # field carries the wrong semantics for KY-listed companies.
+        if change_pct is not None and abs(change_pct) > 30:
+            change = None
+            change_pct = None
 
         result.append({
             "symbol":         code,

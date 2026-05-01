@@ -109,6 +109,36 @@ def test_normalize_quote_handles_negative_change_with_only_change_present():
     assert out["change_pct"] == round(-10 / 610 * 100, 4)
 
 
+def test_normalize_quote_drops_change_pct_when_implausibly_large():
+    """Regression for the 4958 (KY) case where TWSE returned the
+    prior-day close in the `Change` field, computing change_pct =
+    +992%. Anything beyond ±30% is treated as upstream junk and
+    dropped — UI shows '—' until the next refresh instead of a
+    misleading headline."""
+    # close=421, change=382.5 → derived prev=38.5 → +993% → drop.
+    out = svc._normalize_quote("4958", {"close": 421, "change": 382.5})
+    assert out["change"] is None
+    assert out["change_pct"] is None
+
+
+def test_normalize_quote_keeps_legal_limit_up():
+    """A real ±10% limit-up move stays within the sanity bound and
+    must NOT be dropped."""
+    # close=110, change=+10 (from 100), pct = 10/100 = +10%
+    out = svc._normalize_quote("2330", {"close": 110, "change": 10})
+    assert out["change"] == 10
+    assert out["change_pct"] == round(10 / 100 * 100, 4)
+
+
+def test_normalize_quote_drops_negative_implausible_change():
+    """Same bound on the downside — a -50% computed pct is upstream
+    junk (TW limit-down is -10%)."""
+    # close=10, change=-50 → derived prev=60 → -83% → drop
+    out = svc._normalize_quote("4958", {"close": 10, "change": -50})
+    assert out["change"] is None
+    assert out["change_pct"] is None
+
+
 def test_normalize_quote_marks_etf_correctly():
     assert svc._normalize_quote("0050", {})["is_etf"] is True
     assert svc._normalize_quote("2330", {})["is_etf"] is False

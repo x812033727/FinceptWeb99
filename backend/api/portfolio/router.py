@@ -1,3 +1,4 @@
+import logging
 from datetime import date as _date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -20,6 +21,8 @@ from dependencies import get_current_user
 from db.session import get_db
 from limiter import limiter
 import services.portfolio_service as svc
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 Auth = Annotated[dict, Depends(get_current_user)]
@@ -45,6 +48,21 @@ async def get_portfolio(portfolio_id: str, user: Auth, db: DB):
         return await svc.get_portfolio_detail(portfolio_id, user["id"], db)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except Exception:
+        # Catch-all so any unexpected exception path leaves a stack
+        # trace in the logs (instead of just FastAPI's anonymous 500
+        # response). The per-holding `_enrich` already swallows
+        # individual quote/FX failures into a degraded row, so anything
+        # that lands here is a genuine bug — DB schema drift, malformed
+        # input, dependency outage — that we want to see immediately.
+        log.exception(
+            "portfolio.detail_failed",
+            extra={"portfolio_id": portfolio_id, "user_id": user["id"]},
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to load portfolio detail; check server logs.",
+        )
 
 
 @router.delete("/{portfolio_id}", status_code=status.HTTP_204_NO_CONTENT)

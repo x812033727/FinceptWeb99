@@ -1149,6 +1149,71 @@ const RETRYABLE_INGEST_JOBS = new Set([
   "score_discussion_outcomes",
 ]);
 
+// Per-job metadata for the IngestHealthCard. `schedule_zh` is mirrored
+// from the corresponding `add_job` call in `backend/tasks/scheduler.py`
+// — when you change the cron expression there, update the entry here
+// or the displayed schedule will silently drift out of sync.
+// `description_zh` is a 1-line summary in 繁體中文 so the table is
+// readable for non-engineering operators.
+interface JobMeta {
+  description_zh: string;
+  schedule_zh: string;
+}
+const JOB_META: Record<string, JobMeta> = {
+  ingest_news_tw: {
+    description_zh: "台股新聞抓取（Google News RSS）",
+    schedule_zh: "每 1 小時",
+  },
+  ingest_news_international: {
+    description_zh: "國際財經新聞抓取（Fed / 美股 / 國際）",
+    schedule_zh: "每 1 小時",
+  },
+  ingest_ohlcv_tw: {
+    description_zh: "台股每日 K 線（TWSE → FinMind 後備）",
+    schedule_zh: "每天 14:30 (台北)",
+  },
+  ingest_fundamentals_tw: {
+    description_zh: "台股基本面（PE / PB / 殖利率）",
+    schedule_zh: "每天 14:45 (台北)",
+  },
+  ingest_institutional_tw: {
+    description_zh: "台股法人買賣超（外資 / 投信 / 自營商）",
+    schedule_zh: "每天 14:50 (台北)",
+  },
+  ingest_margin_tw: {
+    description_zh: "台股融資融券餘額",
+    schedule_zh: "每天 15:00 (台北)",
+  },
+  ingest_taiex_history: {
+    description_zh: "TAIEX 大盤指數每日歷史線",
+    schedule_zh: "每天 15:10 (台北)",
+  },
+  ingest_revenue_tw: {
+    description_zh: "台股月營收（FinMind 全市場一次抓）",
+    schedule_zh: "每天 17:00 (台北)",
+  },
+  ingest_quotes_retention_tw: {
+    description_zh: "台股 quote_snapshots 30 日保留（清舊資料）",
+    schedule_zh: "每天 11:00 (台北)",
+  },
+  score_news_sentiment: {
+    description_zh: "新聞情緒評分（LLM 評每篇利多 / 利空 / 中性）",
+    schedule_zh: "每 30 分鐘",
+  },
+  auto_run_discussion: {
+    description_zh: "每日自動圓桌討論（已啟用 opt-in 的使用者）",
+    schedule_zh: "每天 08:00 (台北)",
+  },
+  verify_discussion_outcome: {
+    description_zh: "圓桌討論勝負判定（max-high vs day1_open × 1.03）",
+    schedule_zh: "每天 16:30 (台北)",
+  },
+  score_discussion_outcomes: {
+    description_zh: "圓桌討論「對答案」D1-D5 收盤漲跌計算",
+    schedule_zh: "每天 17:30 (台北)",
+  },
+};
+
 function timeAgo(iso: string | null): string {
   if (!iso) return "—";
   const then = new Date(iso).getTime();
@@ -1222,6 +1287,7 @@ function IngestHealthCard() {
             <thead>
               <tr className="border-b border-border text-[10px] text-muted-foreground uppercase tracking-wider">
                 <th className="text-left py-1.5 pr-3">Job</th>
+                <th className="text-left py-1.5 pr-3">排程</th>
                 <th className="text-left py-1.5 pr-3">Status</th>
                 <th className="text-right py-1.5 pr-3">Rows</th>
                 <th className="text-left py-1.5 pr-3">Last Run</th>
@@ -1245,29 +1311,40 @@ function IngestHealthCard() {
                 const badgeText = neverRun
                   ? "pending"
                   : r.ok ? "ok" : "error";
+                const meta = JOB_META[r.job_id];
                 return (
                 <tr key={r.job_id}>
-                  <td className="py-1.5 pr-3 font-mono">{r.job_id}</td>
-                  <td className="py-1.5 pr-3">
+                  <td className="py-1.5 pr-3 align-top">
+                    <div className="font-mono">{r.job_id}</div>
+                    {meta && (
+                      <div className="text-[10px] text-muted-foreground/80 mt-0.5">
+                        {meta.description_zh}
+                      </div>
+                    )}
+                  </td>
+                  <td className="py-1.5 pr-3 text-muted-foreground align-top whitespace-nowrap">
+                    {meta?.schedule_zh ?? "—"}
+                  </td>
+                  <td className="py-1.5 pr-3 align-top">
                     <span
                       className={`px-1.5 py-0.5 rounded text-[10px] ${badgeCls}`}
                     >
                       {badgeText}
                     </span>
                   </td>
-                  <td className="py-1.5 pr-3 text-right tabular-nums">
+                  <td className="py-1.5 pr-3 text-right tabular-nums align-top">
                     {r.row_count.toLocaleString()}
                   </td>
-                  <td className="py-1.5 pr-3 text-muted-foreground">
+                  <td className="py-1.5 pr-3 text-muted-foreground align-top">
                     {timeAgo(r.last_run_at)}
                   </td>
                   <td
-                    className="py-1.5 text-muted-foreground truncate max-w-[24rem]"
+                    className="py-1.5 text-muted-foreground truncate max-w-[24rem] align-top"
                     title={r.error ?? undefined}
                   >
                     {r.error ?? ""}
                   </td>
-                  <td className="py-1.5 pl-3 text-right">
+                  <td className="py-1.5 pl-3 text-right align-top">
                     {RETRYABLE_INGEST_JOBS.has(r.job_id) ? (
                       <button
                         type="button"

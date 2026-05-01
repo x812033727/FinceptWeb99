@@ -245,20 +245,19 @@ def setup_jobs() -> None:
     #                     replace_existing=True, max_instances=1,
     #                     coalesce=True)
 
-    # 庫藏股 (TW listed-company buyback announcements). Sponsor-tier
-    # FinMind dataset; one market-wide call/day returns the trailing
-    # 90 days of announcements + execution-progress updates. Schedule
-    # at 18:00 Taipei (10:00 UTC), an hour after revenue, so the
-    # post-close cluster is fully spread out.
-    from tasks.ingest_buyback_tw import run as run_ingest_buyback_tw
-    scheduler.add_job(
-        run_ingest_buyback_tw,
-        trigger=CronTrigger(hour=10, minute=0, timezone="UTC"),
-        id="ingest_buyback_tw",
-        replace_existing=True,
-        max_instances=1,
-        coalesce=True,
-    )
+    # 庫藏股 (TW listed-company buyback announcements). The cron is
+    # intentionally NOT scheduled — FinMind v4 doesn't expose a
+    # `TaiwanStockBuyBack` dataset (verified via direct curl + the
+    # tutor docs), every call returns HTTP 422 and arms backoff. The
+    # task file + connector method are kept so the cron can be revived
+    # by hand if FinMind ever adds the dataset. Re-add this block to
+    # put it back on a schedule:
+    #
+    #   from tasks.ingest_buyback_tw import run as run_ingest_buyback_tw
+    #   scheduler.add_job(run_ingest_buyback_tw,
+    #                     trigger=CronTrigger(hour=10, minute=0, timezone="UTC"),
+    #                     id="ingest_buyback_tw",
+    #                     replace_existing=True, max_instances=1, coalesce=True)
 
     # 八大行庫 daily flow. Sponsor-tier FinMind dataset; one
     # market-wide call/day. 18:30 Taipei (10:30 UTC), 30 min after

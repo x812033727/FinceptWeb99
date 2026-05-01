@@ -139,8 +139,8 @@ const JOB_META: Record<string, JobMeta> = {
     schedule_zh: "停用中",
   },
   ingest_buyback_tw: {
-    description_zh: "台股庫藏股公告（FinMind sponsor — 公司自家買回是強訊號）",
-    schedule_zh: "每天 18:00 (台北)",
+    description_zh: "台股庫藏股公告（FinMind v4 無 TaiwanStockBuyBack 資料集；預設關閉，FinMind 補上後手動重啟）",
+    schedule_zh: "停用中",
   },
   ingest_govt_bank_flow_tw: {
     description_zh: "台股八大行庫每日買賣金額（FinMind sponsor — 國家隊指標）",

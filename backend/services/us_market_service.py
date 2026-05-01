@@ -27,11 +27,15 @@ log = logging.getLogger(__name__)
 _ET = pytz.timezone("America/New_York")
 
 # ── TTLs (seconds) ────────────────────────────────────────────────
-TTL_QUOTE       = 15
-TTL_HISTORY     = 4 * 3600
-TTL_FUNDAMENTALS = 24 * 3600
-TTL_OPTIONS     = 5 * 60
-TTL_SCREENER    = 10 * 60
+# TTLs centralized in `cache.cache_ttls`. Aliases preserve in-module
+# call-site shape.
+from cache.cache_ttls import (  # noqa: E402
+    TTL_FUNDAMENTALS,
+    TTL_HISTORY_DAILY as TTL_HISTORY,
+    TTL_OPTIONS,
+    TTL_QUOTE_US as TTL_QUOTE,
+    TTL_SCREENER,
+)
 
 # Stooq's per-request 0.2s pacing means a batch of 100 symbols takes
 # ~20 seconds — longer than any sane reverse-proxy timeout. We cap the
@@ -657,7 +661,7 @@ async def get_macro_indicator(name: str) -> list[dict]:
 
 # ── News ──────────────────────────────────────────────────────────
 
-TTL_NEWS = 5 * 60  # 5 minutes
+from cache.cache_ttls import TTL_NEWS  # noqa: E402
 
 
 async def _google_news_rss(query: str, limit: int = 10) -> list[dict[str, Any]]:

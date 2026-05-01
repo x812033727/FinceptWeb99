@@ -35,13 +35,18 @@ log = logging.getLogger(__name__)
 
 _TW = pytz.timezone("Asia/Taipei")
 
-TTL_QUOTE        = 60          # 1 min (TWSE is ~3-5 min delayed anyway)
-TTL_HISTORY      = 4 * 3600
-TTL_INSTITUTIONAL = 4 * 3600
-TTL_MARGIN       = 4 * 3600
-TTL_REVENUE      = 12 * 3600
-TTL_FUNDAMENTALS = 24 * 3600
-TTL_SCREENER     = 10 * 60
+# TTLs live in `cache.cache_ttls` so all three market services tune
+# from the same place. Aliases preserve the existing call-site shape
+# inside this module.
+from cache.cache_ttls import (  # noqa: E402
+    TTL_FUNDAMENTALS,
+    TTL_HISTORY_DAILY as TTL_HISTORY,
+    TTL_INSTITUTIONAL,
+    TTL_MARGIN,
+    TTL_QUOTE_TW as TTL_QUOTE,
+    TTL_REVENUE,
+    TTL_SCREENER,
+)
 
 # In-process symbol→exchange map; refreshed by scheduler (Phase 5)
 _exchange_map: dict[str, str] = {}   # symbol → "TWSE" | "TPEx"
@@ -1301,7 +1306,7 @@ async def get_index(*, history_days: int = 0) -> dict[str, Any]:
 
 # ── News ──────────────────────────────────────────────────────────
 
-TTL_NEWS = 5 * 60
+from cache.cache_ttls import TTL_NEWS  # noqa: E402
 
 
 async def _google_news_rss(query: str, limit: int = 10) -> list[dict[str, Any]]:
@@ -1444,7 +1449,7 @@ async def get_news(symbol: str, limit: int = 10) -> list[dict[str, Any]]:
 # is cached 24h. This trades a slightly stale cache (refreshes once a
 # day) for zero schema/migration cost.
 
-TTL_VALUATION_BAND = 24 * 3600
+from cache.cache_ttls import TTL_VALUATION_BAND  # noqa: E402
 
 
 def _ttm_eps_at(period_end: str, eps_history: list[tuple[str, float]]) -> float | None:
@@ -1597,7 +1602,7 @@ async def get_valuation_band(
 
 # ── Dividends + ETF holdings ──────────────────────────────────────
 
-TTL_DIVIDENDS    = 24 * 3600
+from cache.cache_ttls import TTL_DIVIDENDS  # noqa: E402
 TTL_ETF_HOLDINGS = 24 * 3600
 
 

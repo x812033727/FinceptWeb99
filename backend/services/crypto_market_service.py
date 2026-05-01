@@ -24,9 +24,12 @@ from data.crypto.symbols import TOP20
 
 log = logging.getLogger(__name__)
 
-TTL_QUOTE = 10
-TTL_HISTORY = 5 * 60
-TTL_SCREENER = 60
+# TTLs centralized in `cache.cache_ttls`.
+from cache.cache_ttls import (  # noqa: E402
+    TTL_HISTORY_INTRADAY as TTL_HISTORY,
+    TTL_QUOTE_CRYPTO as TTL_QUOTE,
+    TTL_SCREENER_CRYPTO as TTL_SCREENER,
+)
 
 
 async def get_quote(symbol: str, *, bypass_cache: bool = False) -> dict[str, Any]:
@@ -110,7 +113,7 @@ async def search(q: str, limit: int = 10) -> list[dict[str, Any]]:
 
 # ── News ──────────────────────────────────────────────────────────
 
-TTL_NEWS = 5 * 60
+from cache.cache_ttls import TTL_NEWS  # noqa: E402
 
 
 async def _google_news_rss(query: str, limit: int) -> list[dict[str, Any]]:

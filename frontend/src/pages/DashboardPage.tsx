@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
+import { formatPct } from "@/lib/formatters";
 import { formatQuoteFreshness } from "@/lib/freshness";
 import { DataSourceBadge } from "@/components/DataSourceBadge";
 
@@ -41,7 +42,7 @@ function IndexCard({ symbol, label }: { symbol: string; label: string }) {
           : "—"}
       </div>
       <div className={`text-sm font-medium mt-0.5 ${unavailable ? "text-muted-foreground" : isPos ? "text-green-400" : "text-red-400"}`}>
-        {!unavailable && changePct != null ? `${isPos ? "+" : ""}${changePct.toFixed(2)}%` : "—"}
+        {unavailable ? "—" : formatPct(changePct)}
       </div>
       <div className="text-xs text-muted-foreground mt-1 inline-flex items-center">
         {symbol}

@@ -7,6 +7,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { useAuthStore } from "@/store/authStore";
 import { notifyRateLimited } from "@/lib/api";
+import { formatPct } from "@/lib/formatters";
 import {
   usePortfolios,
   usePortfolioDetail,
@@ -1005,7 +1006,7 @@ function PortfolioDetail({
           },
           {
             label: t("portfolio.summary.performance"),
-            value: `${pnlPositive ? "+" : ""}${detail.total_pnl_pct.toFixed(2)}%`,
+            value: formatPct(detail.total_pnl_pct),
             color: pnlPositive ? "text-positive" : "text-negative",
           },
         ].map((c) => (

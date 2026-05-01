@@ -7,6 +7,11 @@ import {
 } from "recharts";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
+import {
+  formatCompact,
+  formatNumber,
+  formatPct as formatPct_,
+} from "@/lib/formatters";
 import { formatQuoteFreshness } from "@/lib/freshness";
 import CandlestickChart from "@/components/charts/CandlestickChart";
 import { DataSourceBadge } from "@/components/DataSourceBadge";
@@ -212,17 +217,19 @@ const fetchEarnings = (sym: string) =>
 
 // ── shared helpers ─────────────────────────────────────────────────
 
-const fmt = (n: number | null | undefined, d = 2) =>
-  n == null ? "—" : n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
-
-const fmtPct = (n: number | null | undefined, alreadyPct = false) => {
-  if (n == null) return "—";
-  const v = alreadyPct ? n : n * 100;
-  return `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
-};
-
-const fmtK = (n: number) =>
-  n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(0)}K` : String(n);
+// Thin local aliases over `@/lib/formatters` so the original call-site
+// shapes (`fmt`, `fmtPct`, `fmtPct1`, `fmtK`) are unchanged but the
+// behaviour comes from the single source of truth that MarketPage /
+// WatchlistPage / PortfolioPage / DashboardPage also use. The PR #156
+// regression (default `alreadyPct=false` re-multiplying backend percent
+// units into "+993%") cannot recur — `formatPct` defaults to
+// `alreadyPct=true` to match the backend convention.
+const fmt = (n: number | null | undefined, d = 2) => formatNumber(n, d);
+const fmtPct = (n: number | null | undefined, alreadyPct = true) =>
+  formatPct_(n, { alreadyPct });
+const fmtPct1 = (n: number | null | undefined) =>
+  formatPct_(n, { signed: false });
+const fmtK = (n: number) => formatCompact(n);
 
 // ── reusable UI atoms ──────────────────────────────────────────────
 
@@ -809,8 +816,8 @@ function HealthSection({
   );
 }
 
-const fmtPct1 = (n: number | null | undefined) =>
-  n == null ? "—" : `${n >= 0 ? "" : ""}${n.toFixed(2)}%`;
+// `fmtPct1` is now declared at the top of the file as a thin alias
+// over `formatPct(n, { signed: false })`.
 
 function MetricSparkRow({
   label, periods, accessor, suffix = "%",

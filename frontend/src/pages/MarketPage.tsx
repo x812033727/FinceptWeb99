@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
+import { formatPct } from "@/lib/formatters";
 import type { Market, ScreenerResult } from "@/types/market";
 import { DataSourceBadge } from "@/components/DataSourceBadge";
 
@@ -83,7 +84,7 @@ function ChangeCell({ value, unavailable }: { value: number | null | undefined; 
   const pos = value >= 0;
   return (
     <span className={pos ? "text-green-400" : "text-red-400"}>
-      {pos ? "+" : ""}{value.toFixed(2)}%
+      {formatPct(value)}
     </span>
   );
 }
@@ -100,9 +101,7 @@ function IndexCard({ idx, unavailable }: { idx: MarketIndex; unavailable?: boole
           : idx.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}
       </div>
       <div className={`text-sm font-medium ${unavailable ? "text-muted-foreground" : pos ? "text-green-400" : "text-red-400"}`}>
-        {unavailable
-          ? "—"
-          : `${pos ? "+" : ""}${idx.change_pct.toFixed(2)}%`}
+        {unavailable ? "—" : formatPct(idx.change_pct)}
       </div>
     </div>
   );

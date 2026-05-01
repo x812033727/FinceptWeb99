@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
+import { formatPct } from "@/lib/formatters";
 import { formatQuoteFreshness } from "@/lib/freshness";
 
 // ── types ──────────────────────────────────────────────────────────
@@ -221,9 +222,7 @@ function WatchlistCard({ wl }: { wl: Watchlist }) {
                           : "—"}
                       </td>
                       <td className={`text-right px-3 sm:px-4 py-2.5 text-sm font-medium ${pos ? "text-green-400" : "text-red-400"}`}>
-                        {item.change_pct != null
-                          ? `${pos ? "+" : ""}${item.change_pct.toFixed(2)}%`
-                          : "—"}
+                        {formatPct(item.change_pct)}
                       </td>
                       <td className="px-2 py-2.5 text-right">
                         <button

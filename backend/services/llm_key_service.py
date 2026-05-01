@@ -91,8 +91,12 @@ async def resolve_key(
       1. The caller's per-user row in user_llm_provider_keys (if user_id given)
       2. The system row in llm_provider_keys
       3. .env fallback
+      4. (system-task path only, opt-out via SYSTEM_TASK_FALLBACK_TO_ADMIN_KEY)
+         Any admin user's per-user row — solo deployments often configure
+         keys only at the admin's per-user level via the UI; without this
+         tier every cron silently 401s with "no key configured".
 
-    Returns None only if all three are absent.
+    Returns None only if every applicable tier is absent.
     """
     if user_id is not None:
         urow = await db.get(UserLLMProviderKey, (user_id, provider))
@@ -111,7 +115,48 @@ async def resolve_key(
         logger.warning("llm_key.system.decrypt_failed", extra={"provider": provider})
 
     fallback = _env_fallback(provider)
-    return fallback or None
+    if fallback:
+        return fallback
+
+    # Tier 4 — system task fallback to any admin user's per-user key.
+    # Only triggers on the system-task path (`user_id is None`); chat
+    # requests with an explicit user_id already covered tier 1.
+    if user_id is None and settings.SYSTEM_TASK_FALLBACK_TO_ADMIN_KEY:
+        return await _resolve_from_admin_user_key(db, provider)
+    return None
+
+
+async def _resolve_from_admin_user_key(
+    db: AsyncSession, provider: str,
+) -> str | None:
+    """Find the first admin-role user that has a per-user key for
+    `provider` and return the decrypted key. None if no admin has one.
+
+    Newest-admin-first so a recently-created admin's key wins over a
+    long-deactivated one. Inactive users are excluded so disabling an
+    account also revokes its keys from background tasks.
+    """
+    from models.user import User, UserRole
+    stmt = (
+        select(UserLLMProviderKey, User.id)
+        .join(User, User.id == UserLLMProviderKey.user_id)
+        .where(
+            UserLLMProviderKey.provider == provider,
+            User.role == UserRole.admin,
+            User.is_active.is_(True),
+        )
+        .order_by(User.created_at.desc())
+    )
+    rows = (await db.execute(stmt)).all()
+    for urow, _admin_id in rows:
+        plain = decrypt(urow.encrypted_key)
+        if plain:
+            return plain
+        logger.warning(
+            "llm_key.admin_fallback.decrypt_failed",
+            extra={"provider": provider, "user_id": str(_admin_id)},
+        )
+    return None
 
 
 # ── Per-user key CRUD ────────────────────────────────────────────

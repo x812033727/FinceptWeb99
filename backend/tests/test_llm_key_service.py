@@ -192,3 +192,126 @@ async def test_resolve_key_survives_decrypt_failure(db_session, monkeypatch):
 
     val = await keys.resolve_key(db_session, "openai")
     assert val == "fallback-from-env"
+
+
+# ── System-task fallback to admin user's per-user key (PR #206) ────
+
+@pytest.mark.asyncio
+async def test_system_task_falls_back_to_admin_user_key(
+    db_session, monkeypatch,
+):
+    """Solo deployments configure keys at the admin user's per-user
+    level via the UI. Without the tier-4 fallback every cron silently
+    401s ('no key configured') even though the user can chat fine in
+    AIPage."""
+    monkeypatch.setattr(keys.settings, "ANTHROPIC_API_KEY", "")
+    admin = User(
+        id=uuid.uuid4(),
+        email=f"admin-fallback-{uuid.uuid4().hex[:8]}@example.com",
+        hashed_password="x",
+        role=UserRole.admin,
+        is_active=True,
+    )
+    db_session.add(admin)
+    await db_session.commit()
+    await keys.upsert_user_key(db_session, admin.id, "anthropic", "sk-ant-admin-key")
+
+    # System-task path (user_id=None) — finds admin's key.
+    val = await keys.resolve_key(db_session, "anthropic", user_id=None)
+    assert val == "sk-ant-admin-key"
+
+
+@pytest.mark.asyncio
+async def test_admin_fallback_skips_inactive_admin(db_session, monkeypatch):
+    """Disabling an admin account also revokes its keys from background
+    tasks — defence against a fired-admin's key being silently used by
+    cron forever."""
+    monkeypatch.setattr(keys.settings, "OPENAI_API_KEY", "")
+    inactive_admin = User(
+        id=uuid.uuid4(),
+        email=f"ex-admin-{uuid.uuid4().hex[:8]}@example.com",
+        hashed_password="x",
+        role=UserRole.admin,
+        is_active=False,
+    )
+    db_session.add(inactive_admin)
+    await db_session.commit()
+    await keys.upsert_user_key(db_session, inactive_admin.id, "openai", "sk-leaked")
+
+    val = await keys.resolve_key(db_session, "openai", user_id=None)
+    assert val is None
+
+
+@pytest.mark.asyncio
+async def test_admin_fallback_skips_non_admin_user(db_session, monkeypatch):
+    """Only admin-role users participate in the fallback. A
+    viewer/analyst's key must not be reachable from a cron task."""
+    monkeypatch.setattr(keys.settings, "GEMINI_API_KEY", "")
+    viewer = User(
+        id=uuid.uuid4(),
+        email=f"viewer-{uuid.uuid4().hex[:8]}@example.com",
+        hashed_password="x",
+        role=UserRole.viewer,
+        is_active=True,
+    )
+    db_session.add(viewer)
+    await db_session.commit()
+    await keys.upsert_user_key(db_session, viewer.id, "gemini", "viewer-key")
+
+    val = await keys.resolve_key(db_session, "gemini", user_id=None)
+    assert val is None
+
+
+@pytest.mark.asyncio
+async def test_admin_fallback_can_be_disabled_via_setting(
+    db_session, monkeypatch,
+):
+    """Multi-tenant deployments may want admin-key isolation from
+    background workloads. `SYSTEM_TASK_FALLBACK_TO_ADMIN_KEY=False`
+    restores the pre-PR-206 behaviour (system row + .env only)."""
+    monkeypatch.setattr(keys.settings, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(keys.settings, "SYSTEM_TASK_FALLBACK_TO_ADMIN_KEY", False)
+    admin = User(
+        id=uuid.uuid4(),
+        email=f"strict-admin-{uuid.uuid4().hex[:8]}@example.com",
+        hashed_password="x",
+        role=UserRole.admin,
+        is_active=True,
+    )
+    db_session.add(admin)
+    await db_session.commit()
+    await keys.upsert_user_key(db_session, admin.id, "anthropic", "sk-ant-key")
+
+    val = await keys.resolve_key(db_session, "anthropic", user_id=None)
+    assert val is None
+
+
+@pytest.mark.asyncio
+async def test_user_path_does_not_trigger_admin_fallback(
+    db_session, monkeypatch,
+):
+    """When the caller passes its own `user_id` (chat path) and that
+    user has no key, we must NOT silently borrow the admin's key.
+    Each user owns their own quota / billing context."""
+    monkeypatch.setattr(keys.settings, "OPENAI_API_KEY", "")
+    admin = User(
+        id=uuid.uuid4(),
+        email=f"admin-isolated-{uuid.uuid4().hex[:8]}@example.com",
+        hashed_password="x",
+        role=UserRole.admin,
+        is_active=True,
+    )
+    other_user = User(
+        id=uuid.uuid4(),
+        email=f"viewer-isolated-{uuid.uuid4().hex[:8]}@example.com",
+        hashed_password="x",
+        role=UserRole.viewer,
+        is_active=True,
+    )
+    db_session.add_all([admin, other_user])
+    await db_session.commit()
+    await keys.upsert_user_key(db_session, admin.id, "openai", "sk-admin-only")
+
+    # Calling with the viewer's user_id must NOT return the admin's key.
+    val = await keys.resolve_key(db_session, "openai", user_id=other_user.id)
+    assert val is None

@@ -149,6 +149,15 @@ class Settings(BaseSettings):
     # hanging the whole round indefinitely.
     DISCUSSION_PERSONA_TIMEOUT_SECONDS: int = 60
 
+    # `resolve_key(user_id=None)` (the system-task path used by every
+    # background cron) normally consults: system row → .env. For solo /
+    # single-admin deployments where the operator has only set per-user
+    # keys via the admin UI, falling back to the admin user's per-user
+    # key removes the "configure each provider twice" footgun. Disable
+    # for multi-tenant deployments where admin keys must be isolated
+    # from background workloads.
+    SYSTEM_TASK_FALLBACK_TO_ADMIN_KEY: bool = True
+
     # Admin seed (optional — created on first boot)
     ADMIN_EMAIL: str = ""
     ADMIN_PASSWORD: str = ""

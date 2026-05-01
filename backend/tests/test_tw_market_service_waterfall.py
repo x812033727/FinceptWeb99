@@ -97,22 +97,22 @@ def test_normalize_quote_change_pct_is_none_when_prev_close_missing():
     assert out["change_pct"] is None
 
 
-def test_normalize_quote_derives_prev_close_when_only_change_present():
-    """Regression: TWSE realtime returns `change` but no `prev_close`.
-    Before this fix change_pct fell out as None and the watchlist UI
-    showed a blank 漲跌 column. Now we derive prev_close = close -
-    change so change_pct can be computed."""
+def test_normalize_quote_drops_change_when_only_upstream_change_present():
+    """When prev_close is missing, NEVER derive it from the upstream's
+    `change` field. TWSE's STOCK_DAY_ALL puts the prior-day close in
+    the `Change` slot for some KY-listed stocks (4958, 2455, …) — the
+    old derive-prev-from-change fallback turned that into +992% / +996%
+    headlines. Better to surface a blank delta than misleading garbage;
+    the prev_close fallback (FinMind) lives in `_resolve_prev_close`,
+    not in this normalizer.
+    """
     out = svc._normalize_quote("2330", {"close": 785, "change": 5})
-    assert out["change"] == 5
-    # prev_close should be 780 (785 - 5), so change_pct = 5/780*100
-    assert out["change_pct"] == round(5 / 780 * 100, 4)
-
-
-def test_normalize_quote_handles_negative_change_with_only_change_present():
-    out = svc._normalize_quote("2330", {"close": 600, "change": -10})
-    assert out["change"] == -10
-    # prev_close = 610, change_pct = -10/610*100
-    assert out["change_pct"] == round(-10 / 610 * 100, 4)
+    assert out["change"] is None
+    assert out["change_pct"] is None
+    # And on the downside path:
+    out2 = svc._normalize_quote("2330", {"close": 600, "change": -10})
+    assert out2["change"] is None
+    assert out2["change_pct"] is None
 
 
 def test_normalize_quote_drops_change_pct_when_implausibly_large():
@@ -130,8 +130,8 @@ def test_normalize_quote_drops_change_pct_when_implausibly_large():
 def test_normalize_quote_keeps_legal_limit_up():
     """A real ±10% limit-up move stays within the sanity bound and
     must NOT be dropped."""
-    # close=110, change=+10 (from 100), pct = 10/100 = +10%
-    out = svc._normalize_quote("2330", {"close": 110, "change": 10})
+    # prev_close=100, close=110 → +10/100 = +10%
+    out = svc._normalize_quote("2330", {"close": 110, "prev_close": 100})
     assert out["change"] == 10
     assert out["change_pct"] == round(10 / 100 * 100, 4)
 
@@ -171,15 +171,24 @@ async def test_get_quote_short_circuits_on_cache_hit():
 async def test_get_quote_uses_twse_realtime_when_available():
     twse_payload = {"symbol": "2330", "name_zh": "台積電",
                     "close": 785, "open": 780, "high": 790, "low": 775, "volume": 1000}
+    # FinMind may be reached as a prev_close fallback when the archive
+    # has nothing for the symbol — that's expected behaviour now (the
+    # test DB is empty). Stub it with a single-bar response so prev_close
+    # gets populated; assertion below checks TWSE was the QUOTE source.
+    finmind_bars = [
+        {"date": (date.today() - timedelta(days=1)).isoformat(),
+         "open": 780, "high": 790, "low": 775, "close": 780, "volume": 1000},
+    ]
     with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
          patch.object(svc, "cache_set", new_callable=AsyncMock), \
          patch.object(svc.twse, "get_realtime_quote", new=AsyncMock(return_value=twse_payload)), \
-         patch.object(svc.finmind, "get_daily_ohlcv", new_callable=AsyncMock) as finmind_mock:
+         patch.object(svc.finmind, "get_daily_ohlcv",
+                      new=AsyncMock(return_value=finmind_bars)):
         out = await svc.get_quote("2330")
 
     assert out["price"] == 785
     assert out["name_zh"] == "台積電"
-    finmind_mock.assert_not_called()
+    assert out["data_source"] == "twse"
 
 
 @pytest.mark.asyncio
@@ -695,30 +704,61 @@ async def test_get_quote_does_not_show_zero_pct_on_weekend():
 
 
 @pytest.mark.asyncio
-async def test_resolve_prev_close_rejects_stale_archive():
+async def test_resolve_prev_close_rejects_stale_archive_then_falls_through_to_finmind():
     """Stale-archive guard: an ETF that recently went ex-distribution
     can leave the cron's last-ingested bar months behind today's price
     (e.g. 00713 archive 73.71 vs today's 52.85). Returning that bar as
-    `prev` produces a -28% headline that's pure cron-lag artefact, not
-    a real session move.
+    `prev` would produce a -28% headline that's pure cron-lag artefact.
 
-    When the latest archived bar is >7 days old, the resolver returns
-    None so the caller falls through to upstream's `change` field
-    (still bounded by the ±30% sanity check in `_sanitize_change_pct`).
+    When the latest archived bar is >7 days old, the resolver skips
+    the archive and asks FinMind for a fresh daily bar — so 昨收 still
+    populates with reality (53.10) rather than going blank.
     """
     stale_date = (date.today() - timedelta(days=30)).isoformat()
     archive_bars = [
         {"time": stale_date, "open": 72, "high": 74,
          "low": 73, "close": 73.71, "volume": 1_000_000},
     ]
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    finmind_bars = [
+        {"date": yesterday, "open": 52.5, "high": 53.2,
+         "low": 52.0, "close": 53.10, "volume": 800_000},
+    ]
     with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
          patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc.finmind, "get_daily_ohlcv",
+                      new=AsyncMock(return_value=finmind_bars)), \
          patch(
              "services.ingest.repository.read_ohlcv_range_autosession",
              new=AsyncMock(return_value=archive_bars),
          ):
         out = await svc._resolve_prev_close("00713", upstream_close=52.85)
-    assert out is None
+    # Yesterday's FinMind close, not the months-stale 73.71.
+    assert out == 53.10
+
+
+@pytest.mark.asyncio
+async def test_resolve_prev_close_finmind_fallback_when_archive_empty():
+    """When ohlcv_daily has zero bars for a symbol (e.g. KY-listed
+    stock the cron hasn't ingested yet), the resolver falls through to
+    FinMind so 昨收 still has a real number — without this fallback
+    the UI showed blank prev_close + the 998% upstream-change leak we
+    eliminated by removing the derive-prev-from-change shortcut."""
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    finmind_bars = [
+        {"date": yesterday, "open": 320, "high": 322,
+         "low": 318, "close": 321.5, "volume": 1_000_000},
+    ]
+    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc.finmind, "get_daily_ohlcv",
+                      new=AsyncMock(return_value=finmind_bars)), \
+         patch(
+             "services.ingest.repository.read_ohlcv_range_autosession",
+             new=AsyncMock(return_value=[]),
+         ):
+        out = await svc._resolve_prev_close("2455", upstream_close=347.5)
+    assert out == 321.5
 
 
 @pytest.mark.asyncio

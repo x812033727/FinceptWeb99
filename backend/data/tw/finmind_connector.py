@@ -224,6 +224,49 @@ async def get_etf_holdings(symbol: str, start_date: str = "2024-01-01") -> list[
     return await _query("TaiwanStockHoldingSharesPer", symbol, start_date)
 
 
+# ── Holdings + market institutional aggregates (PR #193) ─────────
+
+async def get_shareholding_market_wide(
+    start_date: str, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """`TaiwanStockShareholding` — share-distribution buckets per
+    (symbol, date). FinMind's response shape varies; this returns
+    the rows largely as-is and lets the cron's `_normalize_*`
+    helpers fan them out into the long-form table.
+
+    Sponsor-tier. Published weekly by TWSE/TPEx so a daily cron is
+    fine; UPSERT is idempotent on the (symbol, ts, bucket_id) PK.
+    """
+    return await _query("TaiwanStockShareholding", "", start_date, end_date)
+
+
+async def get_total_institutional_market_wide(
+    start_date: str, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """`TaiwanStockTotalInstitutionalInvestors` — full-market three-
+    major-investor (foreign / SITC / dealer) daily aggregate. One
+    row per trading day. Sponsor-tier.
+
+    FinMind's row shape uses Chinese-keyed columns; we normalise
+    to canonical English names here so the cron has stable input.
+    """
+    rows = await _query("TaiwanStockTotalInstitutionalInvestors", "", start_date, end_date)
+    return [
+        {
+            "date":         r.get("date"),
+            "name":         r.get("name") or "",
+            # FinMind sometimes returns one row per investor type
+            # ({date, name="Foreign_Investor", buy, sell}), other
+            # times one row per date with all fields. Pass through;
+            # the cron's `_aggregate_total_institutional` builds a
+            # single row per date from whichever shape arrives.
+            "buy":          r.get("buy") or r.get("buy_amount"),
+            "sell":         r.get("sell") or r.get("sell_amount"),
+        }
+        for r in rows
+    ]
+
+
 # ── Risk-warning datasets (處置 / 暫停 / 當沖) ────────────────────
 
 async def get_disposition_market_wide(

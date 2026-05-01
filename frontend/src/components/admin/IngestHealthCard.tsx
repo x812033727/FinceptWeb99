@@ -75,6 +75,7 @@ const RETRYABLE_INGEST_JOBS = new Set([
   "ingest_taiex_history",
   "ingest_taiex_tr_history",
   "ingest_risk_signals_tw",
+  "ingest_holdings_aggregates_tw",
   "score_discussion_outcomes",
 ]);
 
@@ -124,6 +125,10 @@ const JOB_META: Record<string, JobMeta> = {
   ingest_risk_signals_tw: {
     description_zh: "台股風險警示三件套：處置股 / 暫停交易 / 當沖比例（FinMind sponsor）",
     schedule_zh: "每天 19:00 (台北)",
+  },
+  ingest_holdings_aggregates_tw: {
+    description_zh: "台股股權分散 + 全市場三大法人日報（FinMind sponsor）",
+    schedule_zh: "每天 19:30 (台北)",
   },
   ingest_revenue_tw: {
     description_zh: "台股月營收（FinMind 全市場一次抓，sponsor tier）",

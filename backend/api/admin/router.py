@@ -63,6 +63,7 @@ RETRYABLE_INGEST_JOBS = {
     "ingest_taiex_history": "TAIEX daily history",
     "ingest_taiex_tr_history": "TAIEX TR (total return) history",
     "ingest_risk_signals_tw": "TW risk signals (disposition / suspended / day-trading)",
+    "ingest_holdings_aggregates_tw": "TW holdings + market-institutional aggregates",
     "score_discussion_outcomes": "Discussion D1-D5 scoreboard",
 }
 
@@ -421,6 +422,9 @@ async def _run_ingest_job_once(job_id: str) -> None:
         await run()
     elif job_id == "ingest_risk_signals_tw":
         from tasks.ingest_risk_signals_tw import run
+        await run()
+    elif job_id == "ingest_holdings_aggregates_tw":
+        from tasks.ingest_holdings_aggregates_tw import run
         await run()
     elif job_id == "score_discussion_outcomes":
         from tasks.score_discussion_outcomes import run

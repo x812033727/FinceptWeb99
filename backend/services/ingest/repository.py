@@ -26,6 +26,10 @@ from models.ohlcv_daily import OhlcvDaily
 from models.quote_snapshot import QuoteSnapshot
 from models.tw_chip_metrics import TwInstitutionalDaily, TwMarginDaily
 from models.tw_govt_bank_flow import TwGovtBankFlowDaily
+from models.tw_holdings_aggregates import (
+    TwMarketInstitutionalDaily,
+    TwStockShareholding,
+)
 from models.tw_revenue_monthly import TwRevenueMonthly
 from models.tw_risk_signals import (
     TwStockDayTradingDaily,
@@ -1055,6 +1059,181 @@ async def read_high_day_trading_ratio(
     out = list(seen.values())
     out.sort(key=lambda d: d["ratio"], reverse=True)
     return out[:limit]
+
+
+# ── 股權分散 (TwStockShareholding) ────────────────────────────────
+
+@dataclass(frozen=True)
+class ShareholdingRow:
+    market: str
+    symbol: str
+    ts: date
+    bucket_id: int
+    bucket_label: str | None
+    holders_count: int | None
+    shares_count: int | None
+    shares_percent: float | None
+    source: str
+
+
+async def upsert_shareholdings(
+    db: AsyncSession, rows: Iterable[ShareholdingRow],
+) -> int:
+    payload = [
+        {
+            "market":         r.market,
+            "symbol":         r.symbol,
+            "ts":             r.ts,
+            "bucket_id":      r.bucket_id,
+            "bucket_label":   r.bucket_label,
+            "holders_count":  r.holders_count,
+            "shares_count":   r.shares_count,
+            "shares_percent": r.shares_percent,
+            "source":         r.source,
+        }
+        for r in rows
+    ]
+    if not payload:
+        return 0
+    update_cols = (
+        "bucket_label", "holders_count", "shares_count",
+        "shares_percent", "source",
+    )
+    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
+    insert_fn = sqlite_insert if dialect == "sqlite" else pg_insert
+    stmt = insert_fn(TwStockShareholding).values(payload)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["market", "symbol", "ts", "bucket_id"],
+        set_={k: getattr(stmt.excluded, k) for k in update_cols},
+    )
+    await db.execute(stmt)
+    await db.commit()
+    return len(payload)
+
+
+async def read_latest_shareholding(
+    db: AsyncSession, *, market: str, symbol: str,
+) -> list[dict[str, Any]]:
+    """All buckets for the most recent publication date of `symbol`.
+    Used by the StockDetailPage shareholder-distribution card and
+    the discussion-context aggregator.
+    """
+    latest_stmt = (
+        select(TwStockShareholding.ts)
+        .where(
+            TwStockShareholding.market == market,
+            TwStockShareholding.symbol == symbol,
+        )
+        .order_by(TwStockShareholding.ts.desc())
+        .limit(1)
+    )
+    latest_ts = (await db.scalars(latest_stmt)).first()
+    if latest_ts is None:
+        return []
+    stmt = (
+        select(TwStockShareholding)
+        .where(
+            TwStockShareholding.market == market,
+            TwStockShareholding.symbol == symbol,
+            TwStockShareholding.ts == latest_ts,
+        )
+        .order_by(TwStockShareholding.bucket_id.asc())
+    )
+    rows = (await db.scalars(stmt)).all()
+    return [
+        {
+            "ts":             r.ts.isoformat(),
+            "bucket_id":      r.bucket_id,
+            "bucket_label":   r.bucket_label,
+            "holders_count":  int(r.holders_count) if r.holders_count is not None else None,
+            "shares_count":   int(r.shares_count) if r.shares_count is not None else None,
+            "shares_percent": float(r.shares_percent) if r.shares_percent is not None else None,
+        }
+        for r in rows
+    ]
+
+
+# ── 全市場三大法人日報 (TwMarketInstitutionalDaily) ─────────────
+
+@dataclass(frozen=True)
+class MarketInstitutionalRow:
+    market: str
+    ts: date
+    foreign_buy: int | None
+    foreign_sell: int | None
+    sitc_buy: int | None
+    sitc_sell: int | None
+    dealer_buy: int | None
+    dealer_sell: int | None
+    source: str
+
+
+async def upsert_market_institutional_daily(
+    db: AsyncSession, rows: Iterable[MarketInstitutionalRow],
+) -> int:
+    payload = [
+        {
+            "market":       r.market,
+            "ts":           r.ts,
+            "foreign_buy":  r.foreign_buy,
+            "foreign_sell": r.foreign_sell,
+            "sitc_buy":     r.sitc_buy,
+            "sitc_sell":    r.sitc_sell,
+            "dealer_buy":   r.dealer_buy,
+            "dealer_sell":  r.dealer_sell,
+            "source":       r.source,
+        }
+        for r in rows
+    ]
+    if not payload:
+        return 0
+    update_cols = (
+        "foreign_buy", "foreign_sell", "sitc_buy", "sitc_sell",
+        "dealer_buy", "dealer_sell", "source",
+    )
+    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
+    insert_fn = sqlite_insert if dialect == "sqlite" else pg_insert
+    stmt = insert_fn(TwMarketInstitutionalDaily).values(payload)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["market", "ts"],
+        set_={k: getattr(stmt.excluded, k) for k in update_cols},
+    )
+    await db.execute(stmt)
+    await db.commit()
+    return len(payload)
+
+
+async def read_recent_market_institutional(
+    db: AsyncSession, *, market: str = "TW", days: int = 5,
+) -> list[dict[str, Any]]:
+    """Last `days` of full-market 三大法人 aggregates, newest first.
+    Used in the discussion context block as the index-level headline
+    ("外資今日對台股淨買超 +250 億 / 連 3 日買超")."""
+    cutoff = date.today() - timedelta(days=days * 3)  # weekend slack
+    stmt = (
+        select(TwMarketInstitutionalDaily)
+        .where(
+            TwMarketInstitutionalDaily.market == market,
+            TwMarketInstitutionalDaily.ts >= cutoff,
+        )
+        .order_by(TwMarketInstitutionalDaily.ts.desc())
+        .limit(days)
+    )
+    rows = (await db.scalars(stmt)).all()
+    return [
+        {
+            "date":         r.ts.isoformat(),
+            "foreign_net":  (int(r.foreign_buy or 0) - int(r.foreign_sell or 0)),
+            "sitc_net":     (int(r.sitc_buy or 0) - int(r.sitc_sell or 0)),
+            "dealer_net":   (int(r.dealer_buy or 0) - int(r.dealer_sell or 0)),
+            "total_net":    (
+                int(r.foreign_buy or 0) - int(r.foreign_sell or 0)
+                + int(r.sitc_buy or 0) - int(r.sitc_sell or 0)
+                + int(r.dealer_buy or 0) - int(r.dealer_sell or 0)
+            ),
+        }
+        for r in rows
+    ]
 
 
 # ── Quote snapshots ────────────────────────────────────────────────

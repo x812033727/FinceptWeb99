@@ -494,6 +494,12 @@ async def gather_market_context(
             "recent_suspensions": [],
             "high_day_trading_ratio": [],
         },
+        # `market_institutional_5d` (PR #193) — full-market three-
+        # major-investor net flow summed by date. Personas read this
+        # as "外資對台股整體買超 +250 億" — the headline-level
+        # narrative complement to the per-symbol `top_foreign_buyers`
+        # block. TW-only.
+        "market_institutional_5d": [],
         # Each connector failure appends `{"source": "...", "error": "..."}`
         # so the personas (and the synthesizer) can mention "context was
         # incomplete" instead of confidently citing missing data. Logged
@@ -614,6 +620,18 @@ async def gather_market_context(
             }
         except Exception as exc:
             _record_error("risk_warnings", exc)
+
+        # 全市場三大法人 5-day net flow (PR #193). Aggregated across
+        # foreign / SITC / dealer; lets personas reference the
+        # index-level narrative ("外資已連 3 日買超台股") alongside
+        # the per-symbol `top_foreign_buyers`.
+        try:
+            from services.ingest.repository import read_recent_market_institutional
+            ctx["market_institutional_5d"] = await read_recent_market_institutional(
+                db, market="TW", days=5,
+            )
+        except Exception as exc:
+            _record_error("market_institutional_5d", exc)
 
     try:
         from services.news_sentiment_service import read_recent_market_sentiment

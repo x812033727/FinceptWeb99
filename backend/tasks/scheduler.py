@@ -308,6 +308,20 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # 股權分散 + 全市場三大法人. FinMind sponsor-tier, 2 datasets
+    # per tick. 19:30 Taipei (11:30 UTC), after risk-signals.
+    from tasks.ingest_holdings_aggregates_tw import (
+        run as run_ingest_holdings_aggregates_tw,
+    )
+    scheduler.add_job(
+        run_ingest_holdings_aggregates_tw,
+        trigger=CronTrigger(hour=11, minute=30, timezone="UTC"),
+        id="ingest_holdings_aggregates_tw",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── News sentiment scoring ────────────────────────────────────
     # Hourly: picks up news rows with NULL sentiment_score and runs them
     # through Claude Haiku in batches. Cheap (one prompt scores 20

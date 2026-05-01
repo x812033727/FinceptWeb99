@@ -718,6 +718,36 @@ def _tag_industry(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 # ── turn loop ───────────────────────────────────────────────────────
 
+# Schema annotation prepended to the JSON dump so weaker / smaller models
+# (Haiku, GPT-4o-mini, Llama-3.3) actually use each ctx block. Without
+# this they tend to fixate on `top_gainers` and ignore risk filters /
+# institutional flow / buyback signals — defeating the cost of all the
+# ingest crons feeding the context.
+#
+# Keep one line per block. Emphasise the negative-filter semantics for
+# `risk_warnings` because that's where weak models most often go wrong
+# (recommending a 處置股 because price action looks bullish).
+_CONTEXT_SCHEMA_ANNOTATION = (
+    "## 市場現況解讀提示\n"
+    "下方 `## 市場現況` 的 JSON 包含多個訊號區塊，請依語意整合判讀，"
+    "不要只挑 `top_gainers` 看：\n"
+    "- top_gainers / top_losers：當日漲跌幅前 10（動能 + 籌碼面）。\n"
+    "- index：大盤 (TAIEX) 即時報價 + 30 日歷史，用以判斷市場 regime。\n"
+    "- news_sentiment：所屬市場整體新聞情緒（bullish/bearish/neutral 計數）。\n"
+    "- per_symbol_news_sentiment：主題提及之個股新聞情緒。\n"
+    "- international_sentiment：Fed / FOMC / 國際宏觀新聞情緒，影響台股風險偏好。\n"
+    "- top_foreign_buyers：近 5 日外資累計淨買超前 10 名（已含產業別）。\n"
+    "- margin_balance_trend：全市場融資 / 融券餘額趨勢（散戶槓桿與看空代理）。\n"
+    "- top_revenue_growers：最新月份營收年增率前 10（基本面）。\n"
+    "- active_buybacks：今日仍在執行庫藏股的公司，**強烈管理層信心訊號**。\n"
+    "- govt_bank_flow_5d：八大行庫近 5 日累計買賣超（國家隊方向）。\n"
+    "- risk_warnings：**負向過濾**——`active_dispositions`（處置股）、"
+    "`recent_suspensions`（近期暫停交易）、`high_day_trading_ratio`"
+    "（當沖比 >60%，投機過熱）。**禁止推薦中招的標的，即使其他訊號看多。**\n"
+    "- market_institutional_5d：全市場三大法人近 5 日淨買賣超（大盤方向）。\n"
+    "- errors：本次抓取的連接器錯誤清單；非空時務必聲明資料不完整。"
+)
+
 
 _TURN_PROMPT_TEMPLATE = (
     "你正在參加一場專家圓桌討論。你的角色身份請依系統提示扮演。\n\n"
@@ -728,6 +758,7 @@ _TURN_PROMPT_TEMPLATE = (
     "  - 不要混入簡體字，即使你的訓練資料偏向簡體也要轉繁。\n\n"
     "## 主題\n{topic}\n\n"
     "## 共同規則\n{rules}\n\n"
+    + _CONTEXT_SCHEMA_ANNOTATION + "\n\n"
     "## 市場現況\n```json\n{context}\n```\n\n"
     "## 先前發言\n{history}\n\n"
     "## 你現在的任務\n"
@@ -1276,6 +1307,7 @@ _SYNTHESIZER_SYSTEM = (
 _SYNTHESIZER_USER_TEMPLATE = (
     "## 討論主題\n{topic}\n\n"
     "## 討論規則\n{rules}\n\n"
+    + _CONTEXT_SCHEMA_ANNOTATION + "\n\n"
     "## 市場現況\n```json\n{context}\n```\n\n"
     "## 全部發言（依序）\n{transcript}\n\n"
     "## 任務\n"

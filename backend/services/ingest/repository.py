@@ -104,6 +104,45 @@ def _to_int(v: Any) -> int | None:
         return None
 
 
+# asyncpg's wire protocol caps a single statement at 32767 bind parameters.
+# Market-wide ingests (e.g. 八大行庫 ~13K rows × 6 cols, 股權分散 ~35K rows × 9
+# cols) blow past that in one shot and surface as InterfaceError. `_chunked_upsert`
+# batches the payload so any market-wide bulk insert stays under the wire cap
+# without callers having to think about it.
+_PG_PARAM_LIMIT = 32000  # leave headroom under the 32767 hard cap
+
+
+async def _chunked_upsert(
+    db: AsyncSession,
+    *,
+    model: type,
+    payload: list[dict[str, Any]],
+    index_elements: list[str],
+    update_cols: tuple[str, ...],
+) -> int:
+    """Dialect-aware ON CONFLICT upsert chunked under asyncpg's bind-param cap.
+
+    Single chunk for small payloads (behaviourally identical to the previous
+    one-shot insert); split for large ones.
+    """
+    if not payload:
+        return 0
+    cols = len(payload[0])
+    chunk_size = max(1, _PG_PARAM_LIMIT // cols)
+    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
+    insert_fn = sqlite_insert if dialect == "sqlite" else pg_insert
+    for i in range(0, len(payload), chunk_size):
+        batch = payload[i:i + chunk_size]
+        stmt = insert_fn(model).values(batch)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=index_elements,
+            set_={k: getattr(stmt.excluded, k) for k in update_cols},
+        )
+        await db.execute(stmt)
+    await db.commit()
+    return len(payload)
+
+
 def _bar_to_row(bar: OhlcvBar) -> dict[str, Any]:
     return {
         "market": bar.market,
@@ -127,32 +166,14 @@ async def upsert_ohlcv_bars(db: AsyncSession, bars: Iterable[OhlcvBar]) -> int:
     refreshed on conflict so operators can tell when a bar was last
     re-ingested.
     """
-    rows = [_bar_to_row(b) for b in bars]
-    if not rows:
-        return 0
-
-    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
-    update_cols = {
-        "open": None, "high": None, "low": None, "close": None,
-        "volume": None, "source": None,
-    }
-
-    if dialect == "sqlite":
-        stmt = sqlite_insert(OhlcvDaily).values(rows)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["market", "symbol", "ts"],
-            set_={k: getattr(stmt.excluded, k) for k in update_cols},
-        )
-    else:
-        stmt = pg_insert(OhlcvDaily).values(rows)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["market", "symbol", "ts"],
-            set_={k: getattr(stmt.excluded, k) for k in update_cols},
-        )
-
-    await db.execute(stmt)
-    await db.commit()
-    return len(rows)
+    payload = [_bar_to_row(b) for b in bars]
+    return await _chunked_upsert(
+        db,
+        model=OhlcvDaily,
+        payload=payload,
+        index_elements=["market", "symbol", "ts"],
+        update_cols=("open", "high", "low", "close", "volume", "source"),
+    )
 
 
 async def read_ohlcv_range(
@@ -251,63 +272,35 @@ async def upsert_institutional_daily(
     metric columns + source so a re-ingest on the same day overwrites
     stale values (e.g. when TWSE corrects a bar)."""
     payload = [_row_to_dict(r, fields=_INSTITUTIONAL_FIELDS) for r in rows]
-    if not payload:
-        return 0
-
-    update_cols = (
-        "fini_buy", "fini_sell",
-        "sitc_buy", "sitc_sell",
-        "dealer_buy", "dealer_sell",
-        "source",
+    return await _chunked_upsert(
+        db,
+        model=TwInstitutionalDaily,
+        payload=payload,
+        index_elements=["market", "symbol", "ts"],
+        update_cols=(
+            "fini_buy", "fini_sell",
+            "sitc_buy", "sitc_sell",
+            "dealer_buy", "dealer_sell",
+            "source",
+        ),
     )
-
-    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
-    if dialect == "sqlite":
-        stmt = sqlite_insert(TwInstitutionalDaily).values(payload)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["market", "symbol", "ts"],
-            set_={k: getattr(stmt.excluded, k) for k in update_cols},
-        )
-    else:
-        stmt = pg_insert(TwInstitutionalDaily).values(payload)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["market", "symbol", "ts"],
-            set_={k: getattr(stmt.excluded, k) for k in update_cols},
-        )
-    await db.execute(stmt)
-    await db.commit()
-    return len(payload)
 
 
 async def upsert_margin_daily(
     db: AsyncSession, rows: Iterable[MarginDailyRow],
 ) -> int:
     payload = [_row_to_dict(r, fields=_MARGIN_FIELDS) for r in rows]
-    if not payload:
-        return 0
-
-    update_cols = (
-        "margin_purchase", "margin_balance",
-        "short_sale", "short_balance",
-        "source",
+    return await _chunked_upsert(
+        db,
+        model=TwMarginDaily,
+        payload=payload,
+        index_elements=["market", "symbol", "ts"],
+        update_cols=(
+            "margin_purchase", "margin_balance",
+            "short_sale", "short_balance",
+            "source",
+        ),
     )
-
-    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
-    if dialect == "sqlite":
-        stmt = sqlite_insert(TwMarginDaily).values(payload)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["market", "symbol", "ts"],
-            set_={k: getattr(stmt.excluded, k) for k in update_cols},
-        )
-    else:
-        stmt = pg_insert(TwMarginDaily).values(payload)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["market", "symbol", "ts"],
-            set_={k: getattr(stmt.excluded, k) for k in update_cols},
-        )
-    await db.execute(stmt)
-    await db.commit()
-    return len(payload)
 
 
 def _institutional_row_out(r: TwInstitutionalDaily) -> dict[str, Any]:
@@ -451,27 +444,13 @@ async def upsert_revenue_monthly(
         }
         for r in rows
     ]
-    if not payload:
-        return 0
-
-    update_cols = ("revenue", "revenue_yoy", "revenue_mom", "source")
-
-    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
-    if dialect == "sqlite":
-        stmt = sqlite_insert(TwRevenueMonthly).values(payload)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["market", "symbol", "ts"],
-            set_={k: getattr(stmt.excluded, k) for k in update_cols},
-        )
-    else:
-        stmt = pg_insert(TwRevenueMonthly).values(payload)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["market", "symbol", "ts"],
-            set_={k: getattr(stmt.excluded, k) for k in update_cols},
-        )
-    await db.execute(stmt)
-    await db.commit()
-    return len(payload)
+    return await _chunked_upsert(
+        db,
+        model=TwRevenueMonthly,
+        payload=payload,
+        index_elements=["market", "symbol", "ts"],
+        update_cols=("revenue", "revenue_yoy", "revenue_mom", "source"),
+    )
 
 
 def _revenue_row_out(r: TwRevenueMonthly) -> dict[str, Any]:
@@ -656,31 +635,17 @@ async def upsert_buybacks(
         }
         for r in rows
     ]
-    if not payload:
-        return 0
-
-    update_cols = (
-        "period_start", "period_end", "method", "purpose",
-        "max_shares", "current_shares", "price_lower", "price_upper",
-        "source",
+    return await _chunked_upsert(
+        db,
+        model=TwStockBuyback,
+        payload=payload,
+        index_elements=["market", "symbol", "announce_date"],
+        update_cols=(
+            "period_start", "period_end", "method", "purpose",
+            "max_shares", "current_shares", "price_lower", "price_upper",
+            "source",
+        ),
     )
-
-    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
-    if dialect == "sqlite":
-        stmt = sqlite_insert(TwStockBuyback).values(payload)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["market", "symbol", "announce_date"],
-            set_={k: getattr(stmt.excluded, k) for k in update_cols},
-        )
-    else:
-        stmt = pg_insert(TwStockBuyback).values(payload)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["market", "symbol", "announce_date"],
-            set_={k: getattr(stmt.excluded, k) for k in update_cols},
-        )
-    await db.execute(stmt)
-    await db.commit()
-    return len(payload)
 
 
 async def read_active_buybacks(
@@ -759,27 +724,13 @@ async def upsert_govt_bank_flows(
         }
         for r in rows
     ]
-    if not payload:
-        return 0
-
-    update_cols = ("buy_amount", "sell_amount", "source")
-
-    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
-    if dialect == "sqlite":
-        stmt = sqlite_insert(TwGovtBankFlowDaily).values(payload)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["market", "ts", "bank_name"],
-            set_={k: getattr(stmt.excluded, k) for k in update_cols},
-        )
-    else:
-        stmt = pg_insert(TwGovtBankFlowDaily).values(payload)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["market", "ts", "bank_name"],
-            set_={k: getattr(stmt.excluded, k) for k in update_cols},
-        )
-    await db.execute(stmt)
-    await db.commit()
-    return len(payload)
+    return await _chunked_upsert(
+        db,
+        model=TwGovtBankFlowDaily,
+        payload=payload,
+        index_elements=["market", "ts", "bank_name"],
+        update_cols=("buy_amount", "sell_amount", "source"),
+    )
 
 
 async def read_recent_govt_bank_flow(
@@ -861,19 +812,13 @@ async def upsert_dispositions(
         }
         for r in rows
     ]
-    if not payload:
-        return 0
-    update_cols = ("period_end", "classification", "level", "reason", "source")
-    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
-    insert_fn = sqlite_insert if dialect == "sqlite" else pg_insert
-    stmt = insert_fn(TwStockDisposition).values(payload)
-    stmt = stmt.on_conflict_do_update(
+    return await _chunked_upsert(
+        db,
+        model=TwStockDisposition,
+        payload=payload,
         index_elements=["market", "symbol", "period_start"],
-        set_={k: getattr(stmt.excluded, k) for k in update_cols},
+        update_cols=("period_end", "classification", "level", "reason", "source"),
     )
-    await db.execute(stmt)
-    await db.commit()
-    return len(payload)
 
 
 async def read_active_dispositions(
@@ -935,19 +880,13 @@ async def upsert_suspensions(
         }
         for r in rows
     ]
-    if not payload:
-        return 0
-    update_cols = ("status", "reason", "source")
-    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
-    insert_fn = sqlite_insert if dialect == "sqlite" else pg_insert
-    stmt = insert_fn(TwStockSuspended).values(payload)
-    stmt = stmt.on_conflict_do_update(
+    return await _chunked_upsert(
+        db,
+        model=TwStockSuspended,
+        payload=payload,
         index_elements=["market", "symbol", "ts"],
-        set_={k: getattr(stmt.excluded, k) for k in update_cols},
+        update_cols=("status", "reason", "source"),
     )
-    await db.execute(stmt)
-    await db.commit()
-    return len(payload)
 
 
 async def read_recent_suspensions(
@@ -1002,19 +941,13 @@ async def upsert_day_trading(
         }
         for r in rows
     ]
-    if not payload:
-        return 0
-    update_cols = ("volume", "buy_amount", "sell_amount", "source")
-    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
-    insert_fn = sqlite_insert if dialect == "sqlite" else pg_insert
-    stmt = insert_fn(TwStockDayTradingDaily).values(payload)
-    stmt = stmt.on_conflict_do_update(
+    return await _chunked_upsert(
+        db,
+        model=TwStockDayTradingDaily,
+        payload=payload,
         index_elements=["market", "symbol", "ts"],
-        set_={k: getattr(stmt.excluded, k) for k in update_cols},
+        update_cols=("volume", "buy_amount", "sell_amount", "source"),
     )
-    await db.execute(stmt)
-    await db.commit()
-    return len(payload)
 
 
 async def read_high_day_trading_ratio(
@@ -1093,22 +1026,16 @@ async def upsert_shareholdings(
         }
         for r in rows
     ]
-    if not payload:
-        return 0
-    update_cols = (
-        "bucket_label", "holders_count", "shares_count",
-        "shares_percent", "source",
-    )
-    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
-    insert_fn = sqlite_insert if dialect == "sqlite" else pg_insert
-    stmt = insert_fn(TwStockShareholding).values(payload)
-    stmt = stmt.on_conflict_do_update(
+    return await _chunked_upsert(
+        db,
+        model=TwStockShareholding,
+        payload=payload,
         index_elements=["market", "symbol", "ts", "bucket_id"],
-        set_={k: getattr(stmt.excluded, k) for k in update_cols},
+        update_cols=(
+            "bucket_label", "holders_count", "shares_count",
+            "shares_percent", "source",
+        ),
     )
-    await db.execute(stmt)
-    await db.commit()
-    return len(payload)
 
 
 async def read_latest_shareholding(
@@ -1185,22 +1112,16 @@ async def upsert_market_institutional_daily(
         }
         for r in rows
     ]
-    if not payload:
-        return 0
-    update_cols = (
-        "foreign_buy", "foreign_sell", "sitc_buy", "sitc_sell",
-        "dealer_buy", "dealer_sell", "source",
-    )
-    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
-    insert_fn = sqlite_insert if dialect == "sqlite" else pg_insert
-    stmt = insert_fn(TwMarketInstitutionalDaily).values(payload)
-    stmt = stmt.on_conflict_do_update(
+    return await _chunked_upsert(
+        db,
+        model=TwMarketInstitutionalDaily,
+        payload=payload,
         index_elements=["market", "ts"],
-        set_={k: getattr(stmt.excluded, k) for k in update_cols},
+        update_cols=(
+            "foreign_buy", "foreign_sell", "sitc_buy", "sitc_sell",
+            "dealer_buy", "dealer_sell", "source",
+        ),
     )
-    await db.execute(stmt)
-    await db.commit()
-    return len(payload)
 
 
 async def read_recent_market_institutional(
@@ -1397,25 +1318,16 @@ async def upsert_fundamentals_snapshots(
         }
         for r in rows
     ]
-    if not payload:
-        return 0
-
-    update_cols = (
-        "pe_ratio", "pb_ratio", "dividend_yield", "eps", "revenue",
-        "payload", "source",
-    )
-    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
-    if dialect == "sqlite":
-        stmt = sqlite_insert(FundamentalsSnapshot).values(payload)
-    else:
-        stmt = pg_insert(FundamentalsSnapshot).values(payload)
-    stmt = stmt.on_conflict_do_update(
+    return await _chunked_upsert(
+        db,
+        model=FundamentalsSnapshot,
+        payload=payload,
         index_elements=["market", "symbol", "as_of"],
-        set_={k: getattr(stmt.excluded, k) for k in update_cols},
+        update_cols=(
+            "pe_ratio", "pb_ratio", "dividend_yield", "eps", "revenue",
+            "payload", "source",
+        ),
     )
-    await db.execute(stmt)
-    await db.commit()
-    return len(payload)
 
 
 async def read_latest_fundamentals(

@@ -11,11 +11,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.ohlcv_daily import OhlcvDaily
+from models.tw_govt_bank_flow import TwGovtBankFlowDaily
 from services.ingest.repository import (
+    GovtBankFlowRow,
     OhlcvBar,
     read_ohlcv_range,
+    upsert_govt_bank_flows,
     upsert_ohlcv_bars,
 )
+from sqlalchemy import func as sa_func
 
 
 def _bar(symbol: str, ts: date, close: float = 100.0, source: str = "twse") -> OhlcvBar:
@@ -130,3 +134,38 @@ def test_ohlcv_bar_from_connector_row_drops_malformed():
     assert OhlcvBar.from_connector_row(
         "TW", "2330", "twse", {"time": "not-a-date"}
     ) is None
+
+
+@pytest.mark.asyncio
+async def test_chunked_upsert_handles_payloads_above_param_cap(
+    db_session: AsyncSession,
+):
+    """Regression: govt-bank-flow ingest used to send ~13K rows × 6 cols
+    in one INSERT, which exceeds asyncpg's 32767 bind-parameter ceiling
+    and surfaces as `InterfaceError`. The chunked upsert helper must
+    split the payload so the wire cap is never hit.
+
+    SQLite has its own (looser) `SQLITE_LIMIT_VARIABLE_NUMBER` cap
+    (default 32766 on >=3.32, 999 on older builds) so this test also
+    catches a bug in the chunking logic itself when run against the
+    in-memory test engine.
+    """
+    today = date(2026, 4, 1)
+    rows = [
+        GovtBankFlowRow(
+            market="TW",
+            ts=today,
+            bank_name=f"bank_{i:05d}",
+            buy_amount=i,
+            sell_amount=i // 2,
+            source="finmind",
+        )
+        for i in range(7000)
+    ]
+    written = await upsert_govt_bank_flows(db_session, rows)
+    assert written == 7000
+
+    count = await db_session.scalar(
+        select(sa_func.count()).select_from(TwGovtBankFlowDaily),
+    )
+    assert count == 7000

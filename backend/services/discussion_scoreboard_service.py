@@ -158,7 +158,15 @@ async def _compute_for_symbol(
 ) -> dict[str, Any]:
     """One symbol's scoreboard row. Reads OHLCV via the autosession
     helper (closed inside repository.py) so we don't have to thread
-    a session through and risk holding it across the whole batch."""
+    a session through and risk holding it across the whole batch.
+
+    Falls back to `tw_market_service.get_history` (TWSE → FinMind
+    waterfall) when the DB archive has zero bars for this symbol —
+    covers the case where the daily OHLCV cron had a transient
+    failure for one symbol but the rest of the universe ingested
+    fine. The fallback's own Redis cache (4h TTL) keeps repeated
+    scoreboard reads cheap.
+    """
     end = created_tw + timedelta(days=_LOOKAHEAD_CALENDAR_DAYS)
     bars: list[dict[str, Any]] = []
     try:
@@ -171,6 +179,34 @@ async def _compute_for_symbol(
             extra={"symbol": sym, "error": str(exc)},
         )
         bars = []
+
+    # Live fallback for symbols completely missing from the archive.
+    # Only fires on `bars == []` so a partial window (e.g. 3 of 5
+    # days ingested) doesn't burn an extra upstream call when we
+    # already have what we need.
+    if not bars:
+        try:
+            from services import tw_market_service
+            live_bars = await tw_market_service.get_history(sym, months=1)
+            # `get_history` returns bars with `time` ISO strings,
+            # same shape as the repository helper. Constrain to
+            # [created_tw, end] so the downstream filter still works.
+            iso_end = end.isoformat()
+            iso_start_chk = created_tw.isoformat()
+            bars = [
+                b for b in (live_bars or [])
+                if iso_start_chk <= (b.get("time") or "") <= iso_end
+            ]
+            if bars:
+                log.info(
+                    "scoreboard.live_fallback_recovered",
+                    extra={"symbol": sym, "bars": len(bars)},
+                )
+        except Exception as exc:
+            log.warning(
+                "scoreboard.live_fallback_failed",
+                extra={"symbol": sym, "error": str(exc)},
+            )
 
     # Filter to bars on or after the TW-local creation date. The
     # repository helper already constrains by [start, end] but we

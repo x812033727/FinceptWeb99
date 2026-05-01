@@ -70,6 +70,7 @@ const RETRYABLE_INGEST_JOBS = new Set([
   "ingest_margin_tw",
   "ingest_revenue_tw",
   "ingest_revenue_tw_slow",
+  "ingest_buyback_tw",
   "ingest_taiex_history",
   "score_discussion_outcomes",
 ]);
@@ -120,6 +121,10 @@ const JOB_META: Record<string, JobMeta> = {
   ingest_revenue_tw_slow: {
     description_zh: "台股月營收（MOPS per-symbol fallback, 預設關閉；FinMind 出問題時手動重啟）",
     schedule_zh: "停用中",
+  },
+  ingest_buyback_tw: {
+    description_zh: "台股庫藏股公告（FinMind sponsor — 公司自家買回是強訊號）",
+    schedule_zh: "每天 18:00 (台北)",
   },
   ingest_quotes_retention_tw: {
     description_zh: "台股 quote_snapshots 30 日保留（清舊資料）",

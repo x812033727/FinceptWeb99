@@ -65,6 +65,7 @@ import models.runtime_setting  # noqa: E402,F401
 import models.system_task_config  # noqa: E402,F401
 import models.tw_chip_metrics  # noqa: E402,F401
 import models.tw_revenue_monthly  # noqa: E402,F401
+import models.tw_stock_buyback  # noqa: E402,F401
 import models.user  # noqa: E402,F401
 import models.user_llm_provider_key  # noqa: E402,F401
 import models.watchlist  # noqa: E402,F401

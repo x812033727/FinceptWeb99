@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_ as sa_or, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +26,7 @@ from models.ohlcv_daily import OhlcvDaily
 from models.quote_snapshot import QuoteSnapshot
 from models.tw_chip_metrics import TwInstitutionalDaily, TwMarginDaily
 from models.tw_revenue_monthly import TwRevenueMonthly
+from models.tw_stock_buyback import TwStockBuyback
 
 log = logging.getLogger(__name__)
 
@@ -596,6 +597,128 @@ async def read_market_margin_balance_trend(
         "total_short_balance": latest["short_balance"],
         "days_observed": len(by_date),
     }
+
+
+# ── TW buyback announcements (庫藏股) ─────────────────────────────
+
+@dataclass(frozen=True)
+class BuybackRow:
+    """One company's single buyback announcement. `current_shares`
+    is the latest execution figure (FinMind updates this daily as
+    the company prints fills); the cron's UPSERT overwrites in
+    place so reads always see the latest progress for an active
+    round."""
+    market: str
+    symbol: str
+    announce_date: date
+    period_start: date | None
+    period_end: date | None
+    method: int | None
+    purpose: str | None
+    max_shares: int | None
+    current_shares: int | None
+    price_lower: float | None
+    price_upper: float | None
+    source: str
+
+
+async def upsert_buybacks(
+    db: AsyncSession, rows: Iterable[BuybackRow],
+) -> int:
+    """Bulk upsert keyed on (market, symbol, announce_date).
+    Re-pulling the same announcement during its execution window
+    overwrites `current_shares` + period fields with the latest
+    upstream value."""
+    payload = [
+        {
+            "market":         r.market,
+            "symbol":         r.symbol,
+            "announce_date":  r.announce_date,
+            "period_start":   r.period_start,
+            "period_end":     r.period_end,
+            "method":         r.method,
+            "purpose":        r.purpose,
+            "max_shares":     r.max_shares,
+            "current_shares": r.current_shares,
+            "price_lower":    r.price_lower,
+            "price_upper":    r.price_upper,
+            "source":         r.source,
+        }
+        for r in rows
+    ]
+    if not payload:
+        return 0
+
+    update_cols = (
+        "period_start", "period_end", "method", "purpose",
+        "max_shares", "current_shares", "price_lower", "price_upper",
+        "source",
+    )
+
+    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
+    if dialect == "sqlite":
+        stmt = sqlite_insert(TwStockBuyback).values(payload)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["market", "symbol", "announce_date"],
+            set_={k: getattr(stmt.excluded, k) for k in update_cols},
+        )
+    else:
+        stmt = pg_insert(TwStockBuyback).values(payload)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["market", "symbol", "announce_date"],
+            set_={k: getattr(stmt.excluded, k) for k in update_cols},
+        )
+    await db.execute(stmt)
+    await db.commit()
+    return len(payload)
+
+
+async def read_active_buybacks(
+    db: AsyncSession, *, market: str = "TW", as_of: date | None = None,
+    limit: int = 30,
+) -> list[dict[str, Any]]:
+    """Buybacks whose execution window contains `as_of` (default:
+    today). Used by the discussion context aggregator to surface
+    "公司自家正在買回" as a bullish signal block, plus by the
+    StockDetailPage company-info card.
+
+    Sorted by `announce_date` desc — the freshest announcement first
+    so the discussion context block reads as "newest moves up top".
+    A row missing `period_end` is treated as still-active out to
+    365 days from announcement (FinMind sometimes leaves the upstream
+    field blank for very recent filings).
+    """
+    today = as_of or date.today()
+    fallback_end = today  # rows with NULL period_end fall back to "still open"
+    stmt = (
+        select(TwStockBuyback)
+        .where(
+            TwStockBuyback.market == market,
+            TwStockBuyback.announce_date <= today,
+            sa_or(
+                TwStockBuyback.period_end.is_(None),
+                TwStockBuyback.period_end >= fallback_end,
+            ),
+        )
+        .order_by(TwStockBuyback.announce_date.desc())
+        .limit(limit)
+    )
+    rows = (await db.scalars(stmt)).all()
+    return [
+        {
+            "symbol":         r.symbol,
+            "announce_date":  r.announce_date.isoformat(),
+            "period_start":   r.period_start.isoformat() if r.period_start else None,
+            "period_end":     r.period_end.isoformat() if r.period_end else None,
+            "method":         r.method,
+            "purpose":        r.purpose,
+            "max_shares":     int(r.max_shares) if r.max_shares is not None else None,
+            "current_shares": int(r.current_shares) if r.current_shares is not None else None,
+            "price_lower":    float(r.price_lower) if r.price_lower is not None else None,
+            "price_upper":    float(r.price_upper) if r.price_upper is not None else None,
+        }
+        for r in rows
+    ]
 
 
 # ── Quote snapshots ────────────────────────────────────────────────

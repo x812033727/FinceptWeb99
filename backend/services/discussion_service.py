@@ -476,6 +476,11 @@ async def gather_market_context(
         # `tasks/ingest_revenue_tw`; empty until the first ingest
         # cycle finishes on a fresh deploy. TW-only.
         "top_revenue_growers": [],
+        # `active_buybacks` (PR #189) — companies whose declared
+        # buyback execution window covers today. Strong management
+        # signal ("we'll spend cash on our own equity"); often
+        # precedes / supports a price-floor narrative. TW-only.
+        "active_buybacks": [],
         # Each connector failure appends `{"source": "...", "error": "..."}`
         # so the personas (and the synthesizer) can mention "context was
         # incomplete" instead of confidently citing missing data. Logged
@@ -548,6 +553,18 @@ async def gather_market_context(
             )
         except Exception as exc:
             _record_error("top_revenue_growers", exc)
+
+        # Active 庫藏股 buybacks (PR #189). Surfaced as a bullish-signal
+        # block so personas can cite "公司自家正在買回" alongside
+        # foreign-flow data. Cap at 10 — most days the active list is
+        # 5-15 entries, and beyond that the prompt context bloats.
+        try:
+            from services.ingest.repository import read_active_buybacks
+            ctx["active_buybacks"] = _tag_industry(
+                await read_active_buybacks(db, market="TW", limit=10)
+            )
+        except Exception as exc:
+            _record_error("active_buybacks", exc)
 
     try:
         from services.news_sentiment_service import read_recent_market_sentiment

@@ -245,6 +245,21 @@ def setup_jobs() -> None:
     #                     replace_existing=True, max_instances=1,
     #                     coalesce=True)
 
+    # 庫藏股 (TW listed-company buyback announcements). Sponsor-tier
+    # FinMind dataset; one market-wide call/day returns the trailing
+    # 90 days of announcements + execution-progress updates. Schedule
+    # at 18:00 Taipei (10:00 UTC), an hour after revenue, so the
+    # post-close cluster is fully spread out.
+    from tasks.ingest_buyback_tw import run as run_ingest_buyback_tw
+    scheduler.add_job(
+        run_ingest_buyback_tw,
+        trigger=CronTrigger(hour=10, minute=0, timezone="UTC"),
+        id="ingest_buyback_tw",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── News sentiment scoring ────────────────────────────────────
     # Hourly: picks up news rows with NULL sentiment_score and runs them
     # through Claude Haiku in batches. Cheap (one prompt scores 20

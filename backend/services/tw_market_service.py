@@ -459,30 +459,17 @@ async def get_quote(symbol: str, *, bypass_cache: bool = False) -> dict[str, Any
     return result
 
 
-# Single source of truth for the daily-move sanity bound. TW stocks
-# have a ±10% legal limit; resumed-trading after halt + IPO day can
-# exceed that, but nothing legal breaks ±30%. Anything beyond is
-# upstream junk (observed on KY-listed stocks where TWSE puts the
-# prior-day close in the `Change` field; FinMind fallbacks where
-# split-adjusted historicals mismatch with current un-adjusted; and
-# stale `quote_snapshots` rows written before this guard was added).
-# Returns None when `chg_pct` is implausible so callers replace the
-# value with NULL rather than render +992% headlines.
-_DAILY_MOVE_MAX_PCT = 30.0
+# Sanity bound moved to `services._quote_helpers` so US can share it
+# (Polygon / yfinance hit the same upstream-garbage failure modes the
+# TW KY-listed +992% bug came from). Local alias keeps the existing
+# call-site shape inside this module.
+from services._quote_helpers import sanitize_change_pct as _shared_sanitize_change_pct  # noqa: E402
 
 
 def _sanitize_change_pct(
     symbol: str, chg_pct: float | None,
 ) -> float | None:
-    if chg_pct is None:
-        return None
-    if abs(chg_pct) > _DAILY_MOVE_MAX_PCT:
-        log.warning(
-            "tw.quote.change_pct_out_of_bounds",
-            extra={"symbol": symbol, "change_pct": chg_pct},
-        )
-        return None
-    return chg_pct
+    return _shared_sanitize_change_pct(symbol, "TW", chg_pct)
 
 
 def _normalize_quote(symbol: str, raw: dict) -> dict[str, Any]:

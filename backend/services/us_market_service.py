@@ -15,6 +15,7 @@ import pytz
 
 from cache.redis_cache import cache_get, cache_set, key_quote, key_history, key_fundamentals
 from config import settings
+from services._quote_helpers import sanitize_change_pct
 import data.us.finnhub_connector as finnhub
 import data.us.polygon_connector as polygon
 import data.us.stooq_connector as stooq
@@ -149,13 +150,23 @@ async def get_quote(ticker: str, *, bypass_cache: bool = False) -> dict[str, Any
 
 
 def _normalize_quote(ticker: str, raw: dict) -> dict[str, Any]:
+    # ±30% sanity bound on `change_pct` — Polygon / yfinance / Stooq
+    # / Finnhub very occasionally surface implausible deltas
+    # (split-adjusted vs un-adjusted historicals, snapshot rows
+    # written before backfill). Same rail TW uses for the KY-listed
+    # +992% class of bug. Drops `change` alongside so the screener
+    # row stays consistent.
+    chg_pct = sanitize_change_pct(
+        ticker, "US", raw.get("change_pct"),
+    )
+    chg = raw.get("change") if chg_pct is not None else None
     return {
         "symbol": ticker.upper(),
         "market": "US",
         "name": raw.get("name", ticker.upper()),
         "price": raw.get("price", 0),
-        "change": raw.get("change", 0),
-        "change_pct": raw.get("change_pct", 0),
+        "change": chg if chg is not None else 0,
+        "change_pct": chg_pct if chg_pct is not None else 0,
         "volume": raw.get("volume", 0),
         "open": raw.get("open"),
         "high": raw.get("high"),

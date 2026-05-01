@@ -224,6 +224,33 @@ async def get_etf_holdings(symbol: str, start_date: str = "2024-01-01") -> list[
     return await _query("TaiwanStockHoldingSharesPer", symbol, start_date)
 
 
+# ── Government bank daily flow (八大行庫) ─────────────────────────
+
+async def get_government_bank_flow_market_wide(
+    start_date: str, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """`TaiwanStockGovernmentBankBuySell` — eight government banks'
+    daily buy/sell aggregates in TW listed equities. One row per
+    `(date, bank_name)` upstream; we pass through that shape and
+    let `tasks.ingest_govt_bank_flow_tw` upsert into
+    `tw_govt_bank_flow_daily`.
+
+    Sponsor-tier dataset. Empty `data_id` returns the full eight-bank
+    set; one call per day suffices.
+    """
+    rows = await _query("TaiwanStockGovernmentBankBuySell", "", start_date, end_date)
+    return [
+        {
+            "date":        r.get("date"),
+            "bank_name":   r.get("name") or r.get("bank_name"),
+            "buy_amount":  r.get("buy_amount") or r.get("buy"),
+            "sell_amount": r.get("sell_amount") or r.get("sell"),
+        }
+        for r in rows
+        if (r.get("name") or r.get("bank_name"))
+    ]
+
+
 # ── Buyback announcements (庫藏股) ───────────────────────────────
 
 async def get_buyback_market_wide(

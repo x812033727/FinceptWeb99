@@ -25,6 +25,7 @@ from models.news_article import NewsArticle
 from models.ohlcv_daily import OhlcvDaily
 from models.quote_snapshot import QuoteSnapshot
 from models.tw_chip_metrics import TwInstitutionalDaily, TwMarginDaily
+from models.tw_govt_bank_flow import TwGovtBankFlowDaily
 from models.tw_revenue_monthly import TwRevenueMonthly
 from models.tw_stock_buyback import TwStockBuyback
 
@@ -719,6 +720,100 @@ async def read_active_buybacks(
         }
         for r in rows
     ]
+
+
+# ── 八大行庫 (TW government bank daily flow) ────────────────────
+
+@dataclass(frozen=True)
+class GovtBankFlowRow:
+    """One bank's daily buy/sell aggregate."""
+    market: str
+    ts: date
+    bank_name: str
+    buy_amount: int | None
+    sell_amount: int | None
+    source: str
+
+
+async def upsert_govt_bank_flows(
+    db: AsyncSession, rows: Iterable[GovtBankFlowRow],
+) -> int:
+    """Bulk upsert keyed on (market, ts, bank_name)."""
+    payload = [
+        {
+            "market":      r.market,
+            "ts":          r.ts,
+            "bank_name":   r.bank_name,
+            "buy_amount":  r.buy_amount,
+            "sell_amount": r.sell_amount,
+            "source":      r.source,
+        }
+        for r in rows
+    ]
+    if not payload:
+        return 0
+
+    update_cols = ("buy_amount", "sell_amount", "source")
+
+    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
+    if dialect == "sqlite":
+        stmt = sqlite_insert(TwGovtBankFlowDaily).values(payload)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["market", "ts", "bank_name"],
+            set_={k: getattr(stmt.excluded, k) for k in update_cols},
+        )
+    else:
+        stmt = pg_insert(TwGovtBankFlowDaily).values(payload)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["market", "ts", "bank_name"],
+            set_={k: getattr(stmt.excluded, k) for k in update_cols},
+        )
+    await db.execute(stmt)
+    await db.commit()
+    return len(payload)
+
+
+async def read_recent_govt_bank_flow(
+    db: AsyncSession, *, market: str = "TW", days: int = 5,
+) -> list[dict[str, Any]]:
+    """Last `days` of trading-day aggregates, summed across the
+    eight banks. Used by the discussion context block — personas
+    care about the headline net flow ("八大行庫 +12 億"), not the
+    per-bank breakdown.
+
+    Returns one row per date, newest first:
+
+        [{"date": "2026-04-30", "buy_total": 8_500_000_000,
+          "sell_total": 6_300_000_000, "net": 2_200_000_000}, …]
+
+    Empty list when the cron hasn't populated yet — caller
+    interprets as "no signal".
+    """
+    cutoff = date.today() - timedelta(days=days * 2)  # +slack for weekends
+    stmt = (
+        select(TwGovtBankFlowDaily)
+        .where(
+            TwGovtBankFlowDaily.market == market,
+            TwGovtBankFlowDaily.ts >= cutoff,
+        )
+        .order_by(TwGovtBankFlowDaily.ts.desc())
+    )
+    rows = (await db.scalars(stmt)).all()
+    by_date: dict[date, dict[str, int]] = {}
+    for r in rows:
+        d = by_date.setdefault(r.ts, {"buy": 0, "sell": 0})
+        d["buy"] += int(r.buy_amount or 0)
+        d["sell"] += int(r.sell_amount or 0)
+    out: list[dict[str, Any]] = []
+    for ts in sorted(by_date.keys(), reverse=True)[:days]:
+        b = by_date[ts]
+        out.append({
+            "date":       ts.isoformat(),
+            "buy_total":  b["buy"],
+            "sell_total": b["sell"],
+            "net":        b["buy"] - b["sell"],
+        })
+    return out
 
 
 # ── Quote snapshots ────────────────────────────────────────────────

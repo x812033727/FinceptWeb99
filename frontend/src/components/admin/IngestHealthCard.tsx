@@ -71,6 +71,7 @@ const RETRYABLE_INGEST_JOBS = new Set([
   "ingest_revenue_tw",
   "ingest_revenue_tw_slow",
   "ingest_buyback_tw",
+  "ingest_govt_bank_flow_tw",
   "ingest_taiex_history",
   "score_discussion_outcomes",
 ]);
@@ -125,6 +126,10 @@ const JOB_META: Record<string, JobMeta> = {
   ingest_buyback_tw: {
     description_zh: "台股庫藏股公告（FinMind sponsor — 公司自家買回是強訊號）",
     schedule_zh: "每天 18:00 (台北)",
+  },
+  ingest_govt_bank_flow_tw: {
+    description_zh: "台股八大行庫每日買賣金額（FinMind sponsor — 國家隊指標）",
+    schedule_zh: "每天 18:30 (台北)",
   },
   ingest_quotes_retention_tw: {
     description_zh: "台股 quote_snapshots 30 日保留（清舊資料）",

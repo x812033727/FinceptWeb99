@@ -481,6 +481,10 @@ async def gather_market_context(
         # signal ("we'll spend cash on our own equity"); often
         # precedes / supports a price-floor narrative. TW-only.
         "active_buybacks": [],
+        # `govt_bank_flow_5d` (PR #190) — eight-government-bank
+        # net buy/sell summed across the last 5 trading days.
+        # Quasi-public-sector flow signal. TW-only.
+        "govt_bank_flow_5d": [],
         # Each connector failure appends `{"source": "...", "error": "..."}`
         # so the personas (and the synthesizer) can mention "context was
         # incomplete" instead of confidently citing missing data. Logged
@@ -565,6 +569,17 @@ async def gather_market_context(
             )
         except Exception as exc:
             _record_error("active_buybacks", exc)
+
+        # 八大行庫 5-day net flow (PR #190). Personas read this as
+        # "國家隊昨天進場 +12 億 / 已連 3 日買超" alongside foreign
+        # flow. Empty when ingest hasn't populated yet.
+        try:
+            from services.ingest.repository import read_recent_govt_bank_flow
+            ctx["govt_bank_flow_5d"] = await read_recent_govt_bank_flow(
+                db, market="TW", days=5,
+            )
+        except Exception as exc:
+            _record_error("govt_bank_flow_5d", exc)
 
     try:
         from services.news_sentiment_service import read_recent_market_sentiment

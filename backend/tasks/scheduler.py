@@ -260,6 +260,21 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # 八大行庫 daily flow. Sponsor-tier FinMind dataset; one
+    # market-wide call/day. 18:30 Taipei (10:30 UTC), 30 min after
+    # buyback so the sponsor-tier cluster spreads predictably.
+    from tasks.ingest_govt_bank_flow_tw import (
+        run as run_ingest_govt_bank_flow_tw,
+    )
+    scheduler.add_job(
+        run_ingest_govt_bank_flow_tw,
+        trigger=CronTrigger(hour=10, minute=30, timezone="UTC"),
+        id="ingest_govt_bank_flow_tw",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── News sentiment scoring ────────────────────────────────────
     # Hourly: picks up news rows with NULL sentiment_score and runs them
     # through Claude Haiku in batches. Cheap (one prompt scores 20

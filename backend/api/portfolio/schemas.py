@@ -5,7 +5,12 @@ from uuid import UUID
 
 class PortfolioCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
-    currency: str = Field(default="USD", min_length=3, max_length=3)
+    # No default — caller must pick (3-letter ISO 4217 / common stable
+    # ticker). Backend then converts every holding's market value to
+    # this base currency on read. Mixed-market portfolios (TW + US +
+    # crypto) need an explicit choice; defaulting to USD silently
+    # converted TWD positions even when the user expected TWD totals.
+    currency: str = Field(..., min_length=3, max_length=3)
 
     @field_validator("currency")
     @classmethod

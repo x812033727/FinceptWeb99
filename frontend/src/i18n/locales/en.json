@@ -224,6 +224,8 @@
     "new_portfolio": "New Portfolio",
     "portfolio_name": "Portfolio name",
     "currency": "Currency",
+    "currency_pick": "Pick a base currency",
+    "currency_hint": "Every holding's market value will be FX-converted to this currency on each load. For mixed TW / US / crypto portfolios, pick the currency of your dominant position.",
     "create": "Create",
     "edit_title": "Edit Portfolio",
     "confirm_delete_portfolio": "Delete this portfolio? All holdings and transactions will be removed.",

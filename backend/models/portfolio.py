@@ -25,7 +25,12 @@ class Portfolio(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
+    # No SQLAlchemy default — caller must pick a base currency at
+    # creation time. The portfolio service / Pydantic schema enforce
+    # the same at the API layer so a USD default can't sneak back in.
+    # Existing rows are unaffected (this only changes ORM-default
+    # behaviour for new inserts; DB column stays NOT NULL).
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
     holdings: Mapped[list["Holding"]] = relationship("Holding", back_populates="portfolio", cascade="all, delete-orphan")

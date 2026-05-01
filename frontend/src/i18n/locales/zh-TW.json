@@ -224,6 +224,8 @@
     "new_portfolio": "新增組合",
     "portfolio_name": "組合名稱",
     "currency": "計價幣別",
+    "currency_pick": "請選擇計價幣別",
+    "currency_hint": "建立後所有持倉的市值都會即時換算成這個幣別。混合台股／美股／加密貨幣的組合請依主要持倉幣別選擇。",
     "create": "建立",
     "edit_title": "編輯投資組合",
     "confirm_delete_portfolio": "確定要刪除這個投資組合？所有持倉與交易紀錄都會一併移除。",

@@ -18,6 +18,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from analytics.portfolio_optimizer import optimize, efficient_frontier
+from cache.cache_ttls import (
+    TTL_FX,
+    TTL_FX_HISTORICAL,
+    TTL_FX_LAST_KNOWN,
+)
 from cache.redis_cache import cache_get, cache_set
 from data.us.fred_connector import get_latest
 from models.portfolio import Holding, Portfolio, Transaction, TransactionType
@@ -26,10 +31,6 @@ from services.tw_market_service import get_quote as tw_quote, get_history as tw_
 from services.crypto_market_service import get_quote as crypto_quote, get_history as crypto_history
 
 logger = logging.getLogger(__name__)
-
-TTL_FX = 4 * 3600
-TTL_FX_LAST_KNOWN = 30 * 86400   # 30 days — survives FRED outages
-TTL_HISTORY = 4 * 3600
 
 _FX_HARD_FALLBACK = 32.0   # only used on cold cache + FRED failure
 
@@ -103,9 +104,7 @@ async def _get_historical_twd_usd(d: date) -> float | None:
             break
 
     if rate is not None:
-        # Long TTL — historical rates are immutable. 90 days is plenty
-        # given Redis eviction and lets old portfolios reload quickly.
-        await cache_set(key, str(rate), 90 * 86400)
+        await cache_set(key, str(rate), TTL_FX_HISTORICAL)
     return rate
 
 

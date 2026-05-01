@@ -30,6 +30,7 @@ _ET = pytz.timezone("America/New_York")
 # TTLs centralized in `cache.cache_ttls`. Aliases preserve in-module
 # call-site shape.
 from cache.cache_ttls import (  # noqa: E402
+    TTL_EARNINGS,
     TTL_FUNDAMENTALS,
     TTL_HISTORY_DAILY as TTL_HISTORY,
     TTL_OPTIONS,
@@ -818,6 +819,5 @@ async def get_earnings(ticker: str) -> dict[str, Any]:
         return {"earnings_date": None, "eps_estimate": None, "revenue_estimate": None}
 
     result = await loop.run_in_executor(None, _fetch)
-    # cache for 6 hours — earnings dates don't change often
-    await cache_set(key, json.dumps(result), 6 * 3600)
+    await cache_set(key, json.dumps(result), TTL_EARNINGS)
     return result

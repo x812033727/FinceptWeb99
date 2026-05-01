@@ -27,6 +27,9 @@ TTL_HISTORY_INTRADAY = 5 * 60       # 5 min — used by the crypto service
 TTL_FUNDAMENTALS = 24 * 3600        # daily refresh (TWSE BWIBBU_d / yfinance)
 TTL_VALUATION_BAND = 24 * 3600
 TTL_DIVIDENDS = 24 * 3600
+TTL_EARNINGS = 6 * 3600              # next-earnings date refresh — yfinance
+                                     # calendar; 4 ticks per day is plenty,
+                                     # the date itself only flips weekly
 
 # ── derived TW-specific ──────────────────────────────────────────
 TTL_INSTITUTIONAL = 4 * 3600        # 法人買賣超 — once per trading day
@@ -42,3 +45,5 @@ TTL_OPTIONS = 5 * 60                 # 5 min — chain shifts only with quote
 # ── FX (TWD/USD via FRED DEXTW) ──────────────────────────────────
 TTL_FX = 4 * 3600
 TTL_FX_LAST_KNOWN = 30 * 86400       # 30 days — used as a fallback floor
+TTL_FX_HISTORICAL = 90 * 86400       # 90 days — historical rates are immutable;
+                                     # long TTL lets old portfolios reload fast

@@ -1,10 +1,68 @@
-import { useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useAuthStore } from "@/store/authStore";
 import { useCheckForUpdates, useTriggerUpdate, useVersion } from "@/hooks/useVersion";
 import api from "@/lib/api";
+
+// Per-card collapse state, persisted to localStorage so admins keep
+// their layout preference across reloads / new tabs. Each card calls
+// `useCollapsible("admin.<id>")` and threads the resulting toggle
+// into a `<CollapsibleHeader>` at the top of its body — clicking
+// the header chevron flips open/closed and saves the new state.
+function useCollapsible(storageKey: string, defaultOpen = true) {
+  const [open, setOpen] = useState<boolean>(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (raw === "0") return false;
+      if (raw === "1") return true;
+    } catch {
+      /* private mode / quota — fall through to default */
+    }
+    return defaultOpen;
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(storageKey, open ? "1" : "0");
+    } catch {
+      /* see above */
+    }
+  }, [storageKey, open]);
+  return { open, toggle: () => setOpen((v) => !v) };
+}
+
+function CollapsibleHeader({
+  open, toggle, title, subtitle, headerRight,
+}: {
+  open: boolean;
+  toggle: () => void;
+  title: ReactNode;
+  subtitle?: ReactNode;
+  headerRight?: ReactNode;
+}) {
+  return (
+    <div className="flex items-start gap-2">
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        className="flex-1 flex items-start gap-2 text-left hover:opacity-80 transition-opacity"
+      >
+        <span className="text-[10px] text-muted-foreground w-3 inline-block pt-1">
+          {open ? "▼" : "▶"}
+        </span>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium">{title}</p>
+          {subtitle && (
+            <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>
+          )}
+        </div>
+      </button>
+      {headerRight && <div className="shrink-0">{headerRight}</div>}
+    </div>
+  );
+}
 
 interface AdminUser {
   id: string;
@@ -29,6 +87,7 @@ const ROLE_COLORS: Record<string, string> = {
 };
 
 function SystemUpdateCard() {
+  const { open, toggle } = useCollapsible("admin.system-update");
   const { data: version, isLoading } = useVersion();
   const check = useCheckForUpdates();
   const trigger = useTriggerUpdate();
@@ -37,59 +96,68 @@ function SystemUpdateCard() {
   const message = trigger.data?.message;
   const checkError = check.isError;
 
+  // Compact subtitle — current/latest version line, mirrored from the
+  // expanded view so the collapsed card is still informative at a
+  // glance ("you are on v0.5.12, latest is v0.5.12").
+  const subtitle =
+    isLoading || !version ? (
+      <span className="animate-pulse">Checking GitHub…</span>
+    ) : (
+      <>
+        Current <span className="font-mono">v{version.current}</span>
+        {" · "}
+        Latest <span className="font-mono">v{version.latest}</span>
+        {version.update_available && (
+          <span className="ml-2 text-amber-500">update available</span>
+        )}
+      </>
+    );
+
   return (
-    <div className="bg-card border border-border rounded-lg p-4">
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div>
-          <p className="text-sm font-medium">System update</p>
-          {isLoading || !version ? (
-            <p className="text-xs text-muted-foreground animate-pulse mt-1">
-              Checking GitHub…
-            </p>
-          ) : (
-            <p className="text-xs text-muted-foreground mt-1">
-              Current <span className="font-mono">v{version.current}</span>
-              {" · "}
-              Latest <span className="font-mono">v{version.latest}</span>
-              {version.update_available && (
-                <span className="ml-2 text-amber-500">update available</span>
-              )}
-            </p>
-          )}
-          {checkError && (
-            <p className="text-xs text-red-500 mt-2">Failed to reach GitHub. Try again.</p>
-          )}
-          {status && (
-            <p
-              className={`text-xs mt-2 ${
-                status === "started"
-                  ? "text-green-500"
-                  : status === "failed"
-                  ? "text-red-500"
-                  : "text-muted-foreground"
-              }`}
+    <div className="bg-card border border-border rounded-lg p-4 space-y-3">
+      <CollapsibleHeader
+        open={open} toggle={toggle}
+        title="System update"
+        subtitle={subtitle}
+      />
+      {open && (
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="space-y-1">
+            {checkError && (
+              <p className="text-xs text-red-500">Failed to reach GitHub. Try again.</p>
+            )}
+            {status && (
+              <p
+                className={`text-xs ${
+                  status === "started"
+                    ? "text-green-500"
+                    : status === "failed"
+                    ? "text-red-500"
+                    : "text-muted-foreground"
+                }`}
+              >
+                {status}: {message}
+              </p>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              disabled={check.isPending || trigger.isPending}
+              onClick={() => check.mutate()}
+              className="text-xs px-3 py-1.5 rounded border border-border bg-background hover:bg-accent/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              {status}: {message}
-            </p>
-          )}
+              {check.isPending ? "Checking…" : "Check for updates"}
+            </button>
+            <button
+              disabled={!version?.update_available || trigger.isPending || check.isPending}
+              onClick={() => trigger.mutate()}
+              className="text-xs px-3 py-1.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {trigger.isPending ? "Updating…" : "Update now"}
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            disabled={check.isPending || trigger.isPending}
-            onClick={() => check.mutate()}
-            className="text-xs px-3 py-1.5 rounded border border-border bg-background hover:bg-accent/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {check.isPending ? "Checking…" : "Check for updates"}
-          </button>
-          <button
-            disabled={!version?.update_available || trigger.isPending || check.isPending}
-            onClick={() => trigger.mutate()}
-            className="text-xs px-3 py-1.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {trigger.isPending ? "Updating…" : "Update now"}
-          </button>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -561,6 +629,7 @@ function SystemTaskRow({ tcfg }: { tcfg: SystemTaskConfig }) {
 
 function SystemTasksCard() {
   const { t } = useTranslation();
+  const { open, toggle } = useCollapsible("admin.system-tasks");
   // staleTime + refetchInterval together so a second admin sees the
   // first admin's edits within 30 s without needing a manual refresh —
   // system_task_configs apply globally to the background scheduler, so
@@ -575,21 +644,26 @@ function SystemTasksCard() {
 
   return (
     <div className="bg-card border border-border rounded-lg p-4 space-y-2">
-      <div>
-        <p className="text-sm font-medium">{t("systemTasks.title")}</p>
-        <p className="text-xs text-muted-foreground mt-0.5">{t("systemTasks.subtitle")}</p>
-      </div>
-      {isLoading ? (
-        <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>
-      ) : (
-        <div className="grid grid-cols-[200px_140px_1fr_auto] gap-2 text-[10px] text-muted-foreground uppercase tracking-wider border-b border-border pb-1">
-          <span>{t("systemTasks.task")}</span>
-          <span>{t("personas.provider")}</span>
-          <span>{t("personas.model")}</span>
-          <span></span>
-        </div>
+      <CollapsibleHeader
+        open={open} toggle={toggle}
+        title={t("systemTasks.title")}
+        subtitle={t("systemTasks.subtitle")}
+      />
+      {open && (
+        <>
+          {isLoading ? (
+            <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>
+          ) : (
+            <div className="grid grid-cols-[200px_140px_1fr_auto] gap-2 text-[10px] text-muted-foreground uppercase tracking-wider border-b border-border pb-1">
+              <span>{t("systemTasks.task")}</span>
+              <span>{t("personas.provider")}</span>
+              <span>{t("personas.model")}</span>
+              <span></span>
+            </div>
+          )}
+          {list.map((tcfg) => <SystemTaskRow key={tcfg.task_id} tcfg={tcfg} />)}
+        </>
       )}
-      {list.map((tcfg) => <SystemTaskRow key={tcfg.task_id} tcfg={tcfg} />)}
     </div>
   );
 }
@@ -724,6 +798,7 @@ function RuntimeSettingRow({ s }: { s: RuntimeSetting }) {
 
 function RuntimeTunablesCard() {
   const { t } = useTranslation();
+  const { open, toggle } = useCollapsible("admin.runtime-tunables");
   const { data: list = [], isLoading } = useQuery<RuntimeSetting[]>({
     queryKey: ["admin", "runtime-settings"],
     queryFn: () => api.get("/admin/runtime-settings").then((r) => r.data),
@@ -734,21 +809,26 @@ function RuntimeTunablesCard() {
 
   return (
     <div className="bg-card border border-border rounded-lg p-4 space-y-2">
-      <div>
-        <p className="text-sm font-medium">{t("runtimeTunables.title")}</p>
-        <p className="text-xs text-muted-foreground mt-0.5">{t("runtimeTunables.subtitle")}</p>
-      </div>
-      {isLoading ? (
-        <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>
-      ) : (
-        <div className="grid grid-cols-[260px_1fr_120px_auto] gap-2 text-[10px] text-muted-foreground uppercase tracking-wider border-b border-border pb-1">
-          <span>{t("runtimeTunables.setting")}</span>
-          <span>{t("runtimeTunables.description")}</span>
-          <span>{t("runtimeTunables.value")}</span>
-          <span></span>
-        </div>
+      <CollapsibleHeader
+        open={open} toggle={toggle}
+        title={t("runtimeTunables.title")}
+        subtitle={t("runtimeTunables.subtitle")}
+      />
+      {open && (
+        <>
+          {isLoading ? (
+            <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>
+          ) : (
+            <div className="grid grid-cols-[260px_1fr_120px_auto] gap-2 text-[10px] text-muted-foreground uppercase tracking-wider border-b border-border pb-1">
+              <span>{t("runtimeTunables.setting")}</span>
+              <span>{t("runtimeTunables.description")}</span>
+              <span>{t("runtimeTunables.value")}</span>
+              <span></span>
+            </div>
+          )}
+          {list.map((s) => <RuntimeSettingRow key={s.key} s={s} />)}
+        </>
       )}
-      {list.map((s) => <RuntimeSettingRow key={s.key} s={s} />)}
     </div>
   );
 }
@@ -756,6 +836,7 @@ function RuntimeTunablesCard() {
 
 function PersonasCard() {
   const { t } = useTranslation();
+  const { open, toggle } = useCollapsible("admin.personas");
   const { data: list = [], isLoading } = useQuery<PersonaConfig[]>({
     queryKey: ["admin", "personas"],
     queryFn: () => api.get("/admin/personas").then((r) => r.data),
@@ -763,21 +844,26 @@ function PersonasCard() {
 
   return (
     <div className="bg-card border border-border rounded-lg p-4 space-y-2">
-      <div>
-        <p className="text-sm font-medium">{t("personas.title")}</p>
-        <p className="text-xs text-muted-foreground mt-0.5">{t("personas.subtitle")}</p>
-      </div>
-      {isLoading ? (
-        <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>
-      ) : (
-        <div className="grid grid-cols-[200px_140px_1fr_auto] gap-2 text-[10px] text-muted-foreground uppercase tracking-wider border-b border-border pb-1">
-          <span>{t("personas.persona")}</span>
-          <span>{t("personas.provider")}</span>
-          <span>{t("personas.model")}</span>
-          <span></span>
-        </div>
+      <CollapsibleHeader
+        open={open} toggle={toggle}
+        title={t("personas.title")}
+        subtitle={t("personas.subtitle")}
+      />
+      {open && (
+        <>
+          {isLoading ? (
+            <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>
+          ) : (
+            <div className="grid grid-cols-[200px_140px_1fr_auto] gap-2 text-[10px] text-muted-foreground uppercase tracking-wider border-b border-border pb-1">
+              <span>{t("personas.persona")}</span>
+              <span>{t("personas.provider")}</span>
+              <span>{t("personas.model")}</span>
+              <span></span>
+            </div>
+          )}
+          {list.map((p) => <PersonaRow key={p.persona_id} p={p} />)}
+        </>
       )}
-      {list.map((p) => <PersonaRow key={p.persona_id} p={p} />)}
     </div>
   );
 }
@@ -825,6 +911,9 @@ const PROVIDER_COLOR: Record<string, string> = {
 export function UsageCard({ scope }: { scope: "admin" | "me" }) {
   const { t } = useTranslation();
   const [days, setDays] = useState(30);
+  // Per-scope storage key so the admin's collapse on the AdminPage
+  // doesn't propagate to /settings (which embeds <UsageCard scope="me">).
+  const { open, toggle } = useCollapsible(`usage.${scope}`);
   const path = scope === "admin" ? "/admin/llm-usage" : "/auth/llm-usage";
   const { data, isLoading } = useQuery<UsageSummary>({
     queryKey: ["llm-usage", scope, days],
@@ -833,30 +922,36 @@ export function UsageCard({ scope }: { scope: "admin" | "me" }) {
 
   return (
     <div className="bg-card border border-border rounded-lg p-4 space-y-3">
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <p className="text-sm font-medium">{t("usage.title")}</p>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            {scope === "admin" ? t("usage.subtitle_admin") : t("usage.subtitle_me")}
-          </p>
-        </div>
-        <div className="flex gap-1">
-          {[7, 30, 90].map((d) => (
-            <button
-              key={d}
-              onClick={() => setDays(d)}
-              className={`px-2.5 py-1 text-xs rounded ${
-                days === d
-                  ? "bg-primary text-primary-foreground"
-                  : "border border-border text-muted-foreground hover:text-foreground"
-              }`}
+      <CollapsibleHeader
+        open={open} toggle={toggle}
+        title={t("usage.title")}
+        subtitle={scope === "admin" ? t("usage.subtitle_admin") : t("usage.subtitle_me")}
+        headerRight={
+          open ? (
+            <div
+              className="flex gap-1"
+              onClick={(e) => e.stopPropagation()}
             >
-              {d}d
-            </button>
-          ))}
-        </div>
-      </div>
+              {[7, 30, 90].map((d) => (
+                <button
+                  key={d}
+                  onClick={(e) => { e.stopPropagation(); setDays(d); }}
+                  className={`px-2.5 py-1 text-xs rounded ${
+                    days === d
+                      ? "bg-primary text-primary-foreground"
+                      : "border border-border text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {d}d
+                </button>
+              ))}
+            </div>
+          ) : null
+        }
+      />
 
+      {open && (
+      <>
       {isLoading || !data ? (
         <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>
       ) : data.total_requests === 0 ? (
@@ -899,6 +994,8 @@ export function UsageCard({ scope }: { scope: "admin" | "me" }) {
           </div>
         </>
       )}
+      </>
+      )}
     </div>
   );
 }
@@ -915,6 +1012,7 @@ function Stat({ label, value }: { label: string; value: string }) {
 
 function LLMKeysCard() {
   const { t } = useTranslation();
+  const { open, toggle } = useCollapsible("admin.llm-keys");
   const { data: keys = [], isLoading } = useQuery<LLMKeyInfo[]>({
     queryKey: ["admin", "llm-keys"],
     queryFn: () => api.get("/admin/llm-keys").then((r) => r.data),
@@ -922,16 +1020,19 @@ function LLMKeysCard() {
 
   return (
     <div className="bg-card border border-border rounded-lg p-4 space-y-3">
-      <div>
-        <p className="text-sm font-medium">{t("llm_keys.title")}</p>
-        <p className="text-xs text-muted-foreground mt-0.5">{t("llm_keys.subtitle")}</p>
-      </div>
-      {isLoading ? (
-        <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>
-      ) : (
-        <div className="space-y-2">
-          {keys.map((k) => <LLMKeyRow key={k.provider} info={k} />)}
-        </div>
+      <CollapsibleHeader
+        open={open} toggle={toggle}
+        title={t("llm_keys.title")}
+        subtitle={t("llm_keys.subtitle")}
+      />
+      {open && (
+        isLoading ? (
+          <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>
+        ) : (
+          <div className="space-y-2">
+            {keys.map((k) => <LLMKeyRow key={k.provider} info={k} />)}
+          </div>
+        )
       )}
     </div>
   );
@@ -1106,6 +1207,7 @@ function MarketKeyRow({ info }: { info: MarketKeyInfo }) {
 
 function MarketKeysCard() {
   const { t } = useTranslation();
+  const { open, toggle } = useCollapsible("admin.market-keys");
   const { data: keys = [], isLoading } = useQuery<MarketKeyInfo[]>({
     queryKey: ["admin", "market-keys"],
     queryFn: () => api.get("/admin/market-keys").then((r) => r.data),
@@ -1113,16 +1215,19 @@ function MarketKeysCard() {
 
   return (
     <div className="bg-card border border-border rounded-lg p-4 space-y-3">
-      <div>
-        <p className="text-sm font-medium">{t("market_keys.title")}</p>
-        <p className="text-xs text-muted-foreground mt-0.5">{t("market_keys.subtitle")}</p>
-      </div>
-      {isLoading ? (
-        <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>
-      ) : (
-        <div className="space-y-2">
-          {keys.map((k) => <MarketKeyRow key={k.provider} info={k} />)}
-        </div>
+      <CollapsibleHeader
+        open={open} toggle={toggle}
+        title={t("market_keys.title")}
+        subtitle={t("market_keys.subtitle")}
+      />
+      {open && (
+        isLoading ? (
+          <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>
+        ) : (
+          <div className="space-y-2">
+            {keys.map((k) => <MarketKeyRow key={k.provider} info={k} />)}
+          </div>
+        )
       )}
     </div>
   );
@@ -1233,6 +1338,7 @@ function timeAgo(iso: string | null): string {
 
 function IngestHealthCard() {
   const qc = useQueryClient();
+  const { open, toggle } = useCollapsible("admin.ingest-health");
   const { data: serverRows = [], isLoading } = useQuery<IngestHealth[]>({
     queryKey: ["admin", "ingest-health"],
     queryFn: () => api.get("/admin/ingest/health").then((r) => r.data),
@@ -1268,12 +1374,16 @@ function IngestHealthCard() {
 
   return (
     <div className="bg-card border border-border rounded-lg p-4 space-y-3">
-      <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-medium">Scheduled Ingest Health</h2>
-        <span className="text-[10px] text-muted-foreground">
-          refreshes every 60s
-        </span>
-      </div>
+      <CollapsibleHeader
+        open={open} toggle={toggle}
+        title="Scheduled Ingest Health"
+        headerRight={
+          <span className="text-[10px] text-muted-foreground">
+            refreshes every 60s
+          </span>
+        }
+      />
+      {open && (<>
       {retry.isSuccess && (
         <p className="text-xs text-green-500">{retry.data.message}</p>
       )}
@@ -1372,6 +1482,7 @@ function IngestHealthCard() {
           </table>
         </div>
       )}
+      </>)}
     </div>
   );
 }
@@ -1460,12 +1571,41 @@ function AdminContent() {
 
       <RuntimeTunablesCard />
 
-      {/* User table */}
-      <div className="bg-card border border-border rounded-lg overflow-hidden">
-        <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-          <span className="text-sm font-medium">Users ({users.length})</span>
-        </div>
+      <UsersSection
+        users={users}
+        isLoading={isLoading}
+        editingId={editingId}
+        setEditingId={setEditingId}
+        updateRole={updateRole}
+        toggleActive={toggleActive}
+      />
+    </div>
+  );
+}
 
+// Inline collapsible wrapper for the Users table — kept as a child
+// component (not refactored fully out of AdminContent) so the
+// mutation callbacks + state handlers stay where they were defined.
+function UsersSection({
+  users, isLoading, editingId, setEditingId, updateRole, toggleActive,
+}: {
+  users: AdminUser[];
+  isLoading: boolean;
+  editingId: string | null;
+  setEditingId: (id: string | null) => void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  updateRole: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  toggleActive: any;
+}) {
+  const { open, toggle } = useCollapsible("admin.users");
+  return (
+    <div className="bg-card border border-border rounded-lg p-4 space-y-3">
+      <CollapsibleHeader
+        open={open} toggle={toggle}
+        title={`Users (${users.length})`}
+      />
+      {open && (<div className="-mx-4 -mb-4 overflow-hidden rounded-b-lg">
         {isLoading ? (
           <p className="p-4 text-xs text-muted-foreground animate-pulse">Loading…</p>
         ) : (
@@ -1540,7 +1680,7 @@ function AdminContent() {
             </table>
           </div>
         )}
-      </div>
+      </div>)}
     </div>
   );
 }

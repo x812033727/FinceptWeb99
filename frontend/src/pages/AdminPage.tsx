@@ -140,9 +140,7 @@ function UsersSection({
   isLoading: boolean;
   editingId: string | null;
   setEditingId: (id: string | null) => void;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   updateRole: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   toggleActive: any;
 }) {
   const { open, toggle } = useCollapsible("admin.users");

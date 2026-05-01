@@ -224,6 +224,73 @@ async def get_etf_holdings(symbol: str, start_date: str = "2024-01-01") -> list[
     return await _query("TaiwanStockHoldingSharesPer", symbol, start_date)
 
 
+# ── Risk-warning datasets (處置 / 暫停 / 當沖) ────────────────────
+
+async def get_disposition_market_wide(
+    start_date: str, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """`TaiwanStockDispositionSecuritiesPeriod` — list of stocks
+    placed under disposition (處置股) with their level + period
+    window. Sponsor-tier. One market-wide call covers all active +
+    recently-expired entries.
+    """
+    rows = await _query("TaiwanStockDispositionSecuritiesPeriod", "", start_date, end_date)
+    return [
+        {
+            "symbol":         r.get("stock_id", ""),
+            "period_start":   r.get("announcement_date") or r.get("period_start") or r.get("date"),
+            "period_end":     r.get("end_date") or r.get("period_end"),
+            "classification": r.get("classification") or r.get("category"),
+            "level":          r.get("level") or r.get("disposition_level"),
+            "reason":         r.get("reason") or r.get("disposition_reason"),
+        }
+        for r in rows
+        if r.get("stock_id")
+    ]
+
+
+async def get_suspended_market_wide(
+    start_date: str, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """`TaiwanStockSuspended` — full-trading-halt event log. Rare;
+    typical month has 0-3 entries. Sponsor-tier.
+    """
+    rows = await _query("TaiwanStockSuspended", "", start_date, end_date)
+    return [
+        {
+            "symbol":  r.get("stock_id", ""),
+            "date":    r.get("date"),
+            "status":  r.get("status") or r.get("suspended_status"),
+            "reason":  r.get("reason") or r.get("suspended_reason"),
+        }
+        for r in rows
+        if r.get("stock_id")
+    ]
+
+
+async def get_day_trading_market_wide(
+    start_date: str, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """`TaiwanStockDayTrading` — per-(symbol, date) day-trading
+    volume aggregates. Used to spot speculative-favorite stocks
+    where intraday round-trips dominate price action. Sponsor-tier.
+    Heavier than the other two — ~1700 rows × N days per call.
+    """
+    rows = await _query("TaiwanStockDayTrading", "", start_date, end_date)
+    return [
+        {
+            "symbol":      r.get("stock_id", ""),
+            "date":        r.get("date"),
+            # FinMind keys vary across versions; try common variants.
+            "volume":      r.get("Volume") or r.get("TradeVolume") or r.get("volume"),
+            "buy_amount":  r.get("BuyAfterSale") or r.get("buy_amount") or r.get("BuyAmount"),
+            "sell_amount": r.get("SellAfterPurchase") or r.get("sell_amount") or r.get("SellAmount"),
+        }
+        for r in rows
+        if r.get("stock_id") and r.get("date")
+    ]
+
+
 # ── Total return index (含息報酬指數) ────────────────────────────
 
 async def get_taiex_total_return_index(

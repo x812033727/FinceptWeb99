@@ -66,6 +66,7 @@ import models.system_task_config  # noqa: E402,F401
 import models.tw_chip_metrics  # noqa: E402,F401
 import models.tw_govt_bank_flow  # noqa: E402,F401
 import models.tw_revenue_monthly  # noqa: E402,F401
+import models.tw_risk_signals  # noqa: E402,F401
 import models.tw_stock_buyback  # noqa: E402,F401
 import models.user  # noqa: E402,F401
 import models.user_llm_provider_key  # noqa: E402,F401

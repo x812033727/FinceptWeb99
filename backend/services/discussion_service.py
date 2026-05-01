@@ -485,6 +485,15 @@ async def gather_market_context(
         # net buy/sell summed across the last 5 trading days.
         # Quasi-public-sector flow signal. TW-only.
         "govt_bank_flow_5d": [],
+        # `risk_warnings` (PR #192) — disposition / suspended /
+        # high-day-trading-ratio summaries. Personas use these as
+        # negative filters: don't recommend a 處置股 even if
+        # screening criteria say buy. TW-only.
+        "risk_warnings": {
+            "active_dispositions": [],
+            "recent_suspensions": [],
+            "high_day_trading_ratio": [],
+        },
         # Each connector failure appends `{"source": "...", "error": "..."}`
         # so the personas (and the synthesizer) can mention "context was
         # incomplete" instead of confidently citing missing data. Logged
@@ -580,6 +589,31 @@ async def gather_market_context(
             )
         except Exception as exc:
             _record_error("govt_bank_flow_5d", exc)
+
+        # Risk warnings (PR #192). Three independent reads — wrap
+        # each individually so one ingest hiccup doesn't blank the
+        # other two. Each block is capped at 10-20 entries; personas
+        # use these as negative filters so per-row detail isn't
+        # required, just the symbol set.
+        try:
+            from services.ingest.repository import (
+                read_active_dispositions,
+                read_high_day_trading_ratio,
+                read_recent_suspensions,
+            )
+            ctx["risk_warnings"] = {
+                "active_dispositions": await read_active_dispositions(
+                    db, market="TW", limit=20,
+                ),
+                "recent_suspensions": await read_recent_suspensions(
+                    db, market="TW", days=7, limit=10,
+                ),
+                "high_day_trading_ratio": await read_high_day_trading_ratio(
+                    db, market="TW", days=1, threshold=0.6, limit=20,
+                ),
+            }
+        except Exception as exc:
+            _record_error("risk_warnings", exc)
 
     try:
         from services.news_sentiment_service import read_recent_market_sentiment

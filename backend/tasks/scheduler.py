@@ -293,6 +293,21 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # Risk-signals 三件套 (處置 / 暫停 / 當沖). FinMind sponsor-tier,
+    # 3 datasets per tick. 19:00 Taipei (11:00 UTC), after the
+    # buyback / govt-bank cluster.
+    from tasks.ingest_risk_signals_tw import (
+        run as run_ingest_risk_signals_tw,
+    )
+    scheduler.add_job(
+        run_ingest_risk_signals_tw,
+        trigger=CronTrigger(hour=11, minute=0, timezone="UTC"),
+        id="ingest_risk_signals_tw",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── News sentiment scoring ────────────────────────────────────
     # Hourly: picks up news rows with NULL sentiment_score and runs them
     # through Claude Haiku in batches. Cheap (one prompt scores 20

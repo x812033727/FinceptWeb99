@@ -27,6 +27,11 @@ from models.quote_snapshot import QuoteSnapshot
 from models.tw_chip_metrics import TwInstitutionalDaily, TwMarginDaily
 from models.tw_govt_bank_flow import TwGovtBankFlowDaily
 from models.tw_revenue_monthly import TwRevenueMonthly
+from models.tw_risk_signals import (
+    TwStockDayTradingDaily,
+    TwStockDisposition,
+    TwStockSuspended,
+)
 from models.tw_stock_buyback import TwStockBuyback
 
 log = logging.getLogger(__name__)
@@ -814,6 +819,242 @@ async def read_recent_govt_bank_flow(
             "net":        b["buy"] - b["sell"],
         })
     return out
+
+
+# ── 風險警示三件套 (PR #192) ──────────────────────────────────────
+#
+# Three small archives ingested together by `tasks.ingest_risk_signals_tw`
+# for the discussion-context "risk warnings" block. Each has its own
+# upsert + a read helper that aggregates the way the discussion
+# aggregator wants (counts + sample symbols, not raw rows).
+
+
+@dataclass(frozen=True)
+class DispositionRow:
+    market: str
+    symbol: str
+    period_start: date
+    period_end: date | None
+    classification: str | None
+    level: int | None
+    reason: str | None
+    source: str
+
+
+async def upsert_dispositions(
+    db: AsyncSession, rows: Iterable[DispositionRow],
+) -> int:
+    payload = [
+        {
+            "market":         r.market,
+            "symbol":         r.symbol,
+            "period_start":   r.period_start,
+            "period_end":     r.period_end,
+            "classification": r.classification,
+            "level":          r.level,
+            "reason":         r.reason,
+            "source":         r.source,
+        }
+        for r in rows
+    ]
+    if not payload:
+        return 0
+    update_cols = ("period_end", "classification", "level", "reason", "source")
+    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
+    insert_fn = sqlite_insert if dialect == "sqlite" else pg_insert
+    stmt = insert_fn(TwStockDisposition).values(payload)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["market", "symbol", "period_start"],
+        set_={k: getattr(stmt.excluded, k) for k in update_cols},
+    )
+    await db.execute(stmt)
+    await db.commit()
+    return len(payload)
+
+
+async def read_active_dispositions(
+    db: AsyncSession, *, market: str = "TW", as_of: date | None = None,
+    limit: int = 30,
+) -> list[dict[str, Any]]:
+    """Stocks whose disposition window covers `as_of`. NULL
+    period_end is treated as still-active (FinMind sometimes leaves
+    the upstream field blank for fresh announcements)."""
+    today = as_of or date.today()
+    stmt = (
+        select(TwStockDisposition)
+        .where(
+            TwStockDisposition.market == market,
+            TwStockDisposition.period_start <= today,
+            sa_or(
+                TwStockDisposition.period_end.is_(None),
+                TwStockDisposition.period_end >= today,
+            ),
+        )
+        .order_by(TwStockDisposition.period_start.desc())
+        .limit(limit)
+    )
+    rows = (await db.scalars(stmt)).all()
+    return [
+        {
+            "symbol":         r.symbol,
+            "period_start":   r.period_start.isoformat(),
+            "period_end":     r.period_end.isoformat() if r.period_end else None,
+            "classification": r.classification,
+            "level":          r.level,
+            "reason":         r.reason,
+        }
+        for r in rows
+    ]
+
+
+@dataclass(frozen=True)
+class SuspendedRow:
+    market: str
+    symbol: str
+    ts: date
+    status: str | None
+    reason: str | None
+    source: str
+
+
+async def upsert_suspensions(
+    db: AsyncSession, rows: Iterable[SuspendedRow],
+) -> int:
+    payload = [
+        {
+            "market": r.market,
+            "symbol": r.symbol,
+            "ts":     r.ts,
+            "status": r.status,
+            "reason": r.reason,
+            "source": r.source,
+        }
+        for r in rows
+    ]
+    if not payload:
+        return 0
+    update_cols = ("status", "reason", "source")
+    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
+    insert_fn = sqlite_insert if dialect == "sqlite" else pg_insert
+    stmt = insert_fn(TwStockSuspended).values(payload)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["market", "symbol", "ts"],
+        set_={k: getattr(stmt.excluded, k) for k in update_cols},
+    )
+    await db.execute(stmt)
+    await db.commit()
+    return len(payload)
+
+
+async def read_recent_suspensions(
+    db: AsyncSession, *, market: str = "TW", days: int = 7,
+    limit: int = 30,
+) -> list[dict[str, Any]]:
+    cutoff = date.today() - timedelta(days=days)
+    stmt = (
+        select(TwStockSuspended)
+        .where(
+            TwStockSuspended.market == market,
+            TwStockSuspended.ts >= cutoff,
+        )
+        .order_by(TwStockSuspended.ts.desc())
+        .limit(limit)
+    )
+    rows = (await db.scalars(stmt)).all()
+    return [
+        {
+            "symbol": r.symbol,
+            "date":   r.ts.isoformat(),
+            "status": r.status,
+            "reason": r.reason,
+        }
+        for r in rows
+    ]
+
+
+@dataclass(frozen=True)
+class DayTradingRow:
+    market: str
+    symbol: str
+    ts: date
+    volume: int | None
+    buy_amount: int | None
+    sell_amount: int | None
+    source: str
+
+
+async def upsert_day_trading(
+    db: AsyncSession, rows: Iterable[DayTradingRow],
+) -> int:
+    payload = [
+        {
+            "market":      r.market,
+            "symbol":      r.symbol,
+            "ts":          r.ts,
+            "volume":      r.volume,
+            "buy_amount":  r.buy_amount,
+            "sell_amount": r.sell_amount,
+            "source":      r.source,
+        }
+        for r in rows
+    ]
+    if not payload:
+        return 0
+    update_cols = ("volume", "buy_amount", "sell_amount", "source")
+    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
+    insert_fn = sqlite_insert if dialect == "sqlite" else pg_insert
+    stmt = insert_fn(TwStockDayTradingDaily).values(payload)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["market", "symbol", "ts"],
+        set_={k: getattr(stmt.excluded, k) for k in update_cols},
+    )
+    await db.execute(stmt)
+    await db.commit()
+    return len(payload)
+
+
+async def read_high_day_trading_ratio(
+    db: AsyncSession, *, market: str = "TW", days: int = 1,
+    threshold: float = 0.6, limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Stocks where day-trading turnover dominates regular trading
+    over the last `days` sessions. The "ratio" is computed as
+    `(buy_amount + sell_amount) / 2 / volume` — each side counted
+    once because a day-trade is one round-trip. A ratio > 0.5 means
+    the majority of volume was intraday round-trips, which is a
+    speculative-character signal.
+    """
+    cutoff = date.today() - timedelta(days=days * 3)  # weekend slack
+    stmt = (
+        select(TwStockDayTradingDaily)
+        .where(
+            TwStockDayTradingDaily.market == market,
+            TwStockDayTradingDaily.ts >= cutoff,
+        )
+        .order_by(TwStockDayTradingDaily.ts.desc())
+    )
+    rows = (await db.scalars(stmt)).all()
+    # Group by symbol, take latest non-zero-volume day, compute ratio.
+    seen: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        if r.symbol in seen:
+            continue
+        vol = int(r.volume or 0)
+        if vol <= 0:
+            continue
+        side = (int(r.buy_amount or 0) + int(r.sell_amount or 0)) / 2
+        ratio = side / vol if vol > 0 else 0.0
+        if ratio < threshold:
+            continue
+        seen[r.symbol] = {
+            "symbol": r.symbol,
+            "date":   r.ts.isoformat(),
+            "ratio":  round(ratio, 4),
+            "volume": vol,
+        }
+    out = list(seen.values())
+    out.sort(key=lambda d: d["ratio"], reverse=True)
+    return out[:limit]
 
 
 # ── Quote snapshots ────────────────────────────────────────────────

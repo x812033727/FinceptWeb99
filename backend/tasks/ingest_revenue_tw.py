@@ -21,7 +21,7 @@ Failure handling and lock semantics mirror `tasks/ingest_news_tw.py`
 cooldown window.
 """
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 import httpx
 

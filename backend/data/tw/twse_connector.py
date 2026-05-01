@@ -292,11 +292,9 @@ async def get_taiex_history(query_date: date | None = None) -> list[dict[str, An
             continue
 
         close = _tw_num(r.get("發行量加權股價指數"))
-        change = _tw_num(r.get("漲跌點數")) or 0.0
-        # FMTQIK only carries close + delta; reconstruct prev close as
-        # close - change. open / high / low aren't in this endpoint —
-        # we leave them as the close (good enough for a 30-day chart
-        # context, accepting the cost of no real intraday range).
+        # FMTQIK doesn't expose open / high / low — flatten everything
+        # to the close. Good enough for a 30-day chart context; we
+        # accept the cost of no intraday range.
         result.append({
             "time":   ce_date,
             "open":   close,

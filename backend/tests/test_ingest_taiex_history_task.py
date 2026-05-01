@@ -5,7 +5,6 @@ into ohlcv_daily under symbol='_TAIEX'. Tests cover lock skip,
 happy path, idempotent re-run, and discussion-context integration
 via the new `tw_market_service.get_index(history_days=...)` shape.
 """
-from datetime import date
 from unittest.mock import AsyncMock, patch
 
 import pytest

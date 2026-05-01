@@ -279,7 +279,6 @@ async def test_resolve_key_fred_falls_back_to_env(db_session, monkeypatch):
 @pytest.mark.asyncio
 async def test_validate_fred_accepts_2xx_with_seriess(monkeypatch):
     """200 response with non-empty `seriess` array → key works."""
-    from unittest.mock import AsyncMock
     import httpx
 
     async def fake_get(self, url, params=None):

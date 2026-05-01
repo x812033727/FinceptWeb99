@@ -9,11 +9,10 @@ rows stay skipped. Per-row failures are isolated.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.discussion import Discussion
@@ -242,7 +241,11 @@ async def test_one_row_failure_doesnt_abort_batch(
         db_session, user.id, age_days=10,
         conclusion={"recommended_symbols": ["BAD"]},
     )
-    good = await _disc(
+    # Second eligible row — its returned ID isn't referenced (only
+    # `bad.id` is matched in the flaky stub) but seeding it ensures
+    # the cron has at least two rows to iterate over and the
+    # post-iteration error count check is meaningful.
+    await _disc(
         db_session, user.id, age_days=10,
         conclusion={"recommended_symbols": ["2330"]},
     )

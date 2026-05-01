@@ -1,5 +1,4 @@
 """Tests for tasks.ingest_revenue_tw — daily monthly-revenue ingest."""
-from datetime import date
 from unittest.mock import AsyncMock, patch
 
 import pytest

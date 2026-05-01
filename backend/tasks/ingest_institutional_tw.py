@@ -18,7 +18,7 @@ cooldown out to see the cause.
 Multi-pod safe via Redis SET-NX lock.
 """
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date
 
 import httpx
 

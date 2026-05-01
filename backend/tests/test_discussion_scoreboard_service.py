@@ -12,11 +12,9 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.discussion import Discussion
-from models.ohlcv_daily import OhlcvDaily
 from models.user import User, UserRole
 from services import discussion_scoreboard_service
 from services.ingest.repository import OhlcvBar, upsert_ohlcv_bars

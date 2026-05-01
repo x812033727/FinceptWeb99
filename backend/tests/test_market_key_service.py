@@ -255,3 +255,58 @@ def test_market_key_uses_same_fernet_as_llm_key():
     plain = "shared-fernet-test"
     cipher = encrypt(plain)
     assert decrypt(cipher) == plain
+
+
+# ── FRED provider ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_fred_in_supported_providers():
+    """FRED was added in PR #149 so admins can save the key from the
+    UI instead of editing .env."""
+    assert "fred" in svc.SUPPORTED_PROVIDERS
+    assert svc._ENV_KEY_ATTR["fred"] == "FRED_API_KEY"
+
+
+@pytest.mark.asyncio
+async def test_resolve_key_fred_falls_back_to_env(db_session, monkeypatch):
+    monkeypatch.setattr(svc.settings, "FRED_API_KEY", "env-fred-key-7890")
+    svc._invalidate_cache()
+    key = await svc.resolve_key("fred")
+    assert key == "env-fred-key-7890"
+
+
+@pytest.mark.asyncio
+async def test_validate_fred_accepts_2xx_with_seriess(monkeypatch):
+    """200 response with non-empty `seriess` array → key works."""
+    from unittest.mock import AsyncMock
+    import httpx
+
+    async def fake_get(self, url, params=None):
+        return httpx.Response(
+            200,
+            request=httpx.Request("GET", url),
+            json={"seriess": [{"id": "FEDFUNDS"}]},
+        )
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    result = await svc.validate_key("fred", "test-key")
+    assert result.ok is True
+
+
+@pytest.mark.asyncio
+async def test_validate_fred_rejects_400(monkeypatch):
+    """400 with `error_message` → key rejected, surface FRED's reason."""
+    import httpx
+
+    async def fake_get(self, url, params=None):
+        return httpx.Response(
+            400,
+            request=httpx.Request("GET", url),
+            json={"error_message": "Bad API Key"},
+        )
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    result = await svc.validate_key("fred", "bad-key")
+    assert result.ok is False
+    assert "Bad API Key" in result.message

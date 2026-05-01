@@ -2,6 +2,11 @@
 FRED (Federal Reserve Economic Data) connector.
 Free API — just needs a key at fred.stlouisfed.org/docs/api/api_key.html
 
+Key resolution: DB-managed via `services.market_key_service.resolve_key
+("fred")` which checks the admin-configurable `market_provider_keys`
+table first and falls back to `settings.FRED_API_KEY`. Lets ops save
+a key from the AdminPage without env edits.
+
 Resilience: when no FRED key is configured we fall back to yfinance for
 the four indicator series that have public Yahoo tickers (10Y yield,
 short rate, dollar index, TWD/USD). Series that are economic releases
@@ -14,7 +19,6 @@ from typing import Any
 
 import httpx
 
-from config import settings
 import data.us.yfinance_connector as yfinance
 
 log = logging.getLogger(__name__)
@@ -76,11 +80,13 @@ async def _yfinance_fallback(series_id: str) -> list[dict[str, Any]]:
 
 
 async def get_series(series_id: str, start_date: str | None = None, end_date: str | None = None) -> list[dict[str, Any]]:
-    if not settings.FRED_API_KEY:
+    from services.market_key_service import resolve_key
+    api_key = await resolve_key("fred")
+    if not api_key:
         return await _yfinance_fallback(series_id)
     params: dict = {
         "series_id": series_id,
-        "api_key": settings.FRED_API_KEY,
+        "api_key": api_key,
         "file_type": "json",
         "sort_order": "asc",
         "limit": 1000,

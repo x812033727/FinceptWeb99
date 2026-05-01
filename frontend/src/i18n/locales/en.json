@@ -523,7 +523,7 @@
     },
     "yield_curve_title": "Yield Curve",
     "loading": "Loading…",
-    "no_data": "No data available — FRED upstream and yfinance fallback both empty"
+    "no_data": "No data. Most common cause: FRED API key not configured. Go to Admin → Market Data Keys and save one (free at https://fred.stlouisfed.org/docs/api/api_key.html)."
   },
   "llm_keys": {
     "title": "AI Model API Keys",

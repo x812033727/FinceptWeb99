@@ -964,6 +964,12 @@ const MARKET_PROVIDER_LABELS: Record<string, { name: string; tagline: string; pl
     placeholder: "eyJhbGc…",
     signupUrl: "https://finmindtrade.com/",
   },
+  fred: {
+    name: "FRED",
+    tagline: "US macro indicators (CPI, GDP, fed funds, yield curve, DXY) · free",
+    placeholder: "abc123…",
+    signupUrl: "https://fred.stlouisfed.org/docs/api/api_key.html",
+  },
 };
 
 function MarketKeyRow({ info }: { info: MarketKeyInfo }) {

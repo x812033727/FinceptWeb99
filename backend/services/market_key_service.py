@@ -46,11 +46,12 @@ logger = logging.getLogger(__name__)
 # Providers exposed in the admin UI. Add new market connectors here as
 # they become DB-managed. Keeping it explicit avoids accidentally exposing
 # a typo'd provider name through the admin endpoint.
-SUPPORTED_PROVIDERS: tuple[str, ...] = ("finnhub", "finmind")
+SUPPORTED_PROVIDERS: tuple[str, ...] = ("finnhub", "finmind", "fred")
 
 _ENV_KEY_ATTR = {
     "finnhub": "FINNHUB_API_KEY",
     "finmind": "FINMIND_TOKEN",
+    "fred":    "FRED_API_KEY",
 }
 
 # In-process cache to avoid hitting the DB on every connector call. The
@@ -233,11 +234,50 @@ async def validate_key(provider: str, key: str) -> ValidationResult:
             return await _validate_finnhub(key)
         if provider == "finmind":
             return await _validate_finmind(key)
+        if provider == "fred":
+            return await _validate_fred(key)
         return ValidationResult(False, f"validation not implemented for {provider}")
     except Exception as exc:
         logger.warning("market_key.validate_failed",
                        extra={"provider": provider, "error": str(exc)})
         return ValidationResult(False, f"validation error: {exc}")
+
+
+async def _validate_fred(key: str) -> ValidationResult:
+    """Hit FRED's `/series` endpoint with FEDFUNDS — a series that
+    every plan can read. 200 + a `seriess` array means the key works.
+    400/401 means rejected; 429 is rate limit.
+    """
+    async with httpx.AsyncClient(timeout=_VALIDATE_TIMEOUT) as client:
+        r = await client.get(
+            "https://api.stlouisfed.org/fred/series",
+            params={
+                "series_id": "FEDFUNDS",
+                "api_key": key,
+                "file_type": "json",
+            },
+        )
+    if r.status_code == 200:
+        try:
+            payload = r.json()
+        except (ValueError, json.JSONDecodeError):
+            return ValidationResult(False, "non-JSON response")
+        if isinstance(payload, dict) and payload.get("seriess"):
+            return ValidationResult(True, "OK")
+        return ValidationResult(False, "key rejected (empty series response)")
+    if r.status_code in (400, 401, 403):
+        # FRED returns 400 with `error_message` on bad keys.
+        try:
+            err = (r.json().get("error_message") or "")[:120]
+        except Exception:
+            err = ""
+        return ValidationResult(
+            False,
+            f"key rejected by FRED{(' — ' + err) if err else ''}",
+        )
+    if r.status_code == 429:
+        return ValidationResult(False, "rate limit hit — try again shortly")
+    return ValidationResult(False, f"HTTP {r.status_code}: {r.text[:200]}")
 
 
 async def _validate_finnhub(key: str) -> ValidationResult:

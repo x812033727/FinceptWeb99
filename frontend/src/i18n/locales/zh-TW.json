@@ -523,7 +523,7 @@
     },
     "yield_curve_title": "殖利率曲線",
     "loading": "載入中…",
-    "no_data": "暫無資料 — FRED 與 yfinance 備援皆為空"
+    "no_data": "暫無資料。最常見原因：FRED API key 未設定。請至「管理後台 → 市場資料金鑰」儲存一組（前往 https://fred.stlouisfed.org/docs/api/api_key.html 申請，免費）"
   },
   "llm_keys": {
     "title": "AI 模型 API 金鑰",

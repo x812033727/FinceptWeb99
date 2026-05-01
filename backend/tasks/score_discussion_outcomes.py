@@ -119,13 +119,28 @@ async def _do_run() -> tuple[int, list[str]]:
     errors: list[str] = []
 
     async with AsyncSessionLocal() as db:
-        from sqlalchemy import or_
+        from sqlalchemy import String, cast, or_
+        # SQLAlchemy `JSON` columns serialize Python `None` as the JSON
+        # literal `'null'`, NOT SQL NULL — so a bare `isnot(None)` /
+        # `is_(None)` would mis-classify unconcluded rows (JSON null
+        # treated as "concluded") and miss freshly-created rows whose
+        # daily_close_prices is JSON null (treated as "already scored").
+        # Cast-to-text comparison handles both states portably across
+        # Postgres + SQLite. (`none_as_null=True` on the columns would
+        # be cleaner long-term but needs a data migration for legacy
+        # rows that already wrote `'null'`.)
+        conclusion_present = cast(Discussion.conclusion, String) != "null"
+        daily_close_missing = or_(
+            Discussion.daily_close_prices.is_(None),
+            cast(Discussion.daily_close_prices, String) == "null",
+        )
         stmt = (
             select(Discussion)
             .where(
                 Discussion.conclusion.isnot(None),
+                conclusion_present,
                 or_(
-                    Discussion.daily_close_prices.is_(None),
+                    daily_close_missing,
                     Discussion.created_at >= refresh_floor,
                 ),
             )

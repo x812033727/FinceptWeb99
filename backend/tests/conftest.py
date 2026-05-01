@@ -113,10 +113,62 @@ async def setup_db():
         await conn.run_sync(Base.metadata.drop_all)
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _truncate_db_between_tests():
+    """Wipe every table after each test so writes from one test don't
+    contaminate the next.
+
+    Several tests use `*_autosession` helpers (`upsert_ohlcv_bars`,
+    `record_health`, `insert_quote_snapshot`, …) that open their own
+    session and commit, persisting rows beyond the test's own
+    `db_session` fixture. Without explicit cleanup, the second test
+    sees the first test's seed data and assertions fail
+    (e.g. `test_persist_scoreboard_partial_window_returns_false`
+    expects only 2 bars for `2330` but inherits the 5 bars seeded by
+    the previous `_full_window` case).
+
+    DELETE per table is fast on in-memory SQLite and runs in
+    dependency order so foreign keys don't fight us.
+    """
+    yield
+    async with test_engine.begin() as conn:
+        for table in reversed(Base.metadata.sorted_tables):
+            await conn.execute(table.delete())
+
+
 @pytest_asyncio.fixture
 async def db_session():
     async with TestSessionLocal() as session:
         yield session
+
+
+# ── point every module-level `AsyncSessionLocal` at the test sessionmaker ──
+#
+# Production code uses `from db.session import AsyncSessionLocal` and then
+# `async with AsyncSessionLocal() as db:` — bypassing FastAPI's dependency
+# injection. Without this fixture those autosession calls reach the real
+# DB and (depending on env) either fail or silently return [] caught by an
+# upstream `except Exception`, causing tests to fall through to live
+# upstream connectors and assertion mismatches against unmocked external
+# data (e.g. `test_compute_scoreboard_full_window` expecting open=600 but
+# getting today's TSMC tick).
+#
+# Patches both `db.session.AsyncSessionLocal` (for lazy imports inside
+# functions) and the bound copies in modules that imported it at top
+# level (the binding is fixed at import time so changing the source
+# module's attribute alone isn't enough).
+@pytest.fixture(autouse=True)
+def _override_async_session_local(monkeypatch):
+    import sys
+    monkeypatch.setattr("db.session.AsyncSessionLocal", TestSessionLocal)
+    for mod_name, mod in list(sys.modules.items()):
+        if mod is None or mod_name == "db.session":
+            continue
+        if getattr(mod, "AsyncSessionLocal", None) is not None:
+            try:
+                monkeypatch.setattr(f"{mod_name}.AsyncSessionLocal", TestSessionLocal)
+            except (AttributeError, ImportError):
+                pass
 
 
 # ── mock Redis ────────────────────────────────────────────────────

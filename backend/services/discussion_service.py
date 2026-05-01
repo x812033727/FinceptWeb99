@@ -723,12 +723,89 @@ def _extract_json_object(text: str) -> str | None:
     return None
 
 
+_TRAILING_COMMA_RE = re.compile(r',(\s*[}\]])')
+
+
+def _strip_json_comments(text: str) -> str:
+    """Remove ``//`` line comments and ``/* … */`` block comments while
+    preserving content inside JSON string literals. A naive regex pass
+    would also chew up legitimate ``//`` chars in URL-shaped string
+    values (``"https://example.com"``).
+    """
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    in_string = False
+    escape = False
+    while i < n:
+        c = text[i]
+        if in_string:
+            out.append(c)
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == '"':
+                in_string = False
+            i += 1
+            continue
+        if c == '"':
+            in_string = True
+            out.append(c)
+            i += 1
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            j = text.find("\n", i + 2)
+            i = n if j < 0 else j  # drop to EOL (keep the newline itself)
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            j = text.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _strip_json_relaxed(text: str) -> str:
+    """Defang the three JSON-like dialects LLMs emit when they get
+    creative with our synthesizer prompt:
+
+      1. ``// 註解`` line comments — copied verbatim from the prompt
+         template's range hints (`// 最多5檔`, `// 0=完全分歧`).
+      2. ``/* … */`` block comments.
+      3. Trailing commas before ``}`` or ``]``.
+
+    Plus normalize Chinese full-width braces / brackets to ASCII so a
+    model that helpfully Sinicized the structure markers still parses.
+    """
+    text = _strip_json_comments(text)
+    text = _TRAILING_COMMA_RE.sub(r"\1", text)
+    text = (
+        text
+        .replace("｛", "{").replace("｝", "}")
+        .replace("［", "[").replace("］", "]")
+        .replace("，", ",").replace("：", ":")
+    )
+    return text
+
+
 def _loads_lenient(text: str) -> Any:
-    """`json.loads(strict=False)` — allows literal control characters
-    (newlines, tabs) inside JSON strings. Necessary because LLMs often
-    emit Chinese content with real `\\n` newlines instead of escaped
-    `\\\\n`, which strict JSON would reject."""
-    return json.loads(text, strict=False)
+    """Tolerant JSON loader for synthesizer / persona outputs.
+
+    Layered fallbacks:
+      - `json.loads(strict=False)` first — allows literal control chars
+        inside strings (LLMs often emit real `\\n` newlines in Chinese
+        content; strict JSON would reject).
+      - On `JSONDecodeError`, run `_strip_json_relaxed` (comments,
+        trailing commas, full-width braces) and retry. Without this
+        an extra `// 註解` carried over from the prompt template
+        bricks the synthesizer with `parse_error`.
+    """
+    try:
+        return json.loads(text, strict=False)
+    except json.JSONDecodeError:
+        return json.loads(_strip_json_relaxed(text), strict=False)
 
 
 # Matches the opening of a `"content": "` field. Used by the truncation
@@ -1251,14 +1328,19 @@ _SYNTHESIZER_USER_TEMPLATE = (
     "## 市場現況\n```json\n{context}\n```\n\n"
     "## 全部發言（依序）\n{transcript}\n\n"
     "## 任務\n"
-    "**直接輸出合法 JSON**（不要包 markdown code fence、不要在 JSON 之前或之後加任何解釋）：\n"
+    "**直接輸出合法 JSON**（不要包 markdown code fence、不要在 JSON 之前或之後加任何解釋、"
+    "不要寫 // 或 /* */ 註解）：\n"
     "{{\n"
-    '  "recommended_symbols": ["代號1", "代號2", ...],   // 最多5檔，要有市場共識且風險可控\n'
-    '  "reasoning": "結論摘要（≤200字，繁體中文，引用至少2位專家）",\n'
-    '  "risks": ["風險1", "風險2", ...],\n'
-    '  "time_horizon": "short_term | medium_term | long_term",\n'
-    '  "consensus_score": 0.0~1.0   // 0=完全分歧 1=完全共識\n'
-    "}}\n"
+    '  "recommended_symbols": ["2330", "0050"],\n'
+    '  "reasoning": "結論摘要，≤200字，繁體中文，引用至少2位專家",\n'
+    '  "risks": ["風險1", "風險2"],\n'
+    '  "time_horizon": "short_term",\n'
+    '  "consensus_score": 0.7\n'
+    "}}\n\n"
+    "欄位規則：\n"
+    "- recommended_symbols：最多 5 檔，要有市場共識且風險可控\n"
+    "- time_horizon：只能是 short_term / medium_term / long_term 三選一\n"
+    "- consensus_score：0.0 到 1.0 之間的數字，0 代表完全分歧，1 代表完全共識\n"
 )
 
 

@@ -1314,3 +1314,73 @@ def test_safe_conclusion_clamps_consensus_and_caps_lists():
     assert len(out["risks"]) == 10
     assert out["time_horizon"] == "short_term"   # invalid → fallback
     assert out["consensus_score"] == 1.0          # clamped to [0,1]
+
+
+def test_safe_conclusion_handles_line_comments_copied_from_prompt():
+    """Synthesizer prompt template included `// 最多5檔` style range
+    hints — some LLMs (gemini, qwen) copy these verbatim into their
+    response. Strict JSON dies; the relaxed loader strips them.
+    """
+    raw = """{
+        "recommended_symbols": ["2330", "0050"],   // 最多5檔
+        "reasoning": "台積電與大盤型 ETF 風險分散",
+        "risks": ["匯率波動"],
+        "time_horizon": "medium_term",
+        "consensus_score": 0.6   // 0=完全分歧 1=完全共識
+    }"""
+    out = discussion_service._safe_conclusion(raw)
+    assert "_parse_error" not in out
+    assert out["recommended_symbols"] == ["2330", "0050"]
+    assert out["time_horizon"] == "medium_term"
+    assert out["consensus_score"] == 0.6
+
+
+def test_safe_conclusion_handles_trailing_commas():
+    raw = (
+        '{"recommended_symbols": ["2330",], '
+        '"reasoning": "x", "risks": ["A",], '
+        '"time_horizon": "short_term", "consensus_score": 0.5,}'
+    )
+    out = discussion_service._safe_conclusion(raw)
+    assert "_parse_error" not in out
+    assert out["recommended_symbols"] == ["2330"]
+
+
+def test_safe_conclusion_handles_block_comments():
+    raw = """{
+        /* synthesizer notes */
+        "recommended_symbols": ["2330"],
+        "reasoning": "y",
+        "risks": [],
+        "time_horizon": "long_term",
+        "consensus_score": 0.8
+    }"""
+    out = discussion_service._safe_conclusion(raw)
+    assert "_parse_error" not in out
+    assert out["time_horizon"] == "long_term"
+
+
+def test_safe_conclusion_preserves_double_slash_inside_string_values():
+    """The // stripper must respect string boundaries — a URL or
+    literal `//` inside a `reasoning` field should survive untouched."""
+    raw = (
+        '{"recommended_symbols": ["2330"], '
+        '"reasoning": "see https://example.com/research // for details", '
+        '"risks": [], "time_horizon": "short_term", "consensus_score": 0.5}'
+    )
+    out = discussion_service._safe_conclusion(raw)
+    assert "_parse_error" not in out
+    assert "https://example.com" in out["reasoning"]
+    assert "//" in out["reasoning"]
+
+
+def test_safe_conclusion_handles_full_width_braces():
+    """Some Chinese-language LLMs occasionally Sinicize the braces too."""
+    raw = (
+        '｛"recommended_symbols": ["2330"]，'
+        '"reasoning": "ok"，"risks": []，'
+        '"time_horizon": "short_term"，"consensus_score": 0.5｝'
+    )
+    out = discussion_service._safe_conclusion(raw)
+    assert "_parse_error" not in out
+    assert out["recommended_symbols"] == ["2330"]

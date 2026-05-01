@@ -18,11 +18,15 @@ interface IngestRetryResult {
 /**
  * Decide the status badge for one ingest row.
  *
- * Four states (in priority order):
+ * Five states (in priority order):
  *  - **pending**: never-run-yet (`last_run_at === null`). Newly-
  *    deployed cron before its first scheduled tick — neutral grey,
  *    not a failure.
  *  - **ok**: last run succeeded (`r.ok === true`). Green.
+ *  - **queued**: error message starts with `queued:` — written by
+ *    the admin "Retry now" endpoint while the background task is
+ *    in-flight. Blue, so the operator sees their click registered
+ *    without a misleading red badge.
  *  - **skipped**: last run failed but the error message starts with
  *    `skipped:` — a known-permanent-state record from a fail-soft
  *    path (e.g. FinMind paywall in PR #183, or a deliberately-off
@@ -47,8 +51,14 @@ export function deriveIngestBadge(r: IngestHealth): { text: string; cls: string 
       cls: "bg-green-500/10 text-green-400 border border-green-500/30",
     };
   }
-  const isSkipped = (r.error?.toLowerCase().startsWith("skipped") ?? false);
-  if (isSkipped) {
+  const errLower = r.error?.toLowerCase() ?? "";
+  if (errLower.startsWith("queued")) {
+    return {
+      text: "queued",
+      cls: "bg-blue-500/10 text-blue-400 border border-blue-500/30",
+    };
+  }
+  if (errLower.startsWith("skipped")) {
     return {
       text: "skipped",
       cls: "bg-amber-500/10 text-amber-400 border border-amber-500/30",

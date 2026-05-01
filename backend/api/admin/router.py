@@ -445,11 +445,15 @@ async def retry_ingest_job(
         raise HTTPException(404, f"ingest job is not retryable: {job_id}")
 
     await ingest_repo.clear_failures(job_id)
+    # Prefix `queued:` so the frontend's `deriveIngestBadge` shows an
+    # amber "queued" pill instead of red "error" while the background
+    # task runs. The actual run will overwrite this row when it
+    # finishes (success → `ok`, failure → real error message).
     await ingest_repo.record_health(
         job_id,
         ok=False,
         row_count=0,
-        error="manual retry queued; previous backoff cleared",
+        error="queued: manual retry — previous backoff cleared",
     )
     background_tasks.add_task(_run_ingest_job_once, job_id)
     return IngestRetryResult(

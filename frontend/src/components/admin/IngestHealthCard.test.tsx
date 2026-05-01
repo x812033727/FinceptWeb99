@@ -55,6 +55,21 @@ describe("deriveIngestBadge", () => {
     expect(out.text).toBe("skipped");
   });
 
+  it("returns queued (blue) when the admin retry endpoint just kicked off a run", () => {
+    // `POST /admin/ingest/{job}/retry` writes a placeholder health
+    // record before the background task starts. Without this branch
+    // the badge would render red until the real run completes —
+    // misleading for slow crons (e.g. ingest_revenue_tw_slow's
+    // ~6-minute tick).
+    const out = deriveIngestBadge({
+      ...baseRow,
+      ok: false,
+      error: "queued: manual retry — previous backoff cleared",
+    });
+    expect(out.text).toBe("queued");
+    expect(out.cls).toContain("text-blue-400");
+  });
+
   it("returns error (red) for transient failures with auto-backoff armed", () => {
     const out = deriveIngestBadge({
       ...baseRow,

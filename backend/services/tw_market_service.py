@@ -162,6 +162,59 @@ def get_company_name(symbol: str) -> str | None:
 
 # ── Quote ─────────────────────────────────────────────────────────
 
+async def _resolve_prev_close_from_archive(symbol: str) -> float | None:
+    """Read the prior trading day's close for `symbol` from
+    `ohlcv_daily`, cached in Redis 4h.
+
+    TWSE's STOCK_DAY_ALL endpoint reliably returns today's close +
+    `Change` field, but `Change` carries the wrong semantics for a
+    handful of symbols (notably KY-listed companies — observed on
+    4958, 2455). Computing change_pct from the upstream `change`
+    surfaces +992% / +996% headlines. The fix: use yesterday's close
+    from our own archive as the baseline, then derive change =
+    today_close - yesterday_close. Always correct, always agrees
+    with the candlestick chart's prior bar.
+
+    Returns None when the archive has no bars before today (fresh
+    deploy, never-ingested symbol). Caller falls through to the
+    upstream's reported change in that case.
+    """
+    cache_key = f"tw:prev_close:{symbol}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        try:
+            return float(cached)
+        except (TypeError, ValueError):
+            pass
+    try:
+        from services.ingest.repository import read_ohlcv_range_autosession
+        today = date.today()
+        start = today - timedelta(days=10)
+        bars = await read_ohlcv_range_autosession("TW", symbol, start, today)
+    except Exception as exc:
+        log.warning(
+            "tw.quote.prev_close_lookup_failed",
+            extra={"symbol": symbol, "error": str(exc)},
+        )
+        return None
+    today_iso = today.isoformat()
+    prior = [b for b in bars if (b.get("time") or "") < today_iso]
+    if not prior:
+        return None
+    last_close = prior[-1].get("close")
+    if last_close is None:
+        return None
+    try:
+        value = float(last_close)
+    except (TypeError, ValueError):
+        return None
+    # 4h TTL: prior-day close is stable once the day is over, but
+    # capping at 4h gives us a self-healing window if a holiday-week
+    # ingest mis-fires (next refresh re-reads from archive).
+    await cache_set(cache_key, str(value), 4 * 3600)
+    return value
+
+
 async def fetch_quote_waterfall(symbol: str) -> tuple[dict | None, str]:
     """Run the TWSE realtime → FinMind 7-day fallback waterfall.
 
@@ -216,6 +269,19 @@ async def fetch_quote_waterfall(symbol: str) -> tuple[dict | None, str]:
 
     if not raw:
         log.warning("tw.quote.all_sources_failed", extra={"symbol": symbol})
+        return raw, source
+
+    # Backfill prev_close from the OHLCV archive when upstream didn't
+    # provide one (TWSE realtime never does; FinMind already pre-fills
+    # via bars[-2] above). Lets `_normalize_quote` derive change from
+    # the archive's prior-day close instead of the upstream's
+    # potentially-wrong `Change` field — the +992% / +996% bug we've
+    # been bandaging with sanity bounds is the symptom of trusting
+    # that field for stocks where TWSE serves it incorrectly.
+    if not raw.get("prev_close"):
+        prev = await _resolve_prev_close_from_archive(symbol)
+        if prev is not None:
+            raw["prev_close"] = prev
 
     return raw, source
 
@@ -298,14 +364,24 @@ def _sanitize_change_pct(
 def _normalize_quote(symbol: str, raw: dict) -> dict[str, Any]:
     close = raw.get("close") or raw.get("price", 0) or 0
     prev  = raw.get("prev_close", 0) or 0
-    chg   = raw.get("change") if raw.get("change") is not None else (close - prev if prev else None)
-    # TWSE realtime returns `change` but no `prev_close`. Without this
-    # back-fill the change_pct guard below trips and the watchlist /
-    # screener UI shows a blank 漲跌 column even when the price + raw
-    # change point both came back fine. Derive prev = close - change
-    # when we have the delta but not the baseline.
-    if chg is not None and not prev and close:
-        prev = close - chg
+    # When prev_close is reliable (set directly by upstream OR
+    # backfilled from the OHLCV archive in fetch_quote_waterfall),
+    # compute change from `close - prev` and IGNORE the upstream's
+    # `change` field. TWSE's STOCK_DAY_ALL puts the prior-day close
+    # in the `Change` slot for some KY-listed stocks (4958, 2455,
+    # …) — trusting it surfaces +992% / +996% headlines. Archive-
+    # derived prev_close + close arithmetic always agrees with the
+    # candlestick chart's prior bar.
+    if prev and close:
+        chg: float | None = close - prev
+    else:
+        # Falls through when upstream gave us close + change but no
+        # baseline AND the archive lookup failed (rare: never-ingested
+        # symbol). Trust the upstream's delta and derive prev from
+        # it as a last resort.
+        chg = raw.get("change") if raw.get("change") is not None else None
+        if chg is not None and not prev and close:
+            prev = close - chg
     chg_pct = round(chg / prev * 100, 4) if (chg is not None and prev) else None
     chg_pct = _sanitize_change_pct(symbol, chg_pct)
     if chg_pct is None:

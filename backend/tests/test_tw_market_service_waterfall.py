@@ -79,11 +79,17 @@ def test_normalize_quote_computes_change_and_change_pct_when_close_and_prev_pres
     assert out["change_pct"] == round(5 / 780 * 100, 4)
 
 
-def test_normalize_quote_uses_explicit_change_when_provided():
-    """If TWSE supplies a precomputed change, the connector trusts it
-    rather than rederiving from prev_close (which may be stale)."""
+def test_normalize_quote_prefers_prev_close_over_upstream_change():
+    """When prev_close is reliable (set directly OR backfilled from
+    the OHLCV archive in fetch_quote_waterfall), close-derived
+    change wins over upstream's `change` field. TWSE puts the
+    prior-day close in the `Change` slot for some KY-listed stocks
+    (4958, 2455 …) — trusting it surfaces +992% headlines.
+    Archive-derived prev_close + arithmetic always agrees with the
+    candlestick chart."""
     out = svc._normalize_quote("2330", {"close": 785, "prev_close": 780, "change": 4.5})
-    assert out["change"] == 4.5  # not 5
+    assert out["change"] == 5  # 785 - 780, NOT the upstream's 4.5
+    assert out["change_pct"] == round(5 / 780 * 100, 4)
 
 
 def test_normalize_quote_change_pct_is_none_when_prev_close_missing():
@@ -504,3 +510,90 @@ async def test_db_snapshot_tier_keeps_plausible_change_pct():
         out = await svc.get_quote("2330")
 
     assert out["change_pct"] == 5.0
+
+
+# ── archive-backed prev_close backfill ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_fetch_quote_waterfall_backfills_prev_close_from_archive():
+    """TWSE realtime returns close + change but no prev_close.
+    Archive lookup yields yesterday's close. Result: change_pct
+    computed from archive baseline, NOT from upstream's
+    potentially-wrong `Change` field."""
+    twse_payload = {
+        "symbol": "2455", "name_zh": "全新",
+        # Real upstream-style row: close present, change is junk
+        # (TWSE puts the prior-day close in the `Change` slot for
+        # some KY-listed stocks).
+        "close": 347.5, "change": 315.84,
+        "open": 321.0, "high": 347.5, "low": 321.0,
+        "volume": 24_628_405,
+    }
+    with patch.object(svc, "cache_get",
+                      new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set",
+                      new_callable=AsyncMock), \
+         patch.object(svc.twse, "get_realtime_quote",
+                      new=AsyncMock(return_value=twse_payload)), \
+         patch(
+             "services.ingest.repository.read_ohlcv_range_autosession",
+             new=AsyncMock(return_value=[
+                 # Yesterday's close — archive truth, not the +315
+                 # garbage TWSE handed us in `change`.
+                 {"time": "2026-04-29", "open": 320, "high": 322,
+                  "low": 318, "close": 321.5, "volume": 1_000_000},
+             ]),
+         ):
+        raw, source = await svc.fetch_quote_waterfall("2455")
+
+    assert source == "twse"
+    assert raw is not None
+    assert raw["prev_close"] == 321.5
+
+
+@pytest.mark.asyncio
+async def test_get_quote_uses_archive_baseline_for_change_pct():
+    """End-to-end: TWSE returns the buggy KY-style row, archive has
+    yesterday's close, the user-visible change_pct is correct
+    (~+8%), not the +992% the sanity bound would otherwise hide."""
+    twse_payload = {
+        "symbol": "2455", "name_zh": "全新",
+        "close": 347.5, "change": 315.84,
+        "volume": 24_628_405,
+        "open": 321.0, "high": 347.5, "low": 321.0,
+    }
+    archive_bars = [
+        {"time": "2026-04-29", "open": 320, "high": 322,
+         "low": 318, "close": 321.5, "volume": 1_000_000},
+    ]
+    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc.twse, "get_realtime_quote",
+                      new=AsyncMock(return_value=twse_payload)), \
+         patch(
+             "services.ingest.repository.read_ohlcv_range_autosession",
+             new=AsyncMock(return_value=archive_bars),
+         ):
+        out = await svc.get_quote("2455")
+
+    assert out["price"] == 347.5
+    expected_chg = 347.5 - 321.5
+    assert out["change"] == expected_chg
+    assert out["change_pct"] == round(expected_chg / 321.5 * 100, 4)
+    # Sanity guard: the +992% headline must NEVER appear.
+    assert abs(out["change_pct"]) < 30
+
+
+@pytest.mark.asyncio
+async def test_resolve_prev_close_from_archive_returns_none_for_unknown_symbol():
+    """No bars in archive → None → caller falls back to upstream's
+    own `change` field. Doesn't crash, doesn't leak stale cache."""
+    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch(
+             "services.ingest.repository.read_ohlcv_range_autosession",
+             new=AsyncMock(return_value=[]),
+         ):
+        out = await svc._resolve_prev_close_from_archive("9999")
+    assert out is None

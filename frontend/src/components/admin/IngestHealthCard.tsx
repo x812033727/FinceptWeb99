@@ -15,6 +15,51 @@ interface IngestRetryResult {
   message: string;
 }
 
+/**
+ * Decide the status badge for one ingest row.
+ *
+ * Four states (in priority order):
+ *  - **pending**: never-run-yet (`last_run_at === null`). Newly-
+ *    deployed cron before its first scheduled tick — neutral grey,
+ *    not a failure.
+ *  - **ok**: last run succeeded (`r.ok === true`). Green.
+ *  - **skipped**: last run failed but the error message starts with
+ *    `skipped:` — a known-permanent-state record from a fail-soft
+ *    path (e.g. FinMind paywall in PR #183, or a deliberately-off
+ *    cron). Yellow, not red, so it doesn't read as an actionable
+ *    incident.
+ *  - **error**: last run failed for any other reason. Red.
+ *
+ * Pulled out of the JSX so it can be unit-tested without mounting
+ * the whole React tree + TanStack Query provider.
+ */
+export function deriveIngestBadge(r: IngestHealth): { text: string; cls: string } {
+  const neverRun = r.last_run_at === null;
+  if (neverRun) {
+    return {
+      text: "pending",
+      cls: "bg-muted/30 text-muted-foreground border border-border",
+    };
+  }
+  if (r.ok) {
+    return {
+      text: "ok",
+      cls: "bg-green-500/10 text-green-400 border border-green-500/30",
+    };
+  }
+  const isSkipped = (r.error?.toLowerCase().startsWith("skipped") ?? false);
+  if (isSkipped) {
+    return {
+      text: "skipped",
+      cls: "bg-amber-500/10 text-amber-400 border border-amber-500/30",
+    };
+  }
+  return {
+    text: "error",
+    cls: "bg-red-500/10 text-red-400 border border-red-500/30",
+  };
+}
+
 // Mirror of `RETRYABLE_INGEST_JOBS` in `backend/api/admin/router.py`.
 // Adding a job here without registering it backend-side just makes the
 // button render — the POST will 404. Keep the two sides in sync.
@@ -186,20 +231,7 @@ export function IngestHealthCard() {
             </thead>
             <tbody className="divide-y divide-border/40">
               {rows.map((r) => {
-                // Three-state badge: ok / error / pending. `last_run_at
-                // === null` means the job has never actually run, so a
-                // red "error" pill would be misleading — it's just
-                // never-run-yet (e.g. a newly-deployed cron before the
-                // first scheduled tick).
-                const neverRun = r.last_run_at === null;
-                const badgeCls = neverRun
-                  ? "bg-muted/30 text-muted-foreground border border-border"
-                  : r.ok
-                    ? "bg-green-500/10 text-green-400 border border-green-500/30"
-                    : "bg-red-500/10 text-red-400 border border-red-500/30";
-                const badgeText = neverRun
-                  ? "pending"
-                  : r.ok ? "ok" : "error";
+                const { text: badgeText, cls: badgeCls } = deriveIngestBadge(r);
                 const meta = JOB_META[r.job_id];
                 return (
                 <tr key={r.job_id}>

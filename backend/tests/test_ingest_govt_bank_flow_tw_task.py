@@ -76,6 +76,43 @@ async def test_success_writes_per_bank_rows(
 
 
 @pytest.mark.asyncio
+async def test_sub_aggregate_rows_per_bank_day_get_summed(
+    patch_session, db_session: AsyncSession,
+):
+    """Regression: FinMind splits each bank-day into many sub-aggregate
+    rows (one per underlying stock / sector). Without summing, the
+    upsert hits postgres' `ON CONFLICT DO UPDATE command cannot affect
+    row a second time` cardinality check. We sum the sub-rows into the
+    daily total per bank before insert."""
+    from tasks import ingest_govt_bank_flow_tw
+
+    # Three sub-rows for (2026-04-30, 兆豐), one row for (2026-04-30, 第一).
+    payload = [
+        _row("2026-04-30", "兆豐", 100_000_000, 80_000_000),
+        _row("2026-04-30", "兆豐",  50_000_000, 40_000_000),
+        _row("2026-04-30", "兆豐",  20_000_000, 10_000_000),
+        _row("2026-04-30", "第一",  30_000_000, 25_000_000),
+    ]
+    with patch("tasks.ingest_govt_bank_flow_tw.acquire_lock",
+               AsyncMock(return_value=True)), \
+         patch("tasks.ingest_govt_bank_flow_tw.release_lock", AsyncMock()), \
+         patch("tasks.ingest_govt_bank_flow_tw.backoff_remaining_seconds",
+               AsyncMock(return_value=0)), \
+         patch("tasks.ingest_govt_bank_flow_tw.clear_failures", AsyncMock()), \
+         patch("tasks.ingest_govt_bank_flow_tw.record_health", AsyncMock()), \
+         patch("tasks.ingest_govt_bank_flow_tw.finmind.get_government_bank_flow_market_wide",
+               AsyncMock(return_value=payload)):
+        await ingest_govt_bank_flow_tw.run()
+
+    rows = (await db_session.scalars(select(TwGovtBankFlowDaily))).all()
+    assert len(rows) == 2
+    by_bank = {r.bank_name: r for r in rows}
+    assert int(by_bank["兆豐"].buy_amount) == 170_000_000
+    assert int(by_bank["兆豐"].sell_amount) == 130_000_000
+    assert int(by_bank["第一"].buy_amount) == 30_000_000
+
+
+@pytest.mark.asyncio
 async def test_paywall_response_marked_skipped(patch_session):
     """If FinMind moves this dataset to paid-only later (it's
     already sponsor-tier as of 2026-04, but they could re-tier),

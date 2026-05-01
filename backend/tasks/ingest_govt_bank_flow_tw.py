@@ -8,6 +8,7 @@ Schedule: 18:30 Taipei (10:30 UTC), after the buyback cron, so the
 post-close FinMind cluster spreads out predictably.
 """
 import logging
+from collections import defaultdict
 from datetime import date, datetime, timedelta
 
 import httpx
@@ -162,7 +163,15 @@ async def _do_run() -> int:
     if not items:
         return 0
 
-    payload: list[GovtBankFlowRow] = []
+    # FinMind splits each bank-day into many sub-aggregate rows (one per
+    # underlying stock / sector — exact bucketing isn't documented). The
+    # tw_govt_bank_flow_daily PK is (market, ts, bank_name), so we have
+    # to sum the sub-rows into the daily total per bank before inserting,
+    # or postgres rejects the batch with CardinalityViolationError on
+    # ON CONFLICT DO UPDATE.
+    totals: dict[tuple[date, str], dict[str, int]] = defaultdict(
+        lambda: {"buy": 0, "sell": 0},
+    )
     for r in items:
         bank = (r.get("bank_name") or "").strip()
         if not bank:
@@ -170,14 +179,21 @@ async def _do_run() -> int:
         ts = _parse_date(r.get("date"))
         if ts is None:
             continue
-        payload.append(GovtBankFlowRow(
+        key = (ts, bank[:40])
+        totals[key]["buy"] += _to_int(r.get("buy_amount")) or 0
+        totals[key]["sell"] += _to_int(r.get("sell_amount")) or 0
+
+    payload = [
+        GovtBankFlowRow(
             market=MARKET,
             ts=ts,
-            bank_name=bank[:40],
-            buy_amount=_to_int(r.get("buy_amount")),
-            sell_amount=_to_int(r.get("sell_amount")),
+            bank_name=bank,
+            buy_amount=v["buy"],
+            sell_amount=v["sell"],
             source="finmind",
-        ))
+        )
+        for (ts, bank), v in totals.items()
+    ]
 
     if not payload:
         return 0

@@ -481,6 +481,99 @@ async def test_run_round_emits_full_event_sequence(
     assert refreshed.current_round == 1
 
 
+# ── _persona_schema_annotation (dynamic prompt header) ───────────
+
+
+def test_persona_schema_annotation_lists_only_present_blocks():
+    """The annotation must mention only blocks actually present in
+    `ctx`. macro_analyst's filtered ctx drops focus_briefs +
+    risk_warnings — the prompt mustn't advertise them, otherwise
+    the LLM hallucinates `## 市場現況` keys it can't find."""
+    ctx = {
+        "market":          "TW",
+        "captured_at":     "t",
+        "errors":          [],
+        "index":           {"price": 1},
+        "macro":           {"fed_funds_rate": {}},
+        "news_sentiment":  {"avg_score": 0.1},
+    }
+    out = discussion_service._persona_schema_annotation(ctx)
+    assert "- index" in out
+    assert "- macro" in out
+    assert "- news_sentiment" in out
+    # Blocks not in ctx must NOT appear in the bullets.
+    assert "- focus_briefs" not in out
+    assert "- risk_warnings" not in out
+    assert "- top_gainers" not in out
+    assert "- user_context" not in out
+
+
+def test_persona_schema_annotation_skips_empty_blocks():
+    """An empty list / {} / None for a block (block is in ctx but
+    nothing was populated) must NOT show in the annotation —
+    advertising "top_foreign_buyers" when its value is `[]` makes
+    the LLM apologise about empty data unnecessarily."""
+    ctx = {
+        "market":             "TW",
+        "captured_at":        "t",
+        "errors":             [],
+        "top_gainers":        [],
+        "top_losers":         [],
+        "index":              None,
+        "focus_briefs":       [],
+        "macro":              None,
+        "user_context":       None,
+        "prior_discussions": [],
+        "risk_warnings": {
+            "active_dispositions": [],
+            "recent_suspensions": [],
+            "high_day_trading_ratio": [],
+        },
+    }
+    out = discussion_service._persona_schema_annotation(ctx)
+    # Only `errors` (always-on) should appear in the bullets.
+    assert "- errors" in out
+    assert "- index" not in out
+    assert "- focus_briefs" not in out
+    assert "- macro" not in out
+    # risk_warnings dict is non-empty (has keys), so it DOES show.
+    # The "block not empty" semantics are: dict with keys counts as
+    # populated; empty dict {} doesn't.
+    assert "- risk_warnings" in out
+
+
+def test_persona_schema_annotation_always_keeps_errors_bullet():
+    """`errors` is always populated (initialised to []) on a clean
+    run, but its bullet must still appear so personas know what
+    `errors: []` means without us having to special-case it in
+    every persona's prompt."""
+    out = discussion_service._persona_schema_annotation(
+        {"market": "TW", "captured_at": "t", "errors": []},
+    )
+    assert "- errors" in out
+
+
+def test_persona_schema_annotation_preserves_block_order():
+    """Output order follows `_BLOCK_ANNOTATIONS` insertion order,
+    not dict-insertion order on the input ctx — the LLM benefits
+    from a stable prompt structure across rounds."""
+    # Pass blocks in scrambled order; output should still be macro
+    # before user_context before prior_discussions per the registry.
+    ctx = {
+        "market":            "TW",
+        "captured_at":       "t",
+        "errors":            [],
+        "prior_discussions": [{"id": "a"}],
+        "user_context":      {"portfolios": [{"name": "Main"}]},
+        "macro":             {"fed_funds_rate": {}},
+    }
+    out = discussion_service._persona_schema_annotation(ctx)
+    pos_macro = out.index("- macro")
+    pos_user = out.index("- user_context")
+    pos_prior = out.index("- prior_discussions")
+    assert pos_macro < pos_user < pos_prior
+
+
 # ── per-persona context filtering ─────────────────────────────────
 
 

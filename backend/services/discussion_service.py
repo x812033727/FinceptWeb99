@@ -1447,12 +1447,29 @@ async def gather_market_context(
         )
         ctx["errors"].append({"source": source, "error": str(exc)})
 
-    # Top movers via the screener (TW-only for now; US fits later when we
-    # add the same shape to us_market_service).
-    if market == "TW":
+    # ── concurrent HTTP-bound blocks ───────────────────────────────
+    # The four blocks below dominate gather_market_context latency
+    # because each issues outbound HTTP (TWSE / FinMind / FRED /
+    # yfinance). Running them sequentially burned 5-7s on a cold
+    # cache before the first persona could speak. Now they fan out
+    # via `asyncio.gather` — each carries its own try/except so a
+    # single connector outage just blanks its block; total wall
+    # time falls to ~max(any one) instead of sum.
+    #
+    # NB: These four are safe to parallelise because none of them
+    # touch `db` directly (they go through `*_autosession` service
+    # helpers that open their own DB session). DB-bound reads later
+    # in this function stay sequential because SQLAlchemy
+    # AsyncSession isn't safe to share across concurrent awaits.
+
+    async def _fetch_screener_pair() -> None:
+        if market != "TW":
+            return
         try:
             from services import tw_market_service
-            rows = await tw_market_service.get_screener(limit=200, min_volume=1_000_000)
+            rows = await tw_market_service.get_screener(
+                limit=200, min_volume=1_000_000,
+            )
             scored = [
                 r for r in rows
                 if isinstance(r.get("change_pct"), (int, float))
@@ -1464,19 +1481,48 @@ async def gather_market_context(
         except Exception as exc:
             _record_error("screener", exc)
 
+    async def _fetch_index() -> None:
+        if market != "TW":
+            return
         try:
             from services import tw_market_service
             # 30-day TAIEX history alongside the current quote. Lets
             # personas reference 大盤型態 ("TAIEX 連跌 5 日 -5%")
-            # without burning an LLM tool call. Backed by the
-            # `ingest_taiex_history` cron writing to ohlcv_daily under
-            # symbol='_TAIEX'; empty `history` on fresh deploys is
-            # fine — `get_index` returns DB-only for history so a
-            # missing archive doesn't fall through to a TWSE call.
+            # without burning an LLM tool call.
             ctx["index"] = await tw_market_service.get_index(history_days=30)
         except Exception as exc:
             _record_error("index", exc)
 
+    async def _fetch_focus_briefs() -> None:
+        if not focus_symbols:
+            return
+        try:
+            ctx["focus_briefs"] = await _assemble_focus_briefs(
+                db, market=market, symbols=list(focus_symbols),
+            )
+        except Exception as exc:
+            _record_error("focus_briefs", exc)
+
+    async def _fetch_macro() -> None:
+        try:
+            ctx["macro"] = await _assemble_macro_block()
+        except Exception as exc:
+            _record_error("macro", exc)
+
+    await asyncio.gather(
+        _fetch_screener_pair(),
+        _fetch_index(),
+        _fetch_focus_briefs(),
+        _fetch_macro(),
+    )
+
+    # ── DB-bound blocks (sequential on shared `db` session) ────────
+    # SQLAlchemy AsyncSession is not safe to share across concurrent
+    # awaits, so these reads run in series. Each is fast (~5-10ms
+    # against a warm Postgres connection), so total DB-bound cost is
+    # ~50-100ms — well below the HTTP wall clock above.
+
+    if market == "TW":
         # Chip metrics — both blocks are best-effort. Empty result
         # (cron hasn't run yet, fresh deploy) leaves the default and
         # personas just won't reference foreign flow / margin. We
@@ -1612,23 +1658,7 @@ async def gather_market_context(
         except Exception as exc:
             _record_error("per_symbol_sentiment", exc)
 
-        # Per-symbol mini analyst report. Best-effort — the assembler
-        # already returns partial briefs on connector failure, so a
-        # bad day for tw_market_service still yields a useful block.
-        try:
-            ctx["focus_briefs"] = await _assemble_focus_briefs(
-                db, market=market, symbols=list(focus_symbols),
-            )
-        except Exception as exc:
-            _record_error("focus_briefs", exc)
-
-    # Macro snapshot is universal — Fed / 10Y / DXY / TWD/USD matter
-    # to TW personas as much as US ones. Errors degrade to an empty
-    # block so `_record_error` can still log the connector outage.
-    try:
-        ctx["macro"] = await _assemble_macro_block()
-    except Exception as exc:
-        _record_error("macro", exc)
+    # focus_briefs + macro fired earlier in the asyncio.gather batch.
 
     if owner_id is not None:
         try:
@@ -1720,55 +1750,101 @@ def _tag_industry(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 # ── turn loop ───────────────────────────────────────────────────────
 
-# Schema annotation prepended to the JSON dump so weaker / smaller models
-# (Haiku, GPT-4o-mini, Llama-3.3) actually use each ctx block. Without
-# this they tend to fixate on `top_gainers` and ignore risk filters /
-# institutional flow / buyback signals — defeating the cost of all the
-# ingest crons feeding the context.
+# Per-block schema annotation. Keys match top-level ctx field names so
+# `_persona_schema_annotation()` can project the right subset for each
+# persona. Without this annotation, weak models (Haiku, GPT-4o-mini,
+# Llama-3.3) fixate on `top_gainers` and ignore the rest — defeating
+# the cost of all the ingest crons feeding the context.
 #
-# Keep one line per block. Emphasise the negative-filter semantics for
-# `risk_warnings` because that's where weak models most often go wrong
-# (recommending a 處置股 because price action looks bullish).
-_CONTEXT_SCHEMA_ANNOTATION = (
+# Bullets are intentionally one-per-block. The `top_gainers` /
+# `top_losers` pair shares one entry because they're rendered together;
+# `risk_warnings` keeps its emphasis on the negative-filter semantics
+# (that's where weak models most often go wrong).
+_BLOCK_ANNOTATIONS: dict[str, str] = {
+    "top_gainers":               "- top_gainers / top_losers：當日漲跌幅前 10（動能 + 籌碼面）。",
+    "index":                     "- index：大盤 (TAIEX) 即時報價 + 30 日歷史，用以判斷市場 regime。",
+    "news_sentiment":            "- news_sentiment：所屬市場整體新聞情緒（bullish/bearish/neutral 計數，全視窗統計而非 headlines 抽樣）。",
+    "per_symbol_news_sentiment": "- per_symbol_news_sentiment：主題提及之個股新聞情緒。",
+    "international_sentiment":   "- international_sentiment：Fed / FOMC / 國際宏觀新聞情緒，影響台股風險偏好。",
+    "top_foreign_buyers":        "- top_foreign_buyers：近 5 日外資累計淨買超前 10 名（已含產業別）。",
+    "margin_balance_trend":      "- margin_balance_trend：全市場融資 / 融券餘額趨勢（散戶槓桿與看空代理）。",
+    "top_revenue_growers":       "- top_revenue_growers：最新月份營收年增率前 10（基本面）。",
+    "active_buybacks":           "- active_buybacks：今日仍在執行庫藏股的公司，**強烈管理層信心訊號**。",
+    "govt_bank_flow_5d":         "- govt_bank_flow_5d：八大行庫近 5 日累計買賣超（國家隊方向）。",
+    "risk_warnings": (
+        "- risk_warnings：**負向過濾**——`active_dispositions`（處置股）、"
+        "`recent_suspensions`（近期暫停交易）、`high_day_trading_ratio`"
+        "（當沖比 >60%，投機過熱）。**禁止推薦中招的標的，即使其他訊號看多。**"
+    ),
+    "market_institutional_5d":   "- market_institutional_5d：全市場三大法人近 5 日淨買賣超（大盤方向）。",
+    "focus_briefs": (
+        "- focus_briefs：**主題提及之個股小型分析師簡報**——`quote` 即時報價、"
+        "`technicals`（MA20/60/120、52w 高低與距離、5/20/60 日漲跌幅、RSI14）、"
+        "`fundamentals`（PE/PB/殖利率/EPS）、`revenue_trend`（近 6 月營收年/月增）、"
+        "`chip_5d`（外資 / 投信 / 自營近 5 日淨買賣）、`margin_latest`（最新融資餘額）、"
+        "`peers`（同產業 3 檔可比標的）。**有此區塊就要引用具體數據**，"
+        "不要只憑 headlines 推論。"
+    ),
+    "macro": (
+        "- macro：宏觀利率與匯率快照（Fed Funds / US 10Y / 10Y-2Y 殖利率價差 / "
+        "DXY / TWD/USD），各帶 `latest_value` + `change_1y` + `change_3m`。"
+        "影響全球風險偏好與外資流向，建議在結論中至少提及一次相關方向。"
+    ),
+    "user_context": (
+        "- user_context：**討論發起人本人的部位**——`portfolios`（組合清單）、"
+        "`holdings`（前 20 大持股，含股數 / 平均成本 / 計價幣別）、"
+        "`watchlist_symbols`（自選股，前 30）、`focus_overlap.held` "
+        "（主題提及的標的中已持有者）、`focus_overlap.watching`（自選股中相關者）。"
+        "**只在你的角色與部位配置 / 風險管理相關時引用**；其他情境忽略。"
+        "**禁止在結論中揭露具體股數或成本價**——僅用於決策邏輯。"
+    ),
+    "prior_discussions": (
+        "- prior_discussions：**本人過去 90 天對主題提及之標的所做的結論**，含日期 / "
+        "topic 摘要 / `recommended_symbols` / `time_horizon` / `consensus_score` / "
+        "`verdict`（win / loss / unverifiable / null）。**用以保持跨討論一致性**——"
+        "若上次對 2330 結論 Hold 而本次卻要 Buy，必須在 content 中明確說明改變理由"
+        "（例如「上週起殖利率下行 +30bp，重新評估」），不可默默翻盤。"
+    ),
+    "errors":                    "- errors：本次抓取的連接器錯誤清單；非空時務必聲明資料不完整。",
+}
+
+_SCHEMA_HEADER = (
     "## 市場現況解讀提示\n"
-    "下方 `## 市場現況` 的 JSON 包含多個訊號區塊，請依語意整合判讀，"
-    "不要只挑 `top_gainers` 看：\n"
-    "- top_gainers / top_losers：當日漲跌幅前 10（動能 + 籌碼面）。\n"
-    "- index：大盤 (TAIEX) 即時報價 + 30 日歷史，用以判斷市場 regime。\n"
-    "- news_sentiment：所屬市場整體新聞情緒（bullish/bearish/neutral 計數）。\n"
-    "- per_symbol_news_sentiment：主題提及之個股新聞情緒。\n"
-    "- international_sentiment：Fed / FOMC / 國際宏觀新聞情緒，影響台股風險偏好。\n"
-    "- top_foreign_buyers：近 5 日外資累計淨買超前 10 名（已含產業別）。\n"
-    "- margin_balance_trend：全市場融資 / 融券餘額趨勢（散戶槓桿與看空代理）。\n"
-    "- top_revenue_growers：最新月份營收年增率前 10（基本面）。\n"
-    "- active_buybacks：今日仍在執行庫藏股的公司，**強烈管理層信心訊號**。\n"
-    "- govt_bank_flow_5d：八大行庫近 5 日累計買賣超（國家隊方向）。\n"
-    "- risk_warnings：**負向過濾**——`active_dispositions`（處置股）、"
-    "`recent_suspensions`（近期暫停交易）、`high_day_trading_ratio`"
-    "（當沖比 >60%，投機過熱）。**禁止推薦中招的標的，即使其他訊號看多。**\n"
-    "- market_institutional_5d：全市場三大法人近 5 日淨買賣超（大盤方向）。\n"
-    "- focus_briefs：**主題提及之個股小型分析師簡報**——`quote` 即時報價、"
-    "`technicals`（MA20/60/120、52w 高低與距離、5/20/60 日漲跌幅、RSI14）、"
-    "`fundamentals`（PE/PB/殖利率/EPS）、`revenue_trend`（近 6 月營收年/月增）、"
-    "`chip_5d`（外資 / 投信 / 自營近 5 日淨買賣）、`margin_latest`（最新融資餘額）、"
-    "`peers`（同產業 3 檔可比標的）。**有此區塊就要引用具體數據**，"
-    "不要只憑 headlines 推論。\n"
-    "- macro：宏觀利率與匯率快照（Fed Funds / US 10Y / 10Y-2Y 殖利率價差 / "
-    "DXY / TWD/USD），各帶 `latest_value` + `change_1y` + `change_3m`。"
-    "影響全球風險偏好與外資流向，建議在結論中至少提及一次相關方向。\n"
-    "- user_context：**討論發起人本人的部位**——`portfolios`（組合清單）、"
-    "`holdings`（前 20 大持股，含股數 / 平均成本 / 計價幣別）、"
-    "`watchlist_symbols`（自選股，前 30）、`focus_overlap.held` "
-    "（主題提及的標的中已持有者）、`focus_overlap.watching`（自選股中相關者）。"
-    "**只在你的角色與部位配置 / 風險管理相關時引用**（portfolio_advisor / "
-    "risk_manager / 在被問加碼減碼時的 buffett / lynch 等）；其他情境忽略。"
-    "**禁止在結論中揭露具體股數或成本價**——僅用於決策邏輯。\n"
-    "- prior_discussions：**本人過去 90 天對主題提及之標的所做的結論**，含日期 / "
-    "topic 摘要 / `recommended_symbols` / `time_horizon` / `consensus_score` / "
-    "`verdict`（win / loss / unverifiable / null）。**用以保持跨討論一致性**——"
-    "若上次對 2330 結論 Hold 而本次卻要 Buy，必須在 content 中明確說明改變理由"
-    "（例如「上週起殖利率下行 +30bp，重新評估」），不可默默翻盤。\n"
-    "- errors：本次抓取的連接器錯誤清單；非空時務必聲明資料不完整。"
+    "下方 `## 市場現況` 的 JSON 包含多個訊號區塊，請依語意整合判讀：\n"
+)
+
+
+def _persona_schema_annotation(ctx: dict[str, Any]) -> str:
+    """Build a schema annotation listing only the blocks present in
+    `ctx`. Avoids the failure mode where the prompt advertises
+    `top_gainers` / `risk_warnings` to a `macro_analyst` whose
+    filtered ctx didn't carry them — the LLM would either invent
+    values or apologise about missing data, both equally bad.
+
+    Block ordering follows `_BLOCK_ANNOTATIONS` insertion order so
+    the prompt structure stays stable across personas. A block is
+    "present" if its key is in `ctx` AND the value isn't None / [] /
+    {} (matches how `gather_market_context` initialises empty
+    blocks). `errors` is always included so personas know what
+    `errors: []` means even on a clean run.
+    """
+    bullets: list[str] = []
+    for block, line in _BLOCK_ANNOTATIONS.items():
+        if block == "errors":
+            bullets.append(line)
+            continue
+        val = ctx.get(block)
+        if val is None or val == [] or val == {}:
+            continue
+        bullets.append(line)
+    return _SCHEMA_HEADER + "\n".join(bullets)
+
+
+# Full annotation kept for `synthesize_conclusion` (which sees the
+# unfiltered context snapshot, so the full block list is always
+# accurate). Built once at import time.
+_CONTEXT_SCHEMA_ANNOTATION = _SCHEMA_HEADER + "\n".join(
+    _BLOCK_ANNOTATIONS.values()
 )
 
 
@@ -1781,7 +1857,7 @@ _TURN_PROMPT_TEMPLATE = (
     "  - 不要混入簡體字，即使你的訓練資料偏向簡體也要轉繁。\n\n"
     "## 主題\n{topic}\n\n"
     "## 共同規則\n{rules}\n\n"
-    + _CONTEXT_SCHEMA_ANNOTATION + "\n\n"
+    "{annotation}\n\n"
     "## 市場現況\n```json\n{context}\n```\n\n"
     "## 先前發言\n{history}\n\n"
     "## 你現在的任務\n"
@@ -2292,9 +2368,15 @@ async def _ask_persona(
     # tokens and stops weak models from mixing irrelevant blocks (e.g.
     # macro_analyst citing risk_warnings dispositions in a Fed thesis).
     filtered_ctx = _filter_context_for_persona(context, persona_id)
+    # Build the schema annotation from what the persona actually sees,
+    # not the full block list — otherwise the prompt advertises blocks
+    # the LLM can't find in `## 市場現況` and forces it to either
+    # hallucinate values or apologise about missing data.
+    annotation = _persona_schema_annotation(filtered_ctx)
     user_prompt = _TURN_PROMPT_TEMPLATE.format(
         topic=topic,
         rules=rules,
+        annotation=annotation,
         context=json.dumps(filtered_ctx, ensure_ascii=False, indent=2),
         history=_format_history(prior_turns),
     )

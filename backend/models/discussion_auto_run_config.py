@@ -18,6 +18,7 @@ from datetime import datetime
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     String,
@@ -33,6 +34,14 @@ from db.base import Base
 
 class DiscussionAutoRunConfig(Base):
     __tablename__ = "discussion_auto_run_configs"
+    __table_args__ = (
+        # Same defence-in-depth contract as Discussion.market —
+        # PR #220 locks the allowed-set at the DB level.
+        CheckConstraint(
+            "market IN ('TW', 'US', 'GLOBAL')",
+            name="ck_discussion_auto_run_configs_market_allowed",
+        ),
+    )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

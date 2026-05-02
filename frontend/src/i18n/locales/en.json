@@ -471,7 +471,7 @@
     "context_replay_title": "Context replay",
     "context_replay_subtitle": "What the personas saw at each round — TAIEX, sentiment, foreign flow, revenue. Useful for audit / backtesting.",
     "context_replay_count": "{{n}} rounds",
-    "context_replay_empty": "No context snapshots (discussion predates PR #135 or all snapshot writes failed)",
+    "context_replay_empty": "No context snapshots — likely older than the 90-day retention window, predates PR #135, or all snapshot writes failed",
     "context_news_label": "News",
     "context_bullish": "bull",
     "context_bearish": "bear",

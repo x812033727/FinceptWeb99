@@ -471,7 +471,7 @@
     "context_replay_title": "當時市場資料 (Replay)",
     "context_replay_subtitle": "每輪專家發言時看到的市場快照。包含大盤、新聞情緒、外資籌碼、月營收等，可用於審計或回測。",
     "context_replay_count": "{{n}} 輪",
-    "context_replay_empty": "此討論沒有保存 context（PR #135 之前建立的舊討論，或所有快照寫入失敗）",
+    "context_replay_empty": "此討論沒有保存 context（可能是 90 天前建立、保留期已過自動清理；或 PR #135 之前建立的舊討論；或所有快照寫入失敗）",
     "context_news_label": "新聞",
     "context_bullish": "利多",
     "context_bearish": "利空",

@@ -2889,7 +2889,7 @@ async def test_assemble_focus_briefs_fan_out_collects_per_symbol():
     """Each symbol gets its own brief built concurrently, returned in
     the input order. A coroutine that raises is logged + skipped, not
     propagated, so a single bad symbol doesn't kill the round."""
-    async def fake_brief(_db, sym: str) -> dict:
+    async def fake_brief(sym: str) -> dict:
         if sym == "BAD":
             raise RuntimeError("upstream blew up")
         return {"symbol": sym, "quote": {"price": 100.0}}

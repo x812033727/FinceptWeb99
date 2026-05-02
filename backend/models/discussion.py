@@ -21,6 +21,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -44,6 +45,15 @@ class Discussion(Base):
         Index(
             "ix_discussions_verify_pending",
             "verify_after_date",
+        ),
+        # Defence in depth (PR #220): the service's `_normalize_market`
+        # already validates against `_VALID_MARKETS`, but raw SQL or
+        # bypassing call paths could still write `'JP'` etc. The
+        # CHECK locks the contract at the DB so downstream code can
+        # rely on the value being one of the three known markets.
+        CheckConstraint(
+            "market IN ('TW', 'US', 'GLOBAL')",
+            name="ck_discussions_market_allowed",
         ),
     )
 

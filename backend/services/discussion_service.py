@@ -873,13 +873,20 @@ async def _get_tw_peers(
     return out
 
 
-async def _build_tw_focus_brief(
-    db: AsyncSession, symbol: str,
-) -> dict[str, Any]:
+async def _build_tw_focus_brief(symbol: str) -> dict[str, Any]:
     """Per-TW-symbol mini analyst report. Each sub-call is wrapped in
     its own try so a single connector outage doesn't blank the whole
     brief — the persona just sees "fundamentals: null" and reasons
-    with what remained."""
+    with what remained.
+
+    Doesn't take a `db` session: every sub-call goes through the
+    `tw_market_service` autosession variants which open + close
+    their own connections. The `db` parameter used to be threaded
+    through (and was unused) — dropped in PR #220 so the
+    concurrency contract is unambiguous: this builder is safe to
+    fan out alongside the parallel `gather_market_context` tasks
+    that DO touch the shared `db`.
+    """
     from services import tw_market_service
 
     brief: dict[str, Any] = {
@@ -1030,12 +1037,19 @@ async def _assemble_focus_briefs(
     db: AsyncSession, *, market: str, symbols: list[str],
 ) -> list[dict[str, Any]]:
     """Fan out per-symbol brief assembly concurrently. Cap at
-    `_MAX_FOCUS_SYMBOLS` for token-budget protection."""
+    `_MAX_FOCUS_SYMBOLS` for token-budget protection.
+
+    `db` is accepted for parity with the other gather_market_context
+    helpers but never threaded into the per-symbol builders — both
+    `_build_tw_focus_brief` and `_build_us_focus_brief` use their
+    respective service modules' autosession helpers, so they can
+    fan out alongside the shared-db reads safely.
+    """
     if not symbols:
         return []
     syms = symbols[:_MAX_FOCUS_SYMBOLS]
     if market == "TW":
-        coros = [_build_tw_focus_brief(db, s) for s in syms]
+        coros = [_build_tw_focus_brief(s) for s in syms]
     elif market == "US":
         coros = [_build_us_focus_brief(s) for s in syms]
     else:
@@ -1048,7 +1062,7 @@ async def _assemble_focus_briefs(
         coros = []
         for s in syms:
             if s.isdigit():
-                coros.append(_build_tw_focus_brief(db, s))
+                coros.append(_build_tw_focus_brief(s))
             elif s in _crypto_universe():
                 continue
             else:

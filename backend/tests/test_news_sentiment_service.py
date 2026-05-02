@@ -466,5 +466,130 @@ async def test_read_recent_market_sentiment_aggregates(db_session: AsyncSession)
     assert out["bullish"] == 1
     assert out["bearish"] == 1
     assert out["neutral"] == 1
+    assert out["considered"] == 3
     assert round(out["avg_score"], 2) == 0.10
     assert len(out["headlines"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_read_recent_market_sentiment_aggregates_full_window_not_just_sample(
+    db_session: AsyncSession,
+):
+    """PR #214 fix: `avg_score` + bullish/bearish/neutral counts must
+    reflect EVERY scored article in the time window, not just the
+    `limit`-capped headlines slice. A 100-bullish-day no longer looks
+    like "10 articles, 7 bullish" because the headline cap stopped
+    early."""
+    now = datetime.now(UTC)
+    bulk = []
+    for i in range(15):
+        bulk.append(_row(
+            f"bullish-{i}", f"https://example.com/win_b_{i}",
+            symbol=None, published_at=now - timedelta(hours=i),
+        ))
+    for i in range(5):
+        bulk.append(_row(
+            f"bearish-{i}", f"https://example.com/win_x_{i}",
+            symbol=None, published_at=now - timedelta(hours=i),
+        ))
+    await insert_news_articles(db_session, bulk)
+    rows = (await db_session.scalars(
+        select(NewsArticle).where(NewsArticle.link.like("https://example.com/win_%"))
+    )).all()
+    for r in rows:
+        is_bullish = r.title.startswith("bullish")
+        r.sentiment_score = 0.7 if is_bullish else -0.5
+        r.sentiment_label = "bullish" if is_bullish else "bearish"
+        r.sentiment_scored_at = now
+    await db_session.commit()
+
+    # limit=5 cuts the headline sample to 5; the bug used to make
+    # avg_score / bullish / bearish reflect only those 5. Now they
+    # must reflect all 20 — 15 bullish + 5 bearish.
+    out = await news_sentiment_service.read_recent_market_sentiment(
+        db_session, market="TW", limit=5, max_age_hours=24,
+    )
+    assert out["considered"] == 20
+    assert out["bullish"] == 15
+    assert out["bearish"] == 5
+    assert out["neutral"] == 0
+    # avg = (15*0.7 + 5*-0.5) / 20 = 0.4
+    assert round(out["avg_score"], 2) == 0.40
+    # Headlines slice is still capped at the request.
+    assert len(out["headlines"]) == 5
+
+
+@pytest.mark.asyncio
+async def test_read_symbol_sentiment_aggregates_full_window_not_just_sample(
+    db_session: AsyncSession,
+):
+    """Mirror of the market-sentiment bug fix for the per-symbol
+    reader. 12 scored articles for 2330 with 9 bullish: the old code
+    showed "10 articles, 7 bullish" because of the headlines cap;
+    fix makes it "considered=12, bullish=9" while keeping headlines
+    capped at the request."""
+    now = datetime.now(UTC)
+    bulk = []
+    for i in range(9):
+        bulk.append(_row(
+            f"sym-bull-{i}", f"https://example.com/sym_b_{i}",
+            symbol="2330", published_at=now - timedelta(hours=i),
+        ))
+    for i in range(3):
+        bulk.append(_row(
+            f"sym-bear-{i}", f"https://example.com/sym_x_{i}",
+            symbol="2330", published_at=now - timedelta(hours=i),
+        ))
+    await insert_news_articles(db_session, bulk)
+    rows = (await db_session.scalars(
+        select(NewsArticle).where(NewsArticle.link.like("https://example.com/sym_%"))
+    )).all()
+    for r in rows:
+        is_bullish = "bull" in r.title
+        r.sentiment_score = 0.6 if is_bullish else -0.4
+        r.sentiment_label = "bullish" if is_bullish else "bearish"
+        r.sentiment_scored_at = now
+    await db_session.commit()
+
+    out = await news_sentiment_service.read_symbol_sentiment(
+        db_session, market="TW", symbol="2330",
+        limit=5, max_age_hours=24,
+    )
+    assert out is not None
+    assert out["considered"] == 12
+    assert out["bullish"] == 9
+    assert out["bearish"] == 3
+    assert len(out["headlines"]) == 5
+
+
+@pytest.mark.asyncio
+async def test_read_symbol_sentiment_default_window_is_seven_days(
+    db_session: AsyncSession,
+):
+    """PR #214 default bumped 72h → 168h to surface mid-cap names
+    that get one mention every few days. A 5-day-old article must
+    now appear; a 9-day-old one must still age out."""
+    now = datetime.now(UTC)
+    await insert_news_articles(db_session, [
+        _row("recent", "https://example.com/sym_w_a",
+             symbol="2330", published_at=now - timedelta(days=5)),
+        _row("ancient", "https://example.com/sym_w_b",
+             symbol="2330", published_at=now - timedelta(days=9)),
+    ])
+    rows = (await db_session.scalars(
+        select(NewsArticle).where(NewsArticle.link.like("https://example.com/sym_w_%"))
+    )).all()
+    for r in rows:
+        r.sentiment_score = 0.5
+        r.sentiment_label = "bullish"
+        r.sentiment_scored_at = now
+    await db_session.commit()
+
+    out = await news_sentiment_service.read_symbol_sentiment(
+        db_session, market="TW", symbol="2330",
+    )
+    assert out is not None
+    titles = [h["title"] for h in out["headlines"]]
+    assert "recent" in titles
+    assert "ancient" not in titles
+    assert out["considered"] == 1

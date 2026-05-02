@@ -1572,8 +1572,13 @@ async def gather_market_context(
 
     try:
         from services.news_sentiment_service import read_recent_market_sentiment
+        # `limit` controls the `headlines` sample; aggregate counts
+        # (`avg_score` / bullish / bearish / neutral) reflect the full
+        # 48h population (PR #214), so 50 is purely a token-budget
+        # decision for the headline slice — bump it up so personas see
+        # 50 of the freshest titles instead of just 20.
         ctx["news_sentiment"] = await read_recent_market_sentiment(
-            db, market=market, limit=20, max_age_hours=48,
+            db, market=market, limit=50, max_age_hours=48,
         )
     except Exception as exc:
         _record_error("news_sentiment", exc)
@@ -1586,7 +1591,7 @@ async def gather_market_context(
     try:
         from services.news_sentiment_service import read_recent_market_sentiment
         ctx["international_sentiment"] = await read_recent_market_sentiment(
-            db, market="GLOBAL", limit=20, max_age_hours=48,
+            db, market="GLOBAL", limit=50, max_age_hours=48,
         )
     except Exception as exc:
         _record_error("international_sentiment", exc)
@@ -1595,8 +1600,12 @@ async def gather_market_context(
         try:
             from services.news_sentiment_service import read_symbol_sentiment
             for sym in focus_symbols[:_MAX_FOCUS_SYMBOLS]:
+                # 7-day window (PR #214): per-symbol news is sparse,
+                # 72h often returned None for mid-caps that have one
+                # mention every few days. Aggregate counts reflect the
+                # full 7-day population; `headlines` cap stays at 10.
                 rows = await read_symbol_sentiment(
-                    db, market=market, symbol=sym, limit=10, max_age_hours=72,
+                    db, market=market, symbol=sym, limit=10, max_age_hours=168,
                 )
                 if rows:
                     ctx["per_symbol_news_sentiment"][sym] = rows

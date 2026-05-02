@@ -359,7 +359,7 @@ async def read_recent_market_sentiment(
     db: AsyncSession,
     *,
     market: str = "TW",
-    limit: int = 20,
+    limit: int = 50,
     max_age_hours: int = 48,
 ) -> dict:
     """Aggregate sentiment-scored news for the discussion orchestrator
@@ -375,52 +375,83 @@ async def read_recent_market_sentiment(
     field so the persona can tell `2330 法說` from a broad-market
     headline; the LLM does the disambiguation, not the SQL filter.
 
+    Aggregation vs sample split (PR #214): `avg_score` and the
+    bullish/bearish/neutral counts are computed over **every** scored
+    article in the time window, not just the headlines slice. The
+    earlier code averaged over the same `limit=20` rows it returned —
+    a 200-article-bullish day still showed "20 articles, 14 bullish"
+    so personas saw a sample-biased ratio. Now `headlines` stays
+    capped at `limit` (token budget) but the counts reflect the full
+    population the personas can trust.
+
     Returns:
         {
-          "avg_score": float,
-          "bullish": int, "bearish": int, "neutral": int,
-          "headlines": [{"title", "symbol", "score", "label", "published_at"}],
+          "avg_score": float,            # over full window
+          "bullish": int,                # over full window
+          "bearish": int,                # over full window
+          "neutral": int,                # over full window
+          "considered": int,             # full-window article count
+          "headlines": [{"title", "symbol", "score", "label",
+                         "published_at"}],   # capped at `limit`
         }
     """
     cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
-    stmt = (
-        select(NewsArticle)
-        .where(
-            NewsArticle.market == market,
-            NewsArticle.published_at >= cutoff,
-            NewsArticle.sentiment_score.isnot(None),
+    base_filter = (
+        NewsArticle.market == market,
+        NewsArticle.published_at >= cutoff,
+        NewsArticle.sentiment_score.isnot(None),
+    )
+
+    # ── full-window aggregate ──────────────────────────────────────
+    # Pull ALL rows in the window (no limit) for an unbiased average +
+    # bucket counts. The window is bounded by `max_age_hours`, so this
+    # never blows up — TW news ingest produces O(100) scored rows in
+    # a typical 48h window.
+    agg_stmt = select(NewsArticle).where(*base_filter)
+    all_rows = list((await db.scalars(agg_stmt)).all())
+    considered = len(all_rows)
+    if considered == 0:
+        return {
+            "avg_score":  0.0,
+            "bullish":    0,
+            "bearish":    0,
+            "neutral":    0,
+            "considered": 0,
+            "headlines":  [],
+        }
+
+    total = sum(r.sentiment_score or 0.0 for r in all_rows)
+    avg = total / considered
+    counts = {"bullish": 0, "bearish": 0, "neutral": 0}
+    for r in all_rows:
+        counts[r.sentiment_label or "neutral"] = (
+            counts.get(r.sentiment_label or "neutral", 0) + 1
         )
+
+    # ── headline sample (newest first, capped) ─────────────────────
+    head_stmt = (
+        select(NewsArticle)
+        .where(*base_filter)
         .order_by(NewsArticle.published_at.desc())
         .limit(limit)
     )
-    rows = list((await db.scalars(stmt)).all())
-    if not rows:
-        return {
-            "avg_score": 0.0,
-            "bullish": 0,
-            "bearish": 0,
-            "neutral": 0,
-            "headlines": [],
-        }
-    total = sum(r.sentiment_score or 0.0 for r in rows)
-    avg = total / len(rows)
-    counts = {"bullish": 0, "bearish": 0, "neutral": 0}
-    for r in rows:
-        counts[r.sentiment_label or "neutral"] = counts.get(r.sentiment_label or "neutral", 0) + 1
+    head_rows = list((await db.scalars(head_stmt)).all())
+
     return {
-        "avg_score": round(avg, 3),
-        "bullish": counts["bullish"],
-        "bearish": counts["bearish"],
-        "neutral": counts["neutral"],
+        "avg_score":  round(avg, 3),
+        "bullish":    counts["bullish"],
+        "bearish":    counts["bearish"],
+        "neutral":    counts["neutral"],
+        "considered": considered,
         "headlines": [
             {
-                "title": r.title,
-                "symbol": r.symbol,
-                "score": r.sentiment_score,
-                "label": r.sentiment_label,
+                "title":        r.title,
+                "symbol":       r.symbol,
+                "score":        r.sentiment_score,
+                "label":        r.sentiment_label,
                 "published_at": r.published_at.isoformat(),
             }
-            for r in rows
+            for r in head_rows
         ],
     }
 
@@ -431,48 +462,69 @@ async def read_symbol_sentiment(
     market: str,
     symbol: str,
     limit: int = 10,
-    max_age_hours: int = 72,
+    max_age_hours: int = 168,
 ) -> dict | None:
     """Aggregate sentiment-scored news for a specific symbol over the last
     `max_age_hours`. Returns None if no scored articles exist for the
     symbol (so the caller can omit the per-symbol block instead of
     rendering an empty stub).
+
+    Window default bumped to 168h / 7d (PR #214): per-symbol news is
+    much sparser than market-wide news. A 72h window often returned
+    None for mid-cap names that get one mention every few days, so
+    personas saw "no news" for stocks that had genuine recent
+    coverage. 7 days is short enough that the signal is still
+    actionable.
+
+    Aggregation is over the **full window**, not the limited
+    headlines slice — same fix as `read_recent_market_sentiment`. A
+    stock with 30 scored articles, 25 of them bullish, no longer
+    looks like "10 articles, 7 bullish" just because the headlines
+    cap stops at 10.
     """
     cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
-    stmt = (
+    base_filter = (
+        NewsArticle.market == market,
+        NewsArticle.symbol == symbol,
+        NewsArticle.published_at >= cutoff,
+        NewsArticle.sentiment_score.isnot(None),
+    )
+
+    agg_stmt = select(NewsArticle).where(*base_filter)
+    all_rows = list((await db.scalars(agg_stmt)).all())
+    if not all_rows:
+        return None
+    considered = len(all_rows)
+    total = sum(r.sentiment_score or 0.0 for r in all_rows)
+    avg = total / considered
+    counts = {"bullish": 0, "bearish": 0, "neutral": 0}
+    for r in all_rows:
+        label = r.sentiment_label or "neutral"
+        counts[label] = counts.get(label, 0) + 1
+
+    head_stmt = (
         select(NewsArticle)
-        .where(
-            NewsArticle.market == market,
-            NewsArticle.symbol == symbol,
-            NewsArticle.published_at >= cutoff,
-            NewsArticle.sentiment_score.isnot(None),
-        )
+        .where(*base_filter)
         .order_by(NewsArticle.published_at.desc())
         .limit(limit)
     )
-    rows = list((await db.scalars(stmt)).all())
-    if not rows:
-        return None
-    total = sum(r.sentiment_score or 0.0 for r in rows)
-    avg = total / len(rows)
-    counts = {"bullish": 0, "bearish": 0, "neutral": 0}
-    for r in rows:
-        label = r.sentiment_label or "neutral"
-        counts[label] = counts.get(label, 0) + 1
+    head_rows = list((await db.scalars(head_stmt)).all())
+
     return {
-        "symbol": symbol,
-        "count": len(rows),
-        "avg_score": round(avg, 3),
-        "bullish": counts["bullish"],
-        "bearish": counts["bearish"],
-        "neutral": counts["neutral"],
+        "symbol":     symbol,
+        "considered": considered,
+        "count":      considered,   # retained for backward-compat callers
+        "avg_score":  round(avg, 3),
+        "bullish":    counts["bullish"],
+        "bearish":    counts["bearish"],
+        "neutral":    counts["neutral"],
         "headlines": [
             {
-                "title": r.title,
-                "score": r.sentiment_score,
-                "label": r.sentiment_label,
+                "title":        r.title,
+                "score":        r.sentiment_score,
+                "label":        r.sentiment_label,
                 "published_at": r.published_at.isoformat(),
             }
-            for r in rows
+            for r in head_rows
         ],
     }

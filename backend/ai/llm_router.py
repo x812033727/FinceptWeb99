@@ -494,14 +494,24 @@ async def _openai_compat_tool_loop(
             yield {"type": "error", "message": str(exc)}
             return
 
+        # Emit per-iteration usage (PR #216): when the model goes
+        # through a tool loop (max_turns iterations of LLM call →
+        # tool exec → LLM call), each iteration consumes its own
+        # prompt + completion tokens. Previously we only emitted on
+        # the FINAL iteration, so a 5-turn run silently dropped 4
+        # iterations of input cost — UsageCard reported a fraction
+        # of true spend. Now every iteration that produced usage
+        # emits the event; the consumer (run_round /
+        # synthesize_conclusion) sums them.
+        if prompt_tokens_seen or completion_tokens_seen:
+            yield {
+                "type": "usage",
+                "prompt_tokens": prompt_tokens_seen,
+                "completion_tokens": completion_tokens_seen,
+            }
+
         if finish_reason != "tool_calls" or not pending:
-            # Natural stop, length cap, or content filter — emit usage if we got it.
-            if prompt_tokens_seen or completion_tokens_seen:
-                yield {
-                    "type": "usage",
-                    "prompt_tokens": prompt_tokens_seen,
-                    "completion_tokens": completion_tokens_seen,
-                }
+            # Natural stop, length cap, or content filter.
             return
 
         # Append the assistant's tool-call message, then execute and feed back.

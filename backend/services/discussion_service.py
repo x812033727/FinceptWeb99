@@ -2678,15 +2678,24 @@ async def run_round(
                                 "is_error": event.get("is_error", False),
                             })
                         elif etype == "usage":
-                            # Capture the provider's reported token counts
-                            # so we can write a per-persona LLMUsageEvent
-                            # row after the turn settles. Without this,
-                            # the bulk of discussion cost (N personas ×
-                            # rounds) was invisible in UsageCard.
-                            usage_seen = {
-                                "prompt_tokens": int(event.get("prompt_tokens", 0)),
-                                "completion_tokens": int(event.get("completion_tokens", 0)),
-                            }
+                            # **Sum** usage across events instead of
+                            # overwriting (PR #216). When the persona's
+                            # provider goes through a tool loop —
+                            # claude_agent's MCP loop or
+                            # _openai_compat_tool_loop's max_turns
+                            # iteration — each LLM call emits its
+                            # own usage event. The earlier code took
+                            # only the LAST one, so a 5-turn tool run
+                            # dropped ~80% of the actual prompt token
+                            # cost. Now every event is added in.
+                            if usage_seen is None:
+                                usage_seen = {"prompt_tokens": 0, "completion_tokens": 0}
+                            usage_seen["prompt_tokens"] += int(
+                                event.get("prompt_tokens", 0)
+                            )
+                            usage_seen["completion_tokens"] += int(
+                                event.get("completion_tokens", 0)
+                            )
                         elif etype == "error":
                             yield TurnEvent("error", {
                                 "message": event.get("message", "LLM error"),
@@ -2962,10 +2971,19 @@ async def synthesize_conclusion(
             if etype == "delta":
                 assembled += event.get("text", "")
             elif etype == "usage":
-                usage_seen = {
-                    "prompt_tokens": int(event.get("prompt_tokens", 0)),
-                    "completion_tokens": int(event.get("completion_tokens", 0)),
-                }
+                # Accumulate (PR #216) — synth doesn't usually run a
+                # tool loop today (system task uses a vanilla provider),
+                # but the same accumulator pattern protects us when an
+                # admin retargets the synthesizer at a tool-capable
+                # provider via SystemTasksCard.
+                if usage_seen is None:
+                    usage_seen = {"prompt_tokens": 0, "completion_tokens": 0}
+                usage_seen["prompt_tokens"] += int(
+                    event.get("prompt_tokens", 0)
+                )
+                usage_seen["completion_tokens"] += int(
+                    event.get("completion_tokens", 0)
+                )
             elif etype == "error":
                 log.warning(
                     "discussion.synthesize.llm_error",

@@ -1144,6 +1144,70 @@ async def test_run_round_forwards_tool_call_and_tool_result_events(
 
 
 @pytest.mark.asyncio
+async def test_run_round_accumulates_usage_across_tool_loop_iterations(
+    db_session: AsyncSession, owner: User,
+):
+    """When a persona's provider runs a tool loop, the upstream stream
+    emits a `usage` event PER iteration (PR #216). run_round must
+    SUM them — the previous overwrite-only behaviour silently dropped
+    intermediate iterations and made UsageCard report a fraction of
+    actual cost.
+
+    Verified by observing what `record_usage` ends up with: a
+    persona that fires 3 LLM calls (200/100, 250/120, 180/80
+    tokens respectively) should be recorded as 630 prompt + 300
+    completion, not 180/80 (last only).
+    """
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+
+    async def _stream_with_loop(*_a, **_kw):
+        # Iteration 1: tool call + usage event
+        yield {"type": "tool_call", "id": "c1", "name": "get_quote",
+               "args": {"symbol": "2330"}}
+        yield {"type": "usage", "prompt_tokens": 200, "completion_tokens": 100}
+        # Iteration 2: another tool call + usage event
+        yield {"type": "tool_call", "id": "c2", "name": "run_dcf",
+               "args": {"symbol": "2330"}}
+        yield {"type": "usage", "prompt_tokens": 250, "completion_tokens": 120}
+        # Iteration 3 (final): text content + usage event
+        yield {"type": "delta",
+               "text": '{"stance": "supplement", "content": "依工具回報"}'}
+        yield {"type": "usage", "prompt_tokens": 180, "completion_tokens": 80}
+
+    record_calls: list[dict] = []
+
+    async def _capture_record_usage(_db, **kwargs):
+        record_calls.append(kwargs)
+
+    with patch(
+        "services.discussion_service.stream_chat",
+        side_effect=_stream_with_loop,
+    ), patch(
+        "services.discussion_service.gather_market_context",
+        new=AsyncMock(return_value={"market": "TW"}),
+    ), patch(
+        "services.llm_usage_service.record_usage",
+        new=_capture_record_usage,
+    ):
+        async for _ev in discussion_service.run_round(
+            db_session, row, user_id=str(owner.id),
+        ):
+            pass
+
+    # buffett + lynch each fire the same fake stream; record per
+    # persona. Verify the SUMMED tokens, not just the last event's.
+    assert len(record_calls) == 2
+    for kw in record_calls:
+        assert kw["prompt_tokens"] == 200 + 250 + 180  # 630
+        assert kw["completion_tokens"] == 100 + 120 + 80  # 300
+
+
+@pytest.mark.asyncio
 async def test_run_round_increments_round_number_on_subsequent_calls(
     db_session: AsyncSession, owner: User,
 ):

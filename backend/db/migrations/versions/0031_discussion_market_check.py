@@ -30,6 +30,22 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    # Defensive: coerce any pre-existing rows whose `market` slipped
+    # outside the allowed set (raw-SQL inserts, ORM bypass, abandoned
+    # branch state) BEFORE the CHECK is added. Without this guard, a
+    # single rogue row would crash the upgrade — and since we can't
+    # roll forward to a fix migration if the upgrade halts, it pays
+    # to be paranoid here. On clean databases this UPDATE affects
+    # 0 rows and adds <1ms.
+    op.execute(
+        "UPDATE discussions SET market = 'TW' "
+        "WHERE market NOT IN ('TW', 'US', 'GLOBAL')"
+    )
+    op.execute(
+        "UPDATE discussion_auto_run_configs SET market = 'TW' "
+        "WHERE market NOT IN ('TW', 'US', 'GLOBAL')"
+    )
+
     # batch_alter_table renders to ALTER TABLE on Postgres and to
     # the create-new-table-copy-data-rename pattern on SQLite — so
     # the same migration code runs on both dialects without a

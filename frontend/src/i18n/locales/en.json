@@ -416,6 +416,7 @@
     "market_label": "Market",
     "inject_label": "Inject a message — visible to all panelists next round",
     "inject_send": "Inject",
+    "inject_shortcut_hint": "(⌘/Ctrl + Enter to send)",
     "inject_placeholder": "e.g. Focus on 2330 instead of the index; Q2 EPS just printed +35% YoY, re-evaluate…",
     "user_persona_name": "You",
     "create": "Create Discussion",

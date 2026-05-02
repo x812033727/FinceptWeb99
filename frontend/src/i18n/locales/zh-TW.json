@@ -417,6 +417,7 @@
     "inject_label": "插話 — 給下一輪所有專家看",
     "inject_placeholder": "例：請聚焦在 2330 而非大盤；剛剛 Q2 EPS 公布 +35% YoY，重新評估…",
     "inject_send": "插入",
+    "inject_shortcut_hint": "(⌘/Ctrl + Enter 送出)",
     "user_persona_name": "討論發起人",
     "create": "建立討論",
     "save_edits": "儲存修改",

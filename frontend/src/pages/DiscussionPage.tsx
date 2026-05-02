@@ -761,6 +761,19 @@ export default function DiscussionPage() {
               <textarea
                 value={injectDraft}
                 onChange={(e) => setInjectDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  // Cmd+Enter (macOS) / Ctrl+Enter (Win/Linux) submits.
+                  // Bare Enter still inserts a newline so multi-line
+                  // injections aren't accidentally sent on the first
+                  // line break.
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    const trimmed = injectDraft.trim();
+                    if (trimmed && !injectMut.isPending) {
+                      injectMut.mutate(trimmed);
+                    }
+                  }
+                }}
                 rows={2}
                 maxLength={2000}
                 placeholder={t("discussion.inject_placeholder")}
@@ -769,6 +782,9 @@ export default function DiscussionPage() {
               <div className="flex items-center justify-between">
                 <span className="text-[10px] text-muted-foreground">
                   {injectDraft.length}/2000
+                  <span className="ml-2 opacity-60">
+                    {t("discussion.inject_shortcut_hint")}
+                  </span>
                 </span>
                 <button
                   type="button"

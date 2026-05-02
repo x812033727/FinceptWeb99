@@ -570,6 +570,208 @@ def test_filter_context_always_includes_metadata_keys():
         assert "errors" in out
 
 
+# ── _assemble_prior_discussions ───────────────────────────────────
+
+
+async def _make_done_discussion(
+    db: AsyncSession,
+    *,
+    owner_id,
+    topic: str,
+    recommended: list[str],
+    market: str = "TW",
+    horizon: str = "short_term",
+    consensus: float = 0.6,
+    verdict: str | None = None,
+    days_old: int = 0,
+) -> Discussion:
+    """Build a concluded discussion fixture for prior-discussion tests.
+    Bypasses run_round / synthesize_conclusion and writes the
+    Discussion row directly with a hand-crafted conclusion."""
+    from datetime import UTC as _UTC, datetime as _dt, timedelta as _td
+
+    row = await discussion_service.create_discussion(
+        db,
+        owner_id=owner_id,
+        topic=topic,
+        rules="r",
+        persona_ids=["buffett", "lynch"],
+        market=market,
+    )
+    row.status = discussion_service.STATUS_DONE
+    row.conclusion = {
+        "recommended_symbols": list(recommended),
+        "reasoning": "ok",
+        "risks": [],
+        "time_horizon": horizon,
+        "consensus_score": consensus,
+    }
+    if verdict is not None:
+        row.verdict = verdict
+    if days_old > 0:
+        row.created_at = _dt.now(_UTC) - _td(days=days_old)
+    await db.commit()
+    await db.refresh(row)
+    return row
+
+
+@pytest.mark.asyncio
+async def test_prior_discussions_empty_when_no_focus_symbols(
+    db_session: AsyncSession, owner: User,
+):
+    """No focus_symbols → no point looking up overlap. Skip the
+    query entirely; returns []."""
+    out = await discussion_service._assemble_prior_discussions(
+        db_session, owner_id=owner.id, focus_symbols=None,
+    )
+    assert out == []
+    out = await discussion_service._assemble_prior_discussions(
+        db_session, owner_id=owner.id, focus_symbols=[],
+    )
+    assert out == []
+
+
+@pytest.mark.asyncio
+async def test_prior_discussions_matches_topic_and_recommended_symbols(
+    db_session: AsyncSession, owner: User,
+):
+    """Two prior discussions: one with the symbol in the topic, the
+    other with it only in `conclusion.recommended_symbols`. Both
+    should be returned."""
+    a = await _make_done_discussion(
+        db_session, owner_id=owner.id,
+        topic="本週短線 2330 走勢", recommended=["2454"],
+    )
+    b = await _make_done_discussion(
+        db_session, owner_id=owner.id,
+        topic="台股大盤觀察", recommended=["2330"],
+    )
+    out = await discussion_service._assemble_prior_discussions(
+        db_session, owner_id=owner.id, focus_symbols=["2330"],
+    )
+    ids = {row["id"] for row in out}
+    assert str(a.id) in ids
+    assert str(b.id) in ids
+    # `matched_symbols` reflects which focus symbols overlapped.
+    for row in out:
+        assert "2330" in row["matched_symbols"]
+
+
+@pytest.mark.asyncio
+async def test_prior_discussions_excludes_self(
+    db_session: AsyncSession, owner: User,
+):
+    """Re-running a round on the SAME discussion must not pull
+    that discussion's own conclusion in as 'past memory'."""
+    self_row = await _make_done_discussion(
+        db_session, owner_id=owner.id,
+        topic="2330", recommended=["2330"],
+    )
+    other = await _make_done_discussion(
+        db_session, owner_id=owner.id,
+        topic="2330 again", recommended=["2330"],
+    )
+    out = await discussion_service._assemble_prior_discussions(
+        db_session, owner_id=owner.id,
+        focus_symbols=["2330"], exclude_id=self_row.id,
+    )
+    ids = {row["id"] for row in out}
+    assert str(self_row.id) not in ids
+    assert str(other.id) in ids
+
+
+@pytest.mark.asyncio
+async def test_prior_discussions_owner_scoped(
+    db_session: AsyncSession, owner: User,
+):
+    """Discussions from another user must not leak into this user's
+    prior list — privacy boundary."""
+    other_user = User(
+        email=f"other-{uuid.uuid4().hex[:8]}@test.com",
+        hashed_password="x",
+    )
+    db_session.add(other_user)
+    await db_session.commit()
+    await db_session.refresh(other_user)
+    await _make_done_discussion(
+        db_session, owner_id=other_user.id,
+        topic="2330 leak", recommended=["2330"],
+    )
+    out = await discussion_service._assemble_prior_discussions(
+        db_session, owner_id=owner.id, focus_symbols=["2330"],
+    )
+    assert out == []
+
+
+@pytest.mark.asyncio
+async def test_prior_discussions_skips_drafts_and_unconcluded(
+    db_session: AsyncSession, owner: User,
+):
+    """Only `status=done` rows with a non-null conclusion count.
+    A draft / running discussion has no committed view to cite."""
+    draft_row = await discussion_service.create_discussion(
+        db_session, owner_id=owner.id,
+        topic="2330 still drafting",
+        rules="r", persona_ids=["buffett", "lynch"],
+    )
+    # Leave status=draft, conclusion=null.
+    out = await discussion_service._assemble_prior_discussions(
+        db_session, owner_id=owner.id, focus_symbols=["2330"],
+    )
+    assert all(row["id"] != str(draft_row.id) for row in out)
+
+
+@pytest.mark.asyncio
+async def test_prior_discussions_drops_old_rows_outside_lookback(
+    db_session: AsyncSession, owner: User,
+):
+    """A 6-month-old discussion shouldn't bloat the prompt of a
+    fresh discussion — `_PRIOR_DISCUSSIONS_LOOKBACK_DAYS` keeps
+    only the recent window."""
+    fresh = await _make_done_discussion(
+        db_session, owner_id=owner.id,
+        topic="2330 fresh", recommended=["2330"], days_old=10,
+    )
+    stale = await _make_done_discussion(
+        db_session, owner_id=owner.id,
+        topic="2330 stale", recommended=["2330"], days_old=200,
+    )
+    out = await discussion_service._assemble_prior_discussions(
+        db_session, owner_id=owner.id, focus_symbols=["2330"],
+    )
+    ids = {row["id"] for row in out}
+    assert str(fresh.id) in ids
+    assert str(stale.id) not in ids
+
+
+@pytest.mark.asyncio
+async def test_prior_discussions_caps_at_limit(
+    db_session: AsyncSession, owner: User,
+):
+    """Even if 12 past discussions overlap, the block caps at
+    `_PRIOR_DISCUSSIONS_CAP` so the prompt doesn't balloon."""
+    for i in range(12):
+        await _make_done_discussion(
+            db_session, owner_id=owner.id,
+            topic=f"2330 round {i}", recommended=["2330"],
+            days_old=i,
+        )
+    out = await discussion_service._assemble_prior_discussions(
+        db_session, owner_id=owner.id, focus_symbols=["2330"],
+    )
+    assert len(out) == discussion_service._PRIOR_DISCUSSIONS_CAP
+
+
+def test_prior_discussions_block_always_included_in_persona_filter():
+    """Prior consensus matters to every archetype, so the filter's
+    always-included set carries the block — even macro_analyst sees
+    it despite not getting `top_gainers` / chip metrics."""
+    assert "prior_discussions" in discussion_service._ALWAYS_INCLUDED_BLOCKS
+    ctx = _full_ctx_for_filter() | {"prior_discussions": [{"id": "x"}]}
+    out = discussion_service._filter_context_for_persona(ctx, "macro_analyst")
+    assert "prior_discussions" in out
+
+
 # ── inject_user_message ───────────────────────────────────────────
 
 

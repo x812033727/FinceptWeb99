@@ -46,7 +46,7 @@ import re
 import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import delete, select, update
@@ -1227,6 +1227,104 @@ async def _assemble_user_context(
     return out
 
 
+# ── prior_discussions (cross-discussion memory) ───────────────────
+#
+# Personas have no recall across sessions: each new discussion sees
+# market data + the current transcript, but never "what did this
+# user / panel conclude on 2330 last week?". That makes consistency
+# impossible — round 1 of a new discussion can recommend Buy on the
+# same name where the last concluded discussion said Hold.
+#
+# `_assemble_prior_discussions` queries the owner's past completed
+# discussions whose topic OR `conclusion.recommended_symbols`
+# overlap with the current focus_symbols. Returns a compact list
+# the synthesiser-style prompt can render as "上次 4/15 對 2330
+# 結論 Hold (時間軸 short_term, 共識 0.7)" so personas can stay
+# coherent across sessions.
+#
+# Owner-scoped (the FK + WHERE clause both hard-gate to the user);
+# the current discussion's own id is excluded so a re-run doesn't
+# reference itself.
+
+_PRIOR_DISCUSSIONS_CAP = 5
+_PRIOR_DISCUSSIONS_LOOKBACK_DAYS = 90
+
+
+async def _assemble_prior_discussions(
+    db: AsyncSession,
+    *,
+    owner_id: uuid.UUID,
+    focus_symbols: list[str] | None,
+    exclude_id: uuid.UUID | None = None,
+) -> list[dict[str, Any]]:
+    """Most-recent-first list of the owner's concluded discussions
+    that overlap any of `focus_symbols` (matched against the topic
+    string or against `conclusion.recommended_symbols`).
+
+    Capped at `_PRIOR_DISCUSSIONS_CAP` and limited to the last
+    `_PRIOR_DISCUSSIONS_LOOKBACK_DAYS` days so a 2-year-old call is
+    not dragged into a fresh discussion's prompt.
+
+    The block is intentionally compact (no full conclusion reasoning,
+    no risks list) — personas only need the headline so they can
+    stay consistent. They can refer the user back to the prior
+    discussion id for full detail.
+    """
+    if not focus_symbols:
+        return []
+
+    cutoff = datetime.now(UTC) - timedelta(days=_PRIOR_DISCUSSIONS_LOOKBACK_DAYS)
+    stmt = (
+        select(Discussion)
+        .where(
+            Discussion.owner_id == owner_id,
+            Discussion.status == STATUS_DONE,
+            Discussion.conclusion.isnot(None),
+            Discussion.created_at >= cutoff,
+        )
+        .order_by(Discussion.created_at.desc())
+        .limit(50)  # generous cap for the in-Python filter
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(Discussion.id != exclude_id)
+    rows = list((await db.scalars(stmt)).all())
+    if not rows:
+        return []
+
+    focus_set = {str(s) for s in focus_symbols}
+    matches: list[dict[str, Any]] = []
+    for row in rows:
+        topic = row.topic or ""
+        conclusion = row.conclusion if isinstance(row.conclusion, dict) else {}
+        recommended = [
+            str(s).strip()
+            for s in (conclusion.get("recommended_symbols") or [])
+            if str(s).strip()
+        ]
+        # Match either: focus symbol literally appears in the topic
+        # string (catches the `2330` / `$AAPL` case the user typed),
+        # or appears in the prior conclusion's recommended_symbols.
+        matched = sorted({
+            sym for sym in focus_set
+            if sym in topic or sym in recommended
+        })
+        if not matched:
+            continue
+        matches.append({
+            "id":                  str(row.id),
+            "created_at":          row.created_at.isoformat(),
+            "topic":               topic[:120],
+            "recommended_symbols": recommended[:5],
+            "time_horizon":        conclusion.get("time_horizon"),
+            "consensus_score":     conclusion.get("consensus_score"),
+            "verdict":             row.verdict,
+            "matched_symbols":     matched,
+        })
+        if len(matches) >= _PRIOR_DISCUSSIONS_CAP:
+            break
+    return matches
+
+
 async def gather_market_context(
     db: AsyncSession,
     *,
@@ -1234,6 +1332,7 @@ async def gather_market_context(
     top_n: int = _DEFAULT_TOP_MOVERS,
     focus_symbols: list[str] | None = None,
     owner_id: uuid.UUID | None = None,
+    exclude_discussion_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Build a structured snapshot of the market state for the personas.
 
@@ -1281,6 +1380,13 @@ async def gather_market_context(
         # round_context snapshot replay (the snapshot itself stays
         # owner-scoped via discussion FK).
         "user_context": None,
+        # Owner's past concluded discussions whose topic /
+        # recommended_symbols overlap the current focus_symbols.
+        # Populated only when both `owner_id` AND `focus_symbols`
+        # are supplied. Empty list when there's no prior history
+        # — most users only have a handful of discussions, so the
+        # 90-day lookback rarely triggers.
+        "prior_discussions": [],
         # International / cross-market news (Fed, FOMC, US markets,
         # global macro) translated into Chinese — populated by the
         # `ingest_news_international` cron writing rows under
@@ -1523,6 +1629,17 @@ async def gather_market_context(
         except Exception as exc:
             _record_error("user_context", exc)
 
+        if focus_symbols:
+            try:
+                ctx["prior_discussions"] = await _assemble_prior_discussions(
+                    db,
+                    owner_id=owner_id,
+                    focus_symbols=focus_symbols,
+                    exclude_id=exclude_discussion_id,
+                )
+            except Exception as exc:
+                _record_error("prior_discussions", exc)
+
     return ctx
 
 
@@ -1637,6 +1754,11 @@ _CONTEXT_SCHEMA_ANNOTATION = (
     "**只在你的角色與部位配置 / 風險管理相關時引用**（portfolio_advisor / "
     "risk_manager / 在被問加碼減碼時的 buffett / lynch 等）；其他情境忽略。"
     "**禁止在結論中揭露具體股數或成本價**——僅用於決策邏輯。\n"
+    "- prior_discussions：**本人過去 90 天對主題提及之標的所做的結論**，含日期 / "
+    "topic 摘要 / `recommended_symbols` / `time_horizon` / `consensus_score` / "
+    "`verdict`（win / loss / unverifiable / null）。**用以保持跨討論一致性**——"
+    "若上次對 2330 結論 Hold 而本次卻要 Buy，必須在 content 中明確說明改變理由"
+    "（例如「上週起殖利率下行 +30bp，重新評估」），不可默默翻盤。\n"
     "- errors：本次抓取的連接器錯誤清單；非空時務必聲明資料不完整。"
 )
 
@@ -2010,6 +2132,12 @@ def _build_persona_tool_kwargs(
 
 _ALWAYS_INCLUDED_BLOCKS: frozenset[str] = frozenset({
     "market", "captured_at", "errors",
+    # `prior_discussions` is meta-context — past consensus on the
+    # same symbols matters to every archetype (a value persona
+    # should know we said Hold last week; a quant persona should
+    # see when their last momentum call was wrong). Cheap because
+    # it's per-symbol-overlap-only.
+    "prior_discussions",
 })
 
 # Full block set — used as the fall-through profile and the union the
@@ -2021,7 +2149,7 @@ _ALL_PERSONA_BLOCKS: frozenset[str] = frozenset({
     "top_foreign_buyers", "margin_balance_trend", "top_revenue_growers",
     "active_buybacks", "govt_bank_flow_5d", "risk_warnings",
     "market_institutional_5d",
-    "focus_briefs", "macro", "user_context",
+    "focus_briefs", "macro", "user_context", "prior_discussions",
 })
 
 # Five archetypes cover the 19 personas without enumerating each one.
@@ -2257,6 +2385,7 @@ async def run_round(
             market=discussion.market,
             focus_symbols=focus,
             owner_id=discussion.owner_id,
+            exclude_discussion_id=discussion.id,
         )
         # Snapshot the assembled context so re-opening the discussion
         # later can show "what data the personas saw at the time".
@@ -2649,6 +2778,7 @@ async def synthesize_conclusion(
             market=discussion.market,
             focus_symbols=focus,
             owner_id=discussion.owner_id,
+            exclude_discussion_id=discussion.id,
         )
 
     user_prompt = _SYNTHESIZER_USER_TEMPLATE.format(

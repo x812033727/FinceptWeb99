@@ -145,6 +145,7 @@ def _to_response(d: Discussion) -> DiscussionResponse:
         day1_open_prices=d.day1_open_prices,
         day5_close_prices=d.day5_close_prices,
         daily_close_prices=d.daily_close_prices,
+        as_of_date=d.as_of_date.isoformat() if d.as_of_date else None,
         created_at=d.created_at,
         updated_at=d.updated_at,
     )
@@ -170,6 +171,16 @@ async def create_session(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    as_of_parsed = None
+    if body.as_of_date:
+        try:
+            from datetime import date as _date
+            as_of_parsed = _date.fromisoformat(body.as_of_date)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"as_of_date must be ISO YYYY-MM-DD; got {body.as_of_date!r}",
+            )
     try:
         row = await discussion_service.create_discussion(
             db,
@@ -178,6 +189,7 @@ async def create_session(
             rules=body.rules,
             persona_ids=body.persona_ids,
             market=body.market,
+            as_of_date=as_of_parsed,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

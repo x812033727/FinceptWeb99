@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import select, update
 
@@ -177,7 +177,14 @@ async def _verify_one(db, d: Discussion) -> bool:
 
     day1_opens: dict[str, float] = dict(d.day1_open_prices or {})
     day5_closes: dict[str, float] = dict(d.day5_close_prices or {})
-    created_tw = to_tw_date(d.created_at)
+    # Backtest mode (PR #224): the post-window starts at `as_of_date`
+    # instead of `created_at.date()`. A discussion built today that
+    # backtests `as_of='2025-01-15'` is verified against bars from
+    # 2025-01-16 onward, not from 2026-05-02.
+    if d.as_of_date is not None:
+        anchor_tw = d.as_of_date
+    else:
+        anchor_tw = to_tw_date(d.created_at)
 
     win_symbol: str | None = None
     win_gain: float | None = None
@@ -186,11 +193,25 @@ async def _verify_one(db, d: Discussion) -> bool:
     resolved_any = False
 
     for sym in symbols:
-        bars = await tw_market_service.get_history(sym, months=1)
+        if d.as_of_date is not None:
+            # Backtest: bars in [as_of, as_of + 14 days] cover the
+            # 5-trading-day window plus weekends / holidays. Read
+            # the archive directly so we don't pull a live snapshot
+            # that would miss historical dates.
+            from services.ingest.repository import read_ohlcv_range_autosession
+            bars = await read_ohlcv_range_autosession(
+                "TW", sym,
+                d.as_of_date,
+                d.as_of_date + timedelta(days=14),
+            )
+        else:
+            bars = await tw_market_service.get_history(sym, months=1)
         # Bars are returned with `time` either as ISO date ("YYYY-MM-DD")
         # or full ISO timestamp. Truncate to date for comparison.
+        # `>= anchor_tw` covers backtest (anchor=as_of_date) and
+        # live (anchor=created_at.date()) uniformly.
         future_bars = sorted(
-            (b for b in bars if _bar_date(b) >= created_tw),
+            (b for b in bars if _bar_date(b) >= anchor_tw),
             key=lambda b: b.get("time", ""),
         )
         window = future_bars[:_WINDOW_TRADING_DAYS]

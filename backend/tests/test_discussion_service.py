@@ -1825,6 +1825,87 @@ async def test_create_discussion_defaults_to_tw(
 
 
 @pytest.mark.asyncio
+async def test_create_discussion_accepts_as_of_date(
+    db_session: AsyncSession, owner: User,
+):
+    """PR #224: as_of_date stored on the row enables backtest mode."""
+    from datetime import date as _date
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="2330 backtest",
+        rules="r",
+        persona_ids=["buffett", "lynch"],
+        as_of_date=_date(2025, 1, 15),
+    )
+    assert row.as_of_date == _date(2025, 1, 15)
+
+
+@pytest.mark.asyncio
+async def test_create_discussion_rejects_future_as_of_date(
+    db_session: AsyncSession, owner: User,
+):
+    """Future as_of has no historical data to filter on AND the
+    verifier's 'next 5 trading days' window doesn't exist yet —
+    reject with a clear ValueError."""
+    from datetime import UTC as _UTC, datetime as _dt, timedelta as _td
+    future = (_dt.now(_UTC) + _td(days=10)).date()
+    with pytest.raises(ValueError, match="future"):
+        await discussion_service.create_discussion(
+            db_session,
+            owner_id=owner.id,
+            topic="bad", rules="r",
+            persona_ids=["buffett", "lynch"],
+            as_of_date=future,
+        )
+
+
+@pytest.mark.asyncio
+async def test_synthesize_conclusion_anchors_verify_after_to_as_of_date(
+    db_session: AsyncSession, owner: User,
+):
+    """Backtest mode: verify_after_date should be 5 trading days
+    after `as_of_date`, not 5 trading days after today. So an
+    as_of=2025-01-15 backtest run today produces a row the
+    verifier picks up immediately (window already in the past)."""
+    from datetime import date as _date
+
+    row = await discussion_service.create_discussion(
+        db_session, owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+        as_of_date=_date(2025, 1, 15),
+    )
+    db_session.add(DiscussionTurn(
+        discussion_id=row.id, round=1, turn_index=0,
+        persona_id="buffett", stance="supplement", content="ok",
+    ))
+    await db_session.commit()
+
+    raw = (
+        '{"recommended_symbols": ["2330"], "reasoning": "ok", '
+        '"risks": [], "time_horizon": "short_term", '
+        '"consensus_score": 0.5}'
+    )
+    with patch(
+        "services.discussion_service.stream_chat",
+        side_effect=_stream_events(raw),
+    ), patch(
+        "services.discussion_service.gather_market_context",
+        new=AsyncMock(return_value={"market": "TW"}),
+    ):
+        await discussion_service.synthesize_conclusion(
+            db_session, row, user_id=str(owner.id),
+        )
+    refreshed = await db_session.get(Discussion, row.id)
+    # Roughly 7 days (5 trading days) after as_of=2025-01-15.
+    from datetime import timedelta as _td
+    expected_lo = _date(2025, 1, 15) + _td(days=5)
+    expected_hi = _date(2025, 1, 15) + _td(days=14)
+    assert expected_lo <= refreshed.verify_after_date <= expected_hi
+
+
+@pytest.mark.asyncio
 async def test_update_discussion_changes_market_in_draft(
     db_session: AsyncSession, owner: User,
 ):
@@ -2973,7 +3054,7 @@ async def test_assemble_focus_briefs_fan_out_collects_per_symbol():
     """Each symbol gets its own brief built concurrently, returned in
     the input order. A coroutine that raises is logged + skipped, not
     propagated, so a single bad symbol doesn't kill the round."""
-    async def fake_brief(sym: str) -> dict:
+    async def fake_brief(sym: str, *, as_of=None) -> dict:
         if sym == "BAD":
             raise RuntimeError("upstream blew up")
         return {"symbol": sym, "quote": {"price": 100.0}}

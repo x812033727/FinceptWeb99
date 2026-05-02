@@ -76,6 +76,11 @@ export default function DiscussionPage() {
   }
   const [personaIds, setPersonaIds] = useState<string[]>(DEFAULT_PERSONAS);
   const [market, setMarket] = useState<DiscussionMarket>("TW");
+  // Backtest anchor (PR #224). Empty string = live mode. ISO date
+  // ("2025-01-15") = "pretend it's that date" — backend fetches
+  // historical-only ctx + verifier grades against next 5 trading
+  // days from this anchor.
+  const [asOfDate, setAsOfDate] = useState<string>("");
 
   // Streaming round state — appended to as the SSE arrives.
   const [streamingTurns, setStreamingTurns] = useState<Turn[]>([]);
@@ -139,6 +144,7 @@ export default function DiscussionPage() {
     setRules(detail.rules);
     setPersonaIds(detail.persona_ids);
     setMarket(detail.market ?? "TW");
+    setAsOfDate(detail.as_of_date ?? "");
   }, [detail]);
 
   useEffect(() => {
@@ -227,7 +233,10 @@ export default function DiscussionPage() {
       return;
     }
     setStreamError(null);
-    createMut.mutate({ topic, rules, persona_ids: personaIds, market });
+    createMut.mutate({
+      topic, rules, persona_ids: personaIds, market,
+      as_of_date: asOfDate || undefined,
+    });
   }
 
   function saveEdits() {
@@ -681,7 +690,7 @@ export default function DiscussionPage() {
             )}
           </div>
 
-          <div className="flex items-center gap-2 text-xs">
+          <div className="flex items-center gap-2 text-xs flex-wrap">
             <span className="text-muted-foreground">{t("discussion.market_label")}</span>
             <select
               value={market}
@@ -693,6 +702,23 @@ export default function DiscussionPage() {
               <option value="US">US</option>
               <option value="GLOBAL">GLOBAL</option>
             </select>
+            <span className="text-muted-foreground ml-2">
+              {t("discussion.as_of_label")}
+            </span>
+            <input
+              type="date"
+              value={asOfDate}
+              onChange={(e) => setAsOfDate(e.target.value)}
+              disabled={!!selectedId || isStreaming}
+              max={new Date().toISOString().slice(0, 10)}
+              placeholder={t("discussion.as_of_placeholder")}
+              className="bg-card border border-border rounded px-2 py-1 text-foreground focus:outline-none focus:border-primary/50 disabled:opacity-60"
+            />
+            {asOfDate && (
+              <span className="px-1.5 py-0.5 rounded text-[10px] border border-amber-800/50 bg-amber-900/20 text-amber-300">
+                {t("discussion.backtest_badge")}
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">

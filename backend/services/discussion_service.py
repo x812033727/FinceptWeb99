@@ -46,7 +46,7 @@ import re
 import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import delete, select, update
@@ -287,11 +287,22 @@ async def create_discussion(
     rules: str,
     persona_ids: list[str],
     market: str | None = None,
+    as_of_date: date | None = None,
 ) -> Discussion:
     topic = _validate_text(topic, field="topic", max_chars=_MAX_TOPIC_CHARS)
     rules = _validate_text(rules, field="rules", max_chars=_MAX_RULES_CHARS)
     pids = _normalize_persona_ids(persona_ids)
     market = _normalize_market(market)
+    if as_of_date is not None:
+        # Reject future dates: there's no historical data to filter
+        # to, and the verifier's "next 5 trading days" window won't
+        # exist yet. Today is allowed (degenerate live mode).
+        from datetime import date as _date_today
+        if as_of_date > _date_today.today():
+            raise ValueError(
+                "as_of_date cannot be in the future "
+                f"(got {as_of_date.isoformat()})",
+            )
 
     row = Discussion(
         owner_id=owner_id,
@@ -301,6 +312,7 @@ async def create_discussion(
         market=market,
         status=STATUS_DRAFT,
         current_round=0,
+        as_of_date=as_of_date,
     )
     db.add(row)
     await db.commit()
@@ -896,7 +908,9 @@ async def _get_tw_peers(
     return out
 
 
-async def _build_tw_focus_brief(symbol: str) -> dict[str, Any]:
+async def _build_tw_focus_brief(
+    symbol: str, *, as_of: date | None = None,
+) -> dict[str, Any]:
     """Per-TW-symbol mini analyst report. Each sub-call is wrapped in
     its own try so a single connector outage doesn't blank the whole
     brief — the persona just sees "fundamentals: null" and reasons
@@ -909,7 +923,14 @@ async def _build_tw_focus_brief(symbol: str) -> dict[str, Any]:
     concurrency contract is unambiguous: this builder is safe to
     fan out alongside the parallel `gather_market_context` tasks
     that DO touch the shared `db`.
+
+    `as_of` (PR #224): backtest mode. When set, routes to
+    `_build_tw_focus_brief_backtest` which reads only from
+    `ohlcv_daily` with `ts <= as_of`. Live-only blocks
+    (fundamentals / revenue / chip / peers) are skipped in v1.
     """
+    if as_of is not None:
+        return await _build_tw_focus_brief_backtest(symbol, as_of=as_of)
     from services import tw_market_service
 
     brief: dict[str, Any] = {
@@ -1003,6 +1024,74 @@ async def _build_tw_focus_brief(symbol: str) -> dict[str, Any]:
     return brief
 
 
+async def _build_tw_focus_brief_backtest(
+    symbol: str, *, as_of: date,
+) -> dict[str, Any]:
+    """Backtest variant of `_build_tw_focus_brief` (PR #224).
+
+    Reads ONLY from `ohlcv_daily` with `ts <= as_of` so no live data
+    leaks back from the future. The synthetic `quote` block carries
+    the close on `as_of` (or the most recent bar before it) plus the
+    1-day change vs the prior bar. Technicals (MA / 52w / RSI / perf
+    %) are computed from the as_of-truncated history.
+
+    Skipped in v1: fundamentals, revenue trend, chip metrics, peers.
+    Those readers either don't have an `as_of`-aware path yet or
+    require live screener data that can't be reconstructed from the
+    DB. They show as null in the brief; personas read them as "data
+    not available in backtest mode" — better than fabricating values
+    that never existed on `as_of`.
+    """
+    from services import tw_market_service
+    from services.ingest.repository import read_ohlcv_range_autosession
+
+    brief: dict[str, Any] = {
+        "symbol":         symbol,
+        "name_zh":        tw_market_service.get_company_name(symbol),
+        "industry":       tw_market_service.get_industry(symbol),
+        "quote":          None,
+        "technicals":     None,
+        "fundamentals":   None,
+        "revenue_trend":  [],
+        "chip_5d":        None,
+        "margin_latest":  None,
+        "peers":          [],
+        "_backtest":      True,   # marker the prompt template can show
+        "_as_of":         as_of.isoformat(),
+    }
+
+    try:
+        # ~12 months of bars ending at as_of so 52w / MA120 have
+        # enough lookback. Slight overshoot fine — `_compute_technicals`
+        # is a pure function over closes.
+        start = as_of - timedelta(days=400)
+        bars = await read_ohlcv_range_autosession("TW", symbol, start, as_of)
+    except Exception as exc:
+        log.warning("focus_brief.backtest.history.failed",
+                    extra={"symbol": symbol, "as_of": as_of.isoformat(), "error": str(exc)})
+        bars = []
+
+    if bars:
+        brief["technicals"] = _compute_technicals(bars)
+        # Synthetic quote: last close as price; change_pct vs prior bar.
+        last = bars[-1]
+        prev = bars[-2] if len(bars) >= 2 else None
+        last_close = _bar_close(last)
+        prev_close = _bar_close(prev) if prev else None
+        change_pct = (
+            ((last_close - prev_close) / prev_close * 100.0)
+            if last_close is not None and prev_close not in (None, 0)
+            else None
+        )
+        brief["quote"] = {
+            "price":      last_close,
+            "change_pct": round(change_pct, 2) if change_pct is not None else None,
+            "volume":     int(last.get("volume") or 0),
+            "prev_close": prev_close,
+        }
+    return brief
+
+
 async def _build_us_focus_brief(symbol: str) -> dict[str, Any]:
     """US-side equivalent — quote + technicals + fundamentals only.
     No revenue / chip / peers because the underlying data tier
@@ -1057,7 +1146,7 @@ async def _build_us_focus_brief(symbol: str) -> dict[str, Any]:
 
 
 async def _assemble_focus_briefs(
-    *, market: str, symbols: list[str],
+    *, market: str, symbols: list[str], as_of: date | None = None,
 ) -> list[dict[str, Any]]:
     """Fan out per-symbol brief assembly concurrently. Cap at
     `_MAX_FOCUS_SYMBOLS` for token-budget protection.
@@ -1068,13 +1157,21 @@ async def _assemble_focus_briefs(
     the shared-`db` reads in `gather_market_context` (PR #222
     cleanup; the dead param was removed for a clearer concurrency
     contract).
+
+    `as_of` (PR #224): backtest mode. TW route uses the historical
+    `_build_tw_focus_brief_backtest` variant. US route currently
+    has no backtest variant — backtests on US discussions return
+    empty briefs in v1.
     """
     if not symbols:
         return []
     syms = symbols[:_MAX_FOCUS_SYMBOLS]
     if market == "TW":
-        coros = [_build_tw_focus_brief(s) for s in syms]
+        coros = [_build_tw_focus_brief(s, as_of=as_of) for s in syms]
     elif market == "US":
+        # No US backtest variant in v1 — degrade to empty briefs.
+        if as_of is not None:
+            return []
         coros = [_build_us_focus_brief(s) for s in syms]
     else:
         # GLOBAL — fall back to US shape for ASCII-letter symbols, TW
@@ -1086,10 +1183,11 @@ async def _assemble_focus_briefs(
         coros = []
         for s in syms:
             if s.isdigit():
-                coros.append(_build_tw_focus_brief(s))
+                coros.append(_build_tw_focus_brief(s, as_of=as_of))
             elif s in _crypto_universe():
                 continue
-            else:
+            elif as_of is None:
+                # US backtest currently unavailable — skip in v1.
                 coros.append(_build_us_focus_brief(s))
     if not coros:
         return []
@@ -1345,6 +1443,7 @@ async def _assemble_prior_discussions(
     owner_id: uuid.UUID,
     focus_symbols: list[str] | None,
     exclude_id: uuid.UUID | None = None,
+    as_of: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Most-recent-first list of the owner's concluded discussions
     that overlap any of `focus_symbols` (matched against the topic
@@ -1354,6 +1453,11 @@ async def _assemble_prior_discussions(
     `_PRIOR_DISCUSSIONS_LOOKBACK_DAYS` days so a 2-year-old call is
     not dragged into a fresh discussion's prompt.
 
+    `as_of` (PR #224) clamps the lookup window to discussions
+    concluded BEFORE that timestamp — backtest mode prevents
+    "future leakage" where a 2026-04-22 discussion would otherwise
+    surface in a 2026-01-15 backtest's prior list.
+
     The block is intentionally compact (no full conclusion reasoning,
     no risks list) — personas only need the headline so they can
     stay consistent. They can refer the user back to the prior
@@ -1362,7 +1466,8 @@ async def _assemble_prior_discussions(
     if not focus_symbols:
         return []
 
-    cutoff = datetime.now(UTC) - timedelta(days=_PRIOR_DISCUSSIONS_LOOKBACK_DAYS)
+    anchor = as_of or datetime.now(UTC)
+    cutoff = anchor - timedelta(days=_PRIOR_DISCUSSIONS_LOOKBACK_DAYS)
     stmt = (
         select(Discussion)
         .where(
@@ -1370,6 +1475,7 @@ async def _assemble_prior_discussions(
             Discussion.status == STATUS_DONE,
             Discussion.conclusion.isnot(None),
             Discussion.created_at >= cutoff,
+            Discussion.created_at < anchor,
         )
         .order_by(Discussion.created_at.desc())
         .limit(50)  # generous cap for the in-Python filter
@@ -1422,6 +1528,7 @@ async def gather_market_context(
     focus_symbols: list[str] | None = None,
     owner_id: uuid.UUID | None = None,
     exclude_discussion_id: uuid.UUID | None = None,
+    as_of: date | None = None,
 ) -> dict[str, Any]:
     """Build a structured snapshot of the market state for the personas.
 
@@ -1633,7 +1740,9 @@ async def gather_market_context(
             return
         try:
             ctx["focus_briefs"] = await _assemble_focus_briefs(
-                market=market, symbols=list(focus_symbols),
+                market=market,
+                symbols=list(focus_symbols),
+                as_of=as_of,
             )
         except Exception as exc:
             _record_error("focus_briefs", exc)
@@ -1751,6 +1860,14 @@ async def gather_market_context(
         except Exception as exc:
             _record_error("market_institutional_5d", exc)
 
+    # Backtest mode (PR #224): convert `as_of` (date) → datetime
+    # anchor at end-of-day so `published_at <= as_of_dt` covers
+    # everything posted on that day.
+    as_of_dt = (
+        datetime.combine(as_of, datetime.max.time(), tzinfo=UTC)
+        if as_of is not None else None
+    )
+
     try:
         from services.news_sentiment_service import read_recent_market_sentiment
         # `limit` controls the `headlines` sample; aggregate counts
@@ -1759,7 +1876,7 @@ async def gather_market_context(
         # decision for the headline slice — bump it up so personas see
         # 50 of the freshest titles instead of just 20.
         ctx["news_sentiment"] = await read_recent_market_sentiment(
-            db, market=market, limit=50, max_age_hours=48,
+            db, market=market, limit=50, max_age_hours=48, as_of=as_of_dt,
         )
     except Exception as exc:
         _record_error("news_sentiment", exc)
@@ -1772,7 +1889,7 @@ async def gather_market_context(
     try:
         from services.news_sentiment_service import read_recent_market_sentiment
         ctx["international_sentiment"] = await read_recent_market_sentiment(
-            db, market="GLOBAL", limit=50, max_age_hours=48,
+            db, market="GLOBAL", limit=50, max_age_hours=48, as_of=as_of_dt,
         )
     except Exception as exc:
         _record_error("international_sentiment", exc)
@@ -1786,7 +1903,8 @@ async def gather_market_context(
                 # mention every few days. Aggregate counts reflect the
                 # full 7-day population; `headlines` cap stays at 10.
                 rows = await read_symbol_sentiment(
-                    db, market=market, symbol=sym, limit=10, max_age_hours=168,
+                    db, market=market, symbol=sym,
+                    limit=10, max_age_hours=168, as_of=as_of_dt,
                 )
                 if rows:
                     ctx["per_symbol_news_sentiment"][sym] = rows
@@ -1810,6 +1928,7 @@ async def gather_market_context(
                     owner_id=owner_id,
                     focus_symbols=focus_symbols,
                     exclude_id=exclude_discussion_id,
+                    as_of=as_of_dt,
                 )
             except Exception as exc:
                 _record_error("prior_discussions", exc)
@@ -2637,6 +2756,7 @@ async def run_round(
             focus_symbols=focus,
             owner_id=discussion.owner_id,
             exclude_discussion_id=discussion.id,
+            as_of=discussion.as_of_date,
         )
         # Snapshot the assembled context so re-opening the discussion
         # later can show "what data the personas saw at the time".
@@ -3039,6 +3159,7 @@ async def synthesize_conclusion(
             focus_symbols=focus,
             owner_id=discussion.owner_id,
             exclude_discussion_id=discussion.id,
+            as_of=discussion.as_of_date,
         )
 
     user_prompt = _SYNTHESIZER_USER_TEMPLATE.format(
@@ -3121,9 +3242,12 @@ async def synthesize_conclusion(
         )
         # 5 trading days matches the verifier's `_WINDOW_TRADING_DAYS`
         # — anything sooner and the bars haven't all resolved yet.
-        discussion.verify_after_date = add_trading_days_estimate(
-            utcnow_tw_date(), 5,
-        )
+        # In backtest mode (PR #224), anchor on `as_of_date` instead
+        # of today so the post-window is the historical 5 trading
+        # days after the backtest anchor — verifier picks the row
+        # up immediately if as_of + 5d is already in the past.
+        anchor = discussion.as_of_date or utcnow_tw_date()
+        discussion.verify_after_date = add_trading_days_estimate(anchor, 5)
     await db.commit()
     await db.refresh(discussion)
     return conclusion

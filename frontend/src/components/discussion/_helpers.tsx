@@ -144,6 +144,9 @@ export async function createSession(body: {
   rules: string;
   persona_ids: string[];
   market?: string;
+  /** Backtest anchor (PR #224). ISO date string ("2025-01-15") or
+   * undefined for live mode. */
+  as_of_date?: string;
 }): Promise<Discussion> {
   const res = await api.post<Discussion>("/discussion/sessions", body);
   return res.data;

@@ -66,6 +66,11 @@ export interface Discussion {
    * sidebar title's close slot so partial-window discussions
    * (D1-D2 only) update immediately instead of waiting for D5. */
   daily_close_prices?: Record<string, (number | null)[]> | null;
+  /** Backtest anchor (PR #224). Non-null = "pretend it's that date":
+   * ctx fetches filtered to data on/before this; verifier grades
+   * against as_of + 5 trading days instead of created_at + 5. UI
+   * surfaces as a `回測` badge. */
+  as_of_date?: string | null;
   created_at: string;
   updated_at: string;
 }

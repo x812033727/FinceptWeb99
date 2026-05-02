@@ -114,6 +114,13 @@ class Discussion(Base):
     verify_after_date: Mapped[date | None] = mapped_column(
         Date, nullable=True,
     )
+    # Backtest anchor (PR #224, migration 0033). NULL = live mode.
+    # Non-null = "pretend it's that date" — every ctx fetch filters
+    # to data with ts/published_at <= as_of_date, and the verifier
+    # uses as_of_date + 5 trading days as the post-window.
+    as_of_date: Mapped[date | None] = mapped_column(
+        Date, nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
     )

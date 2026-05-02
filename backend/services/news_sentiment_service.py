@@ -361,6 +361,7 @@ async def read_recent_market_sentiment(
     market: str = "TW",
     limit: int = 50,
     max_age_hours: int = 48,
+    as_of: datetime | None = None,
 ) -> dict:
     """Aggregate sentiment-scored news for the discussion orchestrator
     to inject as context.
@@ -395,10 +396,15 @@ async def read_recent_market_sentiment(
                          "published_at"}],   # capped at `limit`
         }
     """
-    cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
+    # Backtest mode (PR #224): when `as_of` is set, anchor the
+    # window to that timestamp so news from after `as_of` doesn't
+    # leak in. Live mode keeps `now()` as the anchor.
+    anchor = as_of or datetime.now(UTC)
+    cutoff = anchor - timedelta(hours=max_age_hours)
     base_filter = (
         NewsArticle.market == market,
         NewsArticle.published_at >= cutoff,
+        NewsArticle.published_at <= anchor,
         NewsArticle.sentiment_score.isnot(None),
     )
 
@@ -463,6 +469,7 @@ async def read_symbol_sentiment(
     symbol: str,
     limit: int = 10,
     max_age_hours: int = 168,
+    as_of: datetime | None = None,
 ) -> dict | None:
     """Aggregate sentiment-scored news for a specific symbol over the last
     `max_age_hours`. Returns None if no scored articles exist for the
@@ -482,11 +489,15 @@ async def read_symbol_sentiment(
     looks like "10 articles, 7 bullish" just because the headlines
     cap stops at 10.
     """
-    cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
+    # Backtest mode (PR #224): same anchor pattern as the
+    # market-wide reader.
+    anchor = as_of or datetime.now(UTC)
+    cutoff = anchor - timedelta(hours=max_age_hours)
     base_filter = (
         NewsArticle.market == market,
         NewsArticle.symbol == symbol,
         NewsArticle.published_at >= cutoff,
+        NewsArticle.published_at <= anchor,
         NewsArticle.sentiment_score.isnot(None),
     )
 

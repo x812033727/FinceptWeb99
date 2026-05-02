@@ -23,6 +23,11 @@ class CreateDiscussionRequest(BaseModel):
     # against `_VALID_MARKETS` happens in the service layer so the
     # allowed-set lives in one place.
     market: str | None = Field(default=None, max_length=8)
+    # Backtest anchor (PR #224). NULL/missing = live mode (default).
+    # ISO date string ("2025-01-15") = "pretend it's that date" —
+    # ctx fetches filter to data on/before that date and verifier
+    # grades against the next 5 trading days.
+    as_of_date: str | None = Field(default=None, max_length=10)
 
 
 class UpdateDiscussionRequest(BaseModel):
@@ -71,6 +76,9 @@ class DiscussionResponse(BaseModel):
     # non-null close even before D5 lands, instead of showing `—/—`
     # until the full window completes.
     daily_close_prices: dict[str, list[float | None]] | None = None
+    # Backtest anchor (PR #224). Non-null = backtest mode; UI shows
+    # a "回測" badge and the as_of date next to the topic.
+    as_of_date: str | None = None
     created_at: datetime
     updated_at: datetime
 

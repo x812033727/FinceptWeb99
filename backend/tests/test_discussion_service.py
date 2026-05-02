@@ -640,6 +640,54 @@ async def test_synthesize_conclusion_coerces_shape(
 
 
 @pytest.mark.asyncio
+async def test_synthesize_conclusion_reuses_round_context_snapshot(
+    db_session: AsyncSession, owner: User,
+):
+    """When a round has already snapshotted its context to
+    `discussion_round_contexts`, the synthesizer must reuse that
+    captured payload instead of re-running `gather_market_context`
+    — otherwise post-close synthesises would silently drift from
+    the data the personas reasoned over."""
+    from models.discussion_round_context import DiscussionRoundContext
+
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="topic",
+        rules="rules",
+        persona_ids=["buffett", "lynch"],
+    )
+    db_session.add(DiscussionTurn(
+        discussion_id=row.id, round=1, turn_index=0,
+        persona_id="buffett", stance="supplement", content="x",
+    ))
+    db_session.add(DiscussionRoundContext(
+        discussion_id=row.id, round=1,
+        context={"market": "TW", "marker": "from-snapshot"},
+    ))
+    await db_session.commit()
+
+    raw = (
+        '{"recommended_symbols": ["2330"], "reasoning": "ok", '
+        '"risks": [], "time_horizon": "short_term", '
+        '"consensus_score": 0.5}'
+    )
+    gather_mock = AsyncMock(return_value={"market": "TW"})
+    with patch(
+        "services.discussion_service.stream_chat",
+        side_effect=_stream_events(raw),
+    ), patch(
+        "services.discussion_service.gather_market_context",
+        new=gather_mock,
+    ):
+        await discussion_service.synthesize_conclusion(
+            db_session, row, user_id=str(owner.id),
+        )
+    # Fresh fetch must NOT have been called when a snapshot existed.
+    gather_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_synthesize_conclusion_handles_malformed_output(
     db_session: AsyncSession, owner: User,
 ):
@@ -694,6 +742,113 @@ def test_extract_focus_symbols_dedupes_and_caps():
 
 def test_extract_focus_symbols_empty_when_none():
     assert discussion_service.extract_focus_symbols("純策略討論不提具體標的") == []
+
+
+def test_extract_focus_symbols_filters_year_like_tw():
+    """4-digit year tokens (1900-2099) must NOT be treated as TW codes;
+    `2026 Q1 預估` shouldn't pollute per-symbol news lookups."""
+    out = discussion_service.extract_focus_symbols(
+        "2026 Q1 與 2030 展望，主軸在 2330", market="TW",
+    )
+    assert "2330" in out
+    assert "2026" not in out
+    assert "2030" not in out
+
+
+def test_extract_focus_symbols_us_market_uses_uppercase_tickers():
+    out = discussion_service.extract_focus_symbols(
+        "Should I rotate from NVDA into AMD given USD weakness?",
+        market="US",
+    )
+    assert "NVDA" in out
+    assert "AMD" in out
+    # Stopword guard — bare uppercase 'USD' must not count.
+    assert "USD" not in out
+
+
+def test_extract_focus_symbols_cashtag_works_in_any_market():
+    out = discussion_service.extract_focus_symbols(
+        "$AAPL beats $MSFT this week — same window 2330 也漲", market="TW",
+    )
+    # Cashtags first, then TW codes after.
+    assert out[:2] == ["AAPL", "MSFT"]
+    assert "2330" in out
+
+
+def test_extract_focus_symbols_global_picks_crypto_universe_only():
+    out = discussion_service.extract_focus_symbols(
+        "BTC + ETH + SOL leading the rally; AAA random ticker noise",
+        market="GLOBAL",
+    )
+    assert "BTC" in out and "ETH" in out and "SOL" in out
+    # `AAA` not in the curated Top-20 universe — must NOT be picked up.
+    assert "AAA" not in out
+
+
+# ── _normalize_market ─────────────────────────────────────────────
+
+
+def test_normalize_market_defaults_when_blank():
+    assert discussion_service._normalize_market(None) == "TW"
+    assert discussion_service._normalize_market("") == "TW"
+
+
+def test_normalize_market_uppercases():
+    assert discussion_service._normalize_market("us") == "US"
+    assert discussion_service._normalize_market("global") == "GLOBAL"
+
+
+def test_normalize_market_rejects_unknown():
+    with pytest.raises(ValueError):
+        discussion_service._normalize_market("JP")
+
+
+# ── create + update wires market through ─────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_create_discussion_persists_market(
+    db_session: AsyncSession, owner: User,
+):
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="NVDA earnings preview",
+        rules="≤200 字",
+        persona_ids=["buffett", "lynch"],
+        market="us",
+    )
+    assert row.market == "US"
+
+
+@pytest.mark.asyncio
+async def test_create_discussion_defaults_to_tw(
+    db_session: AsyncSession, owner: User,
+):
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="topic",
+        rules="rules",
+        persona_ids=["buffett", "lynch"],
+    )
+    assert row.market == "TW"
+
+
+@pytest.mark.asyncio
+async def test_update_discussion_changes_market_in_draft(
+    db_session: AsyncSession, owner: User,
+):
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+    await discussion_service.update_discussion(
+        db_session, row, market="GLOBAL",
+    )
+    assert row.market == "GLOBAL"
 
 
 def test_is_speculative_etf_flags_leveraged_inverse_futures_only():

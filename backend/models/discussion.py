@@ -58,6 +58,12 @@ class Discussion(Base):
     topic: Mapped[str] = mapped_column(Text, nullable=False)
     rules: Mapped[str] = mapped_column(Text, nullable=False)
     persona_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    # Which market the discussion is anchored to. Drives which blocks
+    # `gather_market_context` populates (TW chip metrics only fire for
+    # TW, etc.) and which symbol-extraction rules apply to the topic.
+    market: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="TW", server_default="TW",
+    )
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="draft", server_default="draft",
     )

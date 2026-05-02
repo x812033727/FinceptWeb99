@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { AgentInfo, AutoRunConfig } from "@/types/discussion";
+import type { AgentInfo, AutoRunConfig, DiscussionMarket } from "@/types/discussion";
 import { fetchAutoRunConfig, saveAutoRunConfig } from "./_helpers";
 
 // Sits at the top of the sidebar. Lets each user opt themselves into
@@ -30,6 +30,7 @@ export function AutoRunConfigCard({
   const [topic, setTopic] = useState("");
   const [rules, setRules] = useState("");
   const [personaIds, setPersonaIds] = useState<string[]>([]);
+  const [market, setMarket] = useState<DiscussionMarket>("TW");
   const [error, setError] = useState<string | null>(null);
   const [showSaved, setShowSaved] = useState(false);
 
@@ -44,6 +45,7 @@ export function AutoRunConfigCard({
     setTopic(cfg.topic);
     setRules(cfg.rules);
     setPersonaIds(cfg.persona_ids);
+    setMarket(cfg.market ?? "TW");
   }, [cfg]);
 
   const saveMut = useMutation({
@@ -86,6 +88,7 @@ export function AutoRunConfigCard({
       persona_ids: personaIds,
       topic: topic.trim(),
       rules: rules.trim(),
+      market,
     });
   }
 
@@ -133,6 +136,21 @@ export function AutoRunConfigCard({
                 />
                 <span>{t("discussion.auto_run_enabled")}</span>
               </label>
+
+              <div className="flex items-center gap-2 text-[11px]">
+                <span className="text-muted-foreground">
+                  {t("discussion.market_label")}
+                </span>
+                <select
+                  value={market}
+                  onChange={(e) => setMarket(e.target.value as DiscussionMarket)}
+                  className="bg-card border border-border rounded px-1.5 py-0.5 text-foreground focus:outline-none focus:border-primary/50"
+                >
+                  <option value="TW">TW</option>
+                  <option value="US">US</option>
+                  <option value="GLOBAL">GLOBAL</option>
+                </select>
+              </div>
 
               <div>
                 <label className="text-[11px] text-muted-foreground">

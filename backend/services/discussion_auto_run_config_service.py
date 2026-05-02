@@ -23,6 +23,7 @@ from models.discussion_auto_run_config import DiscussionAutoRunConfig
 from services.discussion_service import (
     _MAX_RULES_CHARS,
     _MAX_TOPIC_CHARS,
+    _normalize_market,
     _normalize_persona_ids,
     _validate_text,
 )
@@ -48,15 +49,18 @@ async def upsert_config(
     persona_ids: list[str],
     topic: str,
     rules: str,
+    market: str | None = None,
 ) -> DiscussionAutoRunConfig:
     """Insert or update a user's auto-run config.
 
     Raises ValueError on validation failure (persona count out of
-    bounds, unknown persona id, empty/oversized topic or rules).
+    bounds, unknown persona id, empty/oversized topic or rules,
+    unknown market).
     """
     pids = _normalize_persona_ids(persona_ids)
     topic = _validate_text(topic, field="topic", max_chars=_MAX_TOPIC_CHARS)
     rules = _validate_text(rules, field="rules", max_chars=_MAX_RULES_CHARS)
+    market = _normalize_market(market)
 
     row = await get_config(db, user_id=user_id)
     now = datetime.now(UTC)
@@ -67,6 +71,7 @@ async def upsert_config(
             persona_ids=pids,
             topic=topic,
             rules=rules,
+            market=market,
         )
         db.add(row)
     else:
@@ -74,6 +79,7 @@ async def upsert_config(
         row.persona_ids = pids
         row.topic = topic
         row.rules = rules
+        row.market = market
         row.updated_at = now
     await db.commit()
     await db.refresh(row)

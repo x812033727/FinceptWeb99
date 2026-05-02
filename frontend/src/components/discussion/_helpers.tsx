@@ -142,6 +142,7 @@ export async function createSession(body: {
   topic: string;
   rules: string;
   persona_ids: string[];
+  market?: string;
 }): Promise<Discussion> {
   const res = await api.post<Discussion>("/discussion/sessions", body);
   return res.data;
@@ -149,7 +150,12 @@ export async function createSession(body: {
 
 export async function updateSession(
   id: string,
-  body: { topic?: string; rules?: string; persona_ids?: string[] },
+  body: {
+    topic?: string;
+    rules?: string;
+    persona_ids?: string[];
+    market?: string;
+  },
 ): Promise<Discussion> {
   const res = await api.patch<Discussion>(`/discussion/sessions/${id}`, body);
   return res.data;
@@ -190,6 +196,7 @@ export async function saveAutoRunConfig(body: {
   persona_ids: string[];
   topic: string;
   rules: string;
+  market?: string;
 }): Promise<AutoRunConfig> {
   const res = await api.put<AutoRunConfig>("/discussion/auto-run/config", body);
   return res.data;

@@ -413,6 +413,7 @@
     "topic_label": "Topic",
     "rules_label": "Shared Rules",
     "personas_label": "Participants",
+    "market_label": "Market",
     "create": "Create Discussion",
     "save_edits": "Save Edits",
     "unsaved": "(unsaved)",

@@ -188,6 +188,7 @@ async def _run_for_user(
         topic=cfg.topic,
         rules=cfg.rules,
         persona_ids=list(cfg.persona_ids or []),
+        market=cfg.market,
     )
     # Flag this row as scheduler-produced so the verifier task picks
     # it up and the manual UI can render it differently if we ever

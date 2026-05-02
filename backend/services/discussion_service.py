@@ -65,12 +65,41 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# Recognises a 4-digit TW stock code as a standalone token. Used by
-# `gather_market_context` to optionally pull per-symbol news sentiment for
-# anything mentioned in the topic — discussion personas then see "this is
-# what 2330 specifically is being said about" instead of just market-wide
-# sentiment.
-_TW_SYMBOL_RE = re.compile(r"\b(\d{4,6})\b")
+# Symbol-extraction patterns for `extract_focus_symbols`. Each market
+# uses a different shape:
+#
+#   - TW: 4-6 digit numeric codes. Years like "2026" land in the same
+#     space as 2330 / 0050 / 00878, so the year filter below is the
+#     guard that keeps `read_symbol_sentiment` queries from polluting
+#     a US/global topic with TW lookups.
+#   - US: cashtag `$AAPL` always matches. Bare uppercase tickers
+#     (`AAPL`, `MSFT`) are only honoured when the discussion's market
+#     is US — otherwise common English words like "AND" / "FOR" /
+#     "USD" would be mistaken for tickers in TW topics.
+#   - GLOBAL / crypto: matched against the curated Top-20 universe in
+#     `data/crypto/symbols.py` so `BTC` triggers but `ETH-USD` doesn't.
+_TW_SYMBOL_RE = re.compile(r"(?<![\w])(\d{4,6})(?![\w])")
+_CASHTAG_RE = re.compile(r"\$([A-Z]{1,5})\b")
+_BARE_US_TICKER_RE = re.compile(r"\b([A-Z]{1,5})\b")
+# Year-like 4-digit numbers — keep generous; TW codes never overlap.
+_YEAR_MIN = 1900
+_YEAR_MAX = 2099
+# Common 1-5 letter uppercase tokens that look like US tickers but
+# aren't. Prevents `discussion_service` from sentimening "USD news".
+# Not exhaustive — the topic field is short, false positives are
+# cheap (worst case: an empty per-symbol news block), and adding new
+# entries here is a 1-line patch.
+_US_TICKER_STOPWORDS = frozenset({
+    "A", "AI", "AN", "ARE", "AS", "AT", "BE", "BY", "CAN", "CEO",
+    "CFO", "CTO", "DCF", "DXY", "EPS", "ETF", "EU", "FED", "FOMC",
+    "FOR", "FX", "GDP", "GET", "I", "IF", "IN", "IPO", "IS", "IT",
+    "M2", "NEW", "NO", "NOT", "OF", "ON", "OR", "PE", "ROE",
+    "SEC", "SP", "SPX", "TBD", "THE", "TO", "UK", "US", "USA", "USD",
+    "VAR", "VIX", "WTI", "YOU",
+})
+
+_VALID_MARKETS = ("TW", "US", "GLOBAL")
+_DEFAULT_MARKET = "TW"
 _MAX_FOCUS_SYMBOLS = 5
 
 # ── tuning knobs ────────────────────────────────────────────────────
@@ -224,6 +253,20 @@ def _validate_text(value: str, *, field: str, max_chars: int) -> str:
     return text
 
 
+def _normalize_market(value: str | None) -> str:
+    """Coerce + validate a market string. Falls back to `_DEFAULT_MARKET`
+    when None / empty so legacy clients that never sent the field keep
+    working. Unknown values raise ValueError."""
+    if value is None or not str(value).strip():
+        return _DEFAULT_MARKET
+    market = str(value).strip().upper()
+    if market not in _VALID_MARKETS:
+        raise ValueError(
+            f"market must be one of {_VALID_MARKETS}; got {market!r}",
+        )
+    return market
+
+
 # ── CRUD ────────────────────────────────────────────────────────────
 
 
@@ -234,16 +277,19 @@ async def create_discussion(
     topic: str,
     rules: str,
     persona_ids: list[str],
+    market: str | None = None,
 ) -> Discussion:
     topic = _validate_text(topic, field="topic", max_chars=_MAX_TOPIC_CHARS)
     rules = _validate_text(rules, field="rules", max_chars=_MAX_RULES_CHARS)
     pids = _normalize_persona_ids(persona_ids)
+    market = _normalize_market(market)
 
     row = Discussion(
         owner_id=owner_id,
         topic=topic,
         rules=rules,
         persona_ids=pids,
+        market=market,
         status=STATUS_DRAFT,
         current_round=0,
     )
@@ -341,9 +387,12 @@ async def update_discussion(
     topic: str | None = None,
     rules: str | None = None,
     persona_ids: list[str] | None = None,
+    market: str | None = None,
 ) -> Discussion:
     """Only allowed while status == draft. Once a round has run the
-    persona roster + rules are frozen so prior turns stay coherent."""
+    persona roster + rules + market are frozen so prior turns stay
+    coherent (a TW 籌碼 round followed by a US fundamentals round in
+    the same discussion would be incoherent)."""
     if discussion.status != STATUS_DRAFT:
         raise ValueError("Cannot edit a discussion that has already started")
     if topic is not None:
@@ -352,6 +401,8 @@ async def update_discussion(
         discussion.rules = _validate_text(rules, field="rules", max_chars=_MAX_RULES_CHARS)
     if persona_ids is not None:
         discussion.persona_ids = _normalize_persona_ids(persona_ids)
+    if market is not None:
+        discussion.market = _normalize_market(market)
     discussion.updated_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(discussion)
@@ -414,17 +465,82 @@ async def force_reset_status(
 # ── market context ──────────────────────────────────────────────────
 
 
-def extract_focus_symbols(text: str) -> list[str]:
-    """Pull TW stock codes (4-6 digit) out of free text. Deduped, capped
-    at `_MAX_FOCUS_SYMBOLS`. Used to enrich discussion context with
-    per-symbol news sentiment when the topic names specific stocks
-    ("找出 2330 / 2454 短線買點…")."""
+def _is_year_like(code: str) -> bool:
+    """4-digit numeric tokens in the year range — `2026 Q1 法說` would
+    otherwise be tagged as a TW stock code and pollute the per-symbol
+    sentiment lookup."""
+    if len(code) != 4 or not code.isdigit():
+        return False
+    return _YEAR_MIN <= int(code) <= _YEAR_MAX
+
+
+def _crypto_universe() -> list[str]:
+    """Top-20 crypto base assets, normalised to uppercase. Imported
+    lazily so a unit test that monkeypatches `data.crypto.symbols`
+    sees the patched value, and so the discussion service stays
+    decoupled from the crypto module loading at import time."""
+    try:
+        from data.crypto.symbols import TOP20
+    except Exception:
+        return []
+    return [str(s).upper() for s in TOP20 if s]
+
+
+def extract_focus_symbols(text: str, *, market: str = _DEFAULT_MARKET) -> list[str]:
+    """Pull stock / crypto codes out of free text. Deduped, capped at
+    `_MAX_FOCUS_SYMBOLS`, returned in encounter order.
+
+    Behaviour by market:
+      - TW: 4-6 digit numeric codes; 4-digit year-like values
+        (1900-2099) are filtered to avoid mis-tagging dates.
+      - US: cashtag `$AAPL` always honoured; bare uppercase 1-5 letter
+        tokens honoured if they aren't in `_US_TICKER_STOPWORDS`.
+      - GLOBAL: cashtags + crypto base assets from the curated Top-20
+        universe (BTC / ETH / SOL …). Year-filtered TW codes are also
+        honoured because the international news bucket sometimes
+        carries cross-listed TW ADRs (TSM / UMC).
+
+    Cashtag matches are honoured for every market — `$AAPL` in a TW
+    discussion still pulls AAPL into the per-symbol news bucket,
+    because the user's intent is explicit.
+    """
+    raw = text or ""
     seen: list[str] = []
-    for code in _TW_SYMBOL_RE.findall(text or ""):
+
+    def _push(code: str) -> bool:
         if code not in seen:
             seen.append(code)
-        if len(seen) >= _MAX_FOCUS_SYMBOLS:
-            break
+        return len(seen) >= _MAX_FOCUS_SYMBOLS
+
+    for tag in _CASHTAG_RE.findall(raw):
+        if _push(tag):
+            return seen
+
+    market = (market or _DEFAULT_MARKET).upper()
+    if market == "TW":
+        for code in _TW_SYMBOL_RE.findall(raw):
+            if _is_year_like(code):
+                continue
+            if _push(code):
+                break
+    elif market == "US":
+        for tok in _BARE_US_TICKER_RE.findall(raw):
+            if tok in _US_TICKER_STOPWORDS:
+                continue
+            if _push(tok):
+                break
+    else:  # GLOBAL — accept TW digits + crypto base assets
+        universe = set(_crypto_universe())
+        for tok in _BARE_US_TICKER_RE.findall(raw):
+            if tok not in universe:
+                continue
+            if _push(tok):
+                return seen
+        for code in _TW_SYMBOL_RE.findall(raw):
+            if _is_year_like(code):
+                continue
+            if _push(code):
+                break
     return seen
 
 
@@ -1080,8 +1196,12 @@ async def run_round(
     # permanently stuck in RUNNING and the router would reject every
     # subsequent /round call.
     try:
-        focus = extract_focus_symbols(discussion.topic)
-        context = await gather_market_context(db, focus_symbols=focus)
+        focus = extract_focus_symbols(
+            discussion.topic, market=discussion.market,
+        )
+        context = await gather_market_context(
+            db, market=discussion.market, focus_symbols=focus,
+        )
         # Snapshot the assembled context so re-opening the discussion
         # later can show "what data the personas saw at the time".
         # Failure to persist is non-fatal — we still want the round
@@ -1427,8 +1547,24 @@ async def synthesize_conclusion(
         provider = provider or r_provider
         model = model or r_model
     turns = await get_turns(db, discussion_id=discussion.id)
-    focus = extract_focus_symbols(discussion.topic)
-    context = await gather_market_context(db, focus_symbols=focus)
+    # Reuse the most recent round's context snapshot so the synthesiser
+    # reasons over the same evidence the personas saw, instead of
+    # pulling a fresh `gather_market_context` (which would silently
+    # drift if the round was run pre-close and the synthesise runs
+    # post-close, or if a connector started failing in between).
+    # Falls back to a fresh fetch only for legacy discussions whose
+    # rounds predate the round-context snapshot table — keeps old
+    # rows synthesisable without manual backfill.
+    snapshots = await get_round_contexts(db, discussion_id=discussion.id)
+    if snapshots:
+        context = snapshots[-1].context
+    else:
+        focus = extract_focus_symbols(
+            discussion.topic, market=discussion.market,
+        )
+        context = await gather_market_context(
+            db, market=discussion.market, focus_symbols=focus,
+        )
 
     user_prompt = _SYNTHESIZER_USER_TEMPLATE.format(
         topic=discussion.topic,

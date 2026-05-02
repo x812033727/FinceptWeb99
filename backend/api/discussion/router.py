@@ -133,6 +133,7 @@ def _to_response(d: Discussion) -> DiscussionResponse:
         topic=d.topic,
         rules=d.rules,
         persona_ids=list(d.persona_ids or []),
+        market=d.market,
         status=d.status,
         current_round=d.current_round,
         conclusion=d.conclusion,
@@ -175,6 +176,7 @@ async def create_session(
             topic=body.topic,
             rules=body.rules,
             persona_ids=body.persona_ids,
+            market=body.market,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -297,6 +299,7 @@ async def update_session(
             topic=body.topic,
             rules=body.rules,
             persona_ids=body.persona_ids,
+            market=body.market,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -479,6 +482,7 @@ async def get_auto_run_config(
             persona_ids=[],
             topic="",
             rules="",
+            market="TW",
             updated_at=None,
         )
     return AutoRunConfigResponse(
@@ -486,6 +490,7 @@ async def get_auto_run_config(
         persona_ids=list(row.persona_ids or []),
         topic=row.topic,
         rules=row.rules,
+        market=row.market,
         updated_at=row.updated_at,
     )
 
@@ -504,6 +509,7 @@ async def put_auto_run_config(
             persona_ids=body.persona_ids,
             topic=body.topic,
             rules=body.rules,
+            market=body.market,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -512,6 +518,7 @@ async def put_auto_run_config(
         persona_ids=list(row.persona_ids or []),
         topic=row.topic,
         rules=row.rules,
+        market=row.market,
         updated_at=row.updated_at,
     )
 

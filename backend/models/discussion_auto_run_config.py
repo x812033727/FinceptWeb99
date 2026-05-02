@@ -20,6 +20,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    String,
     Text,
     false,
     func,
@@ -42,6 +43,9 @@ class DiscussionAutoRunConfig(Base):
         Boolean, nullable=False, default=False, server_default=false(),
     )
     persona_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    market: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="TW", server_default="TW",
+    )
     topic: Mapped[str] = mapped_column(Text, nullable=False)
     rules: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

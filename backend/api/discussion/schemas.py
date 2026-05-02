@@ -17,12 +17,19 @@ class CreateDiscussionRequest(BaseModel):
     topic: str = Field(min_length=1, max_length=500)
     rules: str = Field(min_length=1, max_length=2000)
     persona_ids: list[str] = Field(min_length=2, max_length=8)
+    # Market the discussion is anchored to. Optional for backwards
+    # compat with clients that pre-date the field — `discussion_service`
+    # falls back to the default ('TW') when None / missing. Validation
+    # against `_VALID_MARKETS` happens in the service layer so the
+    # allowed-set lives in one place.
+    market: str | None = Field(default=None, max_length=8)
 
 
 class UpdateDiscussionRequest(BaseModel):
     topic: str | None = Field(default=None, min_length=1, max_length=500)
     rules: str | None = Field(default=None, min_length=1, max_length=2000)
     persona_ids: list[str] | None = Field(default=None, min_length=2, max_length=8)
+    market: str | None = Field(default=None, max_length=8)
 
 
 class TurnResponse(BaseModel):
@@ -41,6 +48,7 @@ class DiscussionResponse(BaseModel):
     topic: str
     rules: str
     persona_ids: list[str]
+    market: str
     status: str
     current_round: int
     conclusion: dict[str, Any] | None = None
@@ -81,6 +89,7 @@ class AutoRunConfigRequest(BaseModel):
     persona_ids: list[str] = Field(min_length=2, max_length=8)
     topic: str = Field(min_length=1, max_length=500)
     rules: str = Field(min_length=1, max_length=2000)
+    market: str | None = Field(default=None, max_length=8)
 
 
 class AutoRunConfigResponse(BaseModel):
@@ -88,6 +97,7 @@ class AutoRunConfigResponse(BaseModel):
     persona_ids: list[str]
     topic: str
     rules: str
+    market: str
     updated_at: datetime | None = None
 
 

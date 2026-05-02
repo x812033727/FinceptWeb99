@@ -6,6 +6,7 @@ import { useAuthStore } from "@/store/authStore";
 import type {
   Discussion,
   DiscussionDetail,
+  DiscussionMarket,
   Turn,
 } from "@/types/discussion";
 import { AutoRunConfigCard } from "@/components/discussion/AutoRunConfigCard";
@@ -73,6 +74,7 @@ export default function DiscussionPage() {
     setCollapse((prev) => ({ ...prev, [key]: !prev[key] }));
   }
   const [personaIds, setPersonaIds] = useState<string[]>(DEFAULT_PERSONAS);
+  const [market, setMarket] = useState<DiscussionMarket>("TW");
 
   // Streaming round state — appended to as the SSE arrives.
   const [streamingTurns, setStreamingTurns] = useState<Turn[]>([]);
@@ -117,6 +119,7 @@ export default function DiscussionPage() {
     setTopic(detail.topic);
     setRules(detail.rules);
     setPersonaIds(detail.persona_ids);
+    setMarket(detail.market ?? "TW");
   }, [detail]);
 
   useEffect(() => {
@@ -144,8 +147,12 @@ export default function DiscussionPage() {
   });
 
   const updateMut = useMutation({
-    mutationFn: (body: { topic?: string; rules?: string; persona_ids?: string[] }) =>
-      updateSession(selectedId!, body),
+    mutationFn: (body: {
+      topic?: string;
+      rules?: string;
+      persona_ids?: string[];
+      market?: DiscussionMarket;
+    }) => updateSession(selectedId!, body),
     onSuccess: (row) => {
       queryClient.invalidateQueries({ queryKey: ["discussion-sessions"] });
       queryClient.invalidateQueries({ queryKey: ["discussion-session", selectedId] });
@@ -189,12 +196,12 @@ export default function DiscussionPage() {
       return;
     }
     setStreamError(null);
-    createMut.mutate({ topic, rules, persona_ids: personaIds });
+    createMut.mutate({ topic, rules, persona_ids: personaIds, market });
   }
 
   function saveEdits() {
     if (!selectedId) return;
-    updateMut.mutate({ topic, rules, persona_ids: personaIds });
+    updateMut.mutate({ topic, rules, persona_ids: personaIds, market });
   }
 
   // Per-field saves so the user can commit just the topic edit without
@@ -601,6 +608,20 @@ export default function DiscussionPage() {
                 })}
               </div>
             )}
+          </div>
+
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-muted-foreground">{t("discussion.market_label")}</span>
+            <select
+              value={market}
+              onChange={(e) => setMarket(e.target.value as DiscussionMarket)}
+              disabled={!isDraft || isStreaming}
+              className="bg-card border border-border rounded px-2 py-1 text-foreground focus:outline-none focus:border-primary/50 disabled:opacity-60"
+            >
+              <option value="TW">TW</option>
+              <option value="US">US</option>
+              <option value="GLOBAL">GLOBAL</option>
+            </select>
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">

@@ -42,11 +42,14 @@ export type DiscussionStatus = "draft" | "running" | "done";
 
 export type Verdict = "win" | "loss" | "unverifiable";
 
+export type DiscussionMarket = "TW" | "US" | "GLOBAL";
+
 export interface Discussion {
   id: string;
   topic: string;
   rules: string;
   persona_ids: string[];
+  market: DiscussionMarket;
   status: DiscussionStatus;
   current_round: number;
   conclusion: Conclusion | null;
@@ -98,6 +101,7 @@ export interface AutoRunConfig {
   persona_ids: string[];
   topic: string;
   rules: string;
+  market: DiscussionMarket;
   updated_at: string | null;
 }
 

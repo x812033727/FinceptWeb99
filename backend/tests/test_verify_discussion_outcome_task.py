@@ -272,6 +272,48 @@ async def test_defers_when_no_bars_yet(
 
 
 @pytest.mark.asyncio
+async def test_unverifiable_after_stale_grace_with_no_bars(
+    patch_session, db_session: AsyncSession, owner: User,
+):
+    """PR #223 stale-grace: a row whose `verify_after_date` is more
+    than `_STALE_GRACE_DAYS` past (no bars ever resolved) gets
+    verdict='unverifiable' instead of deferring forever. Stops the
+    cron from burning OHLCV-fetch quota on permanently-stuck rows
+    (delisted symbols, malformed codes, persistent connector
+    outages)."""
+    from tasks import verify_discussion_outcome as vdo
+    today = datetime.now(UTC).date()
+
+    # `verify_after_offset` measured back from today. Set it to
+    # (-grace - 1) so today - verify_after_date = grace + 1 (just
+    # past the cap).
+    d = await _make_pending(
+        db_session, owner.id, symbols=["9999"],
+        verify_after_offset=-(vdo._STALE_GRACE_DAYS + 1),
+    )
+    patches = _stub_lock_helpers() + [
+        patch("services.tw_market_service.get_history",
+              AsyncMock(return_value=[])),
+    ]
+    _enter_all(patches)
+    try:
+        await vdo.run()
+    finally:
+        _exit_all(patches)
+
+    refreshed = await db_session.get(Discussion, d.id)
+    await db_session.refresh(refreshed)
+    assert refreshed.verdict == "unverifiable"
+    assert "no OHLCV" in (refreshed.verdict_reason or "")
+    # Sanity that the stale-grace was the trigger (not the no-symbols
+    # path which would also write 'unverifiable' but with a different
+    # reason).
+    assert "delisted" in (refreshed.verdict_reason or "")
+    # Day fields stay None — there were never any bars to capture.
+    _ = today  # keeps the import live for clarity; not asserted.
+
+
+@pytest.mark.asyncio
 async def test_defers_when_window_under_5_bars(
     patch_session, db_session: AsyncSession, owner: User,
 ):

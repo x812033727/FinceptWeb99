@@ -53,6 +53,14 @@ _LOCK_TTL = 10 * 60
 
 _WIN_THRESHOLD = 0.03
 _WINDOW_TRADING_DAYS = 5
+# Stale-grace cap (PR #223): if `today - verify_after_date` exceeds
+# this and we still can't resolve a single bar for any recommended
+# symbol, give up — verdict='unverifiable'. Without this the cron
+# burns OHLCV-fetch quota every day on permanently-stuck rows
+# (delisted symbol, malformed code, persistent connector failure).
+# 30 days = 6 trading weeks past the would-be resolve date — if the
+# data hasn't surfaced by then, it's not coming.
+_STALE_GRACE_DAYS = 30
 _TW_SYMBOL_RE = re.compile(r"^\d{4,6}$")
 
 
@@ -252,6 +260,39 @@ async def _verify_one(db, d: Discussion) -> bool:
             db, d,
             verdict="loss",
             reason=reason,
+            day1_opens=day1_opens,
+            day5_closes=day5_closes,
+        )
+        return True
+
+    # PR #223 stale-grace: if no symbol resolved AND we're more than
+    # `_STALE_GRACE_DAYS` past the original `verify_after_date`, give
+    # up and mark unverifiable. Otherwise daily cron retries forever
+    # on a permanently-stuck row (delisted code, malformed symbol,
+    # persistent connector outage). Day-1 opens may have been
+    # captured in a prior tick — pass them through so the verdict
+    # reason can hint at what we did manage to see.
+    today = datetime.now(UTC).date()
+    if d.verify_after_date is not None and (
+        (today - d.verify_after_date).days > _STALE_GRACE_DAYS
+    ):
+        log.info(
+            "verify_discussion_outcome.unverifiable_stale",
+            extra={
+                "id":              str(d.id),
+                "symbols":         symbols,
+                "verify_after":    d.verify_after_date.isoformat(),
+                "days_overdue":    (today - d.verify_after_date).days,
+            },
+        )
+        await _set_verdict(
+            db, d,
+            verdict="unverifiable",
+            reason=(
+                f"no OHLCV data for any of {symbols} after "
+                f"{(today - d.verify_after_date).days} days past "
+                f"verify_after_date — likely delisted / malformed symbol"
+            ),
             day1_opens=day1_opens,
             day5_closes=day5_closes,
         )

@@ -1760,6 +1760,101 @@ async def _resolve_persona_specs(
     return out
 
 
+# Provider names whose `_openai_compat_tool_loop` carries the same
+# OpenAI-style tools=[...] schema. Mirrors `_OPENAI_COMPAT_PROVIDERS`
+# in `api/ai_agents/router.py`; kept narrowly here so the discussion
+# service doesn't import the chat-router module (which pulls FastAPI
+# into the test path for free).
+_OPENAI_COMPAT_TOOL_PROVIDERS = ("minimax", "groq", "deepseek", "openrouter")
+
+
+def _build_persona_tool_kwargs(
+    *, provider: str, user_role: str | None, user_id: str | None,
+) -> dict[str, Any]:
+    """Return the tool-related kwargs to forward to `stream_chat` for
+    a single persona turn.
+
+    Mirrors the eligibility rules at `/api/ai/chat`:
+      - `claude_agent` provider: when the SDK is importable + the
+        owner has analyst / admin role, build the MCP toolset and
+        cap turns at `CLAUDE_AGENT_MAX_TURNS`.
+      - OpenAI-compat providers: when the owner has analyst / admin
+        role, build the OpenAI-compat toolset; viewers fall back to
+        plain chat (the `query_user_data` tool reads the caller's
+        own data, so handing it to a viewer would let an account
+        with low quota silently exfiltrate via tool calls).
+      - Any other provider, or any role/SDK gate failing: returns
+        an empty dict so the caller falls through to today's plain
+        streaming.
+
+    Errors building the toolset (SDK import failure, key fetcher
+    blowing up) are swallowed + logged so a single tool-config
+    issue never breaks the discussion round — the persona just
+    gets a tool-less turn and the rest of the round continues.
+    """
+    if not user_id:
+        return {}
+    role = (user_role or "").lower()
+    if role not in ("analyst", "admin"):
+        return {}
+
+    prov = (provider or "").lower()
+    if prov == "claude_agent":
+        if not settings.claude_agent_effective_enabled:
+            return {}
+        try:
+            from ai.tools import build_toolset, tool_names
+            return {
+                "mcp_server":    build_toolset(user_id),
+                "allowed_tools": tool_names(),
+                "max_turns":     settings.CLAUDE_AGENT_MAX_TURNS,
+            }
+        except Exception as exc:
+            log.warning(
+                "discussion.tools.claude_agent.build_failed",
+                extra={"user_id": user_id, "error": str(exc)},
+            )
+            return {}
+
+    if prov in _OPENAI_COMPAT_TOOL_PROVIDERS:
+        try:
+            from ai.tools.openai_compat import build_openai_compat_toolset
+            schemas, dispatch = build_openai_compat_toolset(user_id)
+        except Exception as exc:
+            log.warning(
+                "discussion.tools.openai_compat.build_failed",
+                extra={"user_id": user_id, "provider": prov, "error": str(exc)},
+            )
+            return {}
+        max_turns_attr = {
+            "minimax":    "MINIMAX_MAX_TURNS",
+            "groq":       "GROQ_MAX_TURNS",
+            "deepseek":   "DEEPSEEK_MAX_TURNS",
+            "openrouter": "OPENROUTER_MAX_TURNS",
+        }[prov]
+        return {
+            "openai_tool_schemas":  schemas,
+            "openai_tool_dispatch": dispatch,
+            "max_turns":            getattr(settings, max_turns_attr, 5),
+        }
+
+    return {}
+
+
+# Appended to the user prompt when the persona has tools available so
+# the LLM is reminded that fabricating numbers is never necessary.
+# Listed tool names mirror what `build_toolset` / `build_openai_compat_
+# toolset` ship.
+_PERSONA_TOOL_USAGE_HINT = (
+    "\n\n## 工具可用\n"
+    "你本回合可以呼叫下列工具取得即時數據（傳回值已在工具結果中）："
+    "`get_quote` / `run_dcf` / `run_var` / `run_backtest` / `query_user_data`。"
+    "**禁止虛構數據** — 若需要某個數字而 `## 市場現況` 與 `focus_briefs` 找不到，"
+    "請呼叫對應工具，再把結果寫進 content。每次工具呼叫會自動計入流程，"
+    "你只需專注在分析。"
+)
+
+
 async def _ask_persona(
     db: AsyncSession,
     *,
@@ -1769,20 +1864,32 @@ async def _ask_persona(
     context: dict[str, Any],
     prior_turns: list[DiscussionTurn],
     user_id: str | None,
+    user_role: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Yield raw stream events from one persona's turn. Caller assembles
     the deltas + parses the final JSON.
 
     Takes a pre-resolved `AgentSpec` so callers can batch-load the
     persona roster's overrides up-front (avoiding an N+1 round trip
-    inside the per-persona loop).
+    inside the per-persona loop). When the persona's resolved provider
+    supports tools and the discussion's owner has the right role,
+    `_build_persona_tool_kwargs` adds the MCP / OpenAI-compat toolset
+    so the persona can call get_quote / run_dcf / run_var / run_backtest
+    / query_user_data instead of guessing from the static context.
     """
+    tool_kwargs = _build_persona_tool_kwargs(
+        provider=spec.default_provider,
+        user_role=user_role,
+        user_id=user_id,
+    )
     user_prompt = _TURN_PROMPT_TEMPLATE.format(
         topic=topic,
         rules=rules,
         context=json.dumps(context, ensure_ascii=False, indent=2),
         history=_format_history(prior_turns),
     )
+    if tool_kwargs:
+        user_prompt += _PERSONA_TOOL_USAGE_HINT
     messages = [
         {"role": "system", "content": spec.system_prompt},
         {"role": "user", "content": user_prompt},
@@ -1795,6 +1902,7 @@ async def _ask_persona(
         temperature=0.4,
         db=db,
         user_id=user_id,
+        **tool_kwargs,
     ):
         yield event
 
@@ -1804,6 +1912,7 @@ async def run_round(
     discussion: Discussion,
     *,
     user_id: str | None = None,
+    user_role: str | None = None,
     provider_override: str | None = None,
     model_override: str | None = None,
 ) -> AsyncGenerator[TurnEvent, None]:
@@ -1815,9 +1924,16 @@ async def run_round(
       - context      {market_context}
       - turn_start   {round, turn_index, persona_id, persona_name}
       - delta        {round, turn_index, persona_id, text}
+      - tool_call    {round, turn_index, persona_id, id, name, args}
+      - tool_result  {round, turn_index, persona_id, id, name, summary, is_error}
       - turn_end     {round, turn_index, persona_id, stance, content}
       - round_end    {round, turn_count}
       - error        {message}            (terminal)
+
+    `user_role` (the discussion owner's role) gates tool availability
+    on tool-capable providers — analyst / admin get a real toolset,
+    viewers fall through to plain streaming. Providers without tool
+    support ignore the role entirely.
     """
     # Atomic SQL increment so the round counter can't drift from what's
     # in the DB. The previous in-memory `discussion.current_round =
@@ -1966,6 +2082,7 @@ async def run_round(
                         context=context,
                         prior_turns=prior_turns,
                         user_id=user_id,
+                        user_role=user_role,
                     ):
                         etype = event.get("type")
                         if etype == "delta":
@@ -1979,6 +2096,30 @@ async def run_round(
                                     "persona_id": persona_id,
                                     "text": visible,
                                 })
+                        elif etype == "tool_call":
+                            # Forward through so the SSE consumer can
+                            # show "buffett 正在執行 run_dcf" inline.
+                            # Tool-call rounds inside the LLM loop are
+                            # already capped by the provider's
+                            # `max_turns`; we don't keep a counter here.
+                            yield TurnEvent("tool_call", {
+                                "round": round_number,
+                                "turn_index": idx,
+                                "persona_id": persona_id,
+                                "id":   event.get("id"),
+                                "name": event.get("name"),
+                                "args": event.get("args"),
+                            })
+                        elif etype == "tool_result":
+                            yield TurnEvent("tool_result", {
+                                "round": round_number,
+                                "turn_index": idx,
+                                "persona_id": persona_id,
+                                "id":       event.get("id"),
+                                "name":     event.get("name"),
+                                "summary":  event.get("summary", ""),
+                                "is_error": event.get("is_error", False),
+                            })
                         elif etype == "usage":
                             # Capture the provider's reported token counts
                             # so we can write a per-persona LLMUsageEvent

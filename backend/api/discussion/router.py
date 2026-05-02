@@ -384,6 +384,7 @@ async def run_round(
     queue: asyncio.Queue = asyncio.Queue()
     owner_id = _coerce_owner_uuid(user)
     user_id_str = str(user["id"])
+    user_role_str = str(user.get("role") or "")
 
     async def _run_in_background() -> None:
         completed = 0
@@ -401,7 +402,9 @@ async def run_round(
                     return
                 try:
                     async for ev in discussion_service.run_round(
-                        bg_db, bg_row, user_id=user_id_str,
+                        bg_db, bg_row,
+                        user_id=user_id_str,
+                        user_role=user_role_str,
                     ):
                         if ev.type == "turn_end":
                             completed += 1

@@ -482,6 +482,62 @@ async def test_run_round_emits_full_event_sequence(
 
 
 @pytest.mark.asyncio
+async def test_run_round_forwards_tool_call_and_tool_result_events(
+    db_session: AsyncSession, owner: User,
+):
+    """When the upstream stream emits `tool_call` / `tool_result`
+    (claude_agent SDK or _openai_compat_tool_loop), run_round must
+    forward them as TurnEvents of the same type so the SSE consumer
+    can show what tools were invoked. Each forwarded event carries
+    the surrounding `round` / `turn_index` / `persona_id` so the
+    frontend can attach the tool log to the right speaker."""
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+
+    async def _stream_with_tools(*_a, **_kw):
+        # Persona makes one tool call, gets a result, then writes the
+        # final structured JSON.
+        yield {
+            "type": "tool_call", "id": "call-1",
+            "name": "get_quote", "args": {"symbol": "2330"},
+        }
+        yield {
+            "type": "tool_result", "id": "call-1",
+            "name": "get_quote", "summary": "{\"price\": 950}", "is_error": False,
+        }
+        yield {"type": "delta",
+               "text": '{"stance": "supplement", "content": "依工具回報 2330 報 950"}'}
+
+    with patch(
+        "services.discussion_service.stream_chat",
+        side_effect=_stream_with_tools,
+    ), patch(
+        "services.discussion_service.gather_market_context",
+        new=AsyncMock(return_value={"market": "TW"}),
+    ):
+        events = []
+        async for ev in discussion_service.run_round(
+            db_session, row, user_id=str(owner.id),
+        ):
+            events.append((ev.type, ev.payload))
+
+    types = [t for t, _ in events]
+    # Forwarded events appear inside each persona's turn.
+    assert types.count("tool_call") == 2  # 2 personas × 1 tool call
+    assert types.count("tool_result") == 2
+
+    # Each forwarded event tags the speaker so the UI can route them.
+    tool_calls = [p for t, p in events if t == "tool_call"]
+    assert all("persona_id" in p and "round" in p for p in tool_calls)
+    assert tool_calls[0]["name"] == "get_quote"
+    assert tool_calls[0]["args"] == {"symbol": "2330"}
+
+
+@pytest.mark.asyncio
 async def test_run_round_increments_round_number_on_subsequent_calls(
     db_session: AsyncSession, owner: User,
 ):
@@ -1721,6 +1777,132 @@ async def test_assemble_focus_briefs_returns_empty_when_no_symbols():
         db=None, market="TW", symbols=[],
     )
     assert out == []
+
+
+# ── _build_persona_tool_kwargs ────────────────────────────────────
+
+
+def test_build_persona_tool_kwargs_off_for_viewer_role():
+    """Viewers must not get tools. The MCP toolset's `query_user_data`
+    reads the caller's portfolio — handing it to a low-quota viewer
+    would let them silently exfiltrate via tool-call deltas."""
+    out = discussion_service._build_persona_tool_kwargs(
+        provider="claude_agent",
+        user_role="viewer",
+        user_id="abc",
+    )
+    assert out == {}
+
+
+def test_build_persona_tool_kwargs_off_when_user_id_missing():
+    """No user_id (e.g. auto-run cron with no role injected) → tools
+    off so unattended runs don't fan out N tool calls per persona."""
+    out = discussion_service._build_persona_tool_kwargs(
+        provider="claude_agent",
+        user_role="analyst",
+        user_id=None,
+    )
+    assert out == {}
+
+
+def test_build_persona_tool_kwargs_off_for_unsupported_provider():
+    """openai / anthropic / gemini / ollama don't have a tool-loop in
+    this codebase — return {} so stream_chat falls through to plain
+    streaming."""
+    for prov in ("openai", "anthropic", "gemini", "ollama", ""):
+        out = discussion_service._build_persona_tool_kwargs(
+            provider=prov, user_role="analyst", user_id="u1",
+        )
+        assert out == {}, f"expected no tools for provider={prov!r}"
+
+
+class _SettingsStub:
+    """Replaces `services.discussion_service.settings` for tests that
+    need to flip `claude_agent_effective_enabled` (the real one is a
+    Pydantic computed property and isn't writable).
+
+    Attributes are filled in by the test as needed; missing attrs
+    fall through to the real settings object via `__getattr__`."""
+
+    def __init__(self, **overrides):
+        self._overrides = overrides
+
+    def __getattr__(self, name):
+        if name in self._overrides:
+            return self._overrides[name]
+        from config import settings as _real
+        return getattr(_real, name)
+
+
+def test_build_persona_tool_kwargs_claude_agent_off_when_disabled(monkeypatch):
+    """When `Settings.claude_agent_effective_enabled` is False (SDK
+    not importable, or env flag off) the helper must short-circuit
+    instead of throwing during build_toolset import."""
+    monkeypatch.setattr(
+        discussion_service, "settings",
+        _SettingsStub(claude_agent_effective_enabled=False),
+    )
+    out = discussion_service._build_persona_tool_kwargs(
+        provider="claude_agent",
+        user_role="analyst",
+        user_id="u1",
+    )
+    assert out == {}
+
+
+def test_build_persona_tool_kwargs_openai_compat_swallows_build_failure(monkeypatch):
+    """A broken `build_openai_compat_toolset` (e.g. provider key
+    fetcher hits a transient DB failure) must NOT propagate — the
+    persona just gets a tool-less turn this round.
+
+    Uses a sys.modules stub for `ai.tools.openai_compat` so the test
+    runs even on environments without `claude_agent_sdk` installed
+    (which would otherwise trip on `ai/tools/__init__.py`'s top-
+    level SDK import)."""
+    import sys
+    import types
+
+    def boom(_user_id):
+        raise RuntimeError("provider key fetch failed")
+
+    fake_mod = types.ModuleType("ai.tools.openai_compat")
+    fake_mod.build_openai_compat_toolset = boom
+    monkeypatch.setitem(sys.modules, "ai.tools.openai_compat", fake_mod)
+
+    out = discussion_service._build_persona_tool_kwargs(
+        provider="groq",
+        user_role="analyst",
+        user_id="u1",
+    )
+    assert out == {}
+
+
+def test_build_persona_tool_kwargs_openai_compat_returns_kwargs(monkeypatch):
+    """Happy path for an OpenAI-compat provider: returns the schema +
+    dispatch + max_turns triple. Must NOT include claude_agent-only
+    keys (`mcp_server`, `allowed_tools`)."""
+    import sys
+    import types
+
+    def fake_build(_user_id):
+        return ([{"type": "function", "name": "get_quote"}], {"get_quote": object()})
+
+    fake_mod = types.ModuleType("ai.tools.openai_compat")
+    fake_mod.build_openai_compat_toolset = fake_build
+    monkeypatch.setitem(sys.modules, "ai.tools.openai_compat", fake_mod)
+
+    out = discussion_service._build_persona_tool_kwargs(
+        provider="groq",
+        user_role="analyst",
+        user_id="u1",
+    )
+    assert "openai_tool_schemas" in out
+    assert "openai_tool_dispatch" in out
+    assert "max_turns" in out
+    assert out["max_turns"] >= 1
+    # claude_agent keys must be absent — different code path.
+    assert "mcp_server" not in out
+    assert "allowed_tools" not in out
 
 
 # ── _assemble_user_context ────────────────────────────────────────

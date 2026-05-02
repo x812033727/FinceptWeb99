@@ -522,6 +522,88 @@ async def test_get_scoreboard_returns_rows_when_concluded(
     assert body["rows"][0]["days_resolved"] == 0
 
 
+# ── inject_user_message endpoint ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_inject_201_when_round_done_and_owner(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    h = await _register(client, "disc_inject_ok@example.com")
+    create = await client.post(
+        "/api/discussion/sessions",
+        headers=h,
+        json={"topic": "t", "rules": "r", "persona_ids": ["buffett", "lynch"]},
+    )
+    discussion_id = create.json()["id"]
+
+    # Force current_round=1 (no turns required — only the round
+    # counter check matters at the API layer).
+    row = await db_session.scalar(
+        select(Discussion).where(Discussion.id == uuid.UUID(discussion_id))
+    )
+    row.current_round = 1
+    await db_session.commit()
+
+    r = await client.post(
+        f"/api/discussion/sessions/{discussion_id}/inject",
+        headers=h,
+        json={"content": "請聚焦在 2330"},
+    )
+    assert r.status_code == 201
+    body = r.json()
+    assert body["persona_id"] == "_user"
+    assert body["stance"] == "user_input"
+    assert body["round"] == 1
+    assert "2330" in body["content"]
+
+
+@pytest.mark.asyncio
+async def test_inject_400_before_first_round(
+    client: AsyncClient,
+):
+    h = await _register(client, "disc_inject_no_round@example.com")
+    create = await client.post(
+        "/api/discussion/sessions",
+        headers=h,
+        json={"topic": "t", "rules": "r", "persona_ids": ["buffett", "lynch"]},
+    )
+    discussion_id = create.json()["id"]
+    r = await client.post(
+        f"/api/discussion/sessions/{discussion_id}/inject",
+        headers=h,
+        json={"content": "請聚焦在 2330"},
+    )
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_inject_404_for_non_owner(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    h_a = await _register(client, "disc_inject_a@example.com")
+    h_b = await _register(client, "disc_inject_b@example.com")
+    create = await client.post(
+        "/api/discussion/sessions",
+        headers=h_a,
+        json={"topic": "t", "rules": "r", "persona_ids": ["buffett", "lynch"]},
+    )
+    discussion_id = create.json()["id"]
+
+    row = await db_session.scalar(
+        select(Discussion).where(Discussion.id == uuid.UUID(discussion_id))
+    )
+    row.current_round = 1
+    await db_session.commit()
+
+    r = await client.post(
+        f"/api/discussion/sessions/{discussion_id}/inject",
+        headers=h_b,
+        json={"content": "x"},
+    )
+    assert r.status_code == 404
+
+
 # ── User fixture for service-layer needs ───────────────────────────
 
 

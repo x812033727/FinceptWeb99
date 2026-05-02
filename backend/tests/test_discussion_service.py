@@ -481,6 +481,224 @@ async def test_run_round_emits_full_event_sequence(
     assert refreshed.current_round == 1
 
 
+# ── per-persona context filtering ─────────────────────────────────
+
+
+def _full_ctx_for_filter():
+    """Synthetic ctx covering every block the filter knows about."""
+    return {
+        "market":                    "TW",
+        "captured_at":               "2026-05-01T00:00:00+00:00",
+        "errors":                    [],
+        "top_gainers":               ["g"],
+        "top_losers":                ["l"],
+        "index":                     {"price": 1},
+        "news_sentiment":            {"avg_score": 0},
+        "per_symbol_news_sentiment": {"2330": {}},
+        "international_sentiment":   {"avg_score": 0},
+        "top_foreign_buyers":        [],
+        "margin_balance_trend":      {},
+        "top_revenue_growers":       [],
+        "active_buybacks":           [],
+        "govt_bank_flow_5d":         [],
+        "risk_warnings":             {},
+        "market_institutional_5d":   [],
+        "focus_briefs":              [],
+        "macro":                     {},
+        "user_context":              None,
+    }
+
+
+def test_filter_context_unknown_persona_returns_full_ctx():
+    """Personas not in the registry must NOT silently lose data — fail
+    open so a typo / new persona doesn't hide blocks the LLM expects."""
+    ctx = _full_ctx_for_filter()
+    out = discussion_service._filter_context_for_persona(ctx, "unknown_persona")
+    assert set(out.keys()) == set(ctx.keys())
+
+
+def test_filter_context_macro_analyst_drops_chip_metrics():
+    """macro_analyst's view excludes TW chip-flow + risk_warnings —
+    those would mislead a Fed-policy thesis."""
+    ctx = _full_ctx_for_filter()
+    out = discussion_service._filter_context_for_persona(ctx, "macro_analyst")
+    assert "macro" in out
+    assert "international_sentiment" in out
+    assert "top_foreign_buyers" in out
+    # Negative space — chip / risk blocks dropped.
+    assert "risk_warnings" not in out
+    assert "active_buybacks" not in out
+    assert "focus_briefs" not in out
+
+
+def test_filter_context_buffett_keeps_value_blocks_drops_quant_breadth():
+    ctx = _full_ctx_for_filter()
+    out = discussion_service._filter_context_for_persona(ctx, "buffett")
+    assert "focus_briefs" in out
+    assert "active_buybacks" in out
+    assert "top_revenue_growers" in out
+    # Quant breadth blocks dropped.
+    assert "top_gainers" not in out
+    assert "market_institutional_5d" not in out
+
+
+def test_filter_context_portfolio_advisor_keeps_user_context():
+    """portfolio_advisor specifically needs the owner's holdings to
+    give portfolio-fit advice."""
+    ctx = _full_ctx_for_filter()
+    out = discussion_service._filter_context_for_persona(ctx, "portfolio_advisor")
+    assert "user_context" in out
+    assert "focus_briefs" in out
+
+
+def test_filter_context_claude_research_sees_everything():
+    """The tool-using persona gets the full picture so it can decide
+    which tool to call without re-fetching context blocks."""
+    ctx = _full_ctx_for_filter()
+    out = discussion_service._filter_context_for_persona(ctx, "claude_research")
+    assert set(out.keys()) == set(ctx.keys())
+
+
+def test_filter_context_always_includes_metadata_keys():
+    """`market`, `captured_at`, `errors` must appear in every persona
+    view — the prompt template references them unconditionally."""
+    ctx = _full_ctx_for_filter()
+    for pid in ("macro_analyst", "buffett", "simons", "marks"):
+        out = discussion_service._filter_context_for_persona(ctx, pid)
+        assert "market" in out
+        assert "captured_at" in out
+        assert "errors" in out
+
+
+# ── inject_user_message ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_inject_user_message_persists_turn_at_current_round(
+    db_session: AsyncSession, owner: User,
+):
+    """A user_input turn lands at `round=current_round` after the
+    last persona reply (or any prior injection on the same round)."""
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+    # Simulate a completed round 1 with two persona replies.
+    row.current_round = 1
+    db_session.add_all([
+        DiscussionTurn(
+            discussion_id=row.id, round=1, turn_index=0,
+            persona_id="buffett", stance="supplement", content="ok",
+        ),
+        DiscussionTurn(
+            discussion_id=row.id, round=1, turn_index=1,
+            persona_id="lynch", stance="supplement", content="agree",
+        ),
+    ])
+    await db_session.commit()
+
+    turn = await discussion_service.inject_user_message(
+        db_session, row, content="請聚焦在 2330",
+    )
+    assert turn.persona_id == discussion_service.USER_PERSONA_ID
+    assert turn.stance == discussion_service.USER_INJECTION_STANCE
+    assert turn.round == 1
+    assert turn.turn_index == 2  # after lynch's index=1
+    assert "2330" in turn.content
+
+
+@pytest.mark.asyncio
+async def test_inject_user_message_rejected_when_round_in_progress(
+    db_session: AsyncSession, owner: User,
+):
+    """Injecting while a round is streaming would race the persona
+    write order — reject 4XX-style at the service layer (router
+    surfaces as 400)."""
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+    row.current_round = 1
+    row.status = discussion_service.STATUS_RUNNING
+    await db_session.commit()
+    with pytest.raises(ValueError, match="round is in progress"):
+        await discussion_service.inject_user_message(
+            db_session, row, content="x",
+        )
+
+
+@pytest.mark.asyncio
+async def test_inject_user_message_rejected_before_first_round(
+    db_session: AsyncSession, owner: User,
+):
+    """No personas have spoken yet → nothing to react to. The user
+    can edit topic / rules directly instead."""
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+    with pytest.raises(ValueError, match="before the first round"):
+        await discussion_service.inject_user_message(
+            db_session, row, content="x",
+        )
+
+
+@pytest.mark.asyncio
+async def test_inject_user_message_validates_text_bounds(
+    db_session: AsyncSession, owner: User,
+):
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+    row.current_round = 1
+    await db_session.commit()
+    with pytest.raises(ValueError):
+        await discussion_service.inject_user_message(
+            db_session, row, content="   ",
+        )
+    with pytest.raises(ValueError):
+        await discussion_service.inject_user_message(
+            db_session, row, content="x" * 3000,
+        )
+
+
+def test_format_history_renders_user_injection_with_directive_label():
+    """User-injected turns must NOT be formatted as `_user · user_input：`
+    (which the LLM would parse as a persona stance) — render them with
+    a dedicated 【討論發起人插話】 marker instead."""
+    turns = []
+    t1 = DiscussionTurn()
+    t1.round = 1
+    t1.turn_index = 0
+    t1.persona_id = "buffett"
+    t1.stance = "supplement"
+    t1.content = "看好台積電"
+    turns.append(t1)
+
+    inject = DiscussionTurn()
+    inject.round = 1
+    inject.turn_index = 1
+    inject.persona_id = discussion_service.USER_PERSONA_ID
+    inject.stance = discussion_service.USER_INJECTION_STANCE
+    inject.content = "請聚焦在 2330"
+    turns.append(inject)
+
+    out = discussion_service._format_history(turns)
+    assert "討論發起人插話" in out
+    # The raw `_user · user_input：` form must NOT appear — that would
+    # confuse the persona into reasoning about a stance.
+    assert "_user · user_input" not in out
+
+
 # ── _format_history compression ───────────────────────────────────
 
 

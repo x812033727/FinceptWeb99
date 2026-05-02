@@ -444,6 +444,86 @@ async def delete_discussion(
     return True
 
 
+# ── user injection ─────────────────────────────────────────────────
+#
+# Between rounds the discussion owner can drop a "user_input" turn
+# into the transcript so the next round's personas have to react to
+# it. Use case: after round 1 the user wants to refocus the debate
+# ("把目光放在 2330 而不是大盤"), or feed in extra context the
+# personas missed ("剛剛 Q2 EPS 公布 +35% YoY"). This is an
+# alternative to editing the discussion's `topic` mid-stream — that
+# would silently rewrite history and confuse later rounds.
+#
+# Stored as a normal `DiscussionTurn` with `persona_id="_user"` and
+# `stance="user_input"` so `_format_history` picks it up naturally;
+# the only special-case is `_format_history` rendering it without
+# the "stance" suffix (it's a directive, not an analyst opinion).
+
+USER_PERSONA_ID = "_user"
+USER_INJECTION_STANCE = "user_input"
+_MAX_USER_INJECTION_CHARS = 2000
+
+
+async def inject_user_message(
+    db: AsyncSession, discussion: Discussion, *, content: str,
+) -> DiscussionTurn:
+    """Append a user-input turn to the discussion's current round.
+
+    Constraints:
+      - status must be `draft` (mid-round injection would race the
+        running persona stream and leave the new turn out of order).
+      - `current_round` must be ≥ 1 (no point injecting before the
+        first round has run — the user can just edit `topic` /
+        `rules` while the discussion is still untouched).
+      - content non-empty + capped at `_MAX_USER_INJECTION_CHARS`.
+
+    The injected turn lands at `round=current_round` with
+    `turn_index = max_existing_index + 1` so it sits AFTER the
+    last persona's reply for that round. Personas in the next round
+    will see it via `prior_turns` ordering.
+    """
+    text = _validate_text(
+        content, field="content", max_chars=_MAX_USER_INJECTION_CHARS,
+    )
+    if discussion.status != STATUS_DRAFT:
+        raise ValueError(
+            "Cannot inject a message while a round is in progress",
+        )
+    if (discussion.current_round or 0) < 1:
+        raise ValueError(
+            "Cannot inject a message before the first round has run",
+        )
+
+    # Find the highest turn_index already used in this round so the
+    # injection lands after the last persona reply (and after any
+    # previous injection on the same round).
+    max_idx = await db.scalar(
+        select(DiscussionTurn.turn_index)
+        .where(
+            DiscussionTurn.discussion_id == discussion.id,
+            DiscussionTurn.round == discussion.current_round,
+        )
+        .order_by(DiscussionTurn.turn_index.desc())
+        .limit(1)
+    )
+    next_idx = (int(max_idx) + 1) if max_idx is not None else 0
+
+    row = DiscussionTurn(
+        discussion_id=discussion.id,
+        round=discussion.current_round,
+        turn_index=next_idx,
+        persona_id=USER_PERSONA_ID,
+        stance=USER_INJECTION_STANCE,
+        content=text,
+        citations=None,
+    )
+    db.add(row)
+    discussion.updated_at = datetime.now(UTC)
+    await db.commit()
+    await db.refresh(row)
+    return row
+
+
 async def force_reset_status(
     db: AsyncSession, discussion: Discussion,
 ) -> None:
@@ -1636,20 +1716,26 @@ def _format_history(prior_turns: list[DiscussionTurn]) -> str:
         older = window[:split]
         recent = window[split:]
 
+    def _render(t: DiscussionTurn, body: str) -> str:
+        # User injections aren't analyst opinions — render them as a
+        # directive from the discussion's owner so personas know the
+        # next round must respond to it. Keeps the same `第N輪` prefix
+        # for ordering / recency cues.
+        if t.persona_id == USER_PERSONA_ID:
+            return f"- 第{t.round}輪 · 【討論發起人插話】：{body}"
+        return f"- 第{t.round}輪 · {t.persona_id} · {t.stance}：{body}"
+
     sections: list[str] = []
     if older:
         sections.append("（較早輪次摘要）")
         for t in older:
-            summary = _summarize_turn_content(t.content)
-            sections.append(
-                f"- 第{t.round}輪 · {t.persona_id} · {t.stance}：{summary}"
-            )
+            sections.append(_render(t, _summarize_turn_content(t.content)))
     if older and recent:
         sections.append("")
         sections.append("（最近發言全文）")
     for t in recent:
         body = t.content.strip() or "（同意，無補充）"
-        sections.append(f"- 第{t.round}輪 · {t.persona_id} · {t.stance}：{body}")
+        sections.append(_render(t, body))
     return "\n".join(sections)
 
 
@@ -1901,6 +1987,124 @@ def _build_persona_tool_kwargs(
     return {}
 
 
+# ── per-persona context filtering ──────────────────────────────────
+#
+# Sending the full `gather_market_context` payload (~12-15 blocks) to
+# every persona costs tokens that don't help: a `macro_analyst` doesn't
+# benefit from the `risk_warnings` 處置股 list, and `dalio` doesn't
+# care about per-symbol `top_revenue_growers`. Worse, more text =
+# more attention dilution — weak models start mixing chip-flow data
+# into a macro thesis it shouldn't be in.
+#
+# `_PERSONA_CONTEXT_PROFILES` enumerates the blocks each persona
+# actually wants. Personas absent from the registry fall through to
+# `_ALL_PERSONA_BLOCKS` (current behaviour — full context). Admin
+# overrides on persona provider/model don't affect filtering — the
+# filter is keyed on the canonical persona_id so reskinning Buffett's
+# LLM doesn't change what data he cares about.
+#
+# Always-included keys (top of every persona's view) are the metadata
+# the prompt template references unconditionally: `market`,
+# `captured_at`, and `errors` (so personas can mention "data was
+# incomplete" without us having to enumerate per-archetype).
+
+_ALWAYS_INCLUDED_BLOCKS: frozenset[str] = frozenset({
+    "market", "captured_at", "errors",
+})
+
+# Full block set — used as the fall-through profile and the union the
+# filter compares against. Kept in sync manually with the keys
+# `gather_market_context` populates.
+_ALL_PERSONA_BLOCKS: frozenset[str] = frozenset({
+    "top_gainers", "top_losers", "index",
+    "news_sentiment", "per_symbol_news_sentiment", "international_sentiment",
+    "top_foreign_buyers", "margin_balance_trend", "top_revenue_growers",
+    "active_buybacks", "govt_bank_flow_5d", "risk_warnings",
+    "market_institutional_5d",
+    "focus_briefs", "macro", "user_context",
+})
+
+# Five archetypes cover the 19 personas without enumerating each one.
+# Each profile is the union of "what this persona uses to form a view".
+_MACRO_PROFILE = frozenset({
+    "index", "macro", "international_sentiment",
+    "top_foreign_buyers", "govt_bank_flow_5d", "market_institutional_5d",
+    "news_sentiment", "per_symbol_news_sentiment",
+})
+
+_VALUE_PROFILE = frozenset({
+    "focus_briefs", "per_symbol_news_sentiment", "top_revenue_growers",
+    "active_buybacks", "news_sentiment", "macro",
+})
+
+_CONTRARIAN_PROFILE = frozenset({
+    "top_losers", "risk_warnings", "margin_balance_trend",
+    "focus_briefs", "news_sentiment", "per_symbol_news_sentiment",
+    "macro",
+})
+
+_QUANT_PROFILE = frozenset({
+    "focus_briefs", "top_gainers", "top_losers",
+    "top_foreign_buyers", "market_institutional_5d", "margin_balance_trend",
+    "risk_warnings", "news_sentiment", "macro",
+})
+
+_PORTFOLIO_PROFILE = frozenset({
+    "user_context", "focus_briefs", "per_symbol_news_sentiment",
+    "macro", "news_sentiment", "international_sentiment",
+})
+
+_PERSONA_CONTEXT_PROFILES: dict[str, frozenset[str]] = {
+    # CFA-style functional
+    "market_analyst":    _QUANT_PROFILE,
+    "portfolio_advisor": _PORTFOLIO_PROFILE,
+    "risk_manager":      _CONTRARIAN_PROFILE | {"user_context"},
+    "macro_analyst":     _MACRO_PROFILE,
+    "earnings_analyst":  _VALUE_PROFILE,
+    "trading_coach":     _QUANT_PROFILE,
+    # `claude_research` has tools — give it everything so it has the
+    # full picture before deciding which tool to call.
+    "claude_research":   _ALL_PERSONA_BLOCKS,
+
+    # Value / quality investors
+    "buffett":  _VALUE_PROFILE,
+    "graham":   _VALUE_PROFILE,
+    "munger":   _VALUE_PROFILE | {"risk_warnings"},
+    "lynch":    _VALUE_PROFILE | {"top_gainers"},
+    "fisher":   _VALUE_PROFILE,
+    "smith":    _VALUE_PROFILE,
+
+    # Contrarian
+    "marks":    _CONTRARIAN_PROFILE,
+    "klarman":  _CONTRARIAN_PROFILE,
+
+    # Macro
+    "dalio":    _MACRO_PROFILE,
+    "soros":    _MACRO_PROFILE | {"top_gainers", "focus_briefs"},
+
+    # Quant
+    "simons":   _QUANT_PROFILE,
+    "asness":   _QUANT_PROFILE,
+}
+
+
+def _filter_context_for_persona(
+    ctx: dict[str, Any], persona_id: str,
+) -> dict[str, Any]:
+    """Project `ctx` down to the blocks `persona_id` actually uses,
+    plus the always-included metadata keys.
+
+    Personas not in `_PERSONA_CONTEXT_PROFILES` (custom personas, new
+    additions, typos) get the full context — fail-open so an unknown
+    persona never silently loses data, just costs more tokens.
+    """
+    profile = _PERSONA_CONTEXT_PROFILES.get(persona_id)
+    if profile is None:
+        return ctx
+    allowed = _ALWAYS_INCLUDED_BLOCKS | profile
+    return {k: v for k, v in ctx.items() if k in allowed}
+
+
 # Appended to the user prompt when the persona has tools available so
 # the LLM is reminded that fabricating numbers is never necessary.
 # Listed tool names mirror what `build_toolset` / `build_openai_compat_
@@ -1919,6 +2123,7 @@ async def _ask_persona(
     db: AsyncSession,
     *,
     spec: "AgentSpec",
+    persona_id: str,
     topic: str,
     rules: str,
     context: dict[str, Any],
@@ -1936,16 +2141,24 @@ async def _ask_persona(
     `_build_persona_tool_kwargs` adds the MCP / OpenAI-compat toolset
     so the persona can call get_quote / run_dcf / run_var / run_backtest
     / query_user_data instead of guessing from the static context.
+
+    `persona_id` is the canonical agent ID (e.g. `buffett`,
+    `macro_analyst`) — used to look up the per-persona context profile
+    so the LLM only sees the blocks its archetype actually uses.
     """
     tool_kwargs = _build_persona_tool_kwargs(
         provider=spec.default_provider,
         user_role=user_role,
         user_id=user_id,
     )
+    # Filter context down to blocks this persona actually uses — saves
+    # tokens and stops weak models from mixing irrelevant blocks (e.g.
+    # macro_analyst citing risk_warnings dispositions in a Fed thesis).
+    filtered_ctx = _filter_context_for_persona(context, persona_id)
     user_prompt = _TURN_PROMPT_TEMPLATE.format(
         topic=topic,
         rules=rules,
-        context=json.dumps(context, ensure_ascii=False, indent=2),
+        context=json.dumps(filtered_ctx, ensure_ascii=False, indent=2),
         history=_format_history(prior_turns),
     )
     if tool_kwargs:
@@ -2137,6 +2350,7 @@ async def run_round(
                     async for event in _ask_persona(
                         db,
                         spec=spec,
+                        persona_id=persona_id,
                         topic=discussion.topic,
                         rules=discussion.rules,
                         context=context,

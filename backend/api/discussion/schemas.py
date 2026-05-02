@@ -101,6 +101,10 @@ class AutoRunConfigResponse(BaseModel):
     updated_at: datetime | None = None
 
 
+class InjectUserMessageRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=2000)
+
+
 class ScoreboardRow(BaseModel):
     symbol: str
     day1_open: float | None

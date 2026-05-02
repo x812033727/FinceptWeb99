@@ -19,6 +19,7 @@ import {
   concludeSession,
   createSession,
   deleteSession,
+  injectUserMessage,
   fetchAgents,
   fetchSession,
   fetchSessions,
@@ -192,6 +193,18 @@ export default function DiscussionPage() {
   const concludeMut = useMutation({
     mutationFn: () => concludeSession(selectedId!),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["discussion-session", selectedId] });
+    },
+  });
+
+  // Between-rounds user injection (PR #211). Drops a user_input
+  // turn into the current round's transcript so the next round's
+  // personas have to react to it.
+  const [injectDraft, setInjectDraft] = useState("");
+  const injectMut = useMutation({
+    mutationFn: (content: string) => injectUserMessage(selectedId!, content),
+    onSuccess: () => {
+      setInjectDraft("");
       queryClient.invalidateQueries({ queryKey: ["discussion-session", selectedId] });
     },
   });
@@ -740,6 +753,39 @@ export default function DiscussionPage() {
               </>
             )}
           </div>
+          {selectedId && isDraft && (detail?.current_round ?? 0) >= 1 && !isStreaming && (
+            <div className="border border-border rounded-md p-2 bg-card/40 space-y-1.5">
+              <label className="text-[11px] text-muted-foreground">
+                {t("discussion.inject_label")}
+              </label>
+              <textarea
+                value={injectDraft}
+                onChange={(e) => setInjectDraft(e.target.value)}
+                rows={2}
+                maxLength={2000}
+                placeholder={t("discussion.inject_placeholder")}
+                className="w-full resize-none bg-card border border-border rounded px-2 py-1 text-xs text-foreground focus:outline-none focus:border-primary/50"
+              />
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-muted-foreground">
+                  {injectDraft.length}/2000
+                </span>
+                <button
+                  type="button"
+                  onClick={() => injectMut.mutate(injectDraft.trim())}
+                  disabled={!injectDraft.trim() || injectMut.isPending}
+                  className="px-2.5 py-1 rounded text-[11px] border border-amber-800/50 text-amber-300 hover:bg-amber-900/20 transition-colors disabled:opacity-40"
+                >
+                  {injectMut.isPending ? t("common.saving") : t("discussion.inject_send")}
+                </button>
+              </div>
+              {injectMut.isError && (
+                <p className="text-[10px] text-red-400">
+                  {(injectMut.error as Error)?.message ?? t("common.error")}
+                </p>
+              )}
+            </div>
+          )}
           {streamError && (
             <div className="text-xs text-red-400 bg-red-950/30 border border-red-900/50 rounded px-3 py-2">
               {streamError}

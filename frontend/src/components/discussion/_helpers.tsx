@@ -37,6 +37,7 @@ export const STANCE_BADGE: Record<Turn["stance"], { label: string; cls: string }
   agree: { label: "✓ 同意", cls: "bg-green-900/30 text-green-300 border-green-800/50" },
   dissent: { label: "✗ 異議", cls: "bg-red-900/30 text-red-300 border-red-800/50" },
   supplement: { label: "↳ 補充", cls: "bg-blue-900/30 text-blue-300 border-blue-800/50" },
+  user_input: { label: "✎ 插話", cls: "bg-amber-900/30 text-amber-300 border-amber-800/50" },
 };
 
 // ── localStorage: topic / rules / collapse state ──────────────────
@@ -165,6 +166,15 @@ export async function deleteSession(id: string): Promise<void> {
   await api.delete(`/discussion/sessions/${id}`);
 }
 
+export async function injectUserMessage(
+  id: string, content: string,
+): Promise<Turn> {
+  const res = await api.post<Turn>(
+    `/discussion/sessions/${id}/inject`, { content },
+  );
+  return res.data;
+}
+
 export async function concludeSession(id: string): Promise<{ conclusion: Conclusion }> {
   const res = await api.post<{ conclusion: Conclusion }>(
     `/discussion/sessions/${id}/conclude`,
@@ -207,6 +217,10 @@ export async function saveAutoRunConfig(body: {
 export function usePersonaName(agents: AgentInfo[]) {
   const { t, i18n } = useTranslation();
   return (id: string) => {
+    // The pseudo-persona for between-rounds user injections
+    // (PR #211). Not in the agents list — render as a localised
+    // "discussion owner" label so the transcript reads naturally.
+    if (id === "_user") return t("discussion.user_persona_name");
     const a = agents.find((x) => x.id === id);
     if (!a) return id;
     const key = `personas.agents.${id}.name`;

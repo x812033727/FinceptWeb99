@@ -19,7 +19,10 @@ export interface Turn {
   round: number;
   turn_index: number;
   persona_id: string;
-  stance: "agree" | "dissent" | "supplement";
+  /** `user_input` is the discussion owner's between-rounds injection
+   * (PR #211) — rendered as a directive in the transcript instead
+   * of an analyst opinion. */
+  stance: "agree" | "dissent" | "supplement" | "user_input";
   content: string;
   created_at: string;
 }

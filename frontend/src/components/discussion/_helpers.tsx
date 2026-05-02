@@ -434,6 +434,15 @@ export interface RoundCtxSummary {
   intl_bearish?: number;
   top_foreign_buyer?: { symbol: string; industry?: string | null; net?: number };
   top_revenue_grower?: { symbol: string; industry?: string | null; yoy?: number };
+  /** Compact headline strings extracted from the new context blocks
+   * (PR #213): one short line per block, ready to render in
+   * `RoundContextRow` without further processing. Each is only
+   * present when the underlying block carried meaningful data —
+   * the row renderer decides whether to show the slot. */
+  macro_summary?: string;
+  focus_briefs_summary?: string[];
+  user_context_summary?: string;
+  prior_discussions_summary?: string;
 }
 
 export function summarizeContext(ctx: Record<string, unknown>): RoundCtxSummary {
@@ -482,6 +491,104 @@ export function summarizeContext(ctx: Record<string, unknown>): RoundCtxSummary 
       industry: (top.industry as string | undefined) ?? null,
       yoy: typeof top.revenue_yoy === "number" ? top.revenue_yoy : undefined,
     };
+  }
+
+  // ── new ctx blocks (PR #213) ──────────────────────────────────────
+  // Each branch is defensive: the block may be absent (legacy
+  // snapshot taken before the field was added) or partially
+  // populated (FRED key missing → all summaries null) — fall through
+  // silently rather than render `undefined` strings.
+
+  const macro = ctx.macro as Record<string, unknown> | null | undefined;
+  if (macro && typeof macro === "object") {
+    const ff = (macro.fed_funds_rate as Record<string, unknown> | undefined)?.summary as
+      | { latest_value?: number; change_1y?: number | null }
+      | undefined;
+    const dxy = (macro.usd_index as Record<string, unknown> | undefined)?.summary as
+      | { latest_value?: number; change_1y?: number | null }
+      | undefined;
+    const parts: string[] = [];
+    if (ff && typeof ff.latest_value === "number") {
+      parts.push(
+        `Fed ${toFixedSmart(ff.latest_value)}%` +
+          (typeof ff.change_1y === "number"
+            ? ` (${ff.change_1y >= 0 ? "+" : ""}${toFixedSmart(ff.change_1y)} YoY)`
+            : ""),
+      );
+    }
+    if (dxy && typeof dxy.latest_value === "number") {
+      parts.push(
+        `DXY ${toFixedSmart(dxy.latest_value)}` +
+          (typeof dxy.change_1y === "number"
+            ? ` (${dxy.change_1y >= 0 ? "+" : ""}${toFixedSmart(dxy.change_1y)} YoY)`
+            : ""),
+      );
+    }
+    if (parts.length > 0) out.macro_summary = parts.join(" · ");
+  }
+
+  const briefs = ctx.focus_briefs as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(briefs) && briefs.length > 0) {
+    const lines: string[] = [];
+    for (const b of briefs) {
+      const sym = String(b.symbol ?? "");
+      if (!sym) continue;
+      const name = (b.name_zh as string | undefined) || (b.name as string | undefined) || "";
+      const quote = b.quote as Record<string, unknown> | null | undefined;
+      const price = typeof quote?.price === "number" ? quote.price : null;
+      const changePct = typeof quote?.change_pct === "number" ? quote.change_pct : null;
+      const tech = b.technicals as Record<string, unknown> | null | undefined;
+      const rsi = typeof tech?.rsi14 === "number" ? tech.rsi14 : null;
+      const f = b.fundamentals as Record<string, unknown> | null | undefined;
+      const pe = typeof f?.pe === "number" ? f.pe : null;
+      const segs: string[] = [];
+      if (price != null) {
+        segs.push(`${toFixedSmart(price)}`);
+      }
+      if (changePct != null) segs.push(signedPct(changePct / 100));
+      if (pe != null) segs.push(`PE ${toFixedSmart(pe)}`);
+      if (rsi != null) segs.push(`RSI ${toFixedSmart(rsi)}`);
+      if (segs.length > 0) {
+        lines.push(`${sym}${name ? ` ${name}` : ""}: ${segs.join(" · ")}`);
+      }
+    }
+    if (lines.length > 0) out.focus_briefs_summary = lines;
+  }
+
+  const uc = ctx.user_context as Record<string, unknown> | null | undefined;
+  if (uc && typeof uc === "object") {
+    const portfolios = uc.portfolios as Array<Record<string, unknown>> | undefined;
+    const holdings = uc.holdings as Array<Record<string, unknown>> | undefined;
+    const wl = uc.watchlist_symbols as Array<Record<string, unknown>> | undefined;
+    const overlap = uc.focus_overlap as Record<string, unknown> | undefined;
+    const held = (overlap?.held as string[] | undefined) ?? [];
+    const watching = (overlap?.watching as string[] | undefined) ?? [];
+    const segs: string[] = [];
+    if (Array.isArray(portfolios) && portfolios.length > 0) {
+      segs.push(`${portfolios.length}p`);
+    }
+    if (Array.isArray(holdings) && holdings.length > 0) {
+      segs.push(`${holdings.length}h`);
+    }
+    if (Array.isArray(wl) && wl.length > 0) segs.push(`${wl.length}w`);
+    if (held.length > 0) segs.push(`held: ${held.join(",")}`);
+    if (watching.length > 0) segs.push(`watch: ${watching.join(",")}`);
+    if (segs.length > 0) out.user_context_summary = segs.join(" · ");
+  }
+
+  const prior = ctx.prior_discussions as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(prior) && prior.length > 0) {
+    // Show the freshest prior verdict per matched symbol so the user
+    // can spot cross-discussion drift at a glance.
+    const lines: string[] = [];
+    for (const p of prior.slice(0, 3)) {
+      const horizon = (p.time_horizon as string | undefined) ?? "";
+      const verdict = (p.verdict as string | undefined) ?? "?";
+      const matched = (p.matched_symbols as string[] | undefined) ?? [];
+      const date = String(p.created_at ?? "").slice(0, 10);
+      lines.push(`${date} ${matched.join(",")} → ${horizon}/${verdict}`);
+    }
+    if (lines.length > 0) out.prior_discussions_summary = lines.join(" | ");
   }
 
   return out;

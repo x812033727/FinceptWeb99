@@ -338,4 +338,116 @@ describe("summarizeContext", () => {
       yoy: 45.6,
     });
   });
+
+  // ── new ctx blocks (PR #213) ────────────────────────────────────
+
+  it("renders macro headline from fed_funds + dxy summaries", () => {
+    const out = summarizeContext({
+      macro: {
+        fed_funds_rate: { summary: { latest_value: 4.25, change_1y: -0.75 } },
+        usd_index: { summary: { latest_value: 105.2, change_1y: 6.0 } },
+      },
+    });
+    expect(out.macro_summary).toContain("Fed 4.25%");
+    expect(out.macro_summary).toContain("(-0.75 YoY)");
+    expect(out.macro_summary).toContain("DXY 105.2");
+    expect(out.macro_summary).toContain("(+6 YoY)");
+  });
+
+  it("skips macro_summary when both summaries are null", () => {
+    const out = summarizeContext({
+      macro: {
+        fed_funds_rate: { summary: null },
+        usd_index: { summary: null },
+      },
+    });
+    expect(out.macro_summary).toBeUndefined();
+  });
+
+  it("emits one focus_briefs line per symbol with quote / pe / rsi", () => {
+    const out = summarizeContext({
+      focus_briefs: [
+        {
+          symbol: "2330",
+          name_zh: "台積電",
+          quote: { price: 950, change_pct: 1.2 },
+          fundamentals: { pe: 22.5 },
+          technicals: { rsi14: 62 },
+        },
+        {
+          symbol: "2454",
+          name_zh: "聯發科",
+          quote: { price: 1200, change_pct: -0.5 },
+          fundamentals: { pe: 18 },
+          technicals: { rsi14: 45 },
+        },
+      ],
+    });
+    expect(out.focus_briefs_summary).toHaveLength(2);
+    expect(out.focus_briefs_summary![0]).toContain("2330 台積電");
+    expect(out.focus_briefs_summary![0]).toContain("PE 22.5");
+    expect(out.focus_briefs_summary![0]).toContain("RSI 62");
+    expect(out.focus_briefs_summary![1]).toContain("2454");
+  });
+
+  it("collapses user_context to portfolios/holdings/watchlist counts + overlap", () => {
+    const out = summarizeContext({
+      user_context: {
+        portfolios: [{ name: "Main" }, { name: "USD" }],
+        holdings: Array.from({ length: 5 }, (_, i) => ({ symbol: String(i) })),
+        watchlist_symbols: [{ symbol: "NVDA" }, { symbol: "AAPL" }],
+        focus_overlap: { held: ["2330"], watching: ["NVDA"] },
+      },
+    });
+    expect(out.user_context_summary).toContain("2p");
+    expect(out.user_context_summary).toContain("5h");
+    expect(out.user_context_summary).toContain("2w");
+    expect(out.user_context_summary).toContain("held: 2330");
+    expect(out.user_context_summary).toContain("watch: NVDA");
+  });
+
+  it("omits user_context_summary when block is null / empty arrays", () => {
+    expect(summarizeContext({ user_context: null }).user_context_summary).toBeUndefined();
+    expect(
+      summarizeContext({
+        user_context: {
+          portfolios: [], holdings: [], watchlist_symbols: [],
+          focus_overlap: { held: [], watching: [] },
+        },
+      }).user_context_summary,
+    ).toBeUndefined();
+  });
+
+  it("renders prior_discussions as date · symbols → horizon/verdict per row, max 3", () => {
+    const out = summarizeContext({
+      prior_discussions: [
+        {
+          id: "a", created_at: "2026-04-22T00:00:00Z",
+          matched_symbols: ["2330"], time_horizon: "short_term", verdict: "win",
+        },
+        {
+          id: "b", created_at: "2026-04-15T00:00:00Z",
+          matched_symbols: ["2330"], time_horizon: "medium_term", verdict: null,
+        },
+        {
+          id: "c", created_at: "2026-04-08T00:00:00Z",
+          matched_symbols: ["2330"], time_horizon: "short_term", verdict: "loss",
+        },
+        {
+          id: "d", created_at: "2026-04-01T00:00:00Z",
+          matched_symbols: ["2330"], time_horizon: "long_term", verdict: "win",
+        },
+      ],
+    });
+    // Cap at 3 rows.
+    expect(out.prior_discussions_summary).toBeDefined();
+    expect(out.prior_discussions_summary!.split(" | ")).toHaveLength(3);
+    expect(out.prior_discussions_summary!).toContain("2026-04-22 2330 → short_term/win");
+    expect(out.prior_discussions_summary!).toContain("2026-04-15 2330 → medium_term/?");
+  });
+
+  it("skips prior_discussions_summary when block missing or empty", () => {
+    expect(summarizeContext({}).prior_discussions_summary).toBeUndefined();
+    expect(summarizeContext({ prior_discussions: [] }).prior_discussions_summary).toBeUndefined();
+  });
 });

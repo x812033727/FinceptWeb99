@@ -544,6 +544,482 @@ def extract_focus_symbols(text: str, *, market: str = _DEFAULT_MARKET) -> list[s
     return seen
 
 
+# ── focus_briefs (per-symbol mini analyst report) ──────────────────
+#
+# `gather_market_context` already pulls per-symbol news sentiment for
+# anything the topic names; that's enough for "what is the market
+# saying about 2330" but useless for "should we buy 2330 at this
+# price". An analyst joining a meeting would have at minimum: latest
+# quote, technical context (MAs, 52w range, RSI, recent perf),
+# fundamentals (PE / PB / yield / EPS), revenue trend, foreign /
+# margin flow, and a few peers. `_assemble_focus_briefs` builds that
+# bundle for each focus_symbol so the personas have actual evidence
+# to reason over instead of guessing from headlines.
+#
+# Each block is best-effort — a missing fundamentals snapshot or a
+# stooq history outage doesn't kill the brief, the failed block is
+# just None / [] and the persona reasons with what's available.
+
+
+_FOCUS_BRIEF_HISTORY_MONTHS = 12         # enough for 52w high/low
+_FOCUS_BRIEF_REVENUE_MONTHS = 6
+_FOCUS_BRIEF_CHIP_DAYS = 5
+_FOCUS_BRIEF_PEER_COUNT = 3
+
+
+def _bar_close(bar: dict[str, Any]) -> float | None:
+    c = bar.get("close")
+    try:
+        return float(c) if c is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _ma(closes: list[float], window: int) -> float | None:
+    if len(closes) < window:
+        return None
+    return round(sum(closes[-window:]) / window, 4)
+
+
+def _rsi(closes: list[float], window: int = 14) -> float | None:
+    """Wilder's RSI on the last `window` returns. Falls through to None
+    when there's not enough data — fresh-listed names that landed in
+    the topic get a None instead of a misleading 50."""
+    if len(closes) <= window:
+        return None
+    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    gains = [max(d, 0.0) for d in deltas[-window:]]
+    losses = [max(-d, 0.0) for d in deltas[-window:]]
+    avg_gain = sum(gains) / window
+    avg_loss = sum(losses) / window
+    if avg_loss == 0:
+        return 100.0 if avg_gain > 0 else 50.0
+    rs = avg_gain / avg_loss
+    return round(100.0 - (100.0 / (1.0 + rs)), 2)
+
+
+def _pct_change(start: float | None, end: float | None) -> float | None:
+    if not start or not end or start == 0:
+        return None
+    return round((end - start) / start * 100.0, 2)
+
+
+def _compute_technicals(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Compute summary technicals from a daily-OHLCV history list.
+
+    Returns None when fewer than 20 bars available — the moving
+    averages would be too thin to carry signal and the persona is
+    better off seeing "技術指標不足" than misleading numbers.
+    """
+    closes = [c for c in (_bar_close(b) for b in bars) if c is not None]
+    if len(closes) < 20:
+        return None
+    last = closes[-1]
+    high_52w = max(closes[-min(252, len(closes)):])
+    low_52w = min(closes[-min(252, len(closes)):])
+    return {
+        "last_close":      round(last, 4),
+        "ma20":            _ma(closes, 20),
+        "ma60":            _ma(closes, 60),
+        "ma120":           _ma(closes, 120),
+        "high_52w":        round(high_52w, 4),
+        "low_52w":         round(low_52w, 4),
+        "dist_high_52w_pct": _pct_change(high_52w, last),
+        "dist_low_52w_pct":  _pct_change(low_52w, last),
+        "perf_5d_pct":     _pct_change(
+            closes[-6] if len(closes) >= 6 else None, last,
+        ),
+        "perf_20d_pct":    _pct_change(
+            closes[-21] if len(closes) >= 21 else None, last,
+        ),
+        "perf_60d_pct":    _pct_change(
+            closes[-61] if len(closes) >= 61 else None, last,
+        ),
+        "rsi14":           _rsi(closes, 14),
+    }
+
+
+def _summarize_revenue(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Take the latest `_FOCUS_BRIEF_REVENUE_MONTHS` rows from a
+    `tw_market_service.get_revenue` response, drop noise fields."""
+    if not rows:
+        return []
+    tail = rows[-_FOCUS_BRIEF_REVENUE_MONTHS:]
+    out: list[dict[str, Any]] = []
+    for r in tail:
+        out.append({
+            "month":       (r.get("date") or "")[:7],
+            "revenue_yoy": r.get("revenue_yoy"),
+            "revenue_mom": r.get("revenue_mom"),
+        })
+    return out
+
+
+def _summarize_institutional(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Sum 5-day net foreign / SITC / dealer over the rows. Returns
+    None when nothing came back — caller drops the block."""
+    if not rows:
+        return None
+    fini_net = sitc_net = dealer_net = 0
+    days = 0
+    for r in rows[-_FOCUS_BRIEF_CHIP_DAYS:]:
+        fini_net += int(r.get("fini_buy") or 0) - int(r.get("fini_sell") or 0)
+        sitc_net += int(r.get("sitc_buy") or 0) - int(r.get("sitc_sell") or 0)
+        dealer_net += int(r.get("dealer_buy") or 0) - int(r.get("dealer_sell") or 0)
+        days += 1
+    if days == 0:
+        return None
+    return {
+        "fini_net_5d":   fini_net,
+        "sitc_net_5d":   sitc_net,
+        "dealer_net_5d": dealer_net,
+        "days":          days,
+    }
+
+
+def _summarize_margin(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not rows:
+        return None
+    latest = rows[-1]
+    return {
+        "as_of":           latest.get("date"),
+        "margin_balance":  latest.get("margin_balance"),
+        "short_balance":   latest.get("short_balance"),
+    }
+
+
+async def _get_tw_peers(
+    *, symbol: str, industry: str | None, limit: int = _FOCUS_BRIEF_PEER_COUNT,
+) -> list[dict[str, Any]]:
+    """Same-industry comparable set drawn from the cached screener.
+
+    Picks the most-traded peers (proxy for liquidity / market cap)
+    and returns a compact `{symbol, name, price, change_pct, pe}`
+    record per peer. Empty list when the industry is unknown or the
+    screener cache is cold / failing.
+    """
+    if not industry:
+        return []
+    try:
+        from services import tw_market_service
+        rows = await tw_market_service.get_screener(
+            limit=400, min_volume=500_000,
+        )
+    except Exception:
+        return []
+    candidates = []
+    for r in rows:
+        sym = r.get("symbol")
+        if not sym or sym == symbol:
+            continue
+        if _is_speculative_etf(sym):
+            continue
+        if tw_market_service.get_industry(sym) != industry:
+            continue
+        candidates.append(r)
+    candidates.sort(
+        key=lambda r: (r.get("volume") or 0), reverse=True,
+    )
+    out: list[dict[str, Any]] = []
+    for r in candidates[:limit]:
+        sym = r.get("symbol")
+        out.append({
+            "symbol":     sym,
+            "name":       r.get("name_zh") or tw_market_service.get_company_name(sym),
+            "price":      r.get("price"),
+            "change_pct": r.get("change_pct"),
+            "pe":         r.get("pe_ratio"),
+        })
+    return out
+
+
+async def _build_tw_focus_brief(
+    db: AsyncSession, symbol: str,
+) -> dict[str, Any]:
+    """Per-TW-symbol mini analyst report. Each sub-call is wrapped in
+    its own try so a single connector outage doesn't blank the whole
+    brief — the persona just sees "fundamentals: null" and reasons
+    with what remained."""
+    from services import tw_market_service
+
+    brief: dict[str, Any] = {
+        "symbol":         symbol,
+        "name_zh":        tw_market_service.get_company_name(symbol),
+        "industry":       tw_market_service.get_industry(symbol),
+        "quote":          None,
+        "technicals":     None,
+        "fundamentals":   None,
+        "revenue_trend":  [],
+        "chip_5d":        None,
+        "margin_latest":  None,
+        "peers":          [],
+    }
+
+    # Quote — cached behind Redis 15s, safe to call even mid-round.
+    try:
+        q = await tw_market_service.get_quote(symbol)
+        brief["quote"] = {
+            "price":      q.get("price"),
+            "change_pct": q.get("change_pct"),
+            "volume":     q.get("volume"),
+            "prev_close": q.get("prev_close"),
+        }
+    except Exception as exc:
+        log.warning("focus_brief.quote.failed",
+                    extra={"symbol": symbol, "error": str(exc)})
+
+    # History → technicals. 12 months is enough for 52w stats + 60d MA.
+    try:
+        bars = await tw_market_service.get_history(
+            symbol, months=_FOCUS_BRIEF_HISTORY_MONTHS,
+        )
+        brief["technicals"] = _compute_technicals(bars or [])
+    except Exception as exc:
+        log.warning("focus_brief.history.failed",
+                    extra={"symbol": symbol, "error": str(exc)})
+
+    # Fundamentals.
+    try:
+        f = await tw_market_service.get_fundamentals(symbol)
+        if isinstance(f, dict):
+            brief["fundamentals"] = {
+                "pe":             f.get("pe_ratio"),
+                "pb":             f.get("pb_ratio"),
+                "dividend_yield": f.get("dividend_yield"),
+                "eps":            f.get("eps"),
+            }
+    except Exception as exc:
+        log.warning("focus_brief.fundamentals.failed",
+                    extra={"symbol": symbol, "error": str(exc)})
+
+    # Revenue trend (TW-only data — Taiwan listed companies file monthly).
+    try:
+        rev = await tw_market_service.get_revenue(
+            symbol, months=_FOCUS_BRIEF_REVENUE_MONTHS,
+        )
+        brief["revenue_trend"] = _summarize_revenue(rev or [])
+    except Exception as exc:
+        log.warning("focus_brief.revenue.failed",
+                    extra={"symbol": symbol, "error": str(exc)})
+
+    # Chip metrics (法人 + 融資融券).
+    try:
+        inst = await tw_market_service.get_institutional(
+            symbol, days=_FOCUS_BRIEF_CHIP_DAYS,
+        )
+        brief["chip_5d"] = _summarize_institutional(inst or [])
+    except Exception as exc:
+        log.warning("focus_brief.institutional.failed",
+                    extra={"symbol": symbol, "error": str(exc)})
+
+    try:
+        margin = await tw_market_service.get_margin(
+            symbol, days=_FOCUS_BRIEF_CHIP_DAYS,
+        )
+        brief["margin_latest"] = _summarize_margin(margin or [])
+    except Exception as exc:
+        log.warning("focus_brief.margin.failed",
+                    extra={"symbol": symbol, "error": str(exc)})
+
+    # Peer set — best-effort, off the cached screener.
+    try:
+        brief["peers"] = await _get_tw_peers(
+            symbol=symbol, industry=brief["industry"],
+        )
+    except Exception as exc:
+        log.warning("focus_brief.peers.failed",
+                    extra={"symbol": symbol, "error": str(exc)})
+
+    return brief
+
+
+async def _build_us_focus_brief(symbol: str) -> dict[str, Any]:
+    """US-side equivalent — quote + technicals + fundamentals only.
+    No revenue / chip / peers because the underlying data tier
+    doesn't have parity with TW (no monthly revenue feed, no
+    foreign-investor ledger, no industry-tagged screener)."""
+    from services import us_market_service
+
+    brief: dict[str, Any] = {
+        "symbol":       symbol,
+        "name":         None,
+        "industry":     None,
+        "quote":        None,
+        "technicals":   None,
+        "fundamentals": None,
+    }
+    try:
+        q = await us_market_service.get_quote(symbol)
+        brief["quote"] = {
+            "price":      q.get("price"),
+            "change_pct": q.get("change_pct"),
+            "volume":     q.get("volume"),
+            "prev_close": q.get("prev_close"),
+        }
+    except Exception as exc:
+        log.warning("focus_brief.us_quote.failed",
+                    extra={"symbol": symbol, "error": str(exc)})
+
+    try:
+        bars = await us_market_service.get_history(symbol, period="1y", interval="1d")
+        brief["technicals"] = _compute_technicals(bars or [])
+    except Exception as exc:
+        log.warning("focus_brief.us_history.failed",
+                    extra={"symbol": symbol, "error": str(exc)})
+
+    try:
+        f = await us_market_service.get_fundamentals(symbol)
+        if isinstance(f, dict):
+            brief["name"] = f.get("name")
+            brief["industry"] = f.get("industry") or f.get("sector")
+            brief["fundamentals"] = {
+                "pe":             f.get("pe_ratio"),
+                "pb":             f.get("pb_ratio"),
+                "dividend_yield": f.get("dividend_yield"),
+                "eps":            f.get("eps"),
+                "market_cap":     f.get("market_cap"),
+            }
+    except Exception as exc:
+        log.warning("focus_brief.us_fundamentals.failed",
+                    extra={"symbol": symbol, "error": str(exc)})
+
+    return brief
+
+
+async def _assemble_focus_briefs(
+    db: AsyncSession, *, market: str, symbols: list[str],
+) -> list[dict[str, Any]]:
+    """Fan out per-symbol brief assembly concurrently. Cap at
+    `_MAX_FOCUS_SYMBOLS` for token-budget protection."""
+    if not symbols:
+        return []
+    syms = symbols[:_MAX_FOCUS_SYMBOLS]
+    if market == "TW":
+        coros = [_build_tw_focus_brief(db, s) for s in syms]
+    elif market == "US":
+        coros = [_build_us_focus_brief(s) for s in syms]
+    else:
+        # GLOBAL — fall back to US shape for ASCII-letter symbols, TW
+        # shape for digit-only. Crypto symbols (BTC/ETH/...) would
+        # also land in the US branch but their fundamentals path
+        # doesn't apply; the personas already see them via the
+        # crypto news block, so we skip them here to avoid faking
+        # equity-style PE/PB.
+        coros = []
+        for s in syms:
+            if s.isdigit():
+                coros.append(_build_tw_focus_brief(db, s))
+            elif s in _crypto_universe():
+                continue
+            else:
+                coros.append(_build_us_focus_brief(s))
+    if not coros:
+        return []
+    results = await asyncio.gather(*coros, return_exceptions=True)
+    out: list[dict[str, Any]] = []
+    for r in results:
+        if isinstance(r, Exception):
+            log.warning("focus_brief.fan_out.failed", extra={"error": str(r)})
+            continue
+        out.append(r)
+    return out
+
+
+# ── macro block (FRED-backed) ──────────────────────────────────────
+
+
+_MACRO_SERIES = (
+    ("fed_funds_rate", "Fed Funds Rate (%)"),
+    ("10y_yield",      "US 10Y Treasury (%)"),
+    ("10y_minus_2y",   "10Y-2Y Spread (%)"),
+    ("usd_index",      "USD Index (DXY)"),
+    ("twd_usd",        "TWD/USD"),
+)
+
+
+def _macro_summary_from_series(
+    series: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Reduce a FRED `[{date, value}]` time series to:
+        {latest_date, latest_value, change_1y, change_3m}.
+    Returns None if the series came back empty."""
+    if not series:
+        return None
+    points: list[tuple[str, float]] = []
+    for p in series:
+        try:
+            v = float(p["value"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        d = p.get("date")
+        if not d:
+            continue
+        points.append((d, v))
+    if not points:
+        return None
+    points.sort(key=lambda p: p[0])
+    latest_date, latest_value = points[-1]
+
+    def _earlier_than(target_days: int) -> float | None:
+        from datetime import date as _date
+        from datetime import timedelta as _td
+        try:
+            ld = _date.fromisoformat(latest_date)
+        except ValueError:
+            return None
+        target = ld - _td(days=target_days)
+        # Find the closest point on or before `target`.
+        best: float | None = None
+        for d, v in points:
+            try:
+                dd = _date.fromisoformat(d)
+            except ValueError:
+                continue
+            if dd <= target:
+                best = v
+        return best
+
+    # Series-level change deltas — for rates we report absolute change
+    # (basis points), for everything else relative %. Personas read
+    # these to anchor "Fed cut 75bp YoY" vs "DXY +6% YoY".
+    one_y_ago = _earlier_than(365)
+    three_m_ago = _earlier_than(90)
+    return {
+        "latest_date":  latest_date,
+        "latest_value": round(latest_value, 4),
+        "change_1y":    None if one_y_ago is None
+                        else round(latest_value - one_y_ago, 4),
+        "change_3m":    None if three_m_ago is None
+                        else round(latest_value - three_m_ago, 4),
+    }
+
+
+async def _assemble_macro_block() -> dict[str, Any]:
+    """Pull a small set of FRED macro series concurrently and reduce
+    each to its latest value plus 1y / 3m delta. Empty / failing
+    series degrade to None so the personas can mention "macro data
+    incomplete" instead of confidently citing a missing rate."""
+    from services import us_market_service
+
+    async def _pull(name: str) -> tuple[str, list[dict[str, Any]]]:
+        try:
+            return name, await us_market_service.get_macro_indicator(name)
+        except Exception as exc:
+            log.warning("macro.fetch.failed",
+                        extra={"name": name, "error": str(exc)})
+            return name, []
+
+    results = await asyncio.gather(*[_pull(n) for n, _ in _MACRO_SERIES])
+    by_name = dict(results)
+    block: dict[str, Any] = {}
+    for name, label in _MACRO_SERIES:
+        block[name] = {
+            "label":   label,
+            "summary": _macro_summary_from_series(by_name.get(name) or []),
+        }
+    return block
+
+
 async def gather_market_context(
     db: AsyncSession,
     *,
@@ -570,6 +1046,18 @@ async def gather_market_context(
         "index": None,
         "news_sentiment": None,
         "per_symbol_news_sentiment": {},
+        # Per-focus-symbol mini analyst report (PR #206). Populated when
+        # the topic names specific symbols and `_assemble_focus_briefs`
+        # could pull at least the quote — gives personas actual evidence
+        # to cite ("2330 已脫離 60 日均，距 52w 高點 -3.5%, RSI 62") instead
+        # of guessing from headlines.
+        "focus_briefs": [],
+        # Cross-market macro snapshot (PR #206) — Fed funds / 10Y / yield
+        # spread / DXY / TWD/USD with 1y + 3m deltas. Populated for every
+        # discussion regardless of `market` because rates / FX matter
+        # everywhere; empty `summary` blocks are silently passed through
+        # so a missing FRED key doesn't break the round.
+        "macro": None,
         # International / cross-market news (Fed, FOMC, US markets,
         # global macro) translated into Chinese — populated by the
         # `ingest_news_international` cron writing rows under
@@ -786,6 +1274,24 @@ async def gather_market_context(
         except Exception as exc:
             _record_error("per_symbol_sentiment", exc)
 
+        # Per-symbol mini analyst report. Best-effort — the assembler
+        # already returns partial briefs on connector failure, so a
+        # bad day for tw_market_service still yields a useful block.
+        try:
+            ctx["focus_briefs"] = await _assemble_focus_briefs(
+                db, market=market, symbols=list(focus_symbols),
+            )
+        except Exception as exc:
+            _record_error("focus_briefs", exc)
+
+    # Macro snapshot is universal — Fed / 10Y / DXY / TWD/USD matter
+    # to TW personas as much as US ones. Errors degrade to an empty
+    # block so `_record_error` can still log the connector outage.
+    try:
+        ctx["macro"] = await _assemble_macro_block()
+    except Exception as exc:
+        _record_error("macro", exc)
+
     return ctx
 
 
@@ -884,6 +1390,15 @@ _CONTEXT_SCHEMA_ANNOTATION = (
     "`recent_suspensions`（近期暫停交易）、`high_day_trading_ratio`"
     "（當沖比 >60%，投機過熱）。**禁止推薦中招的標的，即使其他訊號看多。**\n"
     "- market_institutional_5d：全市場三大法人近 5 日淨買賣超（大盤方向）。\n"
+    "- focus_briefs：**主題提及之個股小型分析師簡報**——`quote` 即時報價、"
+    "`technicals`（MA20/60/120、52w 高低與距離、5/20/60 日漲跌幅、RSI14）、"
+    "`fundamentals`（PE/PB/殖利率/EPS）、`revenue_trend`（近 6 月營收年/月增）、"
+    "`chip_5d`（外資 / 投信 / 自營近 5 日淨買賣）、`margin_latest`（最新融資餘額）、"
+    "`peers`（同產業 3 檔可比標的）。**有此區塊就要引用具體數據**，"
+    "不要只憑 headlines 推論。\n"
+    "- macro：宏觀利率與匯率快照（Fed Funds / US 10Y / 10Y-2Y 殖利率價差 / "
+    "DXY / TWD/USD），各帶 `latest_value` + `change_1y` + `change_3m`。"
+    "影響全球風險偏好與外資流向，建議在結論中至少提及一次相關方向。\n"
     "- errors：本次抓取的連接器錯誤清單；非空時務必聲明資料不完整。"
 )
 

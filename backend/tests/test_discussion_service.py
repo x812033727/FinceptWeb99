@@ -904,7 +904,15 @@ async def test_gather_market_context_includes_per_symbol_block_when_focused(
     await db_session.commit()
 
     with patch.object(_tw, "get_screener", new=AsyncMock(return_value=[])), \
-         patch.object(_tw, "get_index", new=AsyncMock(return_value={})):
+         patch.object(_tw, "get_index", new=AsyncMock(return_value={})), \
+         patch(
+            "services.discussion_service._assemble_macro_block",
+            new=AsyncMock(return_value={}),
+         ), \
+         patch(
+            "services.discussion_service._assemble_focus_briefs",
+            new=AsyncMock(return_value=[]),
+         ):
         ctx = await discussion_service.gather_market_context(
             db_session, focus_symbols=["9999", "8888"],
         )
@@ -951,7 +959,15 @@ async def test_gather_market_context_includes_international_sentiment(
     await db_session.commit()
 
     with patch.object(_tw, "get_screener", new=AsyncMock(return_value=[])), \
-         patch.object(_tw, "get_index", new=AsyncMock(return_value={})):
+         patch.object(_tw, "get_index", new=AsyncMock(return_value={})), \
+         patch(
+            "services.discussion_service._assemble_macro_block",
+            new=AsyncMock(return_value={}),
+         ), \
+         patch(
+            "services.discussion_service._assemble_focus_briefs",
+            new=AsyncMock(return_value=[]),
+         ):
         ctx = await discussion_service.gather_market_context(db_session)
 
     assert "international_sentiment" in ctx
@@ -1012,7 +1028,15 @@ async def test_gather_market_context_includes_chip_metrics_for_tw(
     ])
 
     with patch.object(_tw, "get_screener", new=AsyncMock(return_value=[])), \
-         patch.object(_tw, "get_index", new=AsyncMock(return_value={})):
+         patch.object(_tw, "get_index", new=AsyncMock(return_value={})), \
+         patch(
+            "services.discussion_service._assemble_macro_block",
+            new=AsyncMock(return_value={}),
+         ), \
+         patch(
+            "services.discussion_service._assemble_focus_briefs",
+            new=AsyncMock(return_value=[]),
+         ):
         ctx = await discussion_service.gather_market_context(
             db_session, market="TW",
         )
@@ -1037,7 +1061,15 @@ async def test_gather_market_context_skips_chip_metrics_for_non_tw(
     import services.tw_market_service as _tw   # noqa: F401
 
     with patch.object(_tw, "get_screener", new=AsyncMock(return_value=[])), \
-         patch.object(_tw, "get_index", new=AsyncMock(return_value={})):
+         patch.object(_tw, "get_index", new=AsyncMock(return_value={})), \
+         patch(
+            "services.discussion_service._assemble_macro_block",
+            new=AsyncMock(return_value={}),
+         ), \
+         patch(
+            "services.discussion_service._assemble_focus_briefs",
+            new=AsyncMock(return_value=[]),
+         ):
         ctx = await discussion_service.gather_market_context(
             db_session, market="US",
         )
@@ -1559,3 +1591,154 @@ def test_safe_conclusion_handles_full_width_braces():
     out = discussion_service._safe_conclusion(raw)
     assert "_parse_error" not in out
     assert out["recommended_symbols"] == ["2330"]
+
+
+# ── focus_briefs / macro helpers ──────────────────────────────────
+
+
+def _bars(closes: list[float]) -> list[dict]:
+    """Build a synthetic bar series from a list of closes — open/high/low
+    are filled with the close so the technicals helpers can do their
+    52w / MA / RSI work without spurious volatility."""
+    return [
+        {"time": f"2026-01-{i + 1:02d}", "open": c, "high": c,
+         "low": c, "close": float(c), "volume": 1_000}
+        for i, c in enumerate(closes)
+    ]
+
+
+def test_compute_technicals_returns_none_for_short_history():
+    """`<20` bars → None so the persona doesn't see a misleading 20-bar
+    MA computed from 8 days."""
+    assert discussion_service._compute_technicals(_bars([100.0] * 5)) is None
+
+
+def test_compute_technicals_emits_full_block_for_long_history():
+    closes = [100.0 + i for i in range(120)]
+    out = discussion_service._compute_technicals(_bars(closes))
+    assert out is not None
+    assert out["last_close"] == 219.0
+    assert out["high_52w"] == 219.0
+    assert out["low_52w"] == 100.0
+    # Distance to 52w high is 0 because the last bar IS the high.
+    assert out["dist_high_52w_pct"] == 0.0
+    # 60-day perf: closes[-61] is 159, last 219 → +37.74%
+    assert out["perf_60d_pct"] == 37.74
+    # MA20 of last 20 closes (200..219) = 209.5
+    assert out["ma20"] == 209.5
+
+
+def test_rsi_returns_50_for_flat_series():
+    """All-flat series → 0/0 case must short-circuit to 50, not crash."""
+    assert discussion_service._rsi([100.0] * 30) == 50.0
+
+
+def test_rsi_caps_at_100_for_strict_uptrend():
+    closes = [100.0 + i for i in range(30)]
+    assert discussion_service._rsi(closes, window=14) == 100.0
+
+
+def test_summarize_revenue_takes_last_six_only():
+    rows = [{"date": f"2025-{m:02d}-01", "revenue_yoy": m, "revenue_mom": m}
+            for m in range(1, 13)]
+    out = discussion_service._summarize_revenue(rows)
+    assert len(out) == 6
+    # Tail order preserved (oldest of the 6 first, newest last).
+    assert out[0]["month"] == "2025-07"
+    assert out[-1]["month"] == "2025-12"
+
+
+def test_summarize_institutional_sums_recent_window():
+    rows = [
+        {"fini_buy": 200, "fini_sell": 50,
+         "sitc_buy": 30, "sitc_sell": 20,
+         "dealer_buy": 10, "dealer_sell": 15}
+    ] * 3
+    out = discussion_service._summarize_institutional(rows)
+    assert out is not None
+    assert out["fini_net_5d"] == (200 - 50) * 3
+    assert out["sitc_net_5d"] == (30 - 20) * 3
+    assert out["dealer_net_5d"] == (10 - 15) * 3
+    assert out["days"] == 3
+
+
+def test_summarize_institutional_returns_none_for_empty():
+    assert discussion_service._summarize_institutional([]) is None
+
+
+def test_summarize_margin_picks_latest():
+    rows = [
+        {"date": "2026-04-28", "margin_balance": 100, "short_balance": 5},
+        {"date": "2026-04-29", "margin_balance": 110, "short_balance": 6},
+        {"date": "2026-04-30", "margin_balance": 120, "short_balance": 7},
+    ]
+    out = discussion_service._summarize_margin(rows)
+    assert out["as_of"] == "2026-04-30"
+    assert out["margin_balance"] == 120
+
+
+def test_macro_summary_computes_deltas_against_anchored_dates():
+    series = [
+        {"date": "2025-01-30", "value": 4.50},   # ~15m ago — used for change_1y
+        {"date": "2025-04-30", "value": 4.75},   # close to 1y mark, but later than cutoff
+        {"date": "2026-01-30", "value": 5.00},   # 3m ago anchor
+        {"date": "2026-04-30", "value": 4.25},   # latest
+    ]
+    out = discussion_service._macro_summary_from_series(series)
+    assert out is not None
+    assert out["latest_value"] == 4.25
+    # 365 days before 2026-04-30 = 2025-04-30 → matches that point.
+    assert out["change_1y"] == round(4.25 - 4.75, 4)
+    # 90 days before 2026-04-30 = 2026-01-30 → matches that point.
+    assert out["change_3m"] == round(4.25 - 5.00, 4)
+
+
+def test_macro_summary_returns_none_for_empty_or_invalid():
+    assert discussion_service._macro_summary_from_series([]) is None
+    # Garbage rows filter out and the series degrades to None.
+    bad = [{"date": "??", "value": "n/a"}]
+    assert discussion_service._macro_summary_from_series(bad) is None
+
+
+@pytest.mark.asyncio
+async def test_assemble_macro_block_degrades_on_missing_series():
+    """No FRED key + no yfinance fallback → every series is empty.
+    Must not crash, must return one entry per series with `summary=None`."""
+    with patch(
+        "services.us_market_service.get_macro_indicator",
+        new=AsyncMock(return_value=[]),
+    ):
+        block = await discussion_service._assemble_macro_block()
+    assert set(block.keys()) == {n for n, _ in discussion_service._MACRO_SERIES}
+    assert all(v["summary"] is None for v in block.values())
+
+
+@pytest.mark.asyncio
+async def test_assemble_focus_briefs_returns_empty_when_no_symbols():
+    """Caller passes `[]` → assembler short-circuits without touching
+    any market service."""
+    out = await discussion_service._assemble_focus_briefs(
+        db=None, market="TW", symbols=[],
+    )
+    assert out == []
+
+
+@pytest.mark.asyncio
+async def test_assemble_focus_briefs_fan_out_collects_per_symbol():
+    """Each symbol gets its own brief built concurrently, returned in
+    the input order. A coroutine that raises is logged + skipped, not
+    propagated, so a single bad symbol doesn't kill the round."""
+    async def fake_brief(_db, sym: str) -> dict:
+        if sym == "BAD":
+            raise RuntimeError("upstream blew up")
+        return {"symbol": sym, "quote": {"price": 100.0}}
+
+    with patch(
+        "services.discussion_service._build_tw_focus_brief",
+        new=fake_brief,
+    ):
+        out = await discussion_service._assemble_focus_briefs(
+            db=None, market="TW", symbols=["2330", "BAD", "2454"],
+        )
+    syms = [b["symbol"] for b in out]
+    assert "2330" in syms and "2454" in syms and "BAD" not in syms

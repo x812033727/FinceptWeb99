@@ -36,7 +36,9 @@ function RoundContextRow({ snap }: { snap: RoundContextSnapshot }) {
     ? `${t("discussion.context_news_label")}：` +
       `${t("discussion.context_bullish")} ${summary.news_bullish ?? 0} / ` +
       `${t("discussion.context_bearish")} ${summary.news_bearish ?? 0}`
-    : null;
+    : summary.backtest_news_unavailable
+      ? `${t("discussion.context_news_label")}：${t("discussion.context_backtest_news_unavailable")}`
+      : null;
 
   const buyerLine = summary.top_foreign_buyer
     ? `${t("discussion.context_top_foreign")}：${summary.top_foreign_buyer.symbol}` +

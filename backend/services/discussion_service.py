@@ -1553,6 +1553,11 @@ async def gather_market_context(
     ctx: dict[str, Any] = {
         "market": market,
         "captured_at": datetime.now(UTC).isoformat(),
+        # Backtest mode flag: lets the frontend show a precise warning
+        # when news_sentiment is null because the historical archive
+        # doesn't reach `as_of` (vs live mode where null = cron error).
+        "backtest": as_of is not None,
+        "as_of": as_of.isoformat() if as_of is not None else None,
         "top_gainers": [],
         "top_losers": [],
         "index": None,
@@ -1875,9 +1880,20 @@ async def gather_market_context(
         # 48h population (PR #214), so 50 is purely a token-budget
         # decision for the headline slice — bump it up so personas see
         # 50 of the freshest titles instead of just 20.
-        ctx["news_sentiment"] = await read_recent_market_sentiment(
+        ns = await read_recent_market_sentiment(
             db, market=market, limit=50, max_age_hours=48, as_of=as_of_dt,
         )
+        # Backtest mode: if the news archive doesn't reach back this
+        # far (we only started ingesting on deploy day; no paid history
+        # API), drop the block entirely instead of feeding the LLM
+        # `0 bullish / 0 bearish / 0 neutral` — which it would read as
+        # "market has no sentiment" rather than "we have no data".
+        # Live mode keeps the empty block (cron may just not have run
+        # yet on a fresh deploy; that signal IS meaningful to operators).
+        if as_of_dt is not None and not (ns or {}).get("headlines"):
+            ctx["news_sentiment"] = None
+        else:
+            ctx["news_sentiment"] = ns
     except Exception as exc:
         _record_error("news_sentiment", exc)
 
@@ -1888,9 +1904,13 @@ async def gather_market_context(
     # which the personas already know to interpret as "no signal".
     try:
         from services.news_sentiment_service import read_recent_market_sentiment
-        ctx["international_sentiment"] = await read_recent_market_sentiment(
+        intl = await read_recent_market_sentiment(
             db, market="GLOBAL", limit=50, max_age_hours=48, as_of=as_of_dt,
         )
+        if as_of_dt is not None and not (intl or {}).get("headlines"):
+            ctx["international_sentiment"] = None
+        else:
+            ctx["international_sentiment"] = intl
     except Exception as exc:
         _record_error("international_sentiment", exc)
 

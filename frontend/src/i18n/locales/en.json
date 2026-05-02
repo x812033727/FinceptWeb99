@@ -478,6 +478,7 @@
     "context_news_label": "News",
     "context_bullish": "bull",
     "context_bearish": "bear",
+    "context_backtest_news_unavailable": "backtest date predates our news archive (no paid history API) — personas can't see contemporaneous sentiment",
     "context_top_foreign": "Top foreign buy",
     "context_top_revenue": "Top revenue",
     "context_macro": "Macro",

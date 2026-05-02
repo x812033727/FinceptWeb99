@@ -478,6 +478,7 @@
     "context_news_label": "新聞",
     "context_bullish": "利多",
     "context_bearish": "利空",
+    "context_backtest_news_unavailable": "回測日期早於本系統新聞 archive 起始（未付費歷史新聞 API），personas 看不到當時新聞情緒",
     "context_top_foreign": "外資首選",
     "context_top_revenue": "營收首選",
     "context_macro": "宏觀",

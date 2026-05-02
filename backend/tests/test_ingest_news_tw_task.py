@@ -6,7 +6,7 @@ mock `google_news_tw.get_news` instead of `finmind.get_news`, error
 formatter has Google-News-specific HTTP hints, and the article rows
 write `source="google_news_tw"`.
 """
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -186,21 +186,52 @@ async def test_rerun_dedupes(patch_session, db_session: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_blank_published_at_falls_back_to_now(patch_session, db_session: AsyncSession):
-    """Connector rows missing `published_at` must not be dropped — we
-    fall back to current time so the article is at least retrievable."""
+async def test_blank_published_at_drops_article_and_counts_it(
+    patch_session, db_session: AsyncSession,
+):
+    """Articles with unparseable `pubDate` must be dropped, not stamped
+    with `datetime.now(UTC)`. Backtest mode (`gather_market_context
+    (as_of=...)`) was matching against `published_at`, so the old
+    fallback poisoned the archive: every parse-fail article carried an
+    ingestion-time timestamp forever and showed up in every backtest
+    window indistinguishable from live news.
+
+    The dropped count is surfaced in the health row's `error` field
+    so a Google pubDate-format change spike doesn't silently degrade
+    to "ok / 0" with no signal that work was discarded."""
     from tasks import ingest_news_tw
 
-    items = [{
-        "title":        "No date headline",
-        "link":         "https://news.google.com/articles/nodate",
-        "source_name":  "鉅亨網",
-        "description":  "",
-        "published_at": "",
-        "symbol":       "2330",
-    }]
+    items = [
+        # Real headline — keeps.
+        {
+            "title":        "Valid headline",
+            "link":         "https://news.google.com/articles/valid",
+            "source_name":  "鉅亨網",
+            "description":  "",
+            "published_at": "2026-05-01T10:00:00+00:00",
+            "symbol":       "2330",
+        },
+        # Blank pubdate — drops, counts.
+        {
+            "title":        "No date headline",
+            "link":         "https://news.google.com/articles/nodate",
+            "source_name":  "鉅亨網",
+            "description":  "",
+            "published_at": "",
+            "symbol":       "2330",
+        },
+        # Garbage pubdate — drops, counts.
+        {
+            "title":        "Garbage date headline",
+            "link":         "https://news.google.com/articles/garbage",
+            "source_name":  "鉅亨網",
+            "description":  "",
+            "published_at": "not-a-date-at-all",
+            "symbol":       "2330",
+        },
+    ]
 
-    before = datetime.now(UTC)
+    health_mock = AsyncMock()
     with patch("tasks.ingest_news_tw.acquire_lock", AsyncMock(return_value=True)), \
          patch("tasks.ingest_news_tw.release_lock", AsyncMock()), \
          patch("tasks.ingest_news_tw.backoff_remaining_seconds",
@@ -208,20 +239,25 @@ async def test_blank_published_at_falls_back_to_now(patch_session, db_session: A
          patch("tasks.ingest_news_tw.clear_failures", AsyncMock()), \
          patch("tasks.ingest_news_tw.google_news_tw.get_news",
                AsyncMock(return_value=items)), \
-         patch("tasks.ingest_news_tw.record_health", AsyncMock()):
+         patch("tasks.ingest_news_tw.record_health", health_mock):
         await ingest_news_tw.run()
-    after = datetime.now(UTC)
 
-    row = await db_session.scalar(
+    # Only the valid row survives.
+    rows = (await db_session.scalars(
         select(NewsArticle).where(
-            NewsArticle.link == "https://news.google.com/articles/nodate",
+            NewsArticle.link.like("https://news.google.com/articles/%"),
         )
-    )
-    assert row is not None
-    saved = row.published_at
-    if saved.tzinfo is None:
-        saved = saved.replace(tzinfo=UTC)
-    assert before - timedelta(seconds=1) <= saved <= after + timedelta(seconds=1)
+    )).all()
+    assert {r.link for r in rows} == {"https://news.google.com/articles/valid"}
+
+    # Health record exposes the drop count so an admin can see the
+    # parse-fail spike instead of just "row_count=1".
+    kwargs = health_mock.await_args.kwargs
+    assert kwargs["ok"] is True
+    assert kwargs["row_count"] == 1
+    assert "fetched=3" in kwargs["error"]
+    assert "attempted=1" in kwargs["error"]
+    assert "dropped_pubdate=2" in kwargs["error"]
 
 
 # ── error formatting ──────────────────────────────────────────────

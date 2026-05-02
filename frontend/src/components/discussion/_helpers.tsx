@@ -446,6 +446,11 @@ export interface RoundCtxSummary {
   focus_briefs_summary?: string[];
   user_context_summary?: string;
   prior_discussions_summary?: string;
+
+  /** True when the context was assembled in backtest mode and the
+   * news archive didn't reach `as_of`. Lets the row renderer show
+   * "新聞 archive 不及" instead of pretending sentiment was 0/0/0. */
+  backtest_news_unavailable?: boolean;
 }
 
 export function summarizeContext(ctx: Record<string, unknown>): RoundCtxSummary {
@@ -469,6 +474,11 @@ export function summarizeContext(ctx: Record<string, unknown>): RoundCtxSummary 
   if (news && typeof news === "object") {
     if (typeof news.bullish === "number") out.news_bullish = news.bullish;
     if (typeof news.bearish === "number") out.news_bearish = news.bearish;
+  } else if (ctx.backtest === true && news === null) {
+    // gather_market_context drops news_sentiment to null in backtest
+    // mode when the archive doesn't reach `as_of`. Surface that as
+    // its own state so the renderer doesn't fall back to "0 / 0".
+    out.backtest_news_unavailable = true;
   }
   const intl = ctx.international_sentiment as Record<string, unknown> | null | undefined;
   if (intl && typeof intl === "object") {

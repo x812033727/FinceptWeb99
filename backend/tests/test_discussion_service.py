@@ -2054,6 +2054,75 @@ async def test_gather_market_context_includes_international_sentiment(
 
 
 @pytest.mark.asyncio
+async def test_gather_market_context_backtest_drops_empty_news_blocks(
+    db_session: AsyncSession,
+):
+    """Backtest mode: when the news archive doesn't reach `as_of` (we
+    only started ingesting on deploy day; no paid history API), the
+    aggregator returns an empty `headlines` list with `bullish=0,
+    bearish=0, neutral=0` counts. Live mode preserves that block
+    (operators read empty as 'cron hasn't run yet'), but backtest mode
+    should drop it to `null` — otherwise the LLM sees `0/0/0` and
+    interprets it as 'market has no sentiment' rather than 'we have
+    no data for that period'.
+
+    The `backtest` flag on the ctx tells the frontend to render a
+    'news archive doesn't reach this date' warning instead of the
+    usual `bullish N / bearish M` line."""
+    from datetime import date as _date
+    import services.tw_market_service as _tw   # noqa: F401
+
+    with patch.object(_tw, "get_screener", new=AsyncMock(return_value=[])), \
+         patch.object(_tw, "get_index", new=AsyncMock(return_value={})), \
+         patch(
+            "services.discussion_service._assemble_macro_block",
+            new=AsyncMock(return_value={}),
+         ), \
+         patch(
+            "services.discussion_service._assemble_focus_briefs",
+            new=AsyncMock(return_value=[]),
+         ):
+        ctx = await discussion_service.gather_market_context(
+            db_session, as_of=_date(2025, 1, 1),
+        )
+
+    assert ctx["backtest"] is True
+    assert ctx["as_of"] == "2025-01-01"
+    # Both news blocks dropped to None — no headlines, backtest mode.
+    assert ctx["news_sentiment"] is None
+    assert ctx["international_sentiment"] is None
+
+
+@pytest.mark.asyncio
+async def test_gather_market_context_live_keeps_empty_news_block(
+    db_session: AsyncSession,
+):
+    """Live mode (no `as_of`): even when no headlines are scored,
+    `news_sentiment` stays as the empty-counts dict. Operators read
+    the zero counts as 'cron hasn't run yet' — distinct from the
+    backtest case above where dropping the block tells the LLM 'we
+    have no data here'."""
+    import services.tw_market_service as _tw   # noqa: F401
+
+    with patch.object(_tw, "get_screener", new=AsyncMock(return_value=[])), \
+         patch.object(_tw, "get_index", new=AsyncMock(return_value={})), \
+         patch(
+            "services.discussion_service._assemble_macro_block",
+            new=AsyncMock(return_value={}),
+         ), \
+         patch(
+            "services.discussion_service._assemble_focus_briefs",
+            new=AsyncMock(return_value=[]),
+         ):
+        ctx = await discussion_service.gather_market_context(db_session)
+
+    assert ctx["backtest"] is False
+    assert ctx["as_of"] is None
+    assert ctx["news_sentiment"] is not None
+    assert ctx["news_sentiment"]["bullish"] == 0
+
+
+@pytest.mark.asyncio
 async def test_gather_market_context_includes_chip_metrics_for_tw(
     db_session: AsyncSession,
 ):

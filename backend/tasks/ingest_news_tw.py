@@ -133,7 +133,7 @@ async def run() -> None:
             return
 
         try:
-            row_count = await _do_run()
+            counters = await _do_run()
         except Exception as exc:
             detail = _format_news_error(exc)
             failures = await record_failure(JOB_ID)
@@ -149,28 +149,60 @@ async def run() -> None:
 
         # Success — clear any leftover backoff state from prior failures.
         await clear_failures(JOB_ID)
-        log.info("ingest_news_tw.done", extra={"rows_processed": row_count})
-        await record_health(JOB_ID, ok=True, row_count=row_count)
+        log.info("ingest_news_tw.done", extra=counters)
+        # `row_count` carries the row-count badge value (input rows that
+        # made it past pubdate parsing). The status text exposes the
+        # full counter set so admins can spot a parse-fail spike that
+        # would otherwise look like "ok / 95 / 5m ago" with no signal
+        # that 5 articles got dropped.
+        status = (
+            f"fetched={counters['fetched']} attempted={counters['attempted']}"
+        )
+        if counters["dropped_pubdate"]:
+            status += f" dropped_pubdate={counters['dropped_pubdate']}"
+        await record_health(
+            JOB_ID, ok=True, row_count=counters["attempted"], error=status,
+        )
     finally:
         await release_lock(_LOCK_KEY)
 
 
-async def _do_run() -> int:
-    """Pull, dedupe, persist. Returns row count.
+async def _do_run() -> dict[str, int]:
+    """Pull, dedupe, persist. Returns counters for the health record.
 
     Raises on hard failure (HTTP error, network, etc.) — the caller
     catches and arms backoff. Empty results are treated as success
-    with row_count=0 ("RSS responded but parsed to nothing").
+    with `attempted=0` ("RSS responded but parsed to nothing").
+
+    Counters surface to the admin UI so a parse-fail spike (Google
+    changing pubDate format) doesn't silently degrade to "ok / 0".
     """
     items = await google_news_tw.get_news(limit=_FETCH_LIMIT)
-
+    fetched = len(items)
     if not items:
-        return 0
+        return {"fetched": 0, "attempted": 0, "dropped_pubdate": 0}
 
-    rows = [r for r in (_to_row(it) for it in items) if r is not None]
+    rows: list[NewsArticleRow] = []
+    dropped_pubdate = 0
+    for item in items:
+        # Distinguish "title/link missing" (silently drop, normal) from
+        # "pubdate unparseable" (count + log, abnormal). _to_row returns
+        # None for both, so re-check before the count.
+        if not (item.get("title") or "").strip() or not (item.get("link") or "").strip():
+            continue
+        row = _to_row(item)
+        if row is None:
+            dropped_pubdate += 1
+            continue
+        rows.append(row)
+
     async with AsyncSessionLocal() as db:
-        written = await insert_news_articles(db, rows)
-    return written
+        await insert_news_articles(db, rows)
+    return {
+        "fetched": fetched,
+        "attempted": len(rows),
+        "dropped_pubdate": dropped_pubdate,
+    }
 
 
 def _to_row(item: dict) -> NewsArticleRow | None:
@@ -183,8 +215,13 @@ def _to_row(item: dict) -> NewsArticleRow | None:
     try:
         # Connector returns ISO 8601 UTC ("...+00:00") but tolerates
         # mis-parsed pubDate strings flowing through unchanged. Cover
-        # both cases plus the date-only form so a malformed timestamp
-        # doesn't drop the article.
+        # both cases plus the date-only form. Articles that still fail
+        # to parse here are *dropped* (return None) rather than stamped
+        # with `datetime.now(UTC)` — the old fallback poisoned the
+        # archive: a parse-fail article would carry an "ingestion-time"
+        # timestamp forever, so backtest mode (`gather_market_context
+        # (as_of=...)`) saw it in every window and the resulting
+        # `news_sentiment` looked indistinguishable from live mode.
         if "T" in published_raw:
             published_at = datetime.fromisoformat(published_raw.replace("Z", "+00:00"))
         elif " " in published_raw:
@@ -196,7 +233,11 @@ def _to_row(item: dict) -> NewsArticleRow | None:
         else:
             published_at = published_at.astimezone(UTC)
     except (TypeError, ValueError):
-        published_at = datetime.now(UTC)
+        log.info(
+            "ingest_news_tw.pubdate_parse_failed",
+            extra={"raw": published_raw[:80], "title": title[:80]},
+        )
+        return None
 
     return NewsArticleRow(
         market="TW",

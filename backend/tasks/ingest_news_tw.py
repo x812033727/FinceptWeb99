@@ -200,7 +200,16 @@ def _to_row(item: dict) -> NewsArticleRow | None:
 
     return NewsArticleRow(
         market="TW",
-        symbol=item.get("symbol"),
+        # Two-stage symbol tagging (PR #215):
+        #   1. Connector's 4-6 digit regex on the title (catches
+        #      "**2330** 法說會優於預期")
+        #   2. Fallback to in-memory name map on the title — catches
+        #      "**台積電**法說會超預期 - 經濟日報" which has no
+        #      digit code. Without this, ~half of Taiwanese stock
+        #      headlines slip through with `symbol=NULL` and never
+        #      surface in `per_symbol_news_sentiment` lookups.
+        # Both lookups are pure in-memory; cost is negligible.
+        symbol=item.get("symbol") or _name_fallback_symbol(title),
         published_at=published_at,
         title=title,
         link=link,
@@ -209,3 +218,15 @@ def _to_row(item: dict) -> NewsArticleRow | None:
         payload=None,
         source="google_news_tw",
     )
+
+
+def _name_fallback_symbol(title: str) -> str | None:
+    """Defer the import so the task module loads even if
+    `tw_market_service` raises during startup (its `_name_map`
+    population talks to TWSE; on first boot before the symbol-map
+    cron has run, calling here just returns None — graceful)."""
+    try:
+        from services.tw_market_service import find_symbol_by_name_in_text
+        return find_symbol_by_name_in_text(title)
+    except Exception:
+        return None

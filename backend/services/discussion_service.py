@@ -1463,33 +1463,79 @@ async def gather_market_context(
     # AsyncSession isn't safe to share across concurrent awaits.
 
     async def _fetch_screener_pair() -> None:
-        if market != "TW":
-            return
         try:
-            from services import tw_market_service
-            rows = await tw_market_service.get_screener(
-                limit=200, min_volume=1_000_000,
-            )
-            scored = [
-                r for r in rows
-                if isinstance(r.get("change_pct"), (int, float))
-                and not _is_speculative_etf(r.get("symbol"))
-            ]
-            scored.sort(key=lambda r: r["change_pct"], reverse=True)
-            ctx["top_gainers"] = [_compact_screener_row(r) for r in scored[:top_n]]
-            ctx["top_losers"] = [_compact_screener_row(r) for r in scored[-top_n:][::-1]]
+            if market == "TW":
+                from services import tw_market_service
+                rows = await tw_market_service.get_screener(
+                    limit=200, min_volume=1_000_000,
+                )
+                scored = [
+                    r for r in rows
+                    if isinstance(r.get("change_pct"), (int, float))
+                    and not _is_speculative_etf(r.get("symbol"))
+                ]
+                scored.sort(key=lambda r: r["change_pct"], reverse=True)
+                ctx["top_gainers"] = [_compact_screener_row(r) for r in scored[:top_n]]
+                ctx["top_losers"] = [_compact_screener_row(r) for r in scored[-top_n:][::-1]]
+            elif market == "US":
+                # US-side breadth (PR #215): same shape as TW so the
+                # prompt template doesn't have to special-case. Pulled
+                # via the SP500 screener (Polygon → yfinance → curated
+                # universe waterfall handled by us_market_service).
+                from services import us_market_service
+                rows = await us_market_service.get_screener(
+                    limit=200, min_volume=1_000_000,
+                )
+                scored = [
+                    r for r in rows
+                    if isinstance(r.get("change_pct"), (int, float))
+                ]
+                scored.sort(key=lambda r: r["change_pct"], reverse=True)
+                ctx["top_gainers"] = [_compact_us_screener_row(r) for r in scored[:top_n]]
+                ctx["top_losers"] = [_compact_us_screener_row(r) for r in scored[-top_n:][::-1]]
         except Exception as exc:
             _record_error("screener", exc)
 
     async def _fetch_index() -> None:
-        if market != "TW":
-            return
         try:
-            from services import tw_market_service
-            # 30-day TAIEX history alongside the current quote. Lets
-            # personas reference 大盤型態 ("TAIEX 連跌 5 日 -5%")
-            # without burning an LLM tool call.
-            ctx["index"] = await tw_market_service.get_index(history_days=30)
+            if market == "TW":
+                from services import tw_market_service
+                # 30-day TAIEX history alongside the current quote. Lets
+                # personas reference 大盤型態 ("TAIEX 連跌 5 日 -5%")
+                # without burning an LLM tool call.
+                ctx["index"] = await tw_market_service.get_index(history_days=30)
+            elif market == "US":
+                # US-side index snapshot (PR #215): SPY + QQQ + DIA as
+                # the major-index proxies. ETF tickers (not `^GSPC` /
+                # `^IXIC`) so the existing `get_quote` waterfall can
+                # serve them — `^`-prefixed indices fall through the
+                # Polygon free tier. Each is fetched in parallel; a
+                # single ticker outage still fills the others.
+                from services import us_market_service
+                tickers = [
+                    ("SPY", "S&P 500 (SPY)"),
+                    ("QQQ", "NASDAQ-100 (QQQ)"),
+                    ("DIA", "Dow Jones (DIA)"),
+                ]
+
+                async def _q(t: str):
+                    try:
+                        return await us_market_service.get_quote(t)
+                    except Exception:
+                        return None
+
+                results = await asyncio.gather(*[_q(t) for t, _ in tickers])
+                index_block: dict[str, Any] = {}
+                for (ticker, label), q in zip(tickers, results):
+                    if q is None:
+                        continue
+                    index_block[ticker] = {
+                        "label":      label,
+                        "price":      q.get("price"),
+                        "change_pct": q.get("change_pct"),
+                        "prev_close": q.get("prev_close"),
+                    }
+                ctx["index"] = index_block or None
         except Exception as exc:
             _record_error("index", exc)
 
@@ -1717,6 +1763,23 @@ def _compact_screener_row(r: dict[str, Any]) -> dict[str, Any]:
         "volume": r.get("volume"),
         "pe": r.get("pe_ratio"),
         "yield": r.get("dividend_yield"),
+    }
+
+
+def _compact_us_screener_row(r: dict[str, Any]) -> dict[str, Any]:
+    """US-side compact form (PR #215). Mirrors `_compact_screener_row`
+    but pulls from US screener output: industry / sector come from
+    the row directly (no global map like TW's `_industry_map`); PE /
+    yield often missing on Polygon snapshot tier so they're omitted
+    rather than passed through as 0."""
+    sym = r.get("symbol")
+    return {
+        "symbol":     sym,
+        "name":       r.get("name"),
+        "sector":     r.get("sector"),
+        "price":      r.get("price"),
+        "change_pct": r.get("change_pct"),
+        "volume":     r.get("volume"),
     }
 
 

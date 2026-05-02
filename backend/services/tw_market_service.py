@@ -165,6 +165,41 @@ def get_company_name(symbol: str) -> str | None:
     return _name_map.get(symbol)
 
 
+def find_symbol_by_name_in_text(text: str) -> str | None:
+    """Reverse-lookup: scan `text` for any TW listed company short name
+    and return the matching symbol. First match wins, with longer
+    names tried first so e.g. "中華電" matches before "中華" (which
+    is a substring of the former — same prefix collision exists for
+    "台積電" vs "台積").
+
+    Returns None when:
+      - `text` is empty
+      - `_name_map` hasn't been populated yet (fresh deploy, ingest
+        cron hasn't run)
+      - no name matches
+
+    Used by `ingest_news_tw._to_row` to tag articles like
+    "台積電法說超預期 - 經濟日報" (no 4-digit code in title) as
+    `symbol="2330"` so per-symbol news lookups actually find them.
+    The same in-memory `_name_map` populated by `refresh_symbol_map`
+    is reused — no extra fetch.
+
+    Cost: O(N) substring checks per call where N ≈ 1500 listed
+    companies. Each substring check is O(len(text)) ≈ 50 chars, so
+    total ~75K character compares per article — well under 1ms.
+    """
+    if not text or not _name_map:
+        return None
+    # Sort once per call. The map only changes daily on the symbol-
+    # refresh cron, but we trade a tiny per-call sort for not having
+    # to invalidate a cached sorted view from inside the cron path.
+    pairs = sorted(_name_map.items(), key=lambda kv: -len(kv[1] or ""))
+    for symbol, name in pairs:
+        if name and name in text:
+            return symbol
+    return None
+
+
 # ── Quote ─────────────────────────────────────────────────────────
 
 async def _archive_last2_closes(symbol: str) -> list[tuple[str, float]]:

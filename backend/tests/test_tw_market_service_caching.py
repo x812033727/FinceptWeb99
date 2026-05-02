@@ -122,3 +122,73 @@ async def test_get_fundamentals_with_ratios_is_cached():
 
     mock_set.assert_awaited_once()
     assert result["pe"] == 18.5
+
+
+# ── find_symbol_by_name_in_text (PR #215) ─────────────────────────
+
+
+def test_find_symbol_by_name_returns_none_when_map_empty():
+    """Fresh deploy before symbol-map cron has run → graceful None,
+    not exception."""
+    saved = dict(svc._name_map)
+    try:
+        svc._name_map.clear()
+        assert svc.find_symbol_by_name_in_text("台積電法說") is None
+    finally:
+        svc._name_map.clear()
+        svc._name_map.update(saved)
+
+
+def test_find_symbol_by_name_matches_company_name_in_title():
+    saved = dict(svc._name_map)
+    try:
+        svc._name_map.clear()
+        svc._name_map.update({
+            "2330": "台積電",
+            "2454": "聯發科",
+            "2317": "鴻海",
+        })
+        assert svc.find_symbol_by_name_in_text(
+            "台積電法說會超預期 - 經濟日報",
+        ) == "2330"
+        assert svc.find_symbol_by_name_in_text(
+            "聯發科 Q1 EPS 公布",
+        ) == "2454"
+    finally:
+        svc._name_map.clear()
+        svc._name_map.update(saved)
+
+
+def test_find_symbol_by_name_prefers_longer_match_on_collision():
+    """`中華電` contains `中華` as a prefix. Prefix collision must
+    resolve to the longer name, otherwise CHT (2412) headlines
+    would mis-tag as some 中華-prefixed code."""
+    saved = dict(svc._name_map)
+    try:
+        svc._name_map.clear()
+        svc._name_map.update({
+            "2412": "中華電",
+            "1234": "中華",   # shorter — must NOT win when both could match
+        })
+        assert svc.find_symbol_by_name_in_text(
+            "中華電宣布漲價 - 工商時報",
+        ) == "2412"
+        # Pure 中華 (no 電) should still match the shorter name.
+        assert svc.find_symbol_by_name_in_text(
+            "中華大樓開幕",
+        ) == "1234"
+    finally:
+        svc._name_map.clear()
+        svc._name_map.update(saved)
+
+
+def test_find_symbol_by_name_returns_none_when_no_match():
+    saved = dict(svc._name_map)
+    try:
+        svc._name_map.clear()
+        svc._name_map.update({"2330": "台積電"})
+        assert svc.find_symbol_by_name_in_text("純策略討論不提具體公司") is None
+        assert svc.find_symbol_by_name_in_text("") is None
+    finally:
+        svc._name_map.clear()
+        svc._name_map.update(saved)

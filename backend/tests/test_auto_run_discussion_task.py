@@ -174,7 +174,11 @@ async def test_creates_discussion_with_auto_run_flag(
     assert d.persona_ids == ["buffett", "lynch", "soros"]
     assert d.topic == "my topic"
     assert d.rules == "my rules"
-    assert d.verify_after_date is not None
+    # `verify_after_date` is now seeded inside `synthesize_conclusion`
+    # (PR #218) — the auto-run task no longer sets it explicitly
+    # (PR #222). This test mocks `synthesize_conclusion` so the real
+    # seed never fires; the contract is covered by
+    # `test_synthesize_conclusion_seeds_verify_after_date`.
 
 
 @pytest.mark.asyncio
@@ -456,6 +460,13 @@ async def test_one_user_failure_doesnt_block_others(
         call_counter["n"] += 1
         if discussion.owner_id == a.id:
             raise RuntimeError("boom")
+        # Simulate the real synthesize_conclusion's side effect of
+        # seeding verify_after_date on success (PR #218 / #222 —
+        # the auto-run task no longer sets it explicitly).
+        from datetime import UTC as _UTC, datetime as _dt, timedelta as _td
+        discussion.verify_after_date = (
+            _dt.now(_UTC).date() + _td(days=7)
+        )
         return {
             "recommended_symbols": [],
             "reasoning": "x",

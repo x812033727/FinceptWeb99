@@ -1057,16 +1057,17 @@ async def _build_us_focus_brief(symbol: str) -> dict[str, Any]:
 
 
 async def _assemble_focus_briefs(
-    db: AsyncSession, *, market: str, symbols: list[str],
+    *, market: str, symbols: list[str],
 ) -> list[dict[str, Any]]:
     """Fan out per-symbol brief assembly concurrently. Cap at
     `_MAX_FOCUS_SYMBOLS` for token-budget protection.
 
-    `db` is accepted for parity with the other gather_market_context
-    helpers but never threaded into the per-symbol builders — both
-    `_build_tw_focus_brief` and `_build_us_focus_brief` use their
-    respective service modules' autosession helpers, so they can
-    fan out alongside the shared-db reads safely.
+    No `db` param: both `_build_tw_focus_brief` and
+    `_build_us_focus_brief` use their respective service modules'
+    autosession helpers, so this fan-out is safe to run alongside
+    the shared-`db` reads in `gather_market_context` (PR #222
+    cleanup; the dead param was removed for a clearer concurrency
+    contract).
     """
     if not symbols:
         return []
@@ -1632,7 +1633,7 @@ async def gather_market_context(
             return
         try:
             ctx["focus_briefs"] = await _assemble_focus_briefs(
-                db, market=market, symbols=list(focus_symbols),
+                market=market, symbols=list(focus_symbols),
             )
         except Exception as exc:
             _record_error("focus_briefs", exc)

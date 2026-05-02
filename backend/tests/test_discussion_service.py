@@ -2707,7 +2707,7 @@ async def test_assemble_focus_briefs_returns_empty_when_no_symbols():
     """Caller passes `[]` → assembler short-circuits without touching
     any market service."""
     out = await discussion_service._assemble_focus_briefs(
-        db=None, market="TW", symbols=[],
+        market="TW", symbols=[],
     )
     assert out == []
 
@@ -2983,7 +2983,7 @@ async def test_assemble_focus_briefs_fan_out_collects_per_symbol():
         new=fake_brief,
     ):
         out = await discussion_service._assemble_focus_briefs(
-            db=None, market="TW", symbols=["2330", "BAD", "2454"],
+            market="TW", symbols=["2330", "BAD", "2454"],
         )
     syms = [b["symbol"] for b in out]
     assert "2330" in syms and "2454" in syms and "BAD" not in syms

@@ -42,11 +42,7 @@ from services.ingest.repository import (
     record_failure,
     record_health,
 )
-from services.tw_trading_calendar import (
-    add_trading_days_estimate,
-    is_today_likely_trading_day,
-    utcnow_tw_date,
-)
+from services.tw_trading_calendar import is_today_likely_trading_day
 
 log = logging.getLogger(__name__)
 
@@ -247,13 +243,11 @@ async def _run_for_user(
         },
     )
 
-    verify_after = add_trading_days_estimate(utcnow_tw_date(), _AUTO_ROUNDS)
-    await db.execute(
-        update(Discussion)
-        .where(Discussion.id == discussion.id)
-        .values(verify_after_date=verify_after)
-        .execution_options(synchronize_session=False)
-    )
-    await db.commit()
-    discussion.verify_after_date = verify_after
+    # `verify_after_date` is now seeded inside `synthesize_conclusion`
+    # (PR #218), so the dedicated UPDATE that used to live here is
+    # redundant and was using `_AUTO_ROUNDS=5` as a calendar-day arg
+    # to `add_trading_days_estimate` (semantically wrong even if
+    # numerically correct). Trust the service-layer set; if a test
+    # explicitly bypasses it via direct DB writes, that test owns
+    # setting verify_after_date too.
     return True

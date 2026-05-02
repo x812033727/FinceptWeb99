@@ -43,6 +43,7 @@ from api.discussion.schemas import (
     CreateDiscussionRequest,
     DiscussionDetailResponse,
     DiscussionResponse,
+    InjectUserMessageRequest,
     ScoreboardResponse,
     ScoreboardRow,
     TurnResponse,
@@ -133,6 +134,7 @@ def _to_response(d: Discussion) -> DiscussionResponse:
         topic=d.topic,
         rules=d.rules,
         persona_ids=list(d.persona_ids or []),
+        market=d.market,
         status=d.status,
         current_round=d.current_round,
         conclusion=d.conclusion,
@@ -175,6 +177,7 @@ async def create_session(
             topic=body.topic,
             rules=body.rules,
             persona_ids=body.persona_ids,
+            market=body.market,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -297,6 +300,7 @@ async def update_session(
             topic=body.topic,
             rules=body.rules,
             persona_ids=body.persona_ids,
+            market=body.market,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -381,6 +385,7 @@ async def run_round(
     queue: asyncio.Queue = asyncio.Queue()
     owner_id = _coerce_owner_uuid(user)
     user_id_str = str(user["id"])
+    user_role_str = str(user.get("role") or "")
 
     async def _run_in_background() -> None:
         completed = 0
@@ -398,7 +403,9 @@ async def run_round(
                     return
                 try:
                     async for ev in discussion_service.run_round(
-                        bg_db, bg_row, user_id=user_id_str,
+                        bg_db, bg_row,
+                        user_id=user_id_str,
+                        user_role=user_role_str,
                     ):
                         if ev.type == "turn_end":
                             completed += 1
@@ -479,6 +486,7 @@ async def get_auto_run_config(
             persona_ids=[],
             topic="",
             rules="",
+            market="TW",
             updated_at=None,
         )
     return AutoRunConfigResponse(
@@ -486,6 +494,7 @@ async def get_auto_run_config(
         persona_ids=list(row.persona_ids or []),
         topic=row.topic,
         rules=row.rules,
+        market=row.market,
         updated_at=row.updated_at,
     )
 
@@ -504,6 +513,7 @@ async def put_auto_run_config(
             persona_ids=body.persona_ids,
             topic=body.topic,
             rules=body.rules,
+            market=body.market,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -512,7 +522,51 @@ async def put_auto_run_config(
         persona_ids=list(row.persona_ids or []),
         topic=row.topic,
         rules=row.rules,
+        market=row.market,
         updated_at=row.updated_at,
+    )
+
+
+@router.post(
+    "/sessions/{discussion_id}/inject",
+    response_model=TurnResponse,
+    status_code=201,
+)
+async def inject_user_message(
+    discussion_id: uuid.UUID,
+    body: InjectUserMessageRequest,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Append a user-input turn to the current round so the next
+    round's personas have to react to it.
+
+    Owner-scoped. Requires the discussion to be in `draft` status
+    (no in-flight round) and to have at least one round already
+    completed — there's nothing to react to before round 1, and the
+    user can edit topic/rules directly in that case. Does NOT
+    consume AI quota — no LLM call.
+    """
+    row = await discussion_service.get_discussion(
+        db, discussion_id=discussion_id, owner_id=_coerce_owner_uuid(user),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Discussion not found")
+    try:
+        turn = await discussion_service.inject_user_message(
+            db, row, content=body.content,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return TurnResponse(
+        id=turn.id,
+        round=turn.round,
+        turn_index=turn.turn_index,
+        persona_id=turn.persona_id,
+        stance=turn.stance,
+        content=turn.content,
+        citations=turn.citations,
+        created_at=turn.created_at,
     )
 
 

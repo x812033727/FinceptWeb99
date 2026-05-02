@@ -6,6 +6,7 @@ import { useAuthStore } from "@/store/authStore";
 import type {
   Discussion,
   DiscussionDetail,
+  DiscussionMarket,
   Turn,
 } from "@/types/discussion";
 import { AutoRunConfigCard } from "@/components/discussion/AutoRunConfigCard";
@@ -18,6 +19,7 @@ import {
   concludeSession,
   createSession,
   deleteSession,
+  injectUserMessage,
   fetchAgents,
   fetchSession,
   fetchSessions,
@@ -73,6 +75,7 @@ export default function DiscussionPage() {
     setCollapse((prev) => ({ ...prev, [key]: !prev[key] }));
   }
   const [personaIds, setPersonaIds] = useState<string[]>(DEFAULT_PERSONAS);
+  const [market, setMarket] = useState<DiscussionMarket>("TW");
 
   // Streaming round state — appended to as the SSE arrives.
   const [streamingTurns, setStreamingTurns] = useState<Turn[]>([]);
@@ -81,6 +84,23 @@ export default function DiscussionPage() {
   const [streamingRound, setStreamingRound] = useState<number | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
+  // Live tool-use log for the persona currently streaming. Cleared on
+  // every turn_start so each persona's bubble shows only its own
+  // tool calls. Not persisted — once turn_end fires we drop them; the
+  // persona's `content` is meant to summarise what they learned from
+  // the tools, so the bubble's final text already encodes the
+  // signal. Server-side these events are emitted for `claude_agent`
+  // and OpenAI-compat tool-loop providers (PR #208).
+  const [streamingToolEvents, setStreamingToolEvents] = useState<
+    Array<{
+      id: string;
+      kind: "call" | "result";
+      name: string;
+      args?: unknown;
+      summary?: string;
+      is_error?: boolean;
+    }>
+  >([]);
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -103,6 +123,7 @@ export default function DiscussionPage() {
     setStreamingPersona(null);
     setStreamingRound(null);
     setStreamError(null);
+    setStreamingToolEvents([]);
   }, [selectedId]);
 
   // Hydrate the editable form fields from the active session's detail
@@ -117,6 +138,7 @@ export default function DiscussionPage() {
     setTopic(detail.topic);
     setRules(detail.rules);
     setPersonaIds(detail.persona_ids);
+    setMarket(detail.market ?? "TW");
   }, [detail]);
 
   useEffect(() => {
@@ -144,8 +166,12 @@ export default function DiscussionPage() {
   });
 
   const updateMut = useMutation({
-    mutationFn: (body: { topic?: string; rules?: string; persona_ids?: string[] }) =>
-      updateSession(selectedId!, body),
+    mutationFn: (body: {
+      topic?: string;
+      rules?: string;
+      persona_ids?: string[];
+      market?: DiscussionMarket;
+    }) => updateSession(selectedId!, body),
     onSuccess: (row) => {
       queryClient.invalidateQueries({ queryKey: ["discussion-sessions"] });
       queryClient.invalidateQueries({ queryKey: ["discussion-session", selectedId] });
@@ -171,6 +197,18 @@ export default function DiscussionPage() {
     },
   });
 
+  // Between-rounds user injection (PR #211). Drops a user_input
+  // turn into the current round's transcript so the next round's
+  // personas have to react to it.
+  const [injectDraft, setInjectDraft] = useState("");
+  const injectMut = useMutation({
+    mutationFn: (content: string) => injectUserMessage(selectedId!, content),
+    onSuccess: () => {
+      setInjectDraft("");
+      queryClient.invalidateQueries({ queryKey: ["discussion-session", selectedId] });
+    },
+  });
+
   // ── round streaming ──────────────────────────────────────────
 
   function togglePersona(id: string) {
@@ -189,12 +227,12 @@ export default function DiscussionPage() {
       return;
     }
     setStreamError(null);
-    createMut.mutate({ topic, rules, persona_ids: personaIds });
+    createMut.mutate({ topic, rules, persona_ids: personaIds, market });
   }
 
   function saveEdits() {
     if (!selectedId) return;
-    updateMut.mutate({ topic, rules, persona_ids: personaIds });
+    updateMut.mutate({ topic, rules, persona_ids: personaIds, market });
   }
 
   // Per-field saves so the user can commit just the topic edit without
@@ -292,10 +330,49 @@ export default function DiscussionPage() {
                 setStreamingPersona(obj.persona_id);
                 if (typeof obj.round === "number") setStreamingRound(obj.round);
                 setStreamBuffer("");
+                setStreamingToolEvents([]);
                 break;
               case "delta":
                 currentBuffer += obj.text;
                 setStreamBuffer(currentBuffer);
+                break;
+              case "tool_call":
+                // Live tool-use feedback: append a `call` row keyed
+                // on the LLM's tool-call id so the matching
+                // `tool_result` later can mark it complete instead
+                // of producing two rows. `id` may be missing on
+                // some providers — fall back to a random key.
+                setStreamingToolEvents((prev) => [
+                  ...prev,
+                  {
+                    id:    String(obj.id ?? `${Date.now()}-${prev.length}`),
+                    kind:  "call",
+                    name:  String(obj.name ?? "unknown"),
+                    args:  obj.args,
+                  },
+                ]);
+                break;
+              case "tool_result":
+                setStreamingToolEvents((prev) => {
+                  // If we already have a `call` row with this id,
+                  // upgrade it to a `result` row carrying the
+                  // summary; otherwise append a standalone result
+                  // (some providers fire only the result event).
+                  const callIdx = prev.findIndex(
+                    (e) => e.id === String(obj.id) && e.kind === "call",
+                  );
+                  const resultRow = {
+                    id:       String(obj.id ?? `${Date.now()}-${prev.length}`),
+                    kind:     "result" as const,
+                    name:     String(obj.name ?? "unknown"),
+                    summary:  String(obj.summary ?? ""),
+                    is_error: Boolean(obj.is_error),
+                  };
+                  if (callIdx < 0) return [...prev, resultRow];
+                  const next = [...prev];
+                  next[callIdx] = { ...next[callIdx], ...resultRow };
+                  return next;
+                });
                 break;
               case "turn_end":
                 setStreamingTurns((prev) => [
@@ -312,6 +389,7 @@ export default function DiscussionPage() {
                 ]);
                 setStreamBuffer("");
                 setStreamingPersona(null);
+                setStreamingToolEvents([]);
                 currentBuffer = "";
                 break;
               case "error":
@@ -603,6 +681,20 @@ export default function DiscussionPage() {
             )}
           </div>
 
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-muted-foreground">{t("discussion.market_label")}</span>
+            <select
+              value={market}
+              onChange={(e) => setMarket(e.target.value as DiscussionMarket)}
+              disabled={!isDraft || isStreaming}
+              className="bg-card border border-border rounded px-2 py-1 text-foreground focus:outline-none focus:border-primary/50 disabled:opacity-60"
+            >
+              <option value="TW">TW</option>
+              <option value="US">US</option>
+              <option value="GLOBAL">GLOBAL</option>
+            </select>
+          </div>
+
           <div className="flex items-center gap-2 flex-wrap">
             {!selectedId ? (
               <button
@@ -661,6 +753,39 @@ export default function DiscussionPage() {
               </>
             )}
           </div>
+          {selectedId && isDraft && (detail?.current_round ?? 0) >= 1 && !isStreaming && (
+            <div className="border border-border rounded-md p-2 bg-card/40 space-y-1.5">
+              <label className="text-[11px] text-muted-foreground">
+                {t("discussion.inject_label")}
+              </label>
+              <textarea
+                value={injectDraft}
+                onChange={(e) => setInjectDraft(e.target.value)}
+                rows={2}
+                maxLength={2000}
+                placeholder={t("discussion.inject_placeholder")}
+                className="w-full resize-none bg-card border border-border rounded px-2 py-1 text-xs text-foreground focus:outline-none focus:border-primary/50"
+              />
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-muted-foreground">
+                  {injectDraft.length}/2000
+                </span>
+                <button
+                  type="button"
+                  onClick={() => injectMut.mutate(injectDraft.trim())}
+                  disabled={!injectDraft.trim() || injectMut.isPending}
+                  className="px-2.5 py-1 rounded text-[11px] border border-amber-800/50 text-amber-300 hover:bg-amber-900/20 transition-colors disabled:opacity-40"
+                >
+                  {injectMut.isPending ? t("common.saving") : t("discussion.inject_send")}
+                </button>
+              </div>
+              {injectMut.isError && (
+                <p className="text-[10px] text-red-400">
+                  {(injectMut.error as Error)?.message ?? t("common.error")}
+                </p>
+              )}
+            </div>
+          )}
           {streamError && (
             <div className="text-xs text-red-400 bg-red-950/30 border border-red-900/50 rounded px-3 py-2">
               {streamError}
@@ -759,6 +884,38 @@ export default function DiscussionPage() {
                   <span>·</span>
                   <span className="animate-pulse">{t("discussion.thinking")}</span>
                 </div>
+                {streamingToolEvents.length > 0 && (
+                  <div className="mb-2 space-y-0.5 font-mono text-[10px] text-muted-foreground">
+                    {streamingToolEvents.map((ev) => {
+                      const argsStr = ev.args !== undefined
+                        ? JSON.stringify(ev.args)
+                        : "";
+                      const sumStr = (ev.summary ?? "").replace(/\s+/g, " ").trim();
+                      const truncate = (s: string, max: number) =>
+                        s.length > max ? s.slice(0, max) + "…" : s;
+                      const icon = ev.is_error ? "⚠️" : ev.kind === "result" ? "✓" : "⏳";
+                      const tone = ev.is_error
+                        ? "text-amber-400"
+                        : ev.kind === "result"
+                        ? "text-emerald-400"
+                        : "text-muted-foreground";
+                      return (
+                        <div key={ev.id} className={`flex gap-1 ${tone}`}>
+                          <span className="shrink-0">{icon}</span>
+                          <span className="truncate">
+                            <span className="font-semibold">{ev.name}</span>
+                            {argsStr && (
+                              <span className="opacity-70"> {truncate(argsStr, 60)}</span>
+                            )}
+                            {sumStr && (
+                              <span className="opacity-90"> → {truncate(sumStr, 80)}</span>
+                            )}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
                 <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
                   {renderInlineMarkdown(streamBuffer)}
                   <span className="inline-block w-1.5 h-3.5 bg-current ml-0.5 animate-pulse align-middle" />

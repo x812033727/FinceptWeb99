@@ -58,6 +58,18 @@ function RoundContextRow({ snap }: { snap: RoundContextSnapshot }) {
         : "")
     : null;
 
+  const macroLine = summary.macro_summary
+    ? `${t("discussion.context_macro")}：${summary.macro_summary}`
+    : null;
+
+  const userCtxLine = summary.user_context_summary
+    ? `${t("discussion.context_user")}：${summary.user_context_summary}`
+    : null;
+
+  const priorLine = summary.prior_discussions_summary
+    ? `${t("discussion.context_prior")}：${summary.prior_discussions_summary}`
+    : null;
+
   return (
     <div className="border border-border rounded p-2 space-y-1">
       <div className="flex items-center justify-between gap-2">
@@ -76,6 +88,14 @@ function RoundContextRow({ snap }: { snap: RoundContextSnapshot }) {
         {newsLine && <div>{newsLine}</div>}
         {buyerLine && <div>{buyerLine}</div>}
         {growerLine && <div>{growerLine}</div>}
+        {macroLine && <div>{macroLine}</div>}
+        {summary.focus_briefs_summary?.map((line, i) => (
+          <div key={`fb-${i}`} className="text-amber-400/80">
+            {t("discussion.context_focus")}：{line}
+          </div>
+        ))}
+        {userCtxLine && <div className="text-emerald-400/80">{userCtxLine}</div>}
+        {priorLine && <div className="text-blue-400/80">{priorLine}</div>}
       </div>
       <button
         type="button"

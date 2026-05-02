@@ -481,6 +481,575 @@ async def test_run_round_emits_full_event_sequence(
     assert refreshed.current_round == 1
 
 
+# ── per-persona context filtering ─────────────────────────────────
+
+
+def _full_ctx_for_filter():
+    """Synthetic ctx covering every block the filter knows about."""
+    return {
+        "market":                    "TW",
+        "captured_at":               "2026-05-01T00:00:00+00:00",
+        "errors":                    [],
+        "top_gainers":               ["g"],
+        "top_losers":                ["l"],
+        "index":                     {"price": 1},
+        "news_sentiment":            {"avg_score": 0},
+        "per_symbol_news_sentiment": {"2330": {}},
+        "international_sentiment":   {"avg_score": 0},
+        "top_foreign_buyers":        [],
+        "margin_balance_trend":      {},
+        "top_revenue_growers":       [],
+        "active_buybacks":           [],
+        "govt_bank_flow_5d":         [],
+        "risk_warnings":             {},
+        "market_institutional_5d":   [],
+        "focus_briefs":              [],
+        "macro":                     {},
+        "user_context":              None,
+    }
+
+
+def test_filter_context_unknown_persona_returns_full_ctx():
+    """Personas not in the registry must NOT silently lose data — fail
+    open so a typo / new persona doesn't hide blocks the LLM expects."""
+    ctx = _full_ctx_for_filter()
+    out = discussion_service._filter_context_for_persona(ctx, "unknown_persona")
+    assert set(out.keys()) == set(ctx.keys())
+
+
+def test_filter_context_macro_analyst_drops_chip_metrics():
+    """macro_analyst's view excludes TW chip-flow + risk_warnings —
+    those would mislead a Fed-policy thesis."""
+    ctx = _full_ctx_for_filter()
+    out = discussion_service._filter_context_for_persona(ctx, "macro_analyst")
+    assert "macro" in out
+    assert "international_sentiment" in out
+    assert "top_foreign_buyers" in out
+    # Negative space — chip / risk blocks dropped.
+    assert "risk_warnings" not in out
+    assert "active_buybacks" not in out
+    assert "focus_briefs" not in out
+
+
+def test_filter_context_buffett_keeps_value_blocks_drops_quant_breadth():
+    ctx = _full_ctx_for_filter()
+    out = discussion_service._filter_context_for_persona(ctx, "buffett")
+    assert "focus_briefs" in out
+    assert "active_buybacks" in out
+    assert "top_revenue_growers" in out
+    # Quant breadth blocks dropped.
+    assert "top_gainers" not in out
+    assert "market_institutional_5d" not in out
+
+
+def test_filter_context_portfolio_advisor_keeps_user_context():
+    """portfolio_advisor specifically needs the owner's holdings to
+    give portfolio-fit advice."""
+    ctx = _full_ctx_for_filter()
+    out = discussion_service._filter_context_for_persona(ctx, "portfolio_advisor")
+    assert "user_context" in out
+    assert "focus_briefs" in out
+
+
+def test_filter_context_claude_research_sees_everything():
+    """The tool-using persona gets the full picture so it can decide
+    which tool to call without re-fetching context blocks."""
+    ctx = _full_ctx_for_filter()
+    out = discussion_service._filter_context_for_persona(ctx, "claude_research")
+    assert set(out.keys()) == set(ctx.keys())
+
+
+def test_filter_context_always_includes_metadata_keys():
+    """`market`, `captured_at`, `errors` must appear in every persona
+    view — the prompt template references them unconditionally."""
+    ctx = _full_ctx_for_filter()
+    for pid in ("macro_analyst", "buffett", "simons", "marks"):
+        out = discussion_service._filter_context_for_persona(ctx, pid)
+        assert "market" in out
+        assert "captured_at" in out
+        assert "errors" in out
+
+
+# ── _assemble_prior_discussions ───────────────────────────────────
+
+
+async def _make_done_discussion(
+    db: AsyncSession,
+    *,
+    owner_id,
+    topic: str,
+    recommended: list[str],
+    market: str = "TW",
+    horizon: str = "short_term",
+    consensus: float = 0.6,
+    verdict: str | None = None,
+    days_old: int = 0,
+) -> Discussion:
+    """Build a concluded discussion fixture for prior-discussion tests.
+    Bypasses run_round / synthesize_conclusion and writes the
+    Discussion row directly with a hand-crafted conclusion."""
+    from datetime import UTC as _UTC, datetime as _dt, timedelta as _td
+
+    row = await discussion_service.create_discussion(
+        db,
+        owner_id=owner_id,
+        topic=topic,
+        rules="r",
+        persona_ids=["buffett", "lynch"],
+        market=market,
+    )
+    row.status = discussion_service.STATUS_DONE
+    row.conclusion = {
+        "recommended_symbols": list(recommended),
+        "reasoning": "ok",
+        "risks": [],
+        "time_horizon": horizon,
+        "consensus_score": consensus,
+    }
+    if verdict is not None:
+        row.verdict = verdict
+    if days_old > 0:
+        row.created_at = _dt.now(_UTC) - _td(days=days_old)
+    await db.commit()
+    await db.refresh(row)
+    return row
+
+
+@pytest.mark.asyncio
+async def test_prior_discussions_empty_when_no_focus_symbols(
+    db_session: AsyncSession, owner: User,
+):
+    """No focus_symbols → no point looking up overlap. Skip the
+    query entirely; returns []."""
+    out = await discussion_service._assemble_prior_discussions(
+        db_session, owner_id=owner.id, focus_symbols=None,
+    )
+    assert out == []
+    out = await discussion_service._assemble_prior_discussions(
+        db_session, owner_id=owner.id, focus_symbols=[],
+    )
+    assert out == []
+
+
+@pytest.mark.asyncio
+async def test_prior_discussions_matches_topic_and_recommended_symbols(
+    db_session: AsyncSession, owner: User,
+):
+    """Two prior discussions: one with the symbol in the topic, the
+    other with it only in `conclusion.recommended_symbols`. Both
+    should be returned."""
+    a = await _make_done_discussion(
+        db_session, owner_id=owner.id,
+        topic="本週短線 2330 走勢", recommended=["2454"],
+    )
+    b = await _make_done_discussion(
+        db_session, owner_id=owner.id,
+        topic="台股大盤觀察", recommended=["2330"],
+    )
+    out = await discussion_service._assemble_prior_discussions(
+        db_session, owner_id=owner.id, focus_symbols=["2330"],
+    )
+    ids = {row["id"] for row in out}
+    assert str(a.id) in ids
+    assert str(b.id) in ids
+    # `matched_symbols` reflects which focus symbols overlapped.
+    for row in out:
+        assert "2330" in row["matched_symbols"]
+
+
+@pytest.mark.asyncio
+async def test_prior_discussions_excludes_self(
+    db_session: AsyncSession, owner: User,
+):
+    """Re-running a round on the SAME discussion must not pull
+    that discussion's own conclusion in as 'past memory'."""
+    self_row = await _make_done_discussion(
+        db_session, owner_id=owner.id,
+        topic="2330", recommended=["2330"],
+    )
+    other = await _make_done_discussion(
+        db_session, owner_id=owner.id,
+        topic="2330 again", recommended=["2330"],
+    )
+    out = await discussion_service._assemble_prior_discussions(
+        db_session, owner_id=owner.id,
+        focus_symbols=["2330"], exclude_id=self_row.id,
+    )
+    ids = {row["id"] for row in out}
+    assert str(self_row.id) not in ids
+    assert str(other.id) in ids
+
+
+@pytest.mark.asyncio
+async def test_prior_discussions_owner_scoped(
+    db_session: AsyncSession, owner: User,
+):
+    """Discussions from another user must not leak into this user's
+    prior list — privacy boundary."""
+    other_user = User(
+        email=f"other-{uuid.uuid4().hex[:8]}@test.com",
+        hashed_password="x",
+    )
+    db_session.add(other_user)
+    await db_session.commit()
+    await db_session.refresh(other_user)
+    await _make_done_discussion(
+        db_session, owner_id=other_user.id,
+        topic="2330 leak", recommended=["2330"],
+    )
+    out = await discussion_service._assemble_prior_discussions(
+        db_session, owner_id=owner.id, focus_symbols=["2330"],
+    )
+    assert out == []
+
+
+@pytest.mark.asyncio
+async def test_prior_discussions_skips_drafts_and_unconcluded(
+    db_session: AsyncSession, owner: User,
+):
+    """Only `status=done` rows with a non-null conclusion count.
+    A draft / running discussion has no committed view to cite."""
+    draft_row = await discussion_service.create_discussion(
+        db_session, owner_id=owner.id,
+        topic="2330 still drafting",
+        rules="r", persona_ids=["buffett", "lynch"],
+    )
+    # Leave status=draft, conclusion=null.
+    out = await discussion_service._assemble_prior_discussions(
+        db_session, owner_id=owner.id, focus_symbols=["2330"],
+    )
+    assert all(row["id"] != str(draft_row.id) for row in out)
+
+
+@pytest.mark.asyncio
+async def test_prior_discussions_drops_old_rows_outside_lookback(
+    db_session: AsyncSession, owner: User,
+):
+    """A 6-month-old discussion shouldn't bloat the prompt of a
+    fresh discussion — `_PRIOR_DISCUSSIONS_LOOKBACK_DAYS` keeps
+    only the recent window."""
+    fresh = await _make_done_discussion(
+        db_session, owner_id=owner.id,
+        topic="2330 fresh", recommended=["2330"], days_old=10,
+    )
+    stale = await _make_done_discussion(
+        db_session, owner_id=owner.id,
+        topic="2330 stale", recommended=["2330"], days_old=200,
+    )
+    out = await discussion_service._assemble_prior_discussions(
+        db_session, owner_id=owner.id, focus_symbols=["2330"],
+    )
+    ids = {row["id"] for row in out}
+    assert str(fresh.id) in ids
+    assert str(stale.id) not in ids
+
+
+@pytest.mark.asyncio
+async def test_prior_discussions_caps_at_limit(
+    db_session: AsyncSession, owner: User,
+):
+    """Even if 12 past discussions overlap, the block caps at
+    `_PRIOR_DISCUSSIONS_CAP` so the prompt doesn't balloon."""
+    for i in range(12):
+        await _make_done_discussion(
+            db_session, owner_id=owner.id,
+            topic=f"2330 round {i}", recommended=["2330"],
+            days_old=i,
+        )
+    out = await discussion_service._assemble_prior_discussions(
+        db_session, owner_id=owner.id, focus_symbols=["2330"],
+    )
+    assert len(out) == discussion_service._PRIOR_DISCUSSIONS_CAP
+
+
+def test_prior_discussions_block_always_included_in_persona_filter():
+    """Prior consensus matters to every archetype, so the filter's
+    always-included set carries the block — even macro_analyst sees
+    it despite not getting `top_gainers` / chip metrics."""
+    assert "prior_discussions" in discussion_service._ALWAYS_INCLUDED_BLOCKS
+    ctx = _full_ctx_for_filter() | {"prior_discussions": [{"id": "x"}]}
+    out = discussion_service._filter_context_for_persona(ctx, "macro_analyst")
+    assert "prior_discussions" in out
+
+
+# ── inject_user_message ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_inject_user_message_persists_turn_at_current_round(
+    db_session: AsyncSession, owner: User,
+):
+    """A user_input turn lands at `round=current_round` after the
+    last persona reply (or any prior injection on the same round)."""
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+    # Simulate a completed round 1 with two persona replies.
+    row.current_round = 1
+    db_session.add_all([
+        DiscussionTurn(
+            discussion_id=row.id, round=1, turn_index=0,
+            persona_id="buffett", stance="supplement", content="ok",
+        ),
+        DiscussionTurn(
+            discussion_id=row.id, round=1, turn_index=1,
+            persona_id="lynch", stance="supplement", content="agree",
+        ),
+    ])
+    await db_session.commit()
+
+    turn = await discussion_service.inject_user_message(
+        db_session, row, content="請聚焦在 2330",
+    )
+    assert turn.persona_id == discussion_service.USER_PERSONA_ID
+    assert turn.stance == discussion_service.USER_INJECTION_STANCE
+    assert turn.round == 1
+    assert turn.turn_index == 2  # after lynch's index=1
+    assert "2330" in turn.content
+
+
+@pytest.mark.asyncio
+async def test_inject_user_message_rejected_when_round_in_progress(
+    db_session: AsyncSession, owner: User,
+):
+    """Injecting while a round is streaming would race the persona
+    write order — reject 4XX-style at the service layer (router
+    surfaces as 400)."""
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+    row.current_round = 1
+    row.status = discussion_service.STATUS_RUNNING
+    await db_session.commit()
+    with pytest.raises(ValueError, match="round is in progress"):
+        await discussion_service.inject_user_message(
+            db_session, row, content="x",
+        )
+
+
+@pytest.mark.asyncio
+async def test_inject_user_message_rejected_before_first_round(
+    db_session: AsyncSession, owner: User,
+):
+    """No personas have spoken yet → nothing to react to. The user
+    can edit topic / rules directly instead."""
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+    with pytest.raises(ValueError, match="before the first round"):
+        await discussion_service.inject_user_message(
+            db_session, row, content="x",
+        )
+
+
+@pytest.mark.asyncio
+async def test_inject_user_message_validates_text_bounds(
+    db_session: AsyncSession, owner: User,
+):
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+    row.current_round = 1
+    await db_session.commit()
+    with pytest.raises(ValueError):
+        await discussion_service.inject_user_message(
+            db_session, row, content="   ",
+        )
+    with pytest.raises(ValueError):
+        await discussion_service.inject_user_message(
+            db_session, row, content="x" * 3000,
+        )
+
+
+def test_format_history_renders_user_injection_with_directive_label():
+    """User-injected turns must NOT be formatted as `_user · user_input：`
+    (which the LLM would parse as a persona stance) — render them with
+    a dedicated 【討論發起人插話】 marker instead."""
+    turns = []
+    t1 = DiscussionTurn()
+    t1.round = 1
+    t1.turn_index = 0
+    t1.persona_id = "buffett"
+    t1.stance = "supplement"
+    t1.content = "看好台積電"
+    turns.append(t1)
+
+    inject = DiscussionTurn()
+    inject.round = 1
+    inject.turn_index = 1
+    inject.persona_id = discussion_service.USER_PERSONA_ID
+    inject.stance = discussion_service.USER_INJECTION_STANCE
+    inject.content = "請聚焦在 2330"
+    turns.append(inject)
+
+    out = discussion_service._format_history(turns)
+    assert "討論發起人插話" in out
+    # The raw `_user · user_input：` form must NOT appear — that would
+    # confuse the persona into reasoning about a stance.
+    assert "_user · user_input" not in out
+
+
+# ── _format_history compression ───────────────────────────────────
+
+
+def test_summarize_turn_content_truncates_and_strips_markdown():
+    """Long markdown-laden content collapses to a single line under
+    `_HISTORY_SUMMARY_CHARS`; bold markers and stray newlines drop."""
+    # Build something obviously larger than the cap so the truncation
+    # branch fires (the inline data + filler combined is > 120 chars).
+    raw = (
+        "**台積電 (2330)** 已突破 60 日均\n"
+        "目標價 1080 元\n\n"
+        "停損 920 元，外資連 5 日買超 1.2 億。"
+        + "額外文字" * 80
+    )
+    assert len(raw) > discussion_service._HISTORY_SUMMARY_CHARS
+    out = discussion_service._summarize_turn_content(raw)
+    # No markdown bold left.
+    assert "**" not in out
+    # No newlines — collapsed to single line.
+    assert "\n" not in out
+    # Capped at threshold + ellipsis when over budget.
+    assert len(out) <= discussion_service._HISTORY_SUMMARY_CHARS + 1
+    assert out.endswith("…")
+
+
+def test_summarize_turn_content_handles_empty():
+    assert "同意" in discussion_service._summarize_turn_content("")
+    assert "同意" in discussion_service._summarize_turn_content("   \n")
+
+
+def test_format_history_short_window_is_all_full_text():
+    """Fewer than `_FULL_HISTORY_TURNS` turns → no summary section,
+    everything shown verbatim. The persona reading round 2 of an
+    8-persona discussion has already seen 8 turns; no compression
+    yet because none is older than our recency window."""
+    turns = []
+    for i in range(4):
+        t = DiscussionTurn()
+        t.round = 1
+        t.turn_index = i
+        t.persona_id = "buffett"
+        t.stance = "supplement"
+        t.content = f"verbatim-{i}"
+        turns.append(t)
+    out = discussion_service._format_history(turns)
+    assert "（較早輪次摘要）" not in out
+    assert "（最近發言全文）" not in out
+    assert "verbatim-0" in out
+    assert "verbatim-3" in out
+
+
+def test_format_history_long_window_summarises_older_keeps_recent_full():
+    """When the transcript exceeds `_FULL_HISTORY_TURNS`, older turns
+    appear under the summary banner with truncated content; the
+    most recent `_FULL_HISTORY_TURNS` appear under the full-text
+    banner verbatim. Use enough total turns that older + recent
+    each have several rows."""
+    full_window = discussion_service._FULL_HISTORY_TURNS
+    older_count = 4
+    total = full_window + older_count
+    turns = []
+    for i in range(total):
+        t = DiscussionTurn()
+        t.round = (i // 2) + 1
+        t.turn_index = i % 2
+        t.persona_id = "buffett"
+        t.stance = "supplement"
+        if i < older_count:
+            t.content = f"OLD-{i} " + "x" * 300
+        else:
+            t.content = f"NEW-{i} 全文應原樣保留 " + "y" * 300
+        turns.append(t)
+    out = discussion_service._format_history(turns)
+    assert "（較早輪次摘要）" in out
+    assert "（最近發言全文）" in out
+    # All OLD- markers are in the summary band but their 300-char
+    # x-tail is truncated.
+    for i in range(older_count):
+        assert f"OLD-{i}" in out
+    # All NEW- markers are in the full band.
+    for i in range(older_count, total):
+        assert f"NEW-{i}" in out
+    # The OLD lines' 300-char x-filler is bounded by the summary
+    # cap, so no single OLD line carries 200 consecutive x's.
+    older_band_end = out.index("（最近發言全文）")
+    older_band = out[:older_band_end]
+    assert "x" * 200 not in older_band
+
+
+def test_format_history_empty_returns_first_speaker_marker():
+    assert "第一位" in discussion_service._format_history([])
+
+
+@pytest.mark.asyncio
+async def test_run_round_forwards_tool_call_and_tool_result_events(
+    db_session: AsyncSession, owner: User,
+):
+    """When the upstream stream emits `tool_call` / `tool_result`
+    (claude_agent SDK or _openai_compat_tool_loop), run_round must
+    forward them as TurnEvents of the same type so the SSE consumer
+    can show what tools were invoked. Each forwarded event carries
+    the surrounding `round` / `turn_index` / `persona_id` so the
+    frontend can attach the tool log to the right speaker."""
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+
+    async def _stream_with_tools(*_a, **_kw):
+        # Persona makes one tool call, gets a result, then writes the
+        # final structured JSON.
+        yield {
+            "type": "tool_call", "id": "call-1",
+            "name": "get_quote", "args": {"symbol": "2330"},
+        }
+        yield {
+            "type": "tool_result", "id": "call-1",
+            "name": "get_quote", "summary": "{\"price\": 950}", "is_error": False,
+        }
+        yield {"type": "delta",
+               "text": '{"stance": "supplement", "content": "依工具回報 2330 報 950"}'}
+
+    with patch(
+        "services.discussion_service.stream_chat",
+        side_effect=_stream_with_tools,
+    ), patch(
+        "services.discussion_service.gather_market_context",
+        new=AsyncMock(return_value={"market": "TW"}),
+    ):
+        events = []
+        async for ev in discussion_service.run_round(
+            db_session, row, user_id=str(owner.id),
+        ):
+            events.append((ev.type, ev.payload))
+
+    types = [t for t, _ in events]
+    # Forwarded events appear inside each persona's turn.
+    assert types.count("tool_call") == 2  # 2 personas × 1 tool call
+    assert types.count("tool_result") == 2
+
+    # Each forwarded event tags the speaker so the UI can route them.
+    tool_calls = [p for t, p in events if t == "tool_call"]
+    assert all("persona_id" in p and "round" in p for p in tool_calls)
+    assert tool_calls[0]["name"] == "get_quote"
+    assert tool_calls[0]["args"] == {"symbol": "2330"}
+
+
 @pytest.mark.asyncio
 async def test_run_round_increments_round_number_on_subsequent_calls(
     db_session: AsyncSession, owner: User,
@@ -640,6 +1209,54 @@ async def test_synthesize_conclusion_coerces_shape(
 
 
 @pytest.mark.asyncio
+async def test_synthesize_conclusion_reuses_round_context_snapshot(
+    db_session: AsyncSession, owner: User,
+):
+    """When a round has already snapshotted its context to
+    `discussion_round_contexts`, the synthesizer must reuse that
+    captured payload instead of re-running `gather_market_context`
+    — otherwise post-close synthesises would silently drift from
+    the data the personas reasoned over."""
+    from models.discussion_round_context import DiscussionRoundContext
+
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="topic",
+        rules="rules",
+        persona_ids=["buffett", "lynch"],
+    )
+    db_session.add(DiscussionTurn(
+        discussion_id=row.id, round=1, turn_index=0,
+        persona_id="buffett", stance="supplement", content="x",
+    ))
+    db_session.add(DiscussionRoundContext(
+        discussion_id=row.id, round=1,
+        context={"market": "TW", "marker": "from-snapshot"},
+    ))
+    await db_session.commit()
+
+    raw = (
+        '{"recommended_symbols": ["2330"], "reasoning": "ok", '
+        '"risks": [], "time_horizon": "short_term", '
+        '"consensus_score": 0.5}'
+    )
+    gather_mock = AsyncMock(return_value={"market": "TW"})
+    with patch(
+        "services.discussion_service.stream_chat",
+        side_effect=_stream_events(raw),
+    ), patch(
+        "services.discussion_service.gather_market_context",
+        new=gather_mock,
+    ):
+        await discussion_service.synthesize_conclusion(
+            db_session, row, user_id=str(owner.id),
+        )
+    # Fresh fetch must NOT have been called when a snapshot existed.
+    gather_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_synthesize_conclusion_handles_malformed_output(
     db_session: AsyncSession, owner: User,
 ):
@@ -696,6 +1313,113 @@ def test_extract_focus_symbols_empty_when_none():
     assert discussion_service.extract_focus_symbols("純策略討論不提具體標的") == []
 
 
+def test_extract_focus_symbols_filters_year_like_tw():
+    """4-digit year tokens (1900-2099) must NOT be treated as TW codes;
+    `2026 Q1 預估` shouldn't pollute per-symbol news lookups."""
+    out = discussion_service.extract_focus_symbols(
+        "2026 Q1 與 2030 展望，主軸在 2330", market="TW",
+    )
+    assert "2330" in out
+    assert "2026" not in out
+    assert "2030" not in out
+
+
+def test_extract_focus_symbols_us_market_uses_uppercase_tickers():
+    out = discussion_service.extract_focus_symbols(
+        "Should I rotate from NVDA into AMD given USD weakness?",
+        market="US",
+    )
+    assert "NVDA" in out
+    assert "AMD" in out
+    # Stopword guard — bare uppercase 'USD' must not count.
+    assert "USD" not in out
+
+
+def test_extract_focus_symbols_cashtag_works_in_any_market():
+    out = discussion_service.extract_focus_symbols(
+        "$AAPL beats $MSFT this week — same window 2330 也漲", market="TW",
+    )
+    # Cashtags first, then TW codes after.
+    assert out[:2] == ["AAPL", "MSFT"]
+    assert "2330" in out
+
+
+def test_extract_focus_symbols_global_picks_crypto_universe_only():
+    out = discussion_service.extract_focus_symbols(
+        "BTC + ETH + SOL leading the rally; AAA random ticker noise",
+        market="GLOBAL",
+    )
+    assert "BTC" in out and "ETH" in out and "SOL" in out
+    # `AAA` not in the curated Top-20 universe — must NOT be picked up.
+    assert "AAA" not in out
+
+
+# ── _normalize_market ─────────────────────────────────────────────
+
+
+def test_normalize_market_defaults_when_blank():
+    assert discussion_service._normalize_market(None) == "TW"
+    assert discussion_service._normalize_market("") == "TW"
+
+
+def test_normalize_market_uppercases():
+    assert discussion_service._normalize_market("us") == "US"
+    assert discussion_service._normalize_market("global") == "GLOBAL"
+
+
+def test_normalize_market_rejects_unknown():
+    with pytest.raises(ValueError):
+        discussion_service._normalize_market("JP")
+
+
+# ── create + update wires market through ─────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_create_discussion_persists_market(
+    db_session: AsyncSession, owner: User,
+):
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="NVDA earnings preview",
+        rules="≤200 字",
+        persona_ids=["buffett", "lynch"],
+        market="us",
+    )
+    assert row.market == "US"
+
+
+@pytest.mark.asyncio
+async def test_create_discussion_defaults_to_tw(
+    db_session: AsyncSession, owner: User,
+):
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="topic",
+        rules="rules",
+        persona_ids=["buffett", "lynch"],
+    )
+    assert row.market == "TW"
+
+
+@pytest.mark.asyncio
+async def test_update_discussion_changes_market_in_draft(
+    db_session: AsyncSession, owner: User,
+):
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+    await discussion_service.update_discussion(
+        db_session, row, market="GLOBAL",
+    )
+    assert row.market == "GLOBAL"
+
+
 def test_is_speculative_etf_flags_leveraged_inverse_futures_only():
     """`top_gainers` must not include 2x leveraged / inverse / futures-
     tracking ETFs — they mean-revert the next session and persuade the
@@ -749,7 +1473,15 @@ async def test_gather_market_context_includes_per_symbol_block_when_focused(
     await db_session.commit()
 
     with patch.object(_tw, "get_screener", new=AsyncMock(return_value=[])), \
-         patch.object(_tw, "get_index", new=AsyncMock(return_value={})):
+         patch.object(_tw, "get_index", new=AsyncMock(return_value={})), \
+         patch(
+            "services.discussion_service._assemble_macro_block",
+            new=AsyncMock(return_value={}),
+         ), \
+         patch(
+            "services.discussion_service._assemble_focus_briefs",
+            new=AsyncMock(return_value=[]),
+         ):
         ctx = await discussion_service.gather_market_context(
             db_session, focus_symbols=["9999", "8888"],
         )
@@ -796,7 +1528,15 @@ async def test_gather_market_context_includes_international_sentiment(
     await db_session.commit()
 
     with patch.object(_tw, "get_screener", new=AsyncMock(return_value=[])), \
-         patch.object(_tw, "get_index", new=AsyncMock(return_value={})):
+         patch.object(_tw, "get_index", new=AsyncMock(return_value={})), \
+         patch(
+            "services.discussion_service._assemble_macro_block",
+            new=AsyncMock(return_value={}),
+         ), \
+         patch(
+            "services.discussion_service._assemble_focus_briefs",
+            new=AsyncMock(return_value=[]),
+         ):
         ctx = await discussion_service.gather_market_context(db_session)
 
     assert "international_sentiment" in ctx
@@ -857,7 +1597,15 @@ async def test_gather_market_context_includes_chip_metrics_for_tw(
     ])
 
     with patch.object(_tw, "get_screener", new=AsyncMock(return_value=[])), \
-         patch.object(_tw, "get_index", new=AsyncMock(return_value={})):
+         patch.object(_tw, "get_index", new=AsyncMock(return_value={})), \
+         patch(
+            "services.discussion_service._assemble_macro_block",
+            new=AsyncMock(return_value={}),
+         ), \
+         patch(
+            "services.discussion_service._assemble_focus_briefs",
+            new=AsyncMock(return_value=[]),
+         ):
         ctx = await discussion_service.gather_market_context(
             db_session, market="TW",
         )
@@ -882,7 +1630,15 @@ async def test_gather_market_context_skips_chip_metrics_for_non_tw(
     import services.tw_market_service as _tw   # noqa: F401
 
     with patch.object(_tw, "get_screener", new=AsyncMock(return_value=[])), \
-         patch.object(_tw, "get_index", new=AsyncMock(return_value={})):
+         patch.object(_tw, "get_index", new=AsyncMock(return_value={})), \
+         patch(
+            "services.discussion_service._assemble_macro_block",
+            new=AsyncMock(return_value={}),
+         ), \
+         patch(
+            "services.discussion_service._assemble_focus_briefs",
+            new=AsyncMock(return_value=[]),
+         ):
         ctx = await discussion_service.gather_market_context(
             db_session, market="US",
         )
@@ -1404,3 +2160,410 @@ def test_safe_conclusion_handles_full_width_braces():
     out = discussion_service._safe_conclusion(raw)
     assert "_parse_error" not in out
     assert out["recommended_symbols"] == ["2330"]
+
+
+# ── focus_briefs / macro helpers ──────────────────────────────────
+
+
+def _bars(closes: list[float]) -> list[dict]:
+    """Build a synthetic bar series from a list of closes — open/high/low
+    are filled with the close so the technicals helpers can do their
+    52w / MA / RSI work without spurious volatility."""
+    return [
+        {"time": f"2026-01-{i + 1:02d}", "open": c, "high": c,
+         "low": c, "close": float(c), "volume": 1_000}
+        for i, c in enumerate(closes)
+    ]
+
+
+def test_compute_technicals_returns_none_for_short_history():
+    """`<20` bars → None so the persona doesn't see a misleading 20-bar
+    MA computed from 8 days."""
+    assert discussion_service._compute_technicals(_bars([100.0] * 5)) is None
+
+
+def test_compute_technicals_emits_full_block_for_long_history():
+    closes = [100.0 + i for i in range(120)]
+    out = discussion_service._compute_technicals(_bars(closes))
+    assert out is not None
+    assert out["last_close"] == 219.0
+    assert out["high_52w"] == 219.0
+    assert out["low_52w"] == 100.0
+    # Distance to 52w high is 0 because the last bar IS the high.
+    assert out["dist_high_52w_pct"] == 0.0
+    # 60-day perf: closes[-61] is 159, last 219 → +37.74%
+    assert out["perf_60d_pct"] == 37.74
+    # MA20 of last 20 closes (200..219) = 209.5
+    assert out["ma20"] == 209.5
+
+
+def test_rsi_returns_50_for_flat_series():
+    """All-flat series → 0/0 case must short-circuit to 50, not crash."""
+    assert discussion_service._rsi([100.0] * 30) == 50.0
+
+
+def test_rsi_caps_at_100_for_strict_uptrend():
+    closes = [100.0 + i for i in range(30)]
+    assert discussion_service._rsi(closes, window=14) == 100.0
+
+
+def test_summarize_revenue_takes_last_six_only():
+    rows = [{"date": f"2025-{m:02d}-01", "revenue_yoy": m, "revenue_mom": m}
+            for m in range(1, 13)]
+    out = discussion_service._summarize_revenue(rows)
+    assert len(out) == 6
+    # Tail order preserved (oldest of the 6 first, newest last).
+    assert out[0]["month"] == "2025-07"
+    assert out[-1]["month"] == "2025-12"
+
+
+def test_summarize_institutional_sums_recent_window():
+    rows = [
+        {"fini_buy": 200, "fini_sell": 50,
+         "sitc_buy": 30, "sitc_sell": 20,
+         "dealer_buy": 10, "dealer_sell": 15}
+    ] * 3
+    out = discussion_service._summarize_institutional(rows)
+    assert out is not None
+    assert out["fini_net_5d"] == (200 - 50) * 3
+    assert out["sitc_net_5d"] == (30 - 20) * 3
+    assert out["dealer_net_5d"] == (10 - 15) * 3
+    assert out["days"] == 3
+
+
+def test_summarize_institutional_returns_none_for_empty():
+    assert discussion_service._summarize_institutional([]) is None
+
+
+def test_summarize_margin_picks_latest():
+    rows = [
+        {"date": "2026-04-28", "margin_balance": 100, "short_balance": 5},
+        {"date": "2026-04-29", "margin_balance": 110, "short_balance": 6},
+        {"date": "2026-04-30", "margin_balance": 120, "short_balance": 7},
+    ]
+    out = discussion_service._summarize_margin(rows)
+    assert out["as_of"] == "2026-04-30"
+    assert out["margin_balance"] == 120
+
+
+def test_macro_summary_computes_deltas_against_anchored_dates():
+    series = [
+        {"date": "2025-01-30", "value": 4.50},   # ~15m ago — used for change_1y
+        {"date": "2025-04-30", "value": 4.75},   # close to 1y mark, but later than cutoff
+        {"date": "2026-01-30", "value": 5.00},   # 3m ago anchor
+        {"date": "2026-04-30", "value": 4.25},   # latest
+    ]
+    out = discussion_service._macro_summary_from_series(series)
+    assert out is not None
+    assert out["latest_value"] == 4.25
+    # 365 days before 2026-04-30 = 2025-04-30 → matches that point.
+    assert out["change_1y"] == round(4.25 - 4.75, 4)
+    # 90 days before 2026-04-30 = 2026-01-30 → matches that point.
+    assert out["change_3m"] == round(4.25 - 5.00, 4)
+
+
+def test_macro_summary_returns_none_for_empty_or_invalid():
+    assert discussion_service._macro_summary_from_series([]) is None
+    # Garbage rows filter out and the series degrades to None.
+    bad = [{"date": "??", "value": "n/a"}]
+    assert discussion_service._macro_summary_from_series(bad) is None
+
+
+@pytest.mark.asyncio
+async def test_assemble_macro_block_degrades_on_missing_series():
+    """No FRED key + no yfinance fallback → every series is empty.
+    Must not crash, must return one entry per series with `summary=None`."""
+    with patch(
+        "services.us_market_service.get_macro_indicator",
+        new=AsyncMock(return_value=[]),
+    ):
+        block = await discussion_service._assemble_macro_block()
+    assert set(block.keys()) == {n for n, _ in discussion_service._MACRO_SERIES}
+    assert all(v["summary"] is None for v in block.values())
+
+
+@pytest.mark.asyncio
+async def test_assemble_focus_briefs_returns_empty_when_no_symbols():
+    """Caller passes `[]` → assembler short-circuits without touching
+    any market service."""
+    out = await discussion_service._assemble_focus_briefs(
+        db=None, market="TW", symbols=[],
+    )
+    assert out == []
+
+
+# ── _build_persona_tool_kwargs ────────────────────────────────────
+
+
+def test_build_persona_tool_kwargs_off_for_viewer_role():
+    """Viewers must not get tools. The MCP toolset's `query_user_data`
+    reads the caller's portfolio — handing it to a low-quota viewer
+    would let them silently exfiltrate via tool-call deltas."""
+    out = discussion_service._build_persona_tool_kwargs(
+        provider="claude_agent",
+        user_role="viewer",
+        user_id="abc",
+    )
+    assert out == {}
+
+
+def test_build_persona_tool_kwargs_off_when_user_id_missing():
+    """No user_id (e.g. auto-run cron with no role injected) → tools
+    off so unattended runs don't fan out N tool calls per persona."""
+    out = discussion_service._build_persona_tool_kwargs(
+        provider="claude_agent",
+        user_role="analyst",
+        user_id=None,
+    )
+    assert out == {}
+
+
+def test_build_persona_tool_kwargs_off_for_unsupported_provider():
+    """openai / anthropic / gemini / ollama don't have a tool-loop in
+    this codebase — return {} so stream_chat falls through to plain
+    streaming."""
+    for prov in ("openai", "anthropic", "gemini", "ollama", ""):
+        out = discussion_service._build_persona_tool_kwargs(
+            provider=prov, user_role="analyst", user_id="u1",
+        )
+        assert out == {}, f"expected no tools for provider={prov!r}"
+
+
+class _SettingsStub:
+    """Replaces `services.discussion_service.settings` for tests that
+    need to flip `claude_agent_effective_enabled` (the real one is a
+    Pydantic computed property and isn't writable).
+
+    Attributes are filled in by the test as needed; missing attrs
+    fall through to the real settings object via `__getattr__`."""
+
+    def __init__(self, **overrides):
+        self._overrides = overrides
+
+    def __getattr__(self, name):
+        if name in self._overrides:
+            return self._overrides[name]
+        from config import settings as _real
+        return getattr(_real, name)
+
+
+def test_build_persona_tool_kwargs_claude_agent_off_when_disabled(monkeypatch):
+    """When `Settings.claude_agent_effective_enabled` is False (SDK
+    not importable, or env flag off) the helper must short-circuit
+    instead of throwing during build_toolset import."""
+    monkeypatch.setattr(
+        discussion_service, "settings",
+        _SettingsStub(claude_agent_effective_enabled=False),
+    )
+    out = discussion_service._build_persona_tool_kwargs(
+        provider="claude_agent",
+        user_role="analyst",
+        user_id="u1",
+    )
+    assert out == {}
+
+
+def test_build_persona_tool_kwargs_openai_compat_swallows_build_failure(monkeypatch):
+    """A broken `build_openai_compat_toolset` (e.g. provider key
+    fetcher hits a transient DB failure) must NOT propagate — the
+    persona just gets a tool-less turn this round.
+
+    Uses a sys.modules stub for `ai.tools.openai_compat` so the test
+    runs even on environments without `claude_agent_sdk` installed
+    (which would otherwise trip on `ai/tools/__init__.py`'s top-
+    level SDK import)."""
+    import sys
+    import types
+
+    def boom(_user_id):
+        raise RuntimeError("provider key fetch failed")
+
+    fake_mod = types.ModuleType("ai.tools.openai_compat")
+    fake_mod.build_openai_compat_toolset = boom
+    monkeypatch.setitem(sys.modules, "ai.tools.openai_compat", fake_mod)
+
+    out = discussion_service._build_persona_tool_kwargs(
+        provider="groq",
+        user_role="analyst",
+        user_id="u1",
+    )
+    assert out == {}
+
+
+def test_build_persona_tool_kwargs_openai_compat_returns_kwargs(monkeypatch):
+    """Happy path for an OpenAI-compat provider: returns the schema +
+    dispatch + max_turns triple. Must NOT include claude_agent-only
+    keys (`mcp_server`, `allowed_tools`)."""
+    import sys
+    import types
+
+    def fake_build(_user_id):
+        return ([{"type": "function", "name": "get_quote"}], {"get_quote": object()})
+
+    fake_mod = types.ModuleType("ai.tools.openai_compat")
+    fake_mod.build_openai_compat_toolset = fake_build
+    monkeypatch.setitem(sys.modules, "ai.tools.openai_compat", fake_mod)
+
+    out = discussion_service._build_persona_tool_kwargs(
+        provider="groq",
+        user_role="analyst",
+        user_id="u1",
+    )
+    assert "openai_tool_schemas" in out
+    assert "openai_tool_dispatch" in out
+    assert "max_turns" in out
+    assert out["max_turns"] >= 1
+    # claude_agent keys must be absent — different code path.
+    assert "mcp_server" not in out
+    assert "allowed_tools" not in out
+
+
+# ── _assemble_user_context ────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_assemble_user_context_empty_when_no_portfolio_or_watchlist(
+    db_session: AsyncSession, owner: User,
+):
+    """Brand-new user with no holdings + no watchlist → all blocks
+    empty but the structural keys still present so the prompt
+    template doesn't have to handle a None."""
+    out = await discussion_service._assemble_user_context(
+        db_session, owner_id=owner.id, focus_symbols=["2330"],
+    )
+    assert out["portfolios"] == []
+    assert out["holdings"] == []
+    assert out["watchlist_symbols"] == []
+    assert out["focus_overlap"] == {"held": [], "watching": []}
+
+
+@pytest.mark.asyncio
+async def test_assemble_user_context_returns_holdings_and_overlap(
+    db_session: AsyncSession, owner: User,
+):
+    """Owner has 2 portfolios with 3 holdings; topic mentions 2330 +
+    AAPL. Expect holdings list, portfolio metadata, and the
+    focus_overlap.held set picking up 2330 (held) but not AAPL
+    (not held)."""
+    from models.portfolio import Holding, Market, Portfolio
+
+    p1 = Portfolio(user_id=owner.id, name="Main", currency="TWD")
+    p2 = Portfolio(user_id=owner.id, name="USD", currency="USD")
+    db_session.add_all([p1, p2])
+    await db_session.flush()
+    db_session.add_all([
+        Holding(portfolio_id=p1.id, symbol="2330", market=Market.TW,
+                quantity=1000, avg_cost=850, cost_currency="TWD"),
+        Holding(portfolio_id=p1.id, symbol="2454", market=Market.TW,
+                quantity=200, avg_cost=1100, cost_currency="TWD"),
+        Holding(portfolio_id=p2.id, symbol="MSFT", market=Market.US,
+                quantity=50, avg_cost=400, cost_currency="USD"),
+    ])
+    await db_session.commit()
+
+    out = await discussion_service._assemble_user_context(
+        db_session, owner_id=owner.id, focus_symbols=["2330", "AAPL"],
+    )
+    assert {p["name"] for p in out["portfolios"]} == {"Main", "USD"}
+    held_syms = {h["symbol"] for h in out["holdings"]}
+    assert held_syms == {"2330", "2454", "MSFT"}
+    # Largest absolute cost first: 2330 (1000×850 = 850k) leads.
+    assert out["holdings"][0]["symbol"] == "2330"
+    assert out["focus_overlap"]["held"] == ["2330"]
+    assert out["focus_overlap"]["watching"] == []
+
+
+@pytest.mark.asyncio
+async def test_assemble_user_context_picks_up_watchlist_overlap(
+    db_session: AsyncSession, owner: User,
+):
+    """Symbol in topic that's only in the watchlist (not held) appears
+    under focus_overlap.watching instead of held."""
+    from models.portfolio import Market
+    from models.watchlist import Watchlist, WatchlistItem
+
+    wl = Watchlist(user_id=owner.id, name="觀察清單")
+    db_session.add(wl)
+    await db_session.flush()
+    db_session.add_all([
+        WatchlistItem(watchlist_id=wl.id, symbol="2330", market=Market.TW),
+        WatchlistItem(watchlist_id=wl.id, symbol="NVDA", market=Market.US),
+    ])
+    await db_session.commit()
+
+    out = await discussion_service._assemble_user_context(
+        db_session, owner_id=owner.id, focus_symbols=["NVDA", "AMD"],
+    )
+    assert out["focus_overlap"]["held"] == []
+    assert out["focus_overlap"]["watching"] == ["NVDA"]
+    assert {w["symbol"] for w in out["watchlist_symbols"]} == {"2330", "NVDA"}
+
+
+@pytest.mark.asyncio
+async def test_gather_market_context_skips_user_block_without_owner_id(
+    db_session: AsyncSession,
+):
+    """Tests / API callers that don't supply owner_id must NOT see a
+    user_context block populated — privacy invariant."""
+    import services.tw_market_service as _tw  # noqa: F401
+    with patch.object(_tw, "get_screener", new=AsyncMock(return_value=[])), \
+         patch.object(_tw, "get_index", new=AsyncMock(return_value={})), \
+         patch(
+            "services.discussion_service._assemble_macro_block",
+            new=AsyncMock(return_value={}),
+         ), \
+         patch(
+            "services.discussion_service._assemble_focus_briefs",
+            new=AsyncMock(return_value=[]),
+         ):
+        ctx = await discussion_service.gather_market_context(
+            db_session, market="TW",
+        )
+    assert ctx["user_context"] is None
+
+
+@pytest.mark.asyncio
+async def test_gather_market_context_populates_user_block_with_owner_id(
+    db_session: AsyncSession, owner: User,
+):
+    """When owner_id is supplied, gather_market_context wires it
+    through to `_assemble_user_context` and surfaces the result on
+    `ctx["user_context"]`."""
+    import services.tw_market_service as _tw  # noqa: F401
+
+    with patch.object(_tw, "get_screener", new=AsyncMock(return_value=[])), \
+         patch.object(_tw, "get_index", new=AsyncMock(return_value={})), \
+         patch(
+            "services.discussion_service._assemble_macro_block",
+            new=AsyncMock(return_value={}),
+         ), \
+         patch(
+            "services.discussion_service._assemble_focus_briefs",
+            new=AsyncMock(return_value=[]),
+         ):
+        ctx = await discussion_service.gather_market_context(
+            db_session, market="TW", owner_id=owner.id,
+        )
+    assert ctx["user_context"] is not None
+    assert "portfolios" in ctx["user_context"]
+
+
+@pytest.mark.asyncio
+async def test_assemble_focus_briefs_fan_out_collects_per_symbol():
+    """Each symbol gets its own brief built concurrently, returned in
+    the input order. A coroutine that raises is logged + skipped, not
+    propagated, so a single bad symbol doesn't kill the round."""
+    async def fake_brief(_db, sym: str) -> dict:
+        if sym == "BAD":
+            raise RuntimeError("upstream blew up")
+        return {"symbol": sym, "quote": {"price": 100.0}}
+
+    with patch(
+        "services.discussion_service._build_tw_focus_brief",
+        new=fake_brief,
+    ):
+        out = await discussion_service._assemble_focus_briefs(
+            db=None, market="TW", symbols=["2330", "BAD", "2454"],
+        )
+    syms = [b["symbol"] for b in out]
+    assert "2330" in syms and "2454" in syms and "BAD" not in syms

@@ -46,7 +46,7 @@ import re
 import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import delete, select, update
@@ -65,12 +65,41 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# Recognises a 4-digit TW stock code as a standalone token. Used by
-# `gather_market_context` to optionally pull per-symbol news sentiment for
-# anything mentioned in the topic — discussion personas then see "this is
-# what 2330 specifically is being said about" instead of just market-wide
-# sentiment.
-_TW_SYMBOL_RE = re.compile(r"\b(\d{4,6})\b")
+# Symbol-extraction patterns for `extract_focus_symbols`. Each market
+# uses a different shape:
+#
+#   - TW: 4-6 digit numeric codes. Years like "2026" land in the same
+#     space as 2330 / 0050 / 00878, so the year filter below is the
+#     guard that keeps `read_symbol_sentiment` queries from polluting
+#     a US/global topic with TW lookups.
+#   - US: cashtag `$AAPL` always matches. Bare uppercase tickers
+#     (`AAPL`, `MSFT`) are only honoured when the discussion's market
+#     is US — otherwise common English words like "AND" / "FOR" /
+#     "USD" would be mistaken for tickers in TW topics.
+#   - GLOBAL / crypto: matched against the curated Top-20 universe in
+#     `data/crypto/symbols.py` so `BTC` triggers but `ETH-USD` doesn't.
+_TW_SYMBOL_RE = re.compile(r"(?<![\w])(\d{4,6})(?![\w])")
+_CASHTAG_RE = re.compile(r"\$([A-Z]{1,5})\b")
+_BARE_US_TICKER_RE = re.compile(r"\b([A-Z]{1,5})\b")
+# Year-like 4-digit numbers — keep generous; TW codes never overlap.
+_YEAR_MIN = 1900
+_YEAR_MAX = 2099
+# Common 1-5 letter uppercase tokens that look like US tickers but
+# aren't. Prevents `discussion_service` from sentimening "USD news".
+# Not exhaustive — the topic field is short, false positives are
+# cheap (worst case: an empty per-symbol news block), and adding new
+# entries here is a 1-line patch.
+_US_TICKER_STOPWORDS = frozenset({
+    "A", "AI", "AN", "ARE", "AS", "AT", "BE", "BY", "CAN", "CEO",
+    "CFO", "CTO", "DCF", "DXY", "EPS", "ETF", "EU", "FED", "FOMC",
+    "FOR", "FX", "GDP", "GET", "I", "IF", "IN", "IPO", "IS", "IT",
+    "M2", "NEW", "NO", "NOT", "OF", "ON", "OR", "PE", "ROE",
+    "SEC", "SP", "SPX", "TBD", "THE", "TO", "UK", "US", "USA", "USD",
+    "VAR", "VIX", "WTI", "YOU",
+})
+
+_VALID_MARKETS = ("TW", "US", "GLOBAL")
+_DEFAULT_MARKET = "TW"
 _MAX_FOCUS_SYMBOLS = 5
 
 # ── tuning knobs ────────────────────────────────────────────────────
@@ -86,6 +115,15 @@ _MAX_TURN_TOKENS = 2048
 _MAX_TOPIC_CHARS = 500
 _MAX_RULES_CHARS = 2000
 _MAX_HISTORY_TURNS = 30     # how many prior turns to feed the next persona
+
+# When the transcript gets long, only the most recent
+# `_FULL_HISTORY_TURNS` turns are passed verbatim. Older turns are
+# rendered as a single-line summary ("第1輪/buffett/supplement: 看好 2330,
+# 目標價...") capped at `_HISTORY_SUMMARY_CHARS` chars so the prompt
+# budget doesn't balloon at round 5 with 8 personas (40 turns × ~300
+# Chinese chars × 3 BPE tokens ≈ 36K input tokens just for history).
+_FULL_HISTORY_TURNS = 8
+_HISTORY_SUMMARY_CHARS = 120
 
 # Reasoning models surface their chain-of-thought wrapped in <think>...</think>
 # blocks. `strip_think_blocks` removes them post-hoc; `_ThinkBlockFilter`
@@ -224,6 +262,20 @@ def _validate_text(value: str, *, field: str, max_chars: int) -> str:
     return text
 
 
+def _normalize_market(value: str | None) -> str:
+    """Coerce + validate a market string. Falls back to `_DEFAULT_MARKET`
+    when None / empty so legacy clients that never sent the field keep
+    working. Unknown values raise ValueError."""
+    if value is None or not str(value).strip():
+        return _DEFAULT_MARKET
+    market = str(value).strip().upper()
+    if market not in _VALID_MARKETS:
+        raise ValueError(
+            f"market must be one of {_VALID_MARKETS}; got {market!r}",
+        )
+    return market
+
+
 # ── CRUD ────────────────────────────────────────────────────────────
 
 
@@ -234,16 +286,19 @@ async def create_discussion(
     topic: str,
     rules: str,
     persona_ids: list[str],
+    market: str | None = None,
 ) -> Discussion:
     topic = _validate_text(topic, field="topic", max_chars=_MAX_TOPIC_CHARS)
     rules = _validate_text(rules, field="rules", max_chars=_MAX_RULES_CHARS)
     pids = _normalize_persona_ids(persona_ids)
+    market = _normalize_market(market)
 
     row = Discussion(
         owner_id=owner_id,
         topic=topic,
         rules=rules,
         persona_ids=pids,
+        market=market,
         status=STATUS_DRAFT,
         current_round=0,
     )
@@ -341,9 +396,12 @@ async def update_discussion(
     topic: str | None = None,
     rules: str | None = None,
     persona_ids: list[str] | None = None,
+    market: str | None = None,
 ) -> Discussion:
     """Only allowed while status == draft. Once a round has run the
-    persona roster + rules are frozen so prior turns stay coherent."""
+    persona roster + rules + market are frozen so prior turns stay
+    coherent (a TW 籌碼 round followed by a US fundamentals round in
+    the same discussion would be incoherent)."""
     if discussion.status != STATUS_DRAFT:
         raise ValueError("Cannot edit a discussion that has already started")
     if topic is not None:
@@ -352,6 +410,8 @@ async def update_discussion(
         discussion.rules = _validate_text(rules, field="rules", max_chars=_MAX_RULES_CHARS)
     if persona_ids is not None:
         discussion.persona_ids = _normalize_persona_ids(persona_ids)
+    if market is not None:
+        discussion.market = _normalize_market(market)
     discussion.updated_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(discussion)
@@ -384,6 +444,86 @@ async def delete_discussion(
     return True
 
 
+# ── user injection ─────────────────────────────────────────────────
+#
+# Between rounds the discussion owner can drop a "user_input" turn
+# into the transcript so the next round's personas have to react to
+# it. Use case: after round 1 the user wants to refocus the debate
+# ("把目光放在 2330 而不是大盤"), or feed in extra context the
+# personas missed ("剛剛 Q2 EPS 公布 +35% YoY"). This is an
+# alternative to editing the discussion's `topic` mid-stream — that
+# would silently rewrite history and confuse later rounds.
+#
+# Stored as a normal `DiscussionTurn` with `persona_id="_user"` and
+# `stance="user_input"` so `_format_history` picks it up naturally;
+# the only special-case is `_format_history` rendering it without
+# the "stance" suffix (it's a directive, not an analyst opinion).
+
+USER_PERSONA_ID = "_user"
+USER_INJECTION_STANCE = "user_input"
+_MAX_USER_INJECTION_CHARS = 2000
+
+
+async def inject_user_message(
+    db: AsyncSession, discussion: Discussion, *, content: str,
+) -> DiscussionTurn:
+    """Append a user-input turn to the discussion's current round.
+
+    Constraints:
+      - status must be `draft` (mid-round injection would race the
+        running persona stream and leave the new turn out of order).
+      - `current_round` must be ≥ 1 (no point injecting before the
+        first round has run — the user can just edit `topic` /
+        `rules` while the discussion is still untouched).
+      - content non-empty + capped at `_MAX_USER_INJECTION_CHARS`.
+
+    The injected turn lands at `round=current_round` with
+    `turn_index = max_existing_index + 1` so it sits AFTER the
+    last persona's reply for that round. Personas in the next round
+    will see it via `prior_turns` ordering.
+    """
+    text = _validate_text(
+        content, field="content", max_chars=_MAX_USER_INJECTION_CHARS,
+    )
+    if discussion.status != STATUS_DRAFT:
+        raise ValueError(
+            "Cannot inject a message while a round is in progress",
+        )
+    if (discussion.current_round or 0) < 1:
+        raise ValueError(
+            "Cannot inject a message before the first round has run",
+        )
+
+    # Find the highest turn_index already used in this round so the
+    # injection lands after the last persona reply (and after any
+    # previous injection on the same round).
+    max_idx = await db.scalar(
+        select(DiscussionTurn.turn_index)
+        .where(
+            DiscussionTurn.discussion_id == discussion.id,
+            DiscussionTurn.round == discussion.current_round,
+        )
+        .order_by(DiscussionTurn.turn_index.desc())
+        .limit(1)
+    )
+    next_idx = (int(max_idx) + 1) if max_idx is not None else 0
+
+    row = DiscussionTurn(
+        discussion_id=discussion.id,
+        round=discussion.current_round,
+        turn_index=next_idx,
+        persona_id=USER_PERSONA_ID,
+        stance=USER_INJECTION_STANCE,
+        content=text,
+        citations=None,
+    )
+    db.add(row)
+    discussion.updated_at = datetime.now(UTC)
+    await db.commit()
+    await db.refresh(row)
+    return row
+
+
 async def force_reset_status(
     db: AsyncSession, discussion: Discussion,
 ) -> None:
@@ -414,18 +554,775 @@ async def force_reset_status(
 # ── market context ──────────────────────────────────────────────────
 
 
-def extract_focus_symbols(text: str) -> list[str]:
-    """Pull TW stock codes (4-6 digit) out of free text. Deduped, capped
-    at `_MAX_FOCUS_SYMBOLS`. Used to enrich discussion context with
-    per-symbol news sentiment when the topic names specific stocks
-    ("找出 2330 / 2454 短線買點…")."""
+def _is_year_like(code: str) -> bool:
+    """4-digit numeric tokens in the year range — `2026 Q1 法說` would
+    otherwise be tagged as a TW stock code and pollute the per-symbol
+    sentiment lookup."""
+    if len(code) != 4 or not code.isdigit():
+        return False
+    return _YEAR_MIN <= int(code) <= _YEAR_MAX
+
+
+def _crypto_universe() -> list[str]:
+    """Top-20 crypto base assets, normalised to uppercase. Imported
+    lazily so a unit test that monkeypatches `data.crypto.symbols`
+    sees the patched value, and so the discussion service stays
+    decoupled from the crypto module loading at import time."""
+    try:
+        from data.crypto.symbols import TOP20
+    except Exception:
+        return []
+    return [str(s).upper() for s in TOP20 if s]
+
+
+def extract_focus_symbols(text: str, *, market: str = _DEFAULT_MARKET) -> list[str]:
+    """Pull stock / crypto codes out of free text. Deduped, capped at
+    `_MAX_FOCUS_SYMBOLS`, returned in encounter order.
+
+    Behaviour by market:
+      - TW: 4-6 digit numeric codes; 4-digit year-like values
+        (1900-2099) are filtered to avoid mis-tagging dates.
+      - US: cashtag `$AAPL` always honoured; bare uppercase 1-5 letter
+        tokens honoured if they aren't in `_US_TICKER_STOPWORDS`.
+      - GLOBAL: cashtags + crypto base assets from the curated Top-20
+        universe (BTC / ETH / SOL …). Year-filtered TW codes are also
+        honoured because the international news bucket sometimes
+        carries cross-listed TW ADRs (TSM / UMC).
+
+    Cashtag matches are honoured for every market — `$AAPL` in a TW
+    discussion still pulls AAPL into the per-symbol news bucket,
+    because the user's intent is explicit.
+    """
+    raw = text or ""
     seen: list[str] = []
-    for code in _TW_SYMBOL_RE.findall(text or ""):
+
+    def _push(code: str) -> bool:
         if code not in seen:
             seen.append(code)
-        if len(seen) >= _MAX_FOCUS_SYMBOLS:
-            break
+        return len(seen) >= _MAX_FOCUS_SYMBOLS
+
+    for tag in _CASHTAG_RE.findall(raw):
+        if _push(tag):
+            return seen
+
+    market = (market or _DEFAULT_MARKET).upper()
+    if market == "TW":
+        for code in _TW_SYMBOL_RE.findall(raw):
+            if _is_year_like(code):
+                continue
+            if _push(code):
+                break
+    elif market == "US":
+        for tok in _BARE_US_TICKER_RE.findall(raw):
+            if tok in _US_TICKER_STOPWORDS:
+                continue
+            if _push(tok):
+                break
+    else:  # GLOBAL — accept TW digits + crypto base assets
+        universe = set(_crypto_universe())
+        for tok in _BARE_US_TICKER_RE.findall(raw):
+            if tok not in universe:
+                continue
+            if _push(tok):
+                return seen
+        for code in _TW_SYMBOL_RE.findall(raw):
+            if _is_year_like(code):
+                continue
+            if _push(code):
+                break
     return seen
+
+
+# ── focus_briefs (per-symbol mini analyst report) ──────────────────
+#
+# `gather_market_context` already pulls per-symbol news sentiment for
+# anything the topic names; that's enough for "what is the market
+# saying about 2330" but useless for "should we buy 2330 at this
+# price". An analyst joining a meeting would have at minimum: latest
+# quote, technical context (MAs, 52w range, RSI, recent perf),
+# fundamentals (PE / PB / yield / EPS), revenue trend, foreign /
+# margin flow, and a few peers. `_assemble_focus_briefs` builds that
+# bundle for each focus_symbol so the personas have actual evidence
+# to reason over instead of guessing from headlines.
+#
+# Each block is best-effort — a missing fundamentals snapshot or a
+# stooq history outage doesn't kill the brief, the failed block is
+# just None / [] and the persona reasons with what's available.
+
+
+_FOCUS_BRIEF_HISTORY_MONTHS = 12         # enough for 52w high/low
+_FOCUS_BRIEF_REVENUE_MONTHS = 6
+_FOCUS_BRIEF_CHIP_DAYS = 5
+_FOCUS_BRIEF_PEER_COUNT = 3
+
+
+def _bar_close(bar: dict[str, Any]) -> float | None:
+    c = bar.get("close")
+    try:
+        return float(c) if c is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _ma(closes: list[float], window: int) -> float | None:
+    if len(closes) < window:
+        return None
+    return round(sum(closes[-window:]) / window, 4)
+
+
+def _rsi(closes: list[float], window: int = 14) -> float | None:
+    """Wilder's RSI on the last `window` returns. Falls through to None
+    when there's not enough data — fresh-listed names that landed in
+    the topic get a None instead of a misleading 50."""
+    if len(closes) <= window:
+        return None
+    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    gains = [max(d, 0.0) for d in deltas[-window:]]
+    losses = [max(-d, 0.0) for d in deltas[-window:]]
+    avg_gain = sum(gains) / window
+    avg_loss = sum(losses) / window
+    if avg_loss == 0:
+        return 100.0 if avg_gain > 0 else 50.0
+    rs = avg_gain / avg_loss
+    return round(100.0 - (100.0 / (1.0 + rs)), 2)
+
+
+def _pct_change(start: float | None, end: float | None) -> float | None:
+    if not start or not end or start == 0:
+        return None
+    return round((end - start) / start * 100.0, 2)
+
+
+def _compute_technicals(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Compute summary technicals from a daily-OHLCV history list.
+
+    Returns None when fewer than 20 bars available — the moving
+    averages would be too thin to carry signal and the persona is
+    better off seeing "技術指標不足" than misleading numbers.
+    """
+    closes = [c for c in (_bar_close(b) for b in bars) if c is not None]
+    if len(closes) < 20:
+        return None
+    last = closes[-1]
+    high_52w = max(closes[-min(252, len(closes)):])
+    low_52w = min(closes[-min(252, len(closes)):])
+    return {
+        "last_close":      round(last, 4),
+        "ma20":            _ma(closes, 20),
+        "ma60":            _ma(closes, 60),
+        "ma120":           _ma(closes, 120),
+        "high_52w":        round(high_52w, 4),
+        "low_52w":         round(low_52w, 4),
+        "dist_high_52w_pct": _pct_change(high_52w, last),
+        "dist_low_52w_pct":  _pct_change(low_52w, last),
+        "perf_5d_pct":     _pct_change(
+            closes[-6] if len(closes) >= 6 else None, last,
+        ),
+        "perf_20d_pct":    _pct_change(
+            closes[-21] if len(closes) >= 21 else None, last,
+        ),
+        "perf_60d_pct":    _pct_change(
+            closes[-61] if len(closes) >= 61 else None, last,
+        ),
+        "rsi14":           _rsi(closes, 14),
+    }
+
+
+def _summarize_revenue(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Take the latest `_FOCUS_BRIEF_REVENUE_MONTHS` rows from a
+    `tw_market_service.get_revenue` response, drop noise fields."""
+    if not rows:
+        return []
+    tail = rows[-_FOCUS_BRIEF_REVENUE_MONTHS:]
+    out: list[dict[str, Any]] = []
+    for r in tail:
+        out.append({
+            "month":       (r.get("date") or "")[:7],
+            "revenue_yoy": r.get("revenue_yoy"),
+            "revenue_mom": r.get("revenue_mom"),
+        })
+    return out
+
+
+def _summarize_institutional(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Sum 5-day net foreign / SITC / dealer over the rows. Returns
+    None when nothing came back — caller drops the block."""
+    if not rows:
+        return None
+    fini_net = sitc_net = dealer_net = 0
+    days = 0
+    for r in rows[-_FOCUS_BRIEF_CHIP_DAYS:]:
+        fini_net += int(r.get("fini_buy") or 0) - int(r.get("fini_sell") or 0)
+        sitc_net += int(r.get("sitc_buy") or 0) - int(r.get("sitc_sell") or 0)
+        dealer_net += int(r.get("dealer_buy") or 0) - int(r.get("dealer_sell") or 0)
+        days += 1
+    if days == 0:
+        return None
+    return {
+        "fini_net_5d":   fini_net,
+        "sitc_net_5d":   sitc_net,
+        "dealer_net_5d": dealer_net,
+        "days":          days,
+    }
+
+
+def _summarize_margin(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not rows:
+        return None
+    latest = rows[-1]
+    return {
+        "as_of":           latest.get("date"),
+        "margin_balance":  latest.get("margin_balance"),
+        "short_balance":   latest.get("short_balance"),
+    }
+
+
+async def _get_tw_peers(
+    *, symbol: str, industry: str | None, limit: int = _FOCUS_BRIEF_PEER_COUNT,
+) -> list[dict[str, Any]]:
+    """Same-industry comparable set drawn from the cached screener.
+
+    Picks the most-traded peers (proxy for liquidity / market cap)
+    and returns a compact `{symbol, name, price, change_pct, pe}`
+    record per peer. Empty list when the industry is unknown or the
+    screener cache is cold / failing.
+    """
+    if not industry:
+        return []
+    try:
+        from services import tw_market_service
+        rows = await tw_market_service.get_screener(
+            limit=400, min_volume=500_000,
+        )
+    except Exception:
+        return []
+    candidates = []
+    for r in rows:
+        sym = r.get("symbol")
+        if not sym or sym == symbol:
+            continue
+        if _is_speculative_etf(sym):
+            continue
+        if tw_market_service.get_industry(sym) != industry:
+            continue
+        candidates.append(r)
+    candidates.sort(
+        key=lambda r: (r.get("volume") or 0), reverse=True,
+    )
+    out: list[dict[str, Any]] = []
+    for r in candidates[:limit]:
+        sym = r.get("symbol")
+        out.append({
+            "symbol":     sym,
+            "name":       r.get("name_zh") or tw_market_service.get_company_name(sym),
+            "price":      r.get("price"),
+            "change_pct": r.get("change_pct"),
+            "pe":         r.get("pe_ratio"),
+        })
+    return out
+
+
+async def _build_tw_focus_brief(
+    db: AsyncSession, symbol: str,
+) -> dict[str, Any]:
+    """Per-TW-symbol mini analyst report. Each sub-call is wrapped in
+    its own try so a single connector outage doesn't blank the whole
+    brief — the persona just sees "fundamentals: null" and reasons
+    with what remained."""
+    from services import tw_market_service
+
+    brief: dict[str, Any] = {
+        "symbol":         symbol,
+        "name_zh":        tw_market_service.get_company_name(symbol),
+        "industry":       tw_market_service.get_industry(symbol),
+        "quote":          None,
+        "technicals":     None,
+        "fundamentals":   None,
+        "revenue_trend":  [],
+        "chip_5d":        None,
+        "margin_latest":  None,
+        "peers":          [],
+    }
+
+    # Quote — cached behind Redis 15s, safe to call even mid-round.
+    try:
+        q = await tw_market_service.get_quote(symbol)
+        brief["quote"] = {
+            "price":      q.get("price"),
+            "change_pct": q.get("change_pct"),
+            "volume":     q.get("volume"),
+            "prev_close": q.get("prev_close"),
+        }
+    except Exception as exc:
+        log.warning("focus_brief.quote.failed",
+                    extra={"symbol": symbol, "error": str(exc)})
+
+    # History → technicals. 12 months is enough for 52w stats + 60d MA.
+    try:
+        bars = await tw_market_service.get_history(
+            symbol, months=_FOCUS_BRIEF_HISTORY_MONTHS,
+        )
+        brief["technicals"] = _compute_technicals(bars or [])
+    except Exception as exc:
+        log.warning("focus_brief.history.failed",
+                    extra={"symbol": symbol, "error": str(exc)})
+
+    # Fundamentals.
+    try:
+        f = await tw_market_service.get_fundamentals(symbol)
+        if isinstance(f, dict):
+            brief["fundamentals"] = {
+                "pe":             f.get("pe_ratio"),
+                "pb":             f.get("pb_ratio"),
+                "dividend_yield": f.get("dividend_yield"),
+                "eps":            f.get("eps"),
+            }
+    except Exception as exc:
+        log.warning("focus_brief.fundamentals.failed",
+                    extra={"symbol": symbol, "error": str(exc)})
+
+    # Revenue trend (TW-only data — Taiwan listed companies file monthly).
+    try:
+        rev = await tw_market_service.get_revenue(
+            symbol, months=_FOCUS_BRIEF_REVENUE_MONTHS,
+        )
+        brief["revenue_trend"] = _summarize_revenue(rev or [])
+    except Exception as exc:
+        log.warning("focus_brief.revenue.failed",
+                    extra={"symbol": symbol, "error": str(exc)})
+
+    # Chip metrics (法人 + 融資融券).
+    try:
+        inst = await tw_market_service.get_institutional(
+            symbol, days=_FOCUS_BRIEF_CHIP_DAYS,
+        )
+        brief["chip_5d"] = _summarize_institutional(inst or [])
+    except Exception as exc:
+        log.warning("focus_brief.institutional.failed",
+                    extra={"symbol": symbol, "error": str(exc)})
+
+    try:
+        margin = await tw_market_service.get_margin(
+            symbol, days=_FOCUS_BRIEF_CHIP_DAYS,
+        )
+        brief["margin_latest"] = _summarize_margin(margin or [])
+    except Exception as exc:
+        log.warning("focus_brief.margin.failed",
+                    extra={"symbol": symbol, "error": str(exc)})
+
+    # Peer set — best-effort, off the cached screener.
+    try:
+        brief["peers"] = await _get_tw_peers(
+            symbol=symbol, industry=brief["industry"],
+        )
+    except Exception as exc:
+        log.warning("focus_brief.peers.failed",
+                    extra={"symbol": symbol, "error": str(exc)})
+
+    return brief
+
+
+async def _build_us_focus_brief(symbol: str) -> dict[str, Any]:
+    """US-side equivalent — quote + technicals + fundamentals only.
+    No revenue / chip / peers because the underlying data tier
+    doesn't have parity with TW (no monthly revenue feed, no
+    foreign-investor ledger, no industry-tagged screener)."""
+    from services import us_market_service
+
+    brief: dict[str, Any] = {
+        "symbol":       symbol,
+        "name":         None,
+        "industry":     None,
+        "quote":        None,
+        "technicals":   None,
+        "fundamentals": None,
+    }
+    try:
+        q = await us_market_service.get_quote(symbol)
+        brief["quote"] = {
+            "price":      q.get("price"),
+            "change_pct": q.get("change_pct"),
+            "volume":     q.get("volume"),
+            "prev_close": q.get("prev_close"),
+        }
+    except Exception as exc:
+        log.warning("focus_brief.us_quote.failed",
+                    extra={"symbol": symbol, "error": str(exc)})
+
+    try:
+        bars = await us_market_service.get_history(symbol, period="1y", interval="1d")
+        brief["technicals"] = _compute_technicals(bars or [])
+    except Exception as exc:
+        log.warning("focus_brief.us_history.failed",
+                    extra={"symbol": symbol, "error": str(exc)})
+
+    try:
+        f = await us_market_service.get_fundamentals(symbol)
+        if isinstance(f, dict):
+            brief["name"] = f.get("name")
+            brief["industry"] = f.get("industry") or f.get("sector")
+            brief["fundamentals"] = {
+                "pe":             f.get("pe_ratio"),
+                "pb":             f.get("pb_ratio"),
+                "dividend_yield": f.get("dividend_yield"),
+                "eps":            f.get("eps"),
+                "market_cap":     f.get("market_cap"),
+            }
+    except Exception as exc:
+        log.warning("focus_brief.us_fundamentals.failed",
+                    extra={"symbol": symbol, "error": str(exc)})
+
+    return brief
+
+
+async def _assemble_focus_briefs(
+    db: AsyncSession, *, market: str, symbols: list[str],
+) -> list[dict[str, Any]]:
+    """Fan out per-symbol brief assembly concurrently. Cap at
+    `_MAX_FOCUS_SYMBOLS` for token-budget protection."""
+    if not symbols:
+        return []
+    syms = symbols[:_MAX_FOCUS_SYMBOLS]
+    if market == "TW":
+        coros = [_build_tw_focus_brief(db, s) for s in syms]
+    elif market == "US":
+        coros = [_build_us_focus_brief(s) for s in syms]
+    else:
+        # GLOBAL — fall back to US shape for ASCII-letter symbols, TW
+        # shape for digit-only. Crypto symbols (BTC/ETH/...) would
+        # also land in the US branch but their fundamentals path
+        # doesn't apply; the personas already see them via the
+        # crypto news block, so we skip them here to avoid faking
+        # equity-style PE/PB.
+        coros = []
+        for s in syms:
+            if s.isdigit():
+                coros.append(_build_tw_focus_brief(db, s))
+            elif s in _crypto_universe():
+                continue
+            else:
+                coros.append(_build_us_focus_brief(s))
+    if not coros:
+        return []
+    results = await asyncio.gather(*coros, return_exceptions=True)
+    out: list[dict[str, Any]] = []
+    for r in results:
+        if isinstance(r, Exception):
+            log.warning("focus_brief.fan_out.failed", extra={"error": str(r)})
+            continue
+        out.append(r)
+    return out
+
+
+# ── macro block (FRED-backed) ──────────────────────────────────────
+
+
+_MACRO_SERIES = (
+    ("fed_funds_rate", "Fed Funds Rate (%)"),
+    ("10y_yield",      "US 10Y Treasury (%)"),
+    ("10y_minus_2y",   "10Y-2Y Spread (%)"),
+    ("usd_index",      "USD Index (DXY)"),
+    ("twd_usd",        "TWD/USD"),
+)
+
+
+def _macro_summary_from_series(
+    series: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Reduce a FRED `[{date, value}]` time series to:
+        {latest_date, latest_value, change_1y, change_3m}.
+    Returns None if the series came back empty."""
+    if not series:
+        return None
+    points: list[tuple[str, float]] = []
+    for p in series:
+        try:
+            v = float(p["value"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        d = p.get("date")
+        if not d:
+            continue
+        points.append((d, v))
+    if not points:
+        return None
+    points.sort(key=lambda p: p[0])
+    latest_date, latest_value = points[-1]
+
+    def _earlier_than(target_days: int) -> float | None:
+        from datetime import date as _date
+        from datetime import timedelta as _td
+        try:
+            ld = _date.fromisoformat(latest_date)
+        except ValueError:
+            return None
+        target = ld - _td(days=target_days)
+        # Find the closest point on or before `target`.
+        best: float | None = None
+        for d, v in points:
+            try:
+                dd = _date.fromisoformat(d)
+            except ValueError:
+                continue
+            if dd <= target:
+                best = v
+        return best
+
+    # Series-level change deltas — for rates we report absolute change
+    # (basis points), for everything else relative %. Personas read
+    # these to anchor "Fed cut 75bp YoY" vs "DXY +6% YoY".
+    one_y_ago = _earlier_than(365)
+    three_m_ago = _earlier_than(90)
+    return {
+        "latest_date":  latest_date,
+        "latest_value": round(latest_value, 4),
+        "change_1y":    None if one_y_ago is None
+                        else round(latest_value - one_y_ago, 4),
+        "change_3m":    None if three_m_ago is None
+                        else round(latest_value - three_m_ago, 4),
+    }
+
+
+async def _assemble_macro_block() -> dict[str, Any]:
+    """Pull a small set of FRED macro series concurrently and reduce
+    each to its latest value plus 1y / 3m delta. Empty / failing
+    series degrade to None so the personas can mention "macro data
+    incomplete" instead of confidently citing a missing rate."""
+    from services import us_market_service
+
+    async def _pull(name: str) -> tuple[str, list[dict[str, Any]]]:
+        try:
+            return name, await us_market_service.get_macro_indicator(name)
+        except Exception as exc:
+            log.warning("macro.fetch.failed",
+                        extra={"name": name, "error": str(exc)})
+            return name, []
+
+    results = await asyncio.gather(*[_pull(n) for n, _ in _MACRO_SERIES])
+    by_name = dict(results)
+    block: dict[str, Any] = {}
+    for name, label in _MACRO_SERIES:
+        block[name] = {
+            "label":   label,
+            "summary": _macro_summary_from_series(by_name.get(name) or []),
+        }
+    return block
+
+
+# ── user_context (owner's portfolio + watchlist) ───────────────────
+#
+# Personas like portfolio_advisor / risk_manager need to know what
+# the user actually holds before recommending action — "should I add
+# 2330" is unanswerable without knowing whether they already own
+# 30% in 2330. Other personas can ignore the block.
+#
+# Read directly off the ORM with no live-quote enrichment: the
+# discussion isn't about today's exact P&L, it's about portfolio
+# fit, sector concentration, and overlap with the topic. Cap each
+# list (holdings, watchlist_symbols) so the prompt budget stays
+# bounded even for power users with many portfolios.
+#
+# Privacy: round_context snapshots persist this block, but
+# `discussion_round_contexts` is owner-scoped via the discussion's
+# FK — only the owner can read their own snapshots through the API.
+
+_USER_CONTEXT_HOLDING_CAP = 20
+_USER_CONTEXT_WATCHLIST_CAP = 30
+
+
+async def _assemble_user_context(
+    db: AsyncSession,
+    *,
+    owner_id: uuid.UUID,
+    focus_symbols: list[str] | None = None,
+) -> dict[str, Any]:
+    """Compact summary of the discussion owner's portfolio + watchlist.
+
+    Cheap (no live quote enrichment) — suitable to fire on every
+    round. Each sub-block degrades to an empty list on query failure
+    so a transient portfolio-table outage doesn't kill the round.
+    """
+    from models.portfolio import Holding, Portfolio
+    from models.watchlist import Watchlist, WatchlistItem
+
+    out: dict[str, Any] = {
+        "portfolios":        [],
+        "holdings":          [],
+        "watchlist_symbols": [],
+        "focus_overlap":     {"held": [], "watching": []},
+    }
+    focus_set = {s for s in (focus_symbols or []) if s}
+
+    try:
+        pf_stmt = (
+            select(Portfolio)
+            .where(Portfolio.user_id == owner_id)
+            .order_by(Portfolio.created_at)
+        )
+        portfolios = list((await db.scalars(pf_stmt)).all())
+    except Exception as exc:
+        log.warning("user_context.portfolios.failed", extra={"error": str(exc)})
+        portfolios = []
+
+    holdings_rows: list[dict[str, Any]] = []
+    for p in portfolios:
+        try:
+            h_stmt = select(Holding).where(Holding.portfolio_id == p.id)
+            hs = list((await db.scalars(h_stmt)).all())
+        except Exception as exc:
+            log.warning("user_context.holdings.failed",
+                        extra={"portfolio_id": str(p.id), "error": str(exc)})
+            hs = []
+        out["portfolios"].append({
+            "name":          p.name,
+            "currency":      p.currency,
+            "holding_count": len(hs),
+        })
+        for h in hs:
+            holdings_rows.append({
+                "portfolio":     p.name,
+                "symbol":        h.symbol,
+                "market":        h.market.value,
+                "quantity":      float(h.quantity),
+                "avg_cost":      float(h.avg_cost),
+                "cost_currency": h.cost_currency,
+            })
+
+    # Largest-position-first so the cap prefers the meaningful holdings.
+    holdings_rows.sort(
+        key=lambda r: float(r["quantity"]) * float(r["avg_cost"]),
+        reverse=True,
+    )
+    out["holdings"] = holdings_rows[:_USER_CONTEXT_HOLDING_CAP]
+
+    try:
+        wl_stmt = (
+            select(WatchlistItem)
+            .join(Watchlist, WatchlistItem.watchlist_id == Watchlist.id)
+            .where(Watchlist.user_id == owner_id)
+        )
+        wl_items = list((await db.scalars(wl_stmt)).all())
+    except Exception as exc:
+        log.warning("user_context.watchlist.failed", extra={"error": str(exc)})
+        wl_items = []
+
+    seen_wl: set[tuple[str, str]] = set()
+    watchlist_summary: list[dict[str, str]] = []
+    for it in wl_items:
+        key = (it.market.value, it.symbol)
+        if key in seen_wl:
+            continue
+        seen_wl.add(key)
+        watchlist_summary.append({"symbol": it.symbol, "market": it.market.value})
+    out["watchlist_symbols"] = watchlist_summary[:_USER_CONTEXT_WATCHLIST_CAP]
+
+    if focus_set:
+        held_syms = {r["symbol"] for r in holdings_rows}
+        wl_syms = {it["symbol"] for it in watchlist_summary}
+        out["focus_overlap"] = {
+            "held":     sorted(focus_set & held_syms),
+            "watching": sorted(focus_set & wl_syms),
+        }
+
+    return out
+
+
+# ── prior_discussions (cross-discussion memory) ───────────────────
+#
+# Personas have no recall across sessions: each new discussion sees
+# market data + the current transcript, but never "what did this
+# user / panel conclude on 2330 last week?". That makes consistency
+# impossible — round 1 of a new discussion can recommend Buy on the
+# same name where the last concluded discussion said Hold.
+#
+# `_assemble_prior_discussions` queries the owner's past completed
+# discussions whose topic OR `conclusion.recommended_symbols`
+# overlap with the current focus_symbols. Returns a compact list
+# the synthesiser-style prompt can render as "上次 4/15 對 2330
+# 結論 Hold (時間軸 short_term, 共識 0.7)" so personas can stay
+# coherent across sessions.
+#
+# Owner-scoped (the FK + WHERE clause both hard-gate to the user);
+# the current discussion's own id is excluded so a re-run doesn't
+# reference itself.
+
+_PRIOR_DISCUSSIONS_CAP = 5
+_PRIOR_DISCUSSIONS_LOOKBACK_DAYS = 90
+
+
+async def _assemble_prior_discussions(
+    db: AsyncSession,
+    *,
+    owner_id: uuid.UUID,
+    focus_symbols: list[str] | None,
+    exclude_id: uuid.UUID | None = None,
+) -> list[dict[str, Any]]:
+    """Most-recent-first list of the owner's concluded discussions
+    that overlap any of `focus_symbols` (matched against the topic
+    string or against `conclusion.recommended_symbols`).
+
+    Capped at `_PRIOR_DISCUSSIONS_CAP` and limited to the last
+    `_PRIOR_DISCUSSIONS_LOOKBACK_DAYS` days so a 2-year-old call is
+    not dragged into a fresh discussion's prompt.
+
+    The block is intentionally compact (no full conclusion reasoning,
+    no risks list) — personas only need the headline so they can
+    stay consistent. They can refer the user back to the prior
+    discussion id for full detail.
+    """
+    if not focus_symbols:
+        return []
+
+    cutoff = datetime.now(UTC) - timedelta(days=_PRIOR_DISCUSSIONS_LOOKBACK_DAYS)
+    stmt = (
+        select(Discussion)
+        .where(
+            Discussion.owner_id == owner_id,
+            Discussion.status == STATUS_DONE,
+            Discussion.conclusion.isnot(None),
+            Discussion.created_at >= cutoff,
+        )
+        .order_by(Discussion.created_at.desc())
+        .limit(50)  # generous cap for the in-Python filter
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(Discussion.id != exclude_id)
+    rows = list((await db.scalars(stmt)).all())
+    if not rows:
+        return []
+
+    focus_set = {str(s) for s in focus_symbols}
+    matches: list[dict[str, Any]] = []
+    for row in rows:
+        topic = row.topic or ""
+        conclusion = row.conclusion if isinstance(row.conclusion, dict) else {}
+        recommended = [
+            str(s).strip()
+            for s in (conclusion.get("recommended_symbols") or [])
+            if str(s).strip()
+        ]
+        # Match either: focus symbol literally appears in the topic
+        # string (catches the `2330` / `$AAPL` case the user typed),
+        # or appears in the prior conclusion's recommended_symbols.
+        matched = sorted({
+            sym for sym in focus_set
+            if sym in topic or sym in recommended
+        })
+        if not matched:
+            continue
+        matches.append({
+            "id":                  str(row.id),
+            "created_at":          row.created_at.isoformat(),
+            "topic":               topic[:120],
+            "recommended_symbols": recommended[:5],
+            "time_horizon":        conclusion.get("time_horizon"),
+            "consensus_score":     conclusion.get("consensus_score"),
+            "verdict":             row.verdict,
+            "matched_symbols":     matched,
+        })
+        if len(matches) >= _PRIOR_DISCUSSIONS_CAP:
+            break
+    return matches
 
 
 async def gather_market_context(
@@ -434,6 +1331,8 @@ async def gather_market_context(
     market: str = "TW",
     top_n: int = _DEFAULT_TOP_MOVERS,
     focus_symbols: list[str] | None = None,
+    owner_id: uuid.UUID | None = None,
+    exclude_discussion_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Build a structured snapshot of the market state for the personas.
 
@@ -445,6 +1344,15 @@ async def gather_market_context(
     `extract_focus_symbols`) makes the context include per-symbol news
     sentiment alongside the market-wide aggregate. Empty list / None
     skips the per-symbol block.
+
+    `owner_id` (the discussion's owner) opts the context into a
+    `user_context` block carrying the owner's portfolio + watchlist
+    summary plus overlap with `focus_symbols`. Personas that don't
+    care about portfolio fit (macro_analyst, market_analyst, the
+    legendary investors when not asked about position sizing) can
+    ignore it; portfolio_advisor / risk_manager use it to give
+    portfolio-aware advice instead of generic "should I buy 2330"
+    answers.
     """
     ctx: dict[str, Any] = {
         "market": market,
@@ -454,6 +1362,31 @@ async def gather_market_context(
         "index": None,
         "news_sentiment": None,
         "per_symbol_news_sentiment": {},
+        # Per-focus-symbol mini analyst report (PR #206). Populated when
+        # the topic names specific symbols and `_assemble_focus_briefs`
+        # could pull at least the quote — gives personas actual evidence
+        # to cite ("2330 已脫離 60 日均，距 52w 高點 -3.5%, RSI 62") instead
+        # of guessing from headlines.
+        "focus_briefs": [],
+        # Cross-market macro snapshot (PR #206) — Fed funds / 10Y / yield
+        # spread / DXY / TWD/USD with 1y + 3m deltas. Populated for every
+        # discussion regardless of `market` because rates / FX matter
+        # everywhere; empty `summary` blocks are silently passed through
+        # so a missing FRED key doesn't break the round.
+        "macro": None,
+        # Discussion owner's portfolio + watchlist summary. Populated
+        # only when `owner_id` is supplied (tests passing None get a
+        # null block); always None for non-owner reads via
+        # round_context snapshot replay (the snapshot itself stays
+        # owner-scoped via discussion FK).
+        "user_context": None,
+        # Owner's past concluded discussions whose topic /
+        # recommended_symbols overlap the current focus_symbols.
+        # Populated only when both `owner_id` AND `focus_symbols`
+        # are supplied. Empty list when there's no prior history
+        # — most users only have a handful of discussions, so the
+        # 90-day lookback rarely triggers.
+        "prior_discussions": [],
         # International / cross-market news (Fed, FOMC, US markets,
         # global macro) translated into Chinese — populated by the
         # `ingest_news_international` cron writing rows under
@@ -670,6 +1603,43 @@ async def gather_market_context(
         except Exception as exc:
             _record_error("per_symbol_sentiment", exc)
 
+        # Per-symbol mini analyst report. Best-effort — the assembler
+        # already returns partial briefs on connector failure, so a
+        # bad day for tw_market_service still yields a useful block.
+        try:
+            ctx["focus_briefs"] = await _assemble_focus_briefs(
+                db, market=market, symbols=list(focus_symbols),
+            )
+        except Exception as exc:
+            _record_error("focus_briefs", exc)
+
+    # Macro snapshot is universal — Fed / 10Y / DXY / TWD/USD matter
+    # to TW personas as much as US ones. Errors degrade to an empty
+    # block so `_record_error` can still log the connector outage.
+    try:
+        ctx["macro"] = await _assemble_macro_block()
+    except Exception as exc:
+        _record_error("macro", exc)
+
+    if owner_id is not None:
+        try:
+            ctx["user_context"] = await _assemble_user_context(
+                db, owner_id=owner_id, focus_symbols=focus_symbols,
+            )
+        except Exception as exc:
+            _record_error("user_context", exc)
+
+        if focus_symbols:
+            try:
+                ctx["prior_discussions"] = await _assemble_prior_discussions(
+                    db,
+                    owner_id=owner_id,
+                    focus_symbols=focus_symbols,
+                    exclude_id=exclude_discussion_id,
+                )
+            except Exception as exc:
+                _record_error("prior_discussions", exc)
+
     return ctx
 
 
@@ -768,6 +1738,27 @@ _CONTEXT_SCHEMA_ANNOTATION = (
     "`recent_suspensions`（近期暫停交易）、`high_day_trading_ratio`"
     "（當沖比 >60%，投機過熱）。**禁止推薦中招的標的，即使其他訊號看多。**\n"
     "- market_institutional_5d：全市場三大法人近 5 日淨買賣超（大盤方向）。\n"
+    "- focus_briefs：**主題提及之個股小型分析師簡報**——`quote` 即時報價、"
+    "`technicals`（MA20/60/120、52w 高低與距離、5/20/60 日漲跌幅、RSI14）、"
+    "`fundamentals`（PE/PB/殖利率/EPS）、`revenue_trend`（近 6 月營收年/月增）、"
+    "`chip_5d`（外資 / 投信 / 自營近 5 日淨買賣）、`margin_latest`（最新融資餘額）、"
+    "`peers`（同產業 3 檔可比標的）。**有此區塊就要引用具體數據**，"
+    "不要只憑 headlines 推論。\n"
+    "- macro：宏觀利率與匯率快照（Fed Funds / US 10Y / 10Y-2Y 殖利率價差 / "
+    "DXY / TWD/USD），各帶 `latest_value` + `change_1y` + `change_3m`。"
+    "影響全球風險偏好與外資流向，建議在結論中至少提及一次相關方向。\n"
+    "- user_context：**討論發起人本人的部位**——`portfolios`（組合清單）、"
+    "`holdings`（前 20 大持股，含股數 / 平均成本 / 計價幣別）、"
+    "`watchlist_symbols`（自選股，前 30）、`focus_overlap.held` "
+    "（主題提及的標的中已持有者）、`focus_overlap.watching`（自選股中相關者）。"
+    "**只在你的角色與部位配置 / 風險管理相關時引用**（portfolio_advisor / "
+    "risk_manager / 在被問加碼減碼時的 buffett / lynch 等）；其他情境忽略。"
+    "**禁止在結論中揭露具體股數或成本價**——僅用於決策邏輯。\n"
+    "- prior_discussions：**本人過去 90 天對主題提及之標的所做的結論**，含日期 / "
+    "topic 摘要 / `recommended_symbols` / `time_horizon` / `consensus_score` / "
+    "`verdict`（win / loss / unverifiable / null）。**用以保持跨討論一致性**——"
+    "若上次對 2330 結論 Hold 而本次卻要 Buy，必須在 content 中明確說明改變理由"
+    "（例如「上週起殖利率下行 +30bp，重新評估」），不可默默翻盤。\n"
     "- errors：本次抓取的連接器錯誤清單；非空時務必聲明資料不完整。"
 )
 
@@ -803,14 +1794,71 @@ _TURN_PROMPT_TEMPLATE = (
 )
 
 
+def _summarize_turn_content(content: str) -> str:
+    """Compress a turn's full content down to one line for the older-
+    history block. Strips markdown emphasis + collapses whitespace +
+    truncates at `_HISTORY_SUMMARY_CHARS`. The persona doesn't need
+    the full text from 4 rounds ago — only the gist of the speaker's
+    previous position so they can spot drift / contradictions."""
+    body = (content or "").strip()
+    if not body:
+        return "（同意，無補充）"
+    # Drop markdown bold / italic markers + bullet hyphens.
+    body = body.replace("**", "").replace("__", "")
+    # Collapse whitespace + newlines.
+    body = " ".join(body.split())
+    if len(body) > _HISTORY_SUMMARY_CHARS:
+        body = body[:_HISTORY_SUMMARY_CHARS] + "…"
+    return body
+
+
 def _format_history(prior_turns: list[DiscussionTurn]) -> str:
+    """Build the `## 先前發言` block for a persona prompt.
+
+    Two-tier compression keeps the prompt budget bounded:
+      - The N most recent turns (`_FULL_HISTORY_TURNS`) appear in
+        full — these are the live debate the persona is reacting to.
+      - Older turns up to `_MAX_HISTORY_TURNS` appear as a single-
+        line summary so the persona retains continuity ("buffett 第
+        1 輪看好 2330, 我此輪也補強") without paying for verbatim
+        text from rounds ago.
+
+    The full window comes after the summary block so the LLM's
+    recency bias works in our favour — the most recent turn is the
+    last thing in the prompt before its own "你現在的任務" line.
+    """
     if not prior_turns:
         return "（你是本場第一位發言者）"
-    lines = []
-    for t in prior_turns[-_MAX_HISTORY_TURNS:]:
+    window = prior_turns[-_MAX_HISTORY_TURNS:]
+    if len(window) <= _FULL_HISTORY_TURNS:
+        recent = window
+        older: list[DiscussionTurn] = []
+    else:
+        split = len(window) - _FULL_HISTORY_TURNS
+        older = window[:split]
+        recent = window[split:]
+
+    def _render(t: DiscussionTurn, body: str) -> str:
+        # User injections aren't analyst opinions — render them as a
+        # directive from the discussion's owner so personas know the
+        # next round must respond to it. Keeps the same `第N輪` prefix
+        # for ordering / recency cues.
+        if t.persona_id == USER_PERSONA_ID:
+            return f"- 第{t.round}輪 · 【討論發起人插話】：{body}"
+        return f"- 第{t.round}輪 · {t.persona_id} · {t.stance}：{body}"
+
+    sections: list[str] = []
+    if older:
+        sections.append("（較早輪次摘要）")
+        for t in older:
+            sections.append(_render(t, _summarize_turn_content(t.content)))
+    if older and recent:
+        sections.append("")
+        sections.append("（最近發言全文）")
+    for t in recent:
         body = t.content.strip() or "（同意，無補充）"
-        lines.append(f"- 第{t.round}輪 · {t.persona_id} · {t.stance}：{body}")
-    return "\n".join(lines)
+        sections.append(_render(t, body))
+    return "\n".join(sections)
 
 
 # Matches the opening of a `"content": "` field. Used by the truncation
@@ -980,29 +2028,269 @@ async def _resolve_persona_specs(
     return out
 
 
+# Provider names whose `_openai_compat_tool_loop` carries the same
+# OpenAI-style tools=[...] schema. Mirrors `_OPENAI_COMPAT_PROVIDERS`
+# in `api/ai_agents/router.py`; kept narrowly here so the discussion
+# service doesn't import the chat-router module (which pulls FastAPI
+# into the test path for free).
+_OPENAI_COMPAT_TOOL_PROVIDERS = ("minimax", "groq", "deepseek", "openrouter")
+
+
+def _build_persona_tool_kwargs(
+    *, provider: str, user_role: str | None, user_id: str | None,
+) -> dict[str, Any]:
+    """Return the tool-related kwargs to forward to `stream_chat` for
+    a single persona turn.
+
+    Mirrors the eligibility rules at `/api/ai/chat`:
+      - `claude_agent` provider: when the SDK is importable + the
+        owner has analyst / admin role, build the MCP toolset and
+        cap turns at `CLAUDE_AGENT_MAX_TURNS`.
+      - OpenAI-compat providers: when the owner has analyst / admin
+        role, build the OpenAI-compat toolset; viewers fall back to
+        plain chat (the `query_user_data` tool reads the caller's
+        own data, so handing it to a viewer would let an account
+        with low quota silently exfiltrate via tool calls).
+      - Any other provider, or any role/SDK gate failing: returns
+        an empty dict so the caller falls through to today's plain
+        streaming.
+
+    Errors building the toolset (SDK import failure, key fetcher
+    blowing up) are swallowed + logged so a single tool-config
+    issue never breaks the discussion round — the persona just
+    gets a tool-less turn and the rest of the round continues.
+    """
+    if not user_id:
+        return {}
+    role = (user_role or "").lower()
+    if role not in ("analyst", "admin"):
+        return {}
+
+    prov = (provider or "").lower()
+    if prov == "claude_agent":
+        if not settings.claude_agent_effective_enabled:
+            return {}
+        try:
+            from ai.tools import build_toolset, tool_names
+            return {
+                "mcp_server":    build_toolset(user_id),
+                "allowed_tools": tool_names(),
+                "max_turns":     settings.CLAUDE_AGENT_MAX_TURNS,
+            }
+        except Exception as exc:
+            log.warning(
+                "discussion.tools.claude_agent.build_failed",
+                extra={"user_id": user_id, "error": str(exc)},
+            )
+            return {}
+
+    if prov in _OPENAI_COMPAT_TOOL_PROVIDERS:
+        try:
+            from ai.tools.openai_compat import build_openai_compat_toolset
+            schemas, dispatch = build_openai_compat_toolset(user_id)
+        except Exception as exc:
+            log.warning(
+                "discussion.tools.openai_compat.build_failed",
+                extra={"user_id": user_id, "provider": prov, "error": str(exc)},
+            )
+            return {}
+        max_turns_attr = {
+            "minimax":    "MINIMAX_MAX_TURNS",
+            "groq":       "GROQ_MAX_TURNS",
+            "deepseek":   "DEEPSEEK_MAX_TURNS",
+            "openrouter": "OPENROUTER_MAX_TURNS",
+        }[prov]
+        return {
+            "openai_tool_schemas":  schemas,
+            "openai_tool_dispatch": dispatch,
+            "max_turns":            getattr(settings, max_turns_attr, 5),
+        }
+
+    return {}
+
+
+# ── per-persona context filtering ──────────────────────────────────
+#
+# Sending the full `gather_market_context` payload (~12-15 blocks) to
+# every persona costs tokens that don't help: a `macro_analyst` doesn't
+# benefit from the `risk_warnings` 處置股 list, and `dalio` doesn't
+# care about per-symbol `top_revenue_growers`. Worse, more text =
+# more attention dilution — weak models start mixing chip-flow data
+# into a macro thesis it shouldn't be in.
+#
+# `_PERSONA_CONTEXT_PROFILES` enumerates the blocks each persona
+# actually wants. Personas absent from the registry fall through to
+# `_ALL_PERSONA_BLOCKS` (current behaviour — full context). Admin
+# overrides on persona provider/model don't affect filtering — the
+# filter is keyed on the canonical persona_id so reskinning Buffett's
+# LLM doesn't change what data he cares about.
+#
+# Always-included keys (top of every persona's view) are the metadata
+# the prompt template references unconditionally: `market`,
+# `captured_at`, and `errors` (so personas can mention "data was
+# incomplete" without us having to enumerate per-archetype).
+
+_ALWAYS_INCLUDED_BLOCKS: frozenset[str] = frozenset({
+    "market", "captured_at", "errors",
+    # `prior_discussions` is meta-context — past consensus on the
+    # same symbols matters to every archetype (a value persona
+    # should know we said Hold last week; a quant persona should
+    # see when their last momentum call was wrong). Cheap because
+    # it's per-symbol-overlap-only.
+    "prior_discussions",
+})
+
+# Full block set — used as the fall-through profile and the union the
+# filter compares against. Kept in sync manually with the keys
+# `gather_market_context` populates.
+_ALL_PERSONA_BLOCKS: frozenset[str] = frozenset({
+    "top_gainers", "top_losers", "index",
+    "news_sentiment", "per_symbol_news_sentiment", "international_sentiment",
+    "top_foreign_buyers", "margin_balance_trend", "top_revenue_growers",
+    "active_buybacks", "govt_bank_flow_5d", "risk_warnings",
+    "market_institutional_5d",
+    "focus_briefs", "macro", "user_context", "prior_discussions",
+})
+
+# Five archetypes cover the 19 personas without enumerating each one.
+# Each profile is the union of "what this persona uses to form a view".
+_MACRO_PROFILE = frozenset({
+    "index", "macro", "international_sentiment",
+    "top_foreign_buyers", "govt_bank_flow_5d", "market_institutional_5d",
+    "news_sentiment", "per_symbol_news_sentiment",
+})
+
+_VALUE_PROFILE = frozenset({
+    "focus_briefs", "per_symbol_news_sentiment", "top_revenue_growers",
+    "active_buybacks", "news_sentiment", "macro",
+})
+
+_CONTRARIAN_PROFILE = frozenset({
+    "top_losers", "risk_warnings", "margin_balance_trend",
+    "focus_briefs", "news_sentiment", "per_symbol_news_sentiment",
+    "macro",
+})
+
+_QUANT_PROFILE = frozenset({
+    "focus_briefs", "top_gainers", "top_losers",
+    "top_foreign_buyers", "market_institutional_5d", "margin_balance_trend",
+    "risk_warnings", "news_sentiment", "macro",
+})
+
+_PORTFOLIO_PROFILE = frozenset({
+    "user_context", "focus_briefs", "per_symbol_news_sentiment",
+    "macro", "news_sentiment", "international_sentiment",
+})
+
+_PERSONA_CONTEXT_PROFILES: dict[str, frozenset[str]] = {
+    # CFA-style functional
+    "market_analyst":    _QUANT_PROFILE,
+    "portfolio_advisor": _PORTFOLIO_PROFILE,
+    "risk_manager":      _CONTRARIAN_PROFILE | {"user_context"},
+    "macro_analyst":     _MACRO_PROFILE,
+    "earnings_analyst":  _VALUE_PROFILE,
+    "trading_coach":     _QUANT_PROFILE,
+    # `claude_research` has tools — give it everything so it has the
+    # full picture before deciding which tool to call.
+    "claude_research":   _ALL_PERSONA_BLOCKS,
+
+    # Value / quality investors
+    "buffett":  _VALUE_PROFILE,
+    "graham":   _VALUE_PROFILE,
+    "munger":   _VALUE_PROFILE | {"risk_warnings"},
+    "lynch":    _VALUE_PROFILE | {"top_gainers"},
+    "fisher":   _VALUE_PROFILE,
+    "smith":    _VALUE_PROFILE,
+
+    # Contrarian
+    "marks":    _CONTRARIAN_PROFILE,
+    "klarman":  _CONTRARIAN_PROFILE,
+
+    # Macro
+    "dalio":    _MACRO_PROFILE,
+    "soros":    _MACRO_PROFILE | {"top_gainers", "focus_briefs"},
+
+    # Quant
+    "simons":   _QUANT_PROFILE,
+    "asness":   _QUANT_PROFILE,
+}
+
+
+def _filter_context_for_persona(
+    ctx: dict[str, Any], persona_id: str,
+) -> dict[str, Any]:
+    """Project `ctx` down to the blocks `persona_id` actually uses,
+    plus the always-included metadata keys.
+
+    Personas not in `_PERSONA_CONTEXT_PROFILES` (custom personas, new
+    additions, typos) get the full context — fail-open so an unknown
+    persona never silently loses data, just costs more tokens.
+    """
+    profile = _PERSONA_CONTEXT_PROFILES.get(persona_id)
+    if profile is None:
+        return ctx
+    allowed = _ALWAYS_INCLUDED_BLOCKS | profile
+    return {k: v for k, v in ctx.items() if k in allowed}
+
+
+# Appended to the user prompt when the persona has tools available so
+# the LLM is reminded that fabricating numbers is never necessary.
+# Listed tool names mirror what `build_toolset` / `build_openai_compat_
+# toolset` ship.
+_PERSONA_TOOL_USAGE_HINT = (
+    "\n\n## 工具可用\n"
+    "你本回合可以呼叫下列工具取得即時數據（傳回值已在工具結果中）："
+    "`get_quote` / `run_dcf` / `run_var` / `run_backtest` / `query_user_data`。"
+    "**禁止虛構數據** — 若需要某個數字而 `## 市場現況` 與 `focus_briefs` 找不到，"
+    "請呼叫對應工具，再把結果寫進 content。每次工具呼叫會自動計入流程，"
+    "你只需專注在分析。"
+)
+
+
 async def _ask_persona(
     db: AsyncSession,
     *,
     spec: "AgentSpec",
+    persona_id: str,
     topic: str,
     rules: str,
     context: dict[str, Any],
     prior_turns: list[DiscussionTurn],
     user_id: str | None,
+    user_role: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Yield raw stream events from one persona's turn. Caller assembles
     the deltas + parses the final JSON.
 
     Takes a pre-resolved `AgentSpec` so callers can batch-load the
     persona roster's overrides up-front (avoiding an N+1 round trip
-    inside the per-persona loop).
+    inside the per-persona loop). When the persona's resolved provider
+    supports tools and the discussion's owner has the right role,
+    `_build_persona_tool_kwargs` adds the MCP / OpenAI-compat toolset
+    so the persona can call get_quote / run_dcf / run_var / run_backtest
+    / query_user_data instead of guessing from the static context.
+
+    `persona_id` is the canonical agent ID (e.g. `buffett`,
+    `macro_analyst`) — used to look up the per-persona context profile
+    so the LLM only sees the blocks its archetype actually uses.
     """
+    tool_kwargs = _build_persona_tool_kwargs(
+        provider=spec.default_provider,
+        user_role=user_role,
+        user_id=user_id,
+    )
+    # Filter context down to blocks this persona actually uses — saves
+    # tokens and stops weak models from mixing irrelevant blocks (e.g.
+    # macro_analyst citing risk_warnings dispositions in a Fed thesis).
+    filtered_ctx = _filter_context_for_persona(context, persona_id)
     user_prompt = _TURN_PROMPT_TEMPLATE.format(
         topic=topic,
         rules=rules,
-        context=json.dumps(context, ensure_ascii=False, indent=2),
+        context=json.dumps(filtered_ctx, ensure_ascii=False, indent=2),
         history=_format_history(prior_turns),
     )
+    if tool_kwargs:
+        user_prompt += _PERSONA_TOOL_USAGE_HINT
     messages = [
         {"role": "system", "content": spec.system_prompt},
         {"role": "user", "content": user_prompt},
@@ -1015,6 +2303,7 @@ async def _ask_persona(
         temperature=0.4,
         db=db,
         user_id=user_id,
+        **tool_kwargs,
     ):
         yield event
 
@@ -1024,6 +2313,7 @@ async def run_round(
     discussion: Discussion,
     *,
     user_id: str | None = None,
+    user_role: str | None = None,
     provider_override: str | None = None,
     model_override: str | None = None,
 ) -> AsyncGenerator[TurnEvent, None]:
@@ -1035,9 +2325,16 @@ async def run_round(
       - context      {market_context}
       - turn_start   {round, turn_index, persona_id, persona_name}
       - delta        {round, turn_index, persona_id, text}
+      - tool_call    {round, turn_index, persona_id, id, name, args}
+      - tool_result  {round, turn_index, persona_id, id, name, summary, is_error}
       - turn_end     {round, turn_index, persona_id, stance, content}
       - round_end    {round, turn_count}
       - error        {message}            (terminal)
+
+    `user_role` (the discussion owner's role) gates tool availability
+    on tool-capable providers — analyst / admin get a real toolset,
+    viewers fall through to plain streaming. Providers without tool
+    support ignore the role entirely.
     """
     # Atomic SQL increment so the round counter can't drift from what's
     # in the DB. The previous in-memory `discussion.current_round =
@@ -1080,8 +2377,16 @@ async def run_round(
     # permanently stuck in RUNNING and the router would reject every
     # subsequent /round call.
     try:
-        focus = extract_focus_symbols(discussion.topic)
-        context = await gather_market_context(db, focus_symbols=focus)
+        focus = extract_focus_symbols(
+            discussion.topic, market=discussion.market,
+        )
+        context = await gather_market_context(
+            db,
+            market=discussion.market,
+            focus_symbols=focus,
+            owner_id=discussion.owner_id,
+            exclude_discussion_id=discussion.id,
+        )
         # Snapshot the assembled context so re-opening the discussion
         # later can show "what data the personas saw at the time".
         # Failure to persist is non-fatal — we still want the round
@@ -1174,11 +2479,13 @@ async def run_round(
                     async for event in _ask_persona(
                         db,
                         spec=spec,
+                        persona_id=persona_id,
                         topic=discussion.topic,
                         rules=discussion.rules,
                         context=context,
                         prior_turns=prior_turns,
                         user_id=user_id,
+                        user_role=user_role,
                     ):
                         etype = event.get("type")
                         if etype == "delta":
@@ -1192,6 +2499,30 @@ async def run_round(
                                     "persona_id": persona_id,
                                     "text": visible,
                                 })
+                        elif etype == "tool_call":
+                            # Forward through so the SSE consumer can
+                            # show "buffett 正在執行 run_dcf" inline.
+                            # Tool-call rounds inside the LLM loop are
+                            # already capped by the provider's
+                            # `max_turns`; we don't keep a counter here.
+                            yield TurnEvent("tool_call", {
+                                "round": round_number,
+                                "turn_index": idx,
+                                "persona_id": persona_id,
+                                "id":   event.get("id"),
+                                "name": event.get("name"),
+                                "args": event.get("args"),
+                            })
+                        elif etype == "tool_result":
+                            yield TurnEvent("tool_result", {
+                                "round": round_number,
+                                "turn_index": idx,
+                                "persona_id": persona_id,
+                                "id":       event.get("id"),
+                                "name":     event.get("name"),
+                                "summary":  event.get("summary", ""),
+                                "is_error": event.get("is_error", False),
+                            })
                         elif etype == "usage":
                             # Capture the provider's reported token counts
                             # so we can write a per-persona LLMUsageEvent
@@ -1427,8 +2758,28 @@ async def synthesize_conclusion(
         provider = provider or r_provider
         model = model or r_model
     turns = await get_turns(db, discussion_id=discussion.id)
-    focus = extract_focus_symbols(discussion.topic)
-    context = await gather_market_context(db, focus_symbols=focus)
+    # Reuse the most recent round's context snapshot so the synthesiser
+    # reasons over the same evidence the personas saw, instead of
+    # pulling a fresh `gather_market_context` (which would silently
+    # drift if the round was run pre-close and the synthesise runs
+    # post-close, or if a connector started failing in between).
+    # Falls back to a fresh fetch only for legacy discussions whose
+    # rounds predate the round-context snapshot table — keeps old
+    # rows synthesisable without manual backfill.
+    snapshots = await get_round_contexts(db, discussion_id=discussion.id)
+    if snapshots:
+        context = snapshots[-1].context
+    else:
+        focus = extract_focus_symbols(
+            discussion.topic, market=discussion.market,
+        )
+        context = await gather_market_context(
+            db,
+            market=discussion.market,
+            focus_symbols=focus,
+            owner_id=discussion.owner_id,
+            exclude_discussion_id=discussion.id,
+        )
 
     user_prompt = _SYNTHESIZER_USER_TEMPLATE.format(
         topic=discussion.topic,

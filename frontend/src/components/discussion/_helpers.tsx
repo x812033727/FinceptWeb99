@@ -37,6 +37,7 @@ export const STANCE_BADGE: Record<Turn["stance"], { label: string; cls: string }
   agree: { label: "✓ 同意", cls: "bg-green-900/30 text-green-300 border-green-800/50" },
   dissent: { label: "✗ 異議", cls: "bg-red-900/30 text-red-300 border-red-800/50" },
   supplement: { label: "↳ 補充", cls: "bg-blue-900/30 text-blue-300 border-blue-800/50" },
+  user_input: { label: "✎ 插話", cls: "bg-amber-900/30 text-amber-300 border-amber-800/50" },
 };
 
 // ── localStorage: topic / rules / collapse state ──────────────────
@@ -142,6 +143,7 @@ export async function createSession(body: {
   topic: string;
   rules: string;
   persona_ids: string[];
+  market?: string;
 }): Promise<Discussion> {
   const res = await api.post<Discussion>("/discussion/sessions", body);
   return res.data;
@@ -149,7 +151,12 @@ export async function createSession(body: {
 
 export async function updateSession(
   id: string,
-  body: { topic?: string; rules?: string; persona_ids?: string[] },
+  body: {
+    topic?: string;
+    rules?: string;
+    persona_ids?: string[];
+    market?: string;
+  },
 ): Promise<Discussion> {
   const res = await api.patch<Discussion>(`/discussion/sessions/${id}`, body);
   return res.data;
@@ -157,6 +164,15 @@ export async function updateSession(
 
 export async function deleteSession(id: string): Promise<void> {
   await api.delete(`/discussion/sessions/${id}`);
+}
+
+export async function injectUserMessage(
+  id: string, content: string,
+): Promise<Turn> {
+  const res = await api.post<Turn>(
+    `/discussion/sessions/${id}/inject`, { content },
+  );
+  return res.data;
 }
 
 export async function concludeSession(id: string): Promise<{ conclusion: Conclusion }> {
@@ -190,6 +206,7 @@ export async function saveAutoRunConfig(body: {
   persona_ids: string[];
   topic: string;
   rules: string;
+  market?: string;
 }): Promise<AutoRunConfig> {
   const res = await api.put<AutoRunConfig>("/discussion/auto-run/config", body);
   return res.data;
@@ -200,6 +217,10 @@ export async function saveAutoRunConfig(body: {
 export function usePersonaName(agents: AgentInfo[]) {
   const { t, i18n } = useTranslation();
   return (id: string) => {
+    // The pseudo-persona for between-rounds user injections
+    // (PR #211). Not in the agents list — render as a localised
+    // "discussion owner" label so the transcript reads naturally.
+    if (id === "_user") return t("discussion.user_persona_name");
     const a = agents.find((x) => x.id === id);
     if (!a) return id;
     const key = `personas.agents.${id}.name`;
@@ -413,6 +434,15 @@ export interface RoundCtxSummary {
   intl_bearish?: number;
   top_foreign_buyer?: { symbol: string; industry?: string | null; net?: number };
   top_revenue_grower?: { symbol: string; industry?: string | null; yoy?: number };
+  /** Compact headline strings extracted from the new context blocks
+   * (PR #213): one short line per block, ready to render in
+   * `RoundContextRow` without further processing. Each is only
+   * present when the underlying block carried meaningful data —
+   * the row renderer decides whether to show the slot. */
+  macro_summary?: string;
+  focus_briefs_summary?: string[];
+  user_context_summary?: string;
+  prior_discussions_summary?: string;
 }
 
 export function summarizeContext(ctx: Record<string, unknown>): RoundCtxSummary {
@@ -461,6 +491,104 @@ export function summarizeContext(ctx: Record<string, unknown>): RoundCtxSummary 
       industry: (top.industry as string | undefined) ?? null,
       yoy: typeof top.revenue_yoy === "number" ? top.revenue_yoy : undefined,
     };
+  }
+
+  // ── new ctx blocks (PR #213) ──────────────────────────────────────
+  // Each branch is defensive: the block may be absent (legacy
+  // snapshot taken before the field was added) or partially
+  // populated (FRED key missing → all summaries null) — fall through
+  // silently rather than render `undefined` strings.
+
+  const macro = ctx.macro as Record<string, unknown> | null | undefined;
+  if (macro && typeof macro === "object") {
+    const ff = (macro.fed_funds_rate as Record<string, unknown> | undefined)?.summary as
+      | { latest_value?: number; change_1y?: number | null }
+      | undefined;
+    const dxy = (macro.usd_index as Record<string, unknown> | undefined)?.summary as
+      | { latest_value?: number; change_1y?: number | null }
+      | undefined;
+    const parts: string[] = [];
+    if (ff && typeof ff.latest_value === "number") {
+      parts.push(
+        `Fed ${toFixedSmart(ff.latest_value)}%` +
+          (typeof ff.change_1y === "number"
+            ? ` (${ff.change_1y >= 0 ? "+" : ""}${toFixedSmart(ff.change_1y)} YoY)`
+            : ""),
+      );
+    }
+    if (dxy && typeof dxy.latest_value === "number") {
+      parts.push(
+        `DXY ${toFixedSmart(dxy.latest_value)}` +
+          (typeof dxy.change_1y === "number"
+            ? ` (${dxy.change_1y >= 0 ? "+" : ""}${toFixedSmart(dxy.change_1y)} YoY)`
+            : ""),
+      );
+    }
+    if (parts.length > 0) out.macro_summary = parts.join(" · ");
+  }
+
+  const briefs = ctx.focus_briefs as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(briefs) && briefs.length > 0) {
+    const lines: string[] = [];
+    for (const b of briefs) {
+      const sym = String(b.symbol ?? "");
+      if (!sym) continue;
+      const name = (b.name_zh as string | undefined) || (b.name as string | undefined) || "";
+      const quote = b.quote as Record<string, unknown> | null | undefined;
+      const price = typeof quote?.price === "number" ? quote.price : null;
+      const changePct = typeof quote?.change_pct === "number" ? quote.change_pct : null;
+      const tech = b.technicals as Record<string, unknown> | null | undefined;
+      const rsi = typeof tech?.rsi14 === "number" ? tech.rsi14 : null;
+      const f = b.fundamentals as Record<string, unknown> | null | undefined;
+      const pe = typeof f?.pe === "number" ? f.pe : null;
+      const segs: string[] = [];
+      if (price != null) {
+        segs.push(`${toFixedSmart(price)}`);
+      }
+      if (changePct != null) segs.push(signedPct(changePct / 100));
+      if (pe != null) segs.push(`PE ${toFixedSmart(pe)}`);
+      if (rsi != null) segs.push(`RSI ${toFixedSmart(rsi)}`);
+      if (segs.length > 0) {
+        lines.push(`${sym}${name ? ` ${name}` : ""}: ${segs.join(" · ")}`);
+      }
+    }
+    if (lines.length > 0) out.focus_briefs_summary = lines;
+  }
+
+  const uc = ctx.user_context as Record<string, unknown> | null | undefined;
+  if (uc && typeof uc === "object") {
+    const portfolios = uc.portfolios as Array<Record<string, unknown>> | undefined;
+    const holdings = uc.holdings as Array<Record<string, unknown>> | undefined;
+    const wl = uc.watchlist_symbols as Array<Record<string, unknown>> | undefined;
+    const overlap = uc.focus_overlap as Record<string, unknown> | undefined;
+    const held = (overlap?.held as string[] | undefined) ?? [];
+    const watching = (overlap?.watching as string[] | undefined) ?? [];
+    const segs: string[] = [];
+    if (Array.isArray(portfolios) && portfolios.length > 0) {
+      segs.push(`${portfolios.length}p`);
+    }
+    if (Array.isArray(holdings) && holdings.length > 0) {
+      segs.push(`${holdings.length}h`);
+    }
+    if (Array.isArray(wl) && wl.length > 0) segs.push(`${wl.length}w`);
+    if (held.length > 0) segs.push(`held: ${held.join(",")}`);
+    if (watching.length > 0) segs.push(`watch: ${watching.join(",")}`);
+    if (segs.length > 0) out.user_context_summary = segs.join(" · ");
+  }
+
+  const prior = ctx.prior_discussions as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(prior) && prior.length > 0) {
+    // Show the freshest prior verdict per matched symbol so the user
+    // can spot cross-discussion drift at a glance.
+    const lines: string[] = [];
+    for (const p of prior.slice(0, 3)) {
+      const horizon = (p.time_horizon as string | undefined) ?? "";
+      const verdict = (p.verdict as string | undefined) ?? "?";
+      const matched = (p.matched_symbols as string[] | undefined) ?? [];
+      const date = String(p.created_at ?? "").slice(0, 10);
+      lines.push(`${date} ${matched.join(",")} → ${horizon}/${verdict}`);
+    }
+    if (lines.length > 0) out.prior_discussions_summary = lines.join(" | ");
   }
 
   return out;

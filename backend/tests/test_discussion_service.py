@@ -975,6 +975,50 @@ async def test_inject_user_message_persists_turn_at_current_round(
 
 
 @pytest.mark.asyncio
+async def test_inject_user_message_retries_on_unique_collision(
+    db_session: AsyncSession, owner: User,
+):
+    """The PR #218 unique constraint on (discussion_id, round,
+    turn_index) catches the race where two concurrent injects both
+    compute `turn_index = max + 1`. The service must retry by re-
+    reading max + bumping until it lands a free slot."""
+    from sqlalchemy.exc import IntegrityError
+
+    row = await discussion_service.create_discussion(
+        db_session, owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+    row.current_round = 1
+    db_session.add(DiscussionTurn(
+        discussion_id=row.id, round=1, turn_index=0,
+        persona_id="buffett", stance="supplement", content="ok",
+    ))
+    await db_session.commit()
+
+    # First call from outside the test simulates a concurrent inject
+    # winning the race: it inserts turn_index=1 between our SELECT
+    # and our INSERT. We model it by having the first commit raise
+    # IntegrityError, then succeed on the retry.
+    real_commit = db_session.commit
+    calls = {"n": 0}
+
+    async def flaky_commit():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise IntegrityError("simulated", {}, Exception("uniq"))
+        await real_commit()
+
+    with patch.object(db_session, "commit", side_effect=flaky_commit), \
+         patch.object(db_session, "rollback", new=AsyncMock()):
+        turn = await discussion_service.inject_user_message(
+            db_session, row, content="請聚焦在 2330",
+        )
+    assert turn.persona_id == discussion_service.USER_PERSONA_ID
+    assert calls["n"] >= 2  # at least one retry happened
+
+
+@pytest.mark.asyncio
 async def test_inject_user_message_rejected_when_round_in_progress(
     db_session: AsyncSession, owner: User,
 ):
@@ -1389,6 +1433,50 @@ async def test_run_round_persists_partial_round_on_llm_error(
 
 
 # ── synthesize_conclusion ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_synthesize_conclusion_seeds_verify_after_date(
+    db_session: AsyncSession, owner: User,
+):
+    """PR #218: synthesize_conclusion must set verify_after_date so
+    the daily verifier picks the row up — used to be set only by the
+    auto-run cron, leaving manual discussions permanently un-graded
+    and `prior_discussions.verdict` = null forever."""
+    row = await discussion_service.create_discussion(
+        db_session, owner_id=owner.id,
+        topic="topic", rules="rules",
+        persona_ids=["buffett", "lynch"],
+    )
+    db_session.add(DiscussionTurn(
+        discussion_id=row.id, round=1, turn_index=0,
+        persona_id="buffett", stance="supplement", content="ok",
+    ))
+    await db_session.commit()
+    assert row.verify_after_date is None
+
+    raw = (
+        '{"recommended_symbols": ["2330"], "reasoning": "ok", '
+        '"risks": [], "time_horizon": "short_term", '
+        '"consensus_score": 0.5}'
+    )
+    with patch(
+        "services.discussion_service.stream_chat",
+        side_effect=_stream_events(raw),
+    ), patch(
+        "services.discussion_service.gather_market_context",
+        new=AsyncMock(return_value={"market": "TW"}),
+    ):
+        await discussion_service.synthesize_conclusion(
+            db_session, row, user_id=str(owner.id),
+        )
+    refreshed = await db_session.get(Discussion, row.id)
+    assert refreshed.verify_after_date is not None
+    # Roughly 5 trading days (~7 calendar days) after today.
+    from datetime import UTC as _UTC, datetime as _dt, timedelta as _td
+    today = _dt.now(_UTC).date()
+    assert (refreshed.verify_after_date - today) <= _td(days=14)
+    assert (refreshed.verify_after_date - today) >= _td(days=3)
 
 
 @pytest.mark.asyncio

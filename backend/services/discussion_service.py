@@ -497,31 +497,51 @@ async def inject_user_message(
     # Find the highest turn_index already used in this round so the
     # injection lands after the last persona reply (and after any
     # previous injection on the same round).
-    max_idx = await db.scalar(
-        select(DiscussionTurn.turn_index)
-        .where(
-            DiscussionTurn.discussion_id == discussion.id,
-            DiscussionTurn.round == discussion.current_round,
-        )
-        .order_by(DiscussionTurn.turn_index.desc())
-        .limit(1)
-    )
-    next_idx = (int(max_idx) + 1) if max_idx is not None else 0
+    #
+    # Race window (PR #218): two concurrent injects can both read
+    # `max=N` and try to insert `turn_index=N+1`. The PR-#218 unique
+    # constraint on (discussion_id, round, turn_index) surfaces the
+    # second insert as IntegrityError; we retry by re-reading max +
+    # bumping. Bounded retry count protects against pathological
+    # contention storms (typical real traffic = 1-2 attempts max).
+    from sqlalchemy.exc import IntegrityError
 
-    row = DiscussionTurn(
-        discussion_id=discussion.id,
-        round=discussion.current_round,
-        turn_index=next_idx,
-        persona_id=USER_PERSONA_ID,
-        stance=USER_INJECTION_STANCE,
-        content=text,
-        citations=None,
+    last_exc: Exception | None = None
+    for _attempt in range(5):
+        max_idx = await db.scalar(
+            select(DiscussionTurn.turn_index)
+            .where(
+                DiscussionTurn.discussion_id == discussion.id,
+                DiscussionTurn.round == discussion.current_round,
+            )
+            .order_by(DiscussionTurn.turn_index.desc())
+            .limit(1)
+        )
+        next_idx = (int(max_idx) + 1) if max_idx is not None else 0
+
+        row = DiscussionTurn(
+            discussion_id=discussion.id,
+            round=discussion.current_round,
+            turn_index=next_idx,
+            persona_id=USER_PERSONA_ID,
+            stance=USER_INJECTION_STANCE,
+            content=text,
+            citations=None,
+        )
+        db.add(row)
+        discussion.updated_at = datetime.now(UTC)
+        try:
+            await db.commit()
+        except IntegrityError as exc:
+            await db.rollback()
+            last_exc = exc
+            continue
+        await db.refresh(row)
+        return row
+    raise RuntimeError(
+        f"inject_user_message: turn_index collision retried 5x without success "
+        f"(last error: {last_exc})"
     )
-    db.add(row)
-    discussion.updated_at = datetime.now(UTC)
-    await db.commit()
-    await db.refresh(row)
-    return row
 
 
 async def prune_old_round_contexts(
@@ -3041,6 +3061,23 @@ async def synthesize_conclusion(
     discussion.conclusion = conclusion
     discussion.status = STATUS_DONE
     discussion.updated_at = datetime.now(UTC)
+    # Seed `verify_after_date` so the verifier task picks this row up
+    # in 5 trading days (PR #218). Used to be set only by the auto-run
+    # cron, which left manual discussions permanently un-graded —
+    # `prior_discussions` then surfaced `verdict=null` for nearly
+    # every cross-session reference, defeating the consistency check.
+    # Skip when already set (re-conclude after edit) so we don't
+    # push the verification window back artificially.
+    if discussion.verify_after_date is None:
+        from services.tw_trading_calendar import (
+            add_trading_days_estimate,
+            utcnow_tw_date,
+        )
+        # 5 trading days matches the verifier's `_WINDOW_TRADING_DAYS`
+        # — anything sooner and the bars haven't all resolved yet.
+        discussion.verify_after_date = add_trading_days_estimate(
+            utcnow_tw_date(), 5,
+        )
     await db.commit()
     await db.refresh(discussion)
     return conclusion

@@ -1,10 +1,10 @@
-"""Self-grade auto-run discussions — runs daily after TW close.
+"""Self-grade discussion conclusions — runs daily after TW close.
 
 Cron: 08:30 UTC = 16:30 Asia/Taipei (3h after TW close at 13:30 Taipei).
-Picks up every auto-run discussion whose `verify_after_date <= today`
-and `verdict IS NULL`, fetches OHLCV bars for the recommended symbols
-over the 5-trading-day window starting from the discussion's day-1,
-and computes win/loss:
+Picks up every discussion (manual + auto-run, PR #218) whose
+`verify_after_date <= today` and `verdict IS NULL`, fetches OHLCV
+bars for the recommended symbols over the 5-trading-day window
+starting from the discussion's day-1, and computes win/loss:
 
   win  = max(high) >= day1_open × 1.03 for ANY recommended symbol
   loss = no symbol crossed the threshold and at least one symbol's
@@ -105,9 +105,15 @@ async def run() -> None:
 async def _do_run() -> int:
     async with AsyncSessionLocal() as db:
         today = datetime.now(UTC).date()
+        # `auto_run` filter dropped (PR #218): manual discussions
+        # had `verify_after_date` set by `synthesize_conclusion` since
+        # the same PR, so the same date-based gate now covers both
+        # paths. Verdict on manual rows is what powers the
+        # `prior_discussions.verdict` field — without it, every
+        # cross-session reference surfaced `verdict: null`, making
+        # the consistency-check feature mostly noise.
         pending = (await db.scalars(
             select(Discussion).where(
-                Discussion.auto_run.is_(True),
                 Discussion.verdict.is_(None),
                 Discussion.verify_after_date.is_not(None),
                 Discussion.verify_after_date <= today,

@@ -308,23 +308,30 @@ async def test_only_processes_pending_rows(
     patch_session, db_session: AsyncSession, owner: User,
 ):
     """Verifier should skip:
-       - manual (auto_run=False) rows
-       - already-verdict'd rows
+       - already-verdict'd rows (verdict is final)
        - rows whose verify_after_date is in the future
+
+    Should grade BOTH auto_run AND manual rows (PR #218 dropped the
+    `auto_run=True` filter so manual discussions also feed the
+    `prior_discussions.verdict` cross-session memory field).
     """
     today = datetime.now(UTC).date()
 
-    # Eligible: due, no verdict, auto_run
-    eligible = await _make_pending(db_session, owner.id, symbols=["2330"])
+    # Eligible (auto-run): due, no verdict
+    eligible_auto = await _make_pending(db_session, owner.id, symbols=["2330"])
 
-    # Manual row — auto_run=False
-    manual = Discussion(
+    # Eligible (manual) — auto_run=False but otherwise valid; PR #218
+    # dropped the auto_run filter so this row ALSO gets graded. Pin
+    # `created_at` to the same window as the auto-run row so the
+    # mocked bars (keyed off that date) line up for both.
+    eligible_manual = Discussion(
         id=uuid.uuid4(), owner_id=owner.id,
         topic="x", rules="y", persona_ids=["buffett", "lynch"],
         status="done", current_round=5,
         conclusion={"recommended_symbols": ["2330"]},
         auto_run=False,
         verify_after_date=today - timedelta(days=1),
+        created_at=eligible_auto.created_at,
     )
     # Already graded
     already_graded = Discussion(
@@ -344,10 +351,10 @@ async def test_only_processes_pending_rows(
         auto_run=True,
         verify_after_date=today + timedelta(days=5),
     )
-    db_session.add_all([manual, already_graded, future])
+    db_session.add_all([eligible_manual, already_graded, future])
     await db_session.commit()
 
-    bars = _bars(eligible.created_at.date(), 5, open_=100.0,
+    bars = _bars(eligible_auto.created_at.date(), 5, open_=100.0,
                  highs=[103.5, 102, 102, 102, 102])
     patches = _stub_lock_helpers() + [
         patch("services.tw_market_service.get_history",
@@ -360,20 +367,21 @@ async def test_only_processes_pending_rows(
     finally:
         _exit_all(patches)
 
-    # Eligible got graded
-    refreshed = await db_session.get(Discussion, eligible.id)
-    await db_session.refresh(refreshed)
-    assert refreshed.verdict == "win"
-
-    # Manual / future / already_graded untouched
-    for x in (manual, already_graded, future):
-        r = await db_session.get(Discussion, x.id)
+    # Both eligible rows (auto-run + manual) got graded.
+    for d in (eligible_auto, eligible_manual):
+        r = await db_session.get(Discussion, d.id)
         await db_session.refresh(r)
-        if x.id == already_graded.id:
-            assert r.verdict == "win"  # unchanged
-            assert r.verdict_reason == "prior"
-        else:
-            assert r.verdict is None
+        assert r.verdict == "win", f"{d.id} should have been graded"
+
+    # already_graded keeps its prior verdict; future stays NULL.
+    r = await db_session.get(Discussion, already_graded.id)
+    await db_session.refresh(r)
+    assert r.verdict == "win"
+    assert r.verdict_reason == "prior"
+
+    r = await db_session.get(Discussion, future.id)
+    await db_session.refresh(r)
+    assert r.verdict is None
 
 
 @pytest.mark.asyncio

@@ -115,9 +115,14 @@ class Discussion(Base):
 class DiscussionTurn(Base):
     __tablename__ = "discussion_turns"
     __table_args__ = (
+        # Unique (PR #218): `inject_user_message` computes turn_index
+        # = max + 1 from a SELECT, so two concurrent injects could
+        # both write the same index. The unique gate surfaces the
+        # race as an IntegrityError; the service retries.
         Index(
             "ix_discussion_turns_lookup",
             "discussion_id", "round", "turn_index",
+            unique=True,
         ),
     )
 

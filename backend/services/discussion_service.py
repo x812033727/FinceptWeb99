@@ -116,6 +116,15 @@ _MAX_TOPIC_CHARS = 500
 _MAX_RULES_CHARS = 2000
 _MAX_HISTORY_TURNS = 30     # how many prior turns to feed the next persona
 
+# When the transcript gets long, only the most recent
+# `_FULL_HISTORY_TURNS` turns are passed verbatim. Older turns are
+# rendered as a single-line summary ("第1輪/buffett/supplement: 看好 2330,
+# 目標價...") capped at `_HISTORY_SUMMARY_CHARS` chars so the prompt
+# budget doesn't balloon at round 5 with 8 personas (40 turns × ~300
+# Chinese chars × 3 BPE tokens ≈ 36K input tokens just for history).
+_FULL_HISTORY_TURNS = 8
+_HISTORY_SUMMARY_CHARS = 120
+
 # Reasoning models surface their chain-of-thought wrapped in <think>...</think>
 # blocks. `strip_think_blocks` removes them post-hoc; `_ThinkBlockFilter`
 # below does the same as a streaming filter for SSE so the thinking never
@@ -1583,14 +1592,65 @@ _TURN_PROMPT_TEMPLATE = (
 )
 
 
+def _summarize_turn_content(content: str) -> str:
+    """Compress a turn's full content down to one line for the older-
+    history block. Strips markdown emphasis + collapses whitespace +
+    truncates at `_HISTORY_SUMMARY_CHARS`. The persona doesn't need
+    the full text from 4 rounds ago — only the gist of the speaker's
+    previous position so they can spot drift / contradictions."""
+    body = (content or "").strip()
+    if not body:
+        return "（同意，無補充）"
+    # Drop markdown bold / italic markers + bullet hyphens.
+    body = body.replace("**", "").replace("__", "")
+    # Collapse whitespace + newlines.
+    body = " ".join(body.split())
+    if len(body) > _HISTORY_SUMMARY_CHARS:
+        body = body[:_HISTORY_SUMMARY_CHARS] + "…"
+    return body
+
+
 def _format_history(prior_turns: list[DiscussionTurn]) -> str:
+    """Build the `## 先前發言` block for a persona prompt.
+
+    Two-tier compression keeps the prompt budget bounded:
+      - The N most recent turns (`_FULL_HISTORY_TURNS`) appear in
+        full — these are the live debate the persona is reacting to.
+      - Older turns up to `_MAX_HISTORY_TURNS` appear as a single-
+        line summary so the persona retains continuity ("buffett 第
+        1 輪看好 2330, 我此輪也補強") without paying for verbatim
+        text from rounds ago.
+
+    The full window comes after the summary block so the LLM's
+    recency bias works in our favour — the most recent turn is the
+    last thing in the prompt before its own "你現在的任務" line.
+    """
     if not prior_turns:
         return "（你是本場第一位發言者）"
-    lines = []
-    for t in prior_turns[-_MAX_HISTORY_TURNS:]:
+    window = prior_turns[-_MAX_HISTORY_TURNS:]
+    if len(window) <= _FULL_HISTORY_TURNS:
+        recent = window
+        older: list[DiscussionTurn] = []
+    else:
+        split = len(window) - _FULL_HISTORY_TURNS
+        older = window[:split]
+        recent = window[split:]
+
+    sections: list[str] = []
+    if older:
+        sections.append("（較早輪次摘要）")
+        for t in older:
+            summary = _summarize_turn_content(t.content)
+            sections.append(
+                f"- 第{t.round}輪 · {t.persona_id} · {t.stance}：{summary}"
+            )
+    if older and recent:
+        sections.append("")
+        sections.append("（最近發言全文）")
+    for t in recent:
         body = t.content.strip() or "（同意，無補充）"
-        lines.append(f"- 第{t.round}輪 · {t.persona_id} · {t.stance}：{body}")
-    return "\n".join(lines)
+        sections.append(f"- 第{t.round}輪 · {t.persona_id} · {t.stance}：{body}")
+    return "\n".join(sections)
 
 
 # Matches the opening of a `"content": "` field. Used by the truncation

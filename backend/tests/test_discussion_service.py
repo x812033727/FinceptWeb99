@@ -481,6 +481,99 @@ async def test_run_round_emits_full_event_sequence(
     assert refreshed.current_round == 1
 
 
+# ── _format_history compression ───────────────────────────────────
+
+
+def test_summarize_turn_content_truncates_and_strips_markdown():
+    """Long markdown-laden content collapses to a single line under
+    `_HISTORY_SUMMARY_CHARS`; bold markers and stray newlines drop."""
+    # Build something obviously larger than the cap so the truncation
+    # branch fires (the inline data + filler combined is > 120 chars).
+    raw = (
+        "**台積電 (2330)** 已突破 60 日均\n"
+        "目標價 1080 元\n\n"
+        "停損 920 元，外資連 5 日買超 1.2 億。"
+        + "額外文字" * 80
+    )
+    assert len(raw) > discussion_service._HISTORY_SUMMARY_CHARS
+    out = discussion_service._summarize_turn_content(raw)
+    # No markdown bold left.
+    assert "**" not in out
+    # No newlines — collapsed to single line.
+    assert "\n" not in out
+    # Capped at threshold + ellipsis when over budget.
+    assert len(out) <= discussion_service._HISTORY_SUMMARY_CHARS + 1
+    assert out.endswith("…")
+
+
+def test_summarize_turn_content_handles_empty():
+    assert "同意" in discussion_service._summarize_turn_content("")
+    assert "同意" in discussion_service._summarize_turn_content("   \n")
+
+
+def test_format_history_short_window_is_all_full_text():
+    """Fewer than `_FULL_HISTORY_TURNS` turns → no summary section,
+    everything shown verbatim. The persona reading round 2 of an
+    8-persona discussion has already seen 8 turns; no compression
+    yet because none is older than our recency window."""
+    turns = []
+    for i in range(4):
+        t = DiscussionTurn()
+        t.round = 1
+        t.turn_index = i
+        t.persona_id = "buffett"
+        t.stance = "supplement"
+        t.content = f"verbatim-{i}"
+        turns.append(t)
+    out = discussion_service._format_history(turns)
+    assert "（較早輪次摘要）" not in out
+    assert "（最近發言全文）" not in out
+    assert "verbatim-0" in out
+    assert "verbatim-3" in out
+
+
+def test_format_history_long_window_summarises_older_keeps_recent_full():
+    """When the transcript exceeds `_FULL_HISTORY_TURNS`, older turns
+    appear under the summary banner with truncated content; the
+    most recent `_FULL_HISTORY_TURNS` appear under the full-text
+    banner verbatim. Use enough total turns that older + recent
+    each have several rows."""
+    full_window = discussion_service._FULL_HISTORY_TURNS
+    older_count = 4
+    total = full_window + older_count
+    turns = []
+    for i in range(total):
+        t = DiscussionTurn()
+        t.round = (i // 2) + 1
+        t.turn_index = i % 2
+        t.persona_id = "buffett"
+        t.stance = "supplement"
+        if i < older_count:
+            t.content = f"OLD-{i} " + "x" * 300
+        else:
+            t.content = f"NEW-{i} 全文應原樣保留 " + "y" * 300
+        turns.append(t)
+    out = discussion_service._format_history(turns)
+    assert "（較早輪次摘要）" in out
+    assert "（最近發言全文）" in out
+    # All OLD- markers are in the summary band but their 300-char
+    # x-tail is truncated.
+    for i in range(older_count):
+        assert f"OLD-{i}" in out
+    # All NEW- markers are in the full band.
+    for i in range(older_count, total):
+        assert f"NEW-{i}" in out
+    # The OLD lines' 300-char x-filler is bounded by the summary
+    # cap, so no single OLD line carries 200 consecutive x's.
+    older_band_end = out.index("（最近發言全文）")
+    older_band = out[:older_band_end]
+    assert "x" * 200 not in older_band
+
+
+def test_format_history_empty_returns_first_speaker_marker():
+    assert "第一位" in discussion_service._format_history([])
+
+
 @pytest.mark.asyncio
 async def test_run_round_forwards_tool_call_and_tool_result_events(
     db_session: AsyncSession, owner: User,

@@ -83,6 +83,23 @@ export default function DiscussionPage() {
   const [streamingRound, setStreamingRound] = useState<number | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
+  // Live tool-use log for the persona currently streaming. Cleared on
+  // every turn_start so each persona's bubble shows only its own
+  // tool calls. Not persisted — once turn_end fires we drop them; the
+  // persona's `content` is meant to summarise what they learned from
+  // the tools, so the bubble's final text already encodes the
+  // signal. Server-side these events are emitted for `claude_agent`
+  // and OpenAI-compat tool-loop providers (PR #208).
+  const [streamingToolEvents, setStreamingToolEvents] = useState<
+    Array<{
+      id: string;
+      kind: "call" | "result";
+      name: string;
+      args?: unknown;
+      summary?: string;
+      is_error?: boolean;
+    }>
+  >([]);
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -105,6 +122,7 @@ export default function DiscussionPage() {
     setStreamingPersona(null);
     setStreamingRound(null);
     setStreamError(null);
+    setStreamingToolEvents([]);
   }, [selectedId]);
 
   // Hydrate the editable form fields from the active session's detail
@@ -299,10 +317,49 @@ export default function DiscussionPage() {
                 setStreamingPersona(obj.persona_id);
                 if (typeof obj.round === "number") setStreamingRound(obj.round);
                 setStreamBuffer("");
+                setStreamingToolEvents([]);
                 break;
               case "delta":
                 currentBuffer += obj.text;
                 setStreamBuffer(currentBuffer);
+                break;
+              case "tool_call":
+                // Live tool-use feedback: append a `call` row keyed
+                // on the LLM's tool-call id so the matching
+                // `tool_result` later can mark it complete instead
+                // of producing two rows. `id` may be missing on
+                // some providers — fall back to a random key.
+                setStreamingToolEvents((prev) => [
+                  ...prev,
+                  {
+                    id:    String(obj.id ?? `${Date.now()}-${prev.length}`),
+                    kind:  "call",
+                    name:  String(obj.name ?? "unknown"),
+                    args:  obj.args,
+                  },
+                ]);
+                break;
+              case "tool_result":
+                setStreamingToolEvents((prev) => {
+                  // If we already have a `call` row with this id,
+                  // upgrade it to a `result` row carrying the
+                  // summary; otherwise append a standalone result
+                  // (some providers fire only the result event).
+                  const callIdx = prev.findIndex(
+                    (e) => e.id === String(obj.id) && e.kind === "call",
+                  );
+                  const resultRow = {
+                    id:       String(obj.id ?? `${Date.now()}-${prev.length}`),
+                    kind:     "result" as const,
+                    name:     String(obj.name ?? "unknown"),
+                    summary:  String(obj.summary ?? ""),
+                    is_error: Boolean(obj.is_error),
+                  };
+                  if (callIdx < 0) return [...prev, resultRow];
+                  const next = [...prev];
+                  next[callIdx] = { ...next[callIdx], ...resultRow };
+                  return next;
+                });
                 break;
               case "turn_end":
                 setStreamingTurns((prev) => [
@@ -319,6 +376,7 @@ export default function DiscussionPage() {
                 ]);
                 setStreamBuffer("");
                 setStreamingPersona(null);
+                setStreamingToolEvents([]);
                 currentBuffer = "";
                 break;
               case "error":
@@ -780,6 +838,38 @@ export default function DiscussionPage() {
                   <span>·</span>
                   <span className="animate-pulse">{t("discussion.thinking")}</span>
                 </div>
+                {streamingToolEvents.length > 0 && (
+                  <div className="mb-2 space-y-0.5 font-mono text-[10px] text-muted-foreground">
+                    {streamingToolEvents.map((ev) => {
+                      const argsStr = ev.args !== undefined
+                        ? JSON.stringify(ev.args)
+                        : "";
+                      const sumStr = (ev.summary ?? "").replace(/\s+/g, " ").trim();
+                      const truncate = (s: string, max: number) =>
+                        s.length > max ? s.slice(0, max) + "…" : s;
+                      const icon = ev.is_error ? "⚠️" : ev.kind === "result" ? "✓" : "⏳";
+                      const tone = ev.is_error
+                        ? "text-amber-400"
+                        : ev.kind === "result"
+                        ? "text-emerald-400"
+                        : "text-muted-foreground";
+                      return (
+                        <div key={ev.id} className={`flex gap-1 ${tone}`}>
+                          <span className="shrink-0">{icon}</span>
+                          <span className="truncate">
+                            <span className="font-semibold">{ev.name}</span>
+                            {argsStr && (
+                              <span className="opacity-70"> {truncate(argsStr, 60)}</span>
+                            )}
+                            {sumStr && (
+                              <span className="opacity-90"> → {truncate(sumStr, 80)}</span>
+                            )}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
                 <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
                   {renderInlineMarkdown(streamBuffer)}
                   <span className="inline-block w-1.5 h-3.5 bg-current ml-0.5 animate-pulse align-middle" />

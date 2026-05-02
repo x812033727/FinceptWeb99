@@ -524,6 +524,37 @@ async def inject_user_message(
     return row
 
 
+async def prune_old_round_contexts(
+    db: AsyncSession, *, older_than_days: int,
+) -> int:
+    """Delete `discussion_round_contexts` rows whose `captured_at`
+    is older than `older_than_days`. Returns deleted row count.
+
+    Snapshots persist a full `gather_market_context` JSON per round
+    (~30-50 KB each, occasionally 100 KB+ when focus_briefs has 5
+    symbols). A user with 100 discussions × 5 rounds each fills
+    25-50 MB of snapshot JSON; the table grows unbounded today.
+
+    The 90-day default matches `_PRIOR_DISCUSSIONS_LOOKBACK_DAYS` so
+    the cross-session memory window and the replay archive age out
+    together — anything older than 90 days is already considered
+    stale by the discussion subsystem itself. Discussions and their
+    `discussion_turns` are NOT touched (they're tiny, retain
+    forever); only the heavy JSON snapshots get GC'd.
+
+    Multi-pod safe via the standard `delete ... where ts < cutoff`
+    pattern; concurrent runs just both no-op after the first
+    finishes (delete is idempotent).
+    """
+    cutoff = datetime.now(UTC) - timedelta(days=older_than_days)
+    stmt = delete(DiscussionRoundContext).where(
+        DiscussionRoundContext.captured_at < cutoff,
+    )
+    result = await db.execute(stmt)
+    await db.commit()
+    return result.rowcount or 0
+
+
 async def force_reset_status(
     db: AsyncSession, discussion: Discussion,
 ) -> None:

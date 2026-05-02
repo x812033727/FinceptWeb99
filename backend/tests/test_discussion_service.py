@@ -481,6 +481,76 @@ async def test_run_round_emits_full_event_sequence(
     assert refreshed.current_round == 1
 
 
+# ── prune_old_round_contexts (PR #217 — snapshot retention) ─────
+
+
+@pytest.mark.asyncio
+async def test_prune_old_round_contexts_deletes_only_older_than_cutoff(
+    db_session: AsyncSession, owner: User,
+):
+    """Helper must delete rows with `captured_at` strictly before the
+    cutoff and leave the rest. Discussions + turns are untouched."""
+    from datetime import UTC as _UTC, datetime as _dt, timedelta as _td
+
+    from models.discussion_round_context import DiscussionRoundContext
+
+    row = await discussion_service.create_discussion(
+        db_session, owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+
+    # 3 snapshots: 1y old, 30d old, today.
+    now = _dt.now(_UTC)
+    db_session.add_all([
+        DiscussionRoundContext(
+            discussion_id=row.id, round=1,
+            context={"marker": "ancient"},
+            captured_at=now - _td(days=400),
+        ),
+        DiscussionRoundContext(
+            discussion_id=row.id, round=2,
+            context={"marker": "fresh"},
+            captured_at=now - _td(days=30),
+        ),
+        DiscussionRoundContext(
+            discussion_id=row.id, round=3,
+            context={"marker": "today"},
+            captured_at=now,
+        ),
+    ])
+    await db_session.commit()
+
+    deleted = await discussion_service.prune_old_round_contexts(
+        db_session, older_than_days=90,
+    )
+    assert deleted == 1   # only the 400d-old row crossed the cutoff
+
+    # Survivors: round 2 (30d) + round 3 (today).
+    remaining = list((await db_session.scalars(
+        select(DiscussionRoundContext)
+        .where(DiscussionRoundContext.discussion_id == row.id)
+    )).all())
+    markers = {r.context["marker"] for r in remaining}
+    assert markers == {"fresh", "today"}
+
+    # Parent discussion untouched.
+    parent = await db_session.get(Discussion, row.id)
+    assert parent is not None
+
+
+@pytest.mark.asyncio
+async def test_prune_old_round_contexts_returns_zero_when_nothing_old(
+    db_session: AsyncSession, owner: User,
+):
+    """Empty table or no rows past the cutoff → zero deletes, no
+    crash, idempotent."""
+    deleted = await discussion_service.prune_old_round_contexts(
+        db_session, older_than_days=90,
+    )
+    assert deleted == 0
+
+
 # ── _persona_schema_annotation (dynamic prompt header) ───────────
 
 

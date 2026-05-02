@@ -350,6 +350,22 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # ── discussion_round_contexts retention prune ─────────────────
+    # Daily at 04:00 UTC (offset by 1h from quote retention to avoid
+    # a synchronised DELETE peak). Deletes round-context snapshots
+    # older than 90 days — same window as `_PRIOR_DISCUSSIONS_LOOKBACK
+    # _DAYS` so the replay archive ages out together with the cross-
+    # session memory window. Discussions + turns rows are kept forever.
+    from tasks.prune_discussion_contexts import run as run_prune_discussion_contexts
+    scheduler.add_job(
+        run_prune_discussion_contexts,
+        trigger=CronTrigger(hour=4, minute=0, timezone="UTC"),
+        id="prune_discussion_contexts",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── Portfolio EOD snapshots ───────────────────────────────────
     # Run at 23:00 UTC daily (after US + TW markets have both closed)
     from tasks.portfolio_snapshot import take_all_snapshots

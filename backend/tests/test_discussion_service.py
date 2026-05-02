@@ -1723,6 +1723,136 @@ async def test_assemble_focus_briefs_returns_empty_when_no_symbols():
     assert out == []
 
 
+# ── _assemble_user_context ────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_assemble_user_context_empty_when_no_portfolio_or_watchlist(
+    db_session: AsyncSession, owner: User,
+):
+    """Brand-new user with no holdings + no watchlist → all blocks
+    empty but the structural keys still present so the prompt
+    template doesn't have to handle a None."""
+    out = await discussion_service._assemble_user_context(
+        db_session, owner_id=owner.id, focus_symbols=["2330"],
+    )
+    assert out["portfolios"] == []
+    assert out["holdings"] == []
+    assert out["watchlist_symbols"] == []
+    assert out["focus_overlap"] == {"held": [], "watching": []}
+
+
+@pytest.mark.asyncio
+async def test_assemble_user_context_returns_holdings_and_overlap(
+    db_session: AsyncSession, owner: User,
+):
+    """Owner has 2 portfolios with 3 holdings; topic mentions 2330 +
+    AAPL. Expect holdings list, portfolio metadata, and the
+    focus_overlap.held set picking up 2330 (held) but not AAPL
+    (not held)."""
+    from models.portfolio import Holding, Market, Portfolio
+
+    p1 = Portfolio(user_id=owner.id, name="Main", currency="TWD")
+    p2 = Portfolio(user_id=owner.id, name="USD", currency="USD")
+    db_session.add_all([p1, p2])
+    await db_session.flush()
+    db_session.add_all([
+        Holding(portfolio_id=p1.id, symbol="2330", market=Market.TW,
+                quantity=1000, avg_cost=850, cost_currency="TWD"),
+        Holding(portfolio_id=p1.id, symbol="2454", market=Market.TW,
+                quantity=200, avg_cost=1100, cost_currency="TWD"),
+        Holding(portfolio_id=p2.id, symbol="MSFT", market=Market.US,
+                quantity=50, avg_cost=400, cost_currency="USD"),
+    ])
+    await db_session.commit()
+
+    out = await discussion_service._assemble_user_context(
+        db_session, owner_id=owner.id, focus_symbols=["2330", "AAPL"],
+    )
+    assert {p["name"] for p in out["portfolios"]} == {"Main", "USD"}
+    held_syms = {h["symbol"] for h in out["holdings"]}
+    assert held_syms == {"2330", "2454", "MSFT"}
+    # Largest absolute cost first: 2330 (1000×850 = 850k) leads.
+    assert out["holdings"][0]["symbol"] == "2330"
+    assert out["focus_overlap"]["held"] == ["2330"]
+    assert out["focus_overlap"]["watching"] == []
+
+
+@pytest.mark.asyncio
+async def test_assemble_user_context_picks_up_watchlist_overlap(
+    db_session: AsyncSession, owner: User,
+):
+    """Symbol in topic that's only in the watchlist (not held) appears
+    under focus_overlap.watching instead of held."""
+    from models.portfolio import Market
+    from models.watchlist import Watchlist, WatchlistItem
+
+    wl = Watchlist(user_id=owner.id, name="觀察清單")
+    db_session.add(wl)
+    await db_session.flush()
+    db_session.add_all([
+        WatchlistItem(watchlist_id=wl.id, symbol="2330", market=Market.TW),
+        WatchlistItem(watchlist_id=wl.id, symbol="NVDA", market=Market.US),
+    ])
+    await db_session.commit()
+
+    out = await discussion_service._assemble_user_context(
+        db_session, owner_id=owner.id, focus_symbols=["NVDA", "AMD"],
+    )
+    assert out["focus_overlap"]["held"] == []
+    assert out["focus_overlap"]["watching"] == ["NVDA"]
+    assert {w["symbol"] for w in out["watchlist_symbols"]} == {"2330", "NVDA"}
+
+
+@pytest.mark.asyncio
+async def test_gather_market_context_skips_user_block_without_owner_id(
+    db_session: AsyncSession,
+):
+    """Tests / API callers that don't supply owner_id must NOT see a
+    user_context block populated — privacy invariant."""
+    import services.tw_market_service as _tw  # noqa: F401
+    with patch.object(_tw, "get_screener", new=AsyncMock(return_value=[])), \
+         patch.object(_tw, "get_index", new=AsyncMock(return_value={})), \
+         patch(
+            "services.discussion_service._assemble_macro_block",
+            new=AsyncMock(return_value={}),
+         ), \
+         patch(
+            "services.discussion_service._assemble_focus_briefs",
+            new=AsyncMock(return_value=[]),
+         ):
+        ctx = await discussion_service.gather_market_context(
+            db_session, market="TW",
+        )
+    assert ctx["user_context"] is None
+
+
+@pytest.mark.asyncio
+async def test_gather_market_context_populates_user_block_with_owner_id(
+    db_session: AsyncSession, owner: User,
+):
+    """When owner_id is supplied, gather_market_context wires it
+    through to `_assemble_user_context` and surfaces the result on
+    `ctx["user_context"]`."""
+    import services.tw_market_service as _tw  # noqa: F401
+
+    with patch.object(_tw, "get_screener", new=AsyncMock(return_value=[])), \
+         patch.object(_tw, "get_index", new=AsyncMock(return_value={})), \
+         patch(
+            "services.discussion_service._assemble_macro_block",
+            new=AsyncMock(return_value={}),
+         ), \
+         patch(
+            "services.discussion_service._assemble_focus_briefs",
+            new=AsyncMock(return_value=[]),
+         ):
+        ctx = await discussion_service.gather_market_context(
+            db_session, market="TW", owner_id=owner.id,
+        )
+    assert ctx["user_context"] is not None
+    assert "portfolios" in ctx["user_context"]
+
+
 @pytest.mark.asyncio
 async def test_assemble_focus_briefs_fan_out_collects_per_symbol():
     """Each symbol gets its own brief built concurrently, returned in

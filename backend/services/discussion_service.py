@@ -1020,12 +1020,131 @@ async def _assemble_macro_block() -> dict[str, Any]:
     return block
 
 
+# ── user_context (owner's portfolio + watchlist) ───────────────────
+#
+# Personas like portfolio_advisor / risk_manager need to know what
+# the user actually holds before recommending action — "should I add
+# 2330" is unanswerable without knowing whether they already own
+# 30% in 2330. Other personas can ignore the block.
+#
+# Read directly off the ORM with no live-quote enrichment: the
+# discussion isn't about today's exact P&L, it's about portfolio
+# fit, sector concentration, and overlap with the topic. Cap each
+# list (holdings, watchlist_symbols) so the prompt budget stays
+# bounded even for power users with many portfolios.
+#
+# Privacy: round_context snapshots persist this block, but
+# `discussion_round_contexts` is owner-scoped via the discussion's
+# FK — only the owner can read their own snapshots through the API.
+
+_USER_CONTEXT_HOLDING_CAP = 20
+_USER_CONTEXT_WATCHLIST_CAP = 30
+
+
+async def _assemble_user_context(
+    db: AsyncSession,
+    *,
+    owner_id: uuid.UUID,
+    focus_symbols: list[str] | None = None,
+) -> dict[str, Any]:
+    """Compact summary of the discussion owner's portfolio + watchlist.
+
+    Cheap (no live quote enrichment) — suitable to fire on every
+    round. Each sub-block degrades to an empty list on query failure
+    so a transient portfolio-table outage doesn't kill the round.
+    """
+    from models.portfolio import Holding, Portfolio
+    from models.watchlist import Watchlist, WatchlistItem
+
+    out: dict[str, Any] = {
+        "portfolios":        [],
+        "holdings":          [],
+        "watchlist_symbols": [],
+        "focus_overlap":     {"held": [], "watching": []},
+    }
+    focus_set = {s for s in (focus_symbols or []) if s}
+
+    try:
+        pf_stmt = (
+            select(Portfolio)
+            .where(Portfolio.user_id == owner_id)
+            .order_by(Portfolio.created_at)
+        )
+        portfolios = list((await db.scalars(pf_stmt)).all())
+    except Exception as exc:
+        log.warning("user_context.portfolios.failed", extra={"error": str(exc)})
+        portfolios = []
+
+    holdings_rows: list[dict[str, Any]] = []
+    for p in portfolios:
+        try:
+            h_stmt = select(Holding).where(Holding.portfolio_id == p.id)
+            hs = list((await db.scalars(h_stmt)).all())
+        except Exception as exc:
+            log.warning("user_context.holdings.failed",
+                        extra={"portfolio_id": str(p.id), "error": str(exc)})
+            hs = []
+        out["portfolios"].append({
+            "name":          p.name,
+            "currency":      p.currency,
+            "holding_count": len(hs),
+        })
+        for h in hs:
+            holdings_rows.append({
+                "portfolio":     p.name,
+                "symbol":        h.symbol,
+                "market":        h.market.value,
+                "quantity":      float(h.quantity),
+                "avg_cost":      float(h.avg_cost),
+                "cost_currency": h.cost_currency,
+            })
+
+    # Largest-position-first so the cap prefers the meaningful holdings.
+    holdings_rows.sort(
+        key=lambda r: float(r["quantity"]) * float(r["avg_cost"]),
+        reverse=True,
+    )
+    out["holdings"] = holdings_rows[:_USER_CONTEXT_HOLDING_CAP]
+
+    try:
+        wl_stmt = (
+            select(WatchlistItem)
+            .join(Watchlist, WatchlistItem.watchlist_id == Watchlist.id)
+            .where(Watchlist.user_id == owner_id)
+        )
+        wl_items = list((await db.scalars(wl_stmt)).all())
+    except Exception as exc:
+        log.warning("user_context.watchlist.failed", extra={"error": str(exc)})
+        wl_items = []
+
+    seen_wl: set[tuple[str, str]] = set()
+    watchlist_summary: list[dict[str, str]] = []
+    for it in wl_items:
+        key = (it.market.value, it.symbol)
+        if key in seen_wl:
+            continue
+        seen_wl.add(key)
+        watchlist_summary.append({"symbol": it.symbol, "market": it.market.value})
+    out["watchlist_symbols"] = watchlist_summary[:_USER_CONTEXT_WATCHLIST_CAP]
+
+    if focus_set:
+        held_syms = {r["symbol"] for r in holdings_rows}
+        wl_syms = {it["symbol"] for it in watchlist_summary}
+        out["focus_overlap"] = {
+            "held":     sorted(focus_set & held_syms),
+            "watching": sorted(focus_set & wl_syms),
+        }
+
+    return out
+
+
 async def gather_market_context(
     db: AsyncSession,
     *,
     market: str = "TW",
     top_n: int = _DEFAULT_TOP_MOVERS,
     focus_symbols: list[str] | None = None,
+    owner_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Build a structured snapshot of the market state for the personas.
 
@@ -1037,6 +1156,15 @@ async def gather_market_context(
     `extract_focus_symbols`) makes the context include per-symbol news
     sentiment alongside the market-wide aggregate. Empty list / None
     skips the per-symbol block.
+
+    `owner_id` (the discussion's owner) opts the context into a
+    `user_context` block carrying the owner's portfolio + watchlist
+    summary plus overlap with `focus_symbols`. Personas that don't
+    care about portfolio fit (macro_analyst, market_analyst, the
+    legendary investors when not asked about position sizing) can
+    ignore it; portfolio_advisor / risk_manager use it to give
+    portfolio-aware advice instead of generic "should I buy 2330"
+    answers.
     """
     ctx: dict[str, Any] = {
         "market": market,
@@ -1058,6 +1186,12 @@ async def gather_market_context(
         # everywhere; empty `summary` blocks are silently passed through
         # so a missing FRED key doesn't break the round.
         "macro": None,
+        # Discussion owner's portfolio + watchlist summary. Populated
+        # only when `owner_id` is supplied (tests passing None get a
+        # null block); always None for non-owner reads via
+        # round_context snapshot replay (the snapshot itself stays
+        # owner-scoped via discussion FK).
+        "user_context": None,
         # International / cross-market news (Fed, FOMC, US markets,
         # global macro) translated into Chinese — populated by the
         # `ingest_news_international` cron writing rows under
@@ -1292,6 +1426,14 @@ async def gather_market_context(
     except Exception as exc:
         _record_error("macro", exc)
 
+    if owner_id is not None:
+        try:
+            ctx["user_context"] = await _assemble_user_context(
+                db, owner_id=owner_id, focus_symbols=focus_symbols,
+            )
+        except Exception as exc:
+            _record_error("user_context", exc)
+
     return ctx
 
 
@@ -1399,6 +1541,13 @@ _CONTEXT_SCHEMA_ANNOTATION = (
     "- macro：宏觀利率與匯率快照（Fed Funds / US 10Y / 10Y-2Y 殖利率價差 / "
     "DXY / TWD/USD），各帶 `latest_value` + `change_1y` + `change_3m`。"
     "影響全球風險偏好與外資流向，建議在結論中至少提及一次相關方向。\n"
+    "- user_context：**討論發起人本人的部位**——`portfolios`（組合清單）、"
+    "`holdings`（前 20 大持股，含股數 / 平均成本 / 計價幣別）、"
+    "`watchlist_symbols`（自選股，前 30）、`focus_overlap.held` "
+    "（主題提及的標的中已持有者）、`focus_overlap.watching`（自選股中相關者）。"
+    "**只在你的角色與部位配置 / 風險管理相關時引用**（portfolio_advisor / "
+    "risk_manager / 在被問加碼減碼時的 buffett / lynch 等）；其他情境忽略。"
+    "**禁止在結論中揭露具體股數或成本價**——僅用於決策邏輯。\n"
     "- errors：本次抓取的連接器錯誤清單；非空時務必聲明資料不完整。"
 )
 
@@ -1715,7 +1864,10 @@ async def run_round(
             discussion.topic, market=discussion.market,
         )
         context = await gather_market_context(
-            db, market=discussion.market, focus_symbols=focus,
+            db,
+            market=discussion.market,
+            focus_symbols=focus,
+            owner_id=discussion.owner_id,
         )
         # Snapshot the assembled context so re-opening the discussion
         # later can show "what data the personas saw at the time".
@@ -2078,7 +2230,10 @@ async def synthesize_conclusion(
             discussion.topic, market=discussion.market,
         )
         context = await gather_market_context(
-            db, market=discussion.market, focus_symbols=focus,
+            db,
+            market=discussion.market,
+            focus_symbols=focus,
+            owner_id=discussion.owner_id,
         )
 
     user_prompt = _SYNTHESIZER_USER_TEMPLATE.format(

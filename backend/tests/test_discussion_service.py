@@ -682,16 +682,37 @@ def test_filter_context_unknown_persona_returns_full_ctx():
 
 def test_filter_context_macro_analyst_drops_chip_metrics():
     """macro_analyst's view excludes TW chip-flow + risk_warnings —
-    those would mislead a Fed-policy thesis."""
+    those would mislead a Fed-policy thesis. PR #219 adds
+    `focus_briefs` to the macro profile so symbolic macro topics
+    ("Fed 降息 → 2330 受惠") can ground in real data."""
     ctx = _full_ctx_for_filter()
     out = discussion_service._filter_context_for_persona(ctx, "macro_analyst")
     assert "macro" in out
     assert "international_sentiment" in out
     assert "top_foreign_buyers" in out
+    # focus_briefs IS now in scope (PR #219); empty list means
+    # nothing renders, but the schema bullet is available when
+    # populated.
+    assert "focus_briefs" in out
     # Negative space — chip / risk blocks dropped.
     assert "risk_warnings" not in out
     assert "active_buybacks" not in out
-    assert "focus_briefs" not in out
+
+
+def test_filter_context_dalio_now_sees_focus_briefs():
+    """PR #219: dalio (macro archetype) used to lose focus_briefs;
+    now gets them so a Fed-rates thesis can cite specific names'
+    valuation bands instead of staying purely top-down."""
+    ctx = _full_ctx_for_filter()
+    out = discussion_service._filter_context_for_persona(ctx, "dalio")
+    assert "focus_briefs" in out
+    assert "macro" in out
+    # Macro-specific blocks still present.
+    assert "international_sentiment" in out
+    assert "govt_bank_flow_5d" in out
+    # Quant / chip-detail blocks still dropped.
+    assert "top_gainers" not in out
+    assert "risk_warnings" not in out
 
 
 def test_filter_context_buffett_keeps_value_blocks_drops_quant_breadth():

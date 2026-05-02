@@ -2357,6 +2357,14 @@ _MACRO_PROFILE = frozenset({
     "index", "macro", "international_sentiment",
     "top_foreign_buyers", "govt_bank_flow_5d", "market_institutional_5d",
     "news_sentiment", "per_symbol_news_sentiment",
+    # PR #219: macro personas need focus_briefs when the topic
+    # names specific stocks. "Fed cuts → 2330 受惠" requires seeing
+    # 2330's PE / valuation band — without focus_briefs, dalio /
+    # macro_analyst can only deliver pure macro views and never
+    # ground them in a tradeable name. focus_briefs is empty when
+    # focus_symbols is empty, so this is free for non-symbolic
+    # topics (no token cost penalty).
+    "focus_briefs",
 })
 
 _VALUE_PROFILE = frozenset({

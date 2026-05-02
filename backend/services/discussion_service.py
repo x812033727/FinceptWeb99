@@ -681,6 +681,29 @@ def extract_focus_symbols(text: str, *, market: str = _DEFAULT_MARKET) -> list[s
                 continue
             if _push(code):
                 break
+
+    # Name-based fallback for TW + GLOBAL markets (PR #221). Topics
+    # written with the company short name ("討論台積電 / 鴻海 短線
+    # 走勢") miss the digit-only regex. Lookup against the in-memory
+    # `_name_map` populated by the daily symbol-refresh cron picks
+    # those up so `prior_discussions` / `per_symbol_news_sentiment` /
+    # `focus_briefs` actually find them. Skipped for US — different
+    # name conventions, and the bare-ticker regex already covers
+    # the common case there.
+    if market in ("TW", "GLOBAL") and len(seen) < _MAX_FOCUS_SYMBOLS:
+        try:
+            from services.tw_market_service import (
+                find_symbols_by_names_in_text,
+            )
+            remaining = _MAX_FOCUS_SYMBOLS - len(seen)
+            for sym in find_symbols_by_names_in_text(raw, limit=remaining):
+                if _push(sym):
+                    break
+        except Exception:
+            # Fresh deploy where symbol map hasn't loaded, or any
+            # other defensive failure — fall through with whatever
+            # the regex-only pass found.
+            pass
     return seen
 
 

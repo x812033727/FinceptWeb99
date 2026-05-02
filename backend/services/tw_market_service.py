@@ -200,6 +200,50 @@ def find_symbol_by_name_in_text(text: str) -> str | None:
     return None
 
 
+def find_symbols_by_names_in_text(text: str, *, limit: int) -> list[str]:
+    """Multi-match sibling of `find_symbol_by_name_in_text` for the
+    discussion subsystem (PR #221).
+
+    Scans `text` for TW listed company names and returns up to
+    `limit` matched symbols, deduped, longest-name-first so prefix
+    collisions resolve correctly (台積電→2330 chosen over 台積→
+    some-other-symbol).
+
+    A name embedded inside a longer one already-matched name is
+    skipped: "台積電 vs 中華電" matches both 2330 and 2412, but
+    after 中華電→2412 hits we don't also re-match 中華→???.
+
+    Used by `extract_focus_symbols` to pick up name-only mentions
+    ("討論台積電 / 鴻海 短線走勢") that the digit / cashtag regexes
+    miss. Returns empty list when text is empty or name_map hasn't
+    populated yet — caller falls through to the regex matches.
+    """
+    if not text or not _name_map or limit <= 0:
+        return []
+    pairs = sorted(_name_map.items(), key=lambda kv: -len(kv[1] or ""))
+    found: list[str] = []
+    found_set: set[str] = set()
+    # Mask out characters covered by already-matched names so a
+    # shorter name that's a substring of an earlier match doesn't
+    # double-count THE SAME span. But a separate occurrence of the
+    # shorter name elsewhere in the text DOES still match — the
+    # mask only blanks the consumed positions.
+    masked = text
+    for symbol, name in pairs:
+        if not name or symbol in found_set:
+            continue
+        if name not in masked:
+            continue
+        found.append(symbol)
+        found_set.add(symbol)
+        # Replace ALL occurrences of this name in the mask, so the
+        # shorter-name pass sees only what's left.
+        masked = masked.replace(name, " " * len(name))
+        if len(found) >= limit:
+            break
+    return found
+
+
 # ── Quote ─────────────────────────────────────────────────────────
 
 async def _archive_last2_closes(symbol: str) -> list[tuple[str, float]]:

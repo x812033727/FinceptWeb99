@@ -192,3 +192,93 @@ def test_find_symbol_by_name_returns_none_when_no_match():
     finally:
         svc._name_map.clear()
         svc._name_map.update(saved)
+
+
+# ── find_symbols_by_names_in_text (PR #221 multi-match) ─────────
+
+
+def test_find_symbols_by_names_returns_multiple_matches():
+    saved = dict(svc._name_map)
+    try:
+        svc._name_map.clear()
+        svc._name_map.update({
+            "2330": "台積電", "2454": "聯發科", "2317": "鴻海",
+        })
+        out = svc.find_symbols_by_names_in_text(
+            "討論台積電 / 鴻海 短線", limit=5,
+        )
+        assert "2330" in out
+        assert "2317" in out
+        # 聯發科 not in text → not in result
+        assert "2454" not in out
+    finally:
+        svc._name_map.clear()
+        svc._name_map.update(saved)
+
+
+def test_find_symbols_by_names_caps_at_limit():
+    saved = dict(svc._name_map)
+    try:
+        svc._name_map.clear()
+        svc._name_map.update({
+            "2330": "台積電", "2454": "聯發科",
+            "2317": "鴻海", "2412": "中華電",
+        })
+        out = svc.find_symbols_by_names_in_text(
+            "台積電 聯發科 鴻海 中華電 都漲", limit=2,
+        )
+        assert len(out) == 2
+    finally:
+        svc._name_map.clear()
+        svc._name_map.update(saved)
+
+
+def test_find_symbols_by_names_masks_consumed_spans_for_prefix_collision():
+    """中華電 masks its own occurrences before 中華 scans, so the
+    shorter name only matches positions 中華電 didn't consume.
+    "中華地產 vs 中華電" → 中華電 (consumes its slot) + 中華
+    (still hits in 中華地產)."""
+    saved = dict(svc._name_map)
+    try:
+        svc._name_map.clear()
+        svc._name_map.update({
+            "2412": "中華電",
+            "1234": "中華",   # shorter, also matches
+        })
+        out = svc.find_symbols_by_names_in_text(
+            "中華地產 vs 中華電", limit=5,
+        )
+        # Both should land — 中華電 first (longer), then 中華 from
+        # the part of the text that isn't already masked.
+        assert out == ["2412", "1234"]
+
+
+        # Sanity: pure 中華 (no 中華電) still matches the shorter.
+        out = svc.find_symbols_by_names_in_text("中華大樓開幕", limit=5)
+        assert out == ["1234"]
+    finally:
+        svc._name_map.clear()
+        svc._name_map.update(saved)
+
+
+def test_find_symbols_by_names_returns_empty_when_no_matches():
+    saved = dict(svc._name_map)
+    try:
+        svc._name_map.clear()
+        svc._name_map.update({"2330": "台積電"})
+        assert svc.find_symbols_by_names_in_text("純策略討論", limit=5) == []
+        assert svc.find_symbols_by_names_in_text("", limit=5) == []
+        assert svc.find_symbols_by_names_in_text("台積電", limit=0) == []
+    finally:
+        svc._name_map.clear()
+        svc._name_map.update(saved)
+
+
+def test_find_symbols_by_names_empty_when_map_empty():
+    saved = dict(svc._name_map)
+    try:
+        svc._name_map.clear()
+        assert svc.find_symbols_by_names_in_text("台積電法說", limit=5) == []
+    finally:
+        svc._name_map.clear()
+        svc._name_map.update(saved)

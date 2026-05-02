@@ -1690,6 +1690,90 @@ def test_extract_focus_symbols_global_picks_crypto_universe_only():
     assert "AAA" not in out
 
 
+def test_extract_focus_symbols_tw_falls_back_to_company_name(monkeypatch):
+    """PR #221: topics written with TW company names instead of digit
+    codes ("討論台積電 / 鴻海 短線") used to extract nothing — the
+    digit regex saw no codes. Now the in-memory name_map fallback
+    surfaces 2330 + 2317 so per-symbol news + focus_briefs +
+    prior_discussions actually find them."""
+    import services.tw_market_service as tw
+
+    saved = dict(tw._name_map)
+    try:
+        tw._name_map.clear()
+        tw._name_map.update({
+            "2330": "台積電", "2454": "聯發科", "2317": "鴻海",
+        })
+        out = discussion_service.extract_focus_symbols(
+            "討論台積電 / 鴻海 短線走勢", market="TW",
+        )
+        assert "2330" in out
+        assert "2317" in out
+        # 聯發科 wasn't mentioned — must NOT show up.
+        assert "2454" not in out
+    finally:
+        tw._name_map.clear()
+        tw._name_map.update(saved)
+
+
+def test_extract_focus_symbols_tw_mixed_digit_and_name():
+    """A topic mixing digit codes and names should yield deduped
+    union — 2330 from regex, 聯發科 from name fallback."""
+    import services.tw_market_service as tw
+
+    saved = dict(tw._name_map)
+    try:
+        tw._name_map.clear()
+        tw._name_map.update({"2330": "台積電", "2454": "聯發科"})
+        out = discussion_service.extract_focus_symbols(
+            "2330 vs 聯發科 哪個值得買", market="TW",
+        )
+        assert "2330" in out
+        assert "2454" in out
+    finally:
+        tw._name_map.clear()
+        tw._name_map.update(saved)
+
+
+def test_extract_focus_symbols_us_skips_name_fallback():
+    """US market topics ignore TW name lookups (different convention,
+    bare-ticker regex already covers AAPL etc). Even if the user
+    types '台積電 ADR' in a US discussion, the name fallback should
+    NOT inject 2330."""
+    import services.tw_market_service as tw
+
+    saved = dict(tw._name_map)
+    try:
+        tw._name_map.clear()
+        tw._name_map.update({"2330": "台積電"})
+        out = discussion_service.extract_focus_symbols(
+            "$AAPL vs 台積電 ADR (TSM)", market="US",
+        )
+        assert "AAPL" in out
+        # Name fallback skipped for US — 2330 not added.
+        assert "2330" not in out
+    finally:
+        tw._name_map.clear()
+        tw._name_map.update(saved)
+
+
+def test_extract_focus_symbols_name_fallback_swallows_lookup_failure(monkeypatch):
+    """If the name-lookup helper raises (fresh deploy, partial
+    init), extract_focus_symbols falls through with whatever the
+    regex pass found instead of crashing the whole round."""
+    def boom(_text, *, limit):
+        raise RuntimeError("symbol map not loaded")
+
+    monkeypatch.setattr(
+        "services.tw_market_service.find_symbols_by_names_in_text",
+        boom,
+    )
+    out = discussion_service.extract_focus_symbols(
+        "2330 跟 台積電", market="TW",
+    )
+    assert "2330" in out  # regex still produced it
+
+
 # ── _normalize_market ─────────────────────────────────────────────
 
 

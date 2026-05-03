@@ -10,6 +10,7 @@ import type {
   Turn,
 } from "@/types/discussion";
 import { AutoRunConfigCard } from "@/components/discussion/AutoRunConfigCard";
+import { BacktestSweepCard } from "@/components/discussion/BacktestSweepCard";
 import { ConclusionCard } from "@/components/discussion/ConclusionCard";
 import { PostMortemGainersCard } from "@/components/discussion/PostMortemGainersCard";
 import { RoundContextsCard } from "@/components/discussion/RoundContextsCard";
@@ -550,6 +551,16 @@ export default function DiscussionPage() {
           collapsed={collapse.autoRun}
           onToggleCollapse={() => toggleCollapse("autoRun")}
           personaName={personaName}
+        />
+
+        {/* PR #274: multi-day backtest sweep panel. Reuses the
+            current form's topic/rules/personas as the template
+            applied to every spawned discussion in the sweep. */}
+        <BacktestSweepCard
+          topic={topic}
+          rules={rules}
+          market={market}
+          personaIds={personaIds}
         />
 
         <button

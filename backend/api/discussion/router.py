@@ -44,6 +44,9 @@ from api.discussion.schemas import (
     DiscussionDetailResponse,
     DiscussionResponse,
     InjectUserMessageRequest,
+    BacktestSweepCreate,
+    BacktestSweepFailedDate,
+    BacktestSweepResponse,
     PostMortemDailyGainersOut,
     PostMortemDayPerformanceOut,
     PostMortemGainerOut,
@@ -741,3 +744,183 @@ async def run_post_mortem(
         ],
         injected_turn_id=turn.id,
     )
+
+
+# ── Backtest sweep (PR #274) ─────────────────────────────────────
+
+
+def _sweep_to_response(s) -> BacktestSweepResponse:
+    return BacktestSweepResponse(
+        id=s.id,
+        status=s.status,
+        topic=s.topic,
+        rules=s.rules,
+        market=s.market,
+        persona_ids=list(s.persona_ids or []),
+        anchor_date=s.anchor_date.isoformat(),
+        trading_days_count=s.trading_days_count,
+        rounds_per_discussion=s.rounds_per_discussion,
+        concurrency=s.concurrency,
+        resolved_dates=list(s.resolved_dates or []),
+        completed_dates=list(s.completed_dates or []),
+        failed_dates=[
+            BacktestSweepFailedDate(**fd)
+            for fd in (s.failed_dates or [])
+        ],
+        error_message=s.error_message,
+        created_at=s.created_at,
+        started_at=s.started_at,
+        completed_at=s.completed_at,
+        cancelled_at=s.cancelled_at,
+    )
+
+
+@router.get("/sweeps", response_model=list[BacktestSweepResponse])
+async def list_sweeps(
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Most-recent-first list of the caller's sweeps."""
+    from services import backtest_sweep_service as svc
+    rows = await svc.list_sweeps(
+        db, owner_id=_coerce_owner_uuid(user),
+    )
+    return [_sweep_to_response(r) for r in rows]
+
+
+@router.post(
+    "/sweeps",
+    response_model=BacktestSweepResponse,
+    status_code=201,
+)
+async def create_sweep(
+    body: BacktestSweepCreate,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Create a sweep in `pending` state. Caller follows up with
+    `/sweeps/{id}/start` to fire the background worker."""
+    from datetime import date as _date
+    from services import backtest_sweep_service as svc
+
+    try:
+        anchor = _date.fromisoformat(body.anchor_date)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"anchor_date must be ISO date (YYYY-MM-DD), got "
+                   f"{body.anchor_date!r}",
+        )
+    try:
+        sweep = await svc.create_sweep(
+            db, owner_id=_coerce_owner_uuid(user),
+            topic=body.topic, rules=body.rules,
+            market=body.market, persona_ids=body.persona_ids,
+            anchor_date=anchor,
+            trading_days_count=body.trading_days_count,
+            rounds_per_discussion=body.rounds_per_discussion,
+            concurrency=body.concurrency,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _sweep_to_response(sweep)
+
+
+@router.get(
+    "/sweeps/{sweep_id}",
+    response_model=BacktestSweepResponse,
+)
+async def get_sweep(
+    sweep_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Owner-scoped fetch — used by the UI's progress poller."""
+    from services import backtest_sweep_service as svc
+    row = await svc.get_sweep(
+        db, sweep_id=sweep_id, owner_id=_coerce_owner_uuid(user),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Sweep not found")
+    return _sweep_to_response(row)
+
+
+@router.post(
+    "/sweeps/{sweep_id}/start",
+    response_model=BacktestSweepResponse,
+)
+async def start_sweep(
+    sweep_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Fire the background worker. The HTTP request returns
+    immediately — clients poll `GET /sweeps/{id}` for progress."""
+    from services import backtest_sweep_service as svc
+
+    row = await svc.get_sweep(
+        db, sweep_id=sweep_id, owner_id=_coerce_owner_uuid(user),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Sweep not found")
+    if row.status != svc.STATUS_PENDING:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Sweep is in status={row.status!r}; only pending "
+                   "sweeps can be started.",
+        )
+    svc.start_sweep_in_background(row.id)
+    # Re-fetch so the returned row reflects the worker's status flip
+    # (best-effort — the worker may not have flipped to running yet
+    # by the time we return; that's fine, the UI poll will catch it).
+    refreshed = await svc.get_sweep(
+        db, sweep_id=sweep_id, owner_id=_coerce_owner_uuid(user),
+    )
+    return _sweep_to_response(refreshed or row)
+
+
+@router.post(
+    "/sweeps/{sweep_id}/cancel",
+    response_model=BacktestSweepResponse,
+)
+async def cancel_sweep(
+    sweep_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Set the sweep's status to `cancelled`. Already-running
+    workers see this on their next iteration check and bail.
+    Already-terminal sweeps are no-op."""
+    from services import backtest_sweep_service as svc
+
+    row = await svc.get_sweep(
+        db, sweep_id=sweep_id, owner_id=_coerce_owner_uuid(user),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Sweep not found")
+    cancelled = await svc.cancel_sweep(db, row)
+    return _sweep_to_response(cancelled)
+
+
+@router.delete(
+    "/sweeps/{sweep_id}",
+    status_code=204,
+)
+async def delete_sweep(
+    sweep_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Hard-delete the sweep row. Spawned discussions are NOT
+    cascaded — they remain inspectable. Callers should /cancel
+    first if the sweep is actively running, otherwise the
+    background worker will write to a deleted row and noop."""
+    from services import backtest_sweep_service as svc
+
+    row = await svc.get_sweep(
+        db, sweep_id=sweep_id, owner_id=_coerce_owner_uuid(user),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Sweep not found")
+    await svc.delete_sweep(db, row)
+    return None

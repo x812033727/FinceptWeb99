@@ -13,6 +13,7 @@ import type {
   Conclusion,
   Discussion,
   DiscussionDetail,
+  DiscussionMarket,
   RoundContextSnapshot,
   ScoreboardResponse,
   Turn,
@@ -246,6 +247,79 @@ export async function runPostMortem(id: string): Promise<PostMortemResponse> {
   );
   return res.data;
 }
+
+// ── Backtest sweep (PR #274) ─────────────────────────────────────
+
+export interface BacktestSweepFailedDate {
+  date: string;
+  error: string;
+}
+
+export type BacktestSweepStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "cancelled"
+  | "failed";
+
+export interface BacktestSweep {
+  id: string;
+  status: BacktestSweepStatus;
+  topic: string;
+  rules: string;
+  market: DiscussionMarket;
+  persona_ids: string[];
+  anchor_date: string;
+  trading_days_count: number;
+  rounds_per_discussion: number;
+  concurrency: number;
+  resolved_dates: string[];
+  completed_dates: string[];
+  failed_dates: BacktestSweepFailedDate[];
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  cancelled_at: string | null;
+}
+
+export interface CreateBacktestSweepInput {
+  topic: string;
+  rules: string;
+  market: DiscussionMarket;
+  persona_ids: string[];
+  anchor_date: string;
+  trading_days_count: number;
+  rounds_per_discussion?: number;
+  concurrency?: number;
+}
+
+export async function fetchSweeps(): Promise<BacktestSweep[]> {
+  const r = await api.get<BacktestSweep[]>("/discussion/sweeps");
+  return r.data;
+}
+
+export async function createSweep(
+  body: CreateBacktestSweepInput,
+): Promise<BacktestSweep> {
+  const r = await api.post<BacktestSweep>("/discussion/sweeps", body);
+  return r.data;
+}
+
+export async function startSweep(id: string): Promise<BacktestSweep> {
+  const r = await api.post<BacktestSweep>(`/discussion/sweeps/${id}/start`);
+  return r.data;
+}
+
+export async function cancelSweep(id: string): Promise<BacktestSweep> {
+  const r = await api.post<BacktestSweep>(`/discussion/sweeps/${id}/cancel`);
+  return r.data;
+}
+
+export async function deleteSweep(id: string): Promise<void> {
+  await api.delete(`/discussion/sweeps/${id}`);
+}
+
 
 /** localStorage persistence for PostMortemGainersCard (PR #268).
  *  The mutation result is in-memory only — without persistence the

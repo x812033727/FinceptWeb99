@@ -197,3 +197,48 @@ class ScoreboardResponse(BaseModel):
     # value is unchanged from before backtest support).
     created_at_tw_date: str
     rows: list[ScoreboardRow]
+
+
+# ── Backtest sweep (PR #274) ─────────────────────────────────────
+
+
+class BacktestSweepCreate(BaseModel):
+    """POST body for creating a sweep job."""
+    topic: str = Field(..., min_length=1)
+    rules: str = Field(..., min_length=1)
+    market: str
+    persona_ids: list[str] = Field(..., min_length=1)
+    anchor_date: str   # ISO date — coerced to date in the service layer
+    trading_days_count: int = Field(..., ge=1, le=60)
+    rounds_per_discussion: int = Field(default=1, ge=1, le=5)
+    concurrency: int = Field(default=1, ge=1, le=3)
+
+
+class BacktestSweepFailedDate(BaseModel):
+    date: str
+    error: str
+
+
+class BacktestSweepResponse(BaseModel):
+    """Server's view of a sweep, surfaced to the operator UI for
+    progress polling. `resolved_dates` populates after /start;
+    `completed_dates` / `failed_dates` grow as the worker
+    advances."""
+    id: uuid.UUID
+    status: str
+    topic: str
+    rules: str
+    market: str
+    persona_ids: list[str]
+    anchor_date: str
+    trading_days_count: int
+    rounds_per_discussion: int
+    concurrency: int
+    resolved_dates: list[str]
+    completed_dates: list[str]
+    failed_dates: list[BacktestSweepFailedDate]
+    error_message: str | None
+    created_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+    cancelled_at: datetime | None

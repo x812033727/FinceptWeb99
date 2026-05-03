@@ -456,13 +456,23 @@ async def upsert_revenue_monthly(
 
 def _revenue_row_out(r: TwRevenueMonthly) -> dict[str, Any]:
     """Output shape mirrors the FinMind connector — drop-in for
-    `tw_market_service.get_revenue` callers."""
+    `tw_market_service.get_revenue` callers.
+
+    PR #215 defensive filter: rows carrying the PR #211 bogus
+    signature (yoy = year(ts) AND mom = month(ts)) get yoy/mom set
+    to 0.0 — same as the legitimate "no baseline" path. Stops the
+    +2026% number leaking out of the per-symbol revenue page."""
+    yoy = float(r.revenue_yoy) if r.revenue_yoy is not None else 0.0
+    mom = float(r.revenue_mom) if r.revenue_mom is not None else 0.0
+    if _is_bogus_growth_pair(r.revenue_yoy, r.revenue_mom, r.ts):
+        yoy = 0.0
+        mom = 0.0
     return {
         "date":        r.ts.isoformat(),
         "symbol":      r.symbol,
         "revenue":     int(r.revenue) if r.revenue is not None else 0,
-        "revenue_yoy": float(r.revenue_yoy) if r.revenue_yoy is not None else 0.0,
-        "revenue_mom": float(r.revenue_mom) if r.revenue_mom is not None else 0.0,
+        "revenue_yoy": yoy,
+        "revenue_mom": mom,
     }
 
 
@@ -483,6 +493,31 @@ async def read_revenue_range(
     return [_revenue_row_out(r) for r in rows]
 
 
+def _is_bogus_growth_pair(
+    yoy: float | None, mom: float | None, ts: date,
+) -> bool:
+    """Detect the PR #211 bug signature: rows where `revenue_yoy` is
+    the period year integer (e.g. 2026) and `revenue_mom` is the
+    period month integer (e.g. 1), because the FinMind connector
+    earlier mis-mapped its `revenue_year` / `revenue_month` fields as
+    growth percentages.
+
+    Filters at the read layer rather than the write layer so cleanup
+    works without a DB migration. The signature is precise — it
+    only catches rows where BOTH columns exactly equal the date
+    components, so a legitimate (rare) row showing +2026% YoY for
+    Jan revenue (which would also exactly match) would also get
+    nulled, but the probability of that legitimate scenario is
+    negligible (would mean revenue grew 21x YoY in one month).
+    """
+    if yoy is None or mom is None:
+        return False
+    try:
+        return float(yoy) == float(ts.year) and float(mom) == float(ts.month)
+    except (TypeError, ValueError):
+        return False
+
+
 async def read_top_revenue_growers(
     db: AsyncSession,
     market: str = "TW",
@@ -497,6 +532,15 @@ async def read_top_revenue_growers(
     an empty list when the archive has nothing for the market. Skips
     rows with NULL `revenue_yoy` so a company that just IPO'd (no
     prior year baseline) doesn't push a real grower off the list.
+
+    PR #215 also defensively filters out rows whose growth pair
+    matches `(year, month)` of the row's `ts` — the bug signature
+    from PR #211 where the FinMind connector mis-mapped
+    `revenue_year` / `revenue_month` integers as growth percentages.
+    Production rows written before the fix shipped still carry that
+    pattern, and the daily cron is paywalled so it can't overwrite
+    them. This filter makes the LLM stop seeing fabricated +2026%
+    YoY without waiting on a `backfill_revenue_finmind` run.
     """
     latest_stmt = select(TwRevenueMonthly.ts).where(
         TwRevenueMonthly.market == market,
@@ -520,6 +564,19 @@ async def read_top_revenue_growers(
     rows = (await db.scalars(stmt)).all()
     if not rows:
         return []
+
+    # Drop the PR #211 bogus signature before ranking. Without this,
+    # the bogus rows (yoy = 2026 etc.) sort to the top and dominate
+    # the "top growers" list.
+    rows = [
+        r for r in rows
+        if not _is_bogus_growth_pair(
+            r.revenue_yoy, r.revenue_mom, r.ts,
+        )
+    ]
+    if not rows:
+        return []
+
     rows_sorted = sorted(
         rows,
         key=lambda r: float(r.revenue_yoy) if r.revenue_yoy is not None else -1e9,

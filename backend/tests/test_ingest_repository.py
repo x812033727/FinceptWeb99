@@ -169,3 +169,106 @@ async def test_chunked_upsert_handles_payloads_above_param_cap(
         select(sa_func.count()).select_from(TwGovtBankFlowDaily),
     )
     assert count == 7000
+
+
+# ── PR #215: bogus revenue growth filter ─────────────────────────
+
+
+def test_is_bogus_growth_pair_detects_year_month_signature():
+    """The PR #211 bug: connector mis-mapped FinMind's `revenue_year`
+    (period year integer like 2026) to `revenue_yoy` and
+    `revenue_month` (period month 1-12) to `revenue_mom`. Production
+    rows from before the fix carry that exact signature. The detector
+    must flag them precisely without false-positiving legitimate
+    growth rates."""
+    from services.ingest.repository import _is_bogus_growth_pair
+
+    # The exact signature the user reported in production.
+    assert _is_bogus_growth_pair(2026.0, 1.0, date(2026, 1, 1)) is True
+    assert _is_bogus_growth_pair(2026.0, 2.0, date(2026, 2, 1)) is True
+    assert _is_bogus_growth_pair(2024.0, 12.0, date(2024, 12, 1)) is True
+
+    # Legitimate growth rates — NOT flagged.
+    assert _is_bogus_growth_pair(15.2, 3.5, date(2026, 4, 1)) is False
+    assert _is_bogus_growth_pair(-8.0, 2.0, date(2026, 4, 1)) is False  # mom=month but yoy is normal
+    assert _is_bogus_growth_pair(2026.0, 5.0, date(2026, 4, 1)) is False  # yoy=year but mom != month
+    assert _is_bogus_growth_pair(0.0, 0.0, date(2026, 4, 1)) is False
+
+    # Defensive: None inputs return False (caller drops separately).
+    assert _is_bogus_growth_pair(None, 1.0, date(2026, 1, 1)) is False
+    assert _is_bogus_growth_pair(2026.0, None, date(2026, 1, 1)) is False
+    assert _is_bogus_growth_pair(None, None, date(2026, 1, 1)) is False
+
+
+@pytest.mark.asyncio
+async def test_top_revenue_growers_drops_bogus_year_month_rows(
+    db_session: AsyncSession,
+):
+    """End-to-end: a 1101 row carrying the exact production-bug
+    signature (yoy=2026, mom=1, ts=2026-02-01) gets filtered out at
+    read time, so a sibling row with legitimate +15% YoY rises to
+    the top instead of being buried under fabricated +2026%."""
+    from services.ingest.repository import (
+        RevenueMonthlyRow,
+        read_top_revenue_growers,
+        upsert_revenue_monthly,
+    )
+
+    ts = date(2026, 2, 1)
+    await upsert_revenue_monthly(db_session, [
+        # Bogus: matches PR #211 signature
+        RevenueMonthlyRow(
+            market="TW", symbol="1101", ts=ts,
+            revenue=12_000_000_000,
+            revenue_yoy=2026.0, revenue_mom=2.0,
+            source="finmind",
+        ),
+        # Legitimate
+        RevenueMonthlyRow(
+            market="TW", symbol="2330", ts=ts,
+            revenue=200_000_000_000,
+            revenue_yoy=15.2, revenue_mom=3.0,
+            source="finmind",
+        ),
+    ])
+
+    top = await read_top_revenue_growers(db_session, market="TW", limit=10)
+    syms = [r["symbol"] for r in top]
+    # 1101 dropped (bogus signature), 2330 kept (real value).
+    assert "1101" not in syms
+    assert "2330" in syms
+    assert top[0]["revenue_yoy"] == 15.2
+
+
+@pytest.mark.asyncio
+async def test_revenue_row_out_zeros_bogus_growth_in_range_read(
+    db_session: AsyncSession,
+):
+    """The per-symbol revenue page (`read_revenue_range`) must also
+    suppress the bogus pair so the user-facing table doesn't surface
+    +2026%. We zero the values rather than dropping the row entirely
+    — the revenue figure itself is still legitimate, only the growth
+    pair was bogus."""
+    from services.ingest.repository import (
+        RevenueMonthlyRow,
+        read_revenue_range,
+        upsert_revenue_monthly,
+    )
+
+    ts = date(2026, 2, 1)
+    await upsert_revenue_monthly(db_session, [
+        RevenueMonthlyRow(
+            market="TW", symbol="1101", ts=ts,
+            revenue=12_252_892_000,
+            revenue_yoy=2026.0, revenue_mom=2.0,
+            source="finmind",
+        ),
+    ])
+
+    rows = await read_revenue_range(
+        db_session, "TW", "1101", date(2026, 1, 1), date(2026, 3, 1),
+    )
+    assert len(rows) == 1
+    assert rows[0]["revenue"] == 12_252_892_000     # real revenue preserved
+    assert rows[0]["revenue_yoy"] == 0.0            # bogus pair zeroed
+    assert rows[0]["revenue_mom"] == 0.0

@@ -1540,6 +1540,7 @@ async def gather_market_context(
     owner_id: uuid.UUID | None = None,
     exclude_discussion_id: uuid.UUID | None = None,
     as_of: date | None = None,
+    progress_cb: Any = None,
 ) -> dict[str, Any]:
     """Build a structured snapshot of the market state for the personas.
 
@@ -1573,6 +1574,7 @@ async def gather_market_context(
         exclude_discussion_id=exclude_discussion_id,
         as_of=as_of,
         max_focus_symbols=_MAX_FOCUS_SYMBOLS,
+        progress_cb=progress_cb,
     )
 
 
@@ -2443,14 +2445,46 @@ async def run_round(
         focus = extract_focus_symbols(
             discussion.topic, market=discussion.market,
         )
-        context = await gather_market_context(
-            db,
-            market=discussion.market,
-            focus_symbols=focus,
-            owner_id=discussion.owner_id,
-            exclude_discussion_id=discussion.id,
-            as_of=discussion.as_of_date,
-        )
+        # Bridge ctx-gathering progress milestones to SSE events so
+        # the frontend's preparing card (PR #244) can show
+        # "scoring news sentiment..." etc. instead of a static
+        # "loading..." for the full 15-30 s window. Asyncio.Queue +
+        # sentinel pattern: gather runs as a task; we drain the queue
+        # in this generator and yield ctx_progress events; gather's
+        # finally puts None as a "done" marker so we exit the loop.
+        progress_q: asyncio.Queue[str | None] = asyncio.Queue()
+
+        async def _emit_progress(stage: str) -> None:
+            await progress_q.put(stage)
+
+        async def _gather_then_signal() -> dict[str, Any]:
+            try:
+                return await gather_market_context(
+                    db,
+                    market=discussion.market,
+                    focus_symbols=focus,
+                    owner_id=discussion.owner_id,
+                    exclude_discussion_id=discussion.id,
+                    as_of=discussion.as_of_date,
+                    progress_cb=_emit_progress,
+                )
+            finally:
+                # Sentinel — signals to the drainer that no more
+                # progress events are coming so it can break out and
+                # await the result. Always fires (success or failure)
+                # so the caller never deadlocks.
+                await progress_q.put(None)
+
+        ctx_task = asyncio.create_task(_gather_then_signal())
+        while True:
+            stage = await progress_q.get()
+            if stage is None:
+                break
+            yield TurnEvent("ctx_progress", {"stage": stage})
+        # Re-raise any exception the gather hit. The sentinel was
+        # still fired by the finally block above, so we got here
+        # cleanly.
+        context = await ctx_task
         # Snapshot the assembled context so re-opening the discussion
         # later can show "what data the personas saw at the time".
         # Failure to persist is non-fatal — we still want the round

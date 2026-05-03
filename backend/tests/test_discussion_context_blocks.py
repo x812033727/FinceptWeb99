@@ -624,6 +624,161 @@ async def test_build_market_context_initialises_default_shape(
 
 
 @pytest.mark.asyncio
+async def test_build_market_context_invokes_progress_callback_at_milestones(
+    db_session: AsyncSession,
+):
+    """`progress_cb` (PR #252) lets the SSE flow surface
+    ctx-gathering progress to the user instead of going silent for
+    15-30 s during inline news scoring. Pin the milestones the
+    callback should fire — drift here regresses the user-visible
+    preparing card's stage descriptors.
+
+    Expected sequence:
+      1. `fetching_market_data` — before the asyncio.gather block
+      2. `scoring_news_sentiment` — before the slow news block
+      3. `ctx_ready` — after every block finishes
+
+    All HTTP-bound + DB-bound block fetchers are patched at the
+    `services.discussion.context.blocks` layer (the level closest
+    to the builder) so the test doesn't transitively import the
+    cryptography / pandas / yfinance heavy deps.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    stages: list[str] = []
+
+    async def _cb(stage: str) -> None:
+        stages.append(stage)
+
+    with patch(
+        "services.discussion.context.blocks.http.fetch_screener",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.http.fetch_index",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.http.fetch_macro",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.http.fetch_focus_briefs",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.technical.fetch_short_term_signals",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.derivatives.fetch_taifex_positioning",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.chip.fetch_top_foreign_buyers",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.chip.fetch_margin_balance_trend",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.chip.fetch_top_revenue_growers",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.chip.fetch_active_buybacks",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.chip.fetch_govt_bank_flow",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.chip.fetch_market_institutional",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.risk.fetch_risk_warnings",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.news.fetch_market_sentiment",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.news.fetch_international_sentiment",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.news.fetch_per_symbol_sentiment",
+        new=AsyncMock(),
+    ):
+        await build_market_context(
+            db_session, market="TW", progress_cb=_cb,
+        )
+
+    assert "fetching_market_data" in stages
+    assert "scoring_news_sentiment" in stages
+    assert "ctx_ready" in stages
+    # Order matters — preparing card transitions through the stages
+    # in this sequence, so a UI tester relying on the order won't
+    # see weird transitions.
+    assert stages.index("fetching_market_data") < stages.index(
+        "scoring_news_sentiment"
+    )
+    assert stages.index("scoring_news_sentiment") < stages.index("ctx_ready")
+
+
+@pytest.mark.asyncio
+async def test_build_market_context_progress_cb_optional(
+    db_session: AsyncSession,
+):
+    """Default `progress_cb=None` means callers that don't care
+    (auto-run cron, synthesizer-internal calls) don't have to plumb
+    one in. Build must complete normally without it."""
+    from unittest.mock import AsyncMock, patch
+
+    with patch(
+        "services.discussion.context.blocks.http.fetch_screener",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.http.fetch_index",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.http.fetch_macro",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.http.fetch_focus_briefs",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.technical.fetch_short_term_signals",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.derivatives.fetch_taifex_positioning",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.chip.fetch_top_foreign_buyers",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.chip.fetch_margin_balance_trend",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.chip.fetch_top_revenue_growers",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.chip.fetch_active_buybacks",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.chip.fetch_govt_bank_flow",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.chip.fetch_market_institutional",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.risk.fetch_risk_warnings",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.news.fetch_market_sentiment",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.news.fetch_international_sentiment",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.news.fetch_per_symbol_sentiment",
+        new=AsyncMock(),
+    ):
+        ctx = await build_market_context(db_session, market="TW")
+    assert ctx is not None
+    assert "errors" in ctx
+
+
+@pytest.mark.asyncio
 async def test_build_market_context_skips_chip_blocks_for_non_tw(
     db_session: AsyncSession,
 ):

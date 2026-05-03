@@ -32,11 +32,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from .blocks import chip, derivatives, http, news, owner, risk, technical
+
+# Progress callback type. Caller (e.g. `run_round`) provides one so
+# the long ctx-gathering window (~15-30 s when news sentiment scoring
+# fires inline) can surface intermediate "in progress" events to the
+# user instead of going silent. None disables progress emission.
+ProgressCb = Callable[[str], Awaitable[None]]
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -120,9 +127,21 @@ async def build_market_context(
     exclude_discussion_id: UUID | None = None,
     as_of: date | None = None,
     max_focus_symbols: int = 5,
+    progress_cb: ProgressCb | None = None,
 ) -> dict[str, Any]:
     ctx = _initial_ctx(market=market, as_of=as_of)
     record_error = _make_error_recorder(ctx)
+
+    async def _progress(stage: str) -> None:
+        """Emit a progress milestone if the caller wired a callback,
+        else no-op. Wrapped so the body of build_market_context stays
+        readable — `await _progress("X")` reads as a one-liner instead
+        of `if progress_cb: await progress_cb("X")` everywhere.
+        Callback failure is intentionally allowed to bubble up — if
+        the caller's queue/SSE pipe is broken there's no point
+        continuing the gather."""
+        if progress_cb is not None:
+            await progress_cb(stage)
 
     # ── concurrent HTTP-bound blocks ───────────────────────────────
     # Each block goes through `*_autosession` service helpers (or
@@ -130,6 +149,7 @@ async def build_market_context(
     # makes them safe to fan out via `asyncio.gather`. Sequential
     # cold-cache would burn 5-7s before the first persona could
     # speak; parallel fall to ~max(any one).
+    await _progress("fetching_market_data")
     await asyncio.gather(
         http.fetch_screener(
             ctx, market=market, top_n=top_n,
@@ -200,6 +220,12 @@ async def build_market_context(
         if as_of is not None else None
     )
 
+    # News sentiment is the single slowest block (~15-30 s when
+    # inline scoring kicks in for backtest backfill). Emit a
+    # progress event so the UI's preparing card can switch to
+    # "scoring news sentiment..." and the user knows why this
+    # phase is taking longer than the others.
+    await _progress("scoring_news_sentiment")
     await news.fetch_market_sentiment(
         ctx, db, market=market, as_of_dt=as_of_dt,
         record_error=record_error,
@@ -227,4 +253,5 @@ async def build_market_context(
                 as_of_dt=as_of_dt, record_error=record_error,
             )
 
+    await _progress("ctx_ready")
     return ctx

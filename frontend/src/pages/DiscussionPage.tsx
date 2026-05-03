@@ -169,6 +169,12 @@ export default function DiscussionPage() {
   const [streamingPersona, setStreamingPersona] = useState<string | null>(null);
   const [streamBuffer, setStreamBuffer] = useState("");
   const [streamingRound, setStreamingRound] = useState<number | null>(null);
+  // Backend's `ctx_progress` SSE event — fires at ctx-gathering
+  // milestones (`fetching_market_data` / `scoring_news_sentiment` /
+  // `ctx_ready`) so the preparing card (PR #244) can show what's
+  // happening during the silent 15-30 s window. Null when no
+  // progress event has arrived yet (early startup).
+  const [streamingStage, setStreamingStage] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
   // Live tool-use log for the persona currently streaming. Cleared on
@@ -209,6 +215,7 @@ export default function DiscussionPage() {
     setStreamBuffer("");
     setStreamingPersona(null);
     setStreamingRound(null);
+    setStreamingStage(null);
     setStreamError(null);
     setStreamingToolEvents([]);
   }, [selectedId]);
@@ -399,6 +406,7 @@ export default function DiscussionPage() {
     setStreamBuffer("");
     setStreamingPersona(null);
     setStreamingRound(null);
+    setStreamingStage(null);
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -463,6 +471,19 @@ export default function DiscussionPage() {
                           )
                         : old,
                   );
+                }
+                break;
+              case "ctx_progress":
+                // Backend ctx-gathering milestone — drives the
+                // preparing card's stage descriptor (PR #244 +
+                // #252). Stages today: `fetching_market_data` /
+                // `scoring_news_sentiment` / `ctx_ready`. The card
+                // looks up an i18n key per stage; unknown stages
+                // fall back to the generic loading copy so a
+                // backend that adds a new stage doesn't break
+                // older frontends.
+                if (typeof obj.stage === "string") {
+                  setStreamingStage(obj.stage);
                 }
                 break;
               case "turn_start":
@@ -548,6 +569,7 @@ export default function DiscussionPage() {
     } finally {
       setIsStreaming(false);
       setStreamingRound(null);
+      setStreamingStage(null);
       // Refresh persisted turns from the server so the streaming overlay
       // can be cleared without losing state on the next render. Use
       // refetchQueries (not invalidateQueries) so the round counter +
@@ -1063,9 +1085,26 @@ export default function DiscussionPage() {
                     className="inline-block w-2 h-2 rounded-full bg-primary animate-pulse"
                   />
                   <span>
-                    {streamingRound === null
-                      ? t("discussion.loading_context_initial")
-                      : t("discussion.loading_context")}
+                    {/* Backend ctx_progress event (PR #252) drives
+                        a more specific stage descriptor when one is
+                        available; falls back to the generic loading
+                        copy otherwise (older backend / pre-progress-
+                        event window). i18n key
+                        `discussion.loading_stage_<stage>` so adding a
+                        new backend stage just needs a new i18n entry
+                        without code changes. Untranslated stages
+                        fall back to `loading_context` so the user
+                        never sees a raw key. */}
+                    {(() => {
+                      if (streamingStage) {
+                        const i18nKey = `discussion.loading_stage_${streamingStage}`;
+                        const translated = t(i18nKey);
+                        if (translated !== i18nKey) return translated;
+                      }
+                      return streamingRound === null
+                        ? t("discussion.loading_context_initial")
+                        : t("discussion.loading_context");
+                    })()}
                   </span>
                 </div>
               </div>

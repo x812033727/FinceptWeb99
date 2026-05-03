@@ -101,6 +101,23 @@ async def fetch_short_term_signals(
                 except Exception as exc:
                     record_error(f"securities_lending_trend:{sym}", exc)
             signals["securities_lending_trend"] = sbl
+            # Per-symbol large-holder concentration trend (TW only —
+            # `tw_stock_shareholding` table). 千張大戶 + institutional
+            # accumulation/distribution signal that doesn't show up in
+            # the daily 法人 flow. Falls to None if fewer than 2
+            # weekly publications in the window.
+            holdings: dict | None = None
+            if market == "TW":
+                try:
+                    from services.ingest.repository import (
+                        read_holdings_concentration_trend,
+                    )
+                    holdings = await read_holdings_concentration_trend(
+                        db, market=market, symbol=sym, as_of=as_of,
+                    )
+                except Exception as exc:
+                    record_error(f"holdings_concentration:{sym}", exc)
+            signals["holdings_concentration_trend"] = holdings
             # Per-symbol upcoming corporate event (法說 / 除息) within
             # 14 days. yfinance-backed; covers TW + US (other markets
             # fall through with `_suffix_for_market` no-op). None when

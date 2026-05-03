@@ -239,6 +239,186 @@ async def test_read_latest_shareholding_returns_buckets_for_latest_date(
 
 
 @pytest.mark.asyncio
+async def test_holdings_concentration_trend_returns_none_for_single_publication(
+    db_session: AsyncSession,
+):
+    """Need ≥ 2 weekly snapshots to compute a trend. Single
+    publication → None so the discussion ctx folds the field out
+    instead of emitting a misleading "stable" with no movement
+    information."""
+    from datetime import timedelta as _td
+
+    from services.ingest.repository import (
+        ShareholdingRow,
+        read_holdings_concentration_trend,
+        upsert_shareholdings,
+    )
+    anchor = date(2026, 4, 26)
+    await upsert_shareholdings(db_session, [
+        ShareholdingRow("TW", "2330", anchor, 13, "≥600張",
+                        500, 100_000_000, 25.0, "finmind"),
+        ShareholdingRow("TW", "2330", anchor, 14, "≥800張",
+                        300, 80_000_000, 20.0, "finmind"),
+        ShareholdingRow("TW", "2330", anchor, 15, "≥1000張",
+                        100, 50_000_000, 10.0, "finmind"),
+    ])
+    out = await read_holdings_concentration_trend(
+        db_session, market="TW", symbol="2330",
+        weeks=4, as_of=anchor + _td(days=1),
+    )
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_holdings_concentration_trend_classifies_rising(
+    db_session: AsyncSession,
+):
+    """Top-holder shares_percent walks up over 4 weekly snapshots
+    → trend `rising` (institutional accumulation). Pin the
+    `change_pp` math so a refactor that loses the
+    `latest - earliest` direction regresses loudly."""
+    from datetime import timedelta as _td
+
+    from services.ingest.repository import (
+        ShareholdingRow,
+        read_holdings_concentration_trend,
+        upsert_shareholdings,
+    )
+
+    base = date(2026, 4, 5)
+    rows: list[ShareholdingRow] = []
+    # Four weekly snapshots, each top-3 totalling: 50, 51.5, 53, 55
+    weekly_totals = [50.0, 51.5, 53.0, 55.0]
+    for i, total in enumerate(weekly_totals):
+        ts = base + _td(weeks=i)
+        # Spread across buckets 13/14/15 so the SUM matches `total`.
+        rows.extend([
+            ShareholdingRow("TW", "2330", ts, 13, "≥600張",
+                            500, 100_000_000, total * 0.4, "finmind"),
+            ShareholdingRow("TW", "2330", ts, 14, "≥800張",
+                            300,  80_000_000, total * 0.35, "finmind"),
+            ShareholdingRow("TW", "2330", ts, 15, "≥1000張",
+                            100,  50_000_000, total * 0.25, "finmind"),
+        ])
+    await upsert_shareholdings(db_session, rows)
+
+    out = await read_holdings_concentration_trend(
+        db_session, market="TW", symbol="2330",
+        weeks=4, as_of=base + _td(weeks=4),
+    )
+    assert out is not None
+    assert out["publication_count"] == 4
+    # latest - earliest = 55.0 - 50.0 = +5.0 pp → trend=rising
+    assert out["change_pp"] == pytest.approx(5.0, abs=0.01)
+    assert out["trend"] == "rising"
+    assert out["latest_top_holders_pct"] == pytest.approx(55.0, abs=0.01)
+
+
+@pytest.mark.asyncio
+async def test_holdings_concentration_trend_classifies_falling(
+    db_session: AsyncSession,
+):
+    from datetime import timedelta as _td
+
+    from services.ingest.repository import (
+        ShareholdingRow,
+        read_holdings_concentration_trend,
+        upsert_shareholdings,
+    )
+
+    base = date(2026, 4, 5)
+    rows: list[ShareholdingRow] = []
+    for i, total in enumerate([60.0, 58.0, 55.0]):
+        ts = base + _td(weeks=i)
+        rows.append(ShareholdingRow(
+            "TW", "2330", ts, 15, "≥1000張",
+            100, 50_000_000, total, "finmind",
+        ))
+    await upsert_shareholdings(db_session, rows)
+
+    out = await read_holdings_concentration_trend(
+        db_session, market="TW", symbol="2330",
+        weeks=4, as_of=base + _td(weeks=3),
+    )
+    assert out is not None
+    assert out["trend"] == "falling"
+
+
+@pytest.mark.asyncio
+async def test_holdings_concentration_trend_classifies_stable(
+    db_session: AsyncSession,
+):
+    """±1 pp band — 0.5 pp drift over 4 weeks is noise, not a
+    trend. Pin the boundary."""
+    from datetime import timedelta as _td
+
+    from services.ingest.repository import (
+        ShareholdingRow,
+        read_holdings_concentration_trend,
+        upsert_shareholdings,
+    )
+
+    base = date(2026, 4, 5)
+    rows: list[ShareholdingRow] = []
+    for i, total in enumerate([50.0, 50.3, 50.5]):
+        ts = base + _td(weeks=i)
+        rows.append(ShareholdingRow(
+            "TW", "2330", ts, 15, "≥1000張",
+            100, 50_000_000, total, "finmind",
+        ))
+    await upsert_shareholdings(db_session, rows)
+
+    out = await read_holdings_concentration_trend(
+        db_session, market="TW", symbol="2330",
+        weeks=4, as_of=base + _td(weeks=3),
+    )
+    assert out is not None
+    assert out["trend"] == "stable"
+
+
+@pytest.mark.asyncio
+async def test_holdings_concentration_trend_excludes_lower_buckets(
+    db_session: AsyncSession,
+):
+    """Only buckets 13/14/15 contribute. Lower-bucket rows in the
+    same date must be ignored — they're retail-level holders, not
+    the 千張大戶 we're tracking."""
+    from datetime import timedelta as _td
+
+    from services.ingest.repository import (
+        ShareholdingRow,
+        read_holdings_concentration_trend,
+        upsert_shareholdings,
+    )
+
+    base = date(2026, 4, 5)
+    rows: list[ShareholdingRow] = []
+    for i in range(2):
+        ts = base + _td(weeks=i)
+        # bucket 1-12 should be ignored (retail/mid-tier holders).
+        for bucket in range(1, 13):
+            rows.append(ShareholdingRow(
+                "TW", "2330", ts, bucket, f"bucket {bucket}",
+                10, 1_000_000, 100.0, "finmind",
+            ))
+        # Top-3 buckets contribute to the metric.
+        rows.append(ShareholdingRow(
+            "TW", "2330", ts, 15, "≥1000張",
+            100, 50_000_000, 30.0 + i * 2, "finmind",
+        ))
+    await upsert_shareholdings(db_session, rows)
+
+    out = await read_holdings_concentration_trend(
+        db_session, market="TW", symbol="2330",
+        weeks=4, as_of=base + _td(weeks=2),
+    )
+    assert out is not None
+    # Only the bucket-15 30 / 32 contributes; lower buckets ignored.
+    assert out["latest_top_holders_pct"] == pytest.approx(32.0, abs=0.01)
+    assert out["earliest_top_holders_pct"] == pytest.approx(30.0, abs=0.01)
+
+
+@pytest.mark.asyncio
 async def test_read_recent_market_institutional_computes_nets(
     db_session: AsyncSession,
 ):

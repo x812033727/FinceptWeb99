@@ -1275,6 +1275,92 @@ async def read_latest_shareholding(
     ]
 
 
+# Top buckets we sum for the "concentration" metric. FinMind's
+# TaiwanStockShareholding response uses bucket_id 1-15, ascending
+# by holding-size (1 = retail < 1 lot, 15 = > 1,000 lots which is
+# the canonical 千張大戶 threshold). Top 3 buckets capture
+# institutional + 千張大戶 concentration. Operator-tunable in
+# future via runtime config if the bucket scheme drifts.
+_HOLDINGS_TOP_BUCKETS = (13, 14, 15)
+# Trend band as a percentage-point change (NOT a fraction). +1 pp
+# in concentration over a month is a meaningful institutional move;
+# < 1 pp is noise.
+_HOLDINGS_TREND_PP_BAND = 1.0
+
+
+async def read_holdings_concentration_trend(
+    db: AsyncSession, *, market: str, symbol: str,
+    weeks: int = 4, as_of: date | None = None,
+) -> dict[str, Any] | None:
+    """Per-symbol large-holder concentration trend over the last
+    `weeks` weekly publications.
+
+    "Concentration" = sum of `shares_percent` for the top-3 holder
+    buckets (bucket_id 13/14/15 = institutional + 千張大戶 ≥ 1,000
+    lots). Tracking its trend tells us:
+
+        latest > earlier + 1 pp  →  rising  (institutional accumulation)
+        latest < earlier - 1 pp  →  falling (institutional distribution)
+        within ±1 pp             →  stable
+
+    Returns None when:
+      - fewer than 2 weekly publications in the window
+        (can't compute a trend with one snapshot), OR
+      - the symbol's archive is empty for the window.
+
+    Distinct from `read_latest_shareholding` which returns the full
+    bucket breakdown for a single date — operators viewing the
+    StockDetailPage want every bucket; personas in a discussion
+    only need the directional read. Two readers, two consumers.
+    """
+    end = as_of or date.today()
+    cutoff = end - timedelta(days=weeks * 7)
+    stmt = (
+        select(TwStockShareholding)
+        .where(
+            TwStockShareholding.market == market,
+            TwStockShareholding.symbol == symbol,
+            TwStockShareholding.bucket_id.in_(_HOLDINGS_TOP_BUCKETS),
+            TwStockShareholding.ts >= cutoff,
+            TwStockShareholding.ts <= end,
+        )
+        .order_by(TwStockShareholding.ts.asc())
+    )
+    rows = (await db.scalars(stmt)).all()
+    if not rows:
+        return None
+
+    # Sum top-bucket shares_percent per date.
+    by_ts: dict[date, float] = {}
+    for r in rows:
+        if r.shares_percent is None:
+            continue
+        by_ts[r.ts] = by_ts.get(r.ts, 0.0) + float(r.shares_percent)
+    if len(by_ts) < 2:
+        return None
+
+    sorted_ts = sorted(by_ts.keys())
+    earliest_ts = sorted_ts[0]
+    latest_ts = sorted_ts[-1]
+    latest_pct = by_ts[latest_ts]
+    earliest_pct = by_ts[earliest_ts]
+    change_pp = latest_pct - earliest_pct
+    if change_pp > _HOLDINGS_TREND_PP_BAND:
+        trend = "rising"
+    elif change_pp < -_HOLDINGS_TREND_PP_BAND:
+        trend = "falling"
+    else:
+        trend = "stable"
+    return {
+        "latest_date":            latest_ts.isoformat(),
+        "publication_count":      len(by_ts),
+        "latest_top_holders_pct": round(latest_pct, 2),
+        "earliest_top_holders_pct": round(earliest_pct, 2),
+        "change_pp":              round(change_pp, 2),
+        "trend":                  trend,
+    }
+
+
 # ── 全市場三大法人日報 (TwMarketInstitutionalDaily) ─────────────
 
 @dataclass(frozen=True)

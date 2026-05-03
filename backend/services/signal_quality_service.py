@@ -78,6 +78,10 @@ _SIGNAL_TAXONOMY: tuple[SignalSpec, ...] = (
         "numeric", "OBV 5d Δ%",
     ),
     SignalSpec(
+        "short_term_signals.{symbol}.holdings_concentration_trend.change_pp",
+        "numeric", "Top-holders Δpp (4w)",
+    ),
+    SignalSpec(
         "short_term_signals.{symbol}.industry_rs.rs_score",
         "numeric", "Industry RS",
     ),
@@ -102,6 +106,10 @@ _SIGNAL_TAXONOMY: tuple[SignalSpec, ...] = (
     SignalSpec(
         "short_term_signals.{symbol}.upcoming_event.next_event",
         "categorical", "Upcoming event",
+    ),
+    SignalSpec(
+        "short_term_signals.{symbol}.holdings_concentration_trend.trend",
+        "categorical", "Top-holders trend",
     ),
     # Categorical — market-wide
     SignalSpec("taifex_positioning.trend",   "categorical", "TAIFEX trend"),

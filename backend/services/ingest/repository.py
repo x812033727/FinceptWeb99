@@ -503,19 +503,45 @@ def _is_bogus_growth_pair(
     growth percentages.
 
     Filters at the read layer rather than the write layer so cleanup
-    works without a DB migration. The signature is precise — it
-    only catches rows where BOTH columns exactly equal the date
-    components, so a legitimate (rare) row showing +2026% YoY for
-    Jan revenue (which would also exactly match) would also get
-    nulled, but the probability of that legitimate scenario is
-    negligible (would mean revenue grew 21x YoY in one month).
+    works without a DB migration.
+
+    Two signatures, in decreasing strictness:
+
+      1. Strict (PR #215): BOTH ``yoy == ts.year`` AND ``mom == ts.month``.
+         Originally the only check, since the FinMind bug always leaked
+         the (year, month) pair together.
+
+      2. Looser (PR #231): ``yoy == ts.year`` alone, when ``yoy`` is an
+         exact integer. Production data showed rows where partial
+         cleanup nulled ``mom`` but left the bogus ``yoy`` (e.g. 1101
+         showing ``YoY +2026.0%`` in 2026-XX), bypassing the strict
+         filter. ``_pct_change`` rounds to 4 dp on integer revenue
+         values, so an actual computed growth rate essentially never
+         lands on a clean integer — let alone exactly the period year.
+         False-positive risk: a real company growing exactly N% YoY
+         where N == period year would be nulled. Probability is
+         vanishingly small (would need ~21x revenue growth in one
+         month, AND the integer rate would need zero fractional
+         component despite being computed from arbitrary integer
+         revenues).
     """
-    if yoy is None or mom is None:
+    if yoy is None:
         return False
     try:
-        return float(yoy) == float(ts.year) and float(mom) == float(ts.month)
+        yoy_f = float(yoy)
     except (TypeError, ValueError):
         return False
+    # Strict signature first.
+    if mom is not None:
+        try:
+            if yoy_f == float(ts.year) and float(mom) == float(ts.month):
+                return True
+        except (TypeError, ValueError):
+            pass
+    # Looser signature: bogus yoy alone, even when mom was scrubbed.
+    if yoy_f == float(ts.year) and yoy_f == int(yoy_f):
+        return True
+    return False
 
 
 async def read_top_revenue_growers(

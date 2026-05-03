@@ -519,6 +519,13 @@ export function formatDiscussionTitle(s: {
   conclusion: Conclusion | null;
   verdict?: "win" | "loss" | "unverifiable" | null;
   created_at: string;
+  /** PR #276: backtest discussions display the as_of_date (the
+   *  date being analyzed) in the sidebar title rather than
+   *  `created_at` (when the row happened to be created — usually
+   *  today, regardless of which historical day is being replayed).
+   *  Optional / nullable so live discussions fall back to
+   *  `created_at` as before. */
+  as_of_date?: string | null;
   day1_open_prices?: Record<string, number> | null;
   day5_close_prices?: Record<string, number> | null;
   daily_close_prices?: Record<string, (number | null)[]> | null;
@@ -527,7 +534,14 @@ export function formatDiscussionTitle(s: {
   if (!syms.length) {
     return { text: s.topic };
   }
-  const date = formatTaipeiDateCompact(s.created_at);
+  // Prefer as_of_date for backtest discussions — the operator
+  // cares about which historical day is being replayed, not when
+  // they happened to click create. Live discussions
+  // (`as_of_date == null`) fall back to created_at as before.
+  const dateSource = s.as_of_date
+    ? `${s.as_of_date}T00:00:00Z`
+    : s.created_at;
+  const date = formatTaipeiDateCompact(dateSource);
 
   let verdictMark = "";
   let verdictCls = "text-foreground";

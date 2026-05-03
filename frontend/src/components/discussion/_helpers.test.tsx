@@ -158,6 +158,43 @@ describe("formatDiscussionTitle", () => {
     expect(out.date).toBe("20250502");
   });
 
+  it("PR #276: prefers as_of_date over created_at for backtest discussions", () => {
+    /* The previous behaviour displayed today's date in the sidebar
+       even for a discussion backtesting 2026-01-15 — operators
+       were confused which date was being analysed. Now backtest
+       rows surface the as_of_date in the title; live rows
+       (`as_of_date` null/undefined) fall back to created_at. */
+    const out = formatDiscussionTitle({
+      topic: "x",
+      conclusion: baseConclusion,
+      created_at: "2026-05-03T00:00:00Z",   // today, when the row was created
+      as_of_date: "2026-01-15",              // the date being backtested
+    });
+    expect(out.date).toBe("20260115");
+  });
+
+  it("PR #276: live discussion (as_of_date=null) keeps created_at", () => {
+    const out = formatDiscussionTitle({
+      topic: "x",
+      conclusion: baseConclusion,
+      created_at: "2026-05-03T00:00:00Z",
+      as_of_date: null,
+    });
+    expect(out.date).toBe("20260503");
+  });
+
+  it("PR #276: live discussion (as_of_date undefined) keeps created_at", () => {
+    /* `as_of_date` is optional in the type — older sidebar rows
+       loaded from a stale query cache may not carry the field
+       at all. Make sure undefined behaves identically to null. */
+    const out = formatDiscussionTitle({
+      topic: "x",
+      conclusion: baseConclusion,
+      created_at: "2026-05-03T00:00:00Z",
+    });
+    expect(out.date).toBe("20260503");
+  });
+
   it("marks 勝 in green when verdict=win", () => {
     const out = formatDiscussionTitle({
       topic: "x",

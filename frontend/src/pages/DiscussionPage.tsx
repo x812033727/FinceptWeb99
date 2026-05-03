@@ -23,6 +23,7 @@ import {
   deleteSession,
   injectUserMessage,
   runPostMortem,
+  runPostMortemFlowSteps,
   fetchAgents,
   fetchSession,
   fetchSessions,
@@ -264,23 +265,19 @@ export default function DiscussionPage() {
    *  re-run from the partial state).
    */
   async function runPostMortemFlow() {
-    if (!selectedId || isStreaming || postMortemMut.isPending) return;
-    try {
-      await postMortemMut.mutateAsync();
-    } catch (err) {
-      const detail = (err as { response?: { data?: { detail?: string } } })
-        ?.response?.data?.detail ?? (err as Error).message;
-      setStreamError(detail);
-      return;
-    }
-    // Step 2: run the new round — re-uses the existing SSE consumer.
-    await runRound();
-    // Step 3: re-conclude. Only fire if the round actually produced
-    // turns (runRound will set streamError on failure; we read that
-    // synchronous-state snapshot via a fresh callback).
-    setTimeout(() => {
-      if (selectedId) concludeMut.mutate();
-    }, 0);
+    // Orchestration extracted into `runPostMortemFlowSteps`
+    // (PR #279) for unit-testability — this thin wrapper just
+    // wires the page's stateful dependencies to the pure helper.
+    await runPostMortemFlowSteps({
+      canStart: () =>
+        Boolean(selectedId) && !isStreaming && !postMortemMut.isPending,
+      runPostMortem: () => postMortemMut.mutateAsync().then(() => undefined),
+      runRound,
+      runConclude: () => {
+        if (selectedId) concludeMut.mutate();
+      },
+      onError: (detail) => setStreamError(detail),
+    });
   }
 
   // Between-rounds user injection (PR #211). Drops a user_input

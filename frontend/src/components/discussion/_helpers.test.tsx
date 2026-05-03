@@ -9,7 +9,7 @@
  * `formatCompactNumber`) are also exercised so a silent re-tune
  * (e.g. dropping the trailing-zero strip) is caught.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Conclusion } from "@/types/discussion";
 import {
   formatCompactNumber,
@@ -18,6 +18,7 @@ import {
   pctClass,
   readPostMortemResult,
   rememberPostMortemResult,
+  runPostMortemFlowSteps,
   signedPct,
   signedPctSafe,
   summarizeContext,
@@ -600,5 +601,141 @@ describe("rememberPostMortemResult / readPostMortemResult", () => {
         value: realStorage,
       });
     }
+  });
+});
+
+// ── PR #279: runPostMortemFlowSteps orchestration ────────────────
+
+describe("runPostMortemFlowSteps", () => {
+  // Shared synchronous defer so each test can assert ordering
+  // without fake-timer plumbing.
+  const syncDefer = (fn: () => void) => fn();
+
+  it("short-circuits and calls nothing when canStart returns false", async () => {
+    const runPostMortem = vi.fn(async () => undefined);
+    const runRound = vi.fn(async () => undefined);
+    const runConclude = vi.fn();
+    const onError = vi.fn();
+
+    await runPostMortemFlowSteps({
+      canStart: () => false,
+      runPostMortem,
+      runRound,
+      runConclude,
+      onError,
+      defer: syncDefer,
+    });
+
+    expect(runPostMortem).not.toHaveBeenCalled();
+    expect(runRound).not.toHaveBeenCalled();
+    expect(runConclude).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("runs all three steps in order on the happy path", async () => {
+    const calls: string[] = [];
+    const runPostMortem = vi.fn(async () => {
+      calls.push("postMortem");
+    });
+    const runRound = vi.fn(async () => {
+      calls.push("round");
+    });
+    const runConclude = vi.fn(() => {
+      calls.push("conclude");
+    });
+
+    await runPostMortemFlowSteps({
+      canStart: () => true,
+      runPostMortem,
+      runRound,
+      runConclude,
+      onError: vi.fn(),
+      defer: syncDefer,
+    });
+
+    expect(calls).toEqual(["postMortem", "round", "conclude"]);
+  });
+
+  it("short-circuits round + conclude when post-mortem step fails", async () => {
+    /* The post-mortem inject failing (e.g. discussion in `running`
+       status, or backend-side connector outage) means there's no
+       new user_input turn to reflect against. Steps 2 + 3 must
+       NOT fire — the page surfaces the error banner instead. */
+    const runPostMortem = vi.fn(async () => {
+      throw new Error("upstream timeout");
+    });
+    const runRound = vi.fn(async () => undefined);
+    const runConclude = vi.fn();
+    const onError = vi.fn();
+
+    await runPostMortemFlowSteps({
+      canStart: () => true,
+      runPostMortem,
+      runRound,
+      runConclude,
+      onError,
+      defer: syncDefer,
+    });
+
+    expect(runPostMortem).toHaveBeenCalledOnce();
+    expect(runRound).not.toHaveBeenCalled();
+    expect(runConclude).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith("upstream timeout");
+  });
+
+  it("prefers axios-style response.data.detail when present", async () => {
+    /* The backend signals "post-mortem requires backtest mode" /
+       "no ohlcv data in window" via `detail` on a 400. The flow
+       helper must surface the human-readable detail string, not
+       axios's generic `Request failed with status 400` message. */
+    const runPostMortem = vi.fn(async () => {
+      // axios-shaped error
+      throw {
+        message: "Request failed with status 400",
+        response: { data: { detail: "post_mortem requires backtest mode" } },
+      };
+    });
+    const onError = vi.fn();
+
+    await runPostMortemFlowSteps({
+      canStart: () => true,
+      runPostMortem,
+      runRound: vi.fn(async () => undefined),
+      runConclude: vi.fn(),
+      onError,
+      defer: syncDefer,
+    });
+
+    expect(onError).toHaveBeenCalledWith(
+      "post_mortem requires backtest mode",
+    );
+  });
+
+  it("defers conclude through the defer hook (real setTimeout in production)", async () => {
+    /* Production wiring uses `setTimeout(fn, 0)` so React state
+       updates from runRound flush before the synthesizer fetch.
+       Test by injecting a defer that we control + asserting it
+       was the conclude that ran inside it. */
+    let captured: (() => void) | null = null;
+    const customDefer = (fn: () => void) => {
+      captured = fn;
+    };
+    const runConclude = vi.fn();
+
+    await runPostMortemFlowSteps({
+      canStart: () => true,
+      runPostMortem: vi.fn(async () => undefined),
+      runRound: vi.fn(async () => undefined),
+      runConclude,
+      onError: vi.fn(),
+      defer: customDefer,
+    });
+
+    // Conclude not yet fired — it's queued in the deferred fn.
+    expect(runConclude).not.toHaveBeenCalled();
+    expect(captured).not.toBeNull();
+    // Drain the deferred fn — conclude runs.
+    captured!();
+    expect(runConclude).toHaveBeenCalledOnce();
   });
 });

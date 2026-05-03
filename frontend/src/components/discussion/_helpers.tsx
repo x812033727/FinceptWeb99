@@ -328,6 +328,69 @@ export async function deleteSweep(id: string): Promise<void> {
 }
 
 
+/** Pure orchestration helper for the post-mortem 3-step chain
+ *  (PR #279). Extracted from `DiscussionPage.runPostMortemFlow` so
+ *  the ordering / short-circuit semantics can be unit-tested
+ *  without booting the page's full mutation + SSE stack.
+ *
+ *  Steps:
+ *    1. `runPostMortem()` — POST /sessions/:id/post-mortem
+ *       (inject the user_input critique prompt)
+ *    2. `runRound()` — SSE the next round so personas reflect
+ *    3. `runConclude()` — re-synthesize → routes to
+ *       `post_mortem_conclusion` (PR #272 routing)
+ *
+ *  Failures at step 1 short-circuit (steps 2 + 3 don't fire) and
+ *  call `onError(detail)` so the page can surface the error
+ *  banner. Step 2 / 3 errors are owned by their own callers
+ *  (runRound has its own SSE error handling; conclude is fire-
+ *  and-forget so a failure shows up in the conclusion card's
+ *  parse-error state).
+ *
+ *  `runConclude` is fired inside `setTimeout(0)` so React state
+ *  updates from runRound flush before the synthesizer fetch
+ *  begins — without the defer, the SSE-completion state and the
+ *  conclude trigger race and the conclude can run with a stale
+ *  `current_round`. */
+export interface PostMortemFlowDeps {
+  canStart: () => boolean;
+  runPostMortem: () => Promise<void>;
+  runRound: () => Promise<void>;
+  runConclude: () => void;
+  onError: (detail: string) => void;
+  /** Defer hook — defaults to `setTimeout(fn, 0)`. Tests inject a
+   *  synchronous runner so they can assert ordering without
+   *  fake-timer plumbing. */
+  defer?: (fn: () => void) => void;
+}
+
+export async function runPostMortemFlowSteps({
+  canStart,
+  runPostMortem,
+  runRound,
+  runConclude,
+  onError,
+  defer = (fn) => {
+    setTimeout(fn, 0);
+  },
+}: PostMortemFlowDeps): Promise<void> {
+  if (!canStart()) return;
+  try {
+    await runPostMortem();
+  } catch (err) {
+    const detail =
+      (err as { response?: { data?: { detail?: string } } })?.response?.data
+        ?.detail ?? (err as Error).message;
+    onError(detail);
+    return;
+  }
+  await runRound();
+  defer(() => {
+    runConclude();
+  });
+}
+
+
 /** localStorage persistence for PostMortemGainersCard (PR #268).
  *  The mutation result is in-memory only — without persistence the
  *  scannable leaderboard disappears on page reload, leaving only

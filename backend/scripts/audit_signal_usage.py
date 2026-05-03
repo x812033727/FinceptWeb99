@@ -136,6 +136,34 @@ def _format_report(audit: DiscussionAudit) -> str:
         )
         for sig, stats in sorted(name_drop_only):
             out.append(f"  ⚠ {sig} (cited {stats['cited']} times, all without value)")
+
+    # PR #259: hallucinations — values quoted for signals NOT in the
+    # round context. Strict subset (requires a numeric token), so a
+    # high count is a strong fabrication signal.
+    hallucinations = audit.hallucinations()
+    fabricated = [
+        (sig, stats) for sig, stats in hallucinations.items()
+        if stats["hallucinated"] > 0
+    ]
+    if fabricated:
+        out.append("\n=== Hallucinated signals (values cited despite absent) ===")
+        out.append(
+            "Personas quoted numeric values for signals NOT in the "
+            "round prompt. Likely fabrication (LLM filled gaps from "
+            "training data) or a regex collision with another "
+            "signal — investigate before treating as proof."
+        )
+        fabricated.sort(
+            key=lambda kv: (-kv[1]["hallucinated"], kv[0]),
+        )
+        for sig, stats in fabricated:
+            denom = stats["persona_count_absent"] or 0
+            rate = (stats["hallucinated"] / denom * 100) if denom else 0.0
+            out.append(
+                f"  ✗ rate={rate:5.1f}%  "
+                f"({stats['hallucinated']}/{denom} turns across "
+                f"{stats['absent_rounds']} absent rounds)  {sig}"
+            )
     return "\n".join(out)
 
 
@@ -187,6 +215,31 @@ def _format_bulk_report(summary: BulkAuditSummary) -> str:
         )
         for sig in sorted(zero_uptake):
             out.append(f"  ! {sig}")
+
+    # PR #259: hallucinations across the audit window.
+    fabricated = [
+        (sig, stats) for sig, stats in summary.hallucinations.items()
+        if stats["hallucinated"] > 0
+    ]
+    if fabricated:
+        out.append("\n=== Hallucinated signals (across the audit window) ===")
+        out.append(
+            "Numeric values cited for signals NOT in the round prompt. "
+            "Investigate before treating as proof — regex collisions "
+            "with other signal blocks (e.g. YoY in focus_briefs) can "
+            "inflate this count."
+        )
+        fabricated.sort(
+            key=lambda kv: (-kv[1]["hallucinated"], kv[0]),
+        )
+        for sig, stats in fabricated:
+            denom = stats["persona_count_absent"] or 0
+            rate = (stats["hallucinated"] / denom * 100) if denom else 0.0
+            out.append(
+                f"  ✗ rate={rate:5.1f}%  "
+                f"({stats['hallucinated']}/{denom} turns across "
+                f"{stats['absent_rounds']} absent rounds)  {sig}"
+            )
     return "\n".join(out)
 
 

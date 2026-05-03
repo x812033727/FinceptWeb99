@@ -38,6 +38,7 @@ from .schemas import (
     NumericSignalRow,
     SignalAuditOut,
     SignalCoverageRow,
+    SignalHallucinationRow,
     SignalQualityOut,
     RoleUpdate,
     SystemStats,
@@ -610,6 +611,23 @@ async def signal_audit(
         ))
     coverage_rows.sort(key=lambda r: (r.citation_rate, r.signal))
 
+    hallucinations = []
+    for sig, stats in summary.hallucinations.items():
+        if stats["hallucinated"] <= 0:
+            continue
+        denom = stats["persona_count_absent"]
+        rate = (stats["hallucinated"] / denom) if denom else 0.0
+        hallucinations.append(SignalHallucinationRow(
+            signal=sig,
+            absent_rounds=stats["absent_rounds"],
+            hallucinated=stats["hallucinated"],
+            persona_count_absent=denom,
+            hallucination_rate=round(rate, 4),
+        ))
+    hallucinations.sort(
+        key=lambda r: (-r.hallucination_rate, r.signal),
+    )
+
     zero_uptake = sorted(
         sig for sig, stats in summary.coverage.items()
         if stats["cited"] == 0 and stats["persona_count"] > 0
@@ -620,6 +638,7 @@ async def signal_audit(
         discussion_ids=summary.discussion_ids,
         coverage=coverage_rows,
         zero_uptake=zero_uptake,
+        hallucinations=hallucinations,
     )
 
 

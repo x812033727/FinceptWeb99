@@ -149,8 +149,8 @@ def test_has_value_recognises_unit_suffixes():
 
 
 def test_audit_turn_only_checks_present_signals():
-    """Signal NOT in `signals_present` is excluded from the citation
-    map — auditing what the LLM HALLUCINATED is a different feature."""
+    """Signal NOT in `signals_present` is excluded from `cited` —
+    it goes through the `hallucinated` path instead (PR #259)."""
     audit = svc.audit_turn(
         round_no=1,
         persona_id="market_analyst",
@@ -159,7 +159,8 @@ def test_audit_turn_only_checks_present_signals():
         signals_present={
             "short_term_signals.volume_ratio",
             "taifex_positioning",
-            # short_term_signals.rsi_14 NOT in present → not audited
+            # short_term_signals.rsi_14 NOT in present → checked
+            # via the hallucination path, not `cited`.
         },
     )
     assert audit.cited_count == 2
@@ -218,6 +219,126 @@ def test_audit_turn_distinguishes_name_drop_from_value_citation():
     assert audit.cited_with_value["top_foreign_buyers"] is False
     assert audit.cited_count == 3
     assert audit.cited_with_value_count == 1
+
+
+# ── PR #259: hallucination detection ──────────────────────────────
+
+
+def test_audit_turn_flags_hallucination_when_signal_absent_with_value():
+    """Persona quotes a numeric value for a signal that wasn't in the
+    round prompt → `hallucinated[sig]=True`. The numeric requirement
+    keeps general-knowledge mentions out of the count."""
+    spacer = "—" * 80   # keep "67.3" out of taifex's ±60 window
+    audit = svc.audit_turn(
+        round_no=1,
+        persona_id="market_analyst",
+        stance="agree",
+        # RSI cited WITH value but not in signals_present →
+        # hallucination. taifex cited without value → not flagged.
+        content=(
+            f"RSI 67.3 已逼近超買區。{spacer}外資台指期未平倉值得關注。"
+        ),
+        signals_present={"short_term_signals.volume_ratio"},
+    )
+    assert audit.hallucinated["short_term_signals.rsi_14"] is True
+    assert audit.hallucinated["taifex_positioning"] is False
+    assert audit.hallucinated_count == 1
+    # Hallucinated signals don't double-count in `cited`.
+    assert "short_term_signals.rsi_14" not in audit.cited
+
+
+def test_audit_turn_no_hallucination_for_namedrop_without_value():
+    """Mentioning "RSI 偏高" without a number is treated as general
+    knowledge / paraphrasing, not fabrication. The metric requires
+    a numeric token to keep noise low."""
+    audit = svc.audit_turn(
+        round_no=1,
+        persona_id="market_analyst",
+        stance="agree",
+        content="RSI 偏高，外資未平倉值得觀察。",
+        signals_present={"short_term_signals.volume_ratio"},
+    )
+    assert audit.hallucinated["short_term_signals.rsi_14"] is False
+    assert audit.hallucinated_count == 0
+
+
+def test_audit_turn_present_signal_never_in_hallucinated_dict():
+    """Mutual exclusion: a signal in `signals_present` never appears
+    in `hallucinated` (avoids double-counting)."""
+    audit = svc.audit_turn(
+        round_no=1,
+        persona_id="market_analyst",
+        stance="agree",
+        content="RSI 67.3 已逼近超買區。",
+        signals_present={"short_term_signals.rsi_14"},
+    )
+    assert audit.cited["short_term_signals.rsi_14"] is True
+    assert audit.cited_with_value["short_term_signals.rsi_14"] is True
+    assert "short_term_signals.rsi_14" not in audit.hallucinated
+
+
+def test_discussion_audit_hallucinations_aggregates_across_rounds():
+    """Two rounds where RSI is absent in one and present in the other.
+    The aggregate must count hallucinations only against the absent
+    rounds; the present round contributes 0 to the denominator."""
+    audit = svc.DiscussionAudit(
+        discussion_id=str(uuid4()), topic="test",
+    )
+    # Round 1: RSI present → not a hallucination opportunity.
+    r1 = svc.RoundAudit(round=1, signals_present={
+        "short_term_signals.rsi_14",
+    })
+    r1.turns = [
+        svc.TurnAudit(
+            round=1, persona_id="a", stance="agree",
+            cited={"short_term_signals.rsi_14": True},
+            cited_with_value={"short_term_signals.rsi_14": True},
+            hallucinated={},
+        ),
+    ]
+    # Round 2: RSI absent → eligible. 2 personas, 1 hallucinates.
+    r2 = svc.RoundAudit(round=2, signals_present={"taifex_positioning"})
+    r2.turns = [
+        svc.TurnAudit(
+            round=2, persona_id="a", stance="agree",
+            hallucinated={"short_term_signals.rsi_14": True},
+        ),
+        svc.TurnAudit(
+            round=2, persona_id="b", stance="dissent",
+            hallucinated={"short_term_signals.rsi_14": False},
+        ),
+    ]
+    audit.rounds = [r1, r2]
+
+    hall = audit.hallucinations()
+    rsi = hall["short_term_signals.rsi_14"]
+    assert rsi["absent_rounds"] == 1                # only round 2
+    assert rsi["persona_count_absent"] == 2         # 2 personas in round 2
+    assert rsi["hallucinated"] == 1                 # only persona "a"
+
+
+def test_discussion_audit_hallucinations_omits_always_present_signals():
+    """A signal that's in `signals_present` for every round can't be
+    hallucinated relative to this discussion — denominator is 0."""
+    audit = svc.DiscussionAudit(
+        discussion_id=str(uuid4()), topic="test",
+    )
+    r1 = svc.RoundAudit(round=1, signals_present={
+        "short_term_signals.rsi_14",
+    })
+    r1.turns = [
+        svc.TurnAudit(round=1, persona_id="a", stance="agree"),
+    ]
+    audit.rounds = [r1]
+
+    hall = audit.hallucinations()
+    # Signal was in every round → either omitted or zero across the board.
+    rsi_stats = hall.get("short_term_signals.rsi_14", {
+        "absent_rounds": 0, "hallucinated": 0, "persona_count_absent": 0,
+    })
+    assert rsi_stats["absent_rounds"] == 0
+    assert rsi_stats["hallucinated"] == 0
+    assert rsi_stats["persona_count_absent"] == 0
 
 
 # ── DiscussionAudit.coverage ──────────────────────────────────────
@@ -467,6 +588,55 @@ async def test_audit_recent_discussions_filters_by_market(
         db_session, limit=10,
     )
     assert all_markets.discussions_audited == 2
+
+
+@pytest.mark.asyncio
+async def test_audit_recent_discussions_carries_hallucinations(
+    db_session: AsyncSession, owner: User,
+):
+    """PR #259: bulk roll-up surfaces signals personas cite with values
+    despite the round prompt not containing them. Seed a discussion
+    where the context only has volume_ratio but the persona quotes
+    `RSI 67.3` — that's a hallucination."""
+    disc_id = uuid4()
+    db_session.add(Discussion(
+        id=disc_id, owner_id=owner.id, topic="hall",
+        rules="", market="TW",
+        persona_ids=["market_analyst"],
+        status="concluded", current_round=1,
+    ))
+    db_session.add(DiscussionRoundContext(
+        discussion_id=disc_id, round=1,
+        # Only volume_ratio present — RSI is absent from prompt.
+        context={
+            "short_term_signals": {
+                "2330": {"volume_ratio": 2.3},
+            },
+        },
+        captured_at=datetime.now(UTC),
+    ))
+    spacer = "—" * 80   # keep "67.3" out of gap_pct's ±60 window
+    db_session.add(DiscussionTurn(
+        discussion_id=disc_id, round=1, turn_index=0,
+        persona_id="market_analyst", stance="agree",
+        # Hallucinates RSI 67.3 (with value) and an absent gap_pct (no
+        # value, so not flagged) for sanity.
+        content=(
+            f"RSI 67.3 已逼近超買區。{spacer}"
+            f"開盤跳空缺口仍待觀察。"
+        ),
+    ))
+    await db_session.commit()
+
+    summary = await svc.audit_recent_discussions(db_session, limit=10)
+    assert summary.discussions_audited == 1
+    rsi = summary.hallucinations["short_term_signals.rsi_14"]
+    assert rsi["absent_rounds"] == 1
+    assert rsi["persona_count_absent"] == 1
+    assert rsi["hallucinated"] == 1
+    # gap_pct mentioned without a value → not hallucinated.
+    gap = summary.hallucinations.get("short_term_signals.gap_pct", {})
+    assert gap.get("hallucinated", 0) == 0
 
 
 @pytest.mark.asyncio

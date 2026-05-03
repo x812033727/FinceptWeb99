@@ -688,7 +688,10 @@
     "zero_uptake_title": "Zero uptake — never cited",
     "zero_uptake_help": "Present in ≥ 1 round but never cited by any persona. Candidates for schema-annotation tuning or persona-profile removal.",
     "coverage_title": "Full coverage (sorted by citation rate)",
-    "cite_value_split": "Citation rate {{cite}} (with concrete value {{value}})"
+    "cite_value_split": "Citation rate {{cite}} (with concrete value {{value}})",
+    "hallucination_count": "{{count}} signals possibly hallucinated",
+    "hallucination_title": "Hallucinated signals — cited values absent from ctx",
+    "hallucination_help": "Personas quoted concrete numbers, but the signal was not in this round's prompt ctx — likely the LLM filled gaps from training data, or the regex collided with another signal. Inspect the underlying turn content before treating as fabrication."
   },
   "screener": {
     "title": "Screener",

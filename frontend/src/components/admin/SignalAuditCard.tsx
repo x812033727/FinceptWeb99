@@ -33,11 +33,23 @@ interface CoverageRow {
   value_citation_rate?: number;
 }
 
+interface HallucinationRow {
+  signal: string;
+  absent_rounds: number;
+  hallucinated: number;
+  persona_count_absent: number;
+  hallucination_rate: number;
+}
+
 interface SignalAuditResp {
   discussions_audited: number;
   discussion_ids: string[];
   coverage: CoverageRow[];
   zero_uptake: string[];
+  /** PR #259: signals personas cited with a value despite the round
+   *  prompt not containing them. Older backends without the field
+   *  send undefined → frontend treats as empty list. */
+  hallucinations?: HallucinationRow[];
 }
 
 const RECENT_OPTIONS = [10, 30, 50, 100];
@@ -171,6 +183,13 @@ export function SignalAuditCard() {
                     })}
                   </span>
                 )}
+                {(data.hallucinations?.length ?? 0) > 0 && (
+                  <span className="text-orange-400">
+                    ✗ {t("signal_audit.hallucination_count", {
+                      count: data.hallucinations?.length ?? 0,
+                    })}
+                  </span>
+                )}
               </div>
 
               {data.zero_uptake.length > 0 && (
@@ -185,6 +204,31 @@ export function SignalAuditCard() {
                     {data.zero_uptake.map((sig) => (
                       <li key={sig} className="text-red-300">
                         {sig}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {(data.hallucinations?.length ?? 0) > 0 && (
+                <div className="bg-orange-500/5 border border-orange-500/30 rounded p-2 space-y-1">
+                  <p className="text-[11px] font-semibold text-orange-400 uppercase tracking-wider">
+                    {t("signal_audit.hallucination_title")}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">
+                    {t("signal_audit.hallucination_help")}
+                  </p>
+                  <ul className="text-xs font-mono space-y-0.5">
+                    {data.hallucinations?.map((row) => (
+                      <li
+                        key={row.signal}
+                        className="text-orange-300 flex justify-between gap-2"
+                        title={`${row.hallucinated} turns / ${row.persona_count_absent} absent persona-turns across ${row.absent_rounds} rounds`}
+                      >
+                        <span className="truncate">{row.signal}</span>
+                        <span className="tabular-nums text-orange-400/80 shrink-0">
+                          {rateLabel(row.hallucination_rate)} ({row.hallucinated}/{row.persona_count_absent})
+                        </span>
                       </li>
                     ))}
                   </ul>

@@ -131,23 +131,39 @@ _SIGNAL_KEYWORDS: dict[str, list[str]] = {
 class TurnAudit:
     """Per-persona-turn citation map.
 
-    `cited[signal]`             — keyword match ("RSI", "外資", ...)
+    `cited[signal]`             — keyword match ("RSI", "外資", ...).
+                                  Only populated for signals that
+                                  WERE in the round's prompt context.
     `cited_with_value[signal]`  — keyword AND a numeric token
                                   within ±60 chars (PR #258).
                                   Distinguishes "RSI 67.3 已逼近超買"
                                   (concrete value) from "RSI 偏高"
                                   (generic mention).
+    `hallucinated[signal]`      — PR #259: turn cited a signal that
+                                  was NOT in the round's prompt
+                                  context AND quoted a numeric value
+                                  next to the keyword. The strict
+                                  definition (requires a number, not
+                                  just a keyword) keeps general
+                                  knowledge mentions out of the
+                                  hallucination count — the persona
+                                  may legitimately know "RSI is a
+                                  technical indicator" without our
+                                  prompt feeding it; the problem is
+                                  inventing "RSI 67.3" when our
+                                  prompt didn't.
 
-    The two flags are independent: a turn that mentions RSI without
-    quoting a number gets `cited=True, cited_with_value=False`. The
-    audit's "value citation rate" surfaces signals where personas
-    are name-dropping but not actually leveraging the data.
+    The flags are mutually exclusive on `signals_present`: a signal
+    either appears in `cited` (when present) or in `hallucinated`
+    (when absent), never both. `cited_with_value` is the strict
+    subset of `cited`.
     """
     round: int
     persona_id: str
     stance: str
     cited: dict[str, bool] = field(default_factory=dict)
     cited_with_value: dict[str, bool] = field(default_factory=dict)
+    hallucinated: dict[str, bool] = field(default_factory=dict)
 
     @property
     def cited_count(self) -> int:
@@ -156,6 +172,10 @@ class TurnAudit:
     @property
     def cited_with_value_count(self) -> int:
         return sum(1 for v in self.cited_with_value.values() if v)
+
+    @property
+    def hallucinated_count(self) -> int:
+        return sum(1 for v in self.hallucinated.values() if v)
 
 
 @dataclass
@@ -201,6 +221,51 @@ class DiscussionAudit:
                         agg[sig]["cited"] += 1
                     if t.cited_with_value.get(sig):
                         agg[sig]["cited_with_value"] += 1
+        return dict(agg)
+
+    def hallucinations(self) -> dict[str, dict[str, int]]:
+        """PR #259: per-signal hallucination stats.
+
+        `signal_key → {absent_rounds, hallucinated, persona_count_absent}`
+
+        - `absent_rounds`         number of rounds where the signal
+                                  was NOT in the prompt context
+        - `hallucinated`          turns that cited the signal WITH a
+                                  numeric value despite it being
+                                  absent (i.e., the persona produced
+                                  data we didn't supply)
+        - `persona_count_absent`  denominator: total persona turns
+                                  across rounds where the signal was
+                                  absent
+
+        Hallucination rate = `hallucinated / persona_count_absent`.
+
+        Only signals with `absent_rounds > 0` are returned — a signal
+        present in every round can't be hallucinated relative to this
+        discussion's data.
+
+        False-positive note: a value that legitimately came from
+        another signal block (e.g., a YoY number quoted from
+        `focus_briefs` triggering the `top_revenue_growers` regex)
+        still flags here. The metric is an upper bound; investigate
+        the underlying turns before treating high rates as proof of
+        fabrication.
+        """
+        agg: dict[str, dict[str, int]] = defaultdict(
+            lambda: {
+                "absent_rounds": 0, "hallucinated": 0,
+                "persona_count_absent": 0,
+            }
+        )
+        all_signals = set(_SIGNAL_KEYWORDS.keys())
+        for r in self.rounds:
+            absent = all_signals - r.signals_present
+            for sig in absent:
+                agg[sig]["absent_rounds"] += 1
+                agg[sig]["persona_count_absent"] += len(r.turns)
+                for t in r.turns:
+                    if t.hallucinated.get(sig):
+                        agg[sig]["hallucinated"] += 1
         return dict(agg)
 
 
@@ -308,29 +373,37 @@ def audit_turn(
     *, round_no: int, persona_id: str, stance: str, content: str,
     signals_present: set[str],
 ) -> TurnAudit:
-    """Return a TurnAudit recording which present-in-context signals
-    were keyword-matched in this turn's content. Signals NOT in
-    `signals_present` are not checked — citing a signal that wasn't
-    in the prompt would mean the LLM hallucinated it, which is a
-    different problem than coverage.
+    """Return a TurnAudit recording per-signal citation flags.
 
-    Two flags per signal:
-      - `cited`            — keyword present anywhere in content
-      - `cited_with_value` — keyword present AND a numeric token
-                             within ±60 chars of it (PR #258)
+    For each signal in `_SIGNAL_KEYWORDS`:
+      - if the signal IS in `signals_present`:
+          • `cited[sig]`            keyword match anywhere in content
+          • `cited_with_value[sig]` keyword match AND numeric token
+                                    within ±60 chars (PR #258)
+      - if the signal is NOT in `signals_present`:
+          • `hallucinated[sig]`     keyword match AND numeric token
+                                    within ±60 chars (PR #259).
+                                    The numeric requirement is the
+                                    discriminator: a persona writing
+                                    "RSI is overbought territory"
+                                    from training data is fine, but
+                                    "RSI 67.3 已逼近超買" without our
+                                    prompt supplying the value is a
+                                    fabrication.
     """
     audit = TurnAudit(round=round_no, persona_id=persona_id, stance=stance)
-    for signal_key in signals_present:
-        patterns = _SIGNAL_KEYWORDS.get(signal_key)
+    for signal_key, patterns in _SIGNAL_KEYWORDS.items():
         if not patterns:
-            audit.cited[signal_key] = False
-            audit.cited_with_value[signal_key] = False
             continue
-        audit.cited[signal_key] = _match_keywords(content, patterns)
-        audit.cited_with_value[signal_key] = (
-            audit.cited[signal_key]
-            and _has_value_near_keyword(content, patterns)
+        cited = _match_keywords(content, patterns)
+        cited_with_value = (
+            cited and _has_value_near_keyword(content, patterns)
         )
+        if signal_key in signals_present:
+            audit.cited[signal_key] = cited
+            audit.cited_with_value[signal_key] = cited_with_value
+        else:
+            audit.hallucinated[signal_key] = cited_with_value
     return audit
 
 
@@ -404,10 +477,15 @@ class BulkAuditSummary:
     `coverage[signal]` mirrors `DiscussionAudit.coverage()` but
     summed across every audited discussion. Citation rate per
     signal: `cited / persona_count`.
+
+    `hallucinations[signal]` mirrors `DiscussionAudit.hallucinations()`
+    summed across every audited discussion. Hallucination rate per
+    signal: `hallucinated / persona_count_absent` (PR #259).
     """
     discussions_audited: int
     discussion_ids: list[str]
     coverage: dict[str, dict[str, int]] = field(default_factory=dict)
+    hallucinations: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 async def audit_recent_discussions(
@@ -437,6 +515,12 @@ async def audit_recent_discussions(
             "cited_with_value": 0, "persona_count": 0,
         }
     )
+    rolled_hall: dict[str, dict[str, int]] = defaultdict(
+        lambda: {
+            "absent_rounds": 0, "hallucinated": 0,
+            "persona_count_absent": 0,
+        }
+    )
 
     for did in candidate_ids:
         try:
@@ -456,6 +540,13 @@ async def audit_recent_discussions(
             rolled[sig]["cited"] += stats["cited"]
             rolled[sig]["cited_with_value"] += stats.get("cited_with_value", 0)
             rolled[sig]["persona_count"] += stats["persona_count"]
+        for sig, stats in audit.hallucinations().items():
+            rolled_hall[sig]["absent_rounds"] += stats["absent_rounds"]
+            rolled_hall[sig]["hallucinated"] += stats["hallucinated"]
+            rolled_hall[sig]["persona_count_absent"] += (
+                stats["persona_count_absent"]
+            )
 
     summary.coverage = dict(rolled)
+    summary.hallucinations = dict(rolled_hall)
     return summary

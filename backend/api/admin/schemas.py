@@ -214,6 +214,19 @@ class SignalCoverageRow(BaseModel):
     value_citation_rate: float = 0.0   # cited_with_value / persona_count
 
 
+class SignalHallucinationRow(BaseModel):
+    """PR #259: per-signal hallucination row. A signal is "hallucinated"
+    when a persona cites it WITH a numeric value despite the round's
+    prompt context not including that signal — i.e., the persona
+    fabricated data we didn't supply. Sorted descending by rate so
+    the worst offenders surface first."""
+    signal: str
+    absent_rounds: int            # rounds where signal was missing from prompt
+    hallucinated: int             # turns that cited it with a value anyway
+    persona_count_absent: int     # denominator
+    hallucination_rate: float     # hallucinated / persona_count_absent
+
+
 class SignalAuditOut(BaseModel):
     """Bulk audit result surfaced to the AdminPage. Sorted ascending
     by `citation_rate` so zero-uptake offenders surface first."""
@@ -221,6 +234,9 @@ class SignalAuditOut(BaseModel):
     discussion_ids: list[str]
     coverage: list[SignalCoverageRow]
     zero_uptake: list[str]   # signals present ≥1 round but never cited
+    # PR #259: only signals with hallucinated > 0 surface here. Empty
+    # list = personas stayed inside the supplied data.
+    hallucinations: list[SignalHallucinationRow] = []
 
 
 # ── Empirical signal quality vs D5 returns ───────────────────────

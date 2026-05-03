@@ -12,6 +12,7 @@ import type {
 } from "@/types/discussion";
 import { AutoRunConfigCard } from "@/components/discussion/AutoRunConfigCard";
 import { ConclusionCard } from "@/components/discussion/ConclusionCard";
+import { PostMortemGainersCard } from "@/components/discussion/PostMortemGainersCard";
 import { RoundContextsCard } from "@/components/discussion/RoundContextsCard";
 import { ScoreboardCard } from "@/components/discussion/ScoreboardCard";
 import {
@@ -1183,6 +1184,10 @@ export default function DiscussionPage() {
           {detail?.conclusion && (
             <ConclusionCard detail={detail} personaName={personaName} />
           )}
+          {/* Transient post-mortem gainers leaderboard. Renders only
+              while the mutation result is in memory; markdown in the
+              injected user_input turn is the durable record. */}
+          <PostMortemGainersCard data={postMortemMut.data ?? null} />
           {detail && (
             <RoundContextsCard discussionId={detail.id} />
           )}

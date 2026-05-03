@@ -215,3 +215,46 @@ class SignalAuditOut(BaseModel):
     discussion_ids: list[str]
     coverage: list[SignalCoverageRow]
     zero_uptake: list[str]   # signals present ≥1 round but never cited
+
+
+# ── Empirical signal quality vs D5 returns ───────────────────────
+
+
+class NumericSignalRow(BaseModel):
+    """One row in the numeric-signal correlation table."""
+    label: str
+    path: str
+    n: int
+    mean_value: float
+    mean_d5_return: float
+    pearson_r: float | None
+    sign_match_pct: float | None
+
+
+class CategoricalSignalBucket(BaseModel):
+    """Per-category aggregate for a categorical signal."""
+    category: str
+    n: int
+    mean_d5_return: float
+    median_d5_return: float
+
+
+class CategoricalSignalRow(BaseModel):
+    label: str
+    path: str
+    n_total: int
+    buckets: list[CategoricalSignalBucket]
+
+
+class SignalQualityOut(BaseModel):
+    """Empirical signal-vs-D5-return report. Numeric signals get
+    Pearson correlation + sign-match accuracy; categorical signals
+    get per-bucket mean D5. Reads only — derived from concluded
+    discussions' `daily_close_prices` paired with their round-1
+    context snapshots."""
+    discussions_audited: int
+    discussion_ids: list[str]
+    lookback_days: int
+    market: str | None
+    numeric: list[NumericSignalRow]
+    categorical: list[CategoricalSignalRow]

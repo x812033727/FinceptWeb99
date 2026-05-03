@@ -659,6 +659,22 @@
     "by_provider": "依 Provider 拆分",
     "empty": "此區間尚無用量"
   },
+  "signal_quality": {
+    "title": "訊號預測品質",
+    "subtitle": "對 D5 漲跌的相關性 — 哪些訊號真的能預測，哪些是噪音",
+    "refresh": "重新整理",
+    "empty": "查無已結束且 D1-D5 已算出的討論",
+    "audited": "已分析 {{count}} 場討論（最近 {{lookback}} 天）",
+    "numeric_title": "數值訊號（Pearson 相關 + 方向命中率）",
+    "categorical_title": "分類訊號（每類 D5 平均）",
+    "col_signal": "訊號",
+    "col_pearson": "Pearson r",
+    "col_sign_match": "方向命中",
+    "col_mean_d5": "平均 D5",
+    "median_label": "中位數",
+    "numeric_legend": "|r| ≥ 0.3 強訊號；0.1 ≤ |r| < 0.3 弱；< 0.1 噪音。負相關代表 contrarian — 反向操作可能有 alpha。",
+    "categorical_legend": "看 bucket 之間的 D5 差距 — bullish 比 bearish 高越多代表訊號越能區分結果。"
+  },
   "signal_audit": {
     "title": "訊號引用率",
     "subtitle": "Personas 是否真的引用了 ctx 區塊（關鍵字掃描）",

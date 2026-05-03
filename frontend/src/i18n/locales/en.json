@@ -659,6 +659,22 @@
     "by_provider": "By Provider",
     "empty": "No usage yet in this range"
   },
+  "signal_quality": {
+    "title": "Signal Predictive Quality",
+    "subtitle": "Correlation against D5 returns — which signals predict moves vs which are noise",
+    "refresh": "Refresh",
+    "empty": "No concluded discussions with D1-D5 outcomes yet",
+    "audited": "{{count}} discussions audited (last {{lookback}} days)",
+    "numeric_title": "Numeric signals (Pearson r + sign-match)",
+    "categorical_title": "Categorical signals (mean D5 per bucket)",
+    "col_signal": "Signal",
+    "col_pearson": "Pearson r",
+    "col_sign_match": "Sign match",
+    "col_mean_d5": "Mean D5",
+    "median_label": "med",
+    "numeric_legend": "|r| ≥ 0.3 strong; 0.1 ≤ |r| < 0.3 weak; < 0.1 noise. Negative r means contrarian — fading the signal may carry alpha.",
+    "categorical_legend": "Bucket-mean spread shows how well categories separate outcomes — bigger gap = more informative signal."
+  },
   "signal_audit": {
     "title": "Signal Citation Rate",
     "subtitle": "Whether personas actually cite ctx blocks (keyword scan)",

@@ -367,3 +367,82 @@ async def test_signal_audit_aggregates_real_discussion(
     # zero-uptake offenders surface at the top of the table.
     rates = [row["citation_rate"] for row in body["coverage"]]
     assert rates == sorted(rates)
+
+
+# ── signal-quality (PR #253: API for PR #250's CLI service) ──────
+
+
+@pytest.mark.asyncio
+async def test_signal_quality_requires_auth(client: AsyncClient):
+    r = await client.get("/api/admin/signal-quality")
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_signal_quality_rejects_viewer_role(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    token = await _register_login(client, "viewer_quality@test.com")
+    r = await client.get(
+        "/api/admin/signal-quality", headers=_auth(token),
+    )
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_signal_quality_returns_zero_for_empty_archive(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """Fresh deploy with no concluded discussions OR no D1-D5 data
+    yet → 200 with `discussions_audited=0` and the full empty
+    taxonomy (so the UI can still render the schema with empty
+    rows). The taxonomy carries n=0 entries — the card filters them
+    out client-side."""
+    email = "admin_quality_empty@test.com"
+    await _register_login(client, email)
+    admin_tok = await _promote_to_admin(db_session, email, client=client)
+
+    r = await client.get(
+        "/api/admin/signal-quality", headers=_auth(admin_tok),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["discussions_audited"] == 0
+    assert body["discussion_ids"] == []
+    # Taxonomy entries always returned even when empty so the UI
+    # doesn't have to re-implement the signal list.
+    assert isinstance(body["numeric"], list)
+    assert isinstance(body["categorical"], list)
+    assert all(row["n"] == 0 for row in body["numeric"])
+    assert all(row["n_total"] == 0 for row in body["categorical"])
+
+
+@pytest.mark.asyncio
+async def test_signal_quality_rejects_lookback_below_one(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    email = "admin_quality_low@test.com"
+    await _register_login(client, email)
+    admin_tok = await _promote_to_admin(db_session, email, client=client)
+
+    r = await client.get(
+        "/api/admin/signal-quality?lookback=0", headers=_auth(admin_tok),
+    )
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_signal_quality_rejects_lookback_above_cap(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """Cap (~1y) prevents accidental cross-regime aggregation that
+    would silently noise-up the report. CLI is the escape hatch for
+    longer windows."""
+    email = "admin_quality_high@test.com"
+    await _register_login(client, email)
+    admin_tok = await _promote_to_admin(db_session, email, client=client)
+
+    r = await client.get(
+        "/api/admin/signal-quality?lookback=10000", headers=_auth(admin_tok),
+    )
+    assert r.status_code == 400

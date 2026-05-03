@@ -16,14 +16,14 @@ Coverage strategy:
   - Per-block error isolation: a failing block writes to
     `ctx['errors']` but doesn't break sibling blocks.
 """
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from unittest.mock import AsyncMock, patch
 
 from services.discussion.context import build_market_context
-from services.discussion.context.blocks import chip, http, news, owner, risk
+from services.discussion.context.blocks import chip, http, news, owner, risk, technical
 
 
 def _new_ctx() -> dict:
@@ -51,6 +51,7 @@ def _new_ctx() -> dict:
             "high_day_trading_ratio": [],
         },
         "market_institutional_5d": [],
+        "short_term_signals": {},
         "errors": [],
     }
 
@@ -169,6 +170,75 @@ async def test_chip_fetch_top_foreign_buyers_filters_by_as_of(
     syms = [row["symbol"] for row in ctx["top_foreign_buyers"]]
     assert "2330" in syms
     assert "2454" not in syms
+
+
+
+# ── technical.fetch_short_term_signals ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_technical_block_populates_per_symbol_signals(
+    db_session: AsyncSession,
+):
+    """Seed enough OHLCV history for one focus symbol; assert the block
+    populates `ctx['short_term_signals'][symbol]` with the five Tier-1
+    metrics. A symbol without enough history must be silently skipped
+    (don't blank the block, don't raise)."""
+    from services.ingest.repository import OhlcvBar, upsert_ohlcv_bars
+
+    base = date(2026, 3, 1)
+    # 30 bars for 2330 = enough for all metrics.
+    enough = [
+        OhlcvBar(
+            market="TW", symbol="2330", ts=base + timedelta(days=i),
+            open=600.0 + i, high=601.0 + i, low=599.0 + i,
+            close=600.0 + i, volume=1_000_000, source="test",
+        )
+        for i in range(30)
+    ]
+    # 5 bars for 2454 = NOT enough; should be skipped.
+    too_few = [
+        OhlcvBar(
+            market="TW", symbol="2454", ts=base + timedelta(days=i),
+            open=900.0, high=905.0, low=895.0,
+            close=900.0, volume=500_000, source="test",
+        )
+        for i in range(5)
+    ]
+    await upsert_ohlcv_bars(db_session, enough + too_few)
+
+    ctx = _new_ctx()
+    await technical.fetch_short_term_signals(
+        ctx, db_session, market="TW",
+        focus_symbols=["2330", "2454"],
+        as_of=base + timedelta(days=29),
+        record_error=_record(ctx),
+    )
+
+    assert "2330" in ctx["short_term_signals"]
+    assert "2454" not in ctx["short_term_signals"]
+    metrics = ctx["short_term_signals"]["2330"]
+    assert metrics["close"] == 629.0
+    assert metrics["return_5d"] is not None
+    assert metrics["rsi_14"] == 100.0
+    assert ctx["errors"] == []
+
+
+@pytest.mark.asyncio
+async def test_technical_block_noop_when_focus_symbols_empty(
+    db_session: AsyncSession,
+):
+    """Empty `focus_symbols` → block returns immediately without any
+    DB hit. Verified via the empty result + no error capture."""
+    ctx = _new_ctx()
+    await technical.fetch_short_term_signals(
+        ctx, db_session, market="TW",
+        focus_symbols=[],
+        as_of=None,
+        record_error=_record(ctx),
+    )
+    assert ctx["short_term_signals"] == {}
+    assert ctx["errors"] == []
 
 
 # ── risk.fetch_risk_warnings ──────────────────────────────────────
@@ -359,6 +429,7 @@ async def test_build_market_context_initialises_default_shape(
         "market", "captured_at", "backtest", "as_of",
         "top_gainers", "top_losers", "index",
         "news_sentiment", "news_backfill", "per_symbol_news_sentiment",
+        "short_term_signals",
         "focus_briefs", "macro", "user_context",
         "prior_discussions", "international_sentiment",
         "top_foreign_buyers", "margin_balance_trend",

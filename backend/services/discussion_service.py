@@ -1676,6 +1676,12 @@ _BLOCK_ANNOTATIONS: dict[str, str] = {
     "index":                     "- index：大盤 (TAIEX) 即時報價 + 30 日歷史，用以判斷市場 regime。",
     "news_sentiment":            "- news_sentiment：所屬市場整體新聞情緒（bullish/bearish/neutral 計數，全視窗統計而非 headlines 抽樣）。",
     "per_symbol_news_sentiment": "- per_symbol_news_sentiment：主題提及之個股新聞情緒。",
+    "short_term_signals": (
+        "- short_term_signals：focus_symbols 的 Tier-1 短線技術訊號 "
+        "(1-5 日視窗) — `volume_ratio`（量能 / 20 日均量倍數，>2 = 突破型）、"
+        "`return_5d` / `return_20d`（短中期報酬 %）、`rsi_14`（< 30 超賣 / > 70 超買）、"
+        "`gap_pct`（今日開盤跳空 %）。配合 news_sentiment 同向時短線勝率較高。"
+    ),
     "international_sentiment":   "- international_sentiment：Fed / FOMC / 國際宏觀新聞情緒，影響台股風險偏好。",
     "top_foreign_buyers":        "- top_foreign_buyers：近 5 日外資累計淨買超前 10 名（已含產業別）。",
     "margin_balance_trend":      "- margin_balance_trend：全市場融資 / 融券餘額趨勢（散戶槓桿與看空代理）。",
@@ -2142,6 +2148,7 @@ _ALWAYS_INCLUDED_BLOCKS: frozenset[str] = frozenset({
 _ALL_PERSONA_BLOCKS: frozenset[str] = frozenset({
     "top_gainers", "top_losers", "index",
     "news_sentiment", "per_symbol_news_sentiment", "international_sentiment",
+    "short_term_signals",
     "top_foreign_buyers", "margin_balance_trend", "top_revenue_growers",
     "active_buybacks", "govt_bank_flow_5d", "risk_warnings",
     "market_institutional_5d",
@@ -2172,6 +2179,7 @@ _VALUE_PROFILE = frozenset({
 _CONTRARIAN_PROFILE = frozenset({
     "top_losers", "risk_warnings", "margin_balance_trend",
     "focus_briefs", "news_sentiment", "per_symbol_news_sentiment",
+    "short_term_signals",   # RSI extremes + volume spikes flag reversals
     "macro",
 })
 
@@ -2179,10 +2187,12 @@ _QUANT_PROFILE = frozenset({
     "focus_briefs", "top_gainers", "top_losers",
     "top_foreign_buyers", "market_institutional_5d", "margin_balance_trend",
     "risk_warnings", "news_sentiment", "macro",
+    "short_term_signals",   # core Tier-1 quant signals per focus symbol
 })
 
 _PORTFOLIO_PROFILE = frozenset({
     "user_context", "focus_briefs", "per_symbol_news_sentiment",
+    "short_term_signals",   # short-term entry/exit timing for held names
     "macro", "news_sentiment", "international_sentiment",
 })
 

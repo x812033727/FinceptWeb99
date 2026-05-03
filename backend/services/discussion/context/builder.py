@@ -36,7 +36,7 @@ from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from .blocks import chip, http, news, owner, risk
+from .blocks import chip, http, news, owner, risk, technical
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -65,6 +65,12 @@ def _initial_ctx(*, market: str, as_of: date | None) -> dict[str, Any]:
         # "FinMind upstream error" without digging into ctx["errors"].
         "news_backfill": None,
         "per_symbol_news_sentiment": {},
+        # Per-symbol Tier-1 short-term technicals (volume_ratio,
+        # return_5d, return_20d, rsi_14, gap_pct). Computed from
+        # `ohlcv_daily` via `services.short_term_signals` for each
+        # focus symbol. Empty dict when focus_symbols is empty OR
+        # the archive lacks >= 21 trading days for any of them.
+        "short_term_signals": {},
         "focus_briefs": [],
         "macro": None,
         "user_context": None,
@@ -139,6 +145,16 @@ async def build_market_context(
     # SQLAlchemy AsyncSession is not safe to share across concurrent
     # awaits. Each read is fast (~5-10ms) so total DB-bound cost is
     # ~50-100ms, well below the HTTP wall clock above.
+
+    # Per-symbol short-term technicals — works for any market with an
+    # `ohlcv_daily` archive (TW today, US/crypto in future). Doesn't
+    # depend on TW-specific tables so it lives outside the `if TW`
+    # gate below.
+    await technical.fetch_short_term_signals(
+        ctx, db, market=market, focus_symbols=focus_symbols,
+        as_of=as_of, record_error=record_error,
+        max_focus_symbols=max_focus_symbols,
+    )
 
     if market == "TW":
         await chip.fetch_top_foreign_buyers(

@@ -288,6 +288,7 @@ async def get_scoreboard(
     )
     return ScoreboardResponse(
         discussion_id=row.id,
+        anchor_date=payload["anchor_date"],
         created_at_tw_date=payload["created_at_tw_date"],
         rows=[ScoreboardRow(**r) for r in payload["rows"]],
     )

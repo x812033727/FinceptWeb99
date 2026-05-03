@@ -2,7 +2,14 @@
 
 Builds the data behind the "對答案" UI on the discussion detail
 page. For each recommended symbol, walks the 5 trading days
-starting from the discussion's TW-local creation date and reports:
+starting from the discussion's anchor date and reports:
+
+Anchor selection mirrors `tasks/verify_discussion_outcome`: backtest
+discussions (`as_of_date IS NOT NULL`) anchor to that date so the
+post-window is graded against bars from `as_of_date` onward, not
+from the discussion's `created_at` (which is the day the user ran
+the backtest, typically months later). Live discussions keep the
+`to_tw_date(created_at)` anchor.
 
   - day1_open: the open price on the first trading day at or after
     creation. Pinned in `discussion.day1_open_prices` once captured
@@ -61,7 +68,7 @@ async def compute_scoreboard(
     factory.
     """
     syms = _recommended_symbols(discussion)
-    created_tw = to_tw_date(discussion.created_at)
+    anchor_tw = _anchor_date(discussion)
     cached_opens: dict[str, float] = dict(discussion.day1_open_prices or {})
 
     rows: list[dict[str, Any]] = []
@@ -69,14 +76,19 @@ async def compute_scoreboard(
         rows.append(
             await _compute_for_symbol(
                 sym=sym,
-                created_tw=created_tw,
+                anchor_tw=anchor_tw,
                 cached_open=cached_opens.get(sym),
             )
         )
 
+    anchor_iso = anchor_tw.isoformat()
     return {
         "discussion_id": str(discussion.id),
-        "created_at_tw_date": created_tw.isoformat(),
+        "anchor_date": anchor_iso,
+        # Kept for backwards compatibility with frontends that haven't
+        # adopted `anchor_date` yet. Same value as `anchor_date` in
+        # backtest mode now (the live-mode value is unchanged).
+        "created_at_tw_date": anchor_iso,
         "rows": rows,
     }
 
@@ -131,6 +143,20 @@ async def persist_scoreboard(
 # ── internals ──────────────────────────────────────────────────────
 
 
+def _anchor_date(discussion: Discussion) -> date:
+    """The TW-local date the post-window is graded against.
+
+    Backtest discussions anchor to `as_of_date` (the date the user
+    is asking "what would the personas have said back then"), live
+    discussions anchor to `to_tw_date(created_at)`. Mirrors the same
+    selection in `tasks.verify_discussion_outcome` so both modules
+    grade against the same window.
+    """
+    if discussion.as_of_date is not None:
+        return discussion.as_of_date
+    return to_tw_date(discussion.created_at)
+
+
 def _recommended_symbols(discussion: Discussion) -> list[str]:
     """Pull recommended_symbols out of the conclusion JSON, dedup +
     strip. Returns [] for un-concluded discussions or malformed
@@ -153,7 +179,7 @@ def _recommended_symbols(discussion: Discussion) -> list[str]:
 async def _compute_for_symbol(
     *,
     sym: str,
-    created_tw: date,
+    anchor_tw: date,
     cached_open: float | None,
 ) -> dict[str, Any]:
     """One symbol's scoreboard row. Reads OHLCV via the autosession
@@ -167,11 +193,11 @@ async def _compute_for_symbol(
     fine. The fallback's own Redis cache (4h TTL) keeps repeated
     scoreboard reads cheap.
     """
-    end = created_tw + timedelta(days=_LOOKAHEAD_CALENDAR_DAYS)
+    end = anchor_tw + timedelta(days=_LOOKAHEAD_CALENDAR_DAYS)
     bars: list[dict[str, Any]] = []
     try:
         bars = await read_ohlcv_range_autosession(
-            "TW", sym, created_tw, end,
+            "TW", sym, anchor_tw, end,
         )
     except Exception as exc:
         log.warning(
@@ -190,9 +216,9 @@ async def _compute_for_symbol(
             live_bars = await tw_market_service.get_history(sym, months=1)
             # `get_history` returns bars with `time` ISO strings,
             # same shape as the repository helper. Constrain to
-            # [created_tw, end] so the downstream filter still works.
+            # [anchor_tw, end] so the downstream filter still works.
             iso_end = end.isoformat()
-            iso_start_chk = created_tw.isoformat()
+            iso_start_chk = anchor_tw.isoformat()
             bars = [
                 b for b in (live_bars or [])
                 if iso_start_chk <= (b.get("time") or "") <= iso_end
@@ -208,11 +234,11 @@ async def _compute_for_symbol(
                 extra={"symbol": sym, "error": str(exc)},
             )
 
-    # Filter to bars on or after the TW-local creation date. The
-    # repository helper already constrains by [start, end] but we
-    # re-check defensively in case a future repository change widens
-    # the bound semantics.
-    iso_start = created_tw.isoformat()
+    # Filter to bars on or after the anchor date. The repository
+    # helper already constrains by [start, end] but we re-check
+    # defensively in case a future repository change widens the
+    # bound semantics.
+    iso_start = anchor_tw.isoformat()
     future = [b for b in bars if (b.get("time") or "") >= iso_start]
     window = future[:WINDOW_DAYS]
 

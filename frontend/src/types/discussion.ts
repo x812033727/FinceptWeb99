@@ -100,6 +100,13 @@ export interface ScoreboardRow {
 
 export interface ScoreboardResponse {
   discussion_id: string;
+  // Anchor date the D1-D5 window starts from. Backtest discussions
+  // anchor to `as_of_date`; live discussions anchor to TW-local
+  // `created_at`. Prefer this over `created_at_tw_date`.
+  anchor_date: string;
+  // Backwards-compatible alias of `anchor_date`. Same value as
+  // `anchor_date` in both modes; kept so older render paths don't
+  // break during the rollout.
   created_at_tw_date: string;
   rows: ScoreboardRow[];
 }

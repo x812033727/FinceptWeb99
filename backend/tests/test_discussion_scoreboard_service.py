@@ -40,6 +40,7 @@ async def _make_discussion(
     created_at: datetime,
     recommended: list[str] | None,
     day1_open_prices: dict[str, float] | None = None,
+    as_of_date: date | None = None,
 ) -> Discussion:
     d = Discussion(
         id=uuid.uuid4(),
@@ -57,6 +58,7 @@ async def _make_discussion(
             }
         ),
         day1_open_prices=day1_open_prices,
+        as_of_date=as_of_date,
         created_at=created_at,
         updated_at=created_at,
     )
@@ -99,6 +101,8 @@ async def test_compute_scoreboard_full_window(db_session: AsyncSession):
         owner_id=user.id, created_at=created,
         recommended=["2330"],
     )
+    # Live mode: anchor = TW-local creation date.
+    # Both `anchor_date` and `created_at_tw_date` should match.
     # day1 open=600, closes climb 600→610
     await _seed_bars(
         db_session, "2330", start=date(2026, 4, 27),
@@ -109,6 +113,8 @@ async def test_compute_scoreboard_full_window(db_session: AsyncSession):
     result = await discussion_scoreboard_service.compute_scoreboard(
         db_session, d,
     )
+    assert result["anchor_date"] == "2026-04-27"
+    assert result["created_at_tw_date"] == "2026-04-27"
     rows = result["rows"]
     assert len(rows) == 1
     r = rows[0]
@@ -368,3 +374,81 @@ async def test_persist_scoreboard_partial_window_returns_false(
     # bars land. days_resolved < 5 just keeps the "skip" signal off.
     assert refreshed.daily_close_prices["2330"][0] == 602
     assert refreshed.daily_close_prices["2330"][3] is None
+
+
+# ── backtest mode anchor ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_compute_scoreboard_backtest_anchors_on_as_of_date(
+    db_session: AsyncSession,
+):
+    """Backtest discussion (`as_of_date` set, `created_at` typically
+    months later): the D1-D5 window must start at `as_of_date`, not
+    at `created_at`. Mirrors `tasks/verify_discussion_outcome` so
+    both modules grade against the same window."""
+    user = await _make_user(db_session, "scorer-backtest@example.com")
+    # User created the backtest "today" (2026-04-27) but is asking
+    # "what would the personas have said back on 2025-01-15".
+    created = datetime(2026, 4, 27, 6, 0, tzinfo=UTC)
+    anchor = date(2025, 1, 15)
+    d = await _make_discussion(
+        db_session,
+        owner_id=user.id, created_at=created,
+        as_of_date=anchor,
+        recommended=["2330"],
+    )
+    # Bars seeded around the BACKTEST anchor, not creation date. If
+    # the service still anchors to `created_at` it'll find no bars
+    # for "2026-04-27..2026-05-11" and report all-None.
+    await _seed_bars(
+        db_session, "2330", start=anchor,
+        closes=[602, 605, 607, 609, 610],
+        opens=[600, 603, 605, 607, 609],
+    )
+
+    result = await discussion_scoreboard_service.compute_scoreboard(
+        db_session, d,
+    )
+    # Both anchor keys reflect the backtest date.
+    assert result["anchor_date"] == "2025-01-15"
+    assert result["created_at_tw_date"] == "2025-01-15"
+    r = result["rows"][0]
+    assert r["day1_open"] == 600
+    assert r["daily_closes"] == [602, 605, 607, 609, 610]
+    assert r["days_resolved"] == 5
+
+
+@pytest.mark.asyncio
+async def test_persist_scoreboard_backtest_writes_anchor_aligned_closes(
+    db_session: AsyncSession,
+):
+    """End-to-end persist for a backtest discussion: the persisted
+    `daily_close_prices` and `day1_open_prices` reflect bars at the
+    backtest anchor, not at `created_at`."""
+    user = await _make_user(
+        db_session, "scorer-backtest-persist@example.com",
+    )
+    created = datetime(2026, 4, 27, 6, 0, tzinfo=UTC)
+    anchor = date(2025, 1, 15)
+    d = await _make_discussion(
+        db_session,
+        owner_id=user.id, created_at=created,
+        as_of_date=anchor,
+        recommended=["2454"],
+    )
+    await _seed_bars(
+        db_session, "2454", start=anchor,
+        closes=[1000, 1010, 1005, 1020, 1015],
+        opens=[995, 1002, 1008, 1012, 1018],
+    )
+
+    fully = await discussion_scoreboard_service.persist_scoreboard(
+        db_session, d,
+    )
+    assert fully is True
+    refreshed = await db_session.get(Discussion, d.id)
+    assert refreshed.daily_close_prices["2454"] == [
+        1000, 1010, 1005, 1020, 1015,
+    ]
+    assert refreshed.day1_open_prices == {"2454": 995.0}

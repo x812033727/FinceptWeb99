@@ -123,5 +123,13 @@ class ScoreboardRow(BaseModel):
 
 class ScoreboardResponse(BaseModel):
     discussion_id: uuid.UUID
+    # Anchor date the D1-D5 window starts from. For backtest discussions
+    # this is `Discussion.as_of_date`; for live discussions it's
+    # `to_tw_date(Discussion.created_at)`. Frontends should prefer this
+    # field over `created_at_tw_date`.
+    anchor_date: str
+    # Backwards-compatible alias of `anchor_date` for older frontends
+    # that haven't migrated. Same value in both modes now (the live-mode
+    # value is unchanged from before backtest support).
     created_at_tw_date: str
     rows: list[ScoreboardRow]

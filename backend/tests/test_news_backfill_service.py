@@ -111,6 +111,8 @@ async def test_covered_path_scores_unscored_rows_inline(
         market="TW",
         as_of=as_of,
         limit=news_backfill_service._HOT_PATH_INLINE_SCORE_LIMIT,
+        days_back=news_backfill_service._HOT_PATH_DAYS_BACK,
+        days_forward=news_backfill_service._HOT_PATH_DAYS_FORWARD,
     )
     assert out["covered"] is True
     assert out["backfilled"] == 0
@@ -778,3 +780,65 @@ async def test_score_inserted_window_picks_up_just_backfilled_rows(
     score_mock.assert_awaited_once()
     actual_ids = sorted(score_mock.await_args.kwargs["article_ids"])
     assert actual_ids == expected_ids
+
+
+@pytest.mark.asyncio
+async def test_score_inserted_window_hot_path_window_excludes_future_dated_rows(
+    db_session: AsyncSession,
+):
+    """When `days_forward=0` (hot path config), rows published AFTER
+    `as_of` must NOT be picked up — `read_recent_market_sentiment`
+    bounds its window with `published_at <= as_of`, so scoring
+    future-dated rows wastes the cap on data the reader can't use.
+
+    This is the regression case behind the production symptom
+    `scored=100, news_sentiment=null`: the desc-published_at order
+    on a 31-day window crammed all 100 scored rows into `as_of + 1d`,
+    invisible to readers anchored at `as_of`.
+    """
+    from sqlalchemy import select as _select
+
+    from models.news_article import NewsArticle as _NA
+
+    as_of = date(2026, 3, 23)
+    # Rows on as_of itself (in-window) and as_of+1d (out-of-window).
+    in_window_dt = datetime(2026, 3, 23, 9, 0, tzinfo=UTC)
+    after_dt = datetime(2026, 3, 24, 9, 0, tzinfo=UTC)
+    await insert_news_articles(
+        db_session, _seed_articles("TW", 3, in_window_dt),
+    )
+    await insert_news_articles(
+        db_session,
+        [r for r in _seed_articles("TW", 3, after_dt)
+         if r.link not in {f"https://example.com/seed/{i}" for i in range(3)}],
+    )
+
+    in_window_ids = sorted((await db_session.scalars(
+        _select(_NA.id).where(
+            _NA.market == "TW",
+            _NA.published_at <= datetime(2026, 3, 23, 23, 59, 59, tzinfo=UTC),
+        )
+    )).all())
+
+    score_mock = AsyncMock(return_value={
+        "considered": len(in_window_ids),
+        "scored": len(in_window_ids),
+        "batches": 1, "cap_hit": 0,
+    })
+    with patch(
+        "services.news_sentiment_service.score_specific_articles",
+        new=score_mock,
+    ):
+        await news_backfill_service._score_inserted_window(
+            market="TW", as_of=as_of,
+            limit=10,
+            days_back=news_backfill_service._HOT_PATH_DAYS_BACK,
+            days_forward=news_backfill_service._HOT_PATH_DAYS_FORWARD,
+        )
+
+    score_mock.assert_awaited_once()
+    actual_ids = sorted(score_mock.await_args.kwargs["article_ids"])
+    # Only in-window rows should be passed for scoring; the as_of+1d
+    # rows must be excluded by the reader-aligned window.
+    assert actual_ids == in_window_ids
+    assert all(aid in in_window_ids for aid in actual_ids)

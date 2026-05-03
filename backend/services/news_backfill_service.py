@@ -57,6 +57,12 @@ _BACKFILL_DAYS_FORWARD = 1  # capture publish-date-after-event articles
 # 100 IDs = 5 batches × 20 = ~15-30s wait given default LLM latency.
 # Subsequent rounds catch up another 100, cron handles the long tail.
 _HOT_PATH_INLINE_SCORE_LIMIT = 100
+# Hot-path window — match the widest reader window
+# (`read_symbol_sentiment` per-symbol = 7 days; `read_recent_market_sentiment`
+# market-wide = 48h is a subset). `days_forward=0` because no reader
+# looks past `as_of`.
+_HOT_PATH_DAYS_BACK = 7
+_HOT_PATH_DAYS_FORWARD = 0
 
 # Redis lock so two concurrent rounds for the same date don't both fire
 # the FinMind call. TTL covers the FinMind chunk + the inline LLM
@@ -138,26 +144,34 @@ def _format_finmind_error(exc: BaseException) -> str:
 
 async def _score_inserted_window(
     *, market: str, as_of: date, limit: int = 2_000,
+    days_back: int = _BACKFILL_DAYS_BACK,
+    days_forward: int = _BACKFILL_DAYS_FORWARD,
 ) -> dict[str, int]:
     """Inline-score unscored rows in the window so the discussion
     round reads SCORED rows instead of NULL-filtered nothing.
 
-    Two callers, two `limit` defaults:
+    Two callers, two configurations:
 
-      - **Cold backfill path** (`limit=2_000`): we just inserted up to
-        a few hundred new rows; score as many as the daily interactive
-        cap allows. Backfill itself took FinMind round-trip latency,
-        the user is already waiting, and unscored rows starve the
-        round we're about to run.
+      - **Cold backfill path** (`limit=2_000`, default 30d back / 1d
+        forward): we just inserted up to a few hundred new rows
+        spanning the FinMind chunk; score as many as the daily
+        interactive cap allows. Backfill itself took FinMind
+        round-trip latency, the user is already waiting, and unscored
+        rows starve the round we're about to run.
 
-      - **Hot covered path** (`limit=100`, set by caller): archive
-        already had rows, no backfill needed, but those rows were
-        inserted at a time when LLM scoring failed silently (PR #225
-        empty-response bug) so they're still NULL. We want SOME
-        scored signal for the round but not a multi-minute wait — 5
-        batches × 20 rows = ~15-30s gives the personas headlines to
-        cite without locking the round button for the cap's worth of
-        sequential LLM calls.
+      - **Hot covered path** (`limit=100`, `days_back=7`,
+        `days_forward=0`): archive already had rows, no backfill
+        needed, but those rows were inserted at a time when LLM
+        scoring failed silently (PR #225 empty-response bug) so
+        they're still NULL. With 87K+ unscored rows in a 31-day
+        window, `select_unscored_in_window`'s `published_at.desc()`
+        ordering means the top 100 cluster on the latest 1-2 days —
+        which fall *outside* the reader's `[as_of - 48h, as_of]`
+        market-sentiment window if any of them sit in the
+        `as_of + 1d` bucket. Hot path narrows the window to align
+        with the readers (per-symbol 7d is the widest reader; 48h
+        market-wide is a subset; never read past `as_of`) so every
+        row scored is a row at least one reader can use.
 
     Without this step:
       1. backfill inserts (or rows already exist with) sentiment_score=NULL,
@@ -184,14 +198,14 @@ async def _score_inserted_window(
         score_specific_articles, select_unscored_in_window,
     )
 
-    # Match the window the backfill just wrote into. Use UTC bounds so
-    # the same query semantics work on Postgres + SQLite test runs.
+    # Window bounds in UTC so the same query semantics work on
+    # Postgres + SQLite test runs.
     start_dt = _dt.combine(
-        as_of - timedelta(days=_BACKFILL_DAYS_BACK),
+        as_of - timedelta(days=days_back),
         _dt.min.time(), tzinfo=UTC,
     )
     end_dt = _dt.combine(
-        as_of + timedelta(days=_BACKFILL_DAYS_FORWARD),
+        as_of + timedelta(days=days_forward),
         _dt.max.time(), tzinfo=UTC,
     )
 
@@ -310,9 +324,20 @@ async def ensure_news_archive_covers(
         # wait) so the round button isn't blocked for many minutes;
         # the next round adds another batch, and cron eventually
         # catches up the long tail.
+        #
+        # Window is narrowed to `[as_of - 7d, as_of]` instead of the
+        # backfill chunk's 30d-back-1d-forward to ALIGN with the readers
+        # (`read_recent_market_sentiment` 48h, `read_symbol_sentiment`
+        # 7d). With 87K+ unscored rows the desc-published_at ordering
+        # would otherwise cram all 100 scored rows into the latest day,
+        # often `as_of + 1d`, which falls outside *every* reader's
+        # window — scored=100 but news_sentiment=null. PR #227's
+        # `scored=100` symptom from production was exactly this.
         scoring_stats = await _score_inserted_window(
             market=market, as_of=as_of,
             limit=_HOT_PATH_INLINE_SCORE_LIMIT,
+            days_back=_HOT_PATH_DAYS_BACK,
+            days_forward=_HOT_PATH_DAYS_FORWARD,
         )
         return {
             "covered": True,

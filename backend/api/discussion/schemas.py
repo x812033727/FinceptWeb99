@@ -57,6 +57,13 @@ class DiscussionResponse(BaseModel):
     status: str
     current_round: int
     conclusion: dict[str, Any] | None = None
+    # PR #272: post-mortem self-critique conclusion. Populated when
+    # the user runs the post-mortem flow (inject + new round +
+    # re-conclude); the synthesizer routes its output here instead
+    # of overwriting the original `conclusion`. Defaults None so
+    # older clients ignore the field; new clients render a second
+    # card alongside the original when populated.
+    post_mortem_conclusion: dict[str, Any] | None = None
     # Self-grading fields (migration 0018). All optional / default-None
     # so legacy clients ignore them; frontend uses them to render the
     # dynamic title (YYYYMMDD(syms)勝/敗) instead of the user-typed topic.

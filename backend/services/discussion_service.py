@@ -3137,7 +3137,16 @@ async def synthesize_conclusion(
         )
 
     conclusion = _safe_conclusion(assembled)
-    discussion.conclusion = conclusion
+    # PR #272: route the write based on whether the transcript already
+    # carries a post-mortem self-critique. With post-mortem present,
+    # land the synthesizer's output in `post_mortem_conclusion` so
+    # the original `conclusion` is preserved for side-by-side
+    # comparison in the UI. Without post-mortem, the existing
+    # behaviour (overwrite `conclusion`) is unchanged.
+    if has_post_mortem:
+        discussion.post_mortem_conclusion = conclusion
+    else:
+        discussion.conclusion = conclusion
     discussion.status = STATUS_DONE
     discussion.updated_at = datetime.now(UTC)
     # Seed `verify_after_date` so the verifier task picks this row up
@@ -3147,6 +3156,12 @@ async def synthesize_conclusion(
     # every cross-session reference, defeating the consistency check.
     # Skip when already set (re-conclude after edit) so we don't
     # push the verification window back artificially.
+    #
+    # The verifier still grades the ORIGINAL conclusion's recommended
+    # symbols — post_mortem_conclusion is informational. If we ever
+    # want the verifier to use the post-mortem version instead, we'd
+    # update score_discussion_outcomes to prefer the latter when
+    # populated; that's intentionally NOT in this PR.
     if discussion.verify_after_date is None:
         from services.tw_trading_calendar import (
             add_trading_days_estimate,

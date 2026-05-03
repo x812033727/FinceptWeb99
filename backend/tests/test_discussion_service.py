@@ -1622,6 +1622,116 @@ async def test_synthesize_conclusion_coerces_shape(
 
 
 @pytest.mark.asyncio
+async def test_synthesize_conclusion_routes_post_mortem_to_separate_column(
+    db_session: AsyncSession, owner: User,
+):
+    """PR #272: when the transcript already contains a post-mortem
+    self-critique (`_user/user_input` turn whose content starts with
+    "【事後檢討"), the synthesizer's output must land in
+    `post_mortem_conclusion`, leaving the original `conclusion`
+    intact. Operators rely on the side-by-side comparison."""
+    row = await discussion_service.create_discussion(
+        db_session, owner_id=owner.id,
+        topic="topic", rules="rules",
+        persona_ids=["buffett", "lynch"],
+    )
+    # Pre-existing original conclusion that must NOT be clobbered.
+    row.conclusion = {
+        "recommended_symbols": ["2330"],
+        "reasoning": "original take",
+        "risks": [],
+        "time_horizon": "short_term",
+        "consensus_score": 0.6,
+    }
+    # Round 1 persona turn + post-mortem injection (round 1
+    # last turn) + round 2 persona reflection.
+    db_session.add(DiscussionTurn(
+        discussion_id=row.id, round=1, turn_index=0,
+        persona_id="buffett", stance="agree", content="initial",
+    ))
+    db_session.add(DiscussionTurn(
+        discussion_id=row.id, round=1, turn_index=1,
+        persona_id=discussion_service.USER_PERSONA_ID,
+        stance=discussion_service.USER_INJECTION_STANCE,
+        content="【事後檢討 — 對答案】請反思",
+    ))
+    db_session.add(DiscussionTurn(
+        discussion_id=row.id, round=2, turn_index=0,
+        persona_id="buffett", stance="supplement",
+        content="reflection: changing recommendation to 2454",
+    ))
+    await db_session.commit()
+
+    raw = (
+        '{"recommended_symbols": ["2454"], '
+        '"reasoning": "post-mortem revised", '
+        '"risks": [], "time_horizon": "short_term", '
+        '"consensus_score": 0.55}'
+    )
+    with patch(
+        "services.discussion_service.stream_chat",
+        side_effect=_stream_events(raw),
+    ), patch(
+        "services.discussion_service.gather_market_context",
+        new=AsyncMock(return_value={"market": "TW"}),
+    ):
+        await discussion_service.synthesize_conclusion(
+            db_session, row, user_id=str(owner.id),
+        )
+
+    refreshed = await db_session.get(Discussion, row.id)
+    # Original conclusion preserved verbatim.
+    assert refreshed.conclusion is not None
+    assert refreshed.conclusion["recommended_symbols"] == ["2330"]
+    assert refreshed.conclusion["reasoning"] == "original take"
+    # New conclusion landed in post_mortem_conclusion.
+    assert refreshed.post_mortem_conclusion is not None
+    assert refreshed.post_mortem_conclusion["recommended_symbols"] == ["2454"]
+    assert refreshed.post_mortem_conclusion["reasoning"] == "post-mortem revised"
+
+
+@pytest.mark.asyncio
+async def test_synthesize_conclusion_writes_to_main_column_without_post_mortem(
+    db_session: AsyncSession, owner: User,
+):
+    """No post-mortem in transcript → existing behaviour: write to
+    `conclusion`, leave `post_mortem_conclusion` NULL. Guards
+    against accidentally routing first-time syntheses to the
+    post-mortem column."""
+    row = await discussion_service.create_discussion(
+        db_session, owner_id=owner.id,
+        topic="topic", rules="rules",
+        persona_ids=["buffett", "lynch"],
+    )
+    db_session.add(DiscussionTurn(
+        discussion_id=row.id, round=1, turn_index=0,
+        persona_id="buffett", stance="agree", content="just a regular turn",
+    ))
+    await db_session.commit()
+
+    raw = (
+        '{"recommended_symbols": ["2330"], "reasoning": "ok", '
+        '"risks": [], "time_horizon": "short_term", '
+        '"consensus_score": 0.5}'
+    )
+    with patch(
+        "services.discussion_service.stream_chat",
+        side_effect=_stream_events(raw),
+    ), patch(
+        "services.discussion_service.gather_market_context",
+        new=AsyncMock(return_value={"market": "TW"}),
+    ):
+        await discussion_service.synthesize_conclusion(
+            db_session, row, user_id=str(owner.id),
+        )
+
+    refreshed = await db_session.get(Discussion, row.id)
+    assert refreshed.conclusion is not None
+    assert refreshed.conclusion["recommended_symbols"] == ["2330"]
+    assert refreshed.post_mortem_conclusion is None
+
+
+@pytest.mark.asyncio
 async def test_synthesize_conclusion_reuses_round_context_snapshot(
     db_session: AsyncSession, owner: User,
 ):

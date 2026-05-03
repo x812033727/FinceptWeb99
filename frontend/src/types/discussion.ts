@@ -56,6 +56,12 @@ export interface Discussion {
   status: DiscussionStatus;
   current_round: number;
   conclusion: Conclusion | null;
+  /** PR #272: post-mortem self-critique conclusion. Populated when
+   * the user runs the post-mortem flow; preserves the original
+   * `conclusion` for side-by-side comparison instead of overwriting
+   * it. NULL for any discussion that hasn't been through a
+   * post-mortem cycle. */
+  post_mortem_conclusion?: Conclusion | null;
   verdict?: Verdict | null;
   verdict_reason?: string | null;
   verified_at?: string | null;

@@ -1124,6 +1124,19 @@ export default function DiscussionPage() {
           {detail?.conclusion && (
             <ConclusionCard detail={detail} personaName={personaName} />
           )}
+          {/* PR #272: post-mortem self-critique conclusion lands in
+              its own purple card alongside the original. Backend
+              writes here only when `has_post_mortem` is detected
+              in the transcript, so this conditional matches the
+              backend's routing logic. */}
+          {detail?.post_mortem_conclusion && (
+            <ConclusionCard
+              detail={detail}
+              personaName={personaName}
+              conclusion={detail.post_mortem_conclusion}
+              variant="post_mortem"
+            />
+          )}
           {/* Post-mortem gainers leaderboard. Falls back to the
               localStorage-persisted snapshot (PR #268) when the
               mutation state is empty — survives page reload so the

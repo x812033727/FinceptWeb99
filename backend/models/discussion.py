@@ -81,6 +81,15 @@ class Discussion(Base):
         Integer, nullable=False, default=0, server_default="0",
     )
     conclusion: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # PR #272: post-mortem self-critique conclusion. When the user runs
+    # the post-mortem flow (inject + new round + re-conclude), the
+    # synthesizer routes its output here instead of overwriting
+    # `conclusion` so the original-vs-revised comparison stays
+    # available in the UI. NULL for any discussion that hasn't been
+    # through a post-mortem cycle.
+    post_mortem_conclusion: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True,
+    )
     # Self-grading columns (added in migration 0018). `auto_run` flags
     # rows produced by the daily scheduler so the verifier task doesn't
     # touch user-created manual discussions. `verdict` stays NULL until

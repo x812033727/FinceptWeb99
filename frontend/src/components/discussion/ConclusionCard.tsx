@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
-import type { DiscussionDetail, Turn } from "@/types/discussion";
+import type { Conclusion, DiscussionDetail, Turn } from "@/types/discussion";
 import { useCollapsible } from "@/components/Collapsible";
 import { renderInlineMarkdown } from "./_helpers";
 
@@ -74,16 +74,29 @@ function buildMarkdownExport(
   return lines.join("\n");
 }
 
+/**
+ * Reusable conclusion card. Defaults to rendering `detail.conclusion`
+ * (the original synthesizer output) but accepts an explicit
+ * `conclusion` override so the same component can render
+ * `detail.post_mortem_conclusion` (PR #272 — preserved separately
+ * so the original-vs-post-mortem comparison stays visible). The
+ * `variant` switch tints the card and chooses the title /
+ * collapse-storage key so the two cards don't collide.
+ */
 export function ConclusionCard({
   detail,
   personaName,
+  conclusion: overrideConclusion,
+  variant = "primary",
 }: {
   detail: DiscussionDetail;
   personaName: (id: string) => string;
+  conclusion?: Conclusion;
+  variant?: "primary" | "post_mortem";
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const conclusion = detail.conclusion!;
+  const conclusion = overrideConclusion ?? detail.conclusion!;
 
   // Triggers a browser download of the rendered markdown. Filename uses
   // the topic (sanitised) + ISO date so users can recognise exports
@@ -131,19 +144,34 @@ export function ConclusionCard({
   // (export / deep-dive) so users don't accidentally rely on garbage,
   // and prompt them to re-synthesize.
   const hasError = !!conclusion._parse_error;
+  // Variant-specific tint so post-mortem cards don't visually collide
+  // with the original. Purple matches the post-mortem badge from
+  // PR #268 (RoundSection 「📋 事後檢討」 marker) so the two surfaces
+  // share a colour language.
+  const isPostMortem = variant === "post_mortem";
+  const baseClass = isPostMortem
+    ? "bg-purple-950/20 border border-purple-800/50 rounded-lg p-4 mt-4"
+    : "bg-amber-950/20 border border-amber-800/50 rounded-lg p-4 mt-4";
   const cardClass = hasError
     ? "bg-red-950/20 border border-red-800/60 rounded-lg p-4 mt-4"
-    : "bg-amber-950/20 border border-amber-800/50 rounded-lg p-4 mt-4";
-  const titleClass = hasError ? "text-sm font-semibold text-red-300" : "text-sm font-semibold text-amber-300";
+    : baseClass;
+  const okTitleClass = isPostMortem
+    ? "text-sm font-semibold text-purple-300"
+    : "text-sm font-semibold text-amber-300";
+  const titleClass = hasError ? "text-sm font-semibold text-red-300" : okTitleClass;
+  const titleKey = isPostMortem
+    ? "discussion.post_mortem_conclusion_title"
+    : "discussion.conclusion_title";
   // Conclusion is the ONE block that defaults open per the user's
   // UX rule ("at most only the conclusion is default-expanded"). All
   // other transcript sections collapse on render. Persisted per
-  // discussion id so a user who collapsed the conclusion last time
-  // sees it stay collapsed on reload.
-  const { open, toggle } = useCollapsible(
-    `discussion.${detail.id}.conclusion`,
-    true,
-  );
+  // discussion id (and per variant — `.conclusion` vs
+  // `.post_mortem_conclusion`) so the two cards toggle independently
+  // and the user's collapse pref for one doesn't fold the other.
+  const collapseStorageKey = isPostMortem
+    ? `discussion.${detail.id}.post_mortem_conclusion`
+    : `discussion.${detail.id}.conclusion`;
+  const { open, toggle } = useCollapsible(collapseStorageKey, true);
 
   return (
     <div className={cardClass}>
@@ -158,9 +186,7 @@ export function ConclusionCard({
             {open ? "▼" : "▶"}
           </span>
           <h3 className={titleClass}>
-            {hasError
-              ? `⚠ ${t("discussion.conclusion_title")}`
-              : t("discussion.conclusion_title")}
+            {hasError ? `⚠ ${t(titleKey)}` : t(titleKey)}
           </h3>
         </button>
         {!hasError && (
@@ -201,7 +227,11 @@ export function ConclusionCard({
                     key={s}
                     onClick={() => askPersonaAbout(s)}
                     title={t("discussion.click_for_deep_dive")}
-                    className="px-2 py-0.5 rounded bg-amber-900/30 text-amber-200 text-xs font-mono hover:bg-amber-900/60"
+                    className={
+                      isPostMortem
+                        ? "px-2 py-0.5 rounded bg-purple-900/30 text-purple-200 text-xs font-mono hover:bg-purple-900/60"
+                        : "px-2 py-0.5 rounded bg-amber-900/30 text-amber-200 text-xs font-mono hover:bg-amber-900/60"
+                    }
                   >
                     {s}
                   </button>

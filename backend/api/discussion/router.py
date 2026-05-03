@@ -140,6 +140,7 @@ def _to_response(d: Discussion) -> DiscussionResponse:
         status=d.status,
         current_round=d.current_round,
         conclusion=d.conclusion,
+        post_mortem_conclusion=d.post_mortem_conclusion,
         verdict=d.verdict,
         verdict_reason=d.verdict_reason,
         verified_at=d.verified_at,

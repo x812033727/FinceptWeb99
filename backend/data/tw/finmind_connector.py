@@ -466,16 +466,80 @@ async def get_news(
     huge quota saving versus per-symbol fan-out). Pass a specific
     symbol when only that issuer's headlines are needed.
 
-    `end_date` (PR #212) bounds the response on the server side, so
-    historical backfills can chunk by month without pulling everything
-    after `start_date` and post-filtering. Required by the paid-tier
-    backfill script in `scripts/backfill_news_finmind.py`.
+    `end_date` (PR #212) bounds the response by walking the date
+    range one day at a time. FinMind's TaiwanStockNews dataset
+    rejects multi-day queries with a 400:
+
+        "the dataset TaiwanStockNews size is too large, we only
+         send one day data, so end_date parameter need be none"
+
+    so when a caller wants more than one day we issue N requests
+    (one per UTC day in the inclusive `[start_date, end_date]`
+    range) with `end_date=None` and concatenate. Per-day failures
+    are logged and skipped — partial coverage beats throwing the
+    whole window away on a single transient hiccup. If EVERY day
+    fails the last error is re-raised so callers can surface it.
 
     Returns [] silently when FinMind quota is exhausted; the daily
     ingest task records this via `ingest_health` so operators can
     see degraded mode in the admin dashboard.
     """
-    rows = await _query("TaiwanStockNews", symbol, start_date, end_date)
+    if end_date is None or end_date == start_date:
+        rows = await _query("TaiwanStockNews", symbol, start_date, None)
+        return _format_news_rows(rows)
+
+    from datetime import date as _date, timedelta as _td
+    try:
+        cur = _date.fromisoformat(start_date)
+        end = _date.fromisoformat(end_date)
+    except ValueError:
+        # Caller passed a malformed date — fall back to a single
+        # call so the error surfaces normally rather than silently
+        # returning an empty loop.
+        rows = await _query("TaiwanStockNews", symbol, start_date, None)
+        return _format_news_rows(rows)
+
+    if end < cur:
+        return []
+
+    all_rows: list[dict[str, Any]] = []
+    last_exc: Exception | None = None
+    days_attempted = 0
+    days_succeeded = 0
+    while cur <= end:
+        days_attempted += 1
+        try:
+            day_rows = await _query(
+                "TaiwanStockNews", symbol, cur.isoformat(), None,
+            )
+        except Exception as exc:
+            last_exc = exc
+            log.warning(
+                "finmind.news_day_failed",
+                extra={
+                    "day": cur.isoformat(),
+                    "symbol": symbol or "_market",
+                    "error": str(exc),
+                },
+            )
+        else:
+            days_succeeded += 1
+            if day_rows:
+                all_rows.extend(day_rows)
+        cur += _td(days=1)
+
+    # If literally nothing succeeded AND we have an exception in
+    # hand, re-raise it so the backfill orchestrator surfaces a
+    # paywall / rate-limit / network error to the user. Empty
+    # result with no exception is a legitimate "no news this
+    # window" answer.
+    if days_succeeded == 0 and last_exc is not None:
+        raise last_exc
+
+    return _format_news_rows(all_rows)
+
+
+def _format_news_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
             "title":        r.get("title", ""),

@@ -304,32 +304,109 @@ async def test_get_monthly_revenue_maps_to_canonical_field_names():
 # ── get_news (TaiwanStockNews) ───────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_get_news_passes_end_date_when_provided():
-    """The backfill script (`scripts/backfill_news_finmind`) chunks
-    historical pulls by month, so `get_news` must forward `end_date`
-    to `_query` — without it FinMind would return everything from
-    `start_date` onwards regardless of the chunk window."""
-    patcher, mock = install_query([])
-    with patcher:
-        await finmind.get_news(
-            "2024-01-01", symbol="", end_date="2024-01-31",
+async def test_get_news_loops_day_by_day_when_end_date_set():
+    """FinMind's TaiwanStockNews rejects multi-day calls with 400
+    ("dataset size is too large, end_date must be None"). `get_news`
+    walks the [start, end] window one day at a time with end_date=None,
+    accumulates rows. Verifies N _query calls for an N-day range, all
+    with end_date=None."""
+    rows_by_day = {
+        "2024-01-01": [{"title": "d1", "link": "l1",
+                        "source": "x", "description": "",
+                        "date": "2024-01-01 09:00:00", "stock_id": "2330"}],
+        "2024-01-02": [],   # quiet day
+        "2024-01-03": [{"title": "d3", "link": "l3",
+                        "source": "x", "description": "",
+                        "date": "2024-01-03 09:00:00", "stock_id": "2330"}],
+    }
+
+    async def _fake_query(dataset, data_id, start_date, end_date=None):
+        assert end_date is None, "loop must call _query without end_date"
+        return rows_by_day.get(start_date, [])
+
+    with patch.object(finmind, "_query", new=_fake_query):
+        out = await finmind.get_news(
+            "2024-01-01", symbol="", end_date="2024-01-03",
         )
-    args, _ = mock.call_args
-    assert args[0] == "TaiwanStockNews"
-    assert args[1] == ""
-    assert args[2] == "2024-01-01"
-    assert args[3] == "2024-01-31"
+
+    titles = [r["title"] for r in out]
+    assert titles == ["d1", "d3"]
 
 
 @pytest.mark.asyncio
-async def test_get_news_omits_end_date_by_default():
-    """Live ingest path (no `end_date`) must keep working — passing
-    None lets FinMind decide the upper bound (typically: present)."""
-    patcher, mock = install_query([])
-    with patcher:
+async def test_get_news_single_day_passthrough():
+    """When `end_date is None` (the live ingest path) OR the range is
+    one day (`start == end`) we issue a single `_query` call without
+    end_date — no loop overhead."""
+    mock = AsyncMock(return_value=[])
+    with patch.object(finmind, "_query", new=mock):
         await finmind.get_news("2024-01-01")
-    args, _ = mock.call_args
-    assert args[3] is None
+    mock.assert_awaited_once()
+    # 4th positional arg = end_date, must be None.
+    assert mock.call_args.args[3] is None
+
+    mock.reset_mock()
+    with patch.object(finmind, "_query", new=mock):
+        await finmind.get_news(
+            "2024-01-01", symbol="", end_date="2024-01-01",
+        )
+    mock.assert_awaited_once()
+    assert mock.call_args.args[3] is None
+
+
+@pytest.mark.asyncio
+async def test_get_news_per_day_failure_does_not_abort_loop():
+    """One bad day shouldn't poison the whole window — log and skip,
+    keep going with the rest. Verifies partial results return
+    successfully when at least one day worked."""
+    err = httpx.HTTPStatusError("HTTP 400", request=None, response=None)
+
+    async def _flaky_query(dataset, data_id, start_date, end_date=None):
+        if start_date == "2024-01-02":
+            raise err
+        return [{"title": f"news {start_date}",
+                 "link": f"l-{start_date}",
+                 "source": "x", "description": "",
+                 "date": f"{start_date} 09:00:00", "stock_id": "2330"}]
+
+    with patch.object(finmind, "_query", new=_flaky_query):
+        out = await finmind.get_news(
+            "2024-01-01", symbol="", end_date="2024-01-03",
+        )
+
+    titles = [r["title"] for r in out]
+    assert titles == ["news 2024-01-01", "news 2024-01-03"]
+
+
+@pytest.mark.asyncio
+async def test_get_news_all_days_failing_reraises_last_error():
+    """If every day in the range fails, re-raise the last exception
+    so the backfill orchestrator surfaces the paywall / rate-limit /
+    network error to the user instead of silently returning [] and
+    looking like 'no news this window'."""
+    err = httpx.HTTPStatusError("HTTP 402", request=None, response=None)
+
+    async def _always_fails(*args, **kwargs):
+        raise err
+
+    with patch.object(finmind, "_query", new=_always_fails):
+        with pytest.raises(httpx.HTTPStatusError):
+            await finmind.get_news(
+                "2024-01-01", symbol="", end_date="2024-01-03",
+            )
+
+
+@pytest.mark.asyncio
+async def test_get_news_empty_window_when_end_before_start():
+    """Caller bug check: end < start returns [] without calling
+    _query. Avoids an infinite-style loop on a backwards range."""
+    mock = AsyncMock(return_value=[])
+    with patch.object(finmind, "_query", new=mock):
+        out = await finmind.get_news(
+            "2024-01-10", symbol="", end_date="2024-01-01",
+        )
+    assert out == []
+    mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio

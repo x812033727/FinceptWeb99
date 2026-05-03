@@ -84,8 +84,25 @@ async def _make_pending(
     verify_after_offset: int = -1,
     day1_open_prices: dict[str, float] | None = None,
 ) -> Discussion:
-    """Build an auto-run discussion ready for the verifier."""
+    """Build an auto-run discussion ready for the verifier.
+
+    `created_at` is anchored to 04:00 UTC (= noon TW) so the UTC
+    date and the Asia/Taipei date always agree. Without this,
+    a CI run after 16:00 UTC ends up with `created_at.date()`
+    one day BEFORE `to_tw_date(created_at)`, the verifier's
+    anchor sits one day past the seeded bars' start, and the
+    window comes up 1 bar short → `deferred_no_data` instead of
+    a graded verdict (test failure with no actual code defect).
+    """
     today = datetime.now(UTC).date()
+    created_date = today + timedelta(days=created_offset_days)
+    # 04:00 UTC = 12:00 TW; both UTC and TW dates resolve to
+    # `created_date` regardless of when CI happens to fire.
+    created_at = datetime.combine(
+        created_date,
+        datetime.min.time().replace(hour=4),
+        tzinfo=UTC,
+    )
     d = Discussion(
         id=uuid.uuid4(),
         owner_id=owner_id,
@@ -104,7 +121,7 @@ async def _make_pending(
         auto_run=True,
         verify_after_date=today + timedelta(days=verify_after_offset),
         day1_open_prices=day1_open_prices,
-        created_at=datetime.now(UTC) + timedelta(days=created_offset_days),
+        created_at=created_at,
     )
     db.add(d)
     await db.commit()

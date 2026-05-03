@@ -587,8 +587,11 @@ async def test_owner_fetch_user_context_records_error_on_failure(
 async def test_build_market_context_initialises_default_shape(
     db_session: AsyncSession,
 ):
-    """All 18 default keys must be present even when every block
-    returns nothing — the prompt template assumes a stable shape."""
+    """All default keys must be present even when every block
+    returns nothing — the prompt template assumes a stable shape.
+    Updated through PRs #269 (overseas_indicators), #282
+    (single_stock_futures_oi), #283 (taiwan_vix), #284
+    (upcoming_events_calendar), #285 (broker_concentration)."""
     expected_keys = {
         "market", "captured_at", "backtest", "as_of",
         "top_gainers", "top_losers", "index",
@@ -600,6 +603,11 @@ async def test_build_market_context_initialises_default_shape(
         "top_revenue_growers", "active_buybacks",
         "govt_bank_flow_5d", "risk_warnings",
         "market_institutional_5d", "taifex_positioning",
+        "single_stock_futures_oi",   # PR #282
+        "taiwan_vix",                # PR #283
+        "upcoming_events_calendar",  # PR #284
+        "broker_concentration",      # PR #285
+        "overseas_indicators",       # PR #269
         "errors",
     }
 

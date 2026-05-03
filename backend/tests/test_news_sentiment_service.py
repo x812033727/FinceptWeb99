@@ -671,6 +671,125 @@ async def test_read_symbol_sentiment_default_window_is_seven_days(
     assert out["considered"] == 1
 
 
+# ── PR #261: async-scoring backtest leak ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_read_recent_market_sentiment_excludes_late_scored_in_backtest(
+    db_session: AsyncSession,
+):
+    """Sentiment is scored asynchronously by the hourly cron. An
+    article published before `as_of` may not be scored until well
+    after it. A backtest read at `as_of` must NOT include articles
+    whose `sentiment_scored_at > as_of` — those scores didn't exist
+    at the backtest anchor.
+
+    Mode contract: when `as_of` is set, the reader filters
+    `sentiment_scored_at <= as_of`. Live mode (`as_of=None`) skips
+    the filter (any non-null score is by definition in the past)."""
+    backtest_anchor = datetime(2026, 4, 15, 9, 0, tzinfo=UTC)
+    # Article published BEFORE the anchor.
+    await insert_news_articles(db_session, [
+        _row("late-scored",
+             "https://example.com/late_score_a",
+             symbol="2330",
+             published_at=backtest_anchor - timedelta(hours=2)),
+    ])
+    # ... but scored AFTER the anchor (e.g., the next cron tick).
+    rows = (await db_session.scalars(
+        select(NewsArticle).where(
+            NewsArticle.link == "https://example.com/late_score_a"
+        )
+    )).all()
+    for r in rows:
+        r.sentiment_score = 0.7
+        r.sentiment_label = "bullish"
+        r.sentiment_scored_at = backtest_anchor + timedelta(hours=10)
+    await db_session.commit()
+
+    # Backtest mode: late-scored row must be excluded.
+    out = await news_sentiment_service.read_recent_market_sentiment(
+        db_session, market="TW", max_age_hours=48,
+        as_of=backtest_anchor,
+    )
+    assert out["considered"] == 0, (
+        "row scored after as_of must be hidden in backtest mode "
+        "to prevent async-scoring look-ahead leak"
+    )
+
+    # Live mode (no `as_of`): the row IS visible (score now exists).
+    out = await news_sentiment_service.read_recent_market_sentiment(
+        db_session, market="TW", max_age_hours=24 * 365,
+    )
+    assert out["considered"] == 1
+
+
+@pytest.mark.asyncio
+async def test_read_symbol_sentiment_excludes_late_scored_in_backtest(
+    db_session: AsyncSession,
+):
+    """Mirror of the market-wide guard for the per-symbol reader."""
+    backtest_anchor = datetime(2026, 4, 15, 9, 0, tzinfo=UTC)
+    await insert_news_articles(db_session, [
+        _row("sym late-scored",
+             "https://example.com/sym_late_a",
+             symbol="2330",
+             published_at=backtest_anchor - timedelta(hours=2)),
+    ])
+    rows = (await db_session.scalars(
+        select(NewsArticle).where(
+            NewsArticle.link == "https://example.com/sym_late_a"
+        )
+    )).all()
+    for r in rows:
+        r.sentiment_score = 0.7
+        r.sentiment_label = "bullish"
+        r.sentiment_scored_at = backtest_anchor + timedelta(hours=10)
+    await db_session.commit()
+
+    out = await news_sentiment_service.read_symbol_sentiment(
+        db_session, market="TW", symbol="2330",
+        max_age_hours=168, as_of=backtest_anchor,
+    )
+    assert out is None, (
+        "symbol reader must hide post-anchor sentiment scores in "
+        "backtest mode (no scored row in window → returns None)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_read_recent_market_sentiment_includes_pre_anchor_scores_in_backtest(
+    db_session: AsyncSession,
+):
+    """Sanity: a row scored BEFORE the backtest anchor stays in the
+    result set. The filter must only exclude post-anchor scores."""
+    backtest_anchor = datetime(2026, 4, 15, 9, 0, tzinfo=UTC)
+    await insert_news_articles(db_session, [
+        _row("pre-anchor",
+             "https://example.com/pre_anchor_a",
+             symbol="2330",
+             published_at=backtest_anchor - timedelta(hours=2)),
+    ])
+    rows = (await db_session.scalars(
+        select(NewsArticle).where(
+            NewsArticle.link == "https://example.com/pre_anchor_a"
+        )
+    )).all()
+    for r in rows:
+        r.sentiment_score = 0.5
+        r.sentiment_label = "bullish"
+        # Scored BEFORE anchor — must be visible.
+        r.sentiment_scored_at = backtest_anchor - timedelta(hours=1)
+    await db_session.commit()
+
+    out = await news_sentiment_service.read_recent_market_sentiment(
+        db_session, market="TW", max_age_hours=48,
+        as_of=backtest_anchor,
+    )
+    assert out["considered"] == 1
+    assert out["bullish"] == 1
+
+
 # ── score_specific_articles (inline backfill scorer) ──────────────
 
 

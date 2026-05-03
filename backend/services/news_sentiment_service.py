@@ -685,12 +685,22 @@ async def read_recent_market_sentiment(
     # leak in. Live mode keeps `now()` as the anchor.
     anchor = as_of or datetime.now(UTC)
     cutoff = anchor - timedelta(hours=max_age_hours)
-    base_filter = (
+    base_filter = [
         NewsArticle.market == market,
         NewsArticle.published_at >= cutoff,
         NewsArticle.published_at <= anchor,
         NewsArticle.sentiment_score.isnot(None),
-    )
+    ]
+    # PR #261: sentiment is scored asynchronously by the hourly cron,
+    # so an article published at as_of-1h might not be scored until
+    # as_of+24h. Including those rows in a backtest read at as_of
+    # leaks the post-as_of scoring decision. Restrict to articles
+    # whose `sentiment_scored_at <= anchor` to simulate "what the
+    # persona would have seen at as_of". Live mode skips this — the
+    # row's sentiment_score being non-null already implies it was
+    # scored before "now".
+    if as_of is not None:
+        base_filter.append(NewsArticle.sentiment_scored_at <= anchor)
 
     # ── full-window aggregate ──────────────────────────────────────
     # Pull ALL rows in the window (no limit) for an unbiased average +
@@ -777,13 +787,16 @@ async def read_symbol_sentiment(
     # market-wide reader.
     anchor = as_of or datetime.now(UTC)
     cutoff = anchor - timedelta(hours=max_age_hours)
-    base_filter = (
+    base_filter = [
         NewsArticle.market == market,
         NewsArticle.symbol == symbol,
         NewsArticle.published_at >= cutoff,
         NewsArticle.published_at <= anchor,
         NewsArticle.sentiment_score.isnot(None),
-    )
+    ]
+    # PR #261: same async-scoring leak fix as the market-wide reader.
+    if as_of is not None:
+        base_filter.append(NewsArticle.sentiment_scored_at <= anchor)
 
     agg_stmt = select(NewsArticle).where(*base_filter)
     all_rows = list((await db.scalars(agg_stmt)).all())

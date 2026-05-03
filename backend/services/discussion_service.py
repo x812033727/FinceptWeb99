@@ -106,12 +106,14 @@ _MAX_FOCUS_SYMBOLS = 5
 
 _MAX_PERSONAS = 8           # safety cap so one discussion can't fan out 19 LLM calls/round
 _MIN_PERSONAS = 2
-# 2048 gives Chinese-output personas (BPE → ~3 tokens/char) ~600-700 chars of
-# analysis after a reasoning preamble. With 1024 we still saw truncation mid-
-# sentence on long-winded personas (Lynch / Buffett); the salvage path in
-# `_parse_turn_response` recovers the partial content but raising the cap
-# means it kicks in less often.
-_MAX_TURN_TOKENS = 2048
+# 8192 gives reasoning models (MiniMax-M2.7, DeepSeek-R1) enough headroom
+# for chain-of-thought (~3-5K tokens) before the visible Chinese content
+# (~600-700 chars × 3 BPE = ~2K tokens) is emitted. With 2048 the budget
+# was exhausted entirely on reasoning and finish_reason="length" arrived
+# with zero content — see PR #225 for the silent-empty-response diagnosis.
+# Non-thinking personas still emit only what they need; the cap is purely
+# an output-side ceiling, not a token allocation.
+_MAX_TURN_TOKENS = 8192
 _MAX_TOPIC_CHARS = 500
 _MAX_RULES_CHARS = 2000
 _MAX_HISTORY_TURNS = 30     # how many prior turns to feed the next persona
@@ -2813,11 +2815,17 @@ async def synthesize_conclusion(
     assembled = ""
     usage_seen: dict[str, int] | None = None
     try:
+        # max_tokens=8192 gives reasoning models enough room for chain-of-
+        # thought (~3-5K tokens) before the conclusion JSON (~1.5K tokens)
+        # is emitted. The previous 1024 cap was the tightest of the three
+        # LLM call sites and the first to fail under MiniMax-M2.7 — see
+        # PR #225 for the diagnostic and `_MAX_TURN_TOKENS` comment for
+        # the matching rationale.
         async for event in stream_chat(
             messages=messages,
             provider=provider,
             model=model,
-            max_tokens=1024,
+            max_tokens=8192,
             temperature=0.2,
             db=db,
             user_id=user_id,

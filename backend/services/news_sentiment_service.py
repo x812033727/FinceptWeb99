@@ -222,11 +222,18 @@ async def _score_batch(
     assembled = ""
     usage_seen: dict[str, int] | None = None
     try:
+        # max_tokens=8192 leaves ~6-7K headroom for chain-of-thought on
+        # reasoning models (MiniMax-M2.7, DeepSeek-R1) before the JSON
+        # array of ~500-1000 tokens lands. With 2048 a thinking model
+        # exhausted the full budget on reasoning and finish_reason="length"
+        # arrived with zero content (see PR #225 diagnostic). M2.7 has a
+        # 205K context window, so the cap is purely an output-side budget;
+        # non-thinking models still emit only what they need.
         async for event in stream_chat(
             messages=messages,
             provider=provider,
             model=model,
-            max_tokens=2048,
+            max_tokens=8192,
             temperature=0.0,
             db=db,
         ):

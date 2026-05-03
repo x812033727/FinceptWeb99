@@ -1109,6 +1109,36 @@ async def test_inject_user_message_rejected_when_round_in_progress(
 
 
 @pytest.mark.asyncio
+async def test_inject_user_message_allows_done_status_for_post_mortem(
+    db_session: AsyncSession, owner: User,
+):
+    """The post-mortem flow injects a self-critique prompt against a
+    discussion that has already concluded (status=done). The earlier
+    `status != draft` guard rejected this case with the misleading
+    "round is in progress" error even though no round was running.
+
+    Contract under test (PR #266): injection is allowed on `done`
+    status; only `running` is rejected.
+    """
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+    row.current_round = 1
+    row.status = discussion_service.STATUS_DONE
+    await db_session.commit()
+
+    turn = await discussion_service.inject_user_message(
+        db_session, row, content="post-mortem content",
+    )
+    assert turn.persona_id == discussion_service.USER_PERSONA_ID
+    assert turn.stance == discussion_service.USER_INJECTION_STANCE
+    assert turn.content == "post-mortem content"
+
+
+@pytest.mark.asyncio
 async def test_inject_user_message_rejected_before_first_round(
     db_session: AsyncSession, owner: User,
 ):

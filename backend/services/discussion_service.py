@@ -485,8 +485,12 @@ async def inject_user_message(
     """Append a user-input turn to the discussion's current round.
 
     Constraints:
-      - status must be `draft` (mid-round injection would race the
-        running persona stream and leave the new turn out of order).
+      - status must NOT be `running` — mid-round injection would
+        race the active persona stream and leave the new turn out
+        of order. `draft` (round-completed, ready for next round)
+        and `done` (concluded, but extensible — the post-mortem
+        flow injects against a concluded discussion to seed the
+        next round of self-critique) are both fine.
       - `current_round` must be ≥ 1 (no point injecting before the
         first round has run — the user can just edit `topic` /
         `rules` while the discussion is still untouched).
@@ -500,7 +504,7 @@ async def inject_user_message(
     text = _validate_text(
         content, field="content", max_chars=_MAX_USER_INJECTION_CHARS,
     )
-    if discussion.status != STATUS_DRAFT:
+    if discussion.status == STATUS_RUNNING:
         raise ValueError(
             "Cannot inject a message while a round is in progress",
         )

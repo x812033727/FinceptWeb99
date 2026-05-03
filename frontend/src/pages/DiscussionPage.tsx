@@ -896,6 +896,41 @@ export default function DiscussionPage() {
               </div>
             );
           })}
+          {/* Pre-turn-stream "round preparing" card. Backend emits
+              `round_start` immediately after bumping the discussion's
+              current_round, but `gather_market_context` (incl. inline
+              news-sentiment scoring on backtest archives, ~15-30s)
+              runs BEFORE the first `turn_start` event. Without this
+              card the UI shows nothing during that window — users
+              think round 2 didn't fire. Render whenever we're
+              streaming but haven't yet received the first persona's
+              turn_start.
+          */}
+          {isStreaming && !streamingPersona && (
+            <>
+              {streamingRound !== null && (
+                <div className="flex items-center gap-2 my-3">
+                  <span className="text-[11px] font-semibold text-primary tracking-wider">
+                    {t("discussion.round_label", { round: streamingRound })}
+                  </span>
+                  <span className="flex-1 h-px bg-border" />
+                </div>
+              )}
+              <div className="bg-card border border-primary/40 rounded-lg p-3">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span
+                    aria-hidden="true"
+                    className="inline-block w-2 h-2 rounded-full bg-primary animate-pulse"
+                  />
+                  <span>
+                    {streamingRound === null
+                      ? t("discussion.loading_context_initial")
+                      : t("discussion.loading_context")}
+                  </span>
+                </div>
+              </div>
+            </>
+          )}
           {isStreaming && streamingPersona && (
             <>
               {/* When the streaming round hasn't appeared in the transcript

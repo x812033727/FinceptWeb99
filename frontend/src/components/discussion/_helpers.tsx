@@ -210,6 +210,54 @@ export async function runPostMortem(id: string): Promise<PostMortemResponse> {
   return res.data;
 }
 
+/** localStorage persistence for PostMortemGainersCard (PR #268).
+ *  The mutation result is in-memory only — without persistence the
+ *  scannable leaderboard disappears on page reload, leaving only
+ *  the markdown-formatted gainers list inside the user_input turn.
+ *  Operators end up reloading and wondering "did the post-mortem
+ *  even happen". Keyed by discussion ID so each backtest carries
+ *  its own snapshot. Survive across same-browser reloads but not
+ *  across browsers — acceptable trade-off (it's operator
+ *  situational awareness, not durable state).
+ */
+const POST_MORTEM_STORAGE_PREFIX = "discussion.postMortem.";
+
+export function rememberPostMortemResult(
+  discussionId: string, data: PostMortemResponse,
+): void {
+  try {
+    localStorage.setItem(
+      `${POST_MORTEM_STORAGE_PREFIX}${discussionId}`,
+      JSON.stringify(data),
+    );
+  } catch {
+    /* private mode / quota — best-effort */
+  }
+}
+
+export function readPostMortemResult(
+  discussionId: string,
+): PostMortemResponse | null {
+  try {
+    const raw = localStorage.getItem(
+      `${POST_MORTEM_STORAGE_PREFIX}${discussionId}`,
+    );
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PostMortemResponse;
+    // Sanity-check shape — corrupt entries (e.g. older format)
+    // shouldn't crash the card.
+    if (
+      typeof parsed?.next_trading_day === "string" &&
+      Array.isArray(parsed?.top_gainers)
+    ) {
+      return parsed;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchRoundContexts(id: string): Promise<RoundContextSnapshot[]> {
   const res = await api.get<RoundContextSnapshot[]>(
     `/discussion/sessions/${id}/contexts`,

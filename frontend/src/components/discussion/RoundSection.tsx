@@ -11,27 +11,39 @@ export interface RoundSectionProps {
 }
 
 /**
- * One collapsible block per round in the transcript. Header always
- * shows round number + persona-turn count + a chevron; body renders
- * only when expanded. Default-collapsed (per the user's "all rounds
- * folded by default" UX) with state persisted to localStorage so a
- * reload preserves whatever the user expanded last session.
+ * One collapsible block per round in the transcript. Header shows
+ * round number + persona-turn count + a chevron; body renders only
+ * when expanded.
  *
- * Keyed by `(discussionId, round)` so two different discussions
- * don't cross-pollinate collapse state.
+ * Default state:
+ *   - Folded for ordinary persona-only rounds (per the user's
+ *     "all rounds folded by default" UX from PR #247).
+ *   - Auto-expanded for rounds that contain a `_user/user_input`
+ *     turn (e.g. the post-mortem self-critique injection from
+ *     PR #249), AND a 「📋 事後檢討」 / 「✎ 插話」 badge in the
+ *     header. Without this the post-mortem flow looked silently
+ *     broken — the chain succeeded but the new turns were buried
+ *     in collapsed sections with no visual cue. (PR #268)
  *
- * Extracted from `pages/DiscussionPage.tsx` (PR #264) for unit-
- * testability — the parent page is a 1000-line orchestration shell
- * and pulling RoundSection out lets the collapse / chevron / stance
- * badge logic be tested in isolation.
+ * State persists to localStorage keyed by (discussionId, round),
+ * so a reload preserves whatever the user manually expanded /
+ * collapsed.
  */
 export function RoundSection({
   discussionId, round, turns, personaName,
 }: RoundSectionProps) {
   const { t } = useTranslation();
+  // Detect post-mortem injection in this round so the header can
+  // surface the badge and the section can default-expand.
+  const postMortemTurn = turns.find(
+    (tn) =>
+      tn.stance === "user_input" &&
+      (tn.content || "").trimStart().startsWith("【事後檢討"),
+  );
+  const hasUserInjection = turns.some((tn) => tn.stance === "user_input");
   const { open, toggle } = useCollapsible(
     `discussion.${discussionId}.round.${round}`,
-    false,
+    Boolean(hasUserInjection),
   );
   return (
     <div className="my-3 first:mt-0">
@@ -50,6 +62,15 @@ export function RoundSection({
         <span className="text-[10px] text-muted-foreground">
           ({t("discussion.turn_count", { count: turns.length })})
         </span>
+        {postMortemTurn ? (
+          <span className="px-1.5 py-0.5 text-[10px] rounded border bg-purple-900/30 text-purple-300 border-purple-800/50">
+            {t("discussion.post_mortem_round_badge")}
+          </span>
+        ) : hasUserInjection ? (
+          <span className="px-1.5 py-0.5 text-[10px] rounded border bg-amber-900/30 text-amber-300 border-amber-800/50">
+            {t("discussion.user_injection_round_badge")}
+          </span>
+        ) : null}
         <span className="flex-1 h-px bg-border" />
       </button>
       {open && (

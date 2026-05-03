@@ -31,7 +31,9 @@ import {
   readCollapse,
   readDefaultRules,
   readDefaultTopic,
+  readPostMortemResult,
   rememberCollapse,
+  rememberPostMortemResult,
   rememberRules,
   rememberTopic,
   renderInlineMarkdown,
@@ -39,6 +41,7 @@ import {
   updateSession,
   usePersonaName,
 } from "@/components/discussion/_helpers";
+import type { PostMortemResponse } from "@/components/discussion/_helpers";
 import type { CollapseState } from "@/components/discussion/_helpers";
 
 export default function DiscussionPage() {
@@ -228,13 +231,31 @@ export default function DiscussionPage() {
   // conclude so the user clicks ONE button.
   const postMortemMut = useMutation({
     mutationFn: () => runPostMortem(selectedId!),
-    onSuccess: () => {
+    onSuccess: (data) => {
       // Refetch session to pull in the injected turn so the persona
       // history sent to the next round actually contains the critique
       // prompt.
       queryClient.invalidateQueries({ queryKey: ["discussion-session", selectedId] });
+      // PR #268: persist the gainers payload so the leaderboard card
+      // survives a page reload — the mutation result is otherwise
+      // in-memory only and operators kept reloading and wondering
+      // "did the post-mortem run".
+      if (selectedId && data) {
+        rememberPostMortemResult(selectedId, data);
+      }
     },
   });
+
+  // Hydrate the persisted post-mortem result on session switch so
+  // the leaderboard card re-appears after a reload. The mutation
+  // state still wins when fresh — `postMortemMut.data` shadows this
+  // for the rest of the active session. Computed during render with
+  // useMemo since the value is purely a function of `selectedId`
+  // (avoids the react-hooks/set-state-in-effect lint).
+  const persistedPostMortem = useMemo<PostMortemResponse | null>(
+    () => (selectedId ? readPostMortemResult(selectedId) : null),
+    [selectedId],
+  );
 
   /** Three-step chain triggered by 「事後檢討」: inject → run round →
    *  re-conclude. Each step persists independently so a failure at
@@ -1103,10 +1124,14 @@ export default function DiscussionPage() {
           {detail?.conclusion && (
             <ConclusionCard detail={detail} personaName={personaName} />
           )}
-          {/* Transient post-mortem gainers leaderboard. Renders only
-              while the mutation result is in memory; markdown in the
-              injected user_input turn is the durable record. */}
-          <PostMortemGainersCard data={postMortemMut.data ?? null} />
+          {/* Post-mortem gainers leaderboard. Falls back to the
+              localStorage-persisted snapshot (PR #268) when the
+              mutation state is empty — survives page reload so the
+              operator can see "what was the post-mortem about" after
+              coming back to the discussion. */}
+          <PostMortemGainersCard
+            data={postMortemMut.data ?? persistedPostMortem}
+          />
           {detail && (
             <RoundContextsCard discussionId={detail.id} />
           )}

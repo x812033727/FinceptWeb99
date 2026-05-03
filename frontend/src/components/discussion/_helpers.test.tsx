@@ -9,13 +9,15 @@
  * `formatCompactNumber`) are also exercised so a silent re-tune
  * (e.g. dropping the trailing-zero strip) is caught.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Conclusion } from "@/types/discussion";
 import {
   formatCompactNumber,
   formatDiscussionTitle,
   latestNonNull,
   pctClass,
+  readPostMortemResult,
+  rememberPostMortemResult,
   signedPct,
   signedPctSafe,
   summarizeContext,
@@ -449,5 +451,77 @@ describe("summarizeContext", () => {
   it("skips prior_discussions_summary when block missing or empty", () => {
     expect(summarizeContext({}).prior_discussions_summary).toBeUndefined();
     expect(summarizeContext({ prior_discussions: [] }).prior_discussions_summary).toBeUndefined();
+  });
+});
+
+// ── PR #268: post-mortem result localStorage persistence ─────────
+
+describe("rememberPostMortemResult / readPostMortemResult", () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+
+  const sampleData = {
+    next_trading_day: "2026-04-16",
+    top_gainers: [
+      { symbol: "2330", change_pct: 5.23, close: 1100, base_close: 1045 },
+      { symbol: "2317", change_pct: 4.10, close: 220, base_close: 211 },
+    ],
+    injected_turn_id: 42,
+  };
+
+  it("round-trips a post-mortem payload through localStorage", () => {
+    rememberPostMortemResult("disc-A", sampleData);
+    const out = readPostMortemResult("disc-A");
+    expect(out).toEqual(sampleData);
+  });
+
+  it("isolates per-discussion storage so a second discussion doesn't leak the first", () => {
+    rememberPostMortemResult("disc-A", sampleData);
+    expect(readPostMortemResult("disc-B")).toBeNull();
+  });
+
+  it("returns null when nothing is stored for the requested discussion", () => {
+    expect(readPostMortemResult("never-saved")).toBeNull();
+  });
+
+  it("returns null on corrupted storage instead of crashing the card", () => {
+    localStorage.setItem(
+      "discussion.postMortem.disc-bad", "not valid json {",
+    );
+    expect(readPostMortemResult("disc-bad")).toBeNull();
+  });
+
+  it("rejects payloads that don't match the expected shape", () => {
+    /* A future schema bump could leave older entries on the user's
+       machine — the read shouldn't crash, just degrade to null and
+       wait for the next post-mortem run to overwrite the slot. */
+    localStorage.setItem(
+      "discussion.postMortem.disc-old",
+      JSON.stringify({ unrelated_field: "x" }),
+    );
+    expect(readPostMortemResult("disc-old")).toBeNull();
+  });
+
+  it("survives localStorage being unavailable (private mode etc.)", () => {
+    /* Best-effort writes shouldn't throw even when the storage
+       throws on .setItem. Trace via a Proxy that throws on every
+       method — the helper's internal try/catch must absorb it. */
+    const realStorage = window.localStorage;
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      get() {
+        throw new Error("storage unavailable");
+      },
+    });
+    try {
+      expect(() => rememberPostMortemResult("x", sampleData)).not.toThrow();
+      expect(() => readPostMortemResult("x")).not.toThrow();
+      expect(readPostMortemResult("x")).toBeNull();
+    } finally {
+      Object.defineProperty(window, "localStorage", {
+        configurable: true,
+        value: realStorage,
+      });
+    }
   });
 });

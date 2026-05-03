@@ -56,6 +56,61 @@ describe("RoundSection", () => {
     expect(button.textContent).toMatch(/2/);
   });
 
+  it("auto-expands when the round contains a post-mortem user_input turn", () => {
+    /* PR #268: post-mortem rounds are surfaced expanded by default
+       so the operator immediately sees the injected critique +
+       persona reflections, instead of staring at a collapsed
+       section with no visible change after the chain runs. */
+    render(
+      <RoundSection
+        discussionId="d1"
+        round={1}
+        turns={[
+          makeTurn(),
+          makeTurn({
+            id: 2, turn_index: 1, persona_id: "_user",
+            stance: "user_input",
+            content: "【事後檢討 — 對答案】請反思",
+          }),
+        ]}
+        personaName={personaName}
+      />,
+    );
+    const button = screen.getByRole("button");
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    expect(button.textContent).toContain("▼");
+    // 「📋 事後檢討」 badge surfaces in the header.
+    expect(button.textContent).toContain("📋");
+  });
+
+  it("auto-expands and shows the directive badge for non-post-mortem user_input turns", () => {
+    /* Generic owner-injected directives (not necessarily post-mortem)
+       still get an "owner directive" badge so the round isn't
+       silently collapsed — but a different badge so operators can
+       tell the two apart at a glance. */
+    render(
+      <RoundSection
+        discussionId="d1"
+        round={1}
+        turns={[
+          makeTurn(),
+          makeTurn({
+            id: 2, turn_index: 1, persona_id: "_user",
+            stance: "user_input",
+            content: "請聚焦在 2330 的法說會時程。",
+          }),
+        ]}
+        personaName={personaName}
+      />,
+    );
+    const button = screen.getByRole("button");
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    // Owner-directive badge (✎ from the locale file).
+    expect(button.textContent).toContain("✎");
+    // Post-mortem-specific badge must NOT fire for generic directives.
+    expect(button.textContent).not.toContain("📋");
+  });
+
   it("hides turn bodies when collapsed", () => {
     render(
       <RoundSection

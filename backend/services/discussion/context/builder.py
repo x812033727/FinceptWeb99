@@ -124,6 +124,13 @@ def _initial_ctx(*, market: str, as_of: date | None) -> dict[str, Any]:
         # focus_briefs / focus_symbols) — biases coverage toward
         # what the discussion is already tracking.
         "upcoming_events_calendar": [],
+        # Per-focus-symbol 主力分點 (broker concentration, PR #285).
+        # List of `{symbol, as_of, from_ts, session_count,
+        # top_buyers: [{broker, broker_id, net_buy_shares}, ...],
+        # top_sellers: [...]}`. Live FinMind read with 24h Redis
+        # cache; no DB table. Bounded fan-out (≤ 5 focus_symbols)
+        # to cap Sponsor quota burn per discussion.
+        "broker_concentration": [],
         # Overseas index snapshot (PR #269): SOX / NDX / SPX / DJI /
         # VIX latest close + 1-day % change. Wired in for ALL
         # markets — TW personas need overnight US direction, US
@@ -269,6 +276,14 @@ async def build_market_context(
         # means the next round picks it up.
         await chip.fetch_upcoming_events_calendar(
             ctx, market=market,
+            focus_symbols=focus_symbols,
+            as_of=as_of, record_error=record_error,
+        )
+        # PR #285: per-focus-symbol 主力分點. Live FinMind +
+        # cache, no DB. focus_symbols-only fan-out keeps quota
+        # bounded.
+        await chip.fetch_broker_concentration(
+            ctx,
             focus_symbols=focus_symbols,
             as_of=as_of, record_error=record_error,
         )

@@ -746,6 +746,35 @@ async def get_futures_institutional(
     )
 
 
+async def get_broker_concentration_per_symbol(
+    symbol: str, start_date: str, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """``TaiwanStockTradingDailyReport`` — 分點籌碼 (per-broker
+    daily buy/sell volumes for a single stock). Sponsor-tier.
+
+    PR #285 entry point for the broker-concentration ctx block.
+    Fan-out is per-symbol because the dataset has no
+    market-wide call shape; the calling service caps the universe
+    to focus_symbols + caches per (symbol, as_of) so a typical
+    discussion only fires 1-3 calls.
+
+    Row shape (FinMind doc snapshot 2026-05):
+      {
+        "date": "YYYY-MM-DD",
+        "stock_id": "2330",
+        "securities_trader": "凱基台北",
+        "securities_trader_id": "9200",
+        "buy":  1234567,        # shares
+        "sell": 234567,         # shares
+        "buy_price":  600.5,    # weighted avg
+        "sell_price": 601.0,
+      }
+    """
+    return await _query(
+        "TaiwanStockTradingDailyReport", symbol, start_date, end_date,
+    )
+
+
 async def get_stock_futures_institutional_market_wide(
     start_date: str, end_date: str | None = None,
 ) -> list[dict[str, Any]]:

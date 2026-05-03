@@ -108,6 +108,17 @@ _SIGNAL_KEYWORDS: dict[str, list[str]] = {
         # Generic "波動率" alone is too broad (US ^VIX uses it too in
         # overseas_indicators); require TW-specific qualifier.
     ],
+    "broker_concentration": [
+        r"主力(?:進出|分點)?", r"分點", r"branch[_\s]*dot",
+        r"買賣家數", r"分點(?:籌碼|集中)",
+        # Common TW broker brand names — personas frequently
+        # reference the brokers by name when describing 籌碼.
+        # Hit on any of these = persona is reasoning over
+        # broker-level data, which IS what this signal block
+        # carries.
+        r"凱基", r"元大", r"富邦", r"群益", r"國泰", r"永豐",
+        r"中信", r"統一", r"日盛", r"玉山",
+    ],
     "news_sentiment": [
         r"新聞情緒", r"情緒(?:面|偏)", r"sentiment", r"news[_\s]*sentiment",
     ],
@@ -346,6 +357,7 @@ def _detect_present_signals(context: dict[str, Any]) -> set[str]:
         "single_stock_futures_oi",   # PR #282
         "taiwan_vix",                # PR #283
         "upcoming_events_calendar",  # PR #284
+        "broker_concentration",      # PR #285
         "user_context", "prior_discussions",
     ):
         if _is_meaningful(context.get(top_key)):

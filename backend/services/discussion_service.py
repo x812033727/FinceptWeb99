@@ -1756,6 +1756,17 @@ _BLOCK_ANNOTATIONS: dict[str, str] = {
         "或為事件風險預留調整空間（停損 / 部位縮減 / 套保）。"
         "引用時請點名具體標的 + 距今天數（例：「2330 法說 3 日後，建議事件前減倉」）。"
     ),
+    "broker_concentration": (
+        "- broker_concentration：**主力分點 5 日累計買賣超**"
+        "（PR #285，每筆即一個 focus_symbol）。每筆含 `symbol` / "
+        "`top_buyers`[broker, broker_id, net_buy_shares] / `top_sellers`[…] / "
+        "`session_count`。**branch-dot pattern 是公司派 / 主力 / 大戶在做什麼的"
+        "最直接訊號** — 同一家分點連續多日大買大賣，往往領先個股 3-5 日大行情。"
+        "若 top_buyers / top_sellers 集中度高（前 3 大佔總額 > 50%），代表"
+        "走勢有 single-actor driver，分析時應將該分點當作主軸；分散度高則"
+        "表示資金無共識，技術分析權重應降低。引用時請點名具體分點 + 張數"
+        "（例：「凱基台北 連 5 日淨買 +50K 張」），不要只說「主力大買」。"
+    ),
     "margin_balance_trend":      "- margin_balance_trend：全市場融資 / 融券餘額趨勢（散戶槓桿與看空代理）。",
     "top_revenue_growers":       "- top_revenue_growers：最新月份營收年增率前 10（基本面）。",
     "active_buybacks":           "- active_buybacks：今日仍在執行庫藏股的公司，**強烈管理層信心訊號**。",
@@ -2249,6 +2260,7 @@ _ALL_PERSONA_BLOCKS: frozenset[str] = frozenset({
     "single_stock_futures_oi",   # PR #282: per-stock 外資 期貨 net OI shift
     "taiwan_vix",                # PR #283: 台指選擇權波動率指數
     "upcoming_events_calendar",  # PR #284: market-wide 法說 / 除息 calendar
+    "broker_concentration",      # PR #285: per-focus-symbol 主力分點
     "overseas_indicators",   # PR #270: SOX/NDX/SPX/DJI/VIX overnight snapshot
     "focus_briefs", "macro", "user_context", "prior_discussions",
 })
@@ -2286,6 +2298,7 @@ _CONTRARIAN_PROFILE = frozenset({
     "single_stock_futures_oi",  # PR #282: extreme per-stock futures OI also a contrarian setup
     "taiwan_vix",               # PR #283: 台 VIX > 25 = panic = contrarian setup
     "upcoming_events_calendar", # PR #284: events create dislocation opportunities
+    "broker_concentration",     # PR #285: 主力分點 lockstep = setup confirmation/contrarian alarm
     "overseas_indicators",  # PR #270: ^VIX spikes = global panic = contrarian setup
     "macro",
 })
@@ -2299,6 +2312,7 @@ _QUANT_PROFILE = frozenset({
     "single_stock_futures_oi",  # PR #282: per-stock futures smart-money lead
     "taiwan_vix",               # PR #283: TW VIX as a vol-regime filter
     "upcoming_events_calendar", # PR #284: event-risk gating on entries
+    "broker_concentration",     # PR #285: per-focus-symbol 主力分點
     "overseas_indicators",  # PR #270: SOX overnight gap is the dominant TW open driver
 })
 

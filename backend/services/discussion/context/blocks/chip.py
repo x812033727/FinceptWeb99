@@ -266,3 +266,36 @@ async def fetch_upcoming_events_calendar(
             ctx["upcoming_events_calendar"] = events
     except Exception as exc:
         record_error("upcoming_events_calendar", exc)
+
+
+async def fetch_broker_concentration(
+    ctx: dict[str, Any],
+    *,
+    focus_symbols: list[str] | None,
+    as_of: date | None,
+    record_error: ErrorRecorder,
+) -> None:
+    """Per-focus-symbol 主力分點 snapshot (PR #285).
+
+    Live FinMind read with 24h Redis cache — no DB table. Bounded
+    per-discussion fan-out (≤ 5 symbols by default) so a topic
+    that mentions many tickers doesn't burn the Sponsor quota.
+
+    Block is omitted entirely (not rendered as `[]`) when the
+    focus_symbols list is empty OR every symbol returns no broker
+    data. Schema annotation gating then cleanly hides the prompt
+    mention.
+    """
+    if not focus_symbols:
+        return
+    try:
+        from services.broker_concentration_service import (
+            get_broker_concentration_for_focus,
+        )
+        snapshots = await get_broker_concentration_for_focus(
+            focus_symbols, as_of=as_of,
+        )
+        if snapshots:
+            ctx["broker_concentration"] = snapshots
+    except Exception as exc:
+        record_error("broker_concentration", exc)

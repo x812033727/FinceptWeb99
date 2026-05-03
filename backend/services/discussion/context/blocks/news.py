@@ -38,7 +38,25 @@ async def fetch_market_sentiment(
     as_of_dt: datetime | None,
     record_error: ErrorRecorder,
 ) -> None:
-    """Discussion's primary-market sentiment aggregate (last 48h)."""
+    """Discussion's primary-market sentiment aggregate (last 48h).
+
+    Backtest auto-backfill (PR #214): when `as_of_dt` is set and the
+    archive is sparse for the relevant window, kick off a narrow
+    FinMind backfill so personas don't surface the empty-archive
+    warning. Best-effort — silent fail when FINMIND_TOKEN is missing
+    or paywalled. Hot path (archive already populated) is one COUNT
+    query in milliseconds, so no latency cost when not needed."""
+    if as_of_dt is not None:
+        try:
+            from services.news_backfill_service import (
+                ensure_news_archive_covers,
+            )
+            await ensure_news_archive_covers(
+                db, market=market, as_of=as_of_dt.date(),
+            )
+        except Exception as exc:
+            record_error("news_backfill", exc)
+
     try:
         from services.news_sentiment_service import read_recent_market_sentiment
         ns = await read_recent_market_sentiment(

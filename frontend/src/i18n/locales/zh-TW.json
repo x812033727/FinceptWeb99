@@ -652,6 +652,17 @@
     "by_provider": "依 Provider 拆分",
     "empty": "此區間尚無用量"
   },
+  "signal_audit": {
+    "title": "訊號引用率",
+    "subtitle": "Personas 是否真的引用了 ctx 區塊（關鍵字掃描）",
+    "refresh": "重新整理",
+    "empty": "查無已結束的討論（或都沒有 round_context 快照）",
+    "audited": "已分析 {{count}} 場討論（最近 {{requested}} 場中）",
+    "zero_uptake_count": "{{count}} 個訊號無人引用",
+    "zero_uptake_title": "Zero uptake — 完全沒被引用",
+    "zero_uptake_help": "這些訊號在 ≥ 1 輪出現於 ctx，但沒有任何 persona 在內容中引用。建議調整 schema annotation 或從 persona profile 移除。",
+    "coverage_title": "完整覆蓋率（依引用率排序）"
+  },
   "screener": {
     "title": "篩選器",
     "subtitle": "依條件篩選個股",

@@ -652,6 +652,17 @@
     "by_provider": "By Provider",
     "empty": "No usage yet in this range"
   },
+  "signal_audit": {
+    "title": "Signal Citation Rate",
+    "subtitle": "Whether personas actually cite ctx blocks (keyword scan)",
+    "refresh": "Refresh",
+    "empty": "No concluded discussions found (or none had round_context snapshots)",
+    "audited": "{{count}} discussions audited (out of last {{requested}})",
+    "zero_uptake_count": "{{count}} signals never cited",
+    "zero_uptake_title": "Zero uptake — never cited",
+    "zero_uptake_help": "Present in ≥ 1 round but never cited by any persona. Candidates for schema-annotation tuning or persona-profile removal.",
+    "coverage_title": "Full coverage (sorted by citation rate)"
+  },
   "screener": {
     "title": "Screener",
     "subtitle": "Filter stocks by any metric",

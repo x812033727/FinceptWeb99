@@ -9,6 +9,7 @@ import { LLMKeysCard } from "@/components/admin/LLMKeysCard";
 import { MarketKeysCard } from "@/components/admin/MarketKeysCard";
 import { PersonasCard } from "@/components/admin/PersonasCard";
 import { RuntimeTunablesCard } from "@/components/admin/RuntimeTunablesCard";
+import { SignalAuditCard } from "@/components/admin/SignalAuditCard";
 import { SystemTasksCard } from "@/components/admin/SystemTasksCard";
 import { SystemUpdateCard } from "@/components/admin/SystemUpdateCard";
 import { UsageCard } from "@/components/admin/UsageCard";
@@ -117,6 +118,8 @@ function AdminContent() {
       <SystemTasksCard />
 
       <RuntimeTunablesCard />
+
+      <SignalAuditCard />
 
       <UsersSection
         users={users}

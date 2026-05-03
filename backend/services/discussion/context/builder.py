@@ -108,6 +108,13 @@ def _initial_ctx(*, market: str, as_of: date | None) -> dict[str, Any]:
         # industry, name_zh}` ranked by 5-day foreign-net-OI delta
         # descending. TW-only.
         "single_stock_futures_oi": [],
+        # TAIWAN VIX 臺指選擇權波動率指數 (PR #283). Shape:
+        # `{as_of, value, from_ts, from_value, change_pct}`.
+        # Populated only when `tw_vix_daily` has rows in the
+        # window — `taiwan_vix` key is omitted entirely when the
+        # archive is empty so the schema annotation's gating
+        # cleanly hides the prompt mention.
+        "taiwan_vix": None,
         # Overseas index snapshot (PR #269): SOX / NDX / SPX / DJI /
         # VIX latest close + 1-day % change. Wired in for ALL
         # markets — TW personas need overnight US direction, US
@@ -217,6 +224,12 @@ async def build_market_context(
         # PR #282: 個股期貨 三大法人未平倉 — futures-side
         # complement to top_foreign_buyers. TW only.
         await chip.fetch_top_stock_futures_buyers(
+            ctx, db, as_of=as_of, record_error=record_error,
+        )
+        # PR #283: TAIWAN VIX (臺指選擇權波動率指數). TW only —
+        # different volatility regime from US `^VIX` in
+        # overseas_indicators, useful side-by-side.
+        await chip.fetch_taiwan_vix(
             ctx, db, as_of=as_of, record_error=record_error,
         )
         await chip.fetch_margin_balance_trend(

@@ -290,6 +290,20 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # TAIWAN VIX (PR #283). TAIFEX public CSV download — free, no
+    # FinMind quota. 16:00 Taipei (08:00 UTC), 1.5h after cash close
+    # but before the FinMind sponsor cluster so a TAIFEX outage
+    # doesn't cascade into FinMind quota burn.
+    from tasks.ingest_tw_vix import run as run_ingest_tw_vix
+    scheduler.add_job(
+        run_ingest_tw_vix,
+        trigger=CronTrigger(hour=8, minute=0, timezone="UTC"),
+        id="ingest_tw_vix",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # TAIEX TR (含息報酬指數). FinMind sponsor-tier; pulls trailing
     # 400 days every tick (cheap, idempotent UPSERT). 15:30 Taipei
     # (07:30 UTC), 20 min after `ingest_taiex_history` so neither

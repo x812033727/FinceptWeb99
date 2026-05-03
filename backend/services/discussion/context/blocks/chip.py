@@ -173,3 +173,32 @@ async def fetch_top_stock_futures_buyers(
         )
     except Exception as exc:
         record_error("single_stock_futures_oi", exc)
+
+
+async def fetch_taiwan_vix(
+    ctx: dict[str, Any],
+    db: "AsyncSession",
+    *,
+    as_of: date | None,
+    record_error: ErrorRecorder,
+) -> None:
+    """TAIWAN VIX (台指選擇權波動率指數) snapshot — latest close +
+    5-day change % (PR #283). Surfaces alongside the US `^VIX`
+    in `overseas_indicators` so personas can compare TW vs global
+    implied-volatility regimes ("台 VIX 22 vs US VIX 16 → 台股
+    避險溢價 expanded").
+
+    Read tier returns None when the archive is empty (cron hasn't
+    run yet / TAIFEX outage); we drop the key entirely rather
+    than rendering as `null` so the schema annotation's persona
+    profile gating cleanly hides the prompt mention.
+    """
+    try:
+        from services.ingest.repository import read_tw_vix_snapshot
+        snapshot = await read_tw_vix_snapshot(
+            db, market="TW", days=5, as_of=as_of,
+        )
+        if snapshot is not None:
+            ctx["taiwan_vix"] = snapshot
+    except Exception as exc:
+        record_error("taiwan_vix", exc)

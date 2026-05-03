@@ -72,6 +72,7 @@ RETRYABLE_INGEST_JOBS = {
     "ingest_buyback_tw": "TW buyback announcements",
     "ingest_govt_bank_flow_tw": "TW eight-bank daily flow",
     "ingest_stock_futures_oi_tw": "TW 個股期貨 三大法人未平倉 (FinMind sponsor)",
+    "ingest_tw_vix": "TW VIX 臺指選擇權波動率指數 (TAIFEX CSV)",
     "ingest_taiex_history": "TAIEX daily history",
     "ingest_taiex_tr_history": "TAIEX TR (total return) history",
     "ingest_risk_signals_tw": "TW risk signals (disposition / suspended / day-trading)",
@@ -430,6 +431,9 @@ async def _run_ingest_job_once(job_id: str) -> None:
         await run()
     elif job_id == "ingest_stock_futures_oi_tw":
         from tasks.ingest_stock_futures_oi_tw import run
+        await run()
+    elif job_id == "ingest_tw_vix":
+        from tasks.ingest_tw_vix import run
         await run()
     elif job_id == "ingest_taiex_history":
         from tasks.ingest_taiex_history import run

@@ -89,6 +89,12 @@ _SIGNAL_KEYWORDS: dict[str, list[str]] = {
         # ("CDF 連 5 日 +1500 口" = 台積電期).
         r"\b(?:CDF|CFF|CCF|IIF|GLF|GVF|HCF|NEF|NHF|NJF)\b",
     ],
+    "taiwan_vix": [
+        r"台.*VIX", r"VIX[_\s]*TW", r"VXTW",
+        r"臺指選擇權.*波動率", r"台.*波動率指數",
+        # Generic "波動率" alone is too broad (US ^VIX uses it too in
+        # overseas_indicators); require TW-specific qualifier.
+    ],
     "news_sentiment": [
         r"新聞情緒", r"情緒(?:面|偏)", r"sentiment", r"news[_\s]*sentiment",
     ],
@@ -325,6 +331,7 @@ def _detect_present_signals(context: dict[str, Any]) -> set[str]:
         "active_buybacks", "govt_bank_flow_5d", "risk_warnings",
         "market_institutional_5d", "macro", "focus_briefs",
         "single_stock_futures_oi",   # PR #282
+        "taiwan_vix",                # PR #283
         "user_context", "prior_discussions",
     ):
         if _is_meaningful(context.get(top_key)):

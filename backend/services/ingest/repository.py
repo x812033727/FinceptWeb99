@@ -2269,3 +2269,99 @@ async def read_top_foreign_stock_futures_buyers(
 
     results.sort(key=lambda r: r["fini_change"], reverse=True)
     return results[:limit]
+
+
+# ── PR #283: tw_vix_daily ────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class VixDailyRow:
+    """One day's TAIWAN VIX close."""
+    market: str
+    ts: date
+    vix_value: float
+    source: str
+
+
+_VIX_FIELDS = ("market", "ts", "vix_value", "source")
+
+
+async def upsert_tw_vix_daily(
+    db: AsyncSession, rows: Iterable[VixDailyRow],
+) -> int:
+    """Bulk upsert. ON CONFLICT (market, ts) updates `vix_value` +
+    `source` so a re-pull of an already-ingested day with corrected
+    TAIFEX numbers overwrites in place."""
+    from models.tw_vix_daily import TwVixDaily
+    payload = [_row_to_dict(r, fields=_VIX_FIELDS) for r in rows]
+    return await _chunked_upsert(
+        db,
+        model=TwVixDaily,
+        payload=payload,
+        index_elements=["market", "ts"],
+        update_cols=("vix_value", "source"),
+    )
+
+
+async def read_tw_vix_snapshot(
+    db: AsyncSession, *,
+    market: str = "TW",
+    days: int = 5,
+    as_of: date | None = None,
+) -> dict[str, Any] | None:
+    """Latest VIX value + value `days` trading-days ago (best-effort
+    via calendar-day lookback) + change %.
+
+    Returns None when the archive has no rows in the window — caller
+    (ctx block) drops the field entirely so personas don't reference
+    a phantom value.
+
+    Backtest semantics: when `as_of` is set, both endpoints are
+    clamped to `<= as_of`. The TAIFEX archive is insert-only (VIX
+    closes don't get retroactively corrected the way some FinMind
+    datasets do), so no extra masking needed.
+    """
+    from models.tw_vix_daily import TwVixDaily
+
+    end = as_of or date.today()
+    cutoff = end - timedelta(days=days * 3 + 14)
+    stmt = (
+        select(TwVixDaily.ts, TwVixDaily.vix_value)
+        .where(
+            TwVixDaily.market == market,
+            TwVixDaily.ts >= cutoff,
+            TwVixDaily.ts <= end,
+        )
+        .order_by(TwVixDaily.ts.asc())
+    )
+    rows = (await db.execute(stmt)).all()
+    if not rows:
+        return None
+
+    series = [(r[0], float(r[1])) for r in rows]
+    last_ts, last_value = series[-1]
+
+    # Pick the closest bar at-or-before `end - days` calendar days.
+    # We over-approximate by iterating from oldest to newest because
+    # the series is short (< 25 rows even at days=5 + 14 buffer).
+    target = last_ts - timedelta(days=days)
+    prev_pair = None
+    for ts, val in series:
+        if ts <= target:
+            prev_pair = (ts, val)
+        else:
+            break
+
+    change_pct: float | None = None
+    if prev_pair is not None and prev_pair[1]:
+        change_pct = round(
+            (last_value / prev_pair[1] - 1) * 100, 4,
+        )
+
+    return {
+        "as_of":      last_ts.isoformat(),
+        "value":      round(last_value, 4),
+        "from_ts":    prev_pair[0].isoformat() if prev_pair else None,
+        "from_value": round(prev_pair[1], 4) if prev_pair else None,
+        "change_pct": change_pct,
+    }

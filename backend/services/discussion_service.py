@@ -1739,6 +1739,15 @@ _BLOCK_ANNOTATIONS: dict[str, str] = {
         "與 top_foreign_buyers（現貨）同向 = 短線確立度極高，逆向 = 優先信任期貨方。"
         "引用時請帶具體口數（例：「外資個股期 2330 連 5 日多單 +1500 口」）。"
     ),
+    "taiwan_vix": (
+        "- taiwan_vix：**臺指選擇權波動率指數**（VIX_TW，PR #283）。"
+        "`value` = 最新收盤、`change_pct` = 5 日變化 %。"
+        "與 overseas_indicators 的 `^VIX`（美 VIX）並列：兩者方向 / 強度差距"
+        "反映台美避險溢價 spread，VIX_TW 跳升而 ^VIX 平靜 = 台股 idiosyncratic "
+        "風險偏高（地緣 / 央行 / 個股突發）；同步跳升 = 全球 risk-off。"
+        "**> 25 視為高度恐慌**（歷史中位數約 16-18），結論時應提及避險建議。"
+        "引用時請帶具體值（例：「台 VIX 22.3 + 5d +18%，避險溢價擴大」）。"
+    ),
     "margin_balance_trend":      "- margin_balance_trend：全市場融資 / 融券餘額趨勢（散戶槓桿與看空代理）。",
     "top_revenue_growers":       "- top_revenue_growers：最新月份營收年增率前 10（基本面）。",
     "active_buybacks":           "- active_buybacks：今日仍在執行庫藏股的公司，**強烈管理層信心訊號**。",
@@ -2230,6 +2239,7 @@ _ALL_PERSONA_BLOCKS: frozenset[str] = frozenset({
     "active_buybacks", "govt_bank_flow_5d", "risk_warnings",
     "market_institutional_5d", "taifex_positioning",
     "single_stock_futures_oi",   # PR #282: per-stock 外資 期貨 net OI shift
+    "taiwan_vix",                # PR #283: 台指選擇權波動率指數
     "overseas_indicators",   # PR #270: SOX/NDX/SPX/DJI/VIX overnight snapshot
     "focus_briefs", "macro", "user_context", "prior_discussions",
 })
@@ -2239,6 +2249,7 @@ _ALL_PERSONA_BLOCKS: frozenset[str] = frozenset({
 _MACRO_PROFILE = frozenset({
     "index", "macro", "international_sentiment",
     "overseas_indicators",   # PR #270: SOX/NDX/SPX/DJI/VIX — core macro signal
+    "taiwan_vix",            # PR #283: TW implied-vol regime
     "top_foreign_buyers", "govt_bank_flow_5d", "market_institutional_5d",
     "taifex_positioning",   # smart-money directional signal — central to macro view
     "news_sentiment", "per_symbol_news_sentiment",
@@ -2263,6 +2274,7 @@ _CONTRARIAN_PROFILE = frozenset({
     "short_term_signals",   # RSI extremes + volume spikes flag reversals
     "taifex_positioning",   # extreme net OI = contrarian setup
     "single_stock_futures_oi",  # PR #282: extreme per-stock futures OI also a contrarian setup
+    "taiwan_vix",               # PR #283: 台 VIX > 25 = panic = contrarian setup
     "overseas_indicators",  # PR #270: ^VIX spikes = global panic = contrarian setup
     "macro",
 })
@@ -2274,6 +2286,7 @@ _QUANT_PROFILE = frozenset({
     "short_term_signals",   # core Tier-1 quant signals per focus symbol
     "taifex_positioning",   # market-wide directional bias
     "single_stock_futures_oi",  # PR #282: per-stock futures smart-money lead
+    "taiwan_vix",               # PR #283: TW VIX as a vol-regime filter
     "overseas_indicators",  # PR #270: SOX overnight gap is the dominant TW open driver
 })
 

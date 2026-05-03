@@ -696,6 +696,37 @@ a fresh ~50k-row backfill, bump the cap via the AdminPage
 `RuntimeTunablesCard` for a one-time burn — the runtime config
 propagates within 60 s and you can drop it back afterwards.
 
+## Backfilling historical monthly revenue (FinMind paid tier)
+
+The daily `ingest_revenue_tw` cron only pulls a 90-day FinMind
+lookback, and FinMind's market-wide `TaiwanStockMonthRevenue` query
+was paywalled in 2026-04 — when that happens the cron returns early
+without writing anything, so any bogus values sitting in
+`tw_revenue_monthly` from a previous deploy persist indefinitely.
+With a paid FinMind sponsor token, `scripts/backfill_revenue_finmind.py`
+walks the historical archive (~2017+) into `tw_revenue_monthly` in
+30-day chunks **oldest → newest**, so each chunk's `_enrich_growth_rates`
+pass can compute YoY against rows already-backfilled by previous chunks:
+
+```bash
+cd backend
+# the last 3 years (typical first run — covers most TW listed companies'
+# YoY computability)
+python -m scripts.backfill_revenue_finmind --start 2023-01-01 --end 2026-04-30
+
+# or extend further back (FinMind starts ~2017)
+python -m scripts.backfill_revenue_finmind --start 2017-01-01 --end 2026-04-30
+```
+
+The upsert overwrites in place via `(market, symbol, ts)` PK, so:
+  - re-runs are idempotent (no duplicates),
+  - bogus rows from earlier deploys (e.g. PR #211 fix-target where
+    `revenue_yoy=2026` was the year integer leaked through the
+    connector) get overwritten with the correctly-computed value
+    (or NULL when the prior-year baseline still isn't in the archive),
+  - `source="finmind_backfill"` distinguishes backfilled rows from
+    daily-cron rows when investigating coverage.
+
 ## Deployment
 
 **Docker Compose** (single server):

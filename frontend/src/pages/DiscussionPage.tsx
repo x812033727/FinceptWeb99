@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { notifyRateLimited } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
+import { useCollapsible } from "@/components/Collapsible";
 import type {
   Discussion,
   DiscussionDetail,
@@ -38,6 +39,86 @@ import {
   usePersonaName,
 } from "@/components/discussion/_helpers";
 import type { CollapseState } from "@/components/discussion/_helpers";
+
+interface RoundSectionProps {
+  discussionId: string;
+  round: number;
+  turns: Turn[];
+  personaName: (id: string) => string;
+}
+
+/**
+ * One collapsible block per round in the transcript. Header always
+ * shows round number + persona-turn count + a chevron; body renders
+ * only when expanded. Default-collapsed (per the user's "all rounds
+ * folded by default" UX) with state persisted to localStorage so a
+ * reload preserves whatever the user expanded last session.
+ *
+ * Keyed by `(discussionId, round)` so two different discussions don't
+ * cross-pollinate collapse state.
+ */
+function RoundSection({
+  discussionId, round, turns, personaName,
+}: RoundSectionProps) {
+  const { t } = useTranslation();
+  const { open, toggle } = useCollapsible(
+    `discussion.${discussionId}.round.${round}`,
+    false,
+  );
+  return (
+    <div className="my-3 first:mt-0">
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        className="w-full flex items-center gap-2 text-left hover:opacity-80 transition-opacity py-1"
+      >
+        <span className="text-[10px] text-muted-foreground w-3 inline-block">
+          {open ? "▼" : "▶"}
+        </span>
+        <span className="text-[11px] font-semibold text-primary tracking-wider">
+          {t("discussion.round_label", { round })}
+        </span>
+        <span className="text-[10px] text-muted-foreground">
+          ({t("discussion.turn_count", { count: turns.length })})
+        </span>
+        <span className="flex-1 h-px bg-border" />
+      </button>
+      {open && (
+        <div className="space-y-2 mt-2">
+          {turns.map((tn, i) => {
+            const badge = STANCE_BADGE[tn.stance] ?? STANCE_BADGE.supplement;
+            const body =
+              tn.stance === "agree" && !tn.content.trim()
+                ? t("discussion.agree_silent")
+                : tn.content;
+            return (
+              <div
+                key={`${tn.round}-${tn.turn_index}-${i}`}
+                className="bg-card border border-border rounded-lg p-3"
+              >
+                <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                  <span className="font-bold text-red-500">
+                    {personaName(tn.persona_id)}
+                  </span>
+                  <span>·</span>
+                  <span>R{tn.round}</span>
+                  <span>·</span>
+                  <span className={`px-1.5 py-0.5 rounded border text-[10px] ${badge.cls}`}>
+                    {badge.label}
+                  </span>
+                </div>
+                <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
+                  {renderInlineMarkdown(body)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function DiscussionPage() {
   const { t } = useTranslation();
@@ -859,43 +940,32 @@ export default function DiscussionPage() {
               <p className="text-sm text-muted-foreground">{t("discussion.click_to_start")}</p>
             </div>
           )}
-          {transcript.map((tn, i) => {
-            const badge = STANCE_BADGE[tn.stance] ?? STANCE_BADGE.supplement;
-            const body =
-              tn.stance === "agree" && !tn.content.trim()
-                ? t("discussion.agree_silent")
-                : tn.content;
-            const prevRound = i > 0 ? transcript[i - 1].round : null;
-            const showRoundHeader = prevRound !== tn.round;
-            return (
-              <div key={`${tn.round}-${tn.turn_index}-${i}`}>
-                {showRoundHeader && (
-                  <div className="flex items-center gap-2 my-3 first:mt-0">
-                    <span className="text-[11px] font-semibold text-primary tracking-wider">
-                      {t("discussion.round_label", { round: tn.round })}
-                    </span>
-                    <span className="flex-1 h-px bg-border" />
-                  </div>
-                )}
-                <div className="bg-card border border-border rounded-lg p-3">
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-                    <span className="font-bold text-red-500">
-                      {personaName(tn.persona_id)}
-                    </span>
-                    <span>·</span>
-                    <span>R{tn.round}</span>
-                    <span>·</span>
-                    <span className={`px-1.5 py-0.5 rounded border text-[10px] ${badge.cls}`}>
-                      {badge.label}
-                    </span>
-                  </div>
-                  <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
-                    {renderInlineMarkdown(body)}
-                  </div>
-                </div>
-              </div>
+          {/* Group transcript by round so each can collapse independently.
+              Default-collapsed per UX requirement — users want a clean
+              overview screen, not a wall of multi-round text. The live
+              streaming card below stays outside these groups so in-flight
+              content is always visible during a round. */}
+          {(() => {
+            if (!selectedId || transcript.length === 0) return null;
+            const byRound = new Map<number, Turn[]>();
+            for (const tn of transcript) {
+              const list = byRound.get(tn.round) ?? [];
+              list.push(tn);
+              byRound.set(tn.round, list);
+            }
+            const orderedRounds = Array.from(byRound.keys()).sort(
+              (a, b) => a - b,
             );
-          })}
+            return orderedRounds.map((rn) => (
+              <RoundSection
+                key={rn}
+                discussionId={selectedId}
+                round={rn}
+                turns={byRound.get(rn) ?? []}
+                personaName={personaName}
+              />
+            ));
+          })()}
           {/* Pre-turn-stream "round preparing" card. Backend emits
               `round_start` immediately after bumping the discussion's
               current_round, but `gather_market_context` (incl. inline

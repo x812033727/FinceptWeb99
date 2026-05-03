@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import type { DiscussionDetail, Turn } from "@/types/discussion";
+import { useCollapsible } from "@/components/Collapsible";
 import { renderInlineMarkdown } from "./_helpers";
 
 function buildMarkdownExport(
@@ -134,17 +135,40 @@ export function ConclusionCard({
     ? "bg-red-950/20 border border-red-800/60 rounded-lg p-4 mt-4"
     : "bg-amber-950/20 border border-amber-800/50 rounded-lg p-4 mt-4";
   const titleClass = hasError ? "text-sm font-semibold text-red-300" : "text-sm font-semibold text-amber-300";
+  // Conclusion is the ONE block that defaults open per the user's
+  // UX rule ("at most only the conclusion is default-expanded"). All
+  // other transcript sections collapse on render. Persisted per
+  // discussion id so a user who collapsed the conclusion last time
+  // sees it stay collapsed on reload.
+  const { open, toggle } = useCollapsible(
+    `discussion.${detail.id}.conclusion`,
+    true,
+  );
 
   return (
     <div className={cardClass}>
       <div className="flex items-center justify-between mb-2 gap-2">
-        <h3 className={titleClass}>
-          {hasError
-            ? `⚠ ${t("discussion.conclusion_title")}`
-            : t("discussion.conclusion_title")}
-        </h3>
+        <button
+          type="button"
+          onClick={toggle}
+          aria-expanded={open}
+          className="flex items-center gap-2 text-left hover:opacity-80 transition-opacity flex-1 min-w-0"
+        >
+          <span className="text-[10px] text-muted-foreground w-3 inline-block shrink-0">
+            {open ? "▼" : "▶"}
+          </span>
+          <h3 className={titleClass}>
+            {hasError
+              ? `⚠ ${t("discussion.conclusion_title")}`
+              : t("discussion.conclusion_title")}
+          </h3>
+        </button>
         {!hasError && (
-          <div className="flex gap-1.5 shrink-0">
+          <div
+            className="flex gap-1.5 shrink-0"
+            // Action buttons must NOT toggle the card — stop bubbling.
+            onClick={(e) => e.stopPropagation()}
+          >
             <button
               onClick={exportMarkdown}
               className="px-2.5 py-1 text-xs border border-border text-muted-foreground rounded hover:text-foreground"
@@ -162,7 +186,7 @@ export function ConclusionCard({
           </div>
         )}
       </div>
-      {hasError ? (
+      {open && (hasError ? (
         <p className="text-xs text-red-300">{t("discussion.conclusion_parse_error")}</p>
       ) : (
         <>
@@ -213,7 +237,7 @@ export function ConclusionCard({
             </span>
           </div>
         </>
-      )}
+      ))}
     </div>
   );
 }

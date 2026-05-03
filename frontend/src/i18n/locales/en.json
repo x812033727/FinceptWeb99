@@ -431,6 +431,7 @@
     "start_round": "Start Round 1",
     "next_round": "Run Round {{round}}",
     "round_label": "Round {{round}}",
+    "turn_count": "{{count}} experts",
     "created_at": "Created",
     "updated_at": "Last updated",
     "conclude": "Synthesize Conclusion",

@@ -431,6 +431,7 @@
     "start_round": "開始第 1 輪",
     "next_round": "進行第 {{round}} 輪",
     "round_label": "第 {{round}} 輪",
+    "turn_count": "{{count}} 位專家",
     "created_at": "建立於",
     "updated_at": "最後更新",
     "conclude": "彙整結論",

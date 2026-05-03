@@ -36,7 +36,7 @@ from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from .blocks import chip, http, news, owner, risk, technical
+from .blocks import chip, derivatives, http, news, owner, risk, technical
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -87,6 +87,12 @@ def _initial_ctx(*, market: str, as_of: date | None) -> dict[str, Any]:
             "high_day_trading_ratio": [],
         },
         "market_institutional_5d": [],
+        # TAIFEX 三大法人台指期未平倉 (TW only, FinMind-backed). When
+        # `as_of` is set the cache key includes the anchor so backtest
+        # replays don't re-fan-out to FinMind. Shape:
+        # `{contract, as_of, session_count, fini, sitc, dealer, trend}`
+        # — fini / sitc / dealer carry `{net_oi, change_5d}`.
+        "taifex_positioning": None,
         "errors": [],
     }
 
@@ -157,6 +163,12 @@ async def build_market_context(
     )
 
     if market == "TW":
+        # TAIFEX positioning fires regardless of focus_symbols — it's
+        # a market-wide directional signal personas use even on
+        # symbol-less topics ("外資台指期淨空 → 短線偏空").
+        await derivatives.fetch_taifex_positioning(
+            ctx, as_of=as_of, record_error=record_error,
+        )
         await chip.fetch_top_foreign_buyers(
             ctx, db, as_of=as_of, record_error=record_error,
         )

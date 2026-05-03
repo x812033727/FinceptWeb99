@@ -1691,6 +1691,13 @@ _BLOCK_ANNOTATIONS: dict[str, str] = {
     ),
     "international_sentiment":   "- international_sentiment：Fed / FOMC / 國際宏觀新聞情緒，影響台股風險偏好。",
     "top_foreign_buyers":        "- top_foreign_buyers：近 5 日外資累計淨買超前 10 名（已含產業別）。",
+    "taifex_positioning": (
+        "- taifex_positioning：**外資台指期未平倉** (smart-money 方向訊號)。"
+        "`fini.net_oi`（外資多單 - 空單，正值 = 淨多）、"
+        "`fini.change_5d`（5 日變化，> +1000 口偏多 / < -1000 口偏空）、"
+        "`trend` 已自動分類 bullish/bearish/neutral。**外資台指期方向往往領先大盤 1-2 日**，"
+        "若與 news_sentiment 同向則短線方向確立度高；逆向則優先信任此訊號。"
+    ),
     "margin_balance_trend":      "- margin_balance_trend：全市場融資 / 融券餘額趨勢（散戶槓桿與看空代理）。",
     "top_revenue_growers":       "- top_revenue_growers：最新月份營收年增率前 10（基本面）。",
     "active_buybacks":           "- active_buybacks：今日仍在執行庫藏股的公司，**強烈管理層信心訊號**。",
@@ -2158,7 +2165,7 @@ _ALL_PERSONA_BLOCKS: frozenset[str] = frozenset({
     "short_term_signals",
     "top_foreign_buyers", "margin_balance_trend", "top_revenue_growers",
     "active_buybacks", "govt_bank_flow_5d", "risk_warnings",
-    "market_institutional_5d",
+    "market_institutional_5d", "taifex_positioning",
     "focus_briefs", "macro", "user_context", "prior_discussions",
 })
 
@@ -2167,6 +2174,7 @@ _ALL_PERSONA_BLOCKS: frozenset[str] = frozenset({
 _MACRO_PROFILE = frozenset({
     "index", "macro", "international_sentiment",
     "top_foreign_buyers", "govt_bank_flow_5d", "market_institutional_5d",
+    "taifex_positioning",   # smart-money directional signal — central to macro view
     "news_sentiment", "per_symbol_news_sentiment",
     # PR #219: macro personas need focus_briefs when the topic
     # names specific stocks. "Fed cuts → 2330 受惠" requires seeing
@@ -2187,6 +2195,7 @@ _CONTRARIAN_PROFILE = frozenset({
     "top_losers", "risk_warnings", "margin_balance_trend",
     "focus_briefs", "news_sentiment", "per_symbol_news_sentiment",
     "short_term_signals",   # RSI extremes + volume spikes flag reversals
+    "taifex_positioning",   # extreme net OI = contrarian setup
     "macro",
 })
 
@@ -2195,6 +2204,7 @@ _QUANT_PROFILE = frozenset({
     "top_foreign_buyers", "market_institutional_5d", "margin_balance_trend",
     "risk_warnings", "news_sentiment", "macro",
     "short_term_signals",   # core Tier-1 quant signals per focus symbol
+    "taifex_positioning",   # market-wide directional bias
 })
 
 _PORTFOLIO_PROFILE = frozenset({

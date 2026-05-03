@@ -52,6 +52,7 @@ def _new_ctx() -> dict:
         },
         "market_institutional_5d": [],
         "short_term_signals": {},
+        "taifex_positioning": None,
         "errors": [],
     }
 
@@ -481,7 +482,8 @@ async def test_build_market_context_initialises_default_shape(
         "top_foreign_buyers", "margin_balance_trend",
         "top_revenue_growers", "active_buybacks",
         "govt_bank_flow_5d", "risk_warnings",
-        "market_institutional_5d", "errors",
+        "market_institutional_5d", "taifex_positioning",
+        "errors",
     }
 
     with patch(

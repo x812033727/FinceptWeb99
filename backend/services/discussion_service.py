@@ -29,7 +29,7 @@ Design choices:
   - Per-turn LLM output is parsed as JSON. If the persona drifts off
     format (returns prose) we fall back to `stance="supplement"` with the
     raw text as `content` rather than blowing up the round.
-  - Token budget per turn is capped (`_MAX_TURN_TOKENS`) so a runaway
+  - Token budget per turn is capped (`DISCUSSION_TURN_MAX_TOKENS`) so a runaway
     persona can't drain quota.
   - Market context is built once per round and re-used across personas
     via in-memory cache (keyed on `(discussion_id, round)`) — avoids
@@ -106,14 +106,15 @@ _MAX_FOCUS_SYMBOLS = 5
 
 _MAX_PERSONAS = 8           # safety cap so one discussion can't fan out 19 LLM calls/round
 _MIN_PERSONAS = 2
-# 8192 gives reasoning models (MiniMax-M2.7, DeepSeek-R1) enough headroom
-# for chain-of-thought (~3-5K tokens) before the visible Chinese content
-# (~600-700 chars × 3 BPE = ~2K tokens) is emitted. With 2048 the budget
-# was exhausted entirely on reasoning and finish_reason="length" arrived
-# with zero content — see PR #225 for the silent-empty-response diagnosis.
-# Non-thinking personas still emit only what they need; the cap is purely
-# an output-side ceiling, not a token allocation.
-_MAX_TURN_TOKENS = 8192
+# Per-persona-turn `max_tokens` is now admin-tunable via the
+# RuntimeTunablesCard (`DISCUSSION_TURN_MAX_TOKENS`, default 8192). The
+# default gives reasoning models (MiniMax-M2.7, DeepSeek-R1) enough
+# headroom for chain-of-thought (~3-5K tokens) before the visible
+# Chinese content (~600-700 chars × 3 BPE = ~2K tokens) is emitted. With
+# 2048 the budget was exhausted entirely on reasoning and
+# `finish_reason="length"` arrived with zero content (see PR #225 for the
+# silent-empty-response diagnosis). Non-thinking personas still emit only
+# what they need; the cap is purely an output-side ceiling.
 _MAX_TOPIC_CHARS = 500
 _MAX_RULES_CHARS = 2000
 _MAX_HISTORY_TURNS = 30     # how many prior turns to feed the next persona
@@ -2304,11 +2305,18 @@ async def _ask_persona(
         {"role": "system", "content": spec.system_prompt},
         {"role": "user", "content": user_prompt},
     ]
+    try:
+        from services.runtime_config_service import get_int as _runtime_get_int
+        turn_max_tokens = await _runtime_get_int(db, "DISCUSSION_TURN_MAX_TOKENS")
+    except Exception as exc:
+        log.warning("discussion.runtime_config_failed",
+                    extra={"setting": "DISCUSSION_TURN_MAX_TOKENS", "error": str(exc)})
+        turn_max_tokens = settings.DISCUSSION_TURN_MAX_TOKENS
     async for event in stream_chat(
         messages=messages,
         provider=spec.default_provider,
         model=spec.default_model,
-        max_tokens=_MAX_TURN_TOKENS,
+        max_tokens=turn_max_tokens,
         temperature=0.4,
         db=db,
         user_id=user_id,
@@ -2814,18 +2822,26 @@ async def synthesize_conclusion(
 
     assembled = ""
     usage_seen: dict[str, int] | None = None
+    # `max_tokens` is admin-tunable via RuntimeTunablesCard
+    # (`DISCUSSION_SYNTHESIZER_MAX_TOKENS`, default 8192). Default gives
+    # reasoning models enough room for chain-of-thought (~3-5K tokens)
+    # before the conclusion JSON (~1.5K tokens) is emitted.
     try:
-        # max_tokens=8192 gives reasoning models enough room for chain-of-
-        # thought (~3-5K tokens) before the conclusion JSON (~1.5K tokens)
-        # is emitted. The previous 1024 cap was the tightest of the three
-        # LLM call sites and the first to fail under MiniMax-M2.7 — see
-        # PR #225 for the diagnostic and `_MAX_TURN_TOKENS` comment for
-        # the matching rationale.
+        from services.runtime_config_service import get_int as _runtime_get_int
+        synth_max_tokens = await _runtime_get_int(
+            db, "DISCUSSION_SYNTHESIZER_MAX_TOKENS",
+        )
+    except Exception as exc:
+        log.warning("discussion.runtime_config_failed",
+                    extra={"setting": "DISCUSSION_SYNTHESIZER_MAX_TOKENS",
+                           "error": str(exc)})
+        synth_max_tokens = settings.DISCUSSION_SYNTHESIZER_MAX_TOKENS
+    try:
         async for event in stream_chat(
             messages=messages,
             provider=provider,
             model=model,
-            max_tokens=8192,
+            max_tokens=synth_max_tokens,
             temperature=0.2,
             db=db,
             user_id=user_id,

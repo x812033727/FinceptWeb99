@@ -234,19 +234,25 @@ async def _score_batch(
     assembled = ""
     usage_seen: dict[str, int] | None = None
     error_msg: str | None = None
+    # `max_tokens` is admin-tunable via RuntimeTunablesCard
+    # (`SENTIMENT_LLM_MAX_TOKENS`, default 8192). 8192 leaves ~6-7K
+    # headroom for chain-of-thought on reasoning models (MiniMax-M2.7,
+    # DeepSeek-R1) before the JSON array of ~500-1000 tokens lands. M2.7
+    # has a 205K context window, so the cap is purely an output-side
+    # budget; non-thinking models still emit only what they need.
     try:
-        # max_tokens=8192 leaves ~6-7K headroom for chain-of-thought on
-        # reasoning models (MiniMax-M2.7, DeepSeek-R1) before the JSON
-        # array of ~500-1000 tokens lands. With 2048 a thinking model
-        # exhausted the full budget on reasoning and finish_reason="length"
-        # arrived with zero content (see PR #225 diagnostic). M2.7 has a
-        # 205K context window, so the cap is purely an output-side budget;
-        # non-thinking models still emit only what they need.
+        from services.runtime_config_service import get_int as _runtime_get_int
+        max_tokens_budget = await _runtime_get_int(db, "SENTIMENT_LLM_MAX_TOKENS")
+    except Exception as exc:
+        log.warning("news_sentiment.runtime_config_failed",
+                    extra={"setting": "SENTIMENT_LLM_MAX_TOKENS", "error": str(exc)})
+        max_tokens_budget = settings.SENTIMENT_LLM_MAX_TOKENS
+    try:
         async for event in stream_chat(
             messages=messages,
             provider=provider,
             model=model,
-            max_tokens=8192,
+            max_tokens=max_tokens_budget,
             temperature=0.0,
             db=db,
         ):

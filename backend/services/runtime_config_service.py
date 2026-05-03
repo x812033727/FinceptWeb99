@@ -133,6 +133,50 @@ _REGISTRY: dict[str, RuntimeSettingSpec] = {
         min_value=0,
         max_value=10_000,
     ),
+    "SENTIMENT_LLM_MAX_TOKENS": RuntimeSettingSpec(
+        key="SENTIMENT_LLM_MAX_TOKENS",
+        type="int",
+        name="Sentiment scorer max_tokens",
+        description=(
+            "Per-call `max_tokens` budget for the news-sentiment scorer. "
+            "8192 covers the JSON output (~1K) plus ~6-7K headroom for "
+            "chain-of-thought on reasoning models (MiniMax-M2.7, "
+            "DeepSeek-R1). Raise to 16384 / 32768 if a particularly "
+            "verbose reasoning model still surfaces "
+            "`scoring_error: ...finish_reason=length...reasoning_content=NN chars` "
+            "in the discussion ctx. Cost rises proportionally — the cap "
+            "is an output ceiling, but verbose models will use it."
+        ),
+        min_value=512,
+        max_value=131_072,
+    ),
+    "DISCUSSION_TURN_MAX_TOKENS": RuntimeSettingSpec(
+        key="DISCUSSION_TURN_MAX_TOKENS",
+        type="int",
+        name="Discussion persona turn max_tokens",
+        description=(
+            "Per-call `max_tokens` budget for each persona's reply in a "
+            "discussion round. 8192 covers Chinese content (~2K) plus "
+            "~5-6K reasoning headroom. Round cost = N personas × this "
+            "value × output rate, so raising it scales the whole round "
+            "spend."
+        ),
+        min_value=512,
+        max_value=131_072,
+    ),
+    "DISCUSSION_SYNTHESIZER_MAX_TOKENS": RuntimeSettingSpec(
+        key="DISCUSSION_SYNTHESIZER_MAX_TOKENS",
+        type="int",
+        name="Discussion synthesizer max_tokens",
+        description=(
+            "`max_tokens` budget for the conclusion synthesizer (one "
+            "call per `/sessions/{id}/conclude`). 8192 covers the "
+            "structured conclusion JSON (~1.5K) plus reasoning "
+            "headroom."
+        ),
+        min_value=512,
+        max_value=131_072,
+    ),
 }
 
 

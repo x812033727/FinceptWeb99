@@ -159,6 +159,16 @@ class Settings(BaseSettings):
     # hanging the whole round indefinitely.
     DISCUSSION_PERSONA_TIMEOUT_SECONDS: int = 60
 
+    # Per-call LLM `max_tokens` budgets. 8192 is generous for non-thinking
+    # models (their actual output is far smaller — the cap only ceilings
+    # them) and gives reasoning models like MiniMax-M2.7 / DeepSeek-R1
+    # ~6-7K headroom for chain-of-thought before the visible JSON / Chinese
+    # content lands. Bump via RuntimeTunablesCard if a particularly verbose
+    # reasoning model still hits `finish_reason=length` before output.
+    SENTIMENT_LLM_MAX_TOKENS: int = 8192
+    DISCUSSION_TURN_MAX_TOKENS: int = 8192
+    DISCUSSION_SYNTHESIZER_MAX_TOKENS: int = 8192
+
     # `resolve_key(user_id=None)` (the system-task path used by every
     # background cron) normally consults: system row → .env. For solo /
     # single-admin deployments where the operator has only set per-user

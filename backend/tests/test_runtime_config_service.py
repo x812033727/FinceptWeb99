@@ -53,6 +53,26 @@ def test_known_keys_includes_all_baseline_tunables():
     assert "AI_REQUESTS_VIEWER_DAILY" in keys
     assert "AI_REQUESTS_ANALYST_DAILY" in keys
     assert "FINMIND_HOURLY_REQUEST_LIMIT" in keys
+    assert "SENTIMENT_LLM_MAX_TOKENS" in keys
+    assert "DISCUSSION_TURN_MAX_TOKENS" in keys
+    assert "DISCUSSION_SYNTHESIZER_MAX_TOKENS" in keys
+
+
+def test_max_tokens_specs_have_sane_bounds():
+    """The three max_tokens tunables must have non-trivial output
+    floors (so a typo doesn't accidentally lock the LLM to nothing)
+    and ceilings within reach of any provider's context window."""
+    for key in (
+        "SENTIMENT_LLM_MAX_TOKENS",
+        "DISCUSSION_TURN_MAX_TOKENS",
+        "DISCUSSION_SYNTHESIZER_MAX_TOKENS",
+    ):
+        spec = svc.get_spec(key)
+        assert spec.type == "int"
+        assert spec.min_value is not None and spec.min_value >= 256
+        assert spec.max_value is not None and spec.max_value >= 8192
+        # 8192 is the compiled default — ensure it's within bounds.
+        assert spec.min_value <= 8192 <= spec.max_value
 
 
 def test_get_spec_unknown_raises():

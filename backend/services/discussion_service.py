@@ -1680,7 +1680,10 @@ _BLOCK_ANNOTATIONS: dict[str, str] = {
         "- short_term_signals：focus_symbols 的 Tier-1 短線技術訊號 "
         "(1-5 日視窗) — `volume_ratio`（量能 / 20 日均量倍數，>2 = 突破型）、"
         "`return_5d` / `return_20d`（短中期報酬 %）、`rsi_14`（< 30 超賣 / > 70 超買）、"
-        "`gap_pct`（今日開盤跳空 %）。配合 news_sentiment 同向時短線勝率較高。"
+        "`gap_pct`（今日開盤跳空 %）、`kd_k` / `kd_d`（KD 9-3-3，K 從下方穿越 D"
+        "且 < 20 = 偏多反轉，從上方穿越 D 且 > 80 = 偏空反轉）、"
+        "`industry_rs`（同產業 RS：`symbol_return_5d` vs `industry_median_5d`，"
+        "正值 = 領先類股，負值 = 落後）。配合 news_sentiment 同向時短線勝率較高。"
     ),
     "international_sentiment":   "- international_sentiment：Fed / FOMC / 國際宏觀新聞情緒，影響台股風險偏好。",
     "top_foreign_buyers":        "- top_foreign_buyers：近 5 日外資累計淨買超前 10 名（已含產業別）。",

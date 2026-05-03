@@ -179,6 +179,34 @@ def get_company_name(symbol: str) -> str | None:
     return _name_map.get(symbol)
 
 
+def get_industry_peers(symbol: str, *, exclude_self: bool = True) -> list[str]:
+    """Return every symbol in the same 產業別 as `symbol`, optionally
+    excluding `symbol` itself. Returns an empty list when the symbol's
+    industry isn't in `_industry_map` (fresh process before the daily
+    cron has populated, or a code that 上市 doesn't classify).
+
+    Used by `services.short_term_signals.compute_industry_rs` for
+    sector-rotation context — comparing a focus symbol's recent return
+    to the median of its peers tells personas whether the move is
+    idiosyncratic or industry-wide.
+
+    Resolution goes through `resolve_industry_label` so a `_industry_map`
+    populated before PR #213 (raw codes like `"27"`) still groups
+    correctly. Idempotent.
+    """
+    from data.tw.industry_codes import resolve_industry_label
+    target = resolve_industry_label(_industry_map.get(symbol))
+    if target is None:
+        return []
+    peers: list[str] = []
+    for sym, raw_label in _industry_map.items():
+        if exclude_self and sym == symbol:
+            continue
+        if resolve_industry_label(raw_label) == target:
+            peers.append(sym)
+    return peers
+
+
 def find_symbol_by_name_in_text(text: str) -> str | None:
     """Reverse-lookup: scan `text` for any TW listed company short name
     and return the matching symbol. First match wins, with longer

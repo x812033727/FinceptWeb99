@@ -48,7 +48,9 @@ async def fetch_short_term_signals(
     if not focus_symbols:
         return
     try:
-        from services.short_term_signals import compute_short_term_signals
+        from services.short_term_signals import (
+            compute_industry_rs, compute_short_term_signals,
+        )
         for sym in focus_symbols[:max_focus_symbols]:
             try:
                 signals = await compute_short_term_signals(
@@ -57,7 +59,20 @@ async def fetch_short_term_signals(
             except Exception as exc:
                 record_error(f"short_term_signals:{sym}", exc)
                 continue
-            if signals is not None:
-                ctx["short_term_signals"][sym] = signals
+            if signals is None:
+                continue
+            # Industry RS lives under the same per-symbol key so the
+            # persona reads one cohesive technical block per ticker.
+            # Failure (no industry classified, too few peers) folds
+            # the field into None — partial signals beat no signals.
+            try:
+                rs = await compute_industry_rs(
+                    db, market=market, symbol=sym, as_of=as_of,
+                )
+            except Exception as exc:
+                record_error(f"industry_rs:{sym}", exc)
+                rs = None
+            signals["industry_rs"] = rs
+            ctx["short_term_signals"][sym] = signals
     except Exception as exc:
         record_error("short_term_signals", exc)

@@ -88,3 +88,43 @@ def test_get_industry_resolves_codes_from_stale_in_memory_map():
     finally:
         tw_market_service._industry_map.clear()
         tw_market_service._industry_map.update(original)
+
+
+def test_get_industry_peers_returns_same_industry_excluding_self():
+    """Industry RS computation needs the symbol's same-industry peers.
+    The accessor must (a) match on resolved industry name (so a stale
+    raw-code map still groups correctly), (b) exclude the queried
+    symbol itself by default."""
+    from services import tw_market_service
+
+    original = tw_market_service._industry_map.copy()
+    try:
+        tw_market_service._industry_map.clear()
+        tw_market_service._industry_map.update({
+            "2330": "半導體業",
+            "2454": "半導體業",
+            "3034": "半導體業",
+            # Stale raw code that resolves to the same Chinese label.
+            "2303": "24",   # → 半導體業
+            "2412": "通信網路業",
+        })
+        peers = tw_market_service.get_industry_peers("2330")
+        assert "2330" not in peers
+        assert set(peers) == {"2454", "3034", "2303"}
+    finally:
+        tw_market_service._industry_map.clear()
+        tw_market_service._industry_map.update(original)
+
+
+def test_get_industry_peers_returns_empty_for_unmapped_symbol():
+    """Symbol not in the map → no industry to group on → []."""
+    from services import tw_market_service
+
+    original = tw_market_service._industry_map.copy()
+    try:
+        tw_market_service._industry_map.clear()
+        tw_market_service._industry_map.update({"2330": "半導體業"})
+        assert tw_market_service.get_industry_peers("9999") == []
+    finally:
+        tw_market_service._industry_map.clear()
+        tw_market_service._industry_map.update(original)

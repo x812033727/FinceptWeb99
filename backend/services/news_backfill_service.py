@@ -52,6 +52,12 @@ _MIN_ARTICLES_THRESHOLD = 5
 _BACKFILL_DAYS_BACK = 30
 _BACKFILL_DAYS_FORWARD = 1  # capture publish-date-after-event articles
 
+# Hot-path inline scoring cap: when the archive is already covered but
+# rows are unscored, score this many IDs at most per round button press.
+# 100 IDs = 5 batches × 20 = ~15-30s wait given default LLM latency.
+# Subsequent rounds catch up another 100, cron handles the long tail.
+_HOT_PATH_INLINE_SCORE_LIMIT = 100
+
 # Redis lock so two concurrent rounds for the same date don't both fire
 # the FinMind call. TTL covers the FinMind chunk + the inline LLM
 # scoring pass (up to ~5 batches × ~2-3 s each at default cap), with
@@ -131,14 +137,30 @@ def _format_finmind_error(exc: BaseException) -> str:
 
 
 async def _score_inserted_window(
-    *, market: str, as_of: date,
+    *, market: str, as_of: date, limit: int = 2_000,
 ) -> dict[str, int]:
-    """Inline-score the window we just backfilled so the discussion
-    round that triggered this backfill reads SCORED rows instead of
-    NULL-filtered nothing.
+    """Inline-score unscored rows in the window so the discussion
+    round reads SCORED rows instead of NULL-filtered nothing.
+
+    Two callers, two `limit` defaults:
+
+      - **Cold backfill path** (`limit=2_000`): we just inserted up to
+        a few hundred new rows; score as many as the daily interactive
+        cap allows. Backfill itself took FinMind round-trip latency,
+        the user is already waiting, and unscored rows starve the
+        round we're about to run.
+
+      - **Hot covered path** (`limit=100`, set by caller): archive
+        already had rows, no backfill needed, but those rows were
+        inserted at a time when LLM scoring failed silently (PR #225
+        empty-response bug) so they're still NULL. We want SOME
+        scored signal for the round but not a multi-minute wait — 5
+        batches × 20 rows = ~15-30s gives the personas headlines to
+        cite without locking the round button for the cap's worth of
+        sequential LLM calls.
 
     Without this step:
-      1. backfill inserts ~50-200 articles (sentiment_score=NULL),
+      1. backfill inserts (or rows already exist with) sentiment_score=NULL,
       2. read_recent_market_sentiment filters NULL rows out via
          `sentiment_score IS NOT NULL`,
       3. ctx["news_sentiment"] arrives empty,
@@ -178,10 +200,7 @@ async def _score_inserted_window(
             ids = await select_unscored_in_window(
                 score_db, market=market,
                 start=start_dt, end=end_dt,
-                # Bounded by the interactive cap × batch size so we
-                # don't fan out 5000 IDs into a function that'll only
-                # score the first 2000 anyway. 100 calls × 20 = 2000.
-                limit=2_000,
+                limit=limit,
             )
             if not ids:
                 return {
@@ -277,7 +296,31 @@ async def ensure_news_archive_covers(
         return {"covered": False, "backfilled": 0, "error": f"count: {exc}"}
 
     if existing >= _MIN_ARTICLES_THRESHOLD:
-        return {"covered": True, "backfilled": 0}
+        # Archive is covered for this date window — but rows may still
+        # be unscored. Two ways this happens in practice:
+        #   1. A previous backfill inserted them while M2.7 was
+        #      returning empty (PR #225 silent-empty bug, fixed by
+        #      PR #225 + #226), so the inline scoring at the time
+        #      wrote nothing.
+        #   2. Cron's 7-day max_age window doesn't reach back to a
+        #      backtest's anchor date, so historical rows are never
+        #      picked up by the hourly catchup pass.
+        # Either way the round needs SOME scored signal. Cap at
+        # `_HOT_PATH_INLINE_SCORE_LIMIT` (5 batches × 20 ≈ 15-30s
+        # wait) so the round button isn't blocked for many minutes;
+        # the next round adds another batch, and cron eventually
+        # catches up the long tail.
+        scoring_stats = await _score_inserted_window(
+            market=market, as_of=as_of,
+            limit=_HOT_PATH_INLINE_SCORE_LIMIT,
+        )
+        return {
+            "covered": True,
+            "backfilled": 0,
+            "scored": scoring_stats.get("scored", 0),
+            "scoring_batches": scoring_stats.get("batches", 0),
+            "scoring_cap_hit": bool(scoring_stats.get("cap_hit", 0)),
+        }
 
     lock_key = _lock_key(market, as_of)
     if not await acquire_lock(lock_key, _LOCK_TTL_SECONDS):

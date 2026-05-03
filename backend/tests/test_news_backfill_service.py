@@ -45,7 +45,11 @@ async def test_skips_backfill_when_archive_already_covered(
     db_session: AsyncSession,
 ):
     """Hot path: when there are >= _MIN_ARTICLES_THRESHOLD rows in the
-    14-day window, return immediately without calling FinMind."""
+    14-day window, FinMind must not be called. The hot path now ALSO
+    fires inline scoring on the existing rows (with a small `limit` so
+    the round button isn't blocked for minutes) — verified separately
+    in `test_covered_path_scores_unscored_rows_inline`. Here we just
+    confirm: no FinMind, covered=True, scoring stats surface."""
     as_of = date(2026, 3, 23)
     base_dt = datetime(2026, 3, 22, 12, 0, tzinfo=UTC)
     await insert_news_articles(
@@ -53,8 +57,14 @@ async def test_skips_backfill_when_archive_already_covered(
     )
 
     finmind_mock = AsyncMock()
+    score_stub = AsyncMock(return_value={
+        "considered": 0, "scored": 0,
+        "batches": 0, "cap_hit": 0,
+    })
     with patch.object(
         news_backfill_service, "_do_backfill", new=finmind_mock,
+    ), patch.object(
+        news_backfill_service, "_score_inserted_window", new=score_stub,
     ):
         out = await news_backfill_service.ensure_news_archive_covers(
             db_session, market="TW", as_of=as_of,
@@ -63,6 +73,50 @@ async def test_skips_backfill_when_archive_already_covered(
     assert out["covered"] is True
     assert out["backfilled"] == 0
     finmind_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_covered_path_scores_unscored_rows_inline(
+    db_session: AsyncSession,
+):
+    """When the archive is covered but rows are unscored (e.g. inserted
+    by a previous backfill while LLM was returning empty — PR #225 bug),
+    the round button still needs SOME scored data. The covered path
+    must call `_score_inserted_window` with the small hot-path limit
+    (~100 IDs = 5 batches, ~15-30s wait) so the round isn't blocked
+    for minutes on the daily cap's worth of LLM calls.
+    """
+    as_of = date(2026, 3, 23)
+    base_dt = datetime(2026, 3, 22, 12, 0, tzinfo=UTC)
+    await insert_news_articles(
+        db_session, _seed_articles("TW", 10, base_dt),
+    )
+
+    finmind_mock = AsyncMock()
+    score_mock = AsyncMock(return_value={
+        "considered": 80, "scored": 80,
+        "batches": 4, "cap_hit": 0,
+    })
+    with patch.object(
+        news_backfill_service, "_do_backfill", new=finmind_mock,
+    ), patch.object(
+        news_backfill_service, "_score_inserted_window", new=score_mock,
+    ):
+        out = await news_backfill_service.ensure_news_archive_covers(
+            db_session, market="TW", as_of=as_of,
+        )
+
+    finmind_mock.assert_not_awaited()
+    score_mock.assert_awaited_once_with(
+        market="TW",
+        as_of=as_of,
+        limit=news_backfill_service._HOT_PATH_INLINE_SCORE_LIMIT,
+    )
+    assert out["covered"] is True
+    assert out["backfilled"] == 0
+    assert out["scored"] == 80
+    assert out["scoring_batches"] == 4
+    assert out["scoring_cap_hit"] is False
 
 
 @pytest.mark.asyncio

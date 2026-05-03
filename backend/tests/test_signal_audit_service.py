@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.discussion import Discussion, DiscussionTurn
@@ -637,6 +638,194 @@ async def test_audit_recent_discussions_carries_hallucinations(
     # gap_pct mentioned without a value → not hallucinated.
     gap = summary.hallucinations.get("short_term_signals.gap_pct", {})
     assert gap.get("hallucinated", 0) == 0
+
+
+# ── PR #263: snapshot persistence + sparkline reads ──────────────
+
+
+@pytest.mark.asyncio
+async def test_snapshot_audit_to_history_writes_one_row_per_signal(
+    db_session: AsyncSession, owner: User,
+):
+    """A bulk audit produces one row per signal in
+    signal_audit_history. Each row carries the matching counters."""
+    from datetime import date as _date
+
+    from models.signal_audit_history import SignalAuditHistory
+
+    # Seed one discussion that cites RSI.
+    await _seed_concluded_discussion(
+        db_session, owner_id=owner.id, topic="snap1", cite_rsi=True,
+    )
+    when = _date(2026, 5, 3)
+
+    written = await svc.snapshot_audit_to_history(
+        db_session, captured_at=when, market="TW",
+    )
+    assert written > 0
+
+    rsi = (await db_session.scalars(
+        select(SignalAuditHistory).where(
+            SignalAuditHistory.signal == "short_term_signals.rsi_14",
+            SignalAuditHistory.captured_at == when,
+            SignalAuditHistory.market == "TW",
+        )
+    )).first()
+    assert rsi is not None
+    assert rsi.cited_count == 1
+    assert rsi.persona_count == 1
+    assert rsi.discussions_audited == 1
+
+
+@pytest.mark.asyncio
+async def test_snapshot_audit_to_history_is_idempotent(
+    db_session: AsyncSession, owner: User,
+):
+    """Re-running the snapshot on the same UTC day overwrites in
+    place — the (captured_at, market, signal) PK + upsert
+    guarantees no duplicate rows."""
+    from datetime import date as _date
+
+    from models.signal_audit_history import SignalAuditHistory
+
+    await _seed_concluded_discussion(
+        db_session, owner_id=owner.id, topic="idem1", cite_rsi=True,
+    )
+    when = _date(2026, 5, 3)
+
+    await svc.snapshot_audit_to_history(
+        db_session, captured_at=when, market="TW",
+    )
+    first_count = await db_session.scalar(
+        select(func.count()).select_from(SignalAuditHistory).where(
+            SignalAuditHistory.captured_at == when,
+        )
+    )
+
+    # Run again — same data, same day.
+    await svc.snapshot_audit_to_history(
+        db_session, captured_at=when, market="TW",
+    )
+    second_count = await db_session.scalar(
+        select(func.count()).select_from(SignalAuditHistory).where(
+            SignalAuditHistory.captured_at == when,
+        )
+    )
+    assert second_count == first_count, (
+        "second run must overwrite, not append"
+    )
+
+
+@pytest.mark.asyncio
+async def test_read_signal_history_returns_sorted_series(
+    db_session: AsyncSession,
+):
+    """Series ordered by ascending captured_at so the frontend can
+    plot left-to-right without reversing."""
+    from datetime import datetime as _dt, timedelta as _td
+
+    from models.signal_audit_history import SignalAuditHistory
+    today = _dt.utcnow().date()
+
+    # Seed three days of snapshots for one signal — anchored at
+    # today minus offsets so the read window catches them.
+    for offset, cited in [(2, 1), (1, 2), (0, 4)]:
+        db_session.add(SignalAuditHistory(
+            captured_at=today - _td(days=offset),
+            market="TW",
+            signal="short_term_signals.rsi_14",
+            discussions_audited=10,
+            present_count=10, cited_count=cited,
+            cited_with_value_count=0, hallucinated_count=0,
+            persona_count=10, persona_count_absent=0,
+        ))
+    await db_session.commit()
+
+    points = await svc.read_signal_history(
+        db_session,
+        signal="short_term_signals.rsi_14",
+        market="TW",
+        days=10,
+    )
+    assert len(points) == 3
+    # Ascending — earliest day first.
+    assert points[0]["cited_count"] == 1
+    assert points[2]["cited_count"] == 4
+    # Pre-computed citation_rate.
+    assert points[2]["citation_rate"] == 0.4
+
+
+@pytest.mark.asyncio
+async def test_read_signal_history_filters_by_market(
+    db_session: AsyncSession,
+):
+    """`market='TW'` excludes US rows. NULL market filter (all-markets
+    aggregate) is a separate query — not implicit in 'TW'."""
+    from datetime import datetime as _dt
+
+    from models.signal_audit_history import SignalAuditHistory
+    today = _dt.utcnow().date()
+
+    db_session.add(SignalAuditHistory(
+        captured_at=today, market="TW",
+        signal="short_term_signals.rsi_14",
+        discussions_audited=1, present_count=1, cited_count=1,
+        cited_with_value_count=0, hallucinated_count=0,
+        persona_count=1, persona_count_absent=0,
+    ))
+    db_session.add(SignalAuditHistory(
+        captured_at=today, market="US",
+        signal="short_term_signals.rsi_14",
+        discussions_audited=1, present_count=1, cited_count=0,
+        cited_with_value_count=0, hallucinated_count=0,
+        persona_count=1, persona_count_absent=0,
+    ))
+    await db_session.commit()
+
+    tw = await svc.read_signal_history(
+        db_session, signal="short_term_signals.rsi_14",
+        market="TW", days=10,
+    )
+    assert len(tw) == 1
+    assert tw[0]["cited_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_read_all_signals_history_groups_by_signal(
+    db_session: AsyncSession,
+):
+    """Bulk read returns `{signal: [points...]}`. Different signals
+    each get their own list, points within each list are sorted
+    ascending."""
+    from models.signal_audit_history import SignalAuditHistory
+    from datetime import datetime as _dt, timedelta as _td
+    today = _dt.utcnow().date()
+
+    for sig, cited in [
+        ("short_term_signals.rsi_14", 5),
+        ("short_term_signals.volume_ratio", 3),
+    ]:
+        for offset in (0, 1):
+            db_session.add(SignalAuditHistory(
+                captured_at=today - _td(days=offset),
+                market="TW",
+                signal=sig,
+                discussions_audited=10,
+                present_count=10, cited_count=cited,
+                cited_with_value_count=0, hallucinated_count=0,
+                persona_count=10, persona_count_absent=0,
+            ))
+    await db_session.commit()
+
+    bulk = await svc.read_all_signals_history(
+        db_session, market="TW", days=10,
+    )
+    assert "short_term_signals.rsi_14" in bulk
+    assert "short_term_signals.volume_ratio" in bulk
+    assert len(bulk["short_term_signals.rsi_14"]) == 2
+    # Each series sorted by captured_at ascending.
+    rsi = bulk["short_term_signals.rsi_14"]
+    assert rsi[0]["captured_at"] <= rsi[1]["captured_at"]
 
 
 @pytest.mark.asyncio

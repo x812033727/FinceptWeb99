@@ -244,6 +244,30 @@ class SignalHallucinationRow(BaseModel):
     hallucination_rate: float     # hallucinated / persona_count_absent
 
 
+class SignalAuditHistoryPoint(BaseModel):
+    """PR #263: one day in the per-signal trend. Pre-computed rates
+    so the sparkline renderer doesn't need div-by-zero handling."""
+    captured_at: str
+    discussions_audited: int
+    present_count: int
+    cited_count: int
+    cited_with_value_count: int
+    hallucinated_count: int
+    persona_count: int
+    persona_count_absent: int
+    citation_rate: float
+    value_citation_rate: float
+    hallucination_rate: float
+
+
+class SignalAuditHistoryOut(BaseModel):
+    """Per-signal daily history. Sorted ascending by date so the
+    frontend can plot left-to-right."""
+    signal: str
+    market: str | None
+    points: list[SignalAuditHistoryPoint]
+
+
 class SignalAuditOut(BaseModel):
     """Bulk audit result surfaced to the AdminPage. Sorted ascending
     by `citation_rate` so zero-uptake offenders surface first."""
@@ -254,6 +278,10 @@ class SignalAuditOut(BaseModel):
     # PR #259: only signals with hallucinated > 0 surface here. Empty
     # list = personas stayed inside the supplied data.
     hallucinations: list[SignalHallucinationRow] = []
+    # PR #263: per-signal daily history points for the sparkline
+    # column. Keyed by signal name; empty dict when no snapshots
+    # exist yet (the cron hasn't run, or runs with limited backfill).
+    history: dict[str, list[SignalAuditHistoryPoint]] = {}
 
 
 # ── Empirical signal quality vs D5 returns ───────────────────────

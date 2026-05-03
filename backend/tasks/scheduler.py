@@ -337,6 +337,22 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # ── Signal-audit daily snapshot (PR #263) ─────────────────────
+    # Once per UTC day at 02:30 — runs after the daily auto-run
+    # discussions (00:00) + the news sentiment scorer's first cycle
+    # so the snapshot reflects fully-scored data. Persists per-signal
+    # citation / value-citation / hallucination stats into
+    # `signal_audit_history` for the AdminPage sparkline column.
+    from tasks.snapshot_signal_audit import run as run_snapshot_signal_audit
+    scheduler.add_job(
+        run_snapshot_signal_audit,
+        trigger=CronTrigger(hour=2, minute=30, timezone="UTC"),
+        id="snapshot_signal_audit",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── TW quote_snapshots retention prune ────────────────────────
     # Daily at 03:00 UTC; deletes rows older than 30 days so the table
     # doesn't grow unbounded under busy WS subscriptions.

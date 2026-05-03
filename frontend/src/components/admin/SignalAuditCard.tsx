@@ -41,6 +41,17 @@ interface HallucinationRow {
   hallucination_rate: number;
 }
 
+interface HistoryPoint {
+  captured_at: string;
+  citation_rate: number;
+  value_citation_rate: number;
+  hallucination_rate: number;
+  /** Hover tooltips can show the raw counters, but the SVG
+   *  sparkline only needs the rate. */
+  cited_count: number;
+  persona_count: number;
+}
+
 interface SignalAuditResp {
   discussions_audited: number;
   discussion_ids: string[];
@@ -50,6 +61,50 @@ interface SignalAuditResp {
    *  prompt not containing them. Older backends without the field
    *  send undefined → frontend treats as empty list. */
   hallucinations?: HallucinationRow[];
+  /** PR #263: per-signal daily series for the sparkline column.
+   *  Keyed by signal name; older backends send undefined / empty. */
+  history?: Record<string, HistoryPoint[]>;
+}
+
+/**
+ * Tiny inline SVG sparkline showing a 0..1 series. Rendered in the
+ * coverage table's last column. < 2 points renders nothing — a
+ * single dot conveys no trend information.
+ *
+ * Color picks the dominant series color (citation rate); the
+ * value-rate overlay is intentionally omitted from the sparkline
+ * to keep it readable at 80×16. Operators can drill into the row's
+ * tooltip for the split.
+ */
+function Sparkline({
+  points,
+  width = 80,
+  height = 16,
+}: {
+  points: HistoryPoint[];
+  width?: number;
+  height?: number;
+}) {
+  if (!points || points.length < 2) {
+    return <span className="text-[10px] text-muted-foreground/60">—</span>;
+  }
+  const xs = points.map((_, i) => (i / (points.length - 1)) * width);
+  const ys = points.map((p) => height - p.citation_rate * height);
+  const path = xs.map((x, i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${ys[i].toFixed(1)}`).join(" ");
+  const last = points[points.length - 1];
+  const first = points[0];
+  const trendUp = last.citation_rate > first.citation_rate;
+  const stroke = trendUp ? "#10b981" : last.citation_rate < first.citation_rate ? "#ef4444" : "#a3a3a3";
+  return (
+    <svg
+      width={width}
+      height={height}
+      role="img"
+      aria-label={`citation rate trend ${(first.citation_rate * 100).toFixed(0)}% → ${(last.citation_rate * 100).toFixed(0)}% over ${points.length} days`}
+    >
+      <path d={path} stroke={stroke} strokeWidth="1.2" fill="none" />
+    </svg>
+  );
 }
 
 const RECENT_OPTIONS = [10, 30, 50, 100];
@@ -243,7 +298,7 @@ export function SignalAuditCard() {
                   {data.coverage.map((row) => (
                     <li
                       key={row.signal}
-                      className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto_auto] items-center gap-3 text-xs"
+                      className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto_auto_auto] items-center gap-3 text-xs"
                       title={`${row.cited} / ${row.persona_count} cited across ${row.present} round-snapshots`}
                     >
                       <span className="font-mono truncate" title={row.signal}>
@@ -289,6 +344,7 @@ export function SignalAuditCard() {
                       <span className="font-mono tabular-nums text-muted-foreground text-right w-16">
                         {row.cited}/{row.persona_count}
                       </span>
+                      <Sparkline points={data.history?.[row.signal] ?? []} />
                     </li>
                   ))}
                 </ul>

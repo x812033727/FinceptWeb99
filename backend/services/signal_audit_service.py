@@ -28,6 +28,7 @@ import re
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from sqlalchemy import select
@@ -550,3 +551,230 @@ async def audit_recent_discussions(
     summary.coverage = dict(rolled)
     summary.hallucinations = dict(rolled_hall)
     return summary
+
+
+# ── PR #263: daily snapshot persistence for sparkline trends ──────
+
+
+async def snapshot_audit_to_history(
+    db: AsyncSession,
+    *,
+    captured_at: date | None = None,
+    market: str | None = None,
+    days_window: int = 7,
+) -> int:
+    """Compute today's bulk audit and upsert one row per signal into
+    `signal_audit_history`. Idempotent against the (captured_at,
+    market, signal) PK — re-running on the same UTC day overwrites
+    in place rather than appending duplicates.
+
+    Returns the number of rows written. Zero is a normal no-op when
+    the audit window contains no concluded discussions.
+
+    `days_window=7` matches the AdminPage SignalAuditCard default;
+    the snapshot represents "the last 7 days of activity, rolled up
+    on UTC day X".
+    """
+    from datetime import datetime as _dt
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    from models.signal_audit_history import SignalAuditHistory
+
+    # `audit_recent_discussions` pulls the most recent N concluded
+    # discussions; `days_window` is informational here (the bulk
+    # audit doesn't take a day filter — it's already implicit via
+    # `limit`). We pass through unchanged.
+    summary = await audit_recent_discussions(
+        db, limit=days_window * 10, market=market,
+    )
+    when = captured_at or _dt.utcnow().date()
+
+    all_signals = (
+        set(summary.coverage.keys())
+        | set(summary.hallucinations.keys())
+    )
+    rows: list[dict[str, Any]] = []
+    for sig in all_signals:
+        cov = summary.coverage.get(sig, {})
+        hall = summary.hallucinations.get(sig, {})
+        rows.append({
+            "captured_at":            when,
+            "market":                 market,
+            "signal":                 sig,
+            "discussions_audited":    summary.discussions_audited,
+            "present_count":          cov.get("present", 0),
+            "cited_count":            cov.get("cited", 0),
+            "cited_with_value_count": cov.get("cited_with_value", 0),
+            "hallucinated_count":     hall.get("hallucinated", 0),
+            "persona_count":          cov.get("persona_count", 0),
+            "persona_count_absent":   hall.get("persona_count_absent", 0),
+        })
+    if not rows:
+        return 0
+
+    # Dialect-aware upsert: aiosqlite (tests) vs asyncpg (production).
+    # Postgres has a unique-constraint quirk with NULLABLE PK columns
+    # — `market` can be NULL — so the conflict target is explicit.
+    dialect = db.bind.dialect.name if db.bind else "postgresql"
+    if dialect == "sqlite":
+        stmt = sqlite_insert(SignalAuditHistory).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["captured_at", "market", "signal"],
+            set_={
+                col: getattr(stmt.excluded, col) for col in (
+                    "discussions_audited", "present_count",
+                    "cited_count", "cited_with_value_count",
+                    "hallucinated_count", "persona_count",
+                    "persona_count_absent",
+                )
+            },
+        )
+    else:
+        stmt = pg_insert(SignalAuditHistory).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["captured_at", "market", "signal"],
+            set_={
+                col: getattr(stmt.excluded, col) for col in (
+                    "discussions_audited", "present_count",
+                    "cited_count", "cited_with_value_count",
+                    "hallucinated_count", "persona_count",
+                    "persona_count_absent",
+                )
+            },
+        )
+    await db.execute(stmt)
+    await db.commit()
+    return len(rows)
+
+
+async def read_all_signals_history(
+    db: AsyncSession,
+    *,
+    market: str | None = None,
+    days: int = 30,
+) -> dict[str, list[dict[str, Any]]]:
+    """Bulk variant of `read_signal_history`: returns
+    `{signal: [points...]}` for every signal that has ≥ 1 row in
+    the window. Used by the AdminPage sparkline column to fetch
+    all signals' trends in one round-trip instead of N parallel
+    requests per row.
+    """
+    from datetime import datetime as _dt, timedelta as _td
+
+    from models.signal_audit_history import SignalAuditHistory
+
+    today = _dt.utcnow().date()
+    cutoff = today - _td(days=days)
+    stmt = (
+        select(SignalAuditHistory)
+        .where(SignalAuditHistory.captured_at >= cutoff)
+        .order_by(
+            SignalAuditHistory.signal.asc(),
+            SignalAuditHistory.captured_at.asc(),
+        )
+    )
+    if market is None:
+        stmt = stmt.where(SignalAuditHistory.market.is_(None))
+    else:
+        stmt = stmt.where(SignalAuditHistory.market == market)
+    rows = (await db.scalars(stmt)).all()
+
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for r in rows:
+        denom_cite = r.persona_count or 0
+        denom_hall = r.persona_count_absent or 0
+        grouped[r.signal].append({
+            "captured_at":            r.captured_at.isoformat(),
+            "discussions_audited":    r.discussions_audited,
+            "present_count":          r.present_count,
+            "cited_count":            r.cited_count,
+            "cited_with_value_count": r.cited_with_value_count,
+            "hallucinated_count":     r.hallucinated_count,
+            "persona_count":          r.persona_count,
+            "persona_count_absent":   r.persona_count_absent,
+            "citation_rate": (
+                round(r.cited_count / denom_cite, 4)
+                if denom_cite else 0.0
+            ),
+            "value_citation_rate": (
+                round(r.cited_with_value_count / denom_cite, 4)
+                if denom_cite else 0.0
+            ),
+            "hallucination_rate": (
+                round(r.hallucinated_count / denom_hall, 4)
+                if denom_hall else 0.0
+            ),
+        })
+    return dict(grouped)
+
+
+async def read_signal_history(
+    db: AsyncSession,
+    *,
+    signal: str,
+    market: str | None = None,
+    days: int = 30,
+) -> list[dict[str, Any]]:
+    """Return the per-day series for a single signal over the last
+    `days` UTC days. Output is sorted ascending by date so the
+    frontend can plot left-to-right without reversing.
+
+    Each row carries the raw counters plus pre-computed rates so
+    the sparkline renderer doesn't need to handle div-by-zero:
+        citation_rate         = cited / persona_count      (or 0)
+        value_citation_rate   = cited_with_value / persona_count
+        hallucination_rate    = hallucinated / persona_count_absent
+
+    Days with zero discussions audited still appear in the result
+    set if a snapshot row exists — the cron writes one row per
+    signal per day regardless of activity. Days where the cron
+    didn't run are simply absent (gap in series).
+    """
+    from datetime import datetime as _dt, timedelta as _td
+
+    from models.signal_audit_history import SignalAuditHistory
+
+    today = _dt.utcnow().date()
+    cutoff = today - _td(days=days)
+    stmt = (
+        select(SignalAuditHistory)
+        .where(
+            SignalAuditHistory.signal == signal,
+            SignalAuditHistory.captured_at >= cutoff,
+        )
+        .order_by(SignalAuditHistory.captured_at.asc())
+    )
+    if market is None:
+        stmt = stmt.where(SignalAuditHistory.market.is_(None))
+    else:
+        stmt = stmt.where(SignalAuditHistory.market == market)
+    rows = (await db.scalars(stmt)).all()
+
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        denom_cite = r.persona_count or 0
+        denom_hall = r.persona_count_absent or 0
+        out.append({
+            "captured_at":           r.captured_at.isoformat(),
+            "discussions_audited":   r.discussions_audited,
+            "present_count":         r.present_count,
+            "cited_count":           r.cited_count,
+            "cited_with_value_count": r.cited_with_value_count,
+            "hallucinated_count":    r.hallucinated_count,
+            "persona_count":         r.persona_count,
+            "persona_count_absent":  r.persona_count_absent,
+            "citation_rate": (
+                round(r.cited_count / denom_cite, 4)
+                if denom_cite else 0.0
+            ),
+            "value_citation_rate": (
+                round(r.cited_with_value_count / denom_cite, 4)
+                if denom_cite else 0.0
+            ),
+            "hallucination_rate": (
+                round(r.hallucinated_count / denom_hall, 4)
+                if denom_hall else 0.0
+            ),
+        })
+    return out

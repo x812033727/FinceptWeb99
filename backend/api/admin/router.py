@@ -38,6 +38,8 @@ from .schemas import (
     NumericSignalRow,
     PostMortemGapRow,
     PostMortemGapsOut,
+    SignalAuditHistoryOut,
+    SignalAuditHistoryPoint,
     SignalAuditOut,
     SignalCoverageRow,
     SignalHallucinationRow,
@@ -75,6 +77,7 @@ RETRYABLE_INGEST_JOBS = {
     "ingest_holdings_aggregates_tw": "TW holdings + market-institutional aggregates",
     "score_discussion_outcomes": "Discussion D1-D5 scoreboard",
     "score_news_sentiment": "News sentiment scoring (LLM)",
+    "snapshot_signal_audit": "Signal-audit daily snapshot (sparkline source)",
 }
 
 
@@ -442,6 +445,9 @@ async def _run_ingest_job_once(job_id: str) -> None:
     elif job_id == "score_news_sentiment":
         from tasks.score_news_sentiment import run
         await run()
+    elif job_id == "snapshot_signal_audit":
+        from tasks.snapshot_signal_audit import run
+        await run()
 
 
 @router.post("/ingest/{job_id}/retry", response_model=IngestRetryResult)
@@ -635,12 +641,79 @@ async def signal_audit(
         if stats["cited"] == 0 and stats["persona_count"] > 0
     )
 
+    # PR #263: include per-signal trend history for the sparkline
+    # column. Bulk read in one query so the frontend doesn't fan out
+    # to N per-signal calls. Failures here are non-fatal — sparkline
+    # is decorative.
+    history: dict[str, list[SignalAuditHistoryPoint]] = {}
+    try:
+        from services.signal_audit_service import read_all_signals_history
+
+        bulk = await read_all_signals_history(
+            db, market=market, days=30,
+        )
+        history = {
+            sig: [SignalAuditHistoryPoint(**p) for p in points]
+            for sig, points in bulk.items()
+        }
+    except Exception:
+        # Decorative — main response still useful without it.
+        history = {}
+
     return SignalAuditOut(
         discussions_audited=summary.discussions_audited,
         discussion_ids=summary.discussion_ids,
         coverage=coverage_rows,
         zero_uptake=zero_uptake,
         hallucinations=hallucinations,
+        history=history,
+    )
+
+
+# ── Signal-audit history sparkline (PR #263) ─────────────────────
+
+
+_SIGNAL_AUDIT_HISTORY_DAYS_MAX = 365
+
+
+@router.get(
+    "/signal-audit-history",
+    response_model=SignalAuditHistoryOut,
+)
+async def signal_audit_history(
+    _: Admin, db: DB,
+    signal: str,
+    market: str | None = None,
+    days: int = 30,
+) -> SignalAuditHistoryOut:
+    """Per-signal daily snapshot timeseries persisted by the
+    `snapshot_signal_audit` cron. Supports the AdminPage sparkline
+    column on the SignalAuditCard so admins can see whether a
+    signal's citation rate is improving or deteriorating across
+    deploys.
+
+    `days` is bounded — pulling years of per-signal history at
+    O(N rows × M signals) costs nothing on Postgres but slows the
+    frontend; the bound keeps the JSON payload small.
+    """
+    from services.signal_audit_service import read_signal_history
+
+    if days < 1 or days > _SIGNAL_AUDIT_HISTORY_DAYS_MAX:
+        raise HTTPException(
+            400,
+            f"days must be in [1, {_SIGNAL_AUDIT_HISTORY_DAYS_MAX}]; "
+            f"got {days}",
+        )
+    if not signal:
+        raise HTTPException(400, "signal query param is required")
+
+    points_data = await read_signal_history(
+        db, signal=signal, market=market, days=days,
+    )
+    return SignalAuditHistoryOut(
+        signal=signal,
+        market=market,
+        points=[SignalAuditHistoryPoint(**p) for p in points_data],
     )
 
 

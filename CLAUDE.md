@@ -79,7 +79,14 @@ FinceptWeb/
 │   │   │                 #   0021 tw_institutional_daily + tw_margin_daily ·
 │   │   │                 #   0022 tw_revenue_monthly ·
 │   │   │                 #   0023 discussion_round_contexts ·
-│   │   │                 #   0024 discussions.daily_close_prices
+│   │   │                 #   0024 discussions.daily_close_prices ·
+│   │   │                 #   0025-0028 TW chip-flow archive bundle ·
+│   │   │                 #   0029-0031 discussion.market consolidation ·
+│   │   │                 #   0032 backfill_verify_after_date ·
+│   │   │                 #   0033 discussions.as_of_date (backtest mode) ·
+│   │   │                 #   0034 signal_audit_history (sparkline source) ·
+│   │   │                 #   0035 discussions.post_mortem_conclusion ·
+│   │   │                 #   0036 backtest_sweeps · 0037 sweep.auto_post_mortem
 │   │   ├── base.py       # DeclarativeBase with naming convention
 │   │   ├── seed.py       # Admin user seed on first boot
 │   │   └── session.py    # Async engine + get_db dependency
@@ -94,7 +101,8 @@ FinceptWeb/
 │   │                     #   DiscussionTurn, DiscussionAutoRunConfig,
 │   │                     #   DiscussionRoundContext, SystemTaskConfig,
 │   │                     #   RuntimeSetting, TwInstitutionalDaily,
-│   │                     #   TwMarginDaily, TwRevenueMonthly
+│   │                     #   TwMarginDaily, TwRevenueMonthly,
+│   │                     #   SignalAuditHistory, BacktestSweep
 │   ├── services/         # Business logic (cached, waterfall)
 │   │   ├── _quote_helpers.py            # Shared market-quote sanitizer (±30%
 │   │   │                                #   daily-move bound, used by TW + US)
@@ -121,6 +129,16 @@ FinceptWeb/
 │   │   ├── runtime_config_service.py    # Hot-reloadable settings (RuntimeTunablesCard)
 │   │   ├── system_task_config_service.py # Admin LLM routing for background tasks
 │   │   │                                #   (news_sentiment, discussion_synthesizer)
+│   │   ├── signal_audit_service.py      # Citation/value/hallucination audit + history
+│   │   │                                #   (PRs #258 #259 #263)
+│   │   ├── post_mortem_service.py       # Backtest self-critique: D1-D5 self-eval +
+│   │   │                                #   per-day top gainers (PR #273)
+│   │   ├── post_mortem_analysis_service.py # Cumulative "缺什麼資料" taxonomy
+│   │   │                                #   roll-up across post-mortem turns (PR #262)
+│   │   ├── backtest_sweep_service.py    # Multi-day sweep runner: CRUD + worker
+│   │   │                                #   + cancel + concurrency (PRs #274 #275)
+│   │   ├── overseas_market_service.py   # SOX/NDX/SPX/DJI/VIX snapshot via yfinance
+│   │   │                                #   (PRs #269-#271)
 │   │   ├── tw_market_service.py         # TW: TWSE → FinMind → MOPS; don't-cache-empty
 │   │   ├── tw_trading_calendar.py       # TW market-hours / business-day helpers
 │   │   ├── us_market_service.py         # US: Polygon → yfinance → Stooq → Finnhub waterfall
@@ -376,6 +394,43 @@ FinceptWeb/
   Config UI: `AutoRunConfigCard` at the top of `DiscussionPage`'s
   sidebar (collapsed by default).
   API: `GET/PUT /api/discussion/auto-run/config`.
+- **Post-mortem self-critique** (PR #249 + #266 + #267 + #272 + #273):
+  for backtest discussions only. After /conclude, the user can hit
+  「事後檢討」 to chain (a) build_post_mortem_message →
+  (b) inject user_input prompt → (c) run new round → (d) re-synthesize.
+  PR #273 evolved the prompt from a single-day "next-day top 5" to
+  the **5-trading-day window** with two ground-truth surfaces:
+  *recommended self-eval* (per pick D1-D5 close changes vs as_of)
+  and *daily top-N gainers* (each day's #1-5 vs prior-day close).
+  PR #272 routes the re-synthesize output to a separate
+  `discussions.post_mortem_conclusion` JSONB column (migration `0035`)
+  so the original `conclusion` is preserved for side-by-side
+  comparison instead of being overwritten. UI surfaces both in
+  ConclusionCard via a `variant: "primary" | "post_mortem"` prop —
+  primary stays amber, post_mortem is purple matching the
+  RoundSection 「📋 事後檢討」 badge introduced in PR #268.
+  API: `POST /api/discussion/sessions/{id}/post-mortem`.
+- **Multi-day backtest sweep** (`backtest_sweeps` table, migrations
+  `0036` + `0037`, PRs #274 + #275): operator picks an anchor date
+  + N trading days + M rounds-per-discussion + concurrency 1-3 +
+  `auto_post_mortem` flag (default ON). Worker is a detached
+  `asyncio.create_task` fired by /sweeps/{id}/start; resolves the
+  actual N trading days from `ohlcv_daily`, then for each date
+  spawns a new Discussion with `as_of_date=that_date`, runs M
+  rounds, synthesises, and (when `auto_post_mortem`) chains the
+  post-mortem self-critique on top. Cancel mid-flight via
+  /sweeps/{id}/cancel — worker checks status between chunks
+  and bails leaving partial progress in `completed_dates` /
+  `failed_dates`. Failures are isolated per date (one bad date
+  doesn't halt the sweep). Concurrency capped at 3 — going higher
+  saturates LLM provider rate limits and burns daily quota
+  proportionally; default 1 (serial) is the recommended setting.
+  Config UI: `BacktestSweepCard` under `AutoRunConfigCard` in the
+  DiscussionPage left rail.
+  API: `GET/POST /api/discussion/sweeps`,
+  `POST /api/discussion/sweeps/{id}/start`,
+  `POST /api/discussion/sweeps/{id}/cancel`,
+  `DELETE /api/discussion/sweeps/{id}`.
 
 ### TW news ingest
 - Hourly APScheduler job `tasks/ingest_news_tw.py` pulls TW market

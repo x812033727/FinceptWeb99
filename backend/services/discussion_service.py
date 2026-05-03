@@ -1744,6 +1744,14 @@ _BLOCK_ANNOTATIONS: dict[str, str] = {
         "DXY / TWD/USD），各帶 `latest_value` + `change_1y` + `change_3m`。"
         "影響全球風險偏好與外資流向，建議在結論中至少提及一次相關方向。"
     ),
+    "overseas_indicators": (
+        "- overseas_indicators：**隔夜美股 / 全球指數快照**（PR #269）——"
+        "`indices` 內含 ^SOX (費半) / ^IXIC (NASDAQ) / ^GSPC (S&P 500) / "
+        "^DJI (道瓊) / ^VIX (波動率指數)，各帶 `close` + `prev_close` + "
+        "`change_pct`。**台股開盤前必看** — `^SOX` 對台積電等晶圓代工股有 1-2 日領先性，"
+        "`^VIX` 跳升代表全球避險情緒升溫應降低部位風險。引用時請帶具體 % 變化"
+        "（例如「SOX -2.3% 拖累半導體」），勿只提名稱。"
+    ),
     "user_context": (
         "- user_context：**討論發起人本人的部位**——`portfolios`（組合清單）、"
         "`holdings`（前 20 大持股，含股數 / 平均成本 / 計價幣別）、"
@@ -2201,6 +2209,7 @@ _ALL_PERSONA_BLOCKS: frozenset[str] = frozenset({
     "top_foreign_buyers", "margin_balance_trend", "top_revenue_growers",
     "active_buybacks", "govt_bank_flow_5d", "risk_warnings",
     "market_institutional_5d", "taifex_positioning",
+    "overseas_indicators",   # PR #270: SOX/NDX/SPX/DJI/VIX overnight snapshot
     "focus_briefs", "macro", "user_context", "prior_discussions",
 })
 
@@ -2208,6 +2217,7 @@ _ALL_PERSONA_BLOCKS: frozenset[str] = frozenset({
 # Each profile is the union of "what this persona uses to form a view".
 _MACRO_PROFILE = frozenset({
     "index", "macro", "international_sentiment",
+    "overseas_indicators",   # PR #270: SOX/NDX/SPX/DJI/VIX — core macro signal
     "top_foreign_buyers", "govt_bank_flow_5d", "market_institutional_5d",
     "taifex_positioning",   # smart-money directional signal — central to macro view
     "news_sentiment", "per_symbol_news_sentiment",
@@ -2231,6 +2241,7 @@ _CONTRARIAN_PROFILE = frozenset({
     "focus_briefs", "news_sentiment", "per_symbol_news_sentiment",
     "short_term_signals",   # RSI extremes + volume spikes flag reversals
     "taifex_positioning",   # extreme net OI = contrarian setup
+    "overseas_indicators",  # PR #270: ^VIX spikes = global panic = contrarian setup
     "macro",
 })
 
@@ -2240,12 +2251,14 @@ _QUANT_PROFILE = frozenset({
     "risk_warnings", "news_sentiment", "macro",
     "short_term_signals",   # core Tier-1 quant signals per focus symbol
     "taifex_positioning",   # market-wide directional bias
+    "overseas_indicators",  # PR #270: SOX overnight gap is the dominant TW open driver
 })
 
 _PORTFOLIO_PROFILE = frozenset({
     "user_context", "focus_briefs", "per_symbol_news_sentiment",
     "short_term_signals",   # short-term entry/exit timing for held names
     "macro", "news_sentiment", "international_sentiment",
+    "overseas_indicators",  # PR #270: risk-on/off positioning needs ^VIX read
 })
 
 _PERSONA_CONTEXT_PROFILES: dict[str, frozenset[str]] = {

@@ -223,6 +223,130 @@ async def test_read_high_day_trading_ratio(db_session: AsyncSession):
 
 
 @pytest.mark.asyncio
+async def test_read_symbol_day_trading_trend_returns_none_when_no_data(
+    db_session: AsyncSession,
+):
+    """No rows in window for the symbol → None (not zero/empty dict).
+    Caller folds None into the per-symbol signals as `day_trading_trend=None`."""
+    from services.ingest.repository import read_symbol_day_trading_trend
+    out = await read_symbol_day_trading_trend(
+        db_session, market="TW", symbol="DOES_NOT_EXIST",
+        days=5, as_of=date(2026, 4, 30),
+    )
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_read_symbol_day_trading_trend_classifies_rising(
+    db_session: AsyncSession,
+):
+    """5 sessions where day-trading ratio walks 0.30 → 0.70 → trend
+    must classify as 'rising'."""
+    from services.ingest.repository import (
+        DayTradingRow, read_symbol_day_trading_trend, upsert_day_trading,
+    )
+    base = date(2026, 4, 1)
+    # ratios: day1=0.30, day2=0.40, day3=0.50, day4=0.60, day5=0.70
+    rows = []
+    for i, side_per_share in enumerate([3000, 4000, 5000, 6000, 7000]):
+        rows.append(DayTradingRow(
+            "TW", "2330", base + timedelta(days=i),
+            10000, side_per_share, side_per_share, "finmind",
+        ))
+    await upsert_day_trading(db_session, rows)
+
+    out = await read_symbol_day_trading_trend(
+        db_session, market="TW", symbol="2330",
+        days=5, as_of=base + timedelta(days=4),
+    )
+    assert out is not None
+    assert out["latest_ratio"] == 0.7
+    assert out["session_count"] == 5
+    assert out["mean_ratio"] == 0.5
+    assert out["trend"] == "rising"
+
+
+@pytest.mark.asyncio
+async def test_read_symbol_day_trading_trend_classifies_falling(
+    db_session: AsyncSession,
+):
+    """0.70 → 0.30 → falling."""
+    from services.ingest.repository import (
+        DayTradingRow, read_symbol_day_trading_trend, upsert_day_trading,
+    )
+    base = date(2026, 4, 1)
+    rows = [
+        DayTradingRow(
+            "TW", "2330", base + timedelta(days=i),
+            10000, side, side, "finmind",
+        )
+        for i, side in enumerate([7000, 6000, 5000, 4000, 3000])
+    ]
+    await upsert_day_trading(db_session, rows)
+
+    out = await read_symbol_day_trading_trend(
+        db_session, market="TW", symbol="2330",
+        days=5, as_of=base + timedelta(days=4),
+    )
+    assert out is not None
+    assert out["trend"] == "falling"
+    assert out["latest_ratio"] == 0.3
+
+
+@pytest.mark.asyncio
+async def test_read_symbol_day_trading_trend_classifies_stable(
+    db_session: AsyncSession,
+):
+    """Flat 0.50 across 5 days → stable (within ±10% band of mean)."""
+    from services.ingest.repository import (
+        DayTradingRow, read_symbol_day_trading_trend, upsert_day_trading,
+    )
+    base = date(2026, 4, 1)
+    rows = [
+        DayTradingRow(
+            "TW", "2330", base + timedelta(days=i),
+            10000, 5000, 5000, "finmind",
+        )
+        for i in range(5)
+    ]
+    await upsert_day_trading(db_session, rows)
+
+    out = await read_symbol_day_trading_trend(
+        db_session, market="TW", symbol="2330",
+        days=5, as_of=base + timedelta(days=4),
+    )
+    assert out is not None
+    assert out["trend"] == "stable"
+    assert out["latest_ratio"] == out["mean_ratio"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_read_symbol_day_trading_trend_skips_zero_volume_sessions(
+    db_session: AsyncSession,
+):
+    """Session with 0 volume can't compute a ratio — must be excluded
+    from the mean rather than poisoning it with a /0 fallback."""
+    from services.ingest.repository import (
+        DayTradingRow, read_symbol_day_trading_trend, upsert_day_trading,
+    )
+    base = date(2026, 4, 1)
+    rows = [
+        DayTradingRow("TW", "2330", base, 10000, 5000, 5000, "finmind"),
+        DayTradingRow("TW", "2330", base + timedelta(days=1), 0, 0, 0, "finmind"),
+        DayTradingRow("TW", "2330", base + timedelta(days=2), 10000, 5000, 5000, "finmind"),
+    ]
+    await upsert_day_trading(db_session, rows)
+
+    out = await read_symbol_day_trading_trend(
+        db_session, market="TW", symbol="2330",
+        days=5, as_of=base + timedelta(days=2),
+    )
+    assert out is not None
+    assert out["session_count"] == 2   # zero-vol day excluded
+    assert out["mean_ratio"] == 0.5
+
+
+@pytest.mark.asyncio
 async def test_read_recent_suspensions(db_session: AsyncSession):
     from services.ingest.repository import (
         SuspendedRow, read_recent_suspensions, upsert_suspensions,

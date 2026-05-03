@@ -225,6 +225,52 @@ async def test_technical_block_populates_per_symbol_signals(
 
 
 @pytest.mark.asyncio
+async def test_technical_block_folds_in_day_trading_trend_for_tw(
+    db_session: AsyncSession,
+):
+    """For TW focus symbols, the per-symbol day-trading trend (5-day
+    rising/falling/stable) must land under
+    `signals['day_trading_trend']` alongside the other technical
+    metrics. Non-TW markets fold the field to None."""
+    from services.ingest.repository import (
+        DayTradingRow, OhlcvBar, upsert_day_trading, upsert_ohlcv_bars,
+    )
+
+    base = date(2026, 3, 1)
+    # 30 OHLCV bars so compute_short_term_signals returns a dict.
+    await upsert_ohlcv_bars(db_session, [
+        OhlcvBar(
+            market="TW", symbol="2330", ts=base + timedelta(days=i),
+            open=600.0 + i, high=601.0 + i, low=599.0 + i,
+            close=600.0 + i, volume=1_000_000, source="test",
+        )
+        for i in range(30)
+    ])
+    # 5 day-trading sessions — flat 0.50 ratio → stable trend.
+    await upsert_day_trading(db_session, [
+        DayTradingRow(
+            "TW", "2330", base + timedelta(days=25 + i),
+            10000, 5000, 5000, "finmind",
+        )
+        for i in range(5)
+    ])
+
+    ctx = _new_ctx()
+    await technical.fetch_short_term_signals(
+        ctx, db_session, market="TW",
+        focus_symbols=["2330"],
+        as_of=base + timedelta(days=29),
+        record_error=_record(ctx),
+    )
+
+    sig = ctx["short_term_signals"]["2330"]
+    assert sig["day_trading_trend"] is not None
+    assert sig["day_trading_trend"]["latest_ratio"] == 0.5
+    assert sig["day_trading_trend"]["trend"] == "stable"
+    assert ctx["errors"] == []
+
+
+@pytest.mark.asyncio
 async def test_technical_block_noop_when_focus_symbols_empty(
     db_session: AsyncSession,
 ):

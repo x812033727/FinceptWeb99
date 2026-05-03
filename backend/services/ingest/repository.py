@@ -1086,6 +1086,86 @@ async def read_high_day_trading_ratio(
     return out[:limit]
 
 
+async def read_symbol_day_trading_trend(
+    db: AsyncSession, *, market: str = "TW", symbol: str,
+    days: int = 5, as_of: date | None = None,
+) -> dict[str, Any] | None:
+    """Per-symbol day-trading ratio trend over the last `days` sessions.
+
+    Distinct from `read_high_day_trading_ratio`, which returns the
+    market-wide list of stocks above a single-day threshold (typically
+    > 0.6). This per-symbol read tracks the rolling intensity for one
+    focus stock — a 0.5 ratio that's been climbing for 3 sessions
+    behaves very differently from a one-day spike.
+
+    Used by the per-symbol short-term signals technical block so
+    personas have intraday-speculation context for every focus
+    symbol, not just the > 60% market-wide bucket.
+
+    Returns:
+        {
+            "latest_ratio": float,         # most recent session
+            "latest_date":  str,           # iso date of latest session
+            "mean_ratio":   float,         # mean over the lookback
+            "session_count": int,          # sessions actually present
+            "trend":        "rising" | "stable" | "falling",
+        }
+        Or None when no sessions exist for the symbol in the window
+        (fresh listing, gap in ingest, or `as_of` predates the table).
+
+    `trend` heuristic: latest > mean * 1.10 → "rising",
+                       latest < mean * 0.90 → "falling",
+                       otherwise            → "stable".
+    """
+    end = as_of or date.today()
+    # `days * 3` covers weekends + a holiday cluster while still
+    # converging to ~`days` real sessions in the typical month.
+    cutoff = end - timedelta(days=max(days * 3, 14))
+    stmt = (
+        select(TwStockDayTradingDaily)
+        .where(
+            TwStockDayTradingDaily.market == market,
+            TwStockDayTradingDaily.symbol == symbol,
+            TwStockDayTradingDaily.ts >= cutoff,
+            TwStockDayTradingDaily.ts <= end,
+        )
+        .order_by(TwStockDayTradingDaily.ts.desc())
+        .limit(days)
+    )
+    rows = (await db.scalars(stmt)).all()
+    if not rows:
+        return None
+
+    ratios: list[tuple[date, float]] = []
+    for r in rows:
+        vol = int(r.volume or 0)
+        if vol <= 0:
+            continue
+        side = (int(r.buy_amount or 0) + int(r.sell_amount or 0)) / 2
+        ratios.append((r.ts, side / vol))
+    if not ratios:
+        return None
+
+    latest_date, latest_ratio = ratios[0]   # ordered desc
+    mean_ratio = sum(r for _, r in ratios) / len(ratios)
+    if mean_ratio == 0:
+        trend = "stable"
+    elif latest_ratio > mean_ratio * 1.10:
+        trend = "rising"
+    elif latest_ratio < mean_ratio * 0.90:
+        trend = "falling"
+    else:
+        trend = "stable"
+
+    return {
+        "latest_ratio":  round(latest_ratio, 4),
+        "latest_date":   latest_date.isoformat(),
+        "mean_ratio":    round(mean_ratio, 4),
+        "session_count": len(ratios),
+        "trend":         trend,
+    }
+
+
 # ── 股權分散 (TwStockShareholding) ────────────────────────────────
 
 @dataclass(frozen=True)

@@ -48,6 +48,7 @@ async def fetch_short_term_signals(
     if not focus_symbols:
         return
     try:
+        from services.ingest.repository import read_symbol_day_trading_trend
         from services.short_term_signals import (
             compute_industry_rs, compute_short_term_signals,
         )
@@ -73,6 +74,17 @@ async def fetch_short_term_signals(
                 record_error(f"industry_rs:{sym}", exc)
                 rs = None
             signals["industry_rs"] = rs
+            # Per-symbol day-trading trend (TW only — table is
+            # `TwStockDayTradingDaily`). Other markets fold to None.
+            day_trading: dict | None = None
+            if market == "TW":
+                try:
+                    day_trading = await read_symbol_day_trading_trend(
+                        db, market=market, symbol=sym, as_of=as_of,
+                    )
+                except Exception as exc:
+                    record_error(f"day_trading_trend:{sym}", exc)
+            signals["day_trading_trend"] = day_trading
             ctx["short_term_signals"][sym] = signals
     except Exception as exc:
         record_error("short_term_signals", exc)

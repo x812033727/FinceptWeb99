@@ -1683,7 +1683,11 @@ _BLOCK_ANNOTATIONS: dict[str, str] = {
         "`gap_pct`（今日開盤跳空 %）、`kd_k` / `kd_d`（KD 9-3-3，K 從下方穿越 D"
         "且 < 20 = 偏多反轉，從上方穿越 D 且 > 80 = 偏空反轉）、"
         "`industry_rs`（同產業 RS：`symbol_return_5d` vs `industry_median_5d`，"
-        "正值 = 領先類股，負值 = 落後）。配合 news_sentiment 同向時短線勝率較高。"
+        "正值 = 領先類股，負值 = 落後）、"
+        "`day_trading_trend`（個股當沖比 5 日趨勢：`latest_ratio` 最新當沖佔成交比、"
+        "`mean_ratio` 5 日均值、`trend` rising/stable/falling — `latest_ratio > 0.5` "
+        "且 `trend=rising` = 散戶亢奮過熱，短線見頂風險升）。配合 news_sentiment 同向"
+        "時短線勝率較高。"
     ),
     "international_sentiment":   "- international_sentiment：Fed / FOMC / 國際宏觀新聞情緒，影響台股風險偏好。",
     "top_foreign_buyers":        "- top_foreign_buyers：近 5 日外資累計淨買超前 10 名（已含產業別）。",

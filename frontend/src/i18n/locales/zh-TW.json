@@ -438,6 +438,7 @@
     "turn_count": "{{count}} 位專家",
     "created_at": "建立於",
     "updated_at": "最後更新",
+    "as_of_date": "回測日期",
     "conclude": "彙整結論",
     "post_mortem": "事後檢討",
     "post_mortem_hint": "（回測模式）注入隔日漲幅前 5 名讓專家反省 → 跑新一輪 → 重新彙整結論",

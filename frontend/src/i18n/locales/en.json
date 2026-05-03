@@ -438,6 +438,7 @@
     "turn_count": "{{count}} experts",
     "created_at": "Created",
     "updated_at": "Last updated",
+    "as_of_date": "Backtest as-of",
     "conclude": "Synthesize Conclusion",
     "post_mortem": "Post-mortem Review",
     "post_mortem_hint": "(backtest only) Inject next-day top-5 gainers for self-critique → run new round → re-synthesize conclusion",

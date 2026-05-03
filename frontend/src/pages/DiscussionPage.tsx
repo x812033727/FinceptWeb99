@@ -625,7 +625,16 @@ export default function DiscussionPage() {
                 );
               })()}
               <div className="mt-0.5 flex items-center gap-2 text-[10px]">
-                <span>{formatDateShort(s.updated_at || s.created_at)}</span>
+                {/* PR #277: backtest rows show their `as_of_date`
+                    (the historical day being analysed) rather than
+                    when the row happened to be created/updated.
+                    Live rows keep the existing updated_at/created_at
+                    behaviour. */}
+                <span>
+                  {s.as_of_date
+                    ? `回測 ${s.as_of_date}`
+                    : formatDateShort(s.updated_at || s.created_at)}
+                </span>
                 <span>·</span>
                 <span>R{s.current_round}</span>
                 <span>·</span>
@@ -969,6 +978,14 @@ export default function DiscussionPage() {
           )}
           {selectedId && detail && (
             <div className="text-[11px] text-muted-foreground border-b border-border pb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+              {/* PR #277: backtest discussions surface the as_of
+                  date prominently — that's the day being analysed,
+                  far more useful than when the row was created. */}
+              {detail.as_of_date && (
+                <span className="px-1.5 py-0.5 rounded bg-blue-900/20 text-blue-300 border border-blue-800/40 text-[10px] uppercase tracking-wider">
+                  {t("discussion.as_of_date")}：{detail.as_of_date}
+                </span>
+              )}
               <span>
                 {t("discussion.created_at")}：{formatDateLong(detail.created_at)}
               </span>

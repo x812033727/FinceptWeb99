@@ -287,3 +287,128 @@ async def test_audit_discussion_walks_full_path(
     assert cov["short_term_signals.rsi_14"]["persona_count"] == 2
     assert cov["taifex_positioning"]["cited"] == 1
     assert cov["taifex_positioning"]["persona_count"] == 2
+
+
+# ── audit_recent_discussions (bulk) ───────────────────────────────
+
+
+async def _seed_concluded_discussion(
+    db_session: AsyncSession,
+    *,
+    owner_id: uuid.UUID,
+    topic: str,
+    market: str = "TW",
+    cite_rsi: bool,
+) -> uuid.UUID:
+    """Helper: insert one concluded discussion with a single round
+    context + one persona turn whose content does/doesn't mention RSI."""
+    disc_id = uuid4()
+    db_session.add(Discussion(
+        id=disc_id, owner_id=owner_id, topic=topic,
+        rules="", market=market,
+        persona_ids=["market_analyst"],
+        status="concluded", current_round=1,
+    ))
+    db_session.add(DiscussionRoundContext(
+        discussion_id=disc_id, round=1,
+        context={
+            "short_term_signals": {
+                "2330": {"rsi_14": 67.0, "volume_ratio": 2.3},
+            },
+        },
+        captured_at=datetime.now(UTC),
+    ))
+    content = (
+        "RSI 67 已逼近超買，量能放大為均量 2.3 倍。"
+        if cite_rsi
+        else "純粹從基本面看公司的長期競爭優勢。"
+    )
+    db_session.add(DiscussionTurn(
+        discussion_id=disc_id, round=1, turn_index=0,
+        persona_id="market_analyst", stance="agree",
+        content=content,
+    ))
+    await db_session.commit()
+    return disc_id
+
+
+@pytest.mark.asyncio
+async def test_audit_recent_discussions_returns_zero_when_archive_empty(
+    db_session: AsyncSession,
+):
+    summary = await svc.audit_recent_discussions(db_session, limit=10)
+    assert summary.discussions_audited == 0
+    assert summary.discussion_ids == []
+    assert summary.coverage == {}
+
+
+@pytest.mark.asyncio
+async def test_audit_recent_discussions_aggregates_citation_stats(
+    db_session: AsyncSession, owner: User,
+):
+    """Seed 3 concluded discussions where 2 cite RSI and 1 doesn't.
+    Bulk audit must produce: present=3, cited=2, persona_count=3
+    (one persona per discussion, all see RSI in context)."""
+    await _seed_concluded_discussion(
+        db_session, owner_id=owner.id, topic="d1", cite_rsi=True,
+    )
+    await _seed_concluded_discussion(
+        db_session, owner_id=owner.id, topic="d2", cite_rsi=True,
+    )
+    await _seed_concluded_discussion(
+        db_session, owner_id=owner.id, topic="d3", cite_rsi=False,
+    )
+
+    summary = await svc.audit_recent_discussions(db_session, limit=10)
+    assert summary.discussions_audited == 3
+    assert len(summary.discussion_ids) == 3
+    rsi = summary.coverage["short_term_signals.rsi_14"]
+    assert rsi["present"] == 3        # one round per discussion
+    assert rsi["persona_count"] == 3   # one persona × three discussions
+    assert rsi["cited"] == 2           # two of three cited
+
+
+@pytest.mark.asyncio
+async def test_audit_recent_discussions_filters_by_market(
+    db_session: AsyncSession, owner: User,
+):
+    """`market='TW'` must drop non-TW discussions from the roll-up."""
+    await _seed_concluded_discussion(
+        db_session, owner_id=owner.id, topic="tw1",
+        market="TW", cite_rsi=True,
+    )
+    await _seed_concluded_discussion(
+        db_session, owner_id=owner.id, topic="us1",
+        market="US", cite_rsi=True,
+    )
+
+    tw_only = await svc.audit_recent_discussions(
+        db_session, limit=10, market="TW",
+    )
+    assert tw_only.discussions_audited == 1
+
+    all_markets = await svc.audit_recent_discussions(
+        db_session, limit=10,
+    )
+    assert all_markets.discussions_audited == 2
+
+
+@pytest.mark.asyncio
+async def test_audit_recent_discussions_respects_limit(
+    db_session: AsyncSession, owner: User,
+):
+    """`limit=N` clamps the number of discussions audited regardless
+    of how many concluded rows exist. Don't assert which specific
+    ones get picked — SQLite's `created_at` resolves at the second,
+    so 3 rows seeded in the same test tick can share a timestamp
+    and the descending sort isn't deterministic. The contract this
+    test guards is just the COUNT, which is what callers rely on
+    for budget control on large archives."""
+    for topic in ("d1", "d2", "d3"):
+        await _seed_concluded_discussion(
+            db_session, owner_id=owner.id, topic=topic, cite_rsi=True,
+        )
+
+    summary = await svc.audit_recent_discussions(db_session, limit=2)
+    assert summary.discussions_audited == 2
+    assert len(summary.discussion_ids) == 2

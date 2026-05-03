@@ -299,3 +299,71 @@ async def audit_discussion(
             ))
         audit.rounds.append(round_audit)
     return audit
+
+
+# ── Bulk roll-up across recent discussions ────────────────────────
+
+
+@dataclass
+class BulkAuditSummary:
+    """Aggregate signal-citation stats across N recent discussions.
+
+    `discussions_audited` is the count of rows that had persisted
+    round contexts AND at least one persona turn — discussions
+    written before PR #209 (no round context column) or rounds where
+    every persona timed out (no turn rows) are silently excluded.
+
+    `coverage[signal]` mirrors `DiscussionAudit.coverage()` but
+    summed across every audited discussion. Citation rate per
+    signal: `cited / persona_count`.
+    """
+    discussions_audited: int
+    discussion_ids: list[str]
+    coverage: dict[str, dict[str, int]] = field(default_factory=dict)
+
+
+async def audit_recent_discussions(
+    db: AsyncSession,
+    *,
+    limit: int = 30,
+    market: str | None = None,
+    status: str = "concluded",
+) -> BulkAuditSummary:
+    """Roll up signal-citation stats across the most recent `limit`
+    discussions matching `market` / `status`. Default is last 30
+    concluded discussions in any market.
+
+    Returns a BulkAuditSummary; never raises (per-discussion failure
+    is logged and skipped so one bad row can't blank the report).
+    """
+    stmt = select(Discussion.id).where(Discussion.status == status)
+    if market is not None:
+        stmt = stmt.where(Discussion.market == market)
+    stmt = stmt.order_by(Discussion.created_at.desc()).limit(limit)
+    candidate_ids = (await db.scalars(stmt)).all()
+
+    summary = BulkAuditSummary(discussions_audited=0, discussion_ids=[])
+    rolled: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"present": 0, "cited": 0, "persona_count": 0}
+    )
+
+    for did in candidate_ids:
+        try:
+            audit = await audit_discussion(db, did)
+        except Exception as exc:
+            log.warning(
+                "signal_audit.discussion_failed",
+                extra={"discussion_id": str(did), "error": str(exc)},
+            )
+            continue
+        if audit is None:
+            continue   # no persisted round contexts
+        summary.discussions_audited += 1
+        summary.discussion_ids.append(str(did))
+        for sig, stats in audit.coverage().items():
+            rolled[sig]["present"] += stats["present"]
+            rolled[sig]["cited"] += stats["cited"]
+            rolled[sig]["persona_count"] += stats["persona_count"]
+
+    summary.coverage = dict(rolled)
+    return summary

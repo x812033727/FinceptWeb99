@@ -112,6 +112,12 @@ async def refresh_symbol_map() -> None:
                 new_exch[code.strip()] = "TWSE"
     except Exception:
         pass
+    # `resolve_industry_label` translates TWSE/TPEx 產業別 codes (e.g.
+    # `"27"`) to canonical Chinese names (`"通信網路業"`) — both
+    # endpoints now return codes some of the time. Idempotent on
+    # already-resolved values, so it's safe to apply universally.
+    from data.tw.industry_codes import resolve_industry_label
+
     try:
         for row in await twse.get_all_tpex_symbols():
             code = (row.get("SecuritiesCompanyCode") or row.get("代號", "")).strip()
@@ -119,8 +125,9 @@ async def refresh_symbol_map() -> None:
                 continue
             new_exch[code] = "TPEx"
             ind = (row.get("MainSubject") or row.get("IndustryName") or "").strip()
-            if ind:
-                new_industry[code] = ind
+            ind_resolved = resolve_industry_label(ind)
+            if ind_resolved:
+                new_industry[code] = ind_resolved
             nm = (row.get("CompanyName") or row.get("公司名稱") or "").strip()
             if nm:
                 new_name[code] = nm
@@ -135,9 +142,9 @@ async def refresh_symbol_map() -> None:
             sym = row.get("symbol", "").strip()
             if not sym:
                 continue
-            ind = row.get("industry")
-            if ind:
-                new_industry[sym] = ind
+            ind_resolved = resolve_industry_label(row.get("industry"))
+            if ind_resolved:
+                new_industry[sym] = ind_resolved
             nm = row.get("name_zh")
             if nm:
                 new_name[sym] = nm
@@ -156,8 +163,15 @@ def get_industry(symbol: str) -> str | None:
     """In-memory accessor — returns the cached industry for `symbol`,
     or None if the map hasn't been populated for this code.
     Refreshed daily by the `tw_symbol_map` cron via
-    `refresh_symbol_map()`."""
-    return _industry_map.get(symbol)
+    `refresh_symbol_map()`.
+
+    Defensively passes the cached value through `resolve_industry_label`
+    so a process whose `_industry_map` was populated before PR #213
+    (when raw codes like `"27"` were stored) still surfaces the
+    Chinese name without waiting for the next refresh cycle. Idempotent
+    on already-resolved names — safe to apply universally."""
+    from data.tw.industry_codes import resolve_industry_label
+    return resolve_industry_label(_industry_map.get(symbol))
 
 
 def get_company_name(symbol: str) -> str | None:

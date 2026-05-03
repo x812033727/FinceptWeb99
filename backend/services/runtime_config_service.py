@@ -133,6 +133,23 @@ _REGISTRY: dict[str, RuntimeSettingSpec] = {
         min_value=0,
         max_value=10_000,
     ),
+    "SENTIMENT_CRON_MAX_AGE_DAYS": RuntimeSettingSpec(
+        key="SENTIMENT_CRON_MAX_AGE_DAYS",
+        type="int",
+        name="Sentiment cron lookback (days)",
+        description=(
+            "How far back the hourly news-sentiment cron looks for "
+            "unscored articles. Default 7 covers the live RSS firehose "
+            "comfortably. Crank up to 30 / 90 / 365 to drain a fresh "
+            "FinMind backfill — without this, historical backfill rows "
+            "sit unscored forever because their `published_at` falls "
+            "outside the default window. Drop back to 7 once the "
+            "backlog is cleared so the cron stops re-scanning resolved "
+            "ranges every hour."
+        ),
+        min_value=1,
+        max_value=3650,
+    ),
     "SENTIMENT_LLM_MAX_TOKENS": RuntimeSettingSpec(
         key="SENTIMENT_LLM_MAX_TOKENS",
         type="int",

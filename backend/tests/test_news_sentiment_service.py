@@ -224,6 +224,69 @@ async def test_score_pending_skips_when_all_scored(db_session: AsyncSession):
     mocked.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_score_pending_resolves_max_age_from_runtime_config(
+    db_session: AsyncSession,
+):
+    """Bug A fix: with max_age_days=None (default), the cron resolves
+    the lookback from `SENTIMENT_CRON_MAX_AGE_DAYS` runtime config.
+    Cranking it up via AdminPage drains a fresh FinMind backfill whose
+    articles' `published_at` falls outside the default 7-day window.
+
+    Test: seed an article 100 days old. Default 7d window → not seen.
+    Patch the resolver to return 365 → article gets picked up.
+    """
+    from datetime import UTC, datetime, timedelta
+    from unittest.mock import AsyncMock, patch
+
+    historical = datetime.now(UTC) - timedelta(days=100)
+    await insert_news_articles(db_session, [
+        _row(
+            "100 天前的歷史新聞 (FinMind backfill)",
+            "https://example.com/historical_backfill",
+            symbol="HIST_BF",
+            published_at=historical,
+        ),
+    ])
+
+    # Default lookback (7d) — historical article must NOT be picked.
+    with patch(
+        "services.news_sentiment_service.stream_chat",
+        side_effect=_stream_text("[]"),
+    ), patch(
+        "services.runtime_config_service.get_int",
+        new=AsyncMock(return_value=7),
+    ):
+        result = await news_sentiment_service.score_pending(
+            db=db_session, batch_size=10, max_batches=1,
+        )
+    assert result["considered"] == 0
+
+    # Cranked-up lookback (365d) — must now be picked up. Seed a
+    # mocked LLM that returns no scores so the row gets stamped
+    # without breaking on a real LLM call.
+    inserted_id = (await db_session.scalars(
+        select(NewsArticle).where(
+            NewsArticle.link == "https://example.com/historical_backfill",
+        )
+    )).one().id
+
+    with patch(
+        "services.news_sentiment_service.stream_chat",
+        side_effect=_stream_text(
+            f'[{{"id": {inserted_id}, "score": 0.3}}]',
+        ),
+    ), patch(
+        "services.runtime_config_service.get_int",
+        new=AsyncMock(return_value=365),
+    ):
+        result = await news_sentiment_service.score_pending(
+            db=db_session, batch_size=10, max_batches=1,
+        )
+    assert result["considered"] == 1
+    assert result["scored"] == 1
+
+
 # ── per-symbol aggregator ───────────────────────────────────────
 
 

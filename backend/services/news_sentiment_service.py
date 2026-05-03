@@ -378,7 +378,7 @@ async def score_pending(
     max_batches: int = 4,
     provider: str | None = None,
     model: str | None = None,
-    max_age_days: int = _MAX_AGE_DAYS_FOR_SCORING,
+    max_age_days: int | None = None,
 ) -> dict[str, int]:
     """Score up to `batch_size * max_batches` unscored articles.
 
@@ -392,9 +392,38 @@ async def score_pending(
     `news_sentiment` system task config (falling back to the compiled-in
     spec when no override exists). Pass explicit values only in tests
     that want to bypass the resolver.
+
+    `max_age_days=None` resolves at runtime from
+    ``SENTIMENT_CRON_MAX_AGE_DAYS`` (default 7). Cranking this up via
+    AdminPage RuntimeTunablesCard is the operator's lever for draining
+    a fresh FinMind backfill whose articles' ``published_at`` falls
+    outside the default 7-day window — without it, those backfilled
+    rows sit unscored forever (only inline scoring during round-button
+    presses ever touches them, ~100 rows × N rounds, leaving 87K+ rows
+    permanently unreached on a typical backfill).
+
+    Tests pass an explicit value to bypass the runtime resolver.
     """
     own_session = db is None
     session = db if db is not None else AsyncSessionLocal()
+    # Resolve max_age_days from runtime config when caller didn't
+    # pass it explicitly. Done up-front (before the per-batch loop)
+    # so the lookup hits the 60s Redis cache once instead of per
+    # batch.
+    if max_age_days is None:
+        try:
+            from services.runtime_config_service import (
+                get_int as _runtime_get_int,
+            )
+            max_age_days = await _runtime_get_int(
+                session, "SENTIMENT_CRON_MAX_AGE_DAYS",
+            )
+        except Exception as exc:
+            log.warning(
+                "news_sentiment.runtime_max_age_failed",
+                extra={"error": str(exc)},
+            )
+            max_age_days = settings.SENTIMENT_CRON_MAX_AGE_DAYS
     considered = 0
     scored_count = 0
     batches_run = 0

@@ -49,6 +49,7 @@ def test_known_keys_includes_all_baseline_tunables():
     keys = svc.known_keys()
     assert "SENTIMENT_DAILY_LLM_CALL_CAP" in keys
     assert "SENTIMENT_INTERACTIVE_BACKFILL_CAP" in keys
+    assert "SENTIMENT_CRON_MAX_AGE_DAYS" in keys
     assert "DISCUSSION_PERSONA_TIMEOUT_SECONDS" in keys
     assert "AI_REQUESTS_VIEWER_DAILY" in keys
     assert "AI_REQUESTS_ANALYST_DAILY" in keys
@@ -56,6 +57,18 @@ def test_known_keys_includes_all_baseline_tunables():
     assert "SENTIMENT_LLM_MAX_TOKENS" in keys
     assert "DISCUSSION_TURN_MAX_TOKENS" in keys
     assert "DISCUSSION_SYNTHESIZER_MAX_TOKENS" in keys
+
+
+def test_sentiment_cron_max_age_days_has_drain_friendly_bounds():
+    """Operator's lever for draining a multi-year backfill needs
+    the upper bound to actually allow that. 3650 = ~10 years which
+    covers FinMind's 2017+ archive comfortably."""
+    spec = svc.get_spec("SENTIMENT_CRON_MAX_AGE_DAYS")
+    assert spec.type == "int"
+    assert spec.min_value is not None and spec.min_value >= 1
+    assert spec.max_value is not None and spec.max_value >= 365
+    # 7 (compiled default) must be in range.
+    assert spec.min_value <= 7 <= spec.max_value
 
 
 def test_max_tokens_specs_have_sane_bounds():

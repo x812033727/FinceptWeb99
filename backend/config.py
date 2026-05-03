@@ -153,6 +153,13 @@ class Settings(BaseSettings):
     # through to the cron-grade-it-later path.
     SENTIMENT_INTERACTIVE_BACKFILL_CAP: int = 100
 
+    # News sentiment cron: how many days back the hourly job scans for
+    # unscored articles. Default 7 covers the live RSS firehose; crank
+    # to 30 / 90 / 365 via the AdminPage RuntimeTunablesCard to drain a
+    # fresh FinMind backfill (whose articles' `published_at` would
+    # otherwise fall outside the default window and never be picked up).
+    SENTIMENT_CRON_MAX_AGE_DAYS: int = 7
+
     # Discussion: per-persona LLM timeout (seconds). When a single persona's
     # turn doesn't complete in this window we abort it, persist a placeholder,
     # and move on to the next persona — prevents one stuck provider from

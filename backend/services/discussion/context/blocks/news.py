@@ -37,6 +37,7 @@ async def fetch_market_sentiment(
     market: str,
     as_of_dt: datetime | None,
     record_error: ErrorRecorder,
+    focus_symbols: list[str] | None = None,
 ) -> None:
     """Discussion's primary-market sentiment aggregate (last 48h).
 
@@ -53,7 +54,15 @@ async def fetch_market_sentiment(
     doesn't reach this date" from "FINMIND_TOKEN is free-tier" or
     "FinMind upstream error". Without this users couldn't tell the
     difference and would re-run backtests hoping the warning would
-    disappear."""
+    disappear.
+
+    `focus_symbols` (PR #218) plumbs the discussion's mentioned
+    tickers down to `ensure_news_archive_covers` so that when
+    market-wide FinMind is paywalled (Sponsor tier), the helper can
+    fall back to per-symbol fan-out for those specific tickers.
+    Without focus_symbols there's no good default universe to
+    fan out across, so the fallback is skipped and the error
+    surfaces as paywall."""
     if as_of_dt is not None:
         try:
             from services.news_backfill_service import (
@@ -61,6 +70,7 @@ async def fetch_market_sentiment(
             )
             backfill_result = await ensure_news_archive_covers(
                 db, market=market, as_of=as_of_dt.date(),
+                focus_symbols=focus_symbols,
             )
             ctx["news_backfill"] = backfill_result
         except Exception as exc:

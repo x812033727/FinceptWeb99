@@ -268,6 +268,169 @@ def test_sanitise_token_strips_jwt_value():
     ) == "no secrets here"
 
 
+# ── PR #218: per-symbol fan-out fallback on paywall ──────────────
+
+
+@pytest.mark.asyncio
+async def test_paywall_with_focus_symbols_falls_back_to_per_symbol(
+    db_session: AsyncSession,
+):
+    """When market-wide hits a Sponsor-tier paywall AND the discussion
+    has `focus_symbols`, the helper falls back to per-symbol fan-out
+    rather than just surrendering. This is the Sponsor-friendly path:
+    the user keeps news for the tickers they actually care about
+    even though `data_id=""` is blocked."""
+    import httpx
+
+    as_of = date(2024, 6, 15)
+    fake_request = httpx.Request("GET", "https://api.finmindtrade.com/")
+    fake_response = httpx.Response(
+        400, request=fake_request,
+        json={"msg": "Your level is register. Please update your user level.",
+              "status": 400},
+    )
+    paywall_exc = httpx.HTTPStatusError(
+        "400", request=fake_request, response=fake_response,
+    )
+
+    per_symbol_mock = AsyncMock(return_value=4)
+
+    with patch.object(
+        news_backfill_service, "_do_backfill",
+        new=AsyncMock(side_effect=paywall_exc),
+    ), patch.object(
+        news_backfill_service, "_do_backfill_per_symbol",
+        new=per_symbol_mock,
+    ):
+        out = await news_backfill_service.ensure_news_archive_covers(
+            db_session, market="TW", as_of=as_of,
+            focus_symbols=["2330", "2454"],
+        )
+
+    # Per-symbol fallback fired with the focus symbols (capped, but
+    # 2 < cap so passes through unchanged).
+    per_symbol_mock.assert_awaited_once()
+    assert per_symbol_mock.call_args.kwargs["symbols"] == ["2330", "2454"]
+    assert out["fallback"] == "per-symbol"
+    assert out["backfilled"] == 4
+    assert "error" not in out
+
+
+@pytest.mark.asyncio
+async def test_paywall_caps_focus_symbols_at_per_symbol_cap(
+    db_session: AsyncSession,
+):
+    """A discussion topic mentioning many tickers (rare but possible
+    — `extract_focus_symbols` returns up to ~5 typically) shouldn't
+    fan out across all of them when paywall fires. Cap at
+    `_PER_SYMBOL_CAP=5` to bound auto-backfill latency + quota."""
+    import httpx
+
+    as_of = date(2024, 6, 15)
+    fake_request = httpx.Request("GET", "https://api.finmindtrade.com/")
+    fake_response = httpx.Response(
+        400, request=fake_request,
+        json={"msg": "Sponsor tier required", "status": 400},
+    )
+    paywall_exc = httpx.HTTPStatusError(
+        "400", request=fake_request, response=fake_response,
+    )
+
+    with patch.object(
+        news_backfill_service, "_do_backfill",
+        new=AsyncMock(side_effect=paywall_exc),
+    ), patch.object(
+        news_backfill_service, "_do_backfill_per_symbol",
+        new=AsyncMock(return_value=2),
+    ) as ps_mock:
+        await news_backfill_service.ensure_news_archive_covers(
+            db_session, market="TW", as_of=as_of,
+            focus_symbols=["2330", "2454", "2317", "2308", "1101", "2412", "3008"],
+        )
+
+    # Capped at _PER_SYMBOL_CAP (=5), even though caller provided 7.
+    passed_symbols = ps_mock.call_args.kwargs["symbols"]
+    assert len(passed_symbols) == news_backfill_service._PER_SYMBOL_CAP
+    assert passed_symbols == ["2330", "2454", "2317", "2308", "1101"]
+
+
+@pytest.mark.asyncio
+async def test_paywall_without_focus_symbols_returns_paywall_error(
+    db_session: AsyncSession,
+):
+    """Paywall + no focus symbols → no fallback (no good default
+    universe to fan out across). Returns the paywall error so the
+    user knows to either pass focus symbols or upgrade tier."""
+    import httpx
+
+    as_of = date(2024, 6, 15)
+    fake_request = httpx.Request("GET", "https://api.finmindtrade.com/")
+    fake_response = httpx.Response(
+        400, request=fake_request,
+        json={"msg": "Your level is register. Please update.", "status": 400},
+    )
+    paywall_exc = httpx.HTTPStatusError(
+        "400", request=fake_request, response=fake_response,
+    )
+
+    per_symbol_mock = AsyncMock()
+
+    with patch.object(
+        news_backfill_service, "_do_backfill",
+        new=AsyncMock(side_effect=paywall_exc),
+    ), patch.object(
+        news_backfill_service, "_do_backfill_per_symbol",
+        new=per_symbol_mock,
+    ):
+        # No focus_symbols → no fallback path.
+        out = await news_backfill_service.ensure_news_archive_covers(
+            db_session, market="TW", as_of=as_of, focus_symbols=None,
+        )
+
+    per_symbol_mock.assert_not_awaited()
+    assert "paywall" in out["error"].lower()
+    assert "fallback" not in out
+
+
+@pytest.mark.asyncio
+async def test_per_symbol_fallback_failure_surfaces_error(
+    db_session: AsyncSession,
+):
+    """If even the per-symbol path fails (e.g. Sponsor tier ALSO
+    can't query news for some reason), the error from THAT call
+    surfaces. Caller sees an actionable message rather than the
+    original paywall (which would mislead since per-symbol was
+    actually attempted)."""
+    import httpx
+
+    as_of = date(2024, 6, 15)
+    fake_request = httpx.Request("GET", "https://api.finmindtrade.com/")
+    fake_response = httpx.Response(
+        400, request=fake_request,
+        json={"msg": "Sponsor tier required", "status": 400},
+    )
+    paywall_exc = httpx.HTTPStatusError(
+        "400", request=fake_request, response=fake_response,
+    )
+    per_symbol_exc = RuntimeError("FinMind 502")
+
+    with patch.object(
+        news_backfill_service, "_do_backfill",
+        new=AsyncMock(side_effect=paywall_exc),
+    ), patch.object(
+        news_backfill_service, "_do_backfill_per_symbol",
+        new=AsyncMock(side_effect=per_symbol_exc),
+    ):
+        out = await news_backfill_service.ensure_news_archive_covers(
+            db_session, market="TW", as_of=as_of,
+            focus_symbols=["2330"],
+        )
+
+    assert "FinMind 502" in out["error"]
+    assert "fallback" not in out
+    assert out["backfilled"] == 0
+
+
 @pytest.mark.asyncio
 async def test_skips_non_tw_market(db_session: AsyncSession):
     """FinMind's TaiwanStockNews is TW-specific. Calling for a US

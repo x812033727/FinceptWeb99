@@ -175,6 +175,7 @@ async def build_market_context(
     await news.fetch_market_sentiment(
         ctx, db, market=market, as_of_dt=as_of_dt,
         record_error=record_error,
+        focus_symbols=focus_symbols,
     )
     await news.fetch_international_sentiment(
         ctx, db, as_of_dt=as_of_dt, record_error=record_error,

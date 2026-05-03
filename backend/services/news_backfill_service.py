@@ -94,8 +94,43 @@ async def _count_recent_articles(
     return int(await db.scalar(stmt) or 0)
 
 
+# Per-symbol fan-out cap when market-wide is paywalled (PR #218).
+# Discussions typically have 1-3 focus symbols; capping at 5 limits
+# auto-backfill to a few seconds + a few FinMind calls even on
+# pathologically long focus_symbols lists.
+_PER_SYMBOL_CAP = 5
+# Tiny pacing between per-symbol calls so we don't trip rate limits
+# on a tier where TaiwanStockNews per-symbol IS allowed but at a
+# limited concurrency. Sequential awaits + 0.3s pause = polite.
+_PER_SYMBOL_DELAY_S = 0.3
+
+
+def _format_finmind_error(exc: BaseException) -> str:
+    """Translate a FinMind exception into the most informative error
+    string we can surface back to the user. Three cases:
+
+      1. Paywall body present → call out tier mismatch explicitly.
+      2. Other JSON body present → echo the upstream `msg`.
+      3. No JSON body → fall through to httpx default, with the
+         token query param redacted (the URL leaks token=<jwt>).
+    """
+    from data.tw.finmind_paywall import (
+        extract_body_message, looks_like_paywall,
+    )
+    body_msg = extract_body_message(exc)
+    if body_msg and looks_like_paywall(body_msg):
+        return (
+            f"FinMind paywall — TaiwanStockNews requires a paid "
+            f"sponsor tier. Upstream says: {body_msg}"
+        )
+    if body_msg:
+        return f"FinMind error: {body_msg}"
+    return _sanitise_token(str(exc))
+
+
 async def ensure_news_archive_covers(
     db: AsyncSession, *, market: str, as_of: date,
+    focus_symbols: list[str] | None = None,
 ) -> dict:
     """Best-effort: ensure `news_articles` has at least
     `_MIN_ARTICLES_THRESHOLD` rows in the 14-day window ending at
@@ -109,6 +144,29 @@ async def ensure_news_archive_covers(
     Never raises — backfill failures degrade silently to the existing
     "archive doesn't reach this date" warning that the discussion
     UI already renders.
+
+    Two backfill strategies tried in order:
+
+      1. **Market-wide** (`data_id=""`) — one FinMind call returns
+         every listed company's news for the date window. Fast +
+         compact, but typically requires a paid sponsor tier above
+         "Sponsor".
+
+      2. **Per-symbol fan-out** (PR #218) — fired automatically when
+         strategy 1 hits a FinMind paywall AND `focus_symbols` is
+         supplied by the caller. Iterates the topic's focus symbols
+         (capped at 5) calling `data_id=<sym>`. The Sponsor tier
+         allows per-symbol queries, so this gets news flowing for
+         the discussion's mentioned tickers even when market-wide
+         is blocked. No fallback when there are no focus symbols —
+         the discussion would have no use for the arbitrary news.
+
+    Result keys:
+      - `covered`: bool
+      - `backfilled`: int (rows handed to insert_news_articles)
+      - `error`: str (when both strategies failed)
+      - `fallback`: "per-symbol" (when strategy 2 succeeded)
+      - `skipped`: "lock" | "non-tw" (early skip reason)
 
     `market` only `"TW"` is supported today (FinMind dataset is
     Taiwan-specific). Caller should skip non-TW markets.
@@ -130,43 +188,57 @@ async def ensure_news_archive_covers(
 
     lock_key = _lock_key(market, as_of)
     if not await acquire_lock(lock_key, _LOCK_TTL_SECONDS):
-        # Another concurrent round is already backfilling this date —
-        # skip. The eventual DB row count will be correct for whichever
-        # round reads after the winner finishes.
         log.info("news_backfill.skipped_lock_held",
                  extra={"as_of": as_of.isoformat()})
         return {"covered": False, "backfilled": 0, "skipped": "lock"}
 
+    backfilled = 0
+    error_str: str | None = None
+    fallback_used: str | None = None
+
     try:
-        backfilled = await _do_backfill(market=market, as_of=as_of)
-    except Exception as exc:
-        # FinMind tier-mismatch / dataset-paywall errors come through
-        # as HTTP 400 with a JSON body that says e.g. "Your level is
-        # register. Please update your user level." httpx's default
-        # error string only shows "Client error '400 Bad Request'" +
-        # the URL, which is useless for diagnosis (and also leaks the
-        # token in the URL). Pull the upstream body message out via
-        # the shared paywall detector + surface it as the error.
-        from data.tw.finmind_paywall import (
-            extract_body_message, looks_like_paywall,
-        )
-        body_msg = extract_body_message(exc)
-        if body_msg and looks_like_paywall(body_msg):
-            error_str = (
-                f"FinMind paywall — TaiwanStockNews requires a paid "
-                f"sponsor tier. Upstream says: {body_msg}"
+        try:
+            backfilled = await _do_backfill(market=market, as_of=as_of)
+        except Exception as exc:
+            from data.tw.finmind_paywall import (
+                extract_body_message, looks_like_paywall,
             )
-        elif body_msg:
-            error_str = f"FinMind error: {body_msg}"
-        else:
-            # No JSON body parseable from the response — fall back to
-            # httpx's default message (sanitised to drop the token).
-            error_str = _sanitise_token(str(exc))
-        log.warning(
-            "news_backfill.failed",
-            extra={"as_of": as_of.isoformat(), "error": error_str},
-        )
-        return {"covered": False, "backfilled": 0, "error": error_str}
+            is_paywall = looks_like_paywall(extract_body_message(exc))
+
+            if is_paywall and focus_symbols:
+                # Sponsor tier blocks `data_id=""` market-wide calls
+                # but allows per-symbol queries. Fall back to fan-out
+                # over the discussion's focus symbols so the user
+                # still gets contemporaneous news for the tickers
+                # they're actually discussing.
+                log.info(
+                    "news_backfill.paywall_falling_back_to_per_symbol",
+                    extra={
+                        "as_of": as_of.isoformat(),
+                        "symbols": list(focus_symbols[:_PER_SYMBOL_CAP]),
+                    },
+                )
+                try:
+                    backfilled = await _do_backfill_per_symbol(
+                        market=market, as_of=as_of,
+                        symbols=list(focus_symbols[:_PER_SYMBOL_CAP]),
+                    )
+                    fallback_used = "per-symbol"
+                except Exception as exc2:
+                    error_str = _format_finmind_error(exc2)
+                    log.warning(
+                        "news_backfill.per_symbol_fallback_failed",
+                        extra={
+                            "as_of": as_of.isoformat(),
+                            "error": error_str,
+                        },
+                    )
+            else:
+                error_str = _format_finmind_error(exc)
+                log.warning(
+                    "news_backfill.failed",
+                    extra={"as_of": as_of.isoformat(), "error": error_str},
+                )
     finally:
         await release_lock(lock_key)
 
@@ -178,10 +250,90 @@ async def ensure_news_archive_covers(
     except Exception:
         new_count = existing + backfilled
 
-    return {
+    result: dict = {
         "covered": new_count >= _MIN_ARTICLES_THRESHOLD,
         "backfilled": backfilled,
     }
+    if error_str:
+        result["error"] = error_str
+    if fallback_used:
+        result["fallback"] = fallback_used
+    return result
+
+
+async def _do_backfill_per_symbol(
+    *, market: str, as_of: date, symbols: list[str],
+) -> int:
+    """Per-symbol fan-out fallback for Sponsor-tier paywall.
+
+    Sponsor tokens can't issue `data_id=""` market-wide
+    TaiwanStockNews queries (they 400 with a paywall body) but CAN
+    issue per-symbol queries — same dataset, same window, just one
+    `data_id=<sym>` at a time.
+
+    Sequential awaits with a 0.3s pause between symbols. With
+    `_PER_SYMBOL_CAP=5`, the worst case is 5 × ~0.5s = ~2.5s
+    additional latency on top of the failed market-wide attempt.
+    Per-symbol failures are logged and skipped — one symbol's outage
+    doesn't blank the others.
+
+    Returns the count of rows handed to `insert_news_articles`
+    aggregated across all symbols (actual DB inserts smaller after
+    sha256 dedup).
+    """
+    import asyncio
+
+    import data.tw.finmind_connector as finmind
+    from db.session import AsyncSessionLocal
+    from scripts.backfill_news_finmind import _to_row
+    from services.ingest.repository import insert_news_articles
+
+    chunk_start = as_of - timedelta(days=_BACKFILL_DAYS_BACK)
+    chunk_end = as_of + timedelta(days=_BACKFILL_DAYS_FORWARD)
+
+    all_rows = []
+    last_exc: Exception | None = None
+    for i, sym in enumerate(symbols):
+        if i > 0:
+            await asyncio.sleep(_PER_SYMBOL_DELAY_S)
+        try:
+            items = await finmind.get_news(
+                chunk_start.isoformat(),
+                symbol=sym,
+                end_date=chunk_end.isoformat(),
+            )
+        except Exception as exc:
+            last_exc = exc
+            log.warning(
+                "news_backfill.per_symbol_call_failed",
+                extra={"symbol": sym, "error": str(exc)},
+            )
+            continue
+        for item in items:
+            row = _to_row(item, market)
+            if row is not None:
+                all_rows.append(row)
+
+    if not all_rows:
+        # Every symbol either failed or returned nothing. Re-raise
+        # the last exception (if any) so the caller can surface the
+        # FinMind error; if every call genuinely returned [], silent
+        # zero is fine.
+        if last_exc is not None:
+            raise last_exc
+        return 0
+
+    async with AsyncSessionLocal() as write_db:
+        await insert_news_articles(write_db, all_rows)
+    log.info(
+        "news_backfill.per_symbol_inserted",
+        extra={
+            "as_of": as_of.isoformat(),
+            "rows": len(all_rows),
+            "symbols": len(symbols),
+        },
+    )
+    return len(all_rows)
 
 
 async def _do_backfill(*, market: str, as_of: date) -> int:

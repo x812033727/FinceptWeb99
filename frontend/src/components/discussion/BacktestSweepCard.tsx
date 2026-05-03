@@ -60,6 +60,7 @@ function SweepForm({
   const [tradingDays, setTradingDays] = useState<number>(5);
   const [roundsPerDiscussion, setRoundsPerDiscussion] = useState<number>(1);
   const [concurrency, setConcurrency] = useState<number>(1);
+  const [autoPostMortem, setAutoPostMortem] = useState<boolean>(true);
 
   function submit() {
     if (!anchorDate || personaIds.length === 0) return;
@@ -69,6 +70,7 @@ function SweepForm({
       trading_days_count: tradingDays,
       rounds_per_discussion: roundsPerDiscussion,
       concurrency,
+      auto_post_mortem: autoPostMortem,
     });
   }
 
@@ -139,6 +141,22 @@ function SweepForm({
           />
         </label>
       </div>
+      <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={autoPostMortem}
+          onChange={(e) => setAutoPostMortem(e.target.checked)}
+          className="rounded border-border"
+        />
+        <span className="text-muted-foreground">
+          {t("sweep.auto_post_mortem_label")}
+        </span>
+      </label>
+      <p className="text-[10px] text-muted-foreground/70 leading-relaxed">
+        {autoPostMortem
+          ? t("sweep.auto_post_mortem_on_help")
+          : t("sweep.auto_post_mortem_off_help")}
+      </p>
       <p className="text-[10px] text-muted-foreground/70 leading-relaxed">
         {t("sweep.reuse_note", {
           personas: personaIds.length,
@@ -199,6 +217,9 @@ function SweepProgressRow({
             ×{sweep.trading_days_count} {t("sweep.days")} ·
             {" "}{sweep.rounds_per_discussion} {t("sweep.rounds")} ·
             {" "}c={sweep.concurrency}
+            {sweep.auto_post_mortem !== false ? (
+              <span className="ml-1 text-purple-300/80">· 📋</span>
+            ) : null}
           </span>
         </div>
         <div className="flex gap-1.5 shrink-0">

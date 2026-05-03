@@ -212,6 +212,11 @@ class BacktestSweepCreate(BaseModel):
     trading_days_count: int = Field(..., ge=1, le=60)
     rounds_per_discussion: int = Field(default=1, ge=1, le=5)
     concurrency: int = Field(default=1, ge=1, le=3)
+    # PR #275: auto-trigger the post-mortem self-critique after each
+    # spawned discussion's conclude. Default True — if you're
+    # running a multi-day backtest you almost always want the
+    # critique attached.
+    auto_post_mortem: bool = True
 
 
 class BacktestSweepFailedDate(BaseModel):
@@ -234,6 +239,7 @@ class BacktestSweepResponse(BaseModel):
     trading_days_count: int
     rounds_per_discussion: int
     concurrency: int
+    auto_post_mortem: bool   # PR #275
     resolved_dates: list[str]
     completed_dates: list[str]
     failed_dates: list[BacktestSweepFailedDate]

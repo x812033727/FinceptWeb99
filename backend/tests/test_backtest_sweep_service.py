@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -74,6 +74,25 @@ async def test_create_sweep_persists_pending_row(
     assert sweep.persona_ids == ["buffett", "lynch"]
     assert sweep.trading_days_count == 5
     assert sweep.resolved_dates == []
+    # PR #275: auto_post_mortem defaults True so multi-day sweeps
+    # come with the self-critique attached out of the box.
+    assert sweep.auto_post_mortem is True
+
+
+@pytest.mark.asyncio
+async def test_create_sweep_persists_auto_post_mortem_off(
+    db_session: AsyncSession, owner: User,
+):
+    """Operator can opt out — auto_post_mortem=False saves the
+    ~50% cost overhead for cost-sensitive runs."""
+    sweep = await svc.create_sweep(
+        db_session, owner_id=owner.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["buffett"],
+        anchor_date=date(2026, 1, 1), trading_days_count=3,
+        auto_post_mortem=False,
+    )
+    assert sweep.auto_post_mortem is False
 
 
 @pytest.mark.asyncio
@@ -457,6 +476,259 @@ async def test_worker_bails_on_cancellation_mid_flight(
     assert refreshed.status == svc.STATUS_CANCELLED
     assert len(refreshed.completed_dates) == 1
     assert refreshed.completed_dates[0] == "2026-01-05"
+
+
+# ── PR #275: auto-post-mortem branch in _process_one_date ────────
+
+
+@pytest.mark.asyncio
+async def test_process_one_date_runs_post_mortem_when_enabled(
+    db_session: AsyncSession, owner: User,
+):
+    """When `auto_post_mortem=True`, the worker chains the post-
+    mortem flow after the original synthesize: refresh →
+    build_post_mortem_message → inject → run_round → synthesize.
+    Mocks stub the LLM stack so the test stays fast."""
+    sweep = await svc.create_sweep(
+        db_session, owner_id=owner.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["buffett"],
+        anchor_date=date(2026, 1, 5), trading_days_count=1,
+        auto_post_mortem=True,
+    )
+
+    pm_called = {"build": 0, "inject": 0, "round": 0, "synth": 0}
+    base_synth_called = {"n": 0}
+
+    async def _fake_run_round(*args, **kwargs):
+        # generator with no events
+        if False:
+            yield
+        return
+
+    class _StubDisc:
+        conclusion = {"recommended_symbols": ["2330"], "reasoning": "ok"}
+        market = "TW"
+        as_of_date = date(2026, 1, 5)
+
+    async def _fake_create_discussion(db, **_kw):
+        return _StubDisc()
+
+    async def _fake_synthesize(db, disc, **_kw):
+        base_synth_called["n"] += 1
+        # First call (original) — set conclusion. Second call
+        # (post-mortem) — would route to post_mortem_conclusion
+        # in real code, but we just count calls here.
+        if base_synth_called["n"] == 1:
+            disc.conclusion = {"recommended_symbols": ["2330"]}
+        return disc.conclusion
+
+    async def _fake_build_post_mortem(db, disc, **_kw):
+        pm_called["build"] += 1
+        from services.post_mortem_service import PostMortemPayload
+        return PostMortemPayload(
+            trading_days=[date(2026, 1, 6)],
+            recommended_performance=[],
+            daily_top_gainers=[],
+            prompt_text="【事後檢討】test prompt",
+        )
+
+    async def _fake_inject(db, disc, *, content):
+        pm_called["inject"] += 1
+        return None
+
+    async def _fake_refresh(disc):
+        # No-op — the stub already has conclusion set.
+        return None
+
+    semaphore = asyncio.Semaphore(1)
+
+    with patch(
+        "services.discussion_service.create_discussion",
+        new=_fake_create_discussion,
+    ), patch(
+        "services.discussion_service.run_round",
+        new=_fake_run_round,
+    ), patch(
+        "services.discussion_service.synthesize_conclusion",
+        new=_fake_synthesize,
+    ), patch(
+        "services.discussion_service.inject_user_message",
+        new=_fake_inject,
+    ), patch(
+        "services.post_mortem_service.build_post_mortem_message",
+        new=_fake_build_post_mortem,
+    ), patch.object(svc.AsyncSessionLocal.__call__.__self__,
+                     # No-op — caller uses AsyncSessionLocal directly
+                     # below; we'll just rely on the test fixture's
+                     # patched session.
+                     # Use the sweep_service.AsyncSessionLocal alias.
+                     "_dummy", create=True):
+        # Manually patch the session opener to yield the test session.
+        class _CtxYieldSession:
+            async def __aenter__(self_inner):
+                return db_session
+
+            async def __aexit__(self_inner, *exc):
+                return False
+
+        with patch.object(
+            svc, "AsyncSessionLocal",
+            new=lambda: _CtxYieldSession(),
+        ), patch.object(
+            db_session, "refresh", new=_fake_refresh,
+        ):
+            target_date, err = await svc._process_one_date(
+                sweep.id, date(2026, 1, 5), semaphore=semaphore,
+            )
+
+    assert err is None
+    assert pm_called["build"] == 1, "build_post_mortem_message must fire"
+    assert pm_called["inject"] == 1, "inject_user_message must fire"
+    # Two synthesize calls: the original + the post-mortem revision.
+    assert base_synth_called["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_process_one_date_skips_post_mortem_when_disabled(
+    db_session: AsyncSession, owner: User,
+):
+    """`auto_post_mortem=False` → only the original synthesize
+    runs, post-mortem service is never called."""
+    sweep = await svc.create_sweep(
+        db_session, owner_id=owner.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["buffett"],
+        anchor_date=date(2026, 1, 5), trading_days_count=1,
+        auto_post_mortem=False,
+    )
+
+    async def _fake_run_round(*_a, **_kw):
+        if False:
+            yield
+        return
+
+    class _StubDisc:
+        conclusion = {"recommended_symbols": ["2330"]}
+        market = "TW"
+        as_of_date = date(2026, 1, 5)
+
+    async def _fake_create_discussion(db, **_kw):
+        return _StubDisc()
+
+    synth_calls = {"n": 0}
+
+    async def _fake_synthesize(db, disc, **_kw):
+        synth_calls["n"] += 1
+        return disc.conclusion
+
+    pm_calls = {"n": 0}
+
+    async def _fake_build_post_mortem(db, disc, **_kw):
+        pm_calls["n"] += 1
+        from services.post_mortem_service import PostMortemPayload
+        return PostMortemPayload()
+
+    semaphore = asyncio.Semaphore(1)
+
+    class _CtxYieldSession:
+        async def __aenter__(self):
+            return db_session
+
+        async def __aexit__(self, *exc):
+            return False
+
+    with patch.object(
+        svc, "AsyncSessionLocal", new=lambda: _CtxYieldSession(),
+    ), patch(
+        "services.discussion_service.create_discussion",
+        new=_fake_create_discussion,
+    ), patch(
+        "services.discussion_service.run_round",
+        new=_fake_run_round,
+    ), patch(
+        "services.discussion_service.synthesize_conclusion",
+        new=_fake_synthesize,
+    ), patch(
+        "services.post_mortem_service.build_post_mortem_message",
+        new=_fake_build_post_mortem,
+    ):
+        target_date, err = await svc._process_one_date(
+            sweep.id, date(2026, 1, 5), semaphore=semaphore,
+        )
+
+    assert err is None
+    assert synth_calls["n"] == 1, "only the original synthesize should fire"
+    assert pm_calls["n"] == 0, "post-mortem service must NOT be called"
+
+
+@pytest.mark.asyncio
+async def test_process_one_date_does_not_fail_when_post_mortem_raises(
+    db_session: AsyncSession, owner: User,
+):
+    """Post-mortem failure (LLM timeout / no future ohlcv) must NOT
+    fail the whole date — the original conclusion is still valid
+    and the verifier anchors on it. The error is logged and the
+    date counts as completed."""
+    sweep = await svc.create_sweep(
+        db_session, owner_id=owner.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["buffett"],
+        anchor_date=date(2026, 1, 5), trading_days_count=1,
+        auto_post_mortem=True,
+    )
+
+    async def _fake_run_round(*_a, **_kw):
+        if False:
+            yield
+        return
+
+    class _StubDisc:
+        conclusion = {"recommended_symbols": ["2330"]}
+        market = "TW"
+        as_of_date = date(2026, 1, 5)
+
+    async def _fake_create_discussion(db, **_kw):
+        return _StubDisc()
+
+    async def _fake_synthesize(db, disc, **_kw):
+        return disc.conclusion
+
+    async def _failing_build_pm(db, disc, **_kw):
+        raise RuntimeError("simulated post-mortem failure")
+
+    semaphore = asyncio.Semaphore(1)
+
+    class _CtxYieldSession:
+        async def __aenter__(self):
+            return db_session
+
+        async def __aexit__(self, *exc):
+            return False
+
+    with patch.object(
+        svc, "AsyncSessionLocal", new=lambda: _CtxYieldSession(),
+    ), patch(
+        "services.discussion_service.create_discussion",
+        new=_fake_create_discussion,
+    ), patch(
+        "services.discussion_service.run_round",
+        new=_fake_run_round,
+    ), patch(
+        "services.discussion_service.synthesize_conclusion",
+        new=_fake_synthesize,
+    ), patch(
+        "services.post_mortem_service.build_post_mortem_message",
+        new=_failing_build_pm,
+    ):
+        target_date, err = await svc._process_one_date(
+            sweep.id, date(2026, 1, 5), semaphore=semaphore,
+        )
+
+    # err is None — the date completes successfully even though the
+    # post-mortem branch raised internally.
+    assert err is None
+    assert target_date == date(2026, 1, 5)
 
 
 # ── delete + list helpers ────────────────────────────────────────

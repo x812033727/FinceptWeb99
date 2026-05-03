@@ -761,6 +761,7 @@ def _sweep_to_response(s) -> BacktestSweepResponse:
         trading_days_count=s.trading_days_count,
         rounds_per_discussion=s.rounds_per_discussion,
         concurrency=s.concurrency,
+        auto_post_mortem=bool(s.auto_post_mortem),
         resolved_dates=list(s.resolved_dates or []),
         completed_dates=list(s.completed_dates or []),
         failed_dates=[
@@ -820,6 +821,7 @@ async def create_sweep(
             trading_days_count=body.trading_days_count,
             rounds_per_discussion=body.rounds_per_discussion,
             concurrency=body.concurrency,
+            auto_post_mortem=body.auto_post_mortem,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

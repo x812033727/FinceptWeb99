@@ -74,6 +74,7 @@ async def create_sweep(
     trading_days_count: int,
     rounds_per_discussion: int = 1,
     concurrency: int = 1,
+    auto_post_mortem: bool = True,
 ) -> BacktestSweep:
     """Persist a new sweep row in `pending` state. Validates input
     bounds; raises ValueError on invalid input so the API layer
@@ -110,6 +111,7 @@ async def create_sweep(
         trading_days_count=trading_days_count,
         rounds_per_discussion=rounds_per_discussion,
         concurrency=concurrency,
+        auto_post_mortem=auto_post_mortem,
     )
     db.add(sweep)
     await db.commit()
@@ -261,10 +263,28 @@ async def _process_one_date(
                         user_role="analyst",
                     ):
                         pass
-                # Synthesize.
+                # Synthesize the original conclusion.
                 await discussion_service.synthesize_conclusion(
                     db, disc, user_id=str(sweep.owner_id),
                 )
+
+                # PR #275: optional auto-post-mortem. Best-effort —
+                # any failure here logs but does NOT fail the date
+                # because the original conclusion already succeeded
+                # (and is the verifier's anchor anyway).
+                if sweep.auto_post_mortem:
+                    try:
+                        await _run_post_mortem_pass(db, disc, sweep.owner_id)
+                    except Exception as pm_exc:
+                        log.warning(
+                            "backtest_sweep.post_mortem_failed",
+                            extra={
+                                "sweep_id": str(sweep_id),
+                                "date": target_date.isoformat(),
+                                "error": str(pm_exc),
+                            },
+                        )
+
                 return target_date, None
         except Exception as exc:
             log.warning(
@@ -276,6 +296,55 @@ async def _process_one_date(
                 },
             )
             return target_date, str(exc)
+
+
+async def _run_post_mortem_pass(
+    db: AsyncSession, discussion: Any, owner_id: UUID,
+) -> None:
+    """Inject the post-mortem critique prompt, run one reflection
+    round, and re-synthesize. Mirrors the user-facing 「事後檢討」
+    flow (PR #249 + PR #267 + PR #272 + PR #273) end-to-end.
+
+    Skips silently when:
+      - the original conclusion didn't materialise (run_round / synth
+        failed before us — caller's exception handler captures it)
+      - the post-mortem service finds no trading days past as_of
+        (`build_post_mortem_message` returns an empty payload)
+
+    The re-synthesize step routes the new conclusion to
+    `post_mortem_conclusion` because the synthesizer's PR #272
+    detection sees the injected user_input turn whose content
+    starts with "【事後檢討".
+    """
+    from services import discussion_service
+    from services.post_mortem_service import build_post_mortem_message
+
+    # Refresh the discussion so we see the conclusion we just wrote.
+    await db.refresh(discussion)
+    if not discussion.conclusion:
+        return
+
+    payload = await build_post_mortem_message(db, discussion)
+    if not payload.trading_days or not payload.prompt_text:
+        return
+
+    await discussion_service.inject_user_message(
+        db, discussion, content=payload.prompt_text,
+    )
+    # One reflection round so personas critique against the ground
+    # truth surfaced in the prompt.
+    async for _ev in discussion_service.run_round(
+        db, discussion,
+        user_id=str(owner_id),
+        user_role="analyst",
+    ):
+        pass
+    # Re-synthesize. The synthesizer's `has_post_mortem` branch
+    # routes the output to `post_mortem_conclusion`, leaving the
+    # original `conclusion` intact.
+    await discussion_service.synthesize_conclusion(
+        db, discussion, user_id=str(owner_id),
+    )
 
 
 async def _is_cancelled(sweep_id: UUID) -> bool:

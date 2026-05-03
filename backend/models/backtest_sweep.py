@@ -20,7 +20,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
-    JSON, UUID as SqlUUID, Date, DateTime, ForeignKey,
+    JSON, UUID as SqlUUID, Boolean, Date, DateTime, ForeignKey,
     Index, Integer, String, Text, func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -57,6 +57,13 @@ class BacktestSweep(Base):
     )
     concurrency: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1",
+    )
+    # PR #275: auto-trigger the post-mortem self-critique after
+    # each spawned discussion's conclude. Default True — by the
+    # time you're sweeping multiple days you almost always want
+    # the critique attached.
+    auto_post_mortem: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true",
     )
 
     topic: Mapped[str] = mapped_column(Text, nullable=False)

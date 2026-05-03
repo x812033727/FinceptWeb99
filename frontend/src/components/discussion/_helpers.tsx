@@ -273,6 +273,10 @@ export interface BacktestSweep {
   trading_days_count: number;
   rounds_per_discussion: number;
   concurrency: number;
+  /** PR #275: auto-trigger the post-mortem self-critique after each
+   *  spawned discussion's conclude. Older backends omit; treat as
+   *  true since that's the new default. */
+  auto_post_mortem?: boolean;
   resolved_dates: string[];
   completed_dates: string[];
   failed_dates: BacktestSweepFailedDate[];
@@ -292,6 +296,9 @@ export interface CreateBacktestSweepInput {
   trading_days_count: number;
   rounds_per_discussion?: number;
   concurrency?: number;
+  /** Defaults to true on the backend; sent explicitly so the
+   *  toggle's off-state is respected. */
+  auto_post_mortem?: boolean;
 }
 
 export async function fetchSweeps(): Promise<BacktestSweep[]> {

@@ -2962,6 +2962,118 @@ def test_safe_conclusion_handles_full_width_braces():
     assert out["recommended_symbols"] == ["2330"]
 
 
+# ── PR #267: post-mortem fallout fixes ────────────────────────────
+
+
+def test_safe_conclusion_repairs_truncated_json_before_close_brace():
+    """Reasoning model under post-mortem load: long chain-of-thought
+    eats most of `max_tokens`, the JSON starts streaming but gets
+    cut off before the close brace. Repair adds the missing `}`
+    so the operator sees the partial conclusion instead of the
+    parse-error placeholder."""
+    truncated = (
+        '{"recommended_symbols": ["2330", "0050"], '
+        '"reasoning": "事後檢討後仍維持原推薦", '
+        '"risks": ["匯率"], '
+        '"time_horizon": "short_term", '
+        '"consensus_score": 0.6'
+        # Note: missing closing `}` — runs out of tokens here.
+    )
+    out = discussion_service._safe_conclusion(truncated)
+    assert "_parse_error" not in out, (
+        f"truncated JSON should be repaired, not flagged as parse error: {out}"
+    )
+    assert out["recommended_symbols"] == ["2330", "0050"]
+    assert out["consensus_score"] == 0.6
+
+
+def test_safe_conclusion_repairs_json_truncated_inside_string():
+    """Even worse: truncation lands INSIDE a string literal — the
+    repair must close the string before closing the object."""
+    truncated = (
+        '{"recommended_symbols": ["2330"], '
+        '"reasoning": "我認為事後檢討的最終共識仍然是維持原推'
+        # ← string never closed, no commas / braces follow
+    )
+    out = discussion_service._safe_conclusion(truncated)
+    assert "_parse_error" not in out
+    assert out["recommended_symbols"] == ["2330"]
+    assert "事後檢討" in out["reasoning"]
+
+
+def test_safe_conclusion_repairs_json_truncated_after_key_colon():
+    """Most pathological case: truncation lands right after a key's
+    colon (no value yet). Repair drops the orphan key/value pair
+    rather than producing `"foo":}` which is invalid."""
+    truncated = (
+        '{"recommended_symbols": ["2330"], '
+        '"reasoning": "ok", '
+        '"risks": '
+        # ← cuts off right at `:` of risks — no value
+    )
+    out = discussion_service._safe_conclusion(truncated)
+    assert "_parse_error" not in out
+    assert out["recommended_symbols"] == ["2330"]
+
+
+def test_safe_conclusion_still_flags_unparseable_garbage():
+    """Repair shouldn't accidentally rescue non-JSON output. A pure-
+    prose response with no `{` should still surface as parse_error
+    so the operator knows to retry."""
+    raw = "I'm sorry, I cannot answer this question."
+    out = discussion_service._safe_conclusion(raw)
+    assert out["_parse_error"] is True
+
+
+def test_format_transcript_renders_user_input_as_directive():
+    """The post-mortem injection lands as a `_user/user_input` turn.
+    The synthesizer's `_format_transcript` must render it as a
+    discussion-owner directive rather than just another `_user`-named
+    persona, so the LLM doesn't try to *answer* the embedded
+    questions in its `reasoning` field (the failure mode that caused
+    `_parse_error: True` after PR #266)."""
+    from datetime import UTC as _UTC, datetime as _dt
+
+    from models.discussion import DiscussionTurn
+
+    persona_turn = DiscussionTurn(
+        round=1, turn_index=0, persona_id="market_analyst",
+        stance="agree", content="RSI 偏高",
+        created_at=_dt.now(_UTC),
+    )
+    user_turn = DiscussionTurn(
+        round=1, turn_index=1,
+        persona_id=discussion_service.USER_PERSONA_ID,
+        stance=discussion_service.USER_INJECTION_STANCE,
+        content="【事後檢討】請反思",
+        created_at=_dt.now(_UTC),
+    )
+    out = discussion_service._format_transcript([persona_turn, user_turn])
+    assert "market_analyst" in out
+    # User-input rendered with the directive label; the raw `_user`
+    # token must NOT appear in the persona-prefix style.
+    assert "討論發起人指示" in out
+    assert "/_user/user_input]" not in out
+
+
+def test_format_transcript_handles_empty_user_input():
+    """Edge: an empty user_input turn (shouldn't happen given
+    `_validate_text`, but defensive) shouldn't crash the formatter."""
+    from datetime import UTC as _UTC, datetime as _dt
+
+    from models.discussion import DiscussionTurn
+
+    user_turn = DiscussionTurn(
+        round=1, turn_index=0,
+        persona_id=discussion_service.USER_PERSONA_ID,
+        stance=discussion_service.USER_INJECTION_STANCE,
+        content="",
+        created_at=_dt.now(_UTC),
+    )
+    out = discussion_service._format_transcript([user_turn])
+    assert "討論發起人指示" in out
+
+
 # ── focus_briefs / macro helpers ──────────────────────────────────
 
 

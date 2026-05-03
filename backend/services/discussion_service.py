@@ -2803,13 +2803,111 @@ _SYNTHESIZER_USER_TEMPLATE = (
 
 
 def _format_transcript(turns: list[DiscussionTurn]) -> str:
+    """Render the full transcript for the synthesizer prompt.
+
+    Persona turns get a `[第N輪/persona_id/stance]` prefix.
+    User-input turns (e.g. post-mortem self-critique prompts
+    injected via `inject_user_message`) are rendered as a clearly
+    labelled directive — without this distinction the synthesizer
+    LLM treats `_user` as just another analyst and may try to
+    *answer* the directive's questions in the `reasoning` field
+    instead of synthesizing the discussion. The longer post-mortem
+    prompt (4 structured questions) makes that failure mode worse:
+    the LLM dumps a long answer + runs out of `max_tokens` mid-JSON
+    and the response fails to parse.
+    """
     if not turns:
         return "（無發言）"
     lines = []
     for t in turns:
         body = t.content.strip() or "（同意，無補充）"
-        lines.append(f"[第{t.round}輪/{t.persona_id}/{t.stance}] {body}")
+        if t.persona_id == USER_PERSONA_ID:
+            lines.append(
+                f"[第{t.round}輪 · 討論發起人指示（請納入後續分析考量，"
+                f"勿視為專家意見、勿直接回答其中的提問）]\n{body}"
+            )
+        else:
+            lines.append(f"[第{t.round}輪/{t.persona_id}/{t.stance}] {body}")
     return "\n".join(lines)
+
+
+def _try_repair_truncated_json(text: str) -> str | None:
+    """Best-effort recovery for JSON output that got truncated mid-
+    emission (typical when an LLM hits `max_tokens` while writing the
+    object). Walks from the first `{`, tracks string + bracket depth,
+    and on EOF closes any open string + dangling brackets so the
+    result is parseable.
+
+    Returns the repaired substring, or None when the input has no
+    `{` to anchor on. Caller still pipes through `_loads_lenient` —
+    repair only fixes the structural truncation, not relaxed-JSON
+    quirks (those layers stack).
+
+    Conservative: trims trailing `,` / `:` since closing immediately
+    after either is invalid. The recovered fields may be partial
+    (e.g. `reasoning` cut mid-sentence), but a partial conclusion
+    is infinitely more useful than a parse-error placeholder for
+    the operator triaging the discussion.
+    """
+    start = text.find("{")
+    if start < 0:
+        return None
+    in_string = False
+    escape = False
+    bracket_stack: list[str] = []   # "{" / "["
+    last_real_char = ""
+    for c in text[start:]:
+        if escape:
+            escape = False
+            continue
+        if in_string:
+            if c == "\\":
+                escape = True
+                continue
+            if c == '"':
+                in_string = False
+            continue
+        if c == '"':
+            in_string = True
+            last_real_char = c
+            continue
+        if c.isspace():
+            continue
+        last_real_char = c
+        if c in "{[":
+            bracket_stack.append(c)
+        elif c == "}":
+            if bracket_stack and bracket_stack[-1] == "{":
+                bracket_stack.pop()
+        elif c == "]":
+            if bracket_stack and bracket_stack[-1] == "[":
+                bracket_stack.pop()
+
+    if not in_string and not bracket_stack:
+        return None   # already balanced — caller's earlier pass covers it
+
+    body = text[start:].rstrip()
+    # Drop a dangling trailing comma or colon (illegal right before
+    # a close-bracket).
+    while body and body[-1] in ",:":
+        body = body[:-1].rstrip()
+
+    suffix = ""
+    if in_string:
+        suffix += '"'
+    # If we ended right after a `:` (key with no value), drop the
+    # whole key/value pair to avoid `"foo":}` which is illegal.
+    if last_real_char == ":":
+        # Walk back to the last `,` or `{` and trim the orphan key.
+        for i in range(len(body) - 1, -1, -1):
+            if body[i] in ",{":
+                body = body[:i + 1] if body[i] == "," else body[:i + 1]
+                if body and body[-1] == ",":
+                    body = body[:-1]
+                break
+    for opener in reversed(bracket_stack):
+        suffix += "}" if opener == "{" else "]"
+    return body + suffix
 
 
 def _safe_conclusion(raw: str) -> dict[str, Any]:
@@ -2822,6 +2920,20 @@ def _safe_conclusion(raw: str) -> dict[str, Any]:
         if salvaged is not None:
             try:
                 data = _loads_lenient(salvaged)
+            except json.JSONDecodeError:
+                data = None
+    # PR #267: last-resort repair for truncated JSON. Reasoning
+    # models (M2.7 etc.) under post-mortem load can dump a long
+    # chain-of-thought + start the JSON, then run out of
+    # `max_tokens` mid-object — `_extract_json_object` returns
+    # None because the closing `}` was never emitted. Try closing
+    # any open string + brackets and re-parse before falling
+    # through to the parse-error placeholder.
+    if data is None:
+        repaired = _try_repair_truncated_json(cleaned)
+        if repaired is not None:
+            try:
+                data = _loads_lenient(repaired)
             except json.JSONDecodeError:
                 data = None
     if not isinstance(data, dict):
@@ -2903,12 +3015,35 @@ async def synthesize_conclusion(
             as_of=discussion.as_of_date,
         )
 
+    # PR #267: detect a post-mortem self-critique cycle in the
+    # transcript so the synthesizer prompt can call it out and the
+    # token budget can be sized appropriately. Without this guidance
+    # the synthesizer treats the round-2 reflections as just more
+    # opinions and silently double-weights the original round-1
+    # consensus; with longer post-mortem transcripts the JSON also
+    # tends to truncate within the default budget.
+    has_post_mortem = any(
+        t.persona_id == USER_PERSONA_ID
+        and (t.content or "").lstrip().startswith("【事後檢討")
+        for t in turns
+    )
+
     user_prompt = _SYNTHESIZER_USER_TEMPLATE.format(
         topic=discussion.topic,
         rules=discussion.rules,
         context=json.dumps(context, ensure_ascii=False, indent=2),
         transcript=_format_transcript(turns),
     )
+    if has_post_mortem:
+        user_prompt += (
+            "\n\n## 補充提示（事後檢討模式）\n"
+            "本場討論已包含一輪「事後檢討」（基於實際漲幅排行榜的反思），"
+            "請以 personas 在事後檢討輪 (latest round) 的最終立場為主，"
+            "整理出修正後的結論。\n"
+            "**仍然只能輸出合法 JSON**，不要回答事後檢討提示中的問題、"
+            "不要在 JSON 外加任何解說。"
+        )
+
     messages = [
         {"role": "system", "content": _SYNTHESIZER_SYSTEM},
         {"role": "user", "content": user_prompt},
@@ -2930,6 +3065,15 @@ async def synthesize_conclusion(
                     extra={"setting": "DISCUSSION_SYNTHESIZER_MAX_TOKENS",
                            "error": str(exc)})
         synth_max_tokens = settings.DISCUSSION_SYNTHESIZER_MAX_TOKENS
+
+    # Post-mortem transcripts are 1.5-2x longer than a single-round
+    # discussion (round-1 turns + post-mortem prompt + round-2
+    # self-critique replies). Reasoning models need proportionally
+    # more output room or the JSON gets truncated mid-object and
+    # `_safe_conclusion` falls back to the parse-error placeholder.
+    # Bump 50% as a conservative safety margin.
+    if has_post_mortem:
+        synth_max_tokens = int(synth_max_tokens * 1.5)
     try:
         async for event in stream_chat(
             messages=messages,

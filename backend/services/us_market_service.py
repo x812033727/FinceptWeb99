@@ -134,10 +134,47 @@ async def fetch_quote_waterfall(ticker: str) -> tuple[dict[str, Any], str]:
     return raw, source
 
 
-async def get_quote(ticker: str, *, bypass_cache: bool = False) -> dict[str, Any]:
+async def get_quote(
+    ticker: str, *, bypass_cache: bool = False,
+    as_of: date | None = None,
+) -> dict[str, Any]:
     """Read US quote. Hits Redis cache first unless `bypass_cache` is
     set — caller forces a fresh upstream fetch when the user opens a
-    view that promises live prices (e.g. watchlist page on mount)."""
+    view that promises live prices (e.g. watchlist page on mount).
+
+    `as_of` (PR #226): backtest mode. When set, bypasses live waterfall
+    and reads close/prev_close from `ohlcv_daily` at the most recent bar
+    with `ts <= as_of`. Empty dict when no archived bar in range."""
+    if as_of is not None:
+        from services.ingest.repository import read_ohlcv_range_autosession
+        bars = await read_ohlcv_range_autosession(
+            "US", ticker.upper(), as_of - timedelta(days=10), as_of,
+        )
+        if not bars:
+            return {}
+        last = bars[-1]
+        prev = bars[-2]["close"] if len(bars) >= 2 else None
+        result = _normalize_quote(ticker, {
+            "price":      last.get("close"),
+            "open":       last.get("open"),
+            "high":       last.get("high"),
+            "low":        last.get("low"),
+            "volume":     last.get("volume", 0),
+            "prev_close": prev,
+            "change":     (
+                last.get("close") - prev
+                if (last.get("close") is not None and prev is not None)
+                else None
+            ),
+            "change_pct": (
+                round((last["close"] - prev) / prev * 100, 4)
+                if (last.get("close") is not None and prev) else None
+            ),
+        })
+        result["data_source"] = "ohlcv_daily"
+        result["as_of"] = last["time"]
+        return result
+
     key = key_quote("us", ticker)
     if not bypass_cache:
         cached = await cache_get(key)
@@ -410,7 +447,21 @@ async def get_screener(
     limit: int = 100,
     *,
     full_stooq_batch: bool = False,
+    as_of: date | None = None,
 ) -> list[dict[str, Any]]:
+    """
+    `as_of` (PR #226): backtest mode. Reads `ohlcv_daily` at the
+    snapshot date instead of the live Polygon / yfinance / Stooq /
+    Finnhub waterfall. Fundamental filters (PE / PB / yield / sector /
+    market_cap) are skipped — the per-day archive doesn't carry them.
+    """
+    if as_of is not None:
+        return await _get_screener_backtest(
+            as_of=as_of,
+            min_volume=min_volume,
+            limit=limit,
+        )
+
     key = (
         f"us:screener:{min_market_cap}:{min_pe}:{max_pe}:{min_pb}:{max_pb}:"
         f"{min_dividend_yield}:{min_volume}:{sector}:{limit}"
@@ -544,6 +595,80 @@ async def get_screener(
     return results
 
 
+async def _get_screener_backtest(
+    *, as_of: date, min_volume: int | None, limit: int,
+) -> list[dict[str, Any]]:
+    """Backtest mode for `get_screener`. Reads US bars from `ohlcv_daily`
+    over a 10-day window ending at `as_of`, computes change_pct from
+    the latest bar vs the prior bar per symbol. No fundamental fields
+    (yield/PE/PB/market_cap) — archive doesn't carry them.
+    """
+    from db.session import AsyncSessionLocal
+    from models.ohlcv_daily import OhlcvDaily
+    from sqlalchemy import select
+
+    start = as_of - timedelta(days=10)
+    try:
+        async with AsyncSessionLocal() as db:
+            stmt = (
+                select(OhlcvDaily)
+                .where(
+                    OhlcvDaily.market == "US",
+                    OhlcvDaily.ts >= start,
+                    OhlcvDaily.ts <= as_of,
+                )
+                .order_by(OhlcvDaily.symbol, OhlcvDaily.ts)
+            )
+            rows = list((await db.scalars(stmt)).all())
+    except Exception as exc:
+        log.warning("us.screener.backtest_db_error",
+                    extra={"as_of": as_of.isoformat(), "error": str(exc)})
+        return []
+
+    by_symbol: dict[str, list[Any]] = {}
+    for r in rows:
+        by_symbol.setdefault(r.symbol, []).append(r)
+
+    out: list[dict[str, Any]] = []
+    for symbol, bars in by_symbol.items():
+        last = bars[-1]
+        close = float(last.close) if last.close is not None else None
+        vol = int(last.volume or 0)
+        if min_volume and vol < min_volume:
+            continue
+        prev = (
+            float(bars[-2].close)
+            if len(bars) >= 2 and bars[-2].close is not None
+            else None
+        )
+        change = (close - prev) if (close is not None and prev is not None) else None
+        change_pct = (
+            round(change / prev * 100, 4)
+            if (change is not None and prev) else None
+        )
+        change_pct = sanitize_change_pct(symbol, "US", change_pct)
+        if change_pct is None:
+            change = None
+        out.append({
+            "symbol":      symbol,
+            "market":      "US",
+            "name":        symbol,
+            "price":       close,
+            "change":      change,
+            "change_pct":  change_pct,
+            "volume":      vol,
+            "open":        float(last.open) if last.open is not None else None,
+            "high":        float(last.high) if last.high is not None else None,
+            "low":         float(last.low)  if last.low  is not None else None,
+            "prev_close":  prev,
+            "data_source": "ohlcv_daily",
+            "as_of":       last.ts.isoformat(),
+        })
+
+    out.sort(key=lambda r: r["volume"] or 0, reverse=True)
+    return out[:limit]
+
+
 def _filter_polygon_snapshots(snaps: list[dict], min_cap, min_vol, limit) -> list[dict]:
     out = []
     for s in snaps:
@@ -640,15 +765,29 @@ async def _screener_yfinance(
 
 # ── FRED macro data ───────────────────────────────────────────────
 
-async def get_macro_indicator(name: str) -> list[dict]:
+async def get_macro_indicator(
+    name: str, *, as_of: date | None = None,
+) -> list[dict]:
+    """Fetch one FRED macro series (configured in `SERIES`).
+
+    `as_of` (PR #226): backtest mode. Passes `observation_end=as_of`
+    to the FRED connector so the series doesn't include data points
+    after the backtest anchor. Cache key is per-as_of so historical
+    reads don't poison the live cache and vice versa."""
     series_id = SERIES.get(name)
     if not series_id:
         return []
-    key = f"us:macro:{name}"
+    if as_of is not None:
+        key = f"us:macro:{name}:asof={as_of.isoformat()}"
+    else:
+        key = f"us:macro:{name}"
     cached = await cache_get(key)
     if cached:
         return json.loads(cached)
-    data = await get_series(series_id)
+    data = await get_series(
+        series_id,
+        end_date=as_of.isoformat() if as_of is not None else None,
+    )
     # Don't cache an empty series for 4h — without this, a single FRED
     # outage (or a series with no yfinance fallback like CPI/GDP/UNRATE
     # while the FRED key is unset) locks the user out of macro data for

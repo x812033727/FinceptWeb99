@@ -494,13 +494,43 @@ async def fetch_quote_waterfall(symbol: str) -> tuple[dict | None, str]:
     return raw, source
 
 
-async def get_quote(symbol: str, *, bypass_cache: bool = False) -> dict[str, Any]:
+async def get_quote(
+    symbol: str, *, bypass_cache: bool = False,
+    as_of: date | None = None,
+) -> dict[str, Any]:
     """Read TW quote. Hits Redis cache first unless `bypass_cache` is
     set — caller asks for fresh data when the user explicitly opens
     a view that promises live prices (e.g. watchlist page on mount).
     Cache TTL is 15 s so the bypass mostly matters off-hours when the
-    cache otherwise persists for a full TTL."""
-    from services.ingest.repository import read_latest_quote_autosession
+    cache otherwise persists for a full TTL.
+
+    `as_of` (PR #226): backtest mode. When set, bypasses live waterfall
+    and reads close/prev_close from `ohlcv_daily` at the most recent bar
+    with `ts <= as_of`. Returns the live-mode shape so callers don't
+    branch. Empty dict when the archive has no bar in range (caller
+    already treats blank quotes as "no signal")."""
+    from services.ingest.repository import (
+        read_latest_quote_autosession,
+        read_ohlcv_range_autosession,
+    )
+
+    if as_of is not None:
+        from datetime import timedelta as _td
+        bars = await read_ohlcv_range_autosession(
+            "TW", symbol, as_of - _td(days=10), as_of,
+        )
+        if not bars:
+            return {}
+        last = bars[-1]
+        prev = bars[-2]["close"] if len(bars) >= 2 else None
+        result = _normalize_quote(symbol, {
+            "close":      last.get("close"),
+            "volume":     last.get("volume", 0),
+            "prev_close": prev,
+        })
+        result["data_source"] = "ohlcv_daily"
+        result["as_of"] = last["time"]
+        return result
 
     key = key_quote("tw", symbol)
     if not bypass_cache:
@@ -1262,7 +1292,25 @@ async def get_screener(
     include_etf: bool = True,
     etf_only: bool = False,
     limit: int = 100,
+    as_of: date | None = None,
 ) -> list[dict[str, Any]]:
+    """
+    `as_of` (PR #226): backtest mode. When set, builds the screener
+    from `ohlcv_daily` snapshot instead of the live TWSE feed.
+    Valuation filters (PE/PB/yield) are skipped in backtest because
+    the per-day valuation archive doesn't extend back. Result is
+    NOT cached in backtest mode (per-as_of cache key would explode).
+    """
+    if as_of is not None:
+        return await _get_screener_backtest(
+            as_of=as_of,
+            exchange=exchange,
+            min_volume=min_volume,
+            include_etf=include_etf,
+            etf_only=etf_only,
+            limit=limit,
+        )
+
     key = (
         f"tw:screener:{exchange}:{min_volume}:"
         f"{min_pe}:{max_pe}:{min_pb}:{max_pb}:{min_dividend_yield}:"
@@ -1357,9 +1405,102 @@ async def get_screener(
     return result
 
 
+async def _get_screener_backtest(
+    *,
+    as_of: date,
+    exchange: str | None,
+    min_volume: int | None,
+    include_etf: bool,
+    etf_only: bool,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Backtest mode for `get_screener`. Reads `ohlcv_daily` for the
+    10-day window ending at `as_of`, picks the latest bar per symbol,
+    computes change_pct against the prior bar, applies the same volume
+    / exchange / ETF filters as live mode. Output shape mirrors live
+    so callers don't branch.
+    """
+    from db.session import AsyncSessionLocal
+    from models.ohlcv_daily import OhlcvDaily
+    from sqlalchemy import select
+
+    start = as_of - timedelta(days=10)
+    try:
+        async with AsyncSessionLocal() as db:
+            stmt = (
+                select(OhlcvDaily)
+                .where(
+                    OhlcvDaily.market == "TW",
+                    OhlcvDaily.ts >= start,
+                    OhlcvDaily.ts <= as_of,
+                )
+                .order_by(OhlcvDaily.symbol, OhlcvDaily.ts)
+            )
+            rows = list((await db.scalars(stmt)).all())
+    except Exception as exc:
+        log.warning("tw.screener.backtest_db_error",
+                    extra={"as_of": as_of.isoformat(), "error": str(exc)})
+        return []
+
+    by_symbol: dict[str, list[Any]] = {}
+    for r in rows:
+        # Skip the synthetic _TAIEX index row — it's not a stock.
+        if r.symbol.startswith("_"):
+            continue
+        by_symbol.setdefault(r.symbol, []).append(r)
+
+    result: list[dict[str, Any]] = []
+    for symbol, bars in by_symbol.items():
+        if etf_only and not is_etf(symbol):
+            continue
+        if not include_etf and is_etf(symbol):
+            continue
+        exch = _exchange_map.get(symbol, "TWSE")
+        if exchange and exch != exchange:
+            continue
+        last = bars[-1]
+        close = float(last.close) if last.close is not None else None
+        vol = int(last.volume or 0)
+        if min_volume and vol < min_volume:
+            continue
+        prev = (
+            float(bars[-2].close)
+            if len(bars) >= 2 and bars[-2].close is not None
+            else None
+        )
+        change = (close - prev) if (close is not None and prev is not None) else None
+        change_pct = (
+            round(change / prev * 100, 4)
+            if (change is not None and prev) else None
+        )
+        change_pct = _sanitize_change_pct(symbol, change_pct)
+        if change_pct is None and change is not None:
+            change = None
+        result.append({
+            "symbol":         symbol,
+            "market":         "TW",
+            "exchange":       exch,
+            "name_zh":        _name_map.get(symbol, ""),
+            "price":          close,
+            "change":         change,
+            "change_pct":     change_pct,
+            "volume":         vol,
+            "pe_ratio":       None,
+            "pb_ratio":       None,
+            "dividend_yield": None,
+            "data_source":    "ohlcv_daily",
+            "as_of":          last.ts.isoformat(),
+        })
+
+    result.sort(key=lambda r: r["volume"] or 0, reverse=True)
+    return result[:limit]
+
+
 # ── TAIEX index ───────────────────────────────────────────────────
 
-async def get_index(*, history_days: int = 0) -> dict[str, Any]:
+async def get_index(
+    *, history_days: int = 0, as_of: date | None = None,
+) -> dict[str, Any]:
     """TAIEX current quote, optionally with a recent daily history line.
 
     `history_days=0` (default) preserves the legacy "single quote"
@@ -1373,7 +1514,17 @@ async def get_index(*, history_days: int = 0) -> dict[str, Any]:
     History is read from DB only — no live waterfall — so a fresh
     deploy without ingest data returns `history=[]` rather than
     burning a TWSE call per request.
+
+    `as_of` (PR #226): backtest mode. Both the quote portion and
+    the history window come from `ohlcv_daily` clamped to
+    `ts <= as_of`. Live cache is bypassed so the historical read
+    doesn't poison the live key.
     """
+    if as_of is not None:
+        return await _get_index_backtest(
+            as_of=as_of, history_days=history_days,
+        )
+
     key = "tw:index:taiex"
     cached = await cache_get(key)
     if cached:
@@ -1383,10 +1534,9 @@ async def get_index(*, history_days: int = 0) -> dict[str, Any]:
         await cache_set(key, json.dumps(result), TTL_QUOTE)
 
     if history_days > 0:
-        from datetime import timedelta as _td
         from services.ingest.repository import read_ohlcv_range_autosession
         end = date.today()
-        start = end - _td(days=history_days * 2)  # widen for weekends
+        start = end - timedelta(days=history_days * 2)  # widen for weekends
         bars = await read_ohlcv_range_autosession(
             "TW", "_TAIEX", start, end,
         )
@@ -1395,6 +1545,53 @@ async def get_index(*, history_days: int = 0) -> dict[str, Any]:
             for b in bars[-history_days:]
         ]
         result = {**result, "history": history}
+    return result
+
+
+async def _get_index_backtest(
+    *, as_of: date, history_days: int,
+) -> dict[str, Any]:
+    """Backtest mode for `get_index`. Reads `_TAIEX` from `ohlcv_daily`
+    with `ts <= as_of`, returns the same shape as live mode (price /
+    change / change_pct / history). Empty dict when the archive has
+    no bars in range."""
+    from services.ingest.repository import read_ohlcv_range_autosession
+
+    # Pull a generous window so weekends / holidays still leave us with
+    # the latest bar + the prior bar for change_pct computation, plus
+    # the requested history_days slice.
+    window = max(history_days * 2, 14)
+    start = as_of - timedelta(days=window)
+    bars = await read_ohlcv_range_autosession("TW", "_TAIEX", start, as_of)
+    if not bars:
+        return {}
+
+    last = bars[-1]
+    prev_close = bars[-2]["close"] if len(bars) >= 2 else None
+    close = last.get("close")
+    change = (
+        close - prev_close
+        if (close is not None and prev_close is not None) else None
+    )
+    change_pct = (
+        round(change / prev_close * 100, 4)
+        if (change is not None and prev_close) else None
+    )
+    result: dict[str, Any] = {
+        "symbol":      "TAIEX",
+        "name":        "TAIEX",
+        "price":       close,
+        "prev_close":  prev_close,
+        "change":      change,
+        "change_pct":  change_pct,
+        "data_source": "ohlcv_daily",
+        "as_of":       last["time"],
+    }
+    if history_days > 0:
+        result["history"] = [
+            {"time": b["time"], "close": b["close"]}
+            for b in bars[-history_days:]
+        ]
     return result
 
 

@@ -1270,16 +1270,24 @@ def _macro_summary_from_series(
     }
 
 
-async def _assemble_macro_block() -> dict[str, Any]:
+async def _assemble_macro_block(
+    *, as_of: date | None = None,
+) -> dict[str, Any]:
     """Pull a small set of FRED macro series concurrently and reduce
     each to its latest value plus 1y / 3m delta. Empty / failing
     series degrade to None so the personas can mention "macro data
-    incomplete" instead of confidently citing a missing rate."""
+    incomplete" instead of confidently citing a missing rate.
+
+    `as_of` (PR #226): backtest mode. Forwards to FRED's
+    `observation_end` so each series excludes data points after the
+    backtest anchor."""
     from services import us_market_service
 
     async def _pull(name: str) -> tuple[str, list[dict[str, Any]]]:
         try:
-            return name, await us_market_service.get_macro_indicator(name)
+            return name, await us_market_service.get_macro_indicator(
+                name, as_of=as_of,
+            )
         except Exception as exc:
             log.warning("macro.fetch.failed",
                         extra={"name": name, "error": str(exc)})
@@ -1668,7 +1676,7 @@ async def gather_market_context(
             if market == "TW":
                 from services import tw_market_service
                 rows = await tw_market_service.get_screener(
-                    limit=200, min_volume=1_000_000,
+                    limit=200, min_volume=1_000_000, as_of=as_of,
                 )
                 scored = [
                     r for r in rows
@@ -1685,7 +1693,7 @@ async def gather_market_context(
                 # universe waterfall handled by us_market_service).
                 from services import us_market_service
                 rows = await us_market_service.get_screener(
-                    limit=200, min_volume=1_000_000,
+                    limit=200, min_volume=1_000_000, as_of=as_of,
                 )
                 scored = [
                     r for r in rows
@@ -1704,7 +1712,9 @@ async def gather_market_context(
                 # 30-day TAIEX history alongside the current quote. Lets
                 # personas reference 大盤型態 ("TAIEX 連跌 5 日 -5%")
                 # without burning an LLM tool call.
-                ctx["index"] = await tw_market_service.get_index(history_days=30)
+                ctx["index"] = await tw_market_service.get_index(
+                    history_days=30, as_of=as_of,
+                )
             elif market == "US":
                 # US-side index snapshot (PR #215): SPY + QQQ + DIA as
                 # the major-index proxies. ETF tickers (not `^GSPC` /
@@ -1721,14 +1731,14 @@ async def gather_market_context(
 
                 async def _q(t: str):
                     try:
-                        return await us_market_service.get_quote(t)
+                        return await us_market_service.get_quote(t, as_of=as_of)
                     except Exception:
                         return None
 
                 results = await asyncio.gather(*[_q(t) for t, _ in tickers])
                 index_block: dict[str, Any] = {}
                 for (ticker, label), q in zip(tickers, results):
-                    if q is None:
+                    if q is None or not q:
                         continue
                     index_block[ticker] = {
                         "label":      label,
@@ -1754,7 +1764,7 @@ async def gather_market_context(
 
     async def _fetch_macro() -> None:
         try:
-            ctx["macro"] = await _assemble_macro_block()
+            ctx["macro"] = await _assemble_macro_block(as_of=as_of)
         except Exception as exc:
             _record_error("macro", exc)
 
@@ -1781,7 +1791,7 @@ async def gather_market_context(
             from services.ingest.repository import read_top_foreign_buyers
             ctx["top_foreign_buyers"] = _tag_industry(
                 await read_top_foreign_buyers(
-                    db, market="TW", days=5, limit=10,
+                    db, market="TW", days=5, limit=10, as_of=as_of,
                 )
             )
         except Exception as exc:
@@ -1792,7 +1802,7 @@ async def gather_market_context(
                 read_market_margin_balance_trend,
             )
             ctx["margin_balance_trend"] = await read_market_margin_balance_trend(
-                db, market="TW", days=5,
+                db, market="TW", days=5, as_of=as_of,
             )
         except Exception as exc:
             _record_error("margin_balance_trend", exc)
@@ -1800,7 +1810,9 @@ async def gather_market_context(
         try:
             from services.ingest.repository import read_top_revenue_growers
             ctx["top_revenue_growers"] = _tag_industry(
-                await read_top_revenue_growers(db, market="TW", limit=10)
+                await read_top_revenue_growers(
+                    db, market="TW", limit=10, as_of=as_of,
+                )
             )
         except Exception as exc:
             _record_error("top_revenue_growers", exc)
@@ -1812,7 +1824,9 @@ async def gather_market_context(
         try:
             from services.ingest.repository import read_active_buybacks
             ctx["active_buybacks"] = _tag_industry(
-                await read_active_buybacks(db, market="TW", limit=10)
+                await read_active_buybacks(
+                    db, market="TW", limit=10, as_of=as_of,
+                )
             )
         except Exception as exc:
             _record_error("active_buybacks", exc)
@@ -1823,7 +1837,7 @@ async def gather_market_context(
         try:
             from services.ingest.repository import read_recent_govt_bank_flow
             ctx["govt_bank_flow_5d"] = await read_recent_govt_bank_flow(
-                db, market="TW", days=5,
+                db, market="TW", days=5, as_of=as_of,
             )
         except Exception as exc:
             _record_error("govt_bank_flow_5d", exc)
@@ -1841,13 +1855,14 @@ async def gather_market_context(
             )
             ctx["risk_warnings"] = {
                 "active_dispositions": await read_active_dispositions(
-                    db, market="TW", limit=20,
+                    db, market="TW", limit=20, as_of=as_of,
                 ),
                 "recent_suspensions": await read_recent_suspensions(
-                    db, market="TW", days=7, limit=10,
+                    db, market="TW", days=7, limit=10, as_of=as_of,
                 ),
                 "high_day_trading_ratio": await read_high_day_trading_ratio(
                     db, market="TW", days=1, threshold=0.6, limit=20,
+                    as_of=as_of,
                 ),
             }
         except Exception as exc:
@@ -1860,7 +1875,7 @@ async def gather_market_context(
         try:
             from services.ingest.repository import read_recent_market_institutional
             ctx["market_institutional_5d"] = await read_recent_market_institutional(
-                db, market="TW", days=5,
+                db, market="TW", days=5, as_of=as_of,
             )
         except Exception as exc:
             _record_error("market_institutional_5d", exc)

@@ -2094,6 +2094,159 @@ async def test_gather_market_context_backtest_drops_empty_news_blocks(
 
 
 @pytest.mark.asyncio
+async def test_gather_market_context_backtest_threads_as_of_into_chip_blocks(
+    db_session: AsyncSession,
+):
+    """Backtest mode (PR #226): chip metric reads must respect `as_of`
+    so a discussion anchored at 2025-01-15 doesn't see foreign-flow /
+    margin / revenue / govt-bank rows from 2025-04-30. Insert rows
+    on both dates, run with as_of=2025-01-15, assert only the older
+    rows come back."""
+    from datetime import date as _date
+    import services.tw_market_service as _tw   # noqa: F401
+    from services.ingest.repository import (
+        GovtBankFlowRow,
+        InstitutionalDailyRow,
+        MarginDailyRow,
+        MarketInstitutionalRow,
+        upsert_govt_bank_flows,
+        upsert_institutional_daily,
+        upsert_margin_daily,
+        upsert_market_institutional_daily,
+    )
+
+    backtest_day = _date(2025, 1, 15)
+    later_day = _date(2025, 4, 30)
+
+    # Foreign buyers — 2330 leads on backtest_day, 2454 leads on later_day.
+    await upsert_institutional_daily(db_session, [
+        InstitutionalDailyRow(
+            market="TW", symbol="2330", ts=backtest_day,
+            fini_buy=100_000, fini_sell=20_000,
+            sitc_buy=0, sitc_sell=0, dealer_buy=0, dealer_sell=0,
+            source="twse",
+        ),
+        InstitutionalDailyRow(
+            market="TW", symbol="2454", ts=later_day,
+            fini_buy=999_999, fini_sell=0,
+            sitc_buy=0, sitc_sell=0, dealer_buy=0, dealer_sell=0,
+            source="twse",
+        ),
+    ])
+    # Margin — different totals on each day.
+    await upsert_margin_daily(db_session, [
+        MarginDailyRow(
+            market="TW", symbol="2330", ts=backtest_day,
+            margin_purchase=0, margin_balance=11_111,
+            short_sale=0, short_balance=2_222, source="twse",
+        ),
+        MarginDailyRow(
+            market="TW", symbol="2330", ts=later_day,
+            margin_purchase=0, margin_balance=99_999,
+            short_sale=0, short_balance=8_888, source="twse",
+        ),
+    ])
+    # Govt bank flow — different net on each day.
+    await upsert_govt_bank_flows(db_session, [
+        GovtBankFlowRow(
+            market="TW", ts=backtest_day, bank_name="bank1",
+            buy_amount=10_000, sell_amount=5_000, source="twse",
+        ),
+        GovtBankFlowRow(
+            market="TW", ts=later_day, bank_name="bank1",
+            buy_amount=999_000, sell_amount=0, source="twse",
+        ),
+    ])
+    # Market-wide institutional — same pattern.
+    await upsert_market_institutional_daily(db_session, [
+        MarketInstitutionalRow(
+            market="TW", ts=backtest_day,
+            foreign_buy=1_000, foreign_sell=500,
+            sitc_buy=0, sitc_sell=0, dealer_buy=0, dealer_sell=0,
+            source="twse",
+        ),
+        MarketInstitutionalRow(
+            market="TW", ts=later_day,
+            foreign_buy=999_000, foreign_sell=0,
+            sitc_buy=0, sitc_sell=0, dealer_buy=0, dealer_sell=0,
+            source="twse",
+        ),
+    ])
+
+    with patch.object(_tw, "get_screener", new=AsyncMock(return_value=[])), \
+         patch.object(_tw, "get_index", new=AsyncMock(return_value={})), \
+         patch(
+            "services.discussion_service._assemble_macro_block",
+            new=AsyncMock(return_value={}),
+         ), \
+         patch(
+            "services.discussion_service._assemble_focus_briefs",
+            new=AsyncMock(return_value=[]),
+         ):
+        ctx = await discussion_service.gather_market_context(
+            db_session, market="TW", as_of=backtest_day,
+        )
+
+    # foreign_buyers must only contain 2330 (backtest_day row);
+    # 2454's later_day row must NOT bleed through.
+    syms = [row["symbol"] for row in ctx["top_foreign_buyers"]]
+    assert "2330" in syms
+    assert "2454" not in syms
+
+    # Margin trend reflects the 2025-01-15 row, not 2025-04-30.
+    assert ctx["margin_balance_trend"]["total_margin_balance"] == 11_111
+    assert ctx["margin_balance_trend"]["total_short_balance"] == 2_222
+
+    # Govt bank flow's only entry is the backtest_day row.
+    flow = ctx["govt_bank_flow_5d"]
+    assert len(flow) == 1
+    assert flow[0]["date"] == backtest_day.isoformat()
+    assert flow[0]["net"] == 5_000
+
+    # Market-wide institutional reflects the 2025-01-15 numbers.
+    inst = ctx["market_institutional_5d"]
+    assert len(inst) == 1
+    assert inst[0]["date"] == backtest_day.isoformat()
+    assert inst[0]["foreign_net"] == 500
+
+
+@pytest.mark.asyncio
+async def test_gather_market_context_backtest_passes_as_of_to_market_services(
+    db_session: AsyncSession,
+):
+    """Backtest mode (PR #226): the screener / index / macro fetchers
+    receive `as_of` as a kwarg so they can route to the historical
+    data path instead of returning live data."""
+    from datetime import date as _date
+    import services.tw_market_service as _tw   # noqa: F401
+
+    backtest_day = _date(2025, 1, 15)
+
+    screener_mock = AsyncMock(return_value=[])
+    index_mock = AsyncMock(return_value={})
+    macro_mock = AsyncMock(return_value={})
+    focus_mock = AsyncMock(return_value=[])
+
+    with patch.object(_tw, "get_screener", new=screener_mock), \
+         patch.object(_tw, "get_index", new=index_mock), \
+         patch(
+            "services.discussion_service._assemble_macro_block",
+            new=macro_mock,
+         ), \
+         patch(
+            "services.discussion_service._assemble_focus_briefs",
+            new=focus_mock,
+         ):
+        await discussion_service.gather_market_context(
+            db_session, market="TW", as_of=backtest_day,
+        )
+
+    assert screener_mock.call_args.kwargs.get("as_of") == backtest_day
+    assert index_mock.call_args.kwargs.get("as_of") == backtest_day
+    assert macro_mock.call_args.kwargs.get("as_of") == backtest_day
+
+
+@pytest.mark.asyncio
 async def test_gather_market_context_live_keeps_empty_news_block(
     db_session: AsyncSession,
 ):

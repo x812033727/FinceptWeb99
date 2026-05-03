@@ -373,17 +373,18 @@ async def read_top_foreign_buyers(
     *,
     days: int = 5,
     limit: int = 10,
-    end: date | None = None,
+    as_of: date | None = None,
 ) -> list[dict[str, Any]]:
     """Aggregate net foreign buy (`fini_buy - fini_sell`) over the
-    last `days` trading dates and return the top `limit` symbols.
+    last `days` trading dates ending at `as_of` (default: today) and
+    return the top `limit` symbols.
 
     Used by `discussion_service.gather_market_context` so personas
     can reference "外資連 5 日買超 N 億" without burning an LLM tool
     call on the raw rows. Returns an empty list when the table hasn't
     been populated yet (fresh deploy, ingest task hasn't run yet).
     """
-    end = end or date.today()
+    end = as_of or date.today()
     start = end - timedelta(days=days * 2)  # widen for weekend / holiday
     stmt = (
         select(TwInstitutionalDaily)
@@ -487,26 +488,26 @@ async def read_top_revenue_growers(
     market: str = "TW",
     *,
     limit: int = 10,
-    asof: date | None = None,
+    as_of: date | None = None,
 ) -> list[dict[str, Any]]:
     """Top-N TW symbols by latest reported month's YoY revenue growth.
 
-    "Latest month" = the most recent `ts` present for `market` in
-    `tw_revenue_monthly`. Returns an empty list when the archive has
-    nothing for the market. Skips rows with NULL `revenue_yoy` so a
-    company that just IPO'd (no prior year baseline) doesn't push a
-    real grower off the list.
+    "Latest month" = the most recent `ts <= as_of` (default: latest
+    available) present for `market` in `tw_revenue_monthly`. Returns
+    an empty list when the archive has nothing for the market. Skips
+    rows with NULL `revenue_yoy` so a company that just IPO'd (no
+    prior year baseline) doesn't push a real grower off the list.
     """
-    asof_stmt = (
-        select(TwRevenueMonthly.ts)
-        .where(TwRevenueMonthly.market == market)
-        .order_by(TwRevenueMonthly.ts.desc())
-        .limit(1)
+    latest_stmt = select(TwRevenueMonthly.ts).where(
+        TwRevenueMonthly.market == market,
     )
-    latest = await db.scalar(asof_stmt)
+    if as_of is not None:
+        latest_stmt = latest_stmt.where(TwRevenueMonthly.ts <= as_of)
+    latest_stmt = latest_stmt.order_by(TwRevenueMonthly.ts.desc()).limit(1)
+    latest = await db.scalar(latest_stmt)
     if latest is None:
         return []
-    target = asof or latest
+    target = latest
 
     stmt = (
         select(TwRevenueMonthly)
@@ -541,12 +542,12 @@ async def read_market_margin_balance_trend(
     market: str = "TW",
     *,
     days: int = 5,
-    end: date | None = None,
+    as_of: date | None = None,
 ) -> dict[str, Any]:
-    """Aggregate market-wide margin balance over the last `days`. Used
-    by the discussion context as a leverage / retail-activity proxy
-    ("散戶融資餘額連續 X 日創高")."""
-    end = end or date.today()
+    """Aggregate market-wide margin balance over the last `days` ending
+    at `as_of` (default: today). Used by the discussion context as a
+    leverage / retail-activity proxy ("散戶融資餘額連續 X 日創高")."""
+    end = as_of or date.today()
     start = end - timedelta(days=days * 2)
     stmt = (
         select(TwMarginDaily)
@@ -735,11 +736,12 @@ async def upsert_govt_bank_flows(
 
 async def read_recent_govt_bank_flow(
     db: AsyncSession, *, market: str = "TW", days: int = 5,
+    as_of: date | None = None,
 ) -> list[dict[str, Any]]:
-    """Last `days` of trading-day aggregates, summed across the
-    eight banks. Used by the discussion context block — personas
-    care about the headline net flow ("八大行庫 +12 億"), not the
-    per-bank breakdown.
+    """Last `days` of trading-day aggregates ending at `as_of` (default:
+    today), summed across the eight banks. Used by the discussion
+    context block — personas care about the headline net flow ("八大行庫
+    +12 億"), not the per-bank breakdown.
 
     Returns one row per date, newest first:
 
@@ -749,12 +751,14 @@ async def read_recent_govt_bank_flow(
     Empty list when the cron hasn't populated yet — caller
     interprets as "no signal".
     """
-    cutoff = date.today() - timedelta(days=days * 2)  # +slack for weekends
+    end = as_of or date.today()
+    cutoff = end - timedelta(days=days * 2)  # +slack for weekends
     stmt = (
         select(TwGovtBankFlowDaily)
         .where(
             TwGovtBankFlowDaily.market == market,
             TwGovtBankFlowDaily.ts >= cutoff,
+            TwGovtBankFlowDaily.ts <= end,
         )
         .order_by(TwGovtBankFlowDaily.ts.desc())
     )
@@ -891,14 +895,16 @@ async def upsert_suspensions(
 
 async def read_recent_suspensions(
     db: AsyncSession, *, market: str = "TW", days: int = 7,
-    limit: int = 30,
+    limit: int = 30, as_of: date | None = None,
 ) -> list[dict[str, Any]]:
-    cutoff = date.today() - timedelta(days=days)
+    end = as_of or date.today()
+    cutoff = end - timedelta(days=days)
     stmt = (
         select(TwStockSuspended)
         .where(
             TwStockSuspended.market == market,
             TwStockSuspended.ts >= cutoff,
+            TwStockSuspended.ts <= end,
         )
         .order_by(TwStockSuspended.ts.desc())
         .limit(limit)
@@ -953,20 +959,23 @@ async def upsert_day_trading(
 async def read_high_day_trading_ratio(
     db: AsyncSession, *, market: str = "TW", days: int = 1,
     threshold: float = 0.6, limit: int = 20,
+    as_of: date | None = None,
 ) -> list[dict[str, Any]]:
     """Stocks where day-trading turnover dominates regular trading
-    over the last `days` sessions. The "ratio" is computed as
-    `(buy_amount + sell_amount) / 2 / volume` — each side counted
-    once because a day-trade is one round-trip. A ratio > 0.5 means
-    the majority of volume was intraday round-trips, which is a
-    speculative-character signal.
+    over the last `days` sessions ending at `as_of` (default: today).
+    The "ratio" is computed as `(buy_amount + sell_amount) / 2 /
+    volume` — each side counted once because a day-trade is one
+    round-trip. A ratio > 0.5 means the majority of volume was
+    intraday round-trips, which is a speculative-character signal.
     """
-    cutoff = date.today() - timedelta(days=days * 3)  # weekend slack
+    end = as_of or date.today()
+    cutoff = end - timedelta(days=days * 3)  # weekend slack
     stmt = (
         select(TwStockDayTradingDaily)
         .where(
             TwStockDayTradingDaily.market == market,
             TwStockDayTradingDaily.ts >= cutoff,
+            TwStockDayTradingDaily.ts <= end,
         )
         .order_by(TwStockDayTradingDaily.ts.desc())
     )
@@ -1126,16 +1135,20 @@ async def upsert_market_institutional_daily(
 
 async def read_recent_market_institutional(
     db: AsyncSession, *, market: str = "TW", days: int = 5,
+    as_of: date | None = None,
 ) -> list[dict[str, Any]]:
-    """Last `days` of full-market 三大法人 aggregates, newest first.
-    Used in the discussion context block as the index-level headline
-    ("外資今日對台股淨買超 +250 億 / 連 3 日買超")."""
-    cutoff = date.today() - timedelta(days=days * 3)  # weekend slack
+    """Last `days` of full-market 三大法人 aggregates ending at
+    `as_of` (default: today), newest first. Used in the discussion
+    context block as the index-level headline ("外資今日對台股淨買超
+    +250 億 / 連 3 日買超")."""
+    end = as_of or date.today()
+    cutoff = end - timedelta(days=days * 3)  # weekend slack
     stmt = (
         select(TwMarketInstitutionalDaily)
         .where(
             TwMarketInstitutionalDaily.market == market,
             TwMarketInstitutionalDaily.ts >= cutoff,
+            TwMarketInstitutionalDaily.ts <= end,
         )
         .order_by(TwMarketInstitutionalDaily.ts.desc())
         .limit(days)

@@ -268,6 +268,95 @@ def test_sanitise_token_strips_jwt_value():
     ) == "no secrets here"
 
 
+# ── PR #219: silent-zero fallback to per-symbol ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_silent_zero_market_wide_falls_back_to_per_symbol(
+    db_session: AsyncSession,
+):
+    """Sponsor tier sometimes returns HTTP 200 with status=400 in
+    the JSON body for restricted datasets — `_query` reads that as
+    "empty data, no error", so `_do_backfill` returns 0 without
+    raising. PR #218's paywall-on-exception path doesn't catch this.
+    PR #219 adds: market-wide returns 0 AND focus_symbols available
+    → also try per-symbol fan-out."""
+    as_of = date(2024, 6, 15)
+
+    per_symbol_mock = AsyncMock(return_value=3)
+
+    with patch.object(
+        news_backfill_service, "_do_backfill",
+        new=AsyncMock(return_value=0),  # silent zero (no exception)
+    ), patch.object(
+        news_backfill_service, "_do_backfill_per_symbol",
+        new=per_symbol_mock,
+    ):
+        out = await news_backfill_service.ensure_news_archive_covers(
+            db_session, market="TW", as_of=as_of,
+            focus_symbols=["2330"],
+        )
+
+    per_symbol_mock.assert_awaited_once()
+    assert per_symbol_mock.call_args.kwargs["symbols"] == ["2330"]
+    assert out["fallback"] == "per-symbol"
+    assert out["backfilled"] == 3
+
+
+@pytest.mark.asyncio
+async def test_silent_zero_without_focus_symbols_skips_fallback(
+    db_session: AsyncSession,
+):
+    """0-row market-wide without focus → no fallback (no symbol set
+    to fan out across). Result is just covered=False with no error
+    or fallback key."""
+    as_of = date(2024, 6, 15)
+
+    per_symbol_mock = AsyncMock()
+    with patch.object(
+        news_backfill_service, "_do_backfill",
+        new=AsyncMock(return_value=0),
+    ), patch.object(
+        news_backfill_service, "_do_backfill_per_symbol",
+        new=per_symbol_mock,
+    ):
+        out = await news_backfill_service.ensure_news_archive_covers(
+            db_session, market="TW", as_of=as_of, focus_symbols=None,
+        )
+
+    per_symbol_mock.assert_not_awaited()
+    assert out["covered"] is False
+    assert out["backfilled"] == 0
+    assert "fallback" not in out
+
+
+@pytest.mark.asyncio
+async def test_silent_zero_per_symbol_also_returns_zero_no_fallback_key(
+    db_session: AsyncSession,
+):
+    """If per-symbol fan-out also returns 0 (genuinely no news for
+    those tickers in the window), we don't tag the result with
+    `fallback="per-symbol"` — that key signals "fallback recovered
+    data". Truthful zero is just zero."""
+    as_of = date(2024, 6, 15)
+
+    with patch.object(
+        news_backfill_service, "_do_backfill",
+        new=AsyncMock(return_value=0),
+    ), patch.object(
+        news_backfill_service, "_do_backfill_per_symbol",
+        new=AsyncMock(return_value=0),
+    ):
+        out = await news_backfill_service.ensure_news_archive_covers(
+            db_session, market="TW", as_of=as_of,
+            focus_symbols=["2330"],
+        )
+
+    assert out["covered"] is False
+    assert out["backfilled"] == 0
+    assert "fallback" not in out
+
+
 # ── PR #218: per-symbol fan-out fallback on paywall ──────────────
 
 

@@ -152,14 +152,21 @@ async def ensure_news_archive_covers(
          compact, but typically requires a paid sponsor tier above
          "Sponsor".
 
-      2. **Per-symbol fan-out** (PR #218) — fired automatically when
-         strategy 1 hits a FinMind paywall AND `focus_symbols` is
-         supplied by the caller. Iterates the topic's focus symbols
-         (capped at 5) calling `data_id=<sym>`. The Sponsor tier
-         allows per-symbol queries, so this gets news flowing for
-         the discussion's mentioned tickers even when market-wide
-         is blocked. No fallback when there are no focus symbols —
-         the discussion would have no use for the arbitrary news.
+      2. **Per-symbol fan-out** (PR #218 + #219) — fired automatically
+         on either:
+           a. strategy 1 raises a FinMind paywall response (HTTP 400
+              + tier-mismatch body), OR
+           b. strategy 1 succeeds but returns 0 rows AND
+              `focus_symbols` is non-empty (PR #219 — Sponsor tier
+              sometimes responds with HTTP 200 + status=400 in the
+              body for restricted datasets, which `_query` treats as
+              an empty list rather than a paywall).
+         Iterates the topic's focus symbols (capped at 5) calling
+         `data_id=<sym>`. The Sponsor tier allows per-symbol queries,
+         so this gets news flowing for the discussion's mentioned
+         tickers even when market-wide is denied. No fallback when
+         there are no focus symbols — the discussion would have no
+         use for the arbitrary news.
 
     Result keys:
       - `covered`: bool
@@ -207,10 +214,7 @@ async def ensure_news_archive_covers(
 
             if is_paywall and focus_symbols:
                 # Sponsor tier blocks `data_id=""` market-wide calls
-                # but allows per-symbol queries. Fall back to fan-out
-                # over the discussion's focus symbols so the user
-                # still gets contemporaneous news for the tickers
-                # they're actually discussing.
+                # with HTTP 400 + paywall body. Fall back to fan-out.
                 log.info(
                     "news_backfill.paywall_falling_back_to_per_symbol",
                     extra={
@@ -239,6 +243,41 @@ async def ensure_news_archive_covers(
                     "news_backfill.failed",
                     extra={"as_of": as_of.isoformat(), "error": error_str},
                 )
+        else:
+            # Market-wide didn't raise — but it might've silently
+            # returned 0 rows. Sponsor tier sometimes responds with
+            # HTTP 200 + status=400 in the JSON body for restricted
+            # datasets, which `_query` treats as empty. Without this
+            # branch the fallback only fires when FinMind explicitly
+            # raises, missing the silent-deny case (PR #219).
+            #
+            # Trying per-symbol when market-wide returned 0 is also
+            # harmless when it's a genuine "no news for this date" —
+            # per-symbol returns 0 too, no extra rows written.
+            if backfilled == 0 and focus_symbols:
+                log.info(
+                    "news_backfill.empty_market_wide_falling_back_to_per_symbol",
+                    extra={
+                        "as_of": as_of.isoformat(),
+                        "symbols": list(focus_symbols[:_PER_SYMBOL_CAP]),
+                    },
+                )
+                try:
+                    backfilled = await _do_backfill_per_symbol(
+                        market=market, as_of=as_of,
+                        symbols=list(focus_symbols[:_PER_SYMBOL_CAP]),
+                    )
+                    if backfilled > 0:
+                        fallback_used = "per-symbol"
+                except Exception as exc:
+                    error_str = _format_finmind_error(exc)
+                    log.warning(
+                        "news_backfill.per_symbol_fallback_failed",
+                        extra={
+                            "as_of": as_of.isoformat(),
+                            "error": error_str,
+                        },
+                    )
     finally:
         await release_lock(lock_key)
 

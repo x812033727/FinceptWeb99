@@ -803,7 +803,14 @@ export function summarizeContext(ctx: Record<string, unknown>): RoundCtxSummary 
       const horizon = (p.time_horizon as string | undefined) ?? "";
       const verdict = (p.verdict as string | undefined) ?? "?";
       const matched = (p.matched_symbols as string[] | undefined) ?? [];
-      const date = String(p.created_at ?? "").slice(0, 10);
+      // PR #278: prefer as_of_date when present (backtest prior
+      // discussions) so the summary shows the historical day each
+      // prior discussion was analysing, not when its row happened
+      // to be created. Live priors fall through to created_at.
+      const asOf = (p.as_of_date as string | null | undefined) ?? null;
+      const date = asOf
+        ? asOf
+        : String(p.created_at ?? "").slice(0, 10);
       lines.push(`${date} ${matched.join(",")} → ${horizon}/${verdict}`);
     }
     if (lines.length > 0) out.prior_discussions_summary = lines.join(" | ");

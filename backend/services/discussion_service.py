@@ -1523,6 +1523,15 @@ async def _assemble_prior_discussions(
         matches.append({
             "id":                  str(row.id),
             "created_at":          row.created_at.isoformat(),
+            # PR #278: surface the historical anchor for backtest
+            # discussions so the persona prompt + frontend summary
+            # show "the day this prior discussion was analysing",
+            # not the day it was created. NULL for live discussions
+            # — caller (frontend / `_format_history`) falls back to
+            # `created_at` when missing.
+            "as_of_date":          (
+                row.as_of_date.isoformat() if row.as_of_date else None
+            ),
             "topic":               topic[:120],
             "recommended_symbols": recommended[:5],
             "time_horizon":        conclusion.get("time_horizon"),
@@ -1761,11 +1770,13 @@ _BLOCK_ANNOTATIONS: dict[str, str] = {
         "**禁止在結論中揭露具體股數或成本價**——僅用於決策邏輯。"
     ),
     "prior_discussions": (
-        "- prior_discussions：**本人過去 90 天對主題提及之標的所做的結論**，含日期 / "
-        "topic 摘要 / `recommended_symbols` / `time_horizon` / `consensus_score` / "
-        "`verdict`（win / loss / unverifiable / null）。**用以保持跨討論一致性**——"
-        "若上次對 2330 結論 Hold 而本次卻要 Buy，必須在 content 中明確說明改變理由"
-        "（例如「上週起殖利率下行 +30bp，重新評估」），不可默默翻盤。"
+        "- prior_discussions：**本人過去 90 天對主題提及之標的所做的結論**，含 "
+        "`created_at`（建立時間）/ `as_of_date`（回測日期，回測討論才有；"
+        "live 為 null）/ topic 摘要 / `recommended_symbols` / `time_horizon` / "
+        "`consensus_score` / `verdict`（win / loss / unverifiable / null）。"
+        "**用以保持跨討論一致性**——若上次對 2330 結論 Hold 而本次卻要 Buy，"
+        "必須在 content 中明確說明改變理由（例如「上週起殖利率下行 +30bp，重新評估」），"
+        "不可默默翻盤。引用過去討論時請優先以 as_of_date（若有）為錨，更貼近「在那一天的判斷」。"
     ),
     "errors":                    "- errors：本次抓取的連接器錯誤清單；非空時務必聲明資料不完整。",
 }

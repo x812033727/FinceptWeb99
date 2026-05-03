@@ -489,6 +489,46 @@ describe("summarizeContext", () => {
     expect(summarizeContext({}).prior_discussions_summary).toBeUndefined();
     expect(summarizeContext({ prior_discussions: [] }).prior_discussions_summary).toBeUndefined();
   });
+
+  it("PR #278: prefers as_of_date over created_at when present", () => {
+    /* Backtest prior discussions carry an `as_of_date` (the
+       historical day they were analysing). The summary line
+       should anchor on that, not on when the row was created. */
+    const out = summarizeContext({
+      prior_discussions: [
+        {
+          id: "a",
+          created_at: "2026-05-03T10:00:00Z",   // today
+          as_of_date: "2026-01-15",             // backtest anchor
+          matched_symbols: ["2330"],
+          time_horizon: "short_term",
+          verdict: "win",
+        },
+      ],
+    });
+    expect(out.prior_discussions_summary).toContain(
+      "2026-01-15 2330 → short_term/win",
+    );
+    expect(out.prior_discussions_summary).not.toContain("2026-05-03");
+  });
+
+  it("PR #278: falls back to created_at when as_of_date is null", () => {
+    const out = summarizeContext({
+      prior_discussions: [
+        {
+          id: "a",
+          created_at: "2026-05-03T10:00:00Z",
+          as_of_date: null,    // live discussion
+          matched_symbols: ["2330"],
+          time_horizon: "short_term",
+          verdict: "win",
+        },
+      ],
+    });
+    expect(out.prior_discussions_summary).toContain(
+      "2026-05-03 2330 → short_term/win",
+    );
+  });
 });
 
 // ── PR #268: post-mortem result localStorage persistence ─────────

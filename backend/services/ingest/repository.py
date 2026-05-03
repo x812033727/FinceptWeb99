@@ -1522,7 +1522,17 @@ async def insert_news_articles(
 ) -> int:
     """Bulk insert with on-conflict-do-nothing on `dedup_hash`. Returns
     the number of input rows passed (not the number actually inserted —
-    duplicates are silently dropped at the DB layer)."""
+    duplicates are silently dropped at the DB layer).
+
+    Chunks the INSERT into batches of `_INSERT_NEWS_CHUNK_ROWS` so we
+    don't blow past PostgreSQL's wire-protocol limit of 32767 query
+    parameters per statement (`asyncpg.InterfaceError`). NewsArticleRow
+    has 10 fields so 2 000 rows = 20 000 params, comfortably below the
+    cap with headroom for future field additions. A 30-day backtest
+    backfill of a busy news symbol can easily yield 5 000+ rows
+    (~250/day × 31 days), which previously aborted the entire batch
+    with zero rows persisted.
+    """
     payload = [
         {
             "market": r.market,
@@ -1543,14 +1553,25 @@ async def insert_news_articles(
         return 0
 
     dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
-    if dialect == "sqlite":
-        stmt = sqlite_insert(NewsArticle).values(payload)
-    else:
-        stmt = pg_insert(NewsArticle).values(payload)
-    stmt = stmt.on_conflict_do_nothing(index_elements=["dedup_hash"])
-    await db.execute(stmt)
+    insert_fn = sqlite_insert if dialect == "sqlite" else pg_insert
+
+    for i in range(0, len(payload), _INSERT_NEWS_CHUNK_ROWS):
+        chunk = payload[i:i + _INSERT_NEWS_CHUNK_ROWS]
+        stmt = insert_fn(NewsArticle).values(chunk).on_conflict_do_nothing(
+            index_elements=["dedup_hash"],
+        )
+        await db.execute(stmt)
     await db.commit()
     return len(payload)
+
+
+# PostgreSQL's wire protocol caps a single statement at 32767 query
+# parameters. NewsArticleRow has 10 fields → 2 000 rows = 20 000
+# params, leaving headroom. A FinMind day-by-day backfill over a
+# busy 31-day window can return 5 000+ articles for one popular
+# symbol, which used to crash the whole batch with
+# `asyncpg.InterfaceError`.
+_INSERT_NEWS_CHUNK_ROWS = 2_000
 
 
 async def read_recent_news(

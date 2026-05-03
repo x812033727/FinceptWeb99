@@ -116,6 +116,47 @@ async def test_insert_skips_rows_missing_title_or_link(db_session: AsyncSession)
     assert len(saved) == 1
 
 
+@pytest.mark.asyncio
+async def test_insert_chunks_large_batches_to_avoid_param_limit(
+    db_session: AsyncSession, monkeypatch,
+):
+    """PostgreSQL caps a single statement at 32767 query parameters.
+    NewsArticleRow has 10 fields → 3276 rows max in one INSERT.
+    A FinMind day-by-day backfill of a busy news symbol over a 31-day
+    window can return 5 000+ articles, which used to crash the whole
+    batch with `asyncpg.InterfaceError: the number of query arguments
+    cannot exceed 32767`. The repo now chunks into 2 000-row batches.
+
+    We verify behaviour by shrinking the chunk size for the test and
+    inserting more rows than fit in one chunk — every row must land,
+    and asserting `db.execute` was called multiple times."""
+    from unittest.mock import AsyncMock
+    from services.ingest import repository as repo
+
+    monkeypatch.setattr(repo, "_INSERT_NEWS_CHUNK_ROWS", 3)
+    rows = [
+        _row(f"chunk row {i}", f"https://example.com/news/chunk_{i}",
+             symbol=f"CHUNK_{i}")
+        for i in range(7)   # 3 + 3 + 1 → expect 3 executes
+    ]
+
+    real_execute = db_session.execute
+    spy = AsyncMock(side_effect=real_execute)
+    monkeypatch.setattr(db_session, "execute", spy)
+
+    written = await insert_news_articles(db_session, rows)
+    assert written == 7
+    # 3 chunks of 3, 3, 1 → 3 INSERT statements.
+    assert spy.await_count == 3
+
+    saved = (await db_session.scalars(
+        select(NewsArticle).where(NewsArticle.link.like(
+            "https://example.com/news/chunk_%",
+        ))
+    )).all()
+    assert len(saved) == 7
+
+
 # ── read_recent_news ──────────────────────────────────────────────
 
 @pytest.mark.asyncio

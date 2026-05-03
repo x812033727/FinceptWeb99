@@ -107,6 +107,44 @@ def test_match_keywords_per_signal(content, signal, expected):
     assert svc._match_keywords(content, patterns) is expected
 
 
+# ── _has_value_near_keyword (PR #258 value-citation upgrade) ──────
+
+
+@pytest.mark.parametrize("content,patterns,expected", [
+    # Concrete value next to keyword → True
+    ("RSI 67.3 已逼近超買區",     ["RSI"],          True),
+    ("外資台指期 +3500 口淨空",   ["外資台指期"],   True),
+    ("量能放大為均量 2.3 倍",      ["量能"],         True),
+    ("RSI 67",                     ["RSI"],          True),   # int still counts
+    # Keyword without nearby number → False
+    ("RSI 偏高",                   ["RSI"],          False),
+    ("外資動向轉弱",               ["外資台指期"],   False),
+    ("量能放大",                   ["量能"],         False),
+    # Number outside the proximity window → False
+    # ("70" appears > 60 chars away from "RSI" — out of window)
+    (
+        "RSI 處於中性區。" + "X" * 80 + " 此外，目標價 70。",
+        ["RSI"],
+        False,
+    ),
+    # Multiple keyword matches; only one needs a nearby number
+    ("RSI 偏高，但稍後 RSI 67.3 跌破", ["RSI"], True),
+])
+def test_has_value_near_keyword(content, patterns, expected):
+    assert svc._has_value_near_keyword(content, patterns) is expected
+
+
+def test_has_value_recognises_unit_suffixes():
+    """zh-TW writing often has unit-suffixed numbers like `+3500口`,
+    `25%`, `1.2倍`. The numeric token regex covers each — pin them
+    so a future `_NUMERIC_TOKEN` tweak doesn't accidentally drop a
+    common citation form."""
+    assert svc._has_value_near_keyword("外資 +3500口", ["外資"]) is True
+    assert svc._has_value_near_keyword("漲幅 5.2%", ["漲幅"]) is True
+    assert svc._has_value_near_keyword("量能 1.2 倍", ["量能"]) is True
+    assert svc._has_value_near_keyword("淨買 100 張", ["淨買"]) is True
+
+
 # ── audit_turn ────────────────────────────────────────────────────
 
 
@@ -142,6 +180,44 @@ def test_audit_turn_zero_citation_for_irrelevant_content():
         },
     )
     assert audit.cited_count == 0
+    assert audit.cited_with_value_count == 0
+
+
+def test_audit_turn_distinguishes_name_drop_from_value_citation():
+    """Pin the PR #258 contract: name-drop ("RSI 偏高") gets
+    `cited=True, cited_with_value=False`. Concrete-value citation
+    ("RSI 67.3 已逼近超買") gets BOTH true. The two flags are the
+    operator's lever for spotting "personas mention but don't
+    leverage" patterns."""
+    # Space the keywords ≥ 60 chars apart so the numeric token next
+    # to RSI doesn't leak into the proximity windows of the other
+    # keywords (the helper scans ±60 chars per keyword match).
+    spacer = "—" * 80   # > 60 chars of filler with no digits
+    audit = svc.audit_turn(
+        round_no=1,
+        persona_id="market_analyst",
+        stance="agree",
+        content=(
+            f"RSI 67.3 已逼近超買區。{spacer}"
+            f"量能放大但缺乏數據說服力。{spacer}"
+            f"外資買超並未停止。"
+        ),
+        signals_present={
+            "short_term_signals.rsi_14",       # cited WITH value (67.3)
+            "short_term_signals.volume_ratio", # cited but NO value
+            "top_foreign_buyers",              # cited but NO value
+        },
+    )
+    # All three keyword-cited.
+    assert audit.cited["short_term_signals.rsi_14"] is True
+    assert audit.cited["short_term_signals.volume_ratio"] is True
+    assert audit.cited["top_foreign_buyers"] is True
+    # Only RSI has a value within ±60 chars of the keyword.
+    assert audit.cited_with_value["short_term_signals.rsi_14"] is True
+    assert audit.cited_with_value["short_term_signals.volume_ratio"] is False
+    assert audit.cited_with_value["top_foreign_buyers"] is False
+    assert audit.cited_count == 3
+    assert audit.cited_with_value_count == 1
 
 
 # ── DiscussionAudit.coverage ──────────────────────────────────────

@@ -129,15 +129,33 @@ _SIGNAL_KEYWORDS: dict[str, list[str]] = {
 
 @dataclass
 class TurnAudit:
-    """Per-persona-turn citation map: signal_key → bool (cited?)."""
+    """Per-persona-turn citation map.
+
+    `cited[signal]`             — keyword match ("RSI", "外資", ...)
+    `cited_with_value[signal]`  — keyword AND a numeric token
+                                  within ±60 chars (PR #258).
+                                  Distinguishes "RSI 67.3 已逼近超買"
+                                  (concrete value) from "RSI 偏高"
+                                  (generic mention).
+
+    The two flags are independent: a turn that mentions RSI without
+    quoting a number gets `cited=True, cited_with_value=False`. The
+    audit's "value citation rate" surfaces signals where personas
+    are name-dropping but not actually leveraging the data.
+    """
     round: int
     persona_id: str
     stance: str
     cited: dict[str, bool] = field(default_factory=dict)
+    cited_with_value: dict[str, bool] = field(default_factory=dict)
 
     @property
     def cited_count(self) -> int:
         return sum(1 for v in self.cited.values() if v)
+
+    @property
+    def cited_with_value_count(self) -> int:
+        return sum(1 for v in self.cited_with_value.values() if v)
 
 
 @dataclass
@@ -154,12 +172,25 @@ class DiscussionAudit:
     rounds: list[RoundAudit] = field(default_factory=list)
 
     def coverage(self) -> dict[str, dict[str, int]]:
-        """Aggregate `signal_key → {present, cited, persona_count}`
-        across every round + every persona. `persona_count` is the
-        denominator for the citation rate (signal_present_in_round
-        rounds × persona_per_round)."""
+        """Aggregate `signal_key → {present, cited, cited_with_value,
+        persona_count}` across every round + every persona.
+
+        - `cited` counts keyword-only matches (existing behaviour).
+        - `cited_with_value` counts the strict subset where the
+          turn's content also contained a numeric token near the
+          keyword (PR #258). Always ≤ `cited`.
+        - `persona_count` is the denominator for both rates.
+
+        Two rates are useful: a high `cited` with low
+        `cited_with_value` flags a signal personas mention but
+        don't actually leverage the data — typically a prompt-tuning
+        opportunity (push for concrete numbers).
+        """
         agg: dict[str, dict[str, int]] = defaultdict(
-            lambda: {"present": 0, "cited": 0, "persona_count": 0}
+            lambda: {
+                "present": 0, "cited": 0,
+                "cited_with_value": 0, "persona_count": 0,
+            }
         )
         for r in self.rounds:
             for sig in r.signals_present:
@@ -168,6 +199,8 @@ class DiscussionAudit:
                 for t in r.turns:
                     if t.cited.get(sig):
                         agg[sig]["cited"] += 1
+                    if t.cited_with_value.get(sig):
+                        agg[sig]["cited_with_value"] += 1
         return dict(agg)
 
 
@@ -219,11 +252,55 @@ def _detect_present_signals(context: dict[str, Any]) -> set[str]:
 # ── Citation detection ────────────────────────────────────────────
 
 
+# A "concrete value" is a number with at least 1 digit, optionally
+# decimal, optionally signed, optionally with a unit suffix. The
+# unit suffixes (% / pp / 倍 / x / 口 / 張) are common in zh-TW
+# financial writing — including them tightens the false-positive
+# rate (a bare year like "2026" near "RSI" wouldn't usually carry
+# a unit, while a real RSI citation does: "RSI 67.3" → digit;
+# "外資 +3500 口" → digit + 口). Plain digit fallback handles
+# "RSI 67" (no decimal, no unit).
+_NUMERIC_TOKEN = re.compile(
+    r"[+\-]?\d+(?:[\.,]\d+)?\s*(?:%|pp|倍|x|口|張|億|萬)?",
+    re.IGNORECASE,
+)
+# How wide a window around each keyword match to scan for a numeric
+# token. 60 chars covers a typical 1-2 sentence citation in zh-TW
+# (which packs ~30 chars per "sentence") without bleeding into
+# unrelated paragraphs.
+_VALUE_PROXIMITY_WINDOW = 60
+
+
 def _match_keywords(content: str, patterns: list[str]) -> bool:
     """Any-of regex match. Case-insensitive (Chinese tokens unchanged)."""
     for p in patterns:
         if re.search(p, content, re.IGNORECASE):
             return True
+    return False
+
+
+def _has_value_near_keyword(content: str, patterns: list[str]) -> bool:
+    """True when ANY of `patterns` matches AND a numeric token sits
+    within ±`_VALUE_PROXIMITY_WINDOW` chars of that match.
+
+    "RSI 67.3 已逼近超買" → True (digit next to "RSI")
+    "RSI 偏高" → False (no digit near "RSI")
+    "RSI 在 30/70 之間" → True (digit window catches "30")
+                         — accepted false positive: this style
+                         IS actually citing the bands, just not
+                         the actual reading.
+
+    The False-positive rate of plain numeric matching is acceptable
+    for the coverage-stat use case — false positives bias the rate
+    UPWARD (more lenient), and the goal of the metric is to spot
+    signals NEVER cited with values, where the floor matters.
+    """
+    for p in patterns:
+        for m in re.finditer(p, content, re.IGNORECASE):
+            start = max(0, m.start() - _VALUE_PROXIMITY_WINDOW)
+            end = min(len(content), m.end() + _VALUE_PROXIMITY_WINDOW)
+            if _NUMERIC_TOKEN.search(content[start:end]):
+                return True
     return False
 
 
@@ -235,14 +312,25 @@ def audit_turn(
     were keyword-matched in this turn's content. Signals NOT in
     `signals_present` are not checked — citing a signal that wasn't
     in the prompt would mean the LLM hallucinated it, which is a
-    different problem than coverage."""
+    different problem than coverage.
+
+    Two flags per signal:
+      - `cited`            — keyword present anywhere in content
+      - `cited_with_value` — keyword present AND a numeric token
+                             within ±60 chars of it (PR #258)
+    """
     audit = TurnAudit(round=round_no, persona_id=persona_id, stance=stance)
     for signal_key in signals_present:
         patterns = _SIGNAL_KEYWORDS.get(signal_key)
         if not patterns:
             audit.cited[signal_key] = False
+            audit.cited_with_value[signal_key] = False
             continue
         audit.cited[signal_key] = _match_keywords(content, patterns)
+        audit.cited_with_value[signal_key] = (
+            audit.cited[signal_key]
+            and _has_value_near_keyword(content, patterns)
+        )
     return audit
 
 
@@ -344,7 +432,10 @@ async def audit_recent_discussions(
 
     summary = BulkAuditSummary(discussions_audited=0, discussion_ids=[])
     rolled: dict[str, dict[str, int]] = defaultdict(
-        lambda: {"present": 0, "cited": 0, "persona_count": 0}
+        lambda: {
+            "present": 0, "cited": 0,
+            "cited_with_value": 0, "persona_count": 0,
+        }
     )
 
     for did in candidate_ids:
@@ -363,6 +454,7 @@ async def audit_recent_discussions(
         for sig, stats in audit.coverage().items():
             rolled[sig]["present"] += stats["present"]
             rolled[sig]["cited"] += stats["cited"]
+            rolled[sig]["cited_with_value"] += stats.get("cited_with_value", 0)
             rolled[sig]["persona_count"] += stats["persona_count"]
 
     summary.coverage = dict(rolled)

@@ -687,7 +687,8 @@
     "zero_uptake_count": "{{count}} signals never cited",
     "zero_uptake_title": "Zero uptake — never cited",
     "zero_uptake_help": "Present in ≥ 1 round but never cited by any persona. Candidates for schema-annotation tuning or persona-profile removal.",
-    "coverage_title": "Full coverage (sorted by citation rate)"
+    "coverage_title": "Full coverage (sorted by citation rate)",
+    "cite_value_split": "Citation rate {{cite}} (with concrete value {{value}})"
   },
   "screener": {
     "title": "Screener",

@@ -92,9 +92,16 @@ def _format_report(audit: DiscussionAudit) -> str:
             rows.append((rate, sig, stats))
         rows.sort(key=lambda x: (x[0], x[1]))
         for rate, sig, stats in rows:
+            denom = stats["persona_count"]
+            value_rate = (
+                stats.get("cited_with_value", 0) / denom
+                if denom else 0.0
+            )
             out.append(
-                f"  {rate*100:5.1f}%  "
+                f"  cite={rate*100:5.1f}%  "
+                f"value={value_rate*100:5.1f}%  "
                 f"({stats['cited']}/{stats['persona_count']} cited, "
+                f"{stats.get('cited_with_value', 0)} with value, "
                 f"{stats['present']} rounds)  {sig}"
             )
 
@@ -111,6 +118,24 @@ def _format_report(audit: DiscussionAudit) -> str:
         )
         for sig in sorted(zero_uptake):
             out.append(f"  ! {sig}")
+    # Value-citation gap — signals personas mention but don't ground
+    # in actual numbers. Operator's lever for prompt-strengthening:
+    # "must cite the value, not just the name".
+    name_drop_only = [
+        (sig, stats) for sig, stats in coverage.items()
+        if stats["cited"] > 0
+        and stats.get("cited_with_value", 0) == 0
+    ]
+    if name_drop_only:
+        out.append("\n=== Name-drop only (cited without values) ===")
+        out.append(
+            "Personas mention these signals but never quote a "
+            "number. Likely a generic-language habit ('RSI 偏高'). "
+            "Strengthen the prompt schema annotation to demand "
+            "concrete values."
+        )
+        for sig, stats in sorted(name_drop_only):
+            out.append(f"  ⚠ {sig} (cited {stats['cited']} times, all without value)")
     return "\n".join(out)
 
 
@@ -136,9 +161,16 @@ def _format_bulk_report(summary: BulkAuditSummary) -> str:
             rows.append((rate, sig, stats))
         rows.sort(key=lambda x: (x[0], x[1]))
         for rate, sig, stats in rows:
+            denom = stats["persona_count"]
+            value_rate = (
+                stats.get("cited_with_value", 0) / denom
+                if denom else 0.0
+            )
             out.append(
-                f"  {rate*100:5.1f}%  "
+                f"  cite={rate*100:5.1f}%  "
+                f"value={value_rate*100:5.1f}%  "
                 f"({stats['cited']}/{stats['persona_count']} cited, "
+                f"{stats.get('cited_with_value', 0)} with value, "
                 f"present in {stats['present']} round-snapshots)  {sig}"
             )
 

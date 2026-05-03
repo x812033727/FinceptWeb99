@@ -203,9 +203,15 @@ class SignalCoverageRow(BaseModel):
     signal across the audit window."""
     signal: str
     present: int           # rounds the signal appeared in
-    cited: int             # persona-turn citations
+    cited: int             # persona-turn keyword citations
+    # PR #258: subset of `cited` where the turn ALSO contained a
+    # numeric token within ±60 chars of the keyword. Distinguishes
+    # "RSI 67.3" citations from "RSI 偏高" name-drops. Always
+    # ≤ `cited`.
+    cited_with_value: int = 0
     persona_count: int     # denominator for citation_rate
     citation_rate: float   # cited / persona_count, 0.0 when persona_count=0
+    value_citation_rate: float = 0.0   # cited_with_value / persona_count
 
 
 class SignalAuditOut(BaseModel):

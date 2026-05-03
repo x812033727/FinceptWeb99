@@ -687,7 +687,8 @@
     "zero_uptake_count": "{{count}} 個訊號無人引用",
     "zero_uptake_title": "Zero uptake — 完全沒被引用",
     "zero_uptake_help": "這些訊號在 ≥ 1 輪出現於 ctx，但沒有任何 persona 在內容中引用。建議調整 schema annotation 或從 persona profile 移除。",
-    "coverage_title": "完整覆蓋率（依引用率排序）"
+    "coverage_title": "完整覆蓋率（依引用率排序）",
+    "cite_value_split": "引用率 {{cite}}（其中具體數字 {{value}}）"
   },
   "screener": {
     "title": "篩選器",

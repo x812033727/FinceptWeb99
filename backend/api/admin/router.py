@@ -597,12 +597,16 @@ async def signal_audit(
     for sig, stats in summary.coverage.items():
         denom = stats["persona_count"]
         rate = (stats["cited"] / denom) if denom else 0.0
+        cited_with_value = stats.get("cited_with_value", 0)
+        value_rate = (cited_with_value / denom) if denom else 0.0
         coverage_rows.append(SignalCoverageRow(
             signal=sig,
             present=stats["present"],
             cited=stats["cited"],
+            cited_with_value=cited_with_value,
             persona_count=denom,
             citation_rate=round(rate, 4),
+            value_citation_rate=round(value_rate, 4),
         ))
     coverage_rows.sort(key=lambda r: (r.citation_rate, r.signal))
 

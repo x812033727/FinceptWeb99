@@ -23,8 +23,14 @@ interface CoverageRow {
   signal: string;
   present: number;
   cited: number;
+  /** PR #258: subset of `cited` where the persona's content also
+   *  carried a numeric token within ±60 chars of the keyword.
+   *  Always ≤ `cited`; older backends without the field send 0. */
+  cited_with_value?: number;
   persona_count: number;
   citation_rate: number;
+  /** PR #258 sibling rate. 0 when the backend doesn't surface it. */
+  value_citation_rate?: number;
 }
 
 interface SignalAuditResp {
@@ -200,19 +206,41 @@ export function SignalAuditCard() {
                         {row.signal}
                       </span>
                       <div
-                        className="h-2 bg-secondary/40 rounded overflow-hidden"
+                        className="h-2 bg-secondary/40 rounded overflow-hidden relative"
                         role="img"
-                        aria-label={`citation rate ${rateLabel(row.citation_rate)}`}
+                        aria-label={`citation rate ${rateLabel(row.citation_rate)}, value-citation rate ${rateLabel(row.value_citation_rate ?? 0)}`}
                       >
+                        {/* Outer bar = keyword citation rate.
+                            Inner darker bar = subset that ALSO
+                            quoted a number (`cited_with_value`,
+                            PR #258). Stacking visualises the
+                            "name-drop vs concrete value" gap at a
+                            glance. */}
                         <div
                           className={`h-full ${rateColor(row.citation_rate)}`}
                           style={{
                             width: `${Math.max(row.citation_rate * 100, 1)}%`,
                           }}
                         />
+                        <div
+                          className="absolute top-0 left-0 h-full bg-foreground/30"
+                          style={{
+                            width: `${Math.max((row.value_citation_rate ?? 0) * 100, 0)}%`,
+                          }}
+                        />
                       </div>
-                      <span className="font-mono tabular-nums text-right w-12">
+                      <span
+                        className="font-mono tabular-nums text-right w-20"
+                        title={t("signal_audit.cite_value_split", {
+                          cite: rateLabel(row.citation_rate),
+                          value: rateLabel(row.value_citation_rate ?? 0),
+                        })}
+                      >
                         {rateLabel(row.citation_rate)}
+                        <span className="text-muted-foreground/70">
+                          {" / "}
+                          {rateLabel(row.value_citation_rate ?? 0)}
+                        </span>
                       </span>
                       <span className="font-mono tabular-nums text-muted-foreground text-right w-16">
                         {row.cited}/{row.persona_count}

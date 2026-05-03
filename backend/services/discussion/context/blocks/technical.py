@@ -101,6 +101,19 @@ async def fetch_short_term_signals(
                 except Exception as exc:
                     record_error(f"securities_lending_trend:{sym}", exc)
             signals["securities_lending_trend"] = sbl
+            # Per-symbol upcoming corporate event (法說 / 除息) within
+            # 14 days. yfinance-backed; covers TW + US (other markets
+            # fall through with `_suffix_for_market` no-op). None when
+            # no event in the window OR Yahoo doesn't carry the symbol.
+            event: dict | None = None
+            try:
+                from services.event_calendar_service import get_upcoming_event
+                event = await get_upcoming_event(
+                    market=market, symbol=sym, as_of=as_of,
+                )
+            except Exception as exc:
+                record_error(f"upcoming_event:{sym}", exc)
+            signals["upcoming_event"] = event
             ctx["short_term_signals"][sym] = signals
     except Exception as exc:
         record_error("short_term_signals", exc)

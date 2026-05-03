@@ -215,6 +215,9 @@ async def test_technical_block_populates_per_symbol_signals(
     with patch(
         "services.derivatives_service.get_securities_lending_trend",
         new=AsyncMock(return_value=None),
+    ), patch(
+        "services.event_calendar_service.get_upcoming_event",
+        new=AsyncMock(return_value=None),
     ):
         ctx = _new_ctx()
         await technical.fetch_short_term_signals(
@@ -268,6 +271,9 @@ async def test_technical_block_folds_in_day_trading_trend_for_tw(
 
     with patch(
         "services.derivatives_service.get_securities_lending_trend",
+        new=AsyncMock(return_value=None),
+    ), patch(
+        "services.event_calendar_service.get_upcoming_event",
         new=AsyncMock(return_value=None),
     ):
         ctx = _new_ctx()
@@ -327,6 +333,58 @@ async def test_technical_block_folds_in_securities_lending_trend_for_tw(
 
     sig = ctx["short_term_signals"]["2330"]
     assert sig["securities_lending_trend"] == sbl_payload
+    assert ctx["errors"] == []
+
+
+@pytest.mark.asyncio
+async def test_technical_block_folds_in_upcoming_event(
+    db_session: AsyncSession,
+):
+    """`upcoming_event` populated by `event_calendar_service` must
+    land under `signals['upcoming_event']` for any market (yfinance
+    covers TW + US). When None (no events in 14d window), the field
+    is still present so personas can branch on `is None` cleanly."""
+    from unittest.mock import AsyncMock, patch
+
+    from services.ingest.repository import OhlcvBar, upsert_ohlcv_bars
+
+    base = date(2026, 3, 1)
+    await upsert_ohlcv_bars(db_session, [
+        OhlcvBar(
+            market="TW", symbol="2330", ts=base + timedelta(days=i),
+            open=600.0 + i, high=601.0 + i, low=599.0 + i,
+            close=600.0 + i, volume=1_000_000, source="test",
+        )
+        for i in range(30)
+    ])
+
+    event_payload = {
+        "as_of": "2026-03-30",
+        "earnings_date": "2026-04-04",
+        "earnings_in_days": 5,
+        "ex_dividend_date": None,
+        "ex_dividend_in_days": None,
+        "next_event": "earnings",
+        "next_event_in_days": 5,
+    }
+    with patch(
+        "services.derivatives_service.get_securities_lending_trend",
+        new=AsyncMock(return_value=None),
+    ), patch(
+        "services.event_calendar_service.get_upcoming_event",
+        new=AsyncMock(return_value=event_payload),
+    ):
+        ctx = _new_ctx()
+        await technical.fetch_short_term_signals(
+            ctx, db_session, market="TW",
+            focus_symbols=["2330"],
+            as_of=base + timedelta(days=29),
+            record_error=_record(ctx),
+        )
+
+    sig = ctx["short_term_signals"]["2330"]
+    assert sig["upcoming_event"] == event_payload
+    assert sig["upcoming_event"]["next_event"] == "earnings"
     assert ctx["errors"] == []
 
 

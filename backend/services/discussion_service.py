@@ -1690,7 +1690,11 @@ _BLOCK_ANNOTATIONS: dict[str, str] = {
         "`securities_lending_trend`（個股借券餘額 5 日趨勢：`latest_balance` 借券餘額、"
         "`balance_change_5d` 5 日變化（正值 = 餘額上升）、`trend` rising/stable/falling"
         " — `trend=rising` 代表機構透過借券建立隱性空頭部位，是 explicit 短賣以外的"
-        "看空 leading flow，逆勢做多需特別留意）。配合 news_sentiment 同向時短線勝率較高。"
+        "看空 leading flow，逆勢做多需特別留意）、"
+        "`upcoming_event`（未來 14 日法說 / 除息行事曆：`next_event` earnings|ex_dividend、"
+        "`next_event_in_days` 距事件日數 — `next_event_in_days <= 3` 屬事件窗，個股價格"
+        "易出現 asymmetric move，**短線方向訊號失效**，建議 personas 切換為「停看聽」"
+        "策略而非追多殺多）。配合 news_sentiment 同向時短線勝率較高。"
     ),
     "international_sentiment":   "- international_sentiment：Fed / FOMC / 國際宏觀新聞情緒，影響台股風險偏好。",
     "top_foreign_buyers":        "- top_foreign_buyers：近 5 日外資累計淨買超前 10 名（已含產業別）。",

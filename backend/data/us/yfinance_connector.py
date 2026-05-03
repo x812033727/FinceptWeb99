@@ -268,3 +268,74 @@ async def get_financials(ticker: str) -> dict[str, Any]:
             "cash_flow": _df_to_list(t.cashflow),
         }
     return await _run(_fetch)
+
+
+async def get_calendar(ticker: str) -> dict[str, Any]:
+    """Upcoming corporate-event dates from yfinance ``Ticker.calendar``.
+
+    Yahoo's calendar shape for TW listings is shallow but reliable for
+    the two events that matter for short-term-trade timing:
+      - ``Earnings Date``     — next 法說會 (sometimes a [start, end] range)
+      - ``Ex-Dividend Date``  — next 除息日
+
+    Returns a normalised dict so callers don't have to handle
+    yfinance's variable shape (DataFrame on some versions, dict on
+    others, missing keys on yet others):
+
+        {
+          "earnings_date":      "2026-05-12" | None,
+          "ex_dividend_date":   "2026-06-15" | None,
+        }
+
+    Both values may be None when Yahoo doesn't carry the data — TW
+    small-caps are commonly under-covered. Caller should treat None
+    as "no scheduled event in the lookahead window".
+    """
+    def _fetch() -> dict[str, Any]:
+        t = yf.Ticker(ticker)
+        try:
+            cal = t.calendar
+        except Exception as exc:
+            log.debug("yfinance.calendar_failed",
+                      extra={"ticker": ticker, "error": str(exc)})
+            return {"earnings_date": None, "ex_dividend_date": None}
+
+        def _coerce_date(v):
+            """Yahoo can return a single Timestamp, a list/tuple of two
+            (range), or a Python date. Normalise to ISO-date string."""
+            if v is None:
+                return None
+            if isinstance(v, (list, tuple)):
+                if not v:
+                    return None
+                v = v[0]
+            try:
+                if hasattr(v, "strftime"):
+                    return v.strftime("%Y-%m-%d")
+                if isinstance(v, str):
+                    return v[:10]
+            except Exception:
+                return None
+            return None
+
+        # Pre-2024 yfinance returns a pandas DataFrame; current returns
+        # a plain dict. Normalise to dict access.
+        if isinstance(cal, pd.DataFrame):
+            if cal.empty:
+                return {"earnings_date": None, "ex_dividend_date": None}
+            # DataFrame columns are dates, index is the field name.
+            try:
+                cal_dict = {idx: cal.loc[idx].iloc[0] for idx in cal.index}
+            except Exception:
+                cal_dict = {}
+        elif isinstance(cal, dict):
+            cal_dict = cal
+        else:
+            cal_dict = {}
+
+        return {
+            "earnings_date":    _coerce_date(cal_dict.get("Earnings Date")),
+            "ex_dividend_date": _coerce_date(cal_dict.get("Ex-Dividend Date")),
+        }
+
+    return await _run(_fetch)

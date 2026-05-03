@@ -783,6 +783,45 @@ async def test_score_inserted_window_picks_up_just_backfilled_rows(
 
 
 @pytest.mark.asyncio
+async def test_covered_path_surfaces_scoring_error_to_ctx(
+    db_session: AsyncSession,
+):
+    """When inline scoring on the covered path hits an LLM total
+    failure (`_score_batch` returns `(None, error_msg)`), the helper
+    propagates `scoring_error` into the result dict so users see
+    WHY scored=0 in the discussion ctx — not just an opaque zero
+    they'd otherwise have to chase through backend logs.
+    """
+    as_of = date(2026, 3, 23)
+    base_dt = datetime(2026, 3, 22, 12, 0, tzinfo=UTC)
+    await insert_news_articles(
+        db_session, _seed_articles("TW", 10, base_dt),
+    )
+
+    finmind_mock = AsyncMock()
+    score_mock = AsyncMock(return_value={
+        "considered": 0, "scored": 0,
+        "batches": 0, "cap_hit": 0,
+        "error": "minimax returned no content; finish_reason=length; "
+                 "completion_tokens=8192; reasoning_content=24000 chars",
+    })
+    with patch.object(
+        news_backfill_service, "_do_backfill", new=finmind_mock,
+    ), patch.object(
+        news_backfill_service, "_score_inserted_window", new=score_mock,
+    ):
+        out = await news_backfill_service.ensure_news_archive_covers(
+            db_session, market="TW", as_of=as_of,
+        )
+
+    finmind_mock.assert_not_awaited()
+    assert out["covered"] is True
+    assert out["scored"] == 0
+    assert "minimax returned no content" in out["scoring_error"]
+    assert "finish_reason=length" in out["scoring_error"]
+
+
+@pytest.mark.asyncio
 async def test_score_inserted_window_hot_path_window_excludes_future_dated_rows(
     db_session: AsyncSession,
 ):

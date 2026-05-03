@@ -202,16 +202,28 @@ async def _score_batch(
     provider: str,
     model: str,
     db: AsyncSession,
-) -> list[_Scored]:
-    """One LLM call per batch. Returns parsed Scored rows; missing /
-    malformed entries are silently dropped — the next pass retries.
+) -> tuple[list[_Scored] | None, str | None]:
+    """One LLM call per batch.
+
+    Two-axis result:
+      - `(scored, None)` — LLM responded with parseable JSON. `scored`
+        may be empty (LLM saw nothing categorisable) but the call
+        itself succeeded. Caller should stamp the input rows so the
+        next pass doesn't retry the same headlines.
+      - `(None, error_msg)` — LLM totally failed: error event from
+        the stream, exception during streaming, empty content, or
+        unparseable response. Caller MUST NOT stamp the input rows
+        so the next pass can retry transient failures (e.g. provider
+        outage, temporary rate-limit, prompt that confused one
+        request but might work on the next). `error_msg` is the
+        diagnostic for surfacing into the discussion ctx.
 
     Token usage is recorded against `persona_id="_system:news_sentiment"`
     so admins can see background-task cost in UsageCard alongside chat
     usage.
     """
     if not rows:
-        return []
+        return [], None
 
     prompt = _PROMPT_TEMPLATE.format(items=_format_items(rows))
     messages = [
@@ -221,6 +233,7 @@ async def _score_batch(
 
     assembled = ""
     usage_seen: dict[str, int] | None = None
+    error_msg: str | None = None
     try:
         # max_tokens=8192 leaves ~6-7K headroom for chain-of-thought on
         # reasoning models (MiniMax-M2.7, DeepSeek-R1) before the JSON
@@ -246,14 +259,19 @@ async def _score_batch(
                     "completion_tokens": int(event.get("completion_tokens", 0)),
                 }
             elif etype == "error":
+                error_msg = event.get("message") or "llm error"
+                # `extra={"message": ...}` collides with LogRecord's
+                # built-in `message` attribute and raises — use a
+                # distinct key so the warning actually emits.
                 log.warning(
                     "news_sentiment.llm_error",
-                    extra={"message": event.get("message")},
+                    extra={"llm_error": error_msg},
                 )
-                return []
+                # Drain rather than early-return — usage event sometimes
+                # arrives after error, and we want to bill it consistently.
     except Exception as exc:
         log.warning("news_sentiment.stream_failed", extra={"error": str(exc)})
-        return []
+        return None, f"stream exception: {exc}"
 
     if usage_seen is not None:
         from services.llm_usage_service import record_usage
@@ -267,7 +285,21 @@ async def _score_batch(
             completion_tokens=usage_seen["completion_tokens"],
         )
 
+    if error_msg is not None:
+        return None, error_msg
+
+    if not assembled.strip():
+        return None, "llm returned no content (empty stream)"
+
     parsed = _parse_response(assembled)
+    cleaned_check = strip_code_fence(strip_think_blocks(assembled)).strip()
+    if not parsed and cleaned_check not in ("[]", ""):
+        # Non-empty content that didn't parse as a JSON array — treat
+        # as transient failure so the next pass retries instead of
+        # stamping these rows as un-scoreable forever.
+        snippet = assembled.strip().replace("\n", " ")[:200]
+        return None, f"llm response did not parse as JSON array; raw={snippet}"
+
     by_id = {r.id: r for r in rows}
     out: list[_Scored] = []
     for item in parsed:
@@ -280,7 +312,7 @@ async def _score_batch(
             continue
         score = max(-1.0, min(1.0, score))
         out.append(_Scored(article_id=aid, score=score, label=_bucket(score)))
-    return out
+    return out, None
 
 
 async def _fetch_unscored(
@@ -361,6 +393,7 @@ async def score_pending(
     scored_count = 0
     batches_run = 0
     cap_hit = False
+    last_error: str | None = None
     try:
         if provider is None or model is None:
             from services.system_task_config_service import resolve as _resolve_task
@@ -380,24 +413,40 @@ async def score_pending(
             )
             if not rows:
                 break
-            scored = await _score_batch(
+            scored, batch_error = await _score_batch(
                 rows, provider=provider, model=model, db=session,
             )
+            if scored is None:
+                # LLM totally failed (error / empty / parse). Don't
+                # stamp the rows — let the next pass retry transient
+                # failures instead of permanently marking 20 rows as
+                # un-scoreable. Break to avoid burning the rest of
+                # the cap on the same failure mode.
+                last_error = batch_error
+                log.warning(
+                    "news_sentiment.batch_failed_skipping_stamp",
+                    extra={"error": batch_error, "rows": len(rows)},
+                )
+                break
             ids = [r.id for r in rows]
             written = await _write_scores(session, scored, fallback_ids=ids)
             considered += len(rows)
             scored_count += written
             batches_run += 1
             if not scored:
-                # LLM produced nothing usable — break out instead of burning
-                # the remaining batches on the same failure mode.
+                # LLM responded with parseable but empty result —
+                # break out instead of burning the remaining batches
+                # on the same failure mode.
                 break
-        return {
+        result: dict[str, int | str] = {
             "considered": considered,
             "scored": scored_count,
             "batches": batches_run,
             "cap_hit": int(cap_hit),
         }
+        if last_error:
+            result["error"] = last_error
+        return result
     finally:
         if own_session:
             await session.close()
@@ -450,6 +499,7 @@ async def score_specific_articles(
     scored_count = 0
     batches_run = 0
     cap_hit = False
+    last_error: str | None = None
 
     remaining = list(article_ids)
     while remaining:
@@ -482,9 +532,24 @@ async def score_specific_articles(
         if not rows:
             continue
 
-        scored = await _score_batch(
+        scored, batch_error = await _score_batch(
             rows, provider=provider, model=model, db=db,
         )
+        if scored is None:
+            # LLM totally failed — preserve rows for retry on next
+            # press (don't stamp them as tried-but-failed forever)
+            # and surface the error message so the discussion ctx
+            # shows the user WHY scoring is returning 0.
+            last_error = batch_error
+            log.warning(
+                "news_sentiment.interactive_batch_failed",
+                extra={
+                    "error": batch_error,
+                    "remaining": len(remaining),
+                    "scored_so_far": scored_count,
+                },
+            )
+            break
         ids = [r.id for r in rows]
         written = await _write_scores(db, scored, fallback_ids=ids)
         considered += len(rows)
@@ -492,16 +557,19 @@ async def score_specific_articles(
         batches_run += 1
 
         if not scored:
-            # LLM produced nothing usable — break instead of burning
-            # remaining batches on the same failure mode.
+            # LLM responded with parseable but empty result — break
+            # so we don't burn remaining cap on the same failure mode.
             break
 
-    return {
+    result: dict[str, int | str] = {
         "considered": considered,
         "scored": scored_count,
         "batches": batches_run,
         "cap_hit": int(cap_hit),
     }
+    if last_error:
+        result["error"] = last_error
+    return result
 
 
 async def select_unscored_in_window(

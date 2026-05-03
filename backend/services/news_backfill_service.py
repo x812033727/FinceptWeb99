@@ -339,13 +339,20 @@ async def ensure_news_archive_covers(
             days_back=_HOT_PATH_DAYS_BACK,
             days_forward=_HOT_PATH_DAYS_FORWARD,
         )
-        return {
+        result: dict = {
             "covered": True,
             "backfilled": 0,
             "scored": scoring_stats.get("scored", 0),
             "scoring_batches": scoring_stats.get("batches", 0),
             "scoring_cap_hit": bool(scoring_stats.get("cap_hit", 0)),
         }
+        if scoring_stats.get("error"):
+            # Surface the LLM failure reason so the discussion ctx
+            # shows users WHY scoring returned 0 (e.g. "minimax
+            # returned no content; finish_reason=length") instead of
+            # an opaque scored=0 with no log access.
+            result["scoring_error"] = scoring_stats["error"]
+        return result
 
     lock_key = _lock_key(market, as_of)
     if not await acquire_lock(lock_key, _LOCK_TTL_SECONDS):

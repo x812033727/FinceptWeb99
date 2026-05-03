@@ -52,6 +52,19 @@ def _stream_text(text: str):
     return _gen
 
 
+def _stream_error(message: str):
+    async def _gen(*_a, **_kw) -> AsyncIterator[dict]:
+        yield {"type": "error", "message": message}
+    return _gen
+
+
+def _stream_empty():
+    async def _gen(*_a, **_kw) -> AsyncIterator[dict]:
+        return
+        yield  # pragma: no cover — make this a generator
+    return _gen
+
+
 # ── bucket ─────────────────────────────────────────────────────────
 
 
@@ -709,6 +722,184 @@ async def test_score_specific_articles_empty_list_returns_zeros(
         "considered": 0, "scored": 0,
         "batches": 0, "cap_hit": 0,
     }
+
+
+@pytest.mark.asyncio
+async def test_score_specific_articles_skips_stamp_on_llm_error(
+    db_session: AsyncSession,
+):
+    """When the LLM stream emits an `error` event (the post-PR-#225
+    diagnostic for a thinking-model that burned its budget on
+    reasoning, a content_filter block, etc.), `_score_batch` returns
+    `(None, error_msg)` and the input rows MUST stay unscored —
+    `sentiment_scored_at IS NULL` so the next press picks them up
+    again. The error message must surface in the result dict so the
+    discussion ctx shows the user WHY scoring returned 0.
+
+    Without this guarantee, every press of the round button burns
+    20 rows as 'tried-but-failed' permanently — after a few presses
+    on a broken provider, the entire archive becomes unreachable.
+    """
+    await insert_news_articles(db_session, [
+        _row(f"err test {i}", f"https://example.com/err_{i}",
+             symbol=f"ERR_{i}")
+        for i in range(3)
+    ])
+    rows = (await db_session.scalars(
+        select(NewsArticle).where(NewsArticle.link.like(
+            "https://example.com/err_%",
+        )).order_by(NewsArticle.id)
+    )).all()
+    ids = [r.id for r in rows]
+
+    with patch(
+        "services.news_sentiment_service.stream_chat",
+        side_effect=_stream_error(
+            "minimax returned no content; finish_reason=length; "
+            "completion_tokens=8192; reasoning_content=24000 chars",
+        ),
+    ):
+        result = await news_sentiment_service.score_specific_articles(
+            db_session, article_ids=ids,
+        )
+
+    assert result["scored"] == 0
+    assert result["batches"] == 0  # batch failed before counting
+    assert "minimax returned no content" in result["error"]
+
+    # Critical: rows must NOT have been stamped — next press retries.
+    after = (await db_session.scalars(
+        select(NewsArticle).where(NewsArticle.id.in_(ids))
+    )).all()
+    for row in after:
+        assert row.sentiment_scored_at is None, (
+            f"row {row.id} got stamped on LLM total-failure; "
+            "next press would pick a different row, burning the archive"
+        )
+        assert row.sentiment_score is None
+        assert row.sentiment_label is None
+
+
+@pytest.mark.asyncio
+async def test_score_specific_articles_skips_stamp_on_empty_stream(
+    db_session: AsyncSession,
+):
+    """Empty stream (no delta, no error) — symptomatic of a provider
+    that closed the connection without yielding tokens. Same contract
+    as `test_score_specific_articles_skips_stamp_on_llm_error`: rows
+    preserved, error surfaced.
+    """
+    await insert_news_articles(db_session, [
+        _row(f"empty test {i}", f"https://example.com/empty_{i}",
+             symbol=f"EMPTY_{i}")
+        for i in range(2)
+    ])
+    rows = (await db_session.scalars(
+        select(NewsArticle).where(NewsArticle.link.like(
+            "https://example.com/empty_%",
+        )).order_by(NewsArticle.id)
+    )).all()
+    ids = [r.id for r in rows]
+
+    with patch(
+        "services.news_sentiment_service.stream_chat",
+        side_effect=_stream_empty(),
+    ):
+        result = await news_sentiment_service.score_specific_articles(
+            db_session, article_ids=ids,
+        )
+
+    assert result["scored"] == 0
+    assert result.get("error") is not None
+    assert "no content" in result["error"]
+
+    after = (await db_session.scalars(
+        select(NewsArticle).where(NewsArticle.id.in_(ids))
+    )).all()
+    for row in after:
+        assert row.sentiment_scored_at is None
+
+
+@pytest.mark.asyncio
+async def test_score_specific_articles_skips_stamp_on_unparseable_response(
+    db_session: AsyncSession,
+):
+    """LLM returned non-JSON text (model started with prose instead
+    of JSON) — `_parse_response` returns []. Treated as a transient
+    failure: rows preserved for retry, error surfaced.
+    """
+    await insert_news_articles(db_session, [
+        _row(f"parse test {i}", f"https://example.com/parse_{i}",
+             symbol=f"PARSE_{i}")
+        for i in range(2)
+    ])
+    rows = (await db_session.scalars(
+        select(NewsArticle).where(NewsArticle.link.like(
+            "https://example.com/parse_%",
+        )).order_by(NewsArticle.id)
+    )).all()
+    ids = [r.id for r in rows]
+
+    with patch(
+        "services.news_sentiment_service.stream_chat",
+        side_effect=_stream_text("This is just prose, not JSON at all."),
+    ):
+        result = await news_sentiment_service.score_specific_articles(
+            db_session, article_ids=ids,
+        )
+
+    assert result["scored"] == 0
+    assert "did not parse" in result["error"]
+
+    after = (await db_session.scalars(
+        select(NewsArticle).where(NewsArticle.id.in_(ids))
+    )).all()
+    for row in after:
+        assert row.sentiment_scored_at is None
+
+
+@pytest.mark.asyncio
+async def test_score_specific_articles_stamps_on_valid_empty_array(
+    db_session: AsyncSession,
+):
+    """LLM responded with a valid empty array — different semantics
+    from a parse failure. The model saw the headlines but didn't
+    score any (e.g. all flagged as ambiguous). Caller MUST stamp the
+    rows so we don't burn cap retrying the same headlines forever
+    on a model that's just bad at this prompt.
+    """
+    await insert_news_articles(db_session, [
+        _row(f"valid empty {i}", f"https://example.com/ve_{i}",
+             symbol=f"VE_{i}")
+        for i in range(2)
+    ])
+    rows = (await db_session.scalars(
+        select(NewsArticle).where(NewsArticle.link.like(
+            "https://example.com/ve_%",
+        )).order_by(NewsArticle.id)
+    )).all()
+    ids = [r.id for r in rows]
+
+    with patch(
+        "services.news_sentiment_service.stream_chat",
+        side_effect=_stream_text("[]"),
+    ):
+        result = await news_sentiment_service.score_specific_articles(
+            db_session, article_ids=ids,
+        )
+
+    assert result["scored"] == 0
+    assert result["batches"] == 1
+    assert "error" not in result
+
+    # Rows ARE stamped — LLM responded successfully, just had nothing
+    # to say about these particular headlines.
+    after = (await db_session.scalars(
+        select(NewsArticle).where(NewsArticle.id.in_(ids))
+    )).all()
+    for row in after:
+        assert row.sentiment_scored_at is not None
+        assert row.sentiment_score is None  # not scored, just stamped
 
 
 @pytest.mark.asyncio

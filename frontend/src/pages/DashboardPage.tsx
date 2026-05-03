@@ -152,6 +152,90 @@ function RecentGlobalNews() {
   );
 }
 
+interface OverseasIndex {
+  symbol: string;
+  name: string;
+  close: number;
+  prev_close: number;
+  change_pct: number;
+}
+
+interface OverseasResponse {
+  as_of: string | null;
+  indices: OverseasIndex[];
+}
+
+/**
+ * Overnight US/global index snapshot (PR #270). Same data the
+ * discussion context block consumes (PR #269) — exposed on the
+ * dashboard so operators can see SOX / NDX / SPX / DJI / VIX
+ * direction at a glance without opening a discussion. Renders
+ * compact one-line rows with coloured % change so the typical
+ * "did SOX gap down?" check takes a single glance.
+ */
+function OverseasIndicators() {
+  const { t } = useTranslation();
+  const { data, isLoading } = useQuery<OverseasResponse>({
+    queryKey: ["overseas-indicators"],
+    queryFn: () => api.get("/global/overseas-indicators").then((r) => r.data),
+    // Same TTL as the backend cache so the UI doesn't poll faster
+    // than the data refreshes upstream.
+    staleTime: 5 * 60_000,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="text-xs text-muted-foreground animate-pulse">
+        {t("dashboard.loading_overseas") ?? "Loading..."}
+      </div>
+    );
+  }
+
+  const rows = data?.indices ?? [];
+  return (
+    <div className="bg-card border border-border rounded-lg overflow-hidden">
+      <div className="px-4 py-3 border-b border-border">
+        <h2 className="text-sm font-medium text-foreground">
+          {t("dashboard.overseas_indicators_title")}
+        </h2>
+      </div>
+      {rows.length === 0 ? (
+        <div className="px-4 py-6 text-xs text-muted-foreground text-center">
+          {t("dashboard.overseas_indicators_empty")}
+        </div>
+      ) : (
+        <ul className="divide-y divide-border/50">
+          {rows.map((idx) => {
+            const sign = idx.change_pct >= 0 ? "+" : "";
+            const cls = idx.change_pct >= 0 ? "text-green-400" : "text-red-400";
+            return (
+              <li
+                key={idx.symbol}
+                className="px-4 py-2 grid grid-cols-[minmax(0,1fr)_auto_auto] items-baseline gap-3 text-sm"
+              >
+                <span className="text-foreground truncate" title={idx.symbol}>
+                  {idx.name}
+                </span>
+                <span className="font-mono tabular-nums text-foreground">
+                  {idx.close.toLocaleString(undefined, {
+                    maximumFractionDigits: 2,
+                  })}
+                </span>
+                <span
+                  className={`font-mono tabular-nums text-right w-20 ${cls}`}
+                >
+                  {sign}
+                  {idx.change_pct.toFixed(2)}%
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function RecentTWNews() {
   const { t } = useTranslation();
   const { data: items = [], isLoading } = useQuery<NewsItem[]>({
@@ -261,6 +345,12 @@ export default function DashboardPage() {
         </div>
 
         <div className="space-y-4">
+          <div>
+            <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
+              {t("dashboard.overseas_indicators_section")}
+            </h2>
+            <OverseasIndicators />
+          </div>
           <div>
             <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
               {t("dashboard.latest_tw_news")}

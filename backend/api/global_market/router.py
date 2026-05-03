@@ -28,3 +28,21 @@ async def news_recent(_: Auth, limit: int = Query(20, ge=1, le=50)):
         "GLOBAL", symbol=None, limit=limit,
         max_age_days=7, include_sentiment=True,
     )
+
+
+@router.get("/overseas-indicators")
+async def overseas_indicators(_: Auth):
+    """Live snapshot of the curated overseas index universe (PR #270).
+
+    Same data the discussion context uses (PR #269 ctx block), exposed
+    as a public read so the DashboardPage can show overnight US
+    direction at a glance — operators no longer have to open a
+    discussion to see SOX / NDX / SPX / DJI / VIX moves.
+
+    Returns `{as_of: null, indices: [...]}` (live mode only — backtest
+    anchoring is internal to the discussion context). 5-min cached
+    via the same Redis key as the ctx fetcher, so dashboard load
+    doesn't fan out to yfinance unless the cache is cold.
+    """
+    from services.overseas_market_service import get_overseas_snapshot
+    return await get_overseas_snapshot()

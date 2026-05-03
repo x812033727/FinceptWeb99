@@ -81,6 +81,10 @@
     "global_market_news": "國際財經（聯準會 / 美股 / 全球）",
     "loading_news": "載入新聞中…",
     "no_news": "目前沒有可顯示的新聞",
+    "loading_overseas": "載入海外指標中…",
+    "overseas_indicators_section": "海外指標（隔夜 US）",
+    "overseas_indicators_title": "SOX / NDX / SPX / DJI / VIX",
+    "overseas_indicators_empty": "暫無海外指標資料（yfinance 連線失敗或快取冷啟）",
     "cards": {
       "us_market_desc": "S&P 500 即時報價與篩選",
       "tw_market_desc": "上市上櫃即時行情",

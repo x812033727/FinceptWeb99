@@ -81,6 +81,10 @@
     "global_market_news": "International (Fed / US / Global)",
     "loading_news": "Loading news…",
     "no_news": "No news available right now",
+    "loading_overseas": "Loading overseas indicators…",
+    "overseas_indicators_section": "Overseas indicators (overnight US)",
+    "overseas_indicators_title": "SOX / NDX / SPX / DJI / VIX",
+    "overseas_indicators_empty": "No overseas data available (yfinance error or cold cache)",
     "cards": {
       "us_market_desc": "S&P 500 quotes & screener",
       "tw_market_desc": "TW listed stocks live",

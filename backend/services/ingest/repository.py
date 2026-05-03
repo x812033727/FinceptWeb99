@@ -608,13 +608,35 @@ async def read_top_revenue_growers(
         key=lambda r: float(r.revenue_yoy) if r.revenue_yoy is not None else -1e9,
         reverse=True,
     )
+    # Backtest look-ahead defense (PR #256): the ingest task's
+    # `update_cols` includes `revenue_yoy` and `revenue_mom`, so a
+    # later backfill cron can RECOMPUTE these against revised
+    # baseline data. A backtest reading at as_of would then see the
+    # post-revision number, not what was public on as_of. Mask the
+    # exact values in backtest mode while keeping the ranking
+    # itself (the SET of top growers is stable across minor
+    # restatements; the precise number isn't). Live mode keeps the
+    # values as-is — the leak only matters when reconstructing a
+    # past anchor.
+    is_backtest = as_of is not None
     return [
         {
             "symbol":      r.symbol,
             "ts":          r.ts.isoformat(),
             "revenue":     int(r.revenue) if r.revenue is not None else 0,
-            "revenue_yoy": float(r.revenue_yoy) if r.revenue_yoy is not None else None,
-            "revenue_mom": float(r.revenue_mom) if r.revenue_mom is not None else None,
+            # Backtest mode masks yoy/mom to None — the row's
+            # presence in the top-N already conveys the actionable
+            # info (this is one of the highest-growth names);
+            # exposing the precise number would leak post-as_of
+            # restatements.
+            "revenue_yoy": (
+                None if is_backtest
+                else (float(r.revenue_yoy) if r.revenue_yoy is not None else None)
+            ),
+            "revenue_mom": (
+                None if is_backtest
+                else (float(r.revenue_mom) if r.revenue_mom is not None else None)
+            ),
         }
         for r in rows_sorted[:limit]
     ]

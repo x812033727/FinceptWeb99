@@ -298,6 +298,92 @@ async def test_top_revenue_growers_drops_bogus_yoy_when_mom_is_null(
 
 
 @pytest.mark.asyncio
+async def test_top_revenue_growers_masks_yoy_mom_in_backtest_mode(
+    db_session: AsyncSession,
+):
+    """Backtest look-ahead protection (PR #256): the ingest task's
+    `update_cols` includes `revenue_yoy` / `revenue_mom`, so a
+    later backfill cron can RECOMPUTE these against revised
+    baseline data. A backtest reading at as_of would then see the
+    POST-revision number, not what was public on as_of.
+
+    Mask the exact values in backtest mode while keeping the row
+    in the response — the SET of top growers (which symbols rank
+    high) is robust across minor restatements; the precise yoy
+    number isn't. Personas can still cite "top revenue grower"
+    without leaking a future-recomputed value.
+    """
+    from services.ingest.repository import (
+        RevenueMonthlyRow,
+        read_top_revenue_growers,
+        upsert_revenue_monthly,
+    )
+
+    ts = date(2026, 2, 1)
+    await upsert_revenue_monthly(db_session, [
+        RevenueMonthlyRow(
+            market="TW", symbol="2330", ts=ts,
+            revenue=200_000_000_000,
+            revenue_yoy=15.2, revenue_mom=3.0,
+            source="finmind",
+        ),
+        RevenueMonthlyRow(
+            market="TW", symbol="2454", ts=ts,
+            revenue=50_000_000_000,
+            revenue_yoy=8.4, revenue_mom=2.1,
+            source="finmind",
+        ),
+    ])
+
+    # Backtest mode: as_of is set → both yoy and mom must be None.
+    top = await read_top_revenue_growers(
+        db_session, market="TW", limit=10, as_of=ts,
+    )
+    assert len(top) >= 2
+    # Ranking is preserved (2330 ahead of 2454 by yoy=15.2 vs 8.4)
+    # — sorted internally before the mask is applied.
+    assert top[0]["symbol"] == "2330"
+    assert top[1]["symbol"] == "2454"
+    # But the exact values are masked to avoid the leak.
+    assert top[0]["revenue_yoy"] is None
+    assert top[0]["revenue_mom"] is None
+    assert top[1]["revenue_yoy"] is None
+    assert top[1]["revenue_mom"] is None
+    # Symbol + ts + revenue are preserved (those are insert-time data
+    # that never get amended by the backfill cron).
+    assert top[0]["revenue"] == 200_000_000_000
+
+
+@pytest.mark.asyncio
+async def test_top_revenue_growers_keeps_yoy_mom_in_live_mode(
+    db_session: AsyncSession,
+):
+    """Live mode (as_of=None) must show real yoy/mom — the
+    leak only matters for past-anchor reconstruction, and
+    today's UI / chat consumers depend on the actual values."""
+    from services.ingest.repository import (
+        RevenueMonthlyRow,
+        read_top_revenue_growers,
+        upsert_revenue_monthly,
+    )
+
+    ts = date(2026, 2, 1)
+    await upsert_revenue_monthly(db_session, [
+        RevenueMonthlyRow(
+            market="TW", symbol="2330", ts=ts,
+            revenue=200_000_000_000,
+            revenue_yoy=15.2, revenue_mom=3.0,
+            source="finmind",
+        ),
+    ])
+
+    top = await read_top_revenue_growers(db_session, market="TW", limit=10)
+    assert len(top) >= 1
+    assert top[0]["revenue_yoy"] == 15.2
+    assert top[0]["revenue_mom"] == 3.0
+
+
+@pytest.mark.asyncio
 async def test_revenue_row_out_zeros_bogus_growth_in_range_read(
     db_session: AsyncSession,
 ):

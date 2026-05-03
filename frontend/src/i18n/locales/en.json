@@ -693,6 +693,15 @@
     "hallucination_title": "Hallucinated signals — cited values absent from ctx",
     "hallucination_help": "Personas quoted concrete numbers, but the signal was not in this round's prompt ctx — likely the LLM filled gaps from training data, or the regex collided with another signal. Inspect the underlying turn content before treating as fabrication."
   },
+  "post_mortem_gaps": {
+    "title": "Post-mortem — Missing Data Stats",
+    "subtitle": "Which data categories personas most often request in self-critique",
+    "refresh": "Refresh",
+    "empty": "No concluded discussions with post-mortem rounds found",
+    "no_hits": "Analyzed {{count}} discussions but personas didn't mention any taxonomy category",
+    "audited": "{{count}} discussions analyzed (out of last {{requested}})",
+    "row_tooltip": "{{mentions}} mentions across {{discussions}} discussions / {{personas}} personas"
+  },
   "screener": {
     "title": "Screener",
     "subtitle": "Filter stocks by any metric",

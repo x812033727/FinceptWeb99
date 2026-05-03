@@ -693,6 +693,15 @@
     "hallucination_title": "幻覺訊號 — 引用了 ctx 中沒有的數據",
     "hallucination_help": "Personas 在內容中引用了具體數字，但該訊號並未出現在當輪的 prompt ctx — 可能是 LLM 從訓練資料填補空缺，或與其他訊號的關鍵字重疊。請查看原始 turn 內容再判斷。"
   },
+  "post_mortem_gaps": {
+    "title": "事後檢討 — 缺資料統計",
+    "subtitle": "Personas 在事後檢討中最常提到「想要哪一類資料」",
+    "refresh": "重新整理",
+    "empty": "查無含事後檢討輪次的已結束討論",
+    "no_hits": "已分析 {{count}} 場討論，但 personas 沒有提到 taxonomy 中的任何資料缺口",
+    "audited": "已分析 {{count}} 場有事後檢討的討論（最近 {{requested}} 場中）",
+    "row_tooltip": "命中 {{mentions}} 次 / 跨 {{discussions}} 場討論 / {{personas}} 位 persona"
+  },
   "screener": {
     "title": "篩選器",
     "subtitle": "依條件篩選個股",

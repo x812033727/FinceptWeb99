@@ -214,6 +214,23 @@ class SignalCoverageRow(BaseModel):
     value_citation_rate: float = 0.0   # cited_with_value / persona_count
 
 
+class PostMortemGapRow(BaseModel):
+    """PR #262: per-category aggregate of "missing data" mentions
+    extracted from post-mortem persona turns."""
+    category: str
+    mentions: int                  # raw turn-level matches
+    discussions_mentioning: int    # distinct discussions w/ ≥1 hit
+    persona_count_mentioning: int  # distinct personas w/ ≥1 hit
+
+
+class PostMortemGapsOut(BaseModel):
+    """Bulk roll-up surfaced to the AdminPage. Sorted descending by
+    mentions so the most-requested gaps surface first."""
+    discussions_audited: int
+    discussion_ids: list[str]
+    gaps: list[PostMortemGapRow]
+
+
 class SignalHallucinationRow(BaseModel):
     """PR #259: per-signal hallucination row. A signal is "hallucinated"
     when a persona cites it WITH a numeric value despite the round's

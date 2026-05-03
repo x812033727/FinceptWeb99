@@ -37,7 +37,9 @@ from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from .blocks import chip, derivatives, http, news, owner, risk, technical
+from .blocks import (
+    chip, derivatives, http, news, overseas, owner, risk, technical,
+)
 
 # Progress callback type. Caller (e.g. `run_round`) provides one so
 # the long ctx-gathering window (~15-30 s when news sentiment scoring
@@ -100,6 +102,12 @@ def _initial_ctx(*, market: str, as_of: date | None) -> dict[str, Any]:
         # `{contract, as_of, session_count, fini, sitc, dealer, trend}`
         # — fini / sitc / dealer carry `{net_oi, change_5d}`.
         "taifex_positioning": None,
+        # Overseas index snapshot (PR #269): SOX / NDX / SPX / DJI /
+        # VIX latest close + 1-day % change. Wired in for ALL
+        # markets — TW personas need overnight US direction, US
+        # personas need it for self-consistency. Shape:
+        # `{as_of, indices: [{symbol, name, close, prev_close, change_pct}, ...]}`.
+        "overseas_indicators": None,
         "errors": [],
     }
 
@@ -180,6 +188,14 @@ async def build_market_context(
         ctx, db, market=market, focus_symbols=focus_symbols,
         as_of=as_of, record_error=record_error,
         max_focus_symbols=max_focus_symbols,
+    )
+
+    # Overseas index snapshot — fires for all markets. TW personas
+    # need overnight US direction (SOX leadership / VIX / risk-on
+    # vs risk-off); US personas get it for free with the same
+    # one-call cost.
+    await overseas.fetch_overseas_indicators(
+        ctx, as_of=as_of, record_error=record_error,
     )
 
     if market == "TW":

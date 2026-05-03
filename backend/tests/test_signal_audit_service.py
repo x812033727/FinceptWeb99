@@ -81,6 +81,37 @@ def test_detect_present_signals_handles_empty_context():
     assert svc._detect_present_signals({"short_term_signals": {}}) == set()
 
 
+def test_detect_present_signals_overseas_indicators_inspect_indices():
+    """PR #269: `overseas_indicators` returns `{as_of, indices}`
+    even on connector failure (just `indices=[]`). The presence
+    check must inspect the inner list, not the outer dict — a
+    dict with empty `indices` is "we tried but got nothing", not
+    "the block is in the prompt"."""
+    # Empty indices → not present.
+    assert "overseas_indicators" not in svc._detect_present_signals({
+        "overseas_indicators": {"as_of": None, "indices": []},
+    })
+    # Non-empty indices → present.
+    present = svc._detect_present_signals({
+        "overseas_indicators": {
+            "as_of": None,
+            "indices": [{"symbol": "^SOX", "name": "PHLX", "close": 5400}],
+        },
+    })
+    assert "overseas_indicators" in present
+
+
+def test_audit_turn_records_overseas_indicators_citation():
+    """A persona that mentions SOX / VIX / NDX should keyword-match
+    the overseas_indicators signal. Pin the regex coverage."""
+    audit = svc.audit_turn(
+        round_no=1, persona_id="market_analyst", stance="agree",
+        content="美股收盤 SOX -2.3%、VIX 攀升至 18，台股短線承壓",
+        signals_present={"overseas_indicators"},
+    )
+    assert audit.cited["overseas_indicators"] is True
+
+
 # ── _match_keywords ───────────────────────────────────────────────
 
 

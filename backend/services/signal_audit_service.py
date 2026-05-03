@@ -88,6 +88,15 @@ _SIGNAL_KEYWORDS: dict[str, list[str]] = {
     "international_sentiment": [
         r"Fed", r"FOMC", r"國際", r"全球", r"international",
     ],
+    "overseas_indicators": [
+        r"\bSOX\b", r"費半", r"費城半導體",
+        r"NASDAQ", r"那斯達克", r"\bNDX\b",
+        r"S&?P\s*500", r"\bSPX\b",
+        r"道瓊", r"\bDJIA\b", r"\bDJI\b",
+        r"\bVIX\b", r"波動率指數",
+        r"美股(?:收盤|開盤|期貨)?",
+        r"overseas[_\s]*indicators?",
+    ],
     "top_foreign_buyers": [
         r"外資(?:買超|連買|買進)", r"foreign[_\s]*buy", r"投信買超",
     ],
@@ -312,6 +321,13 @@ def _detect_present_signals(context: dict[str, Any]) -> set[str]:
     ):
         if _is_meaningful(context.get(top_key)):
             present.add(top_key)
+
+    # Overseas indicators (PR #269): returned as `{as_of, indices}`,
+    # so the dict is non-empty even when the connector failed
+    # (just `indices=[]`). Check the actual payload.
+    overseas = context.get("overseas_indicators")
+    if isinstance(overseas, dict) and overseas.get("indices"):
+        present.add("overseas_indicators")
     return present
 
 

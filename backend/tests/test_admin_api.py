@@ -230,3 +230,140 @@ async def test_admin_active_nonexistent_user(client: AsyncClient, db_session: As
         headers=_auth(token),
     )
     assert r.status_code == 404
+
+
+# ── signal-citation audit ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_signal_audit_requires_auth(client: AsyncClient):
+    """Unauthenticated → 401. Audit reveals discussion content shape +
+    is admin-only by design."""
+    r = await client.get("/api/admin/signal-audit")
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_signal_audit_rejects_viewer_role(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    token = await _register_login(client, "viewer_audit@test.com")
+    r = await client.get(
+        "/api/admin/signal-audit", headers=_auth(token),
+    )
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_signal_audit_returns_zero_for_empty_archive(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """Fresh deploy with no concluded discussions → 200 with
+    `discussions_audited=0` and empty coverage rather than 404."""
+    email = "admin_audit_empty@test.com"
+    await _register_login(client, email)
+    admin_tok = await _promote_to_admin(db_session, email, client=client)
+
+    r = await client.get(
+        "/api/admin/signal-audit", headers=_auth(admin_tok),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["discussions_audited"] == 0
+    assert body["discussion_ids"] == []
+    assert body["coverage"] == []
+    assert body["zero_uptake"] == []
+
+
+@pytest.mark.asyncio
+async def test_signal_audit_rejects_recent_below_one(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    email = "admin_audit_low@test.com"
+    await _register_login(client, email)
+    admin_tok = await _promote_to_admin(db_session, email, client=client)
+
+    r = await client.get(
+        "/api/admin/signal-audit?recent=0", headers=_auth(admin_tok),
+    )
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_signal_audit_rejects_recent_above_cap(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """200 cap prevents accidentally fanning out across the entire
+    archive and saturating the connection pool."""
+    email = "admin_audit_high@test.com"
+    await _register_login(client, email)
+    admin_tok = await _promote_to_admin(db_session, email, client=client)
+
+    r = await client.get(
+        "/api/admin/signal-audit?recent=10000", headers=_auth(admin_tok),
+    )
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_signal_audit_aggregates_real_discussion(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """End-to-end: seed a concluded discussion with one round context
+    + one citing persona turn, then GET /signal-audit and check the
+    coverage row appears with the expected counts."""
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from sqlalchemy import select as _select
+
+    from models.discussion import Discussion, DiscussionTurn
+    from models.discussion_round_context import DiscussionRoundContext
+
+    email = "admin_audit_e2e@test.com"
+    await _register_login(client, email)
+    admin_tok = await _promote_to_admin(db_session, email, client=client)
+
+    user = (await db_session.execute(
+        _select(User).where(User.email == email)
+    )).scalar_one()
+
+    disc_id = uuid4()
+    db_session.add(Discussion(
+        id=disc_id, owner_id=user.id, topic="2330 短線分析",
+        rules="", market="TW",
+        persona_ids=["market_analyst"],
+        status="concluded", current_round=1,
+    ))
+    db_session.add(DiscussionRoundContext(
+        discussion_id=disc_id, round=1,
+        context={
+            "short_term_signals": {
+                "2330": {"rsi_14": 67.0, "volume_ratio": 2.3},
+            },
+        },
+        captured_at=datetime.now(UTC),
+    ))
+    db_session.add(DiscussionTurn(
+        discussion_id=disc_id, round=1, turn_index=0,
+        persona_id="market_analyst", stance="agree",
+        content="RSI 67 已逼近超買，量能放大為均量 2.3 倍。",
+    ))
+    await db_session.commit()
+
+    r = await client.get(
+        "/api/admin/signal-audit?recent=10", headers=_auth(admin_tok),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["discussions_audited"] >= 1
+    assert str(disc_id) in body["discussion_ids"]
+    by_signal = {row["signal"]: row for row in body["coverage"]}
+    rsi = by_signal.get("short_term_signals.rsi_14")
+    assert rsi is not None
+    assert rsi["cited"] >= 1
+    assert rsi["citation_rate"] > 0
+    # Coverage rows must be sorted ascending by citation rate so the
+    # zero-uptake offenders surface at the top of the table.
+    rates = [row["citation_rate"] for row in body["coverage"]]
+    assert rates == sorted(rates)

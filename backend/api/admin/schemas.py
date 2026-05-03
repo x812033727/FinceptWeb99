@@ -194,3 +194,24 @@ class IngestHealthOut(BaseModel):
 class IngestRetryResult(BaseModel):
     status: str
     message: str
+
+
+# ── Signal-citation audit ────────────────────────────────────────
+
+class SignalCoverageRow(BaseModel):
+    """One row in the audit-coverage table — citation rate for a single
+    signal across the audit window."""
+    signal: str
+    present: int           # rounds the signal appeared in
+    cited: int             # persona-turn citations
+    persona_count: int     # denominator for citation_rate
+    citation_rate: float   # cited / persona_count, 0.0 when persona_count=0
+
+
+class SignalAuditOut(BaseModel):
+    """Bulk audit result surfaced to the AdminPage. Sorted ascending
+    by `citation_rate` so zero-uptake offenders surface first."""
+    discussions_audited: int
+    discussion_ids: list[str]
+    coverage: list[SignalCoverageRow]
+    zero_uptake: list[str]   # signals present ≥1 round but never cited

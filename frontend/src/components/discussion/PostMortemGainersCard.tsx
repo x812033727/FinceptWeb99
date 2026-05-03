@@ -2,24 +2,41 @@ import { useTranslation } from "react-i18next";
 import type { PostMortemResponse } from "./_helpers";
 
 /**
- * Visual leaderboard for the post-mortem gainers (PR #257).
+ * Visual leaderboard for the post-mortem ground-truth views
+ * (PR #273, evolved from PR #257).
  *
- * Backend's `POST /post-mortem` returns the next-trading-day top-N
- * gainers as structured data; PR #249 only embedded them in the
- * injected user_input turn's markdown text. That's readable but not
- * scannable — operator can't sort, can't compare magnitudes
- * visually.
+ * Two sections:
  *
- * This card surfaces the same data as a horizontal-bar leaderboard
- * with a symbol mini-quote so the operator can see at a glance
- * "the actual top gainers were 6505/2603/2317" without reading the
- * prose.
+ *   A. **Recommended D1-D5 self-eval** — for each recommended
+ *      symbol, a row of D1..D5 cumulative-since-as_of % changes.
+ *      Lets the operator see at a glance whether the picks
+ *      delivered, not just whether they overlapped with random
+ *      one-day winners. Cumulative cell coloured green/red.
  *
- * Transient: data lives in mutation state. Page reload clears it
- * (the markdown in the user_input turn is the durable record).
- * Acceptable trade-off: the persona-facing prose is what matters
- * for the discussion; this card is operator situational awareness.
+ *   B. **Daily top-N gainers** — per-day leaderboards across the
+ *      same window. Operator scans the columns for symbols that
+ *      repeat (high-conviction missed picks). Each day rendered
+ *      as a compact column with rank · symbol · % cells.
+ *
+ * Backend writes the same data into the user_input turn's
+ * markdown so the personas see it too — this card is operator
+ * situational awareness.
+ *
+ * Persisted in localStorage by `rememberPostMortemResult`
+ * (PR #268) so reload preserves the snapshot.
  */
+
+function PerfCell({ pct }: { pct: number }) {
+  const sign = pct >= 0 ? "+" : "";
+  const cls =
+    pct >= 0 ? "text-emerald-400" : "text-red-400";
+  return (
+    <span className={`font-mono tabular-nums ${cls}`}>
+      {sign}
+      {pct.toFixed(2)}%
+    </span>
+  );
+}
 
 export function PostMortemGainersCard({
   data,
@@ -27,72 +44,167 @@ export function PostMortemGainersCard({
   data: PostMortemResponse | null;
 }) {
   const { t } = useTranslation();
-  if (!data || data.top_gainers.length === 0) return null;
+  if (!data) return null;
 
-  // Bars scale to the largest absolute change in the set so the
-  // top row always renders at full width and lower rows are
-  // proportional. A single-row case (n=1) renders at full width
-  // too — without the denominator falling back to 1 we'd get
-  // NaN bar widths.
-  const maxAbs = Math.max(
-    1,
-    ...data.top_gainers.map((g) => Math.abs(g.change_pct)),
-  );
+  // Derive the working shape from the new payload, falling back to
+  // the back-compat single-day fields if the backend is older
+  // (PR #270 and earlier).
+  const tradingDays =
+    data.trading_days && data.trading_days.length > 0
+      ? data.trading_days
+      : data.next_trading_day
+      ? [data.next_trading_day]
+      : [];
+  const dailyBlocks =
+    data.daily_top_gainers && data.daily_top_gainers.length > 0
+      ? data.daily_top_gainers
+      : tradingDays.length > 0
+      ? [
+          {
+            trading_day: tradingDays[0],
+            gainers: data.top_gainers ?? [],
+          },
+        ]
+      : [];
+  const recPerf = data.recommended_performance ?? [];
+
+  if (tradingDays.length === 0 && recPerf.length === 0) return null;
+
+  const lastDay = tradingDays[tradingDays.length - 1] ?? "";
 
   return (
-    <div className="bg-purple-950/15 border border-purple-800/40 rounded-lg p-3 mt-3 space-y-2">
-      <div className="flex items-baseline justify-between gap-2">
+    <div className="bg-purple-950/15 border border-purple-800/40 rounded-lg p-3 mt-3 space-y-4">
+      <div className="flex items-baseline justify-between gap-2 flex-wrap">
         <h4 className="text-xs font-semibold text-purple-300">
-          {t("discussion.post_mortem_gainers_title", {
-            date: data.next_trading_day,
+          {t("discussion.post_mortem_window_title", {
+            first: tradingDays[0] ?? "—",
+            last: lastDay,
+            count: tradingDays.length,
           })}
         </h4>
-        <span className="text-[10px] text-muted-foreground">
-          {t("discussion.post_mortem_gainers_count", {
-            count: data.top_gainers.length,
-          })}
-        </span>
       </div>
-      <ul className="space-y-1.5">
-        {data.top_gainers.map((g, i) => {
-          const sign = g.change_pct >= 0 ? "+" : "";
-          const widthPct = (Math.abs(g.change_pct) / maxAbs) * 100;
-          return (
-            <li
-              key={g.symbol}
-              className="grid grid-cols-[2rem_minmax(0,5rem)_minmax(0,1fr)_auto] items-center gap-2 text-xs"
-            >
-              <span className="text-muted-foreground/70 tabular-nums">
-                #{i + 1}
-              </span>
-              <span className="font-mono font-bold text-foreground">
-                {g.symbol}
-              </span>
-              <div
-                className="h-1.5 bg-secondary/40 rounded overflow-hidden"
-                role="img"
-                aria-label={`${g.symbol} ${sign}${g.change_pct.toFixed(2)}%`}
-              >
-                <div
-                  className={`h-full ${
-                    g.change_pct >= 0 ? "bg-emerald-500/70" : "bg-red-500/70"
-                  }`}
-                  style={{ width: `${widthPct}%` }}
-                />
+
+      {/* Section A — recommended D1-D5 self-eval */}
+      <div className="space-y-1.5">
+        <h5 className="text-[11px] font-semibold text-purple-200/90 uppercase tracking-wider">
+          {t("discussion.post_mortem_self_eval_title")}
+        </h5>
+        {recPerf.length === 0 ? (
+          <p className="text-[11px] text-muted-foreground">
+            {t("discussion.post_mortem_self_eval_empty")}
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="text-xs w-full">
+              <thead>
+                <tr className="text-muted-foreground/80 text-[10px] uppercase">
+                  <th className="text-left py-1 pr-3 font-medium">
+                    {t("discussion.post_mortem_symbol_col")}
+                  </th>
+                  <th className="text-right py-1 px-2 font-medium">
+                    {t("discussion.post_mortem_base_col")}
+                  </th>
+                  {tradingDays.map((d, i) => (
+                    <th
+                      key={d}
+                      className="text-right py-1 px-2 font-medium"
+                      title={d}
+                    >
+                      D{i + 1}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {recPerf.map((row) => {
+                  const byDay = new Map(row.days.map((d) => [d.trading_day, d]));
+                  return (
+                    <tr key={row.symbol} className="border-t border-border/50">
+                      <td className="py-1 pr-3 font-mono font-bold text-foreground">
+                        {row.symbol}
+                      </td>
+                      <td className="py-1 px-2 text-right font-mono tabular-nums text-muted-foreground">
+                        {row.base_close.toLocaleString(undefined, {
+                          maximumFractionDigits: 2,
+                        })}
+                      </td>
+                      {tradingDays.map((d) => {
+                        const dp = byDay.get(d);
+                        return (
+                          <td
+                            key={d}
+                            className="py-1 px-2 text-right"
+                          >
+                            {dp ? (
+                              <PerfCell pct={dp.change_pct} />
+                            ) : (
+                              <span className="text-muted-foreground/50 text-[10px]">
+                                —
+                              </span>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Section B — daily top-N gainers */}
+      <div className="space-y-1.5">
+        <h5 className="text-[11px] font-semibold text-purple-200/90 uppercase tracking-wider">
+          {t("discussion.post_mortem_daily_winners_title")}
+        </h5>
+        {dailyBlocks.length === 0 ? (
+          <p className="text-[11px] text-muted-foreground">
+            {t("discussion.post_mortem_daily_winners_empty")}
+          </p>
+        ) : (
+          <div className="grid gap-3"
+            style={{
+              gridTemplateColumns: `repeat(${dailyBlocks.length}, minmax(0, 1fr))`,
+            }}
+          >
+            {dailyBlocks.map((block, i) => (
+              <div key={block.trading_day} className="space-y-1">
+                <div className="text-[10px] text-muted-foreground/80">
+                  D{i + 1}
+                  <span className="font-mono">{block.trading_day}</span>
+                </div>
+                {block.gainers.length === 0 ? (
+                  <p className="text-[10px] text-muted-foreground/60">
+                    （無資料）
+                  </p>
+                ) : (
+                  <ol className="space-y-0.5">
+                    {block.gainers.map((g, j) => (
+                      <li
+                        key={g.symbol}
+                        className="grid grid-cols-[1.2rem_minmax(0,1fr)_auto] items-center gap-1 text-[11px]"
+                      >
+                        <span className="text-muted-foreground/60 tabular-nums">
+                          {j + 1}.
+                        </span>
+                        <span className="font-mono font-bold text-foreground truncate">
+                          {g.symbol}
+                        </span>
+                        <PerfCell pct={g.change_pct} />
+                      </li>
+                    ))}
+                  </ol>
+                )}
               </div>
-              <span
-                className={`font-mono tabular-nums text-right ${
-                  g.change_pct >= 0 ? "text-emerald-400" : "text-red-400"
-                }`}
-              >
-                {sign}{g.change_pct.toFixed(2)}%
-              </span>
-            </li>
-          );
-        })}
-      </ul>
+            ))}
+          </div>
+        )}
+      </div>
+
       <p className="text-[10px] text-muted-foreground/70 leading-relaxed">
-        {t("discussion.post_mortem_gainers_help")}
+        {t("discussion.post_mortem_help_v2")}
       </p>
     </div>
   );

@@ -190,11 +190,48 @@ export interface PostMortemGainer {
   change_pct: number;
   close: number;
   base_close: number;
+  /** PR #273: which trading day this gainer is for. Older
+   *  payloads (D1-only) populated only the flat `top_gainers`
+   *  field; the optional marker is "" / undefined for those. */
+  trading_day?: string;
+}
+
+export interface PostMortemDailyGainers {
+  trading_day: string;
+  gainers: PostMortemGainer[];
+}
+
+export interface PostMortemDayPerformance {
+  trading_day: string;
+  close: number;
+  /** Cumulative since as_of (entry-day) close. */
+  change_pct: number;
+}
+
+export interface PostMortemRecommendedPerformance {
+  symbol: string;
+  /** Close on as_of_date — the entry price we're comparing against. */
+  base_close: number;
+  days: PostMortemDayPerformance[];
 }
 
 export interface PostMortemResponse {
+  /** PR #273: D1-D5 trading-day window. Older backends omit the
+   *  field; frontend treats it as `[next_trading_day]` for the
+   *  single-day legacy view. */
+  trading_days?: string[];
+  /** PR #273: per-recommendation D1-D5 self-eval. Empty array
+   *  when there are no recommendations or the window is too thin. */
+  recommended_performance?: PostMortemRecommendedPerformance[];
+  /** PR #273: per-day top-N gainers across the window. Empty
+   *  array when the archive doesn't reach D1. */
+  daily_top_gainers?: PostMortemDailyGainers[];
+
+  // Back-compat aliases — populated from D1's leaderboard so older
+  // clients keep working unchanged.
   next_trading_day: string;
   top_gainers: PostMortemGainer[];
+
   injected_turn_id: number;
 }
 

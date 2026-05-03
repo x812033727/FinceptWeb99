@@ -44,7 +44,10 @@ from api.discussion.schemas import (
     DiscussionDetailResponse,
     DiscussionResponse,
     InjectUserMessageRequest,
+    PostMortemDailyGainersOut,
+    PostMortemDayPerformanceOut,
     PostMortemGainerOut,
+    PostMortemRecommendedPerformanceOut,
     PostMortemResponse,
     ScoreboardResponse,
     ScoreboardRow,
@@ -670,31 +673,71 @@ async def run_post_mortem(
                    "run /conclude first",
         )
 
-    next_day, gainers, prompt_text = await build_post_mortem_message(db, row)
-    if next_day is None or not gainers:
+    payload = await build_post_mortem_message(db, row)
+    if not payload.trading_days:
         raise HTTPException(
             status_code=400,
-            detail="No ohlcv_daily data found for the next trading day "
-                   "after as_of — archive may not reach this date.",
+            detail="No ohlcv_daily data found in the post-as_of trading "
+                   "window — archive may not reach this date.",
         )
 
     try:
         turn = await discussion_service.inject_user_message(
-            db, row, content=prompt_text,
+            db, row, content=payload.prompt_text,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    # PR #273: serialise the new D1-D5 shape. Back-compat aliases
+    # `next_trading_day` + `top_gainers` populated from D1's
+    # leaderboard so older clients reading the flat shape still
+    # see "next-day gainers".
+    first_day = payload.trading_days[0]
+    d1_gainers_block = next(
+        (b for b in payload.daily_top_gainers if b.trading_day == first_day),
+        None,
+    )
+    d1_gainers = d1_gainers_block.gainers if d1_gainers_block else []
+
     return PostMortemResponse(
-        next_trading_day=next_day.isoformat(),
+        trading_days=[d.isoformat() for d in payload.trading_days],
+        recommended_performance=[
+            PostMortemRecommendedPerformanceOut(
+                symbol=r.symbol,
+                base_close=r.base_close,
+                days=[
+                    PostMortemDayPerformanceOut(
+                        trading_day=dp.trading_day.isoformat(),
+                        close=dp.close,
+                        change_pct=dp.change_pct,
+                    )
+                    for dp in r.days
+                ],
+            )
+            for r in payload.recommended_performance
+        ],
+        daily_top_gainers=[
+            PostMortemDailyGainersOut(
+                trading_day=block.trading_day.isoformat(),
+                gainers=[
+                    PostMortemGainerOut(
+                        symbol=g.symbol, change_pct=g.change_pct,
+                        close=g.close, base_close=g.base_close,
+                        trading_day=g.trading_day.isoformat(),
+                    )
+                    for g in block.gainers
+                ],
+            )
+            for block in payload.daily_top_gainers
+        ],
+        next_trading_day=first_day.isoformat(),
         top_gainers=[
             PostMortemGainerOut(
-                symbol=g.symbol,
-                change_pct=g.change_pct,
-                close=g.close,
-                base_close=g.base_close,
+                symbol=g.symbol, change_pct=g.change_pct,
+                close=g.close, base_close=g.base_close,
+                trading_day=g.trading_day.isoformat(),
             )
-            for g in gainers
+            for g in d1_gainers
         ],
         injected_turn_id=turn.id,
     )

@@ -129,19 +129,59 @@ class ScoreboardRow(BaseModel):
 
 
 class PostMortemGainerOut(BaseModel):
-    """One row in the post-mortem top-N leaderboard."""
+    """One row in a daily post-mortem top-N leaderboard."""
     symbol: str
     change_pct: float
     close: float
     base_close: float
+    trading_day: str       # PR #273: the day this gainer is for
+
+
+class PostMortemDailyGainersOut(BaseModel):
+    """All top-N gainers for a single trading day in the window."""
+    trading_day: str
+    gainers: list[PostMortemGainerOut]
+
+
+class PostMortemDayPerformanceOut(BaseModel):
+    """One recommended symbol's close + cumulative-since-as_of
+    change on a single trading day."""
+    trading_day: str
+    close: float
+    change_pct: float
+
+
+class PostMortemRecommendedPerformanceOut(BaseModel):
+    """Per-recommendation D1-D5 self-evaluation row."""
+    symbol: str
+    base_close: float       # close on as_of_date (entry price)
+    days: list[PostMortemDayPerformanceOut]
 
 
 class PostMortemResponse(BaseModel):
-    """Result of `POST /sessions/{id}/post-mortem` — the top-N
-    next-day gainers + the injected user_input turn that asks
-    the personas to self-critique against them."""
+    """Result of `POST /sessions/{id}/post-mortem`.
+
+    PR #273: evolved from the single-day next-day-gainers shape
+    to a 5-trading-day window with two ground-truth views:
+      - `recommended_performance`: each recommended symbol's own
+        D1-D5 cumulative-since-as_of returns (跟自己比).
+      - `daily_top_gainers`: per-day top-N leaderboards across
+        D1-D5 (cross-section of what was actually trending).
+
+    The flat `top_gainers` field is preserved for back-compat
+    with older clients — populated from D1's leaderboard so the
+    field still reflects "next-day gainers". `next_trading_day`
+    similarly aliases to `trading_days[0]` when present.
+    """
+    # New shape (PR #273).
+    trading_days: list[str] = []
+    recommended_performance: list[PostMortemRecommendedPerformanceOut] = []
+    daily_top_gainers: list[PostMortemDailyGainersOut] = []
+
+    # Back-compat aliases — older frontends read these directly.
     next_trading_day: str
     top_gainers: list[PostMortemGainerOut]
+
     injected_turn_id: int
 
 

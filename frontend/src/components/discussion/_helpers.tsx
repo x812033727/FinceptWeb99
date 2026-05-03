@@ -185,6 +185,31 @@ export async function concludeSession(id: string): Promise<{ conclusion: Conclus
   return res.data;
 }
 
+export interface PostMortemGainer {
+  symbol: string;
+  change_pct: number;
+  close: number;
+  base_close: number;
+}
+
+export interface PostMortemResponse {
+  next_trading_day: string;
+  top_gainers: PostMortemGainer[];
+  injected_turn_id: number;
+}
+
+/** Triggers the post-mortem self-critique injection. Backtest mode +
+ *  has-conclusion only; backend returns 400 otherwise. After this
+ *  resolves, caller is expected to run a new round (so personas
+ *  react) and then re-conclude (so the conclusion incorporates the
+ *  review). The 3-step chain is the user-facing 「事後檢討」 flow. */
+export async function runPostMortem(id: string): Promise<PostMortemResponse> {
+  const res = await api.post<PostMortemResponse>(
+    `/discussion/sessions/${id}/post-mortem`,
+  );
+  return res.data;
+}
+
 export async function fetchRoundContexts(id: string): Promise<RoundContextSnapshot[]> {
   const res = await api.get<RoundContextSnapshot[]>(
     `/discussion/sessions/${id}/contexts`,

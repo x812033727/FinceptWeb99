@@ -21,6 +21,7 @@ import {
   createSession,
   deleteSession,
   injectUserMessage,
+  runPostMortem,
   fetchAgents,
   fetchSession,
   fetchSessions,
@@ -291,6 +292,47 @@ export default function DiscussionPage() {
       queryClient.invalidateQueries({ queryKey: ["discussion-scoreboard", selectedId] });
     },
   });
+
+  // Post-mortem self-critique flow (backtest mode only). Injects the
+  // top-N next-day gainers as a `user_input` turn so the next round's
+  // personas have to defend / revise their conclusion against ground
+  // truth. This mutation only handles the inject step; the caller
+  // (`runPostMortemFlow` below) chains it with a new round + a re-
+  // conclude so the user clicks ONE button.
+  const postMortemMut = useMutation({
+    mutationFn: () => runPostMortem(selectedId!),
+    onSuccess: () => {
+      // Refetch session to pull in the injected turn so the persona
+      // history sent to the next round actually contains the critique
+      // prompt.
+      queryClient.invalidateQueries({ queryKey: ["discussion-session", selectedId] });
+    },
+  });
+
+  /** Three-step chain triggered by 「事後檢討」: inject → run round →
+   *  re-conclude. Each step persists independently so a failure at
+   *  step 2 or 3 leaves a recoverable state (the user can manually
+   *  re-run from the partial state).
+   */
+  async function runPostMortemFlow() {
+    if (!selectedId || isStreaming || postMortemMut.isPending) return;
+    try {
+      await postMortemMut.mutateAsync();
+    } catch (err) {
+      const detail = (err as { response?: { data?: { detail?: string } } })
+        ?.response?.data?.detail ?? (err as Error).message;
+      setStreamError(detail);
+      return;
+    }
+    // Step 2: run the new round — re-uses the existing SSE consumer.
+    await runRound();
+    // Step 3: re-conclude. Only fire if the round actually produced
+    // turns (runRound will set streamError on failure; we read that
+    // synchronous-state snapshot via a fresh callback).
+    setTimeout(() => {
+      if (selectedId) concludeMut.mutate();
+    }, 0);
+  }
 
   // Between-rounds user injection (PR #211). Drops a user_input
   // turn into the current round's transcript so the next round's
@@ -858,6 +900,26 @@ export default function DiscussionPage() {
                 >
                   {concludeMut.isPending ? t("common.computing") : t("discussion.conclude")}
                 </button>
+                {/* Post-mortem self-critique button — backtest + has-
+                    conclusion only. Chains: inject critique prompt →
+                    run new round → re-conclude. Hidden in live mode
+                    since there's no ground truth to critique against. */}
+                {detail?.as_of_date && detail?.conclusion && (
+                  <button
+                    onClick={runPostMortemFlow}
+                    disabled={
+                      isStreaming ||
+                      postMortemMut.isPending ||
+                      concludeMut.isPending
+                    }
+                    title={t("discussion.post_mortem_hint")}
+                    className="px-3 py-1.5 rounded-md border border-purple-800/50 text-purple-300 text-xs hover:bg-purple-900/20 transition-colors disabled:opacity-50"
+                  >
+                    {postMortemMut.isPending
+                      ? t("discussion.post_mortem_running")
+                      : t("discussion.post_mortem")}
+                  </button>
+                )}
                 <button
                   onClick={() => deleteMut.mutate(selectedId)}
                   disabled={deleteMut.isPending || isStreaming}

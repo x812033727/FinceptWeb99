@@ -121,6 +121,23 @@ class ScoreboardRow(BaseModel):
     days_resolved: int
 
 
+class PostMortemGainerOut(BaseModel):
+    """One row in the post-mortem top-N leaderboard."""
+    symbol: str
+    change_pct: float
+    close: float
+    base_close: float
+
+
+class PostMortemResponse(BaseModel):
+    """Result of `POST /sessions/{id}/post-mortem` — the top-N
+    next-day gainers + the injected user_input turn that asks
+    the personas to self-critique against them."""
+    next_trading_day: str
+    top_gainers: list[PostMortemGainerOut]
+    injected_turn_id: int
+
+
 class ScoreboardResponse(BaseModel):
     discussion_id: uuid.UUID
     # Anchor date the D1-D5 window starts from. For backtest discussions

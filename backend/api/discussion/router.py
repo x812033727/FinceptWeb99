@@ -44,6 +44,8 @@ from api.discussion.schemas import (
     DiscussionDetailResponse,
     DiscussionResponse,
     InjectUserMessageRequest,
+    PostMortemGainerOut,
+    PostMortemResponse,
     ScoreboardResponse,
     ScoreboardRow,
     TurnResponse,
@@ -609,3 +611,89 @@ async def conclude_session(
         await _refund(user, count=1)
         raise
     return ConclusionResponse(discussion_id=row.id, conclusion=conclusion)
+
+
+@router.post(
+    "/sessions/{discussion_id}/post-mortem",
+    response_model=PostMortemResponse,
+)
+async def run_post_mortem(
+    discussion_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Inject a self-critique prompt against the actual next-trading-day
+    top gainers, so the next round of personas has to defend or revise
+    their recommendation against ground truth.
+
+    Constraints:
+      - Discussion must be a backtest (`as_of_date` not null) — live
+        discussions don't have ground truth available yet.
+      - Discussion must have a conclusion already (otherwise there's
+        nothing to critique).
+      - Discussion must be in `draft` status (no in-flight round).
+
+    Flow:
+      1. Compute next trading day's top-N gainers from
+         ``ohlcv_daily``.
+      2. Format a structured Chinese-prose self-critique prompt
+         enumerating the gainers + the four review questions (hit/miss,
+         missed-stocks-and-why, false-positive signals, missing data).
+      3. Inject as a `user_input` turn so the next round's personas
+         see it in their `## 先前發言` history.
+
+    Returns the top-gainers data + the injected turn id. Caller is
+    expected to follow up with the standard `/round` SSE endpoint
+    to actually run the personas through the critique, then
+    `/conclude` to re-synthesize a final conclusion.
+
+    No AI quota is consumed by this endpoint itself — the LLM cost
+    happens in the subsequent `/round` call.
+    """
+    from services.post_mortem_service import build_post_mortem_message
+
+    row = await discussion_service.get_discussion(
+        db, discussion_id=discussion_id, owner_id=_coerce_owner_uuid(user),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Discussion not found")
+    if row.as_of_date is None:
+        raise HTTPException(
+            status_code=400,
+            detail="post_mortem requires backtest mode (as_of_date is null)",
+        )
+    if not row.conclusion:
+        raise HTTPException(
+            status_code=400,
+            detail="post_mortem requires an existing conclusion — "
+                   "run /conclude first",
+        )
+
+    next_day, gainers, prompt_text = await build_post_mortem_message(db, row)
+    if next_day is None or not gainers:
+        raise HTTPException(
+            status_code=400,
+            detail="No ohlcv_daily data found for the next trading day "
+                   "after as_of — archive may not reach this date.",
+        )
+
+    try:
+        turn = await discussion_service.inject_user_message(
+            db, row, content=prompt_text,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return PostMortemResponse(
+        next_trading_day=next_day.isoformat(),
+        top_gainers=[
+            PostMortemGainerOut(
+                symbol=g.symbol,
+                change_pct=g.change_pct,
+                close=g.close,
+                base_close=g.base_close,
+            )
+            for g in gainers
+        ],
+        injected_turn_id=turn.id,
+    )

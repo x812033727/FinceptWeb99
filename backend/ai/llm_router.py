@@ -376,6 +376,36 @@ async def _ollama_stream(
 
 # ── OpenAI-compatible tool loop (MiniMax / DeepSeek / Qwen API …) ──
 
+
+def _format_empty_stream_diagnostic(
+    provider_label: str,
+    finish_reason: str | None,
+    completion_tokens: int,
+    reasoning_chars: int,
+) -> str:
+    """Build a human-readable error message for the case where the OpenAI-
+    compat stream ended without producing any visible content or tool
+    calls. The message is consumed by callers (news sentiment scorer,
+    discussion synthesizer) which forward it into their warning logs.
+    """
+    parts = [f"{provider_label} returned no content"]
+    if finish_reason:
+        parts.append(f"finish_reason={finish_reason}")
+    if completion_tokens:
+        parts.append(f"completion_tokens={completion_tokens}")
+    if reasoning_chars:
+        parts.append(
+            f"reasoning_content={reasoning_chars} chars "
+            "(thinking model burned the budget on chain-of-thought; "
+            "switch to a non-thinking variant or raise max_tokens)"
+        )
+    elif finish_reason == "length":
+        parts.append("(hit max_tokens before any content; raise max_tokens)")
+    elif finish_reason == "content_filter":
+        parts.append("(blocked by safety filter)")
+    return "; ".join(parts)
+
+
 async def _openai_compat_tool_loop(
     *,
     base_url: str,
@@ -441,6 +471,14 @@ async def _openai_compat_tool_loop(
         any_text = False
         prompt_tokens_seen = 0
         completion_tokens_seen = 0
+        # Reasoning models (MiniMax-M2, DeepSeek-R1, etc.) stream chain-of-
+        # thought via `delta.reasoning_content` separate from `delta.content`.
+        # We don't yield reasoning as visible tokens (would leak CoT into
+        # transcripts and confuse JSON parsers downstream), but we count
+        # bytes so an empty-content stream can be diagnosed: "model burned
+        # N chars on reasoning before hitting max_tokens" is a very different
+        # failure than "model returned nothing at all".
+        reasoning_chars_seen = 0
 
         try:
             async with httpx.AsyncClient(timeout=180) as client:
@@ -477,6 +515,9 @@ async def _openai_compat_tool_loop(
                             assistant_text_parts.append(text)
                             any_text = True
                             yield {"type": "delta", "text": text}
+                        rc = delta.get("reasoning_content")
+                        if rc:
+                            reasoning_chars_seen += len(rc)
                         for tc in delta.get("tool_calls") or []:
                             idx = tc.get("index", 0)
                             slot = pending.setdefault(idx, {"id": "", "name": "", "args": ""})
@@ -509,6 +550,27 @@ async def _openai_compat_tool_loop(
                 "prompt_tokens": prompt_tokens_seen,
                 "completion_tokens": completion_tokens_seen,
             }
+
+        # Stream ended with no visible content AND no tool intent — the
+        # caller can't proceed but previously got no signal at all (raw=""
+        # silently). Surface a diagnostic so news_sentiment.llm_error /
+        # discussion synthesizer logs explain the failure mode instead of
+        # the generic "parse_failed raw=''" downstream symptom. The most
+        # common cause is a thinking model (MiniMax-M2, DeepSeek-R1)
+        # emitting reasoning_content until max_tokens is exhausted; the
+        # admin's fix is either to switch to a non-thinking variant or
+        # raise the per-call max_tokens budget.
+        if not any_text and not pending and finish_reason != "tool_calls":
+            yield {
+                "type": "error",
+                "message": _format_empty_stream_diagnostic(
+                    provider_label,
+                    finish_reason,
+                    completion_tokens_seen,
+                    reasoning_chars_seen,
+                ),
+            }
+            return
 
         if finish_reason != "tool_calls" or not pending:
             # Natural stop, length cap, or content filter.

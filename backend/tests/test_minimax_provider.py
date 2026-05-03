@@ -131,6 +131,151 @@ async def test_minimax_http_error_propagates(monkeypatch):
     assert "403" in events[-1]["message"]
 
 
+# ── empty-content diagnostics ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_minimax_empty_stream_yields_diagnostic_error(monkeypatch):
+    """Stream ends with `finish_reason=stop` but never emits any
+    `delta.content` or tool_call — caller used to silently see raw="".
+    The loop should now yield a diagnostic error event so the
+    downstream warning log explains what happened.
+    """
+    lines = [
+        _sse({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+        "data: [DONE]\n",
+    ]
+    monkeypatch.setattr(router.httpx, "AsyncClient", _fake_client_factory([_FakeResp(lines)]))
+    monkeypatch.setattr(router.settings, "MINIMAX_API_KEY", "test-key")
+
+    events = [
+        ev async for ev in router._minimax_stream(
+            messages=[{"role": "user", "content": "hi"}],
+            model="MiniMax-M2.7",
+            max_tokens=128, temperature=0.3,
+            tool_schemas=None, tool_dispatch=None, max_turns=6,
+        )
+    ]
+    assert len(events) == 1
+    assert events[0]["type"] == "error"
+    msg = events[0]["message"]
+    assert "minimax" in msg.lower()
+    assert "no content" in msg.lower()
+    assert "finish_reason=stop" in msg
+
+
+@pytest.mark.asyncio
+async def test_minimax_reasoning_only_stream_diagnoses_thinking_burn(monkeypatch):
+    """Thinking model (MiniMax-M2 family) emits reasoning_content but
+    never produces visible content before hitting max_tokens. The
+    diagnostic should call out the reasoning byte count and hint at
+    switching to a non-thinking variant.
+    """
+    lines = [
+        _sse({"choices": [{"delta": {"reasoning_content": "Let me think about this carefully. "}, "finish_reason": None}]}),
+        _sse({"choices": [{"delta": {"reasoning_content": "I need to evaluate every headline... "}, "finish_reason": None}]}),
+        _sse({"choices": [{"delta": {}, "finish_reason": "length"}],
+              "usage": {"prompt_tokens": 1500, "completion_tokens": 2048}}),
+        "data: [DONE]\n",
+    ]
+    monkeypatch.setattr(router.httpx, "AsyncClient", _fake_client_factory([_FakeResp(lines)]))
+    monkeypatch.setattr(router.settings, "MINIMAX_API_KEY", "test-key")
+
+    events = [
+        ev async for ev in router._minimax_stream(
+            messages=[{"role": "user", "content": "score these headlines"}],
+            model="MiniMax-M2.7",
+            max_tokens=2048, temperature=0.0,
+            tool_schemas=None, tool_dispatch=None, max_turns=6,
+        )
+    ]
+    types = [e["type"] for e in events]
+    assert "error" in types
+    err = next(e for e in events if e["type"] == "error")
+    msg = err["message"]
+    assert "reasoning_content" in msg
+    assert "finish_reason=length" in msg
+    assert "completion_tokens=2048" in msg
+    assert "thinking" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_minimax_length_cutoff_with_no_reasoning_hints_max_tokens(monkeypatch):
+    """Non-thinking model that runs out of tokens before producing any
+    content should at least surface the `(hit max_tokens ...)` hint.
+    """
+    lines = [
+        _sse({"choices": [{"delta": {}, "finish_reason": "length"}],
+              "usage": {"prompt_tokens": 100, "completion_tokens": 16}}),
+        "data: [DONE]\n",
+    ]
+    monkeypatch.setattr(router.httpx, "AsyncClient", _fake_client_factory([_FakeResp(lines)]))
+    monkeypatch.setattr(router.settings, "MINIMAX_API_KEY", "test-key")
+
+    events = [
+        ev async for ev in router._minimax_stream(
+            messages=[{"role": "user", "content": "x"}],
+            model="MiniMax-Text-01",
+            max_tokens=16, temperature=0.0,
+            tool_schemas=None, tool_dispatch=None, max_turns=6,
+        )
+    ]
+    err = next(e for e in events if e["type"] == "error")
+    assert "max_tokens" in err["message"]
+    assert "reasoning_content" not in err["message"]
+
+
+@pytest.mark.asyncio
+async def test_minimax_content_filter_finish_reason_is_diagnosed(monkeypatch):
+    lines = [
+        _sse({"choices": [{"delta": {}, "finish_reason": "content_filter"}]}),
+        "data: [DONE]\n",
+    ]
+    monkeypatch.setattr(router.httpx, "AsyncClient", _fake_client_factory([_FakeResp(lines)]))
+    monkeypatch.setattr(router.settings, "MINIMAX_API_KEY", "test-key")
+
+    events = [
+        ev async for ev in router._minimax_stream(
+            messages=[{"role": "user", "content": "x"}],
+            model="MiniMax-M2.7",
+            max_tokens=128, temperature=0.0,
+            tool_schemas=None, tool_dispatch=None, max_turns=6,
+        )
+    ]
+    err = next(e for e in events if e["type"] == "error")
+    assert "content_filter" in err["message"]
+    assert "safety filter" in err["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_minimax_reasoning_content_is_not_yielded_as_delta(monkeypatch):
+    """Reasoning chain-of-thought must never leak into the visible
+    transcript — the JSON parser downstream would choke on prose, and
+    the chat UI would expose model internals to the user.
+    """
+    lines = [
+        _sse({"choices": [{"delta": {"reasoning_content": "thinking..."}, "finish_reason": None}]}),
+        _sse({"choices": [{"delta": {"content": "Here is the JSON: "}, "finish_reason": None}]}),
+        _sse({"choices": [{"delta": {"content": "[]"}, "finish_reason": None}]}),
+        _sse({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+        "data: [DONE]\n",
+    ]
+    monkeypatch.setattr(router.httpx, "AsyncClient", _fake_client_factory([_FakeResp(lines)]))
+    monkeypatch.setattr(router.settings, "MINIMAX_API_KEY", "test-key")
+
+    events = [
+        ev async for ev in router._minimax_stream(
+            messages=[{"role": "user", "content": "x"}],
+            model="MiniMax-M2.7",
+            max_tokens=128, temperature=0.0,
+            tool_schemas=None, tool_dispatch=None, max_turns=6,
+        )
+    ]
+    deltas = [e["text"] for e in events if e["type"] == "delta"]
+    assert deltas == ["Here is the JSON: ", "[]"]
+    assert all(e["type"] != "error" for e in events)
+
+
 # ── tool loop ─────────────────────────────────────────────────────
 
 _TOOL_SCHEMAS = [

@@ -127,6 +127,40 @@ async def test_query_returns_empty_when_envelope_status_is_not_200():
 
 
 @pytest.mark.asyncio
+async def test_query_captures_silent_deny_msg_into_contextvar():
+    """Silent paywall (HTTP 200 + body.status != 200) used to be
+    indistinguishable from "no data" because we returned []. Now the
+    body's `msg` is captured into a contextvar that callers can read
+    via :func:`consume_last_silent_deny`."""
+    patcher_http, _ = install_http(FakeResponse({
+        "status": 402,
+        "msg": "Your level is register. Please update your user level.",
+    }))
+    with patcher_http, patch.object(finmind, "cache_incr", new=AsyncMock(return_value=1)):
+        out = await finmind._query("TaiwanStockNews", "", "2026-03-23")
+    assert out == []
+    captured = finmind.consume_last_silent_deny()
+    assert "Your level is register" in (captured or "")
+    # contextvar consumed → second read is None.
+    assert finmind.consume_last_silent_deny() is None
+
+
+@pytest.mark.asyncio
+async def test_query_clears_silent_deny_on_subsequent_success():
+    """A successful call after a silent-deny call must clear the
+    contextvar so the silent-deny state doesn't bleed across calls."""
+    patcher1, _ = install_http(FakeResponse({"status": 402, "msg": "denied"}))
+    with patcher1, patch.object(finmind, "cache_incr", new=AsyncMock(return_value=1)):
+        await finmind._query("TaiwanStockNews", "", "2026-03-23")
+    # Now a successful call.
+    patcher2, _ = install_http(FakeResponse({"status": 200, "data": [{"x": 1}]}))
+    with patcher2, patch.object(finmind, "cache_incr", new=AsyncMock(return_value=1)):
+        out = await finmind._query("TaiwanStockNews", "", "2026-03-24")
+    assert out == [{"x": 1}]
+    assert finmind.consume_last_silent_deny() is None
+
+
+@pytest.mark.asyncio
 async def test_query_returns_empty_when_data_field_is_missing():
     """`{"status": 200}` with no `data` field → []."""
     patcher_http, _ = install_http(FakeResponse({"status": 200}))
@@ -407,6 +441,89 @@ async def test_get_news_empty_window_when_end_before_start():
         )
     assert out == []
     mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_news_raises_silent_deny_when_every_day_paywalled():
+    """When FinMind silently denies every day in the window with
+    HTTP 200 + body.status != 200, the loop sees `[]` for each day
+    BUT `consume_last_silent_deny()` returns the body msg.
+    `get_news` must surface this as :class:`FinMindSilentDeny` so
+    the orchestrator's existing `_format_finmind_error` path treats
+    it like a real paywall and shows the user the actual reason.
+    """
+    deny_msg = "Your level is register. Please update your user level."
+
+    # Each day: _query returns [] AND sets the contextvar.
+    async def _silent_query(dataset, data_id, start_date, end_date=None):
+        finmind._last_silent_deny.set(deny_msg)
+        return []
+
+    with patch.object(finmind, "_query", new=_silent_query):
+        with pytest.raises(finmind.FinMindSilentDeny) as exc_info:
+            await finmind.get_news(
+                "2024-01-01", symbol="", end_date="2024-01-03",
+            )
+
+    err = exc_info.value
+    assert err.body_msg == deny_msg
+    assert err.days == 3
+
+
+@pytest.mark.asyncio
+async def test_get_news_silent_deny_reachable_via_extract_body_message():
+    """:class:`FinMindSilentDeny` carries `body_msg` so the
+    paywall-detection helper picks it up the same way it picks up
+    real :class:`httpx.HTTPStatusError` body messages — meaning
+    `_format_finmind_error` formats it identically to a true paywall."""
+    from data.tw.finmind_paywall import (
+        extract_body_message, looks_like_paywall,
+    )
+
+    err = finmind.FinMindSilentDeny(
+        "Your level is register. Please update.", days=5,
+    )
+    assert extract_body_message(err) == "Your level is register. Please update."
+    assert looks_like_paywall(extract_body_message(err)) is True
+
+
+@pytest.mark.asyncio
+async def test_get_news_partial_silent_deny_returns_what_it_got():
+    """If half the days were silent-denied but half had data, return
+    the data we got — partial coverage beats throwing it away. (No
+    exception in the partial-success case; user sees what's available.)"""
+    async def _mixed_query(dataset, data_id, start_date, end_date=None):
+        if start_date in ("2024-01-01", "2024-01-03"):
+            finmind._last_silent_deny.set("denied")
+            return []
+        return [{"title": f"news {start_date}", "link": f"l-{start_date}",
+                 "source": "x", "description": "",
+                 "date": f"{start_date} 09:00:00", "stock_id": "2330"}]
+
+    with patch.object(finmind, "_query", new=_mixed_query):
+        out = await finmind.get_news(
+            "2024-01-01", symbol="", end_date="2024-01-04",
+        )
+
+    titles = [r["title"] for r in out]
+    # Only 2024-01-02 and 2024-01-04 had data.
+    assert titles == ["news 2024-01-02", "news 2024-01-04"]
+
+
+@pytest.mark.asyncio
+async def test_get_news_legitimate_empty_window_returns_no_error():
+    """When every day's `_query` succeeds (no exception, no silent
+    deny) and just returns `[]` (FinMind says "no news this day"),
+    `get_news` returns [] without raising — that's a legitimate
+    quiet window, not a failure."""
+    async def _empty_query(dataset, data_id, start_date, end_date=None):
+        return []
+
+    with patch.object(finmind, "_query", new=_empty_query):
+        out = await finmind.get_news(
+            "2024-01-01", symbol="", end_date="2024-01-03",
+        )
+    assert out == []
 
 
 @pytest.mark.asyncio

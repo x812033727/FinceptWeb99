@@ -45,10 +45,14 @@ _PAYWALL_HINTS: tuple[str, ...] = (
 
 def extract_body_message(exc: BaseException) -> str:
     """Pull the FinMind body's ``msg`` / ``message`` / ``detail``
-    out of an :class:`httpx.HTTPStatusError`.
+    out of an :class:`httpx.HTTPStatusError`, or fall back to a
+    ``body_msg`` attribute on custom FinMind exceptions
+    (e.g. :class:`FinMindSilentDeny` raised when every day in a
+    multi-day TaiwanStockNews window comes back with HTTP 200 +
+    body status != 200 — i.e. silent paywall).
 
     Returns ``""`` when:
-      - ``exc`` isn't an HTTPStatusError at all
+      - ``exc`` isn't an HTTPStatusError or carrier of ``body_msg``
       - the response body isn't JSON
       - none of the three known keys carry a string
 
@@ -57,6 +61,9 @@ def extract_body_message(exc: BaseException) -> str:
     so a FinMind error with a missing body falls through to the
     transient-failure path (auto-backoff arms) — the safest default.
     """
+    direct = getattr(exc, "body_msg", None)
+    if isinstance(direct, str) and direct:
+        return direct
     if not isinstance(exc, httpx.HTTPStatusError):
         return ""
     try:

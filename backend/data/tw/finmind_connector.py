@@ -3,6 +3,7 @@ FinMind connector — registered free tier: 600 req/HOUR (300/hr anonymous).
 Tracks usage in Redis with a 1-hour rolling window; falls silent (returns
 []) when near the limit.
 """
+import contextvars
 import logging
 from typing import Any
 
@@ -50,6 +51,18 @@ async def _query(dataset: str, data_id: str, start_date: str, end_date: str | No
     """
     Check hourly quota before hitting the API.
     Returns [] when quota is exhausted so callers fall back to TWSE.
+
+    Silent-deny capture (PR-F.7): when FinMind responds with
+    HTTP 200 but `body.status != 200` (the "tier upgrade required"
+    signal — different from explicit 4xx paywall), we historically
+    swallowed this as `[]` and the caller got back zero rows with
+    no error context. Now the body's `msg` is captured into a
+    contextvar that callers (currently `get_news`) can read via
+    :func:`consume_last_silent_deny` to distinguish "FinMind
+    accepted the query and there genuinely was no data" from
+    "FinMind silently denied the query because the tier doesn't
+    cover this dataset/range". Plus a WARNING log line so operators
+    see it in server logs even without UI plumbing.
     """
     token = await _get_token()
 
@@ -83,8 +96,60 @@ async def _query(dataset: str, data_id: str, start_date: str, end_date: str | No
         body = r.json()
 
     if body.get("status") != 200:
+        body_msg = body.get("msg") or body.get("message") or ""
+        if isinstance(body_msg, str) and body_msg:
+            _last_silent_deny.set(body_msg)
+            log.warning(
+                "finmind.silent_deny",
+                extra={
+                    "dataset": dataset,
+                    "data_id": data_id or "_market",
+                    "start_date": start_date,
+                    "end_date": end_date or "",
+                    "body_status": body.get("status"),
+                    "body_msg": body_msg,
+                },
+            )
+        else:
+            _last_silent_deny.set(None)
         return []
+    _last_silent_deny.set(None)
     return body.get("data", [])
+
+
+# Per-task contextvar that captures the most recent silent-deny msg
+# (HTTP 200 + body.status != 200) from `_query`. Callers like
+# `get_news` read it via :func:`consume_last_silent_deny` after each
+# call to detect cases where FinMind accepted the request but
+# returned nothing because the tier doesn't grant access.
+_last_silent_deny: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "finmind_last_silent_deny", default=None,
+)
+
+
+def consume_last_silent_deny() -> str | None:
+    """Read + clear the most recent silent-deny msg captured by
+    `_query` in this task's context. Returns None when the most
+    recent call succeeded normally or wasn't a silent deny."""
+    msg = _last_silent_deny.get()
+    _last_silent_deny.set(None)
+    return msg
+
+
+class FinMindSilentDeny(Exception):
+    """FinMind responded HTTP 200 + body.status != 200 (silent
+    paywall) for every request in a multi-day window. Carries the
+    body's `msg` so :func:`finmind_paywall.extract_body_message`
+    surfaces it via the standard ``body_msg`` attribute path,
+    which means downstream `_format_finmind_error` formats it the
+    same way as a real 4xx paywall."""
+
+    def __init__(self, msg: str, days: int):
+        self.body_msg = msg
+        self.days = days
+        super().__init__(
+            f"FinMind silent paywall ({days} day(s) all denied): {msg}"
+        )
 
 
 # ── Daily OHLCV ───────────────────────────────────────────────────
@@ -505,7 +570,9 @@ async def get_news(
     all_rows: list[dict[str, Any]] = []
     last_exc: Exception | None = None
     days_attempted = 0
-    days_succeeded = 0
+    days_with_data = 0
+    days_silent_deny = 0
+    last_silent_msg: str | None = None
     while cur <= end:
         days_attempted += 1
         try:
@@ -523,18 +590,28 @@ async def get_news(
                 },
             )
         else:
-            days_succeeded += 1
-            if day_rows:
+            silent = consume_last_silent_deny()
+            if silent:
+                days_silent_deny += 1
+                last_silent_msg = silent
+            elif day_rows:
+                days_with_data += 1
                 all_rows.extend(day_rows)
+            # else: legitimate empty (FinMind returned status=200
+            #       with empty data — quiet news day or no symbol
+            #       activity). Don't count as success or failure.
         cur += _td(days=1)
 
-    # If literally nothing succeeded AND we have an exception in
-    # hand, re-raise it so the backfill orchestrator surfaces a
-    # paywall / rate-limit / network error to the user. Empty
-    # result with no exception is a legitimate "no news this
-    # window" answer.
-    if days_succeeded == 0 and last_exc is not None:
-        raise last_exc
+    # No data anywhere: pick the most informative failure to surface.
+    if days_with_data == 0:
+        if last_exc is not None:
+            raise last_exc
+        if days_silent_deny > 0:
+            raise FinMindSilentDeny(
+                last_silent_msg or "(no body msg)", days_silent_deny,
+            )
+        # Else: every day legitimately empty — return [] without
+        # error. Caller will see backfilled=0 and handle it.
 
     return _format_news_rows(all_rows)
 

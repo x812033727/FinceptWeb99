@@ -294,6 +294,188 @@ async def test_compute_includes_kd_in_signals(db_session: AsyncSession):
     assert result["kd_d"] is not None
 
 
+# ── _compute_macd ─────────────────────────────────────────────────
+
+
+def test_macd_returns_none_below_minimum_window():
+    """MACD(12, 26, 9) needs 26 + 9 = 35 closes minimum to seed
+    both EMAs and the signal smoother. Below that the signal line
+    is unstable, so we surface None rather than a misleading value."""
+    closes = [100.0 + i for i in range(20)]
+    macd, sig, hist = sts._compute_macd(closes)
+    assert macd is None and sig is None and hist is None
+
+
+def test_macd_monotonic_uptrend_produces_positive_macd_line():
+    """A strictly rising series → fast EMA leads slow EMA → MACD > 0.
+    Note that `histogram` (= MACD − signal) tends toward 0 on
+    perfectly LINEAR data because both lines stabilise to the same
+    value; non-zero histogram only appears under acceleration. We
+    pin the line, not the histogram, for the linear-trend case."""
+    closes = [100.0 + i for i in range(50)]
+    macd, sig, hist = sts._compute_macd(closes)
+    assert macd is not None and sig is not None and hist is not None
+    assert macd > 0
+    assert sig > 0
+
+
+def test_macd_monotonic_downtrend_produces_negative_macd_line():
+    closes = [200.0 - i for i in range(50)]
+    macd, sig, hist = sts._compute_macd(closes)
+    assert macd is not None and sig is not None
+    assert macd < 0
+    assert sig < 0
+
+
+def test_macd_acceleration_produces_positive_histogram():
+    """Acceleration (price gains accelerating, not just steady) is
+    when histogram diverges from zero. Quadratic ramp → fast EMA
+    pulls away from slow EMA → MACD line rises faster than its
+    own signal → histogram > 0. Pin this case so a refactor that
+    breaks the histogram math (e.g. swapping MACD/signal) regresses
+    loudly even when the line itself still looks right."""
+    closes = [100.0 + i * i * 0.01 for i in range(50)]
+    _, _, hist = sts._compute_macd(closes)
+    assert hist is not None and hist > 0
+
+
+# ── _compute_bollinger ────────────────────────────────────────────
+
+
+def test_bollinger_returns_none_below_period():
+    closes = [100.0] * 10
+    pct_b, width = sts._compute_bollinger(closes, period=20)
+    assert pct_b is None and width is None
+
+
+def test_bollinger_zero_volatility_returns_none():
+    """Constant prices → upper == lower → undefined %B. Return None
+    so the caller treats it as 'no signal' (a stock that hasn't
+    moved at all isn't actionable)."""
+    closes = [100.0] * 30
+    pct_b, width = sts._compute_bollinger(closes, period=20)
+    assert pct_b is None and width is None
+
+
+def test_bollinger_close_at_upper_band_pct_b_above_one():
+    """Close that exceeds the +2σ upper band → %B > 1 (overbought
+    breakout). Symmetric: a close below -2σ would give %B < 0."""
+    closes = [100.0] * 19 + [120.0]   # last close is a huge spike
+    pct_b, width = sts._compute_bollinger(closes, period=20)
+    assert pct_b is not None and pct_b > 1.0
+    assert width is not None and width > 0
+
+
+def test_bollinger_close_at_mean_pct_b_near_half():
+    """Close exactly at the SMA → %B ≈ 0.5 (mid-band)."""
+    # 19 closes alternating 99/101 (mean 100) + final close at 100.
+    closes = [99.0, 101.0] * 9 + [99.0, 100.0]
+    assert closes[-1] == 100.0
+    pct_b, _ = sts._compute_bollinger(closes, period=20)
+    assert pct_b is not None
+    assert 0.4 <= pct_b <= 0.6
+
+
+# ── _compute_obv_5d_change_pct ────────────────────────────────────
+
+
+def test_obv_returns_none_below_seven_bars():
+    bars = [{"close": 100.0 + i, "volume": 1000} for i in range(5)]
+    assert sts._compute_obv_5d_change_pct(bars) is None
+
+
+def test_obv_strict_uptrend_with_constant_volume_grows_positive():
+    """Every bar closes higher than the previous → OBV walk adds
+    volume each step → cumulative grows monotonically → 5-day
+    change is strongly positive."""
+    bars = [
+        {"close": 100.0 + i, "volume": 1000}
+        for i in range(10)
+    ]
+    out = sts._compute_obv_5d_change_pct(bars)
+    assert out is not None
+    assert out > 0
+
+
+def test_obv_strict_downtrend_with_constant_volume_grows_negative():
+    """Every bar closes lower than the previous → OBV subtracts
+    volume each step → cumulative grows more negative → 5-day
+    change %, vs an already-negative anchor, is positive in
+    MAGNITUDE but inverted by the sign flip in the formula:
+    actually the 5-day window itself trends down so the change
+    direction depends on the absolute value normalisation. Test
+    that it's well-defined (not None) and matches the expected
+    direction for a downtrend."""
+    bars = [
+        {"close": 200.0 - i, "volume": 1000}
+        for i in range(10)
+    ]
+    out = sts._compute_obv_5d_change_pct(bars)
+    assert out is not None
+    # Downtrend → OBV is going more negative → latest < earlier.
+    # (latest - earlier) is negative; abs(earlier) is positive.
+    # So result is negative.
+    assert out < 0
+
+
+def test_obv_skips_zero_volume_or_null_close_bars_without_crashing():
+    """Defensive: bad-data bars (null close / zero volume) get
+    treated as 'hold' (OBV unchanged). The compute still produces
+    a result as long as at least one valid up/down bar lands inside
+    the 5-day window so the anchor isn't 0 (which would trigger
+    div-by-zero protection)."""
+    bars: list[dict] = [
+        {"close": 100.0, "volume": 1000},
+        {"close": 101.0, "volume": 1000},
+        {"close": 102.0, "volume": 1000},
+        {"close": 103.0, "volume": 1000},
+        {"close": None,  "volume": 1000},   # null close → hold
+        {"close": 105.0, "volume": 0},       # zero volume → hold
+        {"close": 106.0, "volume": 1000},
+        {"close": 107.0, "volume": 1000},
+        {"close": 108.0, "volume": 1000},
+        {"close": 109.0, "volume": 1000},
+    ]
+    out = sts._compute_obv_5d_change_pct(bars)
+    assert out is not None  # didn't crash on the bad rows
+
+
+# ── full-pipeline integration: compute_short_term_signals ─────────
+
+
+@pytest.mark.asyncio
+async def test_compute_includes_macd_bollinger_obv_in_signals(
+    db_session: AsyncSession,
+):
+    """End-to-end: 50 monotonic-up bars must produce MACD / Bollinger
+    / OBV fields populated alongside the existing RSI / KD output.
+    The integration check that the new helpers wire into the
+    `ShortTermSignals` dataclass + `to_dict` correctly — previously a
+    field added to the dataclass that wasn't added to to_dict would
+    silently drop the value at the API surface."""
+    base = date(2026, 3, 1)
+    await _seed(db_session, [
+        _bar("2330", base + timedelta(days=i),
+             close=600.0 + i, volume=1_000_000)
+        for i in range(50)
+    ])
+    result = await sts.compute_short_term_signals(
+        db_session, market="TW", symbol="2330",
+        as_of=base + timedelta(days=49),
+    )
+    assert result is not None
+    # All three new metric families must appear, with sensible signs
+    # for a strict uptrend. Note: linear ramp converges histogram
+    # toward 0 (both MACD and signal stabilise to the same value),
+    # so we pin the line, not the histogram, for this case.
+    assert result["macd"] is not None and result["macd"] > 0
+    assert result["macd_hist"] is not None
+    assert result["bollinger_pct_b"] is not None
+    assert result["bollinger_width"] is not None and result["bollinger_width"] > 0
+    assert result["obv_5d_change_pct"] is not None
+    assert result["obv_5d_change_pct"] > 0
+
+
 # ── compute_industry_rs ───────────────────────────────────────────
 
 

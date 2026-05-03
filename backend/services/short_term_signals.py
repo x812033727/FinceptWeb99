@@ -72,8 +72,13 @@ log = logging.getLogger(__name__)
 _MIN_BARS = 21
 # Read this many calendar days back to leave room for weekends + holidays
 # while still hitting >= 21 trading days. ~45 days covers the worst case
-# (CNY week + a one-week holiday cluster).
-_LOOKBACK_DAYS = 45
+# (CNY week + a one-week holiday cluster). Extended from 45 → 60
+# in PR #254 so MACD(12, 26, 9) has enough bars to seed both the
+# slow EMA (26) and the signal smoothing (9 more) before the latest
+# value is reported. < 35 trading days produces an unstable MACD;
+# 60 calendar days ≈ 40-42 trading days, comfortably above that
+# floor even with a holiday cluster.
+_LOOKBACK_DAYS = 60
 
 
 @dataclass(frozen=True)
@@ -88,6 +93,14 @@ class ShortTermSignals:
     gap_pct: float | None
     kd_k: float | None
     kd_d: float | None
+    # PR #254 — MACD / Bollinger / OBV. None when the bar count
+    # falls below each indicator's minimum stable window.
+    macd: float | None
+    macd_signal: float | None
+    macd_hist: float | None
+    bollinger_pct_b: float | None
+    bollinger_width: float | None
+    obv_5d_change_pct: float | None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -101,6 +114,12 @@ class ShortTermSignals:
             "gap_pct":      _round_or_none(self.gap_pct, 2),
             "kd_k":         _round_or_none(self.kd_k, 1),
             "kd_d":         _round_or_none(self.kd_d, 1),
+            "macd":         _round_or_none(self.macd, 4),
+            "macd_signal":  _round_or_none(self.macd_signal, 4),
+            "macd_hist":    _round_or_none(self.macd_hist, 4),
+            "bollinger_pct_b": _round_or_none(self.bollinger_pct_b, 3),
+            "bollinger_width": _round_or_none(self.bollinger_width, 4),
+            "obv_5d_change_pct": _round_or_none(self.obv_5d_change_pct, 2),
         }
 
 
@@ -171,6 +190,136 @@ def _compute_kd_9_3_3(
         k_prev, d_prev = k, d
         k_latest, d_latest = k, d
     return k_latest, d_latest
+
+
+def _ema_series(values: list[float], n: int) -> list[float]:
+    """Standard exponential moving average. Seeds with the first
+    `n`-period SMA, then `EMA_t = α·v_t + (1-α)·EMA_{t-1}` with
+    `α = 2/(n+1)`. Returns a list aligned to the input — the first
+    `n-1` slots are None-equivalent (we use NaN-style placeholders
+    represented as the seed value to keep types simple, and callers
+    only look at the last value)."""
+    if len(values) < n:
+        return []
+    alpha = 2.0 / (n + 1)
+    seed = sum(values[:n]) / n
+    out: list[float] = [0.0] * (n - 1) + [seed]
+    for i in range(n, len(values)):
+        out.append(alpha * values[i] + (1 - alpha) * out[-1])
+    return out
+
+
+def _compute_macd(
+    closes: list[float], fast: int = 12, slow: int = 26, signal: int = 9,
+) -> tuple[float | None, float | None, float | None]:
+    """Standard MACD(fast, slow, signal). Returns (macd, signal,
+    hist) for the latest bar. None when bar count is below the
+    `slow + signal` floor — under that the signal line hasn't had
+    enough EMA-of-EMA smoothing to be stable.
+
+    macd = EMA(fast) - EMA(slow)
+    signal = EMA(macd, signal)
+    hist = macd - signal
+
+    Histogram interpretation: positive = bullish momentum, negative
+    = bearish; histogram crossing zero is the canonical entry/exit
+    signal that complements RSI/KD overbought/oversold reads.
+    """
+    if len(closes) < slow + signal:
+        return None, None, None
+    ema_fast = _ema_series(closes, fast)
+    ema_slow = _ema_series(closes, slow)
+    if not ema_fast or not ema_slow:
+        return None, None, None
+    # MACD line is only meaningful from index `slow-1` onwards (when
+    # both EMAs have stabilised). Trim to the common stable window.
+    macd_line = [
+        ema_fast[i] - ema_slow[i] for i in range(slow - 1, len(closes))
+    ]
+    if len(macd_line) < signal:
+        return None, None, None
+    signal_line = _ema_series(macd_line, signal)
+    if not signal_line:
+        return None, None, None
+    macd_latest = macd_line[-1]
+    signal_latest = signal_line[-1]
+    return macd_latest, signal_latest, macd_latest - signal_latest
+
+
+def _compute_bollinger(
+    closes: list[float], period: int = 20, k: float = 2.0,
+) -> tuple[float | None, float | None]:
+    """Bollinger Bands (period, k σ). Returns (%B, width-pct) for the
+    latest bar.
+
+    %B = (close - lower) / (upper - lower)
+        > 1   above upper band (overbought breakout)
+        < 0   below lower band (oversold breakdown)
+        0.5   middle / SMA
+
+    width-pct = (upper - lower) / middle, expressed as a fraction
+    (e.g. 0.06 = 6 % of price). Tracks volatility regime — squeezing
+    bands often precede directional breakouts.
+    """
+    if len(closes) < period:
+        return None, None
+    window = closes[-period:]
+    mean = sum(window) / period
+    var = sum((c - mean) ** 2 for c in window) / period
+    sd = var ** 0.5
+    upper = mean + k * sd
+    lower = mean - k * sd
+    if upper == lower or mean == 0:
+        return None, None
+    pct_b = (closes[-1] - lower) / (upper - lower)
+    width = (upper - lower) / mean
+    return pct_b, width
+
+
+def _compute_obv_5d_change_pct(
+    bars: list[dict[str, Any]],
+) -> float | None:
+    """Cumulative OBV walk over the bar window, returning the % change
+    of the latest cumulative value vs 5 trading days ago.
+
+    OBV adds volume on up-close days, subtracts on down-close days,
+    holds on flat. The absolute level is meaningless (depends on
+    starting point); only the trend matters. % change makes the
+    signal comparable across symbols regardless of typical volume
+    magnitude.
+
+    Positive = institutional accumulation (volume on up days
+    outweighs volume on down days). Negative = distribution
+    (selling pressure under price stability).
+    """
+    if len(bars) < 7:
+        return None
+    obv: list[float] = [0.0]
+    for i in range(1, len(bars)):
+        prev_close = bars[i - 1].get("close")
+        cur_close = bars[i].get("close")
+        cur_vol = bars[i].get("volume")
+        if (
+            prev_close is None or cur_close is None or
+            cur_vol is None or cur_vol == 0
+        ):
+            obv.append(obv[-1])
+            continue
+        if cur_close > prev_close:
+            obv.append(obv[-1] + cur_vol)
+        elif cur_close < prev_close:
+            obv.append(obv[-1] - cur_vol)
+        else:
+            obv.append(obv[-1])
+    latest = obv[-1]
+    earlier = obv[-6]   # 5 trading days ago
+    # Use absolute value of `earlier` for the denominator so we don't
+    # invert the sign on negative-OBV symbols (a stock in distribution
+    # for a long time can have a deeply negative OBV; latest=-1000,
+    # earlier=-1500 → absolute trend is +33 %, not -33 %).
+    if earlier == 0:
+        return None
+    return (latest - earlier) / abs(earlier) * 100
 
 
 def _compute_volume_ratio(
@@ -247,6 +396,9 @@ async def compute_short_term_signals(
 
     rsi_14 = _compute_rsi_14(closes)
     kd_k, kd_d = _compute_kd_9_3_3(bars)
+    macd, macd_sig, macd_hist = _compute_macd(closes)
+    bol_pct_b, bol_width = _compute_bollinger(closes)
+    obv_change = _compute_obv_5d_change_pct(bars)
 
     # Gap: today's open vs prev close.
     today_open = latest.get("open")
@@ -266,6 +418,12 @@ async def compute_short_term_signals(
         gap_pct=gap_pct,
         kd_k=kd_k,
         kd_d=kd_d,
+        macd=macd,
+        macd_signal=macd_sig,
+        macd_hist=macd_hist,
+        bollinger_pct_b=bol_pct_b,
+        bollinger_width=bol_width,
+        obv_5d_change_pct=obv_change,
     )
     return signals.to_dict()
 

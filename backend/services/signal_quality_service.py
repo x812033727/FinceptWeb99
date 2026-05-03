@@ -68,6 +68,15 @@ _SIGNAL_TAXONOMY: tuple[SignalSpec, ...] = (
     SignalSpec("short_term_signals.{symbol}.return_20d",     "numeric", "Return 20d %"),
     SignalSpec("short_term_signals.{symbol}.kd_k",           "numeric", "KD %K"),
     SignalSpec("short_term_signals.{symbol}.gap_pct",        "numeric", "Gap %"),
+    SignalSpec("short_term_signals.{symbol}.macd_hist",      "numeric", "MACD histogram"),
+    SignalSpec(
+        "short_term_signals.{symbol}.bollinger_pct_b",
+        "numeric", "Bollinger %B",
+    ),
+    SignalSpec(
+        "short_term_signals.{symbol}.obv_5d_change_pct",
+        "numeric", "OBV 5d Δ%",
+    ),
     SignalSpec(
         "short_term_signals.{symbol}.industry_rs.rs_score",
         "numeric", "Industry RS",

@@ -42,15 +42,30 @@ const MARKET_OPTIONS: Array<{ value: string | undefined; label: string }> = [
   { value: "GLOBAL", label: "GLOBAL" },
 ];
 
-function rateColor(rate: number): string {
-  // Mirror the audit CLI's mental model: red < 10 % critical,
-  // yellow 10-50 % under-utilised, green >= 50 % healthy uptake.
+/**
+ * Bar-fill colour for a citation-rate. Mirrors the audit CLI's mental
+ * model so admins reading the bulk script + the AdminPage card see
+ * the same severity bins:
+ *
+ *   < 10 %  critical / near-zero uptake → red
+ *   < 50 %  under-utilised              → yellow
+ *  ≥ 50 %  healthy                      → emerald
+ *
+ * Exported for direct unit tests; the thresholds are policy and
+ * shouldn't drift between the component and any future consumers
+ * (e.g. a sparkline trend view).
+ */
+export function rateColor(rate: number): string {
   if (rate < 0.1) return "bg-red-500/70";
   if (rate < 0.5) return "bg-yellow-500/70";
   return "bg-emerald-500/70";
 }
 
-function rateLabel(rate: number): string {
+/**
+ * Format a 0–1 citation rate as a percentage string with one
+ * decimal. `0` → "0.0%", `1` → "100.0%", `0.6383` → "63.8%".
+ */
+export function rateLabel(rate: number): string {
   return `${(rate * 100).toFixed(1)}%`;
 }
 

@@ -57,6 +57,13 @@ def _initial_ctx(*, market: str, as_of: date | None) -> dict[str, Any]:
         "top_losers": [],
         "index": None,
         "news_sentiment": None,
+        # Backtest auto-backfill diagnostic (PR #216). Populated only
+        # in backtest mode (`as_of != None`); shape:
+        # `{covered: bool, backfilled: int, error?: str, skipped?: str}`.
+        # Lets the user distinguish "archive truly doesn't reach this
+        # date" from "FINMIND_TOKEN is missing/free-tier" or
+        # "FinMind upstream error" without digging into ctx["errors"].
+        "news_backfill": None,
         "per_symbol_news_sentiment": {},
         "focus_briefs": [],
         "macro": None,

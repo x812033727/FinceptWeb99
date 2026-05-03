@@ -45,17 +45,31 @@ async def fetch_market_sentiment(
     FinMind backfill so personas don't surface the empty-archive
     warning. Best-effort — silent fail when FINMIND_TOKEN is missing
     or paywalled. Hot path (archive already populated) is one COUNT
-    query in milliseconds, so no latency cost when not needed."""
+    query in milliseconds, so no latency cost when not needed.
+
+    Surfaces the backfill diagnostic (PR #216) into
+    `ctx["news_backfill"]` so users can see why news is empty when
+    auto-backfill returned nothing — distinguishes "archive truly
+    doesn't reach this date" from "FINMIND_TOKEN is free-tier" or
+    "FinMind upstream error". Without this users couldn't tell the
+    difference and would re-run backtests hoping the warning would
+    disappear."""
     if as_of_dt is not None:
         try:
             from services.news_backfill_service import (
                 ensure_news_archive_covers,
             )
-            await ensure_news_archive_covers(
+            backfill_result = await ensure_news_archive_covers(
                 db, market=market, as_of=as_of_dt.date(),
             )
+            ctx["news_backfill"] = backfill_result
         except Exception as exc:
             record_error("news_backfill", exc)
+            ctx["news_backfill"] = {
+                "covered": False,
+                "backfilled": 0,
+                "error": str(exc),
+            }
 
     try:
         from services.news_sentiment_service import read_recent_market_sentiment

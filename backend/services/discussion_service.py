@@ -1748,6 +1748,14 @@ _BLOCK_ANNOTATIONS: dict[str, str] = {
         "**> 25 視為高度恐慌**（歷史中位數約 16-18），結論時應提及避險建議。"
         "引用時請帶具體值（例：「台 VIX 22.3 + 5d +18%，避險溢價擴大」）。"
     ),
+    "upcoming_events_calendar": (
+        "- upcoming_events_calendar：**未來 30 日法說會 / 除權息行事曆**"
+        "（PR #284，市場層級，限本次討論已關注的標的）。每筆含 `symbol` / "
+        "`next_event`（earnings / ex_dividend）/ `next_event_in_days`（距今天數）/ "
+        "`next_event_date`。**事件前後幾日波動放大、方向難測**，分析師應主動避開"
+        "或為事件風險預留調整空間（停損 / 部位縮減 / 套保）。"
+        "引用時請點名具體標的 + 距今天數（例：「2330 法說 3 日後，建議事件前減倉」）。"
+    ),
     "margin_balance_trend":      "- margin_balance_trend：全市場融資 / 融券餘額趨勢（散戶槓桿與看空代理）。",
     "top_revenue_growers":       "- top_revenue_growers：最新月份營收年增率前 10（基本面）。",
     "active_buybacks":           "- active_buybacks：今日仍在執行庫藏股的公司，**強烈管理層信心訊號**。",
@@ -2240,6 +2248,7 @@ _ALL_PERSONA_BLOCKS: frozenset[str] = frozenset({
     "market_institutional_5d", "taifex_positioning",
     "single_stock_futures_oi",   # PR #282: per-stock 外資 期貨 net OI shift
     "taiwan_vix",                # PR #283: 台指選擇權波動率指數
+    "upcoming_events_calendar",  # PR #284: market-wide 法說 / 除息 calendar
     "overseas_indicators",   # PR #270: SOX/NDX/SPX/DJI/VIX overnight snapshot
     "focus_briefs", "macro", "user_context", "prior_discussions",
 })
@@ -2266,6 +2275,7 @@ _MACRO_PROFILE = frozenset({
 _VALUE_PROFILE = frozenset({
     "focus_briefs", "per_symbol_news_sentiment", "top_revenue_growers",
     "active_buybacks", "news_sentiment", "macro",
+    "upcoming_events_calendar",  # PR #284: event windows for entry/exit timing
 })
 
 _CONTRARIAN_PROFILE = frozenset({
@@ -2275,6 +2285,7 @@ _CONTRARIAN_PROFILE = frozenset({
     "taifex_positioning",   # extreme net OI = contrarian setup
     "single_stock_futures_oi",  # PR #282: extreme per-stock futures OI also a contrarian setup
     "taiwan_vix",               # PR #283: 台 VIX > 25 = panic = contrarian setup
+    "upcoming_events_calendar", # PR #284: events create dislocation opportunities
     "overseas_indicators",  # PR #270: ^VIX spikes = global panic = contrarian setup
     "macro",
 })
@@ -2287,6 +2298,7 @@ _QUANT_PROFILE = frozenset({
     "taifex_positioning",   # market-wide directional bias
     "single_stock_futures_oi",  # PR #282: per-stock futures smart-money lead
     "taiwan_vix",               # PR #283: TW VIX as a vol-regime filter
+    "upcoming_events_calendar", # PR #284: event-risk gating on entries
     "overseas_indicators",  # PR #270: SOX overnight gap is the dominant TW open driver
 })
 
@@ -2295,6 +2307,7 @@ _PORTFOLIO_PROFILE = frozenset({
     "short_term_signals",   # short-term entry/exit timing for held names
     "macro", "news_sentiment", "international_sentiment",
     "overseas_indicators",  # PR #270: risk-on/off positioning needs ^VIX read
+    "upcoming_events_calendar",  # PR #284: position sizing around earnings
 })
 
 _PERSONA_CONTEXT_PROFILES: dict[str, frozenset[str]] = {

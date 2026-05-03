@@ -78,6 +78,19 @@ _SIGNAL_KEYWORDS: dict[str, list[str]] = {
         r"法說", r"法人說明會", r"除息", r"除權",
         r"earnings(?:\s*call|\s*date)?", r"ex.div(?:idend)?",
     ],
+    "upcoming_events_calendar": [
+        # Same pool as the per-symbol upcoming_event — what
+        # changes is the SCOPE (rolling-30d market-wide vs
+        # per-focus-symbol single-event). Audit-wise we want
+        # both keys to register a citation on the same persona
+        # text since either block can be the source the persona
+        # was reading.
+        r"法說", r"法人說明會", r"除息", r"除權",
+        r"earnings(?:\s*call|\s*date)?", r"ex.div(?:idend)?",
+        # New phrases that more naturally suggest "scanning a
+        # broader calendar" rather than a single symbol's date.
+        r"行事曆", r"事件(?:風險|窗口)", r"event[_\s]*calendar",
+    ],
     # Market-wide
     "taifex_positioning": [
         r"台指期", r"未平倉", r"\bOI\b", r"net[_\s]*oi", r"taifex",
@@ -332,6 +345,7 @@ def _detect_present_signals(context: dict[str, Any]) -> set[str]:
         "market_institutional_5d", "macro", "focus_briefs",
         "single_stock_futures_oi",   # PR #282
         "taiwan_vix",                # PR #283
+        "upcoming_events_calendar",  # PR #284
         "user_context", "prior_discussions",
     ):
         if _is_meaningful(context.get(top_key)):

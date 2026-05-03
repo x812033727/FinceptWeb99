@@ -115,6 +115,15 @@ def _initial_ctx(*, market: str, as_of: date | None) -> dict[str, Any]:
         # archive is empty so the schema annotation's gating
         # cleanly hides the prompt mention.
         "taiwan_vix": None,
+        # Market-wide rolling 30-day 法說會 / 除息 calendar
+        # (PR #284). Shape:
+        # `[{symbol, next_event, next_event_in_days, next_event_date}, ...]`
+        # sorted soonest-first. Universe is the set of symbols
+        # already in other ctx blocks (top_foreign_buyers /
+        # top_revenue_growers / single_stock_futures_oi /
+        # focus_briefs / focus_symbols) — biases coverage toward
+        # what the discussion is already tracking.
+        "upcoming_events_calendar": [],
         # Overseas index snapshot (PR #269): SOX / NDX / SPX / DJI /
         # VIX latest close + 1-day % change. Wired in for ALL
         # markets — TW personas need overnight US direction, US
@@ -249,6 +258,19 @@ async def build_market_context(
         )
         await chip.fetch_market_institutional(
             ctx, db, as_of=as_of, record_error=record_error,
+        )
+        # PR #284: market-wide 法說會 / 除息 calendar. Must fire
+        # AFTER top_foreign_buyers / top_revenue_growers /
+        # single_stock_futures_oi / focus_briefs because it draws
+        # its symbol universe from those blocks' output. focus_briefs
+        # is populated later (in the news/owner phase) — that's OK,
+        # the universe is "everything in ctx so far" + focus_symbols,
+        # and a follow-up symbol arriving via focus_briefs just
+        # means the next round picks it up.
+        await chip.fetch_upcoming_events_calendar(
+            ctx, market=market,
+            focus_symbols=focus_symbols,
+            as_of=as_of, record_error=record_error,
         )
 
     # Backtest mode: convert `as_of` (date) → datetime anchor at

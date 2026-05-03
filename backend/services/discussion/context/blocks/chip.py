@@ -202,3 +202,67 @@ async def fetch_taiwan_vix(
             ctx["taiwan_vix"] = snapshot
     except Exception as exc:
         record_error("taiwan_vix", exc)
+
+
+async def fetch_upcoming_events_calendar(
+    ctx: dict[str, Any],
+    *,
+    market: str,
+    focus_symbols: list[str] | None,
+    as_of: date | None,
+    record_error: ErrorRecorder,
+) -> None:
+    """Market-wide rolling 30-day 法說會 / 除息 calendar (PR #284).
+
+    Builds the universe of "currently relevant" symbols from
+    already-populated ctx blocks instead of a static large-cap
+    list, so the calendar surfaces events for stocks the rest
+    of the prompt is already reasoning over. Universe sources:
+      - `focus_symbols` (topic-mentioned stocks)
+      - `top_foreign_buyers` (recent cash-equity smart money)
+      - `top_revenue_growers` (basics standouts)
+      - `single_stock_futures_oi` (futures-side smart money)
+      - `focus_briefs` (per-symbol mini-briefs)
+
+    Failures are silent — `get_market_upcoming_events` already
+    drops per-symbol yfinance errors. A blank calendar reads as
+    "no events in window" which is a meaningful signal in itself.
+    """
+    try:
+        from services.event_calendar_service import (
+            get_market_upcoming_events,
+        )
+
+        symbols: list[str] = []
+        seen: set[str] = set()
+
+        def _push(s: str | None) -> None:
+            if not s:
+                return
+            s = str(s).strip()
+            if s and s not in seen:
+                seen.add(s)
+                symbols.append(s)
+
+        for s in focus_symbols or []:
+            _push(s)
+        for row in (ctx.get("top_foreign_buyers") or []):
+            _push(row.get("symbol") if isinstance(row, dict) else None)
+        for row in (ctx.get("top_revenue_growers") or []):
+            _push(row.get("symbol") if isinstance(row, dict) else None)
+        for row in (ctx.get("single_stock_futures_oi") or []):
+            _push(row.get("symbol") if isinstance(row, dict) else None)
+        for row in (ctx.get("focus_briefs") or []):
+            _push(row.get("symbol") if isinstance(row, dict) else None)
+
+        if not symbols:
+            return
+
+        events = await get_market_upcoming_events(
+            market, symbols, as_of=as_of,
+            lookahead_days=30, limit=20,
+        )
+        if events:
+            ctx["upcoming_events_calendar"] = events
+    except Exception as exc:
+        record_error("upcoming_events_calendar", exc)

@@ -167,3 +167,84 @@ async def get_upcoming_event(
     except Exception:
         pass
     return result
+
+
+# ── Market-wide aggregation (PR #284) ─────────────────────────────
+
+
+# Default window for the broader-market calendar — a 30-day forward
+# horizon catches a full earnings cycle without dragging in events
+# so far out (60+ days) that they're noise relative to short-term
+# decisions.
+_MARKET_WIDE_LOOKAHEAD_DAYS = 30
+
+
+async def get_market_upcoming_events(
+    market: str,
+    symbols: list[str],
+    *,
+    as_of: date | None = None,
+    lookahead_days: int = _MARKET_WIDE_LOOKAHEAD_DAYS,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Aggregate upcoming events across `symbols`, sorted by
+    `next_event_in_days` ascending. Each entry has the same fields
+    `get_upcoming_event` returns plus a `symbol` key + a flat
+    `next_event_date` so the discussion-prompt rendering doesn't
+    have to branch on event type.
+
+    Caller usage (PR #284): collect the universe of "currently
+    relevant" symbols from already-populated ctx blocks
+    (`top_foreign_buyers` / `top_revenue_growers` /
+    `single_stock_futures_oi` / `focus_briefs` / `focus_symbols`)
+    so the calendar surfaces events for stocks the personas are
+    already tracking, not a static large-cap list. The ctx-driven
+    universe biases coverage toward what's actionable in this
+    discussion.
+
+    Each per-symbol lookup hits the existing 24h cache, so
+    repeated rounds within a discussion (or back-to-back
+    discussions over the same trending stocks) only fan out the
+    underlying yfinance call once per symbol per day.
+
+    Defensive handling: per-symbol failures are silently dropped
+    (the event_calendar already returns None on connector error),
+    so a single mid-list yfinance hiccup doesn't blank the whole
+    block.
+    """
+    if not symbols:
+        return []
+
+    seen: set[str] = set()
+    events: list[dict[str, Any]] = []
+    for sym in symbols:
+        sym = (sym or "").strip()
+        if not sym or sym in seen:
+            continue
+        # Synthetic index symbols (`_TAIEX`, `_TAIEX_TR`) carry no
+        # corporate calendar — skip without a yfinance call.
+        if sym.startswith("_"):
+            continue
+        seen.add(sym)
+        ev = await get_upcoming_event(
+            market, sym, as_of, lookahead_days=lookahead_days,
+        )
+        if ev is None or ev.get("next_event") is None:
+            continue
+        next_event = ev["next_event"]
+        next_event_date = (
+            ev.get("earnings_date") if next_event == "earnings"
+            else ev.get("ex_dividend_date")
+        )
+        events.append({
+            "symbol":              sym,
+            "next_event":          next_event,
+            "next_event_in_days":  ev["next_event_in_days"],
+            "next_event_date":     next_event_date,
+        })
+
+    # Sort by soonest-first; ties broken by symbol so the
+    # prompt's day-3 cluster has a stable order across runs
+    # (keeps audit / signal-trend reads reproducible).
+    events.sort(key=lambda e: (e["next_event_in_days"], e["symbol"]))
+    return events[:limit]

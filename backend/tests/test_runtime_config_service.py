@@ -48,6 +48,7 @@ async def admin_user(db_session: AsyncSession) -> User:
 def test_known_keys_includes_all_baseline_tunables():
     keys = svc.known_keys()
     assert "SENTIMENT_DAILY_LLM_CALL_CAP" in keys
+    assert "SENTIMENT_INTERACTIVE_BACKFILL_CAP" in keys
     assert "DISCUSSION_PERSONA_TIMEOUT_SECONDS" in keys
     assert "AI_REQUESTS_VIEWER_DAILY" in keys
     assert "AI_REQUESTS_ANALYST_DAILY" in keys

@@ -71,6 +71,22 @@ _REGISTRY: dict[str, RuntimeSettingSpec] = {
         min_value=0,
         max_value=10_000,
     ),
+    "SENTIMENT_INTERACTIVE_BACKFILL_CAP": RuntimeSettingSpec(
+        key="SENTIMENT_INTERACTIVE_BACKFILL_CAP",
+        type="int",
+        name="Sentiment interactive backfill cap",
+        description=(
+            "Per-day cap on inline LLM calls fired by the backtest news "
+            "auto-backfill (separate from the hourly cron's cap). Each "
+            "call scores up to 20 freshly-backfilled headlines so the "
+            "discussion round that triggered the backfill reads scored "
+            "data instead of NULL-filtered nothing. 100 = ~2 000 "
+            "articles/day = ~10-40 backtests fully scored inline. Set 0 "
+            "to disable inline scoring (rounds will read empty news)."
+        ),
+        min_value=0,
+        max_value=10_000,
+    ),
     "DISCUSSION_PERSONA_TIMEOUT_SECONDS": RuntimeSettingSpec(
         key="DISCUSSION_PERSONA_TIMEOUT_SECONDS",
         type="int",

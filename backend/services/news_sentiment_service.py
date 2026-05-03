@@ -64,23 +64,64 @@ async def _can_make_llm_call(db: AsyncSession | None = None) -> bool:
     the cap, so we'd rather skip a scoring pass than risk spending an
     unbounded amount during a multi-hour Redis incident.
     """
-    cap = settings.SENTIMENT_DAILY_LLM_CALL_CAP
+    return await _can_reserve_llm_call(
+        db,
+        cap_setting="SENTIMENT_DAILY_LLM_CALL_CAP",
+        compiled_default=settings.SENTIMENT_DAILY_LLM_CALL_CAP,
+        redis_key_prefix="sentiment:llm_calls",
+    )
+
+
+async def _can_make_interactive_llm_call(
+    db: AsyncSession | None = None,
+) -> bool:
+    """Same shape as `_can_make_llm_call` but spends from a separate
+    daily budget — the inline `score_specific_articles` path used by
+    the backtest news auto-backfill (`services.news_backfill_service`).
+
+    Why a separate counter: the cron and the interactive path serve
+    different SLAs. A heavy day of backtests must not starve the
+    hourly cron's ability to score the live RSS fire-hose, and a busy
+    cron day must not block a user who picks an old backtest date.
+    Two budgets, two counters, two runtime tunables.
+    """
+    return await _can_reserve_llm_call(
+        db,
+        cap_setting="SENTIMENT_INTERACTIVE_BACKFILL_CAP",
+        compiled_default=settings.SENTIMENT_INTERACTIVE_BACKFILL_CAP,
+        redis_key_prefix="sentiment:interactive_llm_calls",
+    )
+
+
+async def _can_reserve_llm_call(
+    db: AsyncSession | None,
+    *,
+    cap_setting: str,
+    compiled_default: int,
+    redis_key_prefix: str,
+) -> bool:
+    """Shared cap-reserve mechanic. See `_can_make_llm_call` for the
+    fail-closed semantics — both daily and interactive callers share
+    identical Redis-incr-with-TTL behaviour, only the key prefix and
+    runtime-config setting name differ.
+    """
+    cap = compiled_default
     if db is not None:
         try:
             from services.runtime_config_service import get_int as _get_int
-            cap = await _get_int(db, "SENTIMENT_DAILY_LLM_CALL_CAP")
+            cap = await _get_int(db, cap_setting)
         except Exception as exc:
             log.warning("news_sentiment.runtime_config_failed",
-                        extra={"error": str(exc)})
+                        extra={"setting": cap_setting, "error": str(exc)})
     if cap <= 0:
         return True
     today = datetime.now(UTC).strftime("%Y%m%d")
-    key = f"sentiment:llm_calls:{today}"
+    key = f"{redis_key_prefix}:{today}"
     try:
         count = await cache_incr(key, ttl_seconds=86400)
     except Exception as exc:
         log.error("news_sentiment.cap_check_failed_fail_closed",
-                  extra={"error": str(exc)})
+                  extra={"setting": cap_setting, "error": str(exc)})
         return False
     return count <= cap
 
@@ -353,6 +394,139 @@ async def score_pending(
     finally:
         if own_session:
             await session.close()
+
+
+async def score_specific_articles(
+    db: AsyncSession,
+    *,
+    article_ids: list[int],
+    batch_size: int = _BATCH_SIZE,
+    provider: str | None = None,
+    model: str | None = None,
+    persona_id_for_usage: str = "_system:news_sentiment_interactive",
+) -> dict[str, int]:
+    """Score a fixed list of article IDs synchronously, blocking until
+    every batch finishes or the interactive cap is hit.
+
+    Distinct from `score_pending` (the hourly cron) in three ways:
+      - Scope is a fixed ID list, not "any unscored row in window".
+      - Cap is `SENTIMENT_INTERACTIVE_BACKFILL_CAP`, with its own
+        Redis counter so a busy cron day doesn't block a user backtest
+        and a heavy backtest day doesn't starve the cron.
+      - Usage is recorded under `_system:news_sentiment_interactive`
+        so the AdminPage UsageCard distinguishes interactive cost from
+        background cron cost.
+
+    Used by the backtest news auto-backfill: after `insert_news_articles`
+    persists rows pulled from FinMind, this function runs a few LLM
+    batches against them so the discussion round that triggered the
+    backfill reads SCORED data instead of NULL-filtered nothing.
+
+    Returns the same shape as `score_pending`:
+      `{"considered": int, "scored": int, "batches": int, "cap_hit": int}`
+
+    `article_ids` is the candidate set; rows already scored (race with
+    cron) are silently dropped. `batch_size` matches the cron path.
+    `provider`/`model` default to the `news_sentiment` system task
+    config so admin overrides apply automatically.
+    """
+    if not article_ids:
+        return {"considered": 0, "scored": 0, "batches": 0, "cap_hit": 0}
+
+    if provider is None or model is None:
+        from services.system_task_config_service import resolve as _resolve_task
+        r_provider, r_model = await _resolve_task(db, "news_sentiment")
+        provider = provider or r_provider
+        model = model or r_model
+
+    considered = 0
+    scored_count = 0
+    batches_run = 0
+    cap_hit = False
+
+    remaining = list(article_ids)
+    while remaining:
+        if not await _can_make_interactive_llm_call(db):
+            cap_hit = True
+            log.warning(
+                "news_sentiment.interactive_cap_hit",
+                extra={
+                    "remaining": len(remaining),
+                    "scored_so_far": scored_count,
+                },
+            )
+            break
+
+        chunk_ids = remaining[:batch_size]
+        remaining = remaining[batch_size:]
+
+        # Re-fetch fresh — the cron may have scored some of these
+        # between when the caller built the ID list and now. Skip
+        # any row that already has a score so we don't double-spend
+        # the interactive budget.
+        stmt = (
+            select(NewsArticle)
+            .where(
+                NewsArticle.id.in_(chunk_ids),
+                NewsArticle.sentiment_scored_at.is_(None),
+            )
+        )
+        rows = list((await db.scalars(stmt)).all())
+        if not rows:
+            continue
+
+        scored = await _score_batch(
+            rows, provider=provider, model=model, db=db,
+        )
+        ids = [r.id for r in rows]
+        written = await _write_scores(db, scored, fallback_ids=ids)
+        considered += len(rows)
+        scored_count += written
+        batches_run += 1
+
+        if not scored:
+            # LLM produced nothing usable — break instead of burning
+            # remaining batches on the same failure mode.
+            break
+
+    return {
+        "considered": considered,
+        "scored": scored_count,
+        "batches": batches_run,
+        "cap_hit": int(cap_hit),
+    }
+
+
+async def select_unscored_in_window(
+    db: AsyncSession,
+    *,
+    market: str,
+    start: datetime,
+    end: datetime,
+    limit: int,
+) -> list[int]:
+    """Return up to `limit` article IDs in [start, end] for `market`
+    that still have NULL `sentiment_scored_at`. Used by
+    `news_backfill_service` to pick the just-backfilled rows to feed
+    into `score_specific_articles` — picking by window instead of
+    capturing IDs from the insert avoids the dialect-specific
+    RETURNING handling and tolerates partial-overlap re-runs.
+
+    Ordered newest-first so when the cap is hit we score the freshest
+    articles (which is what the discussion round cares about most).
+    """
+    stmt = (
+        select(NewsArticle.id)
+        .where(
+            NewsArticle.market == market,
+            NewsArticle.published_at >= start,
+            NewsArticle.published_at <= end,
+            NewsArticle.sentiment_scored_at.is_(None),
+        )
+        .order_by(NewsArticle.published_at.desc())
+        .limit(limit)
+    )
+    return list((await db.scalars(stmt)).all())
 
 
 async def read_recent_market_sentiment(

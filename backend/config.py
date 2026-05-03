@@ -143,6 +143,16 @@ class Settings(BaseSettings):
     # FinMind's TW news firehose. Increase for multi-market deployments.
     SENTIMENT_DAILY_LLM_CALL_CAP: int = 100
 
+    # News sentiment scorer: hard cap on LLM calls per UTC day for the
+    # *interactive* path that fires inline after a backtest auto-backfill
+    # (`news_backfill_service`). Separate budget from the cron's
+    # `SENTIMENT_DAILY_LLM_CALL_CAP` so a heavy backtest can't starve the
+    # daily cron, and vice versa. Same per-batch math: 100 calls = 2,000
+    # articles/day max — for a typical backtest window of ~50-200 articles
+    # this lets ~10-40 backtests/day score fully inline before falling
+    # through to the cron-grade-it-later path.
+    SENTIMENT_INTERACTIVE_BACKFILL_CAP: int = 100
+
     # Discussion: per-persona LLM timeout (seconds). When a single persona's
     # turn doesn't complete in this window we abort it, persist a placeholder,
     # and move on to the next persona — prevents one stuck provider from

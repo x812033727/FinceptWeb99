@@ -593,3 +593,222 @@ async def test_read_symbol_sentiment_default_window_is_seven_days(
     assert "recent" in titles
     assert "ancient" not in titles
     assert out["considered"] == 1
+
+
+# ── score_specific_articles (inline backfill scorer) ──────────────
+
+
+@pytest.mark.asyncio
+async def test_score_specific_articles_scores_only_listed_ids(
+    db_session: AsyncSession,
+):
+    """Given an explicit ID list, score those articles inline. Other
+    unscored articles in the same window are ignored — scope is the
+    fixed list, not "all unscored rows" like the cron does."""
+    await insert_news_articles(db_session, [
+        _row("listed bullish", "https://example.com/inline_a",
+             symbol="A_INLINE"),
+        _row("listed bearish", "https://example.com/inline_b",
+             symbol="B_INLINE"),
+        _row("unlisted neutral", "https://example.com/inline_c",
+             symbol="C_INLINE"),
+    ])
+    rows = (await db_session.scalars(
+        select(NewsArticle).where(NewsArticle.symbol.in_(
+            ["A_INLINE", "B_INLINE", "C_INLINE"],
+        )).order_by(NewsArticle.id)
+    )).all()
+    id_a, id_b, id_c = rows[0].id, rows[1].id, rows[2].id
+
+    fake = (
+        f'[{{"id": {id_a}, "score": 0.7, "reason": "x"}},'
+        f' {{"id": {id_b}, "score": -0.5, "reason": "y"}}]'
+    )
+    with patch(
+        "services.news_sentiment_service.stream_chat",
+        side_effect=_stream_text(fake),
+    ):
+        result = await news_sentiment_service.score_specific_articles(
+            db_session, article_ids=[id_a, id_b],
+        )
+
+    assert result["considered"] == 2
+    assert result["scored"] == 2
+    assert result["batches"] == 1
+    assert result["cap_hit"] == 0
+
+    # Listed articles got scored.
+    refreshed = (await db_session.scalars(
+        select(NewsArticle).where(NewsArticle.id.in_([id_a, id_b, id_c]))
+        .order_by(NewsArticle.id)
+    )).all()
+    assert refreshed[0].sentiment_score == 0.7
+    assert refreshed[1].sentiment_score == -0.5
+    # Unlisted article was not touched — confirms scope is the ID list,
+    # not "any unscored row in the same window".
+    assert refreshed[2].sentiment_score is None
+    assert refreshed[2].sentiment_scored_at is None
+
+
+@pytest.mark.asyncio
+async def test_score_specific_articles_skips_already_scored(
+    db_session: AsyncSession,
+):
+    """Race with cron: an ID in the list may have been scored between
+    when the caller built the list and now. Re-fetch should skip
+    already-scored rows so we don't double-spend the interactive
+    budget."""
+    now = datetime.now(UTC)
+    await insert_news_articles(db_session, [
+        _row("already scored", "https://example.com/race_a",
+             symbol="RACE_A"),
+        _row("still pending", "https://example.com/race_b",
+             symbol="RACE_B"),
+    ])
+    rows = (await db_session.scalars(
+        select(NewsArticle).where(NewsArticle.symbol.in_(
+            ["RACE_A", "RACE_B"],
+        )).order_by(NewsArticle.id)
+    )).all()
+    id_a, id_b = rows[0].id, rows[1].id
+
+    # Pretend the cron already scored RACE_A.
+    rows[0].sentiment_score = 0.4
+    rows[0].sentiment_label = "bullish"
+    rows[0].sentiment_scored_at = now
+    await db_session.commit()
+
+    fake = f'[{{"id": {id_b}, "score": -0.3, "reason": "z"}}]'
+    with patch(
+        "services.news_sentiment_service.stream_chat",
+        side_effect=_stream_text(fake),
+    ):
+        result = await news_sentiment_service.score_specific_articles(
+            db_session, article_ids=[id_a, id_b],
+        )
+
+    # Only RACE_B was actually scored (RACE_A skipped).
+    assert result["considered"] == 1
+    assert result["scored"] == 1
+
+    refreshed = await db_session.get(NewsArticle, id_a)
+    # Cron's score preserved, not overwritten.
+    assert refreshed.sentiment_score == 0.4
+
+
+@pytest.mark.asyncio
+async def test_score_specific_articles_empty_list_returns_zeros(
+    db_session: AsyncSession,
+):
+    """Empty input: no DB hits, no LLM call, return zero counters.
+    Used by the backfill orchestrator when nothing was inserted."""
+    result = await news_sentiment_service.score_specific_articles(
+        db_session, article_ids=[],
+    )
+    assert result == {
+        "considered": 0, "scored": 0,
+        "batches": 0, "cap_hit": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_score_specific_articles_respects_interactive_cap(
+    db_session: AsyncSession,
+):
+    """Interactive cap exhausts → loop breaks, returns cap_hit=1.
+    Verifies the cap counter is the SEPARATE one
+    (`sentiment:interactive_llm_calls`), not the cron's daily."""
+    await insert_news_articles(db_session, [
+        _row(f"cap test {i}", f"https://example.com/cap_{i}",
+             symbol=f"CAP_{i}")
+        for i in range(3)
+    ])
+    rows = (await db_session.scalars(
+        select(NewsArticle).where(NewsArticle.link.like(
+            "https://example.com/cap_%",
+        )).order_by(NewsArticle.id)
+    )).all()
+    ids = [r.id for r in rows]
+
+    # Cap returns False → no batches run.
+    with patch(
+        "services.news_sentiment_service._can_make_interactive_llm_call",
+        return_value=False,
+    ):
+        result = await news_sentiment_service.score_specific_articles(
+            db_session, article_ids=ids,
+        )
+
+    assert result["batches"] == 0
+    assert result["scored"] == 0
+    assert result["cap_hit"] == 1
+
+
+# ── select_unscored_in_window ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_select_unscored_in_window_returns_only_unscored(
+    db_session: AsyncSession,
+):
+    """The reader returns IDs of only NULL-`sentiment_scored_at` rows
+    in the date window, newest-first. Used by news_backfill_service to
+    pick the just-inserted rows for inline scoring."""
+    base = datetime(2024, 6, 10, 12, 0, tzinfo=UTC)
+    await insert_news_articles(db_session, [
+        _row("in-window unscored old",
+             "https://example.com/win_a",
+             symbol="WIN_A", published_at=base),
+        _row("in-window unscored new",
+             "https://example.com/win_b",
+             symbol="WIN_B", published_at=base + timedelta(hours=4)),
+        _row("in-window scored",
+             "https://example.com/win_c",
+             symbol="WIN_C", published_at=base + timedelta(hours=2)),
+        _row("out-of-window",
+             "https://example.com/win_d",
+             symbol="WIN_D", published_at=base + timedelta(days=60)),
+    ])
+    rows = (await db_session.scalars(
+        select(NewsArticle).where(NewsArticle.link.like(
+            "https://example.com/win_%",
+        )).order_by(NewsArticle.id)
+    )).all()
+    a, b, c, _d = rows[0], rows[1], rows[2], rows[3]
+    # Mark C as scored.
+    c.sentiment_score = 0.0
+    c.sentiment_label = "neutral"
+    c.sentiment_scored_at = datetime.now(UTC)
+    await db_session.commit()
+
+    out = await news_sentiment_service.select_unscored_in_window(
+        db_session, market="TW",
+        start=base - timedelta(days=1),
+        end=base + timedelta(days=1),
+        limit=10,
+    )
+
+    # Newest-first: B (hour 4) before A (hour 0). C excluded (scored).
+    # D excluded (out of window).
+    assert out == [b.id, a.id]
+
+
+@pytest.mark.asyncio
+async def test_select_unscored_in_window_respects_limit(
+    db_session: AsyncSession,
+):
+    base = datetime(2024, 6, 10, 12, 0, tzinfo=UTC)
+    await insert_news_articles(db_session, [
+        _row(f"limit test {i}",
+             f"https://example.com/lim_{i}",
+             symbol=f"LIM_{i}",
+             published_at=base + timedelta(minutes=i))
+        for i in range(5)
+    ])
+    out = await news_sentiment_service.select_unscored_in_window(
+        db_session, market="TW",
+        start=base - timedelta(hours=1),
+        end=base + timedelta(hours=1),
+        limit=3,
+    )
+    assert len(out) == 3

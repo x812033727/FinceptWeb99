@@ -566,3 +566,161 @@ async def test_concurrent_lock_contention_skips_second_caller(
     assert out["covered"] is False
     assert out.get("skipped") == "lock"
     backfill_mock.assert_not_awaited()
+
+
+# ── inline score-on-backfill (PR-F.5 / option A) ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_backfill_triggers_inline_scoring(
+    db_session: AsyncSession,
+):
+    """End-to-end: when backfill inserts rows, the orchestrator MUST
+    fire `_score_inserted_window` so the discussion round that
+    triggered the backfill reads scored data instead of NULL-filtered
+    nothing. Verified via mock — actual scoring logic is unit-tested
+    in `test_news_sentiment_service`."""
+    as_of = date(2024, 6, 15)
+
+    async def _fake_backfill(*, market, as_of):
+        await insert_news_articles(
+            db_session,
+            _seed_articles("TW", 6, datetime(2024, 6, 10, 9, 0, tzinfo=UTC)),
+        )
+        return 6
+
+    score_mock = AsyncMock(return_value={
+        "considered": 6, "scored": 6,
+        "batches": 1, "cap_hit": 0,
+    })
+    with patch.object(
+        news_backfill_service, "_do_backfill",
+        new=AsyncMock(side_effect=_fake_backfill),
+    ), patch.object(
+        news_backfill_service, "_score_inserted_window",
+        new=score_mock,
+    ):
+        out = await news_backfill_service.ensure_news_archive_covers(
+            db_session, market="TW", as_of=as_of,
+        )
+
+    score_mock.assert_awaited_once_with(market="TW", as_of=as_of)
+    assert out["backfilled"] == 6
+    assert out["scored"] == 6
+    assert out["scoring_batches"] == 1
+    assert out["scoring_cap_hit"] is False
+
+
+@pytest.mark.asyncio
+async def test_backfill_skips_inline_scoring_when_zero_inserted(
+    db_session: AsyncSession,
+):
+    """Don't burn LLM calls on a no-op backfill (FinMind returned []
+    for whatever reason). Inline scorer must not fire when the helper
+    returns 0 rows."""
+    as_of = date(2024, 6, 15)
+
+    score_mock = AsyncMock()
+    with patch.object(
+        news_backfill_service, "_do_backfill",
+        new=AsyncMock(return_value=0),
+    ), patch.object(
+        news_backfill_service, "_score_inserted_window",
+        new=score_mock,
+    ):
+        out = await news_backfill_service.ensure_news_archive_covers(
+            db_session, market="TW", as_of=as_of,
+        )
+
+    score_mock.assert_not_awaited()
+    assert out["backfilled"] == 0
+    # Result still surfaces the (zero) scoring stats so downstream
+    # diagnostic UI can render them uniformly.
+    assert out["scored"] == 0
+    assert out["scoring_batches"] == 0
+    assert out["scoring_cap_hit"] is False
+
+
+@pytest.mark.asyncio
+async def test_backfill_inline_scoring_failure_does_not_break_backfill(
+    db_session: AsyncSession,
+):
+    """If the inline scorer raises (LLM provider misconfigured, Redis
+    cap counter blew up), the backfill itself still succeeded —
+    `backfilled` stays accurate, `covered` reflects archive state, and
+    `scoring_error` surfaces in the result for diagnostics."""
+    as_of = date(2024, 6, 15)
+
+    async def _fake_backfill(*, market, as_of):
+        await insert_news_articles(
+            db_session,
+            _seed_articles("TW", 6, datetime(2024, 6, 10, 9, 0, tzinfo=UTC)),
+        )
+        return 6
+
+    # _score_inserted_window catches its own errors and returns the
+    # zero-stats dict with `error` key. Simulate that contract.
+    score_stub = AsyncMock(return_value={
+        "considered": 0, "scored": 0,
+        "batches": 0, "cap_hit": 0,
+        "error": "LLM provider unavailable",
+    })
+    with patch.object(
+        news_backfill_service, "_do_backfill",
+        new=AsyncMock(side_effect=_fake_backfill),
+    ), patch.object(
+        news_backfill_service, "_score_inserted_window",
+        new=score_stub,
+    ):
+        out = await news_backfill_service.ensure_news_archive_covers(
+            db_session, market="TW", as_of=as_of,
+        )
+
+    assert out["backfilled"] == 6
+    assert out["covered"] is True
+    assert out["scored"] == 0
+    assert out.get("scoring_error") == "LLM provider unavailable"
+
+
+@pytest.mark.asyncio
+async def test_score_inserted_window_picks_up_just_backfilled_rows(
+    db_session: AsyncSession,
+):
+    """Direct test of the helper: insert N rows clustered around the
+    anchor, confirm `_score_inserted_window` selects all of them and
+    forwards the ID set to `score_specific_articles`. No LLM is
+    actually invoked — the downstream scorer is mocked so this stays
+    a pure plumbing test."""
+    from sqlalchemy import select as _select
+
+    from models.news_article import NewsArticle as _NA
+
+    as_of = date(2024, 6, 15)
+    base_dt = datetime(2024, 6, 14, 12, 0, tzinfo=UTC)
+    await insert_news_articles(
+        db_session, _seed_articles("TW", 4, base_dt),
+    )
+    # Pull the IDs we just inserted via a market filter — the helper
+    # uses a wider date window (`as_of ± _BACKFILL_DAYS_BACK/_FORWARD`),
+    # so anything in the test's `_seed_articles` cluster qualifies.
+    expected_ids = sorted((await db_session.scalars(
+        _select(_NA.id).where(_NA.market == "TW")
+    )).all())
+
+    score_mock = AsyncMock(return_value={
+        "considered": len(expected_ids), "scored": len(expected_ids),
+        "batches": 1, "cap_hit": 0,
+    })
+    with patch(
+        "services.news_sentiment_service.score_specific_articles",
+        new=score_mock,
+    ):
+        result = await news_backfill_service._score_inserted_window(
+            market="TW", as_of=as_of,
+        )
+
+    assert result["scored"] == len(expected_ids)
+    assert result["batches"] == 1
+    score_mock.assert_awaited_once()
+    actual_ids = sorted(score_mock.await_args.kwargs["article_ids"])
+    assert actual_ids == expected_ids

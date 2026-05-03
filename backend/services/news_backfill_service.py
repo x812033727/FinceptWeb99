@@ -53,8 +53,10 @@ _BACKFILL_DAYS_BACK = 30
 _BACKFILL_DAYS_FORWARD = 1  # capture publish-date-after-event articles
 
 # Redis lock so two concurrent rounds for the same date don't both fire
-# the FinMind call. TTL covers a slow chunk + reasonable retry slack.
-_LOCK_TTL_SECONDS = 60
+# the FinMind call. TTL covers the FinMind chunk + the inline LLM
+# scoring pass (up to ~5 batches × ~2-3 s each at default cap), with
+# slack for retry.
+_LOCK_TTL_SECONDS = 180
 
 
 def _lock_key(market: str, as_of: date) -> str:
@@ -126,6 +128,90 @@ def _format_finmind_error(exc: BaseException) -> str:
     if body_msg:
         return f"FinMind error: {body_msg}"
     return _sanitise_token(str(exc))
+
+
+async def _score_inserted_window(
+    *, market: str, as_of: date,
+) -> dict[str, int]:
+    """Inline-score the window we just backfilled so the discussion
+    round that triggered this backfill reads SCORED rows instead of
+    NULL-filtered nothing.
+
+    Without this step:
+      1. backfill inserts ~50-200 articles (sentiment_score=NULL),
+      2. read_recent_market_sentiment filters NULL rows out via
+         `sentiment_score IS NOT NULL`,
+      3. ctx["news_sentiment"] arrives empty,
+      4. personas debate without news context — defeating the
+         entire point of the auto-backfill.
+
+    The inline scorer respects its own daily cap
+    (`SENTIMENT_INTERACTIVE_BACKFILL_CAP`) so a heavy backtest day
+    can't starve the cron's budget. When the cap is hit the
+    remainder stays NULL and the hourly cron picks them up later.
+
+    Returns the `score_specific_articles` result dict, or
+    `{"considered": 0, ...}` when nothing was found to score.
+    Errors logged but never raised — best-effort, the backfill itself
+    succeeded.
+    """
+    from datetime import datetime as _dt
+
+    from db.session import AsyncSessionLocal
+    from services.news_sentiment_service import (
+        score_specific_articles, select_unscored_in_window,
+    )
+
+    # Match the window the backfill just wrote into. Use UTC bounds so
+    # the same query semantics work on Postgres + SQLite test runs.
+    start_dt = _dt.combine(
+        as_of - timedelta(days=_BACKFILL_DAYS_BACK),
+        _dt.min.time(), tzinfo=UTC,
+    )
+    end_dt = _dt.combine(
+        as_of + timedelta(days=_BACKFILL_DAYS_FORWARD),
+        _dt.max.time(), tzinfo=UTC,
+    )
+
+    try:
+        async with AsyncSessionLocal() as score_db:
+            ids = await select_unscored_in_window(
+                score_db, market=market,
+                start=start_dt, end=end_dt,
+                # Bounded by the interactive cap × batch size so we
+                # don't fan out 5000 IDs into a function that'll only
+                # score the first 2000 anyway. 100 calls × 20 = 2000.
+                limit=2_000,
+            )
+            if not ids:
+                return {
+                    "considered": 0, "scored": 0,
+                    "batches": 0, "cap_hit": 0,
+                }
+            stats = await score_specific_articles(
+                score_db, article_ids=ids,
+            )
+        log.info(
+            "news_backfill.inline_scored",
+            extra={
+                "as_of": as_of.isoformat(),
+                "considered": stats["considered"],
+                "scored": stats["scored"],
+                "batches": stats["batches"],
+                "cap_hit": stats["cap_hit"],
+            },
+        )
+        return stats
+    except Exception as exc:
+        log.warning(
+            "news_backfill.inline_score_failed",
+            extra={"as_of": as_of.isoformat(), "error": str(exc)},
+        )
+        return {
+            "considered": 0, "scored": 0,
+            "batches": 0, "cap_hit": 0,
+            "error": str(exc),
+        }
 
 
 async def ensure_news_archive_covers(
@@ -278,6 +364,20 @@ async def ensure_news_archive_covers(
                             "error": error_str,
                         },
                     )
+        # Inline-score the freshly-backfilled rows BEFORE releasing
+        # the lock — this is the whole point of the auto-backfill.
+        # Without this the round reads NULL-filtered nothing and
+        # personas debate without news context. Bounded by
+        # SENTIMENT_INTERACTIVE_BACKFILL_CAP; cap-hit means the
+        # remainder waits for the hourly cron.
+        scoring_stats: dict[str, int] = {
+            "considered": 0, "scored": 0,
+            "batches": 0, "cap_hit": 0,
+        }
+        if backfilled > 0:
+            scoring_stats = await _score_inserted_window(
+                market=market, as_of=as_of,
+            )
     finally:
         await release_lock(lock_key)
 
@@ -292,7 +392,16 @@ async def ensure_news_archive_covers(
     result: dict = {
         "covered": new_count >= _MIN_ARTICLES_THRESHOLD,
         "backfilled": backfilled,
+        # Inline-scoring stats so the discussion's `news_backfill`
+        # diagnostic surfaces "we wrote 200 rows AND scored 100 of
+        # them" — distinguishes "nothing to read" from "read but
+        # cron hasn't caught up" cases the user used to hit.
+        "scored": scoring_stats.get("scored", 0),
+        "scoring_batches": scoring_stats.get("batches", 0),
+        "scoring_cap_hit": bool(scoring_stats.get("cap_hit", 0)),
     }
+    if scoring_stats.get("error"):
+        result["scoring_error"] = scoring_stats["error"]
     if error_str:
         result["error"] = error_str
     if fallback_used:

@@ -61,6 +61,18 @@ def _lock_key(market: str, as_of: date) -> str:
     return f"lock:news_backfill:{market}:{as_of.isoformat()}"
 
 
+def _sanitise_token(s: str) -> str:
+    """Strip any `token=<jwt>` query param from the string. httpx's
+    default 4xx error message includes the full request URL — and the
+    URL has the FinMind token as a query string. Without sanitisation,
+    that token leaks into `ctx["news_backfill"]["error"]` (which the
+    user sees in the discussion JSON, browser DevTools, etc).
+    Conservative regex: strips the value only, preserves surrounding
+    URL structure for diagnostics."""
+    import re
+    return re.sub(r"token=[^&\s'\"]+", "token=<redacted>", s)
+
+
 async def _count_recent_articles(
     db: AsyncSession, *, market: str, end: date,
 ) -> int:
@@ -128,11 +140,33 @@ async def ensure_news_archive_covers(
     try:
         backfilled = await _do_backfill(market=market, as_of=as_of)
     except Exception as exc:
+        # FinMind tier-mismatch / dataset-paywall errors come through
+        # as HTTP 400 with a JSON body that says e.g. "Your level is
+        # register. Please update your user level." httpx's default
+        # error string only shows "Client error '400 Bad Request'" +
+        # the URL, which is useless for diagnosis (and also leaks the
+        # token in the URL). Pull the upstream body message out via
+        # the shared paywall detector + surface it as the error.
+        from data.tw.finmind_paywall import (
+            extract_body_message, looks_like_paywall,
+        )
+        body_msg = extract_body_message(exc)
+        if body_msg and looks_like_paywall(body_msg):
+            error_str = (
+                f"FinMind paywall — TaiwanStockNews requires a paid "
+                f"sponsor tier. Upstream says: {body_msg}"
+            )
+        elif body_msg:
+            error_str = f"FinMind error: {body_msg}"
+        else:
+            # No JSON body parseable from the response — fall back to
+            # httpx's default message (sanitised to drop the token).
+            error_str = _sanitise_token(str(exc))
         log.warning(
             "news_backfill.failed",
-            extra={"as_of": as_of.isoformat(), "error": str(exc)},
+            extra={"as_of": as_of.isoformat(), "error": error_str},
         )
-        return {"covered": False, "backfilled": 0, "error": str(exc)}
+        return {"covered": False, "backfilled": 0, "error": error_str}
     finally:
         await release_lock(lock_key)
 

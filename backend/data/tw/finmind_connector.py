@@ -146,16 +146,32 @@ async def get_margin(symbol: str, start_date: str, end_date: str | None = None) 
 
 
 # ── Monthly revenue (月營收) ──────────────────────────────────────
+#
+# FinMind's `TaiwanStockMonthRevenue` row shape:
+#   date          — report-publish date (YYYY-MM-DD), e.g. "2026-02-10"
+#   stock_id      — symbol
+#   revenue       — current month revenue (千元 NTD)
+#   revenue_year  — REVENUE PERIOD YEAR (integer), e.g. 2026   (NOT YoY %!)
+#   revenue_month — REVENUE PERIOD MONTH (integer 1-12)         (NOT MoM %!)
+#
+# The connector deliberately does NOT expose `revenue_yoy` / `revenue_mom`
+# from the upstream row because FinMind's `TaiwanStockMonthRevenue` basic
+# dataset doesn't carry growth percentages — they're a derived metric.
+# Earlier code mapped `revenue_year` → `revenue_yoy` thinking it was the
+# growth rate, which produced absurd "+2026% YoY" values in production
+# (PR #211). The ingest task computes YoY/MoM by joining historical rows
+# in `tw_revenue_monthly`.
+
 
 async def get_monthly_revenue(symbol: str, start_date: str, end_date: str | None = None) -> list[dict[str, Any]]:
     rows = await _query("TaiwanStockMonthRevenue", symbol, start_date, end_date)
     return [
         {
-            "date":          r["date"],
-            "symbol":        symbol,
-            "revenue":       r.get("revenue", 0),           # 千元 NTD
-            "revenue_mom":   r.get("revenue_month", 0),     # 月增率 %
-            "revenue_yoy":   r.get("revenue_year", 0),      # 年增率 %
+            "date":         r["date"],
+            "symbol":       symbol,
+            "revenue":      r.get("revenue", 0),           # 千元 NTD
+            "period_year":  r.get("revenue_year"),         # int, not %
+            "period_month": r.get("revenue_month"),        # int 1-12, not %
         }
         for r in rows
     ]
@@ -175,11 +191,11 @@ async def get_monthly_revenue_market_wide(
     rows = await _query("TaiwanStockMonthRevenue", "", start_date, end_date)
     return [
         {
-            "date":        r["date"],
-            "symbol":      r.get("stock_id", ""),
-            "revenue":     r.get("revenue", 0),           # 千元 NTD
-            "revenue_mom": r.get("revenue_month", 0),
-            "revenue_yoy": r.get("revenue_year", 0),
+            "date":         r["date"],
+            "symbol":       r.get("stock_id", ""),
+            "revenue":      r.get("revenue", 0),           # 千元 NTD
+            "period_year":  r.get("revenue_year"),         # int, not %
+            "period_month": r.get("revenue_month"),        # int 1-12, not %
         }
         for r in rows
         if r.get("stock_id")
@@ -439,18 +455,27 @@ async def get_buyback_market_wide(
 
 # ── News ──────────────────────────────────────────────────────────
 
-async def get_news(start_date: str, symbol: str = "") -> list[dict[str, Any]]:
+async def get_news(
+    start_date: str,
+    symbol: str = "",
+    end_date: str | None = None,
+) -> list[dict[str, Any]]:
     """
     Taiwan stock news. `symbol=""` returns market-wide articles
     (FinMind's data_id="" returns everyone's news in one call — a
     huge quota saving versus per-symbol fan-out). Pass a specific
     symbol when only that issuer's headlines are needed.
 
+    `end_date` (PR #212) bounds the response on the server side, so
+    historical backfills can chunk by month without pulling everything
+    after `start_date` and post-filtering. Required by the paid-tier
+    backfill script in `scripts/backfill_news_finmind.py`.
+
     Returns [] silently when FinMind quota is exhausted; the daily
     ingest task records this via `ingest_health` so operators can
     see degraded mode in the admin dashboard.
     """
-    rows = await _query("TaiwanStockNews", symbol, start_date)
+    rows = await _query("TaiwanStockNews", symbol, start_date, end_date)
     return [
         {
             "title":        r.get("title", ""),

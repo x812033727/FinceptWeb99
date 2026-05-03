@@ -878,6 +878,16 @@ async def get_revenue(symbol: str, months: int = 12) -> list[dict[str, Any]]:
         except Exception:
             pass
 
+    # FinMind connector no longer fakes growth rates (PR #211 — the
+    # upstream `revenue_year` / `revenue_month` were period integers,
+    # not YoY/MoM percentages). Stamp `revenue_yoy=None, revenue_mom=None`
+    # on every FinMind row so the API response shape stays consistent
+    # for callers that expect these keys. MOPS rows already carry real
+    # yoy/mom from "去年同月增減百分比" so we leave those untouched.
+    for row in result:
+        row.setdefault("revenue_yoy", None)
+        row.setdefault("revenue_mom", None)
+
     if result:
         await cache_set(key, json.dumps(result), TTL_REVENUE)
     return result

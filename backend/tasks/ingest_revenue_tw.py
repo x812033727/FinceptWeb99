@@ -16,6 +16,11 @@ Lookback: 90 days. Wide enough to pick up late filers + any
 upstream corrections to recently-published months without writing
 years of unchanged history every day.
 
+Growth rates: FinMind's `TaiwanStockMonthRevenue` doesn't carry YoY
+or MoM as percentages — only the period year/month integers. We
+compute both ourselves by joining each new row to its prev-month and
+prev-year-same-month counterparts (in-payload first, then DB). PR #211.
+
 Failure handling and lock semantics mirror `tasks/ingest_news_tw.py`
 — exponential 1h → 6h backoff, last-error preserved across the
 cooldown window.
@@ -24,10 +29,12 @@ import logging
 from datetime import date, timedelta
 
 import httpx
+from sqlalchemy import select
 
 import data.tw.finmind_connector as finmind
 from cache.redis_cache import acquire_lock, release_lock
 from db.session import AsyncSessionLocal
+from models.tw_revenue_monthly import TwRevenueMonthly
 from services.ingest.repository import (
     RevenueMonthlyRow,
     backoff_remaining_seconds,
@@ -161,6 +168,82 @@ async def run() -> None:
         await release_lock(_LOCK_KEY)
 
 
+def _shift_month(d: date, delta_months: int) -> date:
+    """Shift `d` by N calendar months, anchoring to day-1. Revenue rows
+    use `ts = first-of-month` so e.g. `_shift_month(date(2026,2,1), -12)`
+    gives `date(2025,2,1)` — the prev-year-same-month for YoY lookup."""
+    total = d.year * 12 + (d.month - 1) + delta_months
+    year, month = divmod(total, 12)
+    return date(year, month + 1, 1)
+
+
+def _pct_change(current: int | None, base: int | None) -> float | None:
+    """`((current - base) / base) * 100` rounded to 4 dp. Returns None
+    when either is missing or `base` is zero (fresh-IPO no-baseline +
+    division-by-zero protection)."""
+    if current is None or base is None or base == 0:
+        return None
+    return round((current - base) / base * 100, 4)
+
+
+async def _enrich_growth_rates(
+    db, payload: list[RevenueMonthlyRow],
+) -> list[RevenueMonthlyRow]:
+    """Compute YoY + MoM percentages for each payload row.
+
+    Strategy:
+      1. Index the in-memory payload by (symbol, ts) so consecutive
+         months in the same FinMind response feed each other for MoM.
+      2. Collect (symbol, prev-month-ts) and (symbol, prev-year-ts)
+         pairs we still need from DB and run ONE bulk query.
+      3. For each row, compute MoM and YoY against the looked-up
+         baselines. None when the baseline row doesn't exist (newly
+         listed, gaps in archive, ingest not run far enough back).
+
+    Returns a NEW list of `RevenueMonthlyRow` instances — the input
+    payload is not mutated.
+    """
+    by_key: dict[tuple[str, date], int | None] = {
+        (r.symbol, r.ts): r.revenue for r in payload
+    }
+
+    needed: set[tuple[str, date]] = set()
+    for r in payload:
+        for delta in (-1, -12):
+            k = (r.symbol, _shift_month(r.ts, delta))
+            if k not in by_key:
+                needed.add(k)
+
+    if needed:
+        symbols = {sym for sym, _ in needed}
+        ts_set = {ts for _, ts in needed}
+        stmt = select(TwRevenueMonthly).where(
+            TwRevenueMonthly.market == MARKET,
+            TwRevenueMonthly.symbol.in_(symbols),
+            TwRevenueMonthly.ts.in_(ts_set),
+        )
+        rows = (await db.scalars(stmt)).all()
+        for row in rows:
+            by_key[(row.symbol, row.ts)] = (
+                int(row.revenue) if row.revenue is not None else None
+            )
+
+    enriched: list[RevenueMonthlyRow] = []
+    for r in payload:
+        prev_month = by_key.get((r.symbol, _shift_month(r.ts, -1)))
+        prev_year = by_key.get((r.symbol, _shift_month(r.ts, -12)))
+        enriched.append(RevenueMonthlyRow(
+            market=r.market,
+            symbol=r.symbol,
+            ts=r.ts,
+            revenue=r.revenue,
+            revenue_yoy=_pct_change(r.revenue, prev_year),
+            revenue_mom=_pct_change(r.revenue, prev_month),
+            source=r.source,
+        ))
+    return enriched
+
+
 async def _do_run() -> int:
     start = (date.today() - timedelta(days=_LOOKBACK_DAYS)).isoformat()
     items = await finmind.get_monthly_revenue_market_wide(start)
@@ -176,28 +259,22 @@ async def _do_run() -> int:
             ts = date.fromisoformat(str(r.get("date", ""))[:10])
         except ValueError:
             continue
-        # Coerce growth percentages — FinMind sometimes returns ""
-        # or None for newly-listed companies with no prior baseline.
-        try:
-            yoy = float(r.get("revenue_yoy", 0)) if r.get("revenue_yoy") not in (None, "") else None
-        except (TypeError, ValueError):
-            yoy = None
-        try:
-            mom = float(r.get("revenue_mom", 0)) if r.get("revenue_mom") not in (None, "") else None
-        except (TypeError, ValueError):
-            mom = None
         try:
             rev = int(r.get("revenue", 0))
         except (TypeError, ValueError):
             rev = None
 
+        # Growth rates filled in by `_enrich_growth_rates` below — the
+        # connector no longer fakes them from FinMind's period-year /
+        # period-month integers (which were misinterpreted as yoy/mom
+        # before PR #211, producing absurd "+2026% YoY" values).
         payload.append(RevenueMonthlyRow(
             market=MARKET,
             symbol=sym,
             ts=ts,
             revenue=rev,
-            revenue_yoy=yoy,
-            revenue_mom=mom,
+            revenue_yoy=None,
+            revenue_mom=None,
             source="finmind",
         ))
 
@@ -205,4 +282,5 @@ async def _do_run() -> int:
         return 0
 
     async with AsyncSessionLocal() as db:
-        return await upsert_revenue_monthly(db, payload)
+        enriched = await _enrich_growth_rates(db, payload)
+        return await upsert_revenue_monthly(db, enriched)

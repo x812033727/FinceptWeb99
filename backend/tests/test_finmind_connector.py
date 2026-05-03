@@ -276,18 +276,81 @@ async def test_get_margin_defaults_missing_fields_to_zero():
 
 @pytest.mark.asyncio
 async def test_get_monthly_revenue_maps_to_canonical_field_names():
+    """FinMind's `revenue_year` / `revenue_month` are the REVENUE PERIOD
+    year and month integers (not YoY / MoM growth rates). We expose
+    them as `period_year` / `period_month` so callers don't accidentally
+    treat them as percentages — that's what produced the +2026% YoY
+    bug fixed in PR #211. Growth rates are computed downstream in the
+    ingest task by joining historical rows."""
     rows = [{
-        "date": "2024-04-01",
-        "revenue": 100_000_000,
-        "revenue_month": 5.5,
-        "revenue_year": 12.3,
+        "date":          "2024-04-10",     # report date
+        "revenue":       100_000_000,
+        "revenue_month": 4,                # April (period month, not %)
+        "revenue_year":  2024,             # 2024 (period year, not %)
     }]
     patcher, _ = install_query(rows)
     with patcher:
         out = await finmind.get_monthly_revenue("2330", "2024-04-01")
     assert out[0]["revenue"] == 100_000_000
-    assert out[0]["revenue_mom"] == 5.5
-    assert out[0]["revenue_yoy"] == 12.3
+    assert out[0]["period_month"] == 4
+    assert out[0]["period_year"] == 2024
+    # Growth rate keys must NOT be present — letting them leak as
+    # 4 / 2024 caused the original bug.
+    assert "revenue_mom" not in out[0]
+    assert "revenue_yoy" not in out[0]
+    assert out[0]["symbol"] == "2330"
+
+
+# ── get_news (TaiwanStockNews) ───────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_get_news_passes_end_date_when_provided():
+    """The backfill script (`scripts/backfill_news_finmind`) chunks
+    historical pulls by month, so `get_news` must forward `end_date`
+    to `_query` — without it FinMind would return everything from
+    `start_date` onwards regardless of the chunk window."""
+    patcher, mock = install_query([])
+    with patcher:
+        await finmind.get_news(
+            "2024-01-01", symbol="", end_date="2024-01-31",
+        )
+    args, _ = mock.call_args
+    assert args[0] == "TaiwanStockNews"
+    assert args[1] == ""
+    assert args[2] == "2024-01-01"
+    assert args[3] == "2024-01-31"
+
+
+@pytest.mark.asyncio
+async def test_get_news_omits_end_date_by_default():
+    """Live ingest path (no `end_date`) must keep working — passing
+    None lets FinMind decide the upper bound (typically: present)."""
+    patcher, mock = install_query([])
+    with patcher:
+        await finmind.get_news("2024-01-01")
+    args, _ = mock.call_args
+    assert args[3] is None
+
+
+@pytest.mark.asyncio
+async def test_get_news_maps_finmind_fields_to_canonical_shape():
+    """FinMind's row uses `source` / `date` / `stock_id`; we expose
+    `source_name` / `published_at` / `symbol` so downstream callers
+    don't have to know FinMind's column names."""
+    rows = [{
+        "title":       "台積電 Q2 EPS 創高",
+        "link":        "https://example.com/2330",
+        "source":      "經濟日報",
+        "description": "summary text",
+        "date":        "2026-04-15 09:30:00",
+        "stock_id":    "2330",
+    }]
+    patcher, _ = install_query(rows)
+    with patcher:
+        out = await finmind.get_news("2026-04-01")
+    assert out[0]["title"] == "台積電 Q2 EPS 創高"
+    assert out[0]["source_name"] == "經濟日報"
+    assert out[0]["published_at"] == "2026-04-15 09:30:00"
     assert out[0]["symbol"] == "2330"
 
 

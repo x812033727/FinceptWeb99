@@ -664,6 +664,38 @@ have at least one provider key configured. Exits non-zero on any
 assertion failure — drop into a Kubernetes post-deploy hook or CI smoke
 job. See script docstring for `--personas`, `--keep`, `--timeout` flags.
 
+## Backfilling historical news (FinMind paid tier)
+
+The hourly Google News RSS ingest only sees the last ~14 days, which
+is why backtest discussions anchored at older dates surface the
+"news archive doesn't reach this date" warning. With a paid FinMind
+sponsor token (`FINMIND_TOKEN` env var or admin-panel-stored DB
+key), `scripts/backfill_news_finmind.py` pulls the entire historical
+`TaiwanStockNews` archive (FinMind starts ~2017) into `news_articles`
+in monthly chunks:
+
+```bash
+cd backend
+# the last 2 years (typical first backfill)
+python -m scripts.backfill_news_finmind --start 2024-01-01 --end 2026-04-30
+
+# a narrow window — e.g. just the discussion's anchor week
+python -m scripts.backfill_news_finmind --start 2026-03-25 --end 2026-04-05
+```
+
+Idempotent: sha256(title+link) dedup at the insert layer means
+re-running the same range writes nothing the second time. Backfilled
+rows carry `source="finmind_backfill"` so the admin dashboard can
+distinguish them from regular Google News RSS rows
+(`source="google_news_rss"` etc.) when investigating coverage.
+
+Sentiment scoring: backfilled rows arrive with `sentiment_score=NULL`.
+The hourly `tasks.score_news_sentiment` cron picks them up at the
+configured `SENTIMENT_DAILY_LLM_CALL_CAP` rate (default 100/day). For
+a fresh ~50k-row backfill, bump the cap via the AdminPage
+`RuntimeTunablesCard` for a one-time burn — the runtime config
+propagates within 60 s and you can drop it back afterwards.
+
 ## Deployment
 
 **Docker Compose** (single server):

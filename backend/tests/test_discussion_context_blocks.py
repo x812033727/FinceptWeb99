@@ -208,13 +208,21 @@ async def test_technical_block_populates_per_symbol_signals(
     ]
     await upsert_ohlcv_bars(db_session, enough + too_few)
 
-    ctx = _new_ctx()
-    await technical.fetch_short_term_signals(
-        ctx, db_session, market="TW",
-        focus_symbols=["2330", "2454"],
-        as_of=base + timedelta(days=29),
-        record_error=_record(ctx),
-    )
+    from unittest.mock import AsyncMock, patch
+
+    # Mock the FinMind-facing securities-lending helper so the test
+    # doesn't trip the connector → market_key_service import chain.
+    with patch(
+        "services.derivatives_service.get_securities_lending_trend",
+        new=AsyncMock(return_value=None),
+    ):
+        ctx = _new_ctx()
+        await technical.fetch_short_term_signals(
+            ctx, db_session, market="TW",
+            focus_symbols=["2330", "2454"],
+            as_of=base + timedelta(days=29),
+            record_error=_record(ctx),
+        )
 
     assert "2330" in ctx["short_term_signals"]
     assert "2454" not in ctx["short_term_signals"]
@@ -256,18 +264,69 @@ async def test_technical_block_folds_in_day_trading_trend_for_tw(
         for i in range(5)
     ])
 
-    ctx = _new_ctx()
-    await technical.fetch_short_term_signals(
-        ctx, db_session, market="TW",
-        focus_symbols=["2330"],
-        as_of=base + timedelta(days=29),
-        record_error=_record(ctx),
-    )
+    from unittest.mock import AsyncMock, patch
+
+    with patch(
+        "services.derivatives_service.get_securities_lending_trend",
+        new=AsyncMock(return_value=None),
+    ):
+        ctx = _new_ctx()
+        await technical.fetch_short_term_signals(
+            ctx, db_session, market="TW",
+            focus_symbols=["2330"],
+            as_of=base + timedelta(days=29),
+            record_error=_record(ctx),
+        )
 
     sig = ctx["short_term_signals"]["2330"]
     assert sig["day_trading_trend"] is not None
     assert sig["day_trading_trend"]["latest_ratio"] == 0.5
     assert sig["day_trading_trend"]["trend"] == "stable"
+    assert ctx["errors"] == []
+
+
+@pytest.mark.asyncio
+async def test_technical_block_folds_in_securities_lending_trend_for_tw(
+    db_session: AsyncSession,
+):
+    """For TW focus symbols, the per-symbol securities-lending
+    (借券) 5-day trend must land under
+    `signals['securities_lending_trend']`. Mocked the FinMind-
+    facing helper directly so the test stays offline."""
+    from unittest.mock import AsyncMock, patch
+
+    from services.ingest.repository import OhlcvBar, upsert_ohlcv_bars
+
+    base = date(2026, 3, 1)
+    await upsert_ohlcv_bars(db_session, [
+        OhlcvBar(
+            market="TW", symbol="2330", ts=base + timedelta(days=i),
+            open=600.0 + i, high=601.0 + i, low=599.0 + i,
+            close=600.0 + i, volume=1_000_000, source="test",
+        )
+        for i in range(30)
+    ])
+
+    sbl_payload = {
+        "as_of": "2026-03-30", "session_count": 5,
+        "latest_balance": 130_000, "balance_change_5d": 30_000,
+        "latest_volume": 8_000, "mean_volume_5d": 6_500,
+        "trend": "rising",
+    }
+    with patch(
+        "services.derivatives_service.get_securities_lending_trend",
+        new=AsyncMock(return_value=sbl_payload),
+    ):
+        ctx = _new_ctx()
+        await technical.fetch_short_term_signals(
+            ctx, db_session, market="TW",
+            focus_symbols=["2330"],
+            as_of=base + timedelta(days=29),
+            record_error=_record(ctx),
+        )
+
+    sig = ctx["short_term_signals"]["2330"]
+    assert sig["securities_lending_trend"] == sbl_payload
     assert ctx["errors"] == []
 
 

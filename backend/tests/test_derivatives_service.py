@@ -223,3 +223,134 @@ async def test_cache_miss_writes_result_back_with_ttl():
     assert args[0] == "taifex:positioning:TX:2026-04-30"
     # TTL is the third positional arg
     assert args[2] == svc._CACHE_TTL_SECONDS
+
+
+# ── Securities lending trend ──────────────────────────────────────
+
+
+def _sbl_row(d: str, balance: int, volume: int = 0) -> dict:
+    return {
+        "date": d, "stock_id": "2330",
+        "securities_lending_balance": balance,
+        "securities_lending_volume": volume,
+    }
+
+
+@pytest.mark.asyncio
+async def test_sbl_returns_none_when_finmind_empty():
+    with patch("services.derivatives_service.cache_get", new=AsyncMock(return_value=None)), \
+         patch("services.derivatives_service.cache_set", new=AsyncMock()), \
+         patch.object(svc.finmind, "get_securities_lending",
+                      new=AsyncMock(return_value=[])):
+        result = await svc.get_securities_lending_trend(
+            symbol="2330", as_of=date(2026, 4, 30),
+        )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_sbl_returns_none_when_only_one_session():
+    """Single session → can't compute 5d change → None."""
+    rows = [_sbl_row("2026-04-30", 100_000, 5_000)]
+    with patch("services.derivatives_service.cache_get", new=AsyncMock(return_value=None)), \
+         patch("services.derivatives_service.cache_set", new=AsyncMock()), \
+         patch.object(svc.finmind, "get_securities_lending",
+                      new=AsyncMock(return_value=rows)):
+        result = await svc.get_securities_lending_trend(
+            symbol="2330", as_of=date(2026, 4, 30),
+        )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_sbl_classifies_rising_balance_as_bearish_pressure():
+    """Balance climbs 100k → 130k (+30%) over the window → trend
+    must be 'rising' (institutional building hidden short-side)."""
+    rows = [
+        _sbl_row("2026-04-25", 100_000, 5_000),
+        _sbl_row("2026-04-26", 110_000, 6_000),
+        _sbl_row("2026-04-29", 120_000, 7_000),
+        _sbl_row("2026-04-30", 130_000, 8_000),
+    ]
+    with patch("services.derivatives_service.cache_get", new=AsyncMock(return_value=None)), \
+         patch("services.derivatives_service.cache_set", new=AsyncMock()), \
+         patch.object(svc.finmind, "get_securities_lending",
+                      new=AsyncMock(return_value=rows)):
+        result = await svc.get_securities_lending_trend(
+            symbol="2330", as_of=date(2026, 4, 30),
+        )
+    assert result is not None
+    assert result["latest_balance"] == 130_000
+    assert result["balance_change_5d"] == 30_000
+    assert result["session_count"] == 4
+    assert result["trend"] == "rising"
+    # mean_volume_5d = (5+6+7+8)*1000/4 = 6500
+    assert result["mean_volume_5d"] == 6_500
+
+
+@pytest.mark.asyncio
+async def test_sbl_classifies_falling_balance_as_short_covering():
+    """Balance 130k → 100k (-23%) → 'falling' (covers / closing
+    short positions)."""
+    rows = [
+        _sbl_row("2026-04-25", 130_000),
+        _sbl_row("2026-04-30", 100_000),
+    ]
+    with patch("services.derivatives_service.cache_get", new=AsyncMock(return_value=None)), \
+         patch("services.derivatives_service.cache_set", new=AsyncMock()), \
+         patch.object(svc.finmind, "get_securities_lending",
+                      new=AsyncMock(return_value=rows)):
+        result = await svc.get_securities_lending_trend(
+            symbol="2330", as_of=date(2026, 4, 30),
+        )
+    assert result is not None
+    assert result["trend"] == "falling"
+
+
+@pytest.mark.asyncio
+async def test_sbl_classifies_flat_balance_as_stable():
+    """100k → 102k (+2%) within ±5% band → stable."""
+    rows = [
+        _sbl_row("2026-04-25", 100_000),
+        _sbl_row("2026-04-30", 102_000),
+    ]
+    with patch("services.derivatives_service.cache_get", new=AsyncMock(return_value=None)), \
+         patch("services.derivatives_service.cache_set", new=AsyncMock()), \
+         patch.object(svc.finmind, "get_securities_lending",
+                      new=AsyncMock(return_value=rows)):
+        result = await svc.get_securities_lending_trend(
+            symbol="2330", as_of=date(2026, 4, 30),
+        )
+    assert result is not None
+    assert result["trend"] == "stable"
+
+
+@pytest.mark.asyncio
+async def test_sbl_balance_helper_falls_back_to_alternate_keys():
+    """Older FinMind rows used `balance` plain instead of
+    `securities_lending_balance`. Helper must accept both."""
+    assert svc._sbl_balance({"balance": 12_345}) == 12_345
+    assert svc._sbl_balance({"lending_balance": 6_789}) == 6_789
+    assert svc._sbl_balance({"securities_lending_balance": 99_999}) == 99_999
+    # No recognised key → None.
+    assert svc._sbl_balance({"transaction_volume": 1}) is None
+
+
+@pytest.mark.asyncio
+async def test_sbl_cache_hit_short_circuits_finmind():
+    cached_payload = {
+        "as_of": "2026-04-30", "session_count": 5,
+        "latest_balance": 100_000, "balance_change_5d": 0,
+        "latest_volume": 5_000, "mean_volume_5d": 5_000,
+        "trend": "stable",
+    }
+    finmind_mock = AsyncMock()
+    with patch(
+        "services.derivatives_service.cache_get",
+        new=AsyncMock(return_value=json.dumps(cached_payload)),
+    ), patch.object(svc.finmind, "get_securities_lending", new=finmind_mock):
+        result = await svc.get_securities_lending_trend(
+            symbol="2330", as_of=date(2026, 4, 30),
+        )
+    assert result == cached_payload
+    finmind_mock.assert_not_awaited()

@@ -85,6 +85,22 @@ async def fetch_short_term_signals(
                 except Exception as exc:
                     record_error(f"day_trading_trend:{sym}", exc)
             signals["day_trading_trend"] = day_trading
+            # Per-symbol securities-lending (借券) trend — TW only,
+            # FinMind-backed via `derivatives_service`. Cached per
+            # (symbol, as_of) for 4h so multi-persona rounds and
+            # adjacent backtests don't re-fan-out FinMind quota.
+            sbl: dict | None = None
+            if market == "TW":
+                try:
+                    from services.derivatives_service import (
+                        get_securities_lending_trend,
+                    )
+                    sbl = await get_securities_lending_trend(
+                        symbol=sym, as_of=as_of,
+                    )
+                except Exception as exc:
+                    record_error(f"securities_lending_trend:{sym}", exc)
+            signals["securities_lending_trend"] = sbl
             ctx["short_term_signals"][sym] = signals
     except Exception as exc:
         record_error("short_term_signals", exc)

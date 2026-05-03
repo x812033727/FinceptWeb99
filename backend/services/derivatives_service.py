@@ -188,3 +188,161 @@ async def get_taifex_positioning(
     except Exception:
         pass
     return result
+
+
+# ── Per-symbol securities lending (借券) ──────────────────────────
+
+
+_SBL_LOOKBACK_DAYS = 14
+_SBL_MIN_SESSIONS = 2
+# Trend bands as a fraction of the mean balance, not absolute contracts —
+# stocks vary by orders of magnitude in absolute lending balance, so a
+# percentage-relative threshold travels better.
+_SBL_TREND_BAND = 0.05
+
+
+def _sbl_balance(row: dict[str, Any]) -> int | None:
+    """Securities-lending balance for a FinMind row. Tolerant of the
+    field-name variants the dataset has shipped with — some have
+    `securities_lending_balance`, some plain `balance`, some
+    `lending_balance`."""
+    keys = (
+        "securities_lending_balance",
+        "lending_balance",
+        "balance",
+    )
+    for k in keys:
+        v = row.get(k)
+        if v is not None:
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _sbl_volume(row: dict[str, Any]) -> int | None:
+    keys = (
+        "securities_lending_volume",
+        "lending_volume",
+        "transaction_volume",
+        "volume",
+    )
+    for k in keys:
+        v = row.get(k)
+        if v is not None:
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+async def get_securities_lending_trend(
+    symbol: str,
+    as_of: date | None = None,
+) -> dict[str, Any] | None:
+    """Per-symbol 借券 (securities lending) 5-day trend. Returns:
+
+        {
+          "as_of":             "2026-04-30",
+          "session_count":     int,
+          "latest_balance":    int,        # 借券餘額 latest session
+          "balance_change_5d": int,        # earliest → latest
+          "latest_volume":     int|None,   # 當日成交量
+          "mean_volume_5d":    int|None,
+          "trend":             "rising" | "stable" | "falling",
+        }
+
+    `trend` based on `balance_change_5d` vs the latest balance:
+      change > +5% of latest → "rising" (institutional short-side pressure building)
+      change < -5% of latest → "falling" (covering)
+      else                   → "stable"
+
+    None when FinMind returns no rows or fewer than `_SBL_MIN_SESSIONS`
+    sessions in the window. Cached per (symbol, as_of) for
+    `_CACHE_TTL_SECONDS` so multi-persona rounds don't re-fan-out.
+    """
+    end = as_of or datetime.now(UTC).date()
+    cache_key = f"sbl:trend:{symbol}:{end.isoformat()}"
+    try:
+        cached = await cache_get(cache_key)
+    except Exception:
+        cached = None
+    if cached:
+        try:
+            return json.loads(cached)
+        except json.JSONDecodeError:
+            pass
+
+    start = end - timedelta(days=_SBL_LOOKBACK_DAYS)
+    try:
+        rows = await finmind.get_securities_lending(
+            symbol, start.isoformat(), end.isoformat(),
+        )
+    except Exception as exc:
+        log.warning(
+            "sbl_trend.fetch_failed",
+            extra={"symbol": symbol, "error": str(exc)},
+        )
+        return None
+    if not rows:
+        return None
+
+    # Pivot by date → (balance, volume). FinMind returns one row per
+    # date for the symbol; multiple rows on the same date (rare) get
+    # last-write-wins which is fine for trend calc.
+    by_date: dict[str, dict[str, int | None]] = {}
+    for r in rows:
+        d = r.get("date")
+        if not d:
+            continue
+        by_date[d] = {
+            "balance": _sbl_balance(r),
+            "volume":  _sbl_volume(r),
+        }
+
+    sorted_dates = sorted(by_date.keys())
+    if len(sorted_dates) < _SBL_MIN_SESSIONS:
+        return None
+
+    latest_date = sorted_dates[-1]
+    earliest_date = sorted_dates[0]
+    latest_balance = by_date[latest_date]["balance"]
+    earliest_balance = by_date[earliest_date]["balance"]
+    if latest_balance is None or earliest_balance is None:
+        return None
+
+    balance_change = latest_balance - earliest_balance
+    if latest_balance == 0:
+        trend = "stable"
+    else:
+        rel = balance_change / abs(latest_balance)
+        if rel > _SBL_TREND_BAND:
+            trend = "rising"
+        elif rel < -_SBL_TREND_BAND:
+            trend = "falling"
+        else:
+            trend = "stable"
+
+    volumes = [
+        v["volume"] for v in by_date.values() if v["volume"] is not None
+    ]
+    latest_volume = by_date[latest_date]["volume"]
+    mean_volume = int(sum(volumes) / len(volumes)) if volumes else None
+
+    result = {
+        "as_of":             latest_date,
+        "session_count":     len(sorted_dates),
+        "latest_balance":    latest_balance,
+        "balance_change_5d": balance_change,
+        "latest_volume":     latest_volume,
+        "mean_volume_5d":    mean_volume,
+        "trend":             trend,
+    }
+
+    try:
+        await cache_set(cache_key, json.dumps(result), _CACHE_TTL_SECONDS)
+    except Exception:
+        pass
+    return result

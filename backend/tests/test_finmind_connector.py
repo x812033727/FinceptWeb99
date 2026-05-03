@@ -568,3 +568,71 @@ async def test_pass_through_methods_call_query_with_correct_dataset(method, data
     args, _ = mock.call_args
     assert args[0] == dataset
     assert args[1] == "2330"
+
+
+# ── Public escape hatch: query() ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_query_forwards_dataset_data_id_and_dates_to_underlying_query():
+    """`query()` is a thin public wrapper around `_query`. It must
+    pass dataset / data_id / start_date / end_date through verbatim
+    so callers using rare datasets get identical semantics to typed
+    wrappers."""
+    patcher, mock = install_query([{"date": "2026-04-30", "v": 42}])
+    with patcher:
+        rows = await finmind.query(
+            "TaiwanStockPER", "2330", "2026-01-01", "2026-04-30",
+        )
+    assert rows == [{"date": "2026-04-30", "v": 42}]
+    args, _ = mock.call_args
+    assert args == ("TaiwanStockPER", "2330", "2026-01-01", "2026-04-30")
+
+
+@pytest.mark.asyncio
+async def test_query_defaults_data_id_and_end_date():
+    """Using `query()` for a market-wide dataset (data_id="" and no
+    end_date) must work without forcing the caller to pass them."""
+    patcher, mock = install_query([{"date": "2026-04-30"}])
+    with patcher:
+        await finmind.query("TaiwanStockBlockTrade", start_date="2026-04-30")
+    args, _ = mock.call_args
+    assert args == ("TaiwanStockBlockTrade", "", "2026-04-30", None)
+
+
+# ── Short-term-signal typed wrappers ─────────────────────────────
+
+
+@pytest.mark.parametrize("method,dataset,is_per_symbol", [
+    ("get_per_pbr",                              "TaiwanStockPER",                                   True),
+    ("get_securities_lending",                   "TaiwanStockSecuritiesLending",                     True),
+    ("get_price_adj",                            "TaiwanStockPriceAdj",                              True),
+    ("get_market_total_margin",                  "TaiwanStockTotalMarginPurchaseShortSale",          False),
+    ("get_market_margin_maintenance",            "TaiwanTotalExchangeMarginMaintenance",             False),
+    ("get_block_trade_market_wide",              "TaiwanStockBlockTrade",                            False),
+    ("get_futures_institutional",                "TaiwanFuturesInstitutionalInvestors",              True),
+    ("get_futures_institutional_after_hours",    "TaiwanFuturesInstitutionalInvestorsAfterHours",    True),
+    ("get_option_institutional",                 "TaiwanOptionInstitutionalInvestors",               True),
+    ("get_business_indicator",                   "TaiwanBusinessIndicator",                          False),
+])
+@pytest.mark.asyncio
+async def test_short_term_wrappers_route_to_correct_dataset(
+    method, dataset, is_per_symbol,
+):
+    """Each new typed wrapper for short-term-prediction signals must
+    forward to `_query` with the exact FinMind dataset name + the
+    expected data_id shape (symbol vs market-wide ""). A typo in the
+    dataset name silent-empties from the API, so this guards the
+    entire short-term signal surface against drift."""
+    patcher, mock = install_query([{"date": "2026-04-30"}])
+    with patcher:
+        if is_per_symbol:
+            await getattr(finmind, method)("2330", "2026-01-01")
+        else:
+            await getattr(finmind, method)("2026-01-01")
+    args, _ = mock.call_args
+    assert args[0] == dataset
+    if is_per_symbol:
+        assert args[1] == "2330"
+    else:
+        assert args[1] == ""

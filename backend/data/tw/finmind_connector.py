@@ -628,3 +628,157 @@ def _format_news_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         }
         for r in rows
     ]
+
+
+# ── Public escape hatch for any FinMind dataset ───────────────────
+
+
+async def query(
+    dataset: str,
+    data_id: str = "",
+    start_date: str = "",
+    end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """Generic call into the FinMind ``v4/data`` endpoint.
+
+    Use this when the dataset doesn't have a typed wrapper above. The
+    full canonical registry of dataset names lives in
+    :mod:`data.tw.finmind_datasets` (also surfaced at
+    https://finmind.github.io/tutor/TaiwanMarket/DataList/).
+
+    Same hourly quota + silent-deny semantics as the typed wrappers
+    (uses ``_query`` under the hood). Returns the raw FinMind row
+    dicts — caller is responsible for any normalisation.
+
+    Examples:
+        # Per-symbol P/E + P/B daily
+        rows = await query("TaiwanStockPER", "2330", "2026-01-01")
+
+        # Market-wide block trades for the last week
+        rows = await query("TaiwanStockBlockTrade", "",
+                           "2026-04-26", "2026-05-03")
+    """
+    return await _query(dataset, data_id, start_date, end_date)
+
+
+# ── Per-symbol valuation / chip / price (short-term signals) ──────
+
+
+async def get_per_pbr(
+    symbol: str, start_date: str, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """``TaiwanStockPER`` — daily P/E, P/B, and dividend yield per
+    symbol. Useful as a short-term valuation context for personas
+    deciding whether a momentum move has fundamental room left."""
+    return await _query("TaiwanStockPER", symbol, start_date, end_date)
+
+
+async def get_securities_lending(
+    symbol: str, start_date: str, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """``TaiwanStockSecuritiesLending`` — per-symbol securities-lending
+    activity (借券). Rising securities-lending is a leading indicator
+    for short-side pressure that doesn't show up in the explicit
+    短賣 columns of `TaiwanStockMarginPurchaseShortSale`."""
+    return await _query("TaiwanStockSecuritiesLending", symbol, start_date, end_date)
+
+
+async def get_price_adj(
+    symbol: str, start_date: str, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """``TaiwanStockPriceAdj`` — split-and-dividend-adjusted daily
+    OHLCV. Use for backtests / multi-year return calculations where
+    the raw `TaiwanStockPrice` series would have artificial gaps on
+    ex-dividend / split dates."""
+    return await _query("TaiwanStockPriceAdj", symbol, start_date, end_date)
+
+
+# ── Market-wide chip / leverage stress (short-term signals) ───────
+
+
+async def get_market_total_margin(
+    start_date: str, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """``TaiwanStockTotalMarginPurchaseShortSale`` — market-wide
+    daily 融資 / 融券 totals. Distinct from the per-symbol
+    `get_margin`: this is the aggregate signal personas use to
+    gauge retail leverage / short positioning."""
+    return await _query(
+        "TaiwanStockTotalMarginPurchaseShortSale", "", start_date, end_date,
+    )
+
+
+async def get_market_margin_maintenance(
+    start_date: str, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """``TaiwanTotalExchangeMarginMaintenance`` — daily market-wide
+    融資維持率. Falling under ~150% historically marks margin-call
+    stress that precedes panic selling — a high-value short-term
+    risk signal."""
+    return await _query(
+        "TaiwanTotalExchangeMarginMaintenance", "", start_date, end_date,
+    )
+
+
+async def get_block_trade_market_wide(
+    start_date: str, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """``TaiwanStockBlockTrade`` — daily 鉅額交易 records. Block
+    trades signal informed-money positioning (mostly institutional
+    rebalancing or strategic stake changes); useful as a 'big money
+    moved here' tag on top of the standard 法人 flow."""
+    return await _query("TaiwanStockBlockTrade", "", start_date, end_date)
+
+
+# ── Derivatives (overnight + directional signals) ─────────────────
+
+
+async def get_futures_institutional(
+    contract: str, start_date: str, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """``TaiwanFuturesInstitutionalInvestors`` — three-major-investor
+    daily flows on a futures contract (e.g. ``TX`` for 台指期).
+    The single most direct short-term directional signal: when 外資
+    consistently builds long futures positions overnight, TAIEX
+    typically opens with a gap up."""
+    return await _query(
+        "TaiwanFuturesInstitutionalInvestors", contract, start_date, end_date,
+    )
+
+
+async def get_futures_institutional_after_hours(
+    contract: str, start_date: str, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """``TaiwanFuturesInstitutionalInvestorsAfterHours`` — same shape
+    as `get_futures_institutional` but for the night session
+    (15:00-05:00 next day). When US markets move overnight, the night-
+    session 法人 flows are the cleanest leading indicator for next-day
+    TAIEX open direction."""
+    return await _query(
+        "TaiwanFuturesInstitutionalInvestorsAfterHours",
+        contract, start_date, end_date,
+    )
+
+
+async def get_option_institutional(
+    contract: str, start_date: str, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """``TaiwanOptionInstitutionalInvestors`` — three-investor daily
+    flows on an options contract (e.g. ``TXO``). Directional bias +
+    P/C ratio derivable from the underlying call/put split."""
+    return await _query(
+        "TaiwanOptionInstitutionalInvestors", contract, start_date, end_date,
+    )
+
+
+# ── Macro ─────────────────────────────────────────────────────────
+
+
+async def get_business_indicator(
+    start_date: str, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """``TaiwanBusinessIndicator`` — monthly 景氣對策信號 (5-light
+    system). Slow-moving but useful as macro context for personas
+    considering whether a short-term thesis is fighting the macro
+    tape."""
+    return await _query("TaiwanBusinessIndicator", "", start_date, end_date)

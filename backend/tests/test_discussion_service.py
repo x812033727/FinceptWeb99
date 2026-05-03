@@ -554,6 +554,53 @@ async def test_prune_old_round_contexts_returns_zero_when_nothing_old(
 # ── _persona_schema_annotation (dynamic prompt header) ───────────
 
 
+def test_turn_prompt_template_carries_signal_citation_guidance():
+    """The 訊號引用準則 section is the structural countermeasure to the
+    'persona ignores the JSON, talks generic narrative' failure mode.
+    Three rules must be present:
+      1. 引用具體數值 not 一般性形容詞
+      2. 每個與本主題相關的訊號區塊都要至少點名一次
+      3. 訊號間互相印證或衝突要明寫
+    Any drift in the template (re-flow, translation, accidental delete)
+    that drops one of these will silently regress citation rate.
+    """
+    tpl = discussion_service._TURN_PROMPT_TEMPLATE
+    assert "## 訊號引用準則" in tpl
+    # Rule 1 — concrete number requirement
+    assert "引用具體數值" in tpl
+    assert "RSI 67.3" in tpl, (
+        "Rule 1 example must show a numeric citation pattern personas "
+        "can mimic; without it weak models produce 'RSI 偏高' even when "
+        "the rule is stated abstractly."
+    )
+    # Rule 2 — coverage requirement
+    assert "都要至少點名一次" in tpl
+    # Rule 3 — cross-signal reconciliation
+    assert "互相印證或衝突要明寫" in tpl
+
+
+def test_turn_prompt_template_renders_with_standard_substitutions():
+    """All five `{topic}/{rules}/{annotation}/{context}/{history}`
+    placeholders must remain — adding the citation-guidance section
+    in PR #X mustn't accidentally consume one of them via brace mismatch."""
+    rendered = discussion_service._TURN_PROMPT_TEMPLATE.format(
+        topic="2330 短線分析",
+        rules="字數 ≤ 500",
+        annotation="## annotation",
+        context='{"k":1}',
+        history="（首輪）",
+    )
+    assert "2330 短線分析" in rendered
+    assert "字數 ≤ 500" in rendered
+    assert "## annotation" in rendered
+    assert '{"k":1}' in rendered
+    assert "（首輪）" in rendered
+    # The literal JSON example in the task instruction must survive
+    # str.format() — its `{{...}}` escaping is what keeps `format`
+    # from interpreting it as a placeholder.
+    assert '"stance": "agree|dissent|supplement"' in rendered
+
+
 def test_persona_schema_annotation_lists_only_present_blocks():
     """The annotation must mention only blocks actually present in
     `ctx`. macro_analyst's filtered ctx drops focus_briefs +

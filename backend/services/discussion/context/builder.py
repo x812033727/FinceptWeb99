@@ -102,6 +102,12 @@ def _initial_ctx(*, market: str, as_of: date | None) -> dict[str, Any]:
         # `{contract, as_of, session_count, fini, sitc, dealer, trend}`
         # — fini / sitc / dealer carry `{net_oi, change_5d}`.
         "taifex_positioning": None,
+        # Per-stock futures (個股期貨) institutional net-OI shifts
+        # (PR #282). List of `{symbol, contract_id, fini_net_oi,
+        # fini_change, fini_long_oi, fini_short_oi, as_of, from_ts,
+        # industry, name_zh}` ranked by 5-day foreign-net-OI delta
+        # descending. TW-only.
+        "single_stock_futures_oi": [],
         # Overseas index snapshot (PR #269): SOX / NDX / SPX / DJI /
         # VIX latest close + 1-day % change. Wired in for ALL
         # markets — TW personas need overnight US direction, US
@@ -206,6 +212,11 @@ async def build_market_context(
             ctx, as_of=as_of, record_error=record_error,
         )
         await chip.fetch_top_foreign_buyers(
+            ctx, db, as_of=as_of, record_error=record_error,
+        )
+        # PR #282: 個股期貨 三大法人未平倉 — futures-side
+        # complement to top_foreign_buyers. TW only.
+        await chip.fetch_top_stock_futures_buyers(
             ctx, db, as_of=as_of, record_error=record_error,
         )
         await chip.fetch_margin_balance_trend(

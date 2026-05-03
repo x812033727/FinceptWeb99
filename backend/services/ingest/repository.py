@@ -25,6 +25,7 @@ from models.news_article import NewsArticle
 from models.ohlcv_daily import OhlcvDaily
 from models.quote_snapshot import QuoteSnapshot
 from models.tw_chip_metrics import TwInstitutionalDaily, TwMarginDaily
+from models.tw_stock_futures_oi import TwStockFuturesOi
 from models.tw_govt_bank_flow import TwGovtBankFlowDaily
 from models.tw_holdings_aggregates import (
     TwMarketInstitutionalDaily,
@@ -2125,3 +2126,146 @@ async def upsert_ohlcv_bars_autosession(bars: Iterable[OhlcvBar]) -> int:
         log.warning("ingest.write.db_error",
                     extra={"market": bars[0].market, "count": len(bars), "error": str(exc)})
         return 0
+
+
+# ── PR #282: tw_stock_futures_oi ─────────────────────────────────
+
+
+@dataclass(frozen=True)
+class StockFuturesOiRow:
+    """One per-stock-futures aggregated row (all 3 institutional
+    types collapsed into columns, mirroring InstitutionalDailyRow).
+    The cron builds these from FinMind's per-investor-type rows."""
+    market: str
+    symbol: str
+    contract_id: str
+    ts: date
+    fini_long_oi: int | None
+    fini_short_oi: int | None
+    fini_net_oi: int | None
+    sitc_long_oi: int | None
+    sitc_short_oi: int | None
+    sitc_net_oi: int | None
+    dealer_long_oi: int | None
+    dealer_short_oi: int | None
+    dealer_net_oi: int | None
+    source: str
+
+
+_STOCK_FUTURES_OI_FIELDS = (
+    "market", "symbol", "contract_id", "ts",
+    "fini_long_oi", "fini_short_oi", "fini_net_oi",
+    "sitc_long_oi", "sitc_short_oi", "sitc_net_oi",
+    "dealer_long_oi", "dealer_short_oi", "dealer_net_oi",
+    "source",
+)
+
+
+async def upsert_stock_futures_oi(
+    db: AsyncSession, rows: Iterable[StockFuturesOiRow],
+) -> int:
+    """Bulk upsert. ON CONFLICT (market, symbol, ts) updates every
+    metric column + contract_id + source so a re-ingest on the
+    same date overwrites stale values (e.g. when FinMind corrects
+    a prior session's OI numbers)."""
+    payload = [
+        _row_to_dict(r, fields=_STOCK_FUTURES_OI_FIELDS) for r in rows
+    ]
+    return await _chunked_upsert(
+        db,
+        model=TwStockFuturesOi,
+        payload=payload,
+        index_elements=["market", "symbol", "ts"],
+        update_cols=(
+            "contract_id",
+            "fini_long_oi", "fini_short_oi", "fini_net_oi",
+            "sitc_long_oi", "sitc_short_oi", "sitc_net_oi",
+            "dealer_long_oi", "dealer_short_oi", "dealer_net_oi",
+            "source",
+        ),
+    )
+
+
+async def read_top_foreign_stock_futures_buyers(
+    db: AsyncSession, *,
+    market: str = "TW",
+    days: int = 5,
+    limit: int = 10,
+    as_of: date | None = None,
+) -> list[dict[str, Any]]:
+    """Top N stocks by foreign-investor net-OI **change** over the
+    last `days` trading days ending at `as_of` (default: today).
+
+    Computes (latest_fini_net_oi - earliest_fini_net_oi) for each
+    symbol that has both endpoints and ranks descending. Negative
+    deltas (foreign net-OI shrinking, i.e. shorts building) are
+    NOT inverted — the read tier returns the most-bullish only.
+    Caller (context block) can call again with a different sort
+    if it wants the bearish side too.
+
+    Backtest look-ahead protection (PR #282 mirrors PR #243): when
+    `as_of` is set, NOTHING is masked — futures OI rows are
+    insert-only on FinMind's side (no retroactive corrections to
+    long/short/net), and the cron ingests one-row-per-day with
+    immutable historical numbers. Personas reading at as_of=D see
+    exactly the OI snapshot that was published on D's close.
+    """
+    end = as_of or date.today()
+    cutoff = end - timedelta(days=days * 2)   # generous: covers weekends
+    stmt = (
+        select(
+            TwStockFuturesOi.symbol,
+            TwStockFuturesOi.ts,
+            TwStockFuturesOi.fini_net_oi,
+            TwStockFuturesOi.fini_long_oi,
+            TwStockFuturesOi.fini_short_oi,
+            TwStockFuturesOi.contract_id,
+        )
+        .where(
+            TwStockFuturesOi.market == market,
+            TwStockFuturesOi.ts >= cutoff,
+            TwStockFuturesOi.ts <= end,
+            TwStockFuturesOi.fini_net_oi.isnot(None),
+        )
+        .order_by(
+            TwStockFuturesOi.symbol.asc(),
+            TwStockFuturesOi.ts.asc(),
+        )
+    )
+    rows = (await db.execute(stmt)).all()
+    if not rows:
+        return []
+
+    # Group by symbol, then take (latest, earliest) within the
+    # window for each.
+    by_symbol: dict[str, list[tuple[date, int, int | None, int | None, str]]] = {}
+    for sym, ts, net, long_oi, short_oi, contract in rows:
+        by_symbol.setdefault(sym, []).append(
+            (ts, int(net), long_oi, short_oi, contract),
+        )
+
+    results: list[dict[str, Any]] = []
+    for sym, series in by_symbol.items():
+        if len(series) < 2:
+            # Need at least 2 points to compute a delta; one-row
+            # symbols (just-listed contracts) get skipped silently.
+            continue
+        series.sort(key=lambda x: x[0])
+        first_ts, first_net, *_ = series[0]
+        last_ts, last_net, last_long, last_short, last_contract = series[-1]
+        if last_ts == first_ts:
+            continue
+        delta = last_net - first_net
+        results.append({
+            "symbol":          sym,
+            "contract_id":     last_contract,
+            "fini_net_oi":     last_net,
+            "fini_long_oi":    last_long,
+            "fini_short_oi":   last_short,
+            "fini_change":     delta,
+            "as_of":           last_ts.isoformat(),
+            "from_ts":         first_ts.isoformat(),
+        })
+
+    results.sort(key=lambda r: r["fini_change"], reverse=True)
+    return results[:limit]

@@ -274,6 +274,22 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # 個股期貨 三大法人未平倉 (PR #282). FinMind sponsor-tier
+    # `TaiwanFuturesInstitutionalInvestors` market-wide call.
+    # 18:45 Taipei (10:45 UTC), 15 min after govt_bank_flow to
+    # avoid stacking sponsor-tier requests on a single tick.
+    from tasks.ingest_stock_futures_oi_tw import (
+        run as run_ingest_stock_futures_oi_tw,
+    )
+    scheduler.add_job(
+        run_ingest_stock_futures_oi_tw,
+        trigger=CronTrigger(hour=10, minute=45, timezone="UTC"),
+        id="ingest_stock_futures_oi_tw",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # TAIEX TR (含息報酬指數). FinMind sponsor-tier; pulls trailing
     # 400 days every tick (cheap, idempotent UPSERT). 15:30 Taipei
     # (07:30 UTC), 20 min after `ingest_taiex_history` so neither

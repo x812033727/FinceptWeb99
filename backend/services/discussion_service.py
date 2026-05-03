@@ -1730,6 +1730,15 @@ _BLOCK_ANNOTATIONS: dict[str, str] = {
         "`trend` 已自動分類 bullish/bearish/neutral。**外資台指期方向往往領先大盤 1-2 日**，"
         "若與 news_sentiment 同向則短線方向確立度高；逆向則優先信任此訊號。"
     ),
+    "single_stock_futures_oi": (
+        "- single_stock_futures_oi：**個股期貨外資未平倉變化前 N 名** "
+        "(per-stock smart-money 方向訊號，PR #282)。每筆含 `symbol` / "
+        "`contract_id` / `fini_net_oi`（最新淨倉，正 = 淨多）/ "
+        "`fini_change`（5 日淨倉變化，正 = 外資多單建倉，負 = 空單建倉）/ "
+        "`industry` / `name_zh`。**個股期貨外資方向通常領先個股現貨 1-2 日**，"
+        "與 top_foreign_buyers（現貨）同向 = 短線確立度極高，逆向 = 優先信任期貨方。"
+        "引用時請帶具體口數（例：「外資個股期 2330 連 5 日多單 +1500 口」）。"
+    ),
     "margin_balance_trend":      "- margin_balance_trend：全市場融資 / 融券餘額趨勢（散戶槓桿與看空代理）。",
     "top_revenue_growers":       "- top_revenue_growers：最新月份營收年增率前 10（基本面）。",
     "active_buybacks":           "- active_buybacks：今日仍在執行庫藏股的公司，**強烈管理層信心訊號**。",
@@ -2220,6 +2229,7 @@ _ALL_PERSONA_BLOCKS: frozenset[str] = frozenset({
     "top_foreign_buyers", "margin_balance_trend", "top_revenue_growers",
     "active_buybacks", "govt_bank_flow_5d", "risk_warnings",
     "market_institutional_5d", "taifex_positioning",
+    "single_stock_futures_oi",   # PR #282: per-stock 外資 期貨 net OI shift
     "overseas_indicators",   # PR #270: SOX/NDX/SPX/DJI/VIX overnight snapshot
     "focus_briefs", "macro", "user_context", "prior_discussions",
 })
@@ -2252,6 +2262,7 @@ _CONTRARIAN_PROFILE = frozenset({
     "focus_briefs", "news_sentiment", "per_symbol_news_sentiment",
     "short_term_signals",   # RSI extremes + volume spikes flag reversals
     "taifex_positioning",   # extreme net OI = contrarian setup
+    "single_stock_futures_oi",  # PR #282: extreme per-stock futures OI also a contrarian setup
     "overseas_indicators",  # PR #270: ^VIX spikes = global panic = contrarian setup
     "macro",
 })
@@ -2262,6 +2273,7 @@ _QUANT_PROFILE = frozenset({
     "risk_warnings", "news_sentiment", "macro",
     "short_term_signals",   # core Tier-1 quant signals per focus symbol
     "taifex_positioning",   # market-wide directional bias
+    "single_stock_futures_oi",  # PR #282: per-stock futures smart-money lead
     "overseas_indicators",  # PR #270: SOX overnight gap is the dominant TW open driver
 })
 

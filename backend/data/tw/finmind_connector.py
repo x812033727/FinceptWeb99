@@ -746,6 +746,42 @@ async def get_futures_institutional(
     )
 
 
+async def get_stock_futures_institutional_market_wide(
+    start_date: str, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """``TaiwanFuturesInstitutionalInvestors`` with ``data_id=""`` —
+    PR #282 entry point for 個股期貨 (single-stock futures) daily
+    institutional flows. One call returns rows for ALL contracts
+    (TX/MTX index futures + every individual stock future), so we
+    skip the ~250-symbol fan-out the per-contract API would need.
+
+    Caller is responsible for filtering out index-futures rows
+    (TX / MTX / TE / TF / etc.) and aggregating the per-investor-
+    type rows into per-(stock, date) totals — keeping the connector
+    a thin pass-through.
+
+    Sponsor tier — free tier returns silent-deny on `data_id=""`
+    for this dataset. The ingest task fail-soft handles that via
+    `consume_last_silent_deny`.
+
+    Row shape (FinMind doc snapshot 2026-05):
+      {
+        "date": "YYYY-MM-DD",
+        "futures_id": "CDF",        # contract code
+        "stock_id": "2330",          # underlying stock (when present)
+        "institutional_investors": "外資" | "投信" | "自營商",
+        "long_deal_volume": int,
+        "short_deal_volume": int,
+        "long_open_interest_balance_volume": int,
+        "short_open_interest_balance_volume": int,
+        ...
+      }
+    """
+    return await _query(
+        "TaiwanFuturesInstitutionalInvestors", "", start_date, end_date,
+    )
+
+
 async def get_futures_institutional_after_hours(
     contract: str, start_date: str, end_date: str | None = None,
 ) -> list[dict[str, Any]]:

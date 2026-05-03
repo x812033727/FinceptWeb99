@@ -82,6 +82,13 @@ _SIGNAL_KEYWORDS: dict[str, list[str]] = {
     "taifex_positioning": [
         r"台指期", r"未平倉", r"\bOI\b", r"net[_\s]*oi", r"taifex",
     ],
+    "single_stock_futures_oi": [
+        r"個股期(?:貨)?", r"single[_\s]*stock[_\s]*future",
+        r"外資.*個股期", r"期貨.*多單", r"期貨.*空單",
+        # Common contract codes — personas often reference them by name
+        # ("CDF 連 5 日 +1500 口" = 台積電期).
+        r"\b(?:CDF|CFF|CCF|IIF|GLF|GVF|HCF|NEF|NHF|NJF)\b",
+    ],
     "news_sentiment": [
         r"新聞情緒", r"情緒(?:面|偏)", r"sentiment", r"news[_\s]*sentiment",
     ],
@@ -317,6 +324,7 @@ def _detect_present_signals(context: dict[str, Any]) -> set[str]:
         "top_foreign_buyers", "margin_balance_trend", "top_revenue_growers",
         "active_buybacks", "govt_bank_flow_5d", "risk_warnings",
         "market_institutional_5d", "macro", "focus_briefs",
+        "single_stock_futures_oi",   # PR #282
         "user_context", "prior_discussions",
     ):
         if _is_meaningful(context.get(top_key)):

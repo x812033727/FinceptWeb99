@@ -914,7 +914,24 @@ async def read_active_dispositions(
 ) -> list[dict[str, Any]]:
     """Stocks whose disposition window covers `as_of`. NULL
     period_end is treated as still-active (FinMind sometimes leaves
-    the upstream field blank for fresh announcements)."""
+    the upstream field blank for fresh announcements).
+
+    Backtest look-ahead protection (PR #243): when `as_of` is set,
+    `period_end` is masked to None in the output. Rationale: the
+    upsert's `update_cols` includes `period_end`, so a disposition
+    announced on 03-23 with original end 03-30 that later got
+    extended to 04-07 (re-ingested by a subsequent FinMind tick)
+    will have its DB row's period_end overwritten to 04-07. A
+    backtest reading at as_of=03-23 would then see 04-07, which
+    leaks the future extension that wasn't public on 03-23.
+    Personas only need the LIST of currently-disposed stocks (the
+    action is "avoid until period ends" regardless), so dropping
+    the precise end date eliminates the leak without losing
+    decision-relevant information.
+
+    Live mode (`as_of=None`) returns period_end as-is — the leak
+    only matters when reconstructing a past anchor.
+    """
     today = as_of or date.today()
     stmt = (
         select(TwStockDisposition)
@@ -930,11 +947,17 @@ async def read_active_dispositions(
         .limit(limit)
     )
     rows = (await db.scalars(stmt)).all()
+    is_backtest = as_of is not None
     return [
         {
             "symbol":         r.symbol,
             "period_start":   r.period_start.isoformat(),
-            "period_end":     r.period_end.isoformat() if r.period_end else None,
+            # Backtest: hide period_end to defang the FinMind-extension
+            # look-ahead. Live mode shows the real value.
+            "period_end": (
+                None if is_backtest
+                else (r.period_end.isoformat() if r.period_end else None)
+            ),
             "classification": r.classification,
             "level":          r.level,
             "reason":         r.reason,

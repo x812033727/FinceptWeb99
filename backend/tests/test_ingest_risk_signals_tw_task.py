@@ -196,6 +196,77 @@ async def test_read_active_dispositions_filters_by_period(
 
 
 @pytest.mark.asyncio
+async def test_read_active_dispositions_hides_period_end_in_backtest_mode(
+    db_session: AsyncSession,
+):
+    """Look-ahead protection (PR #243): the upsert allows
+    `period_end` to be overwritten by later FinMind ticks (it's in
+    `update_cols`). A disposition announced on 03-23 with original
+    end 03-30 that gets extended to 04-07 in a subsequent ingest
+    has its DB row's period_end overwritten to 04-07. A backtest
+    reading at as_of=03-23 must NOT see the future-extended end
+    date — the reader masks `period_end` to None in backtest mode
+    to eliminate the leak.
+
+    The full disposition list (which stocks ARE under disposition)
+    is the action-relevant info personas need; the precise end date
+    is not. Personas avoid these stocks regardless of when the
+    period nominally ends.
+    """
+    from services.ingest.repository import (
+        DispositionRow, read_active_dispositions, upsert_dispositions,
+    )
+    as_of = date(2026, 3, 23)
+    # Disposition announced on as_of with end date 04-07 — could
+    # legitimately be the original announcement OR a later extension.
+    # Reader can't tell, so masks defensively.
+    await upsert_dispositions(db_session, [
+        DispositionRow(
+            "TW", "6426", date(2026, 3, 23), date(2026, 4, 7),
+            "處置", 1, "10日漲跌異常", "finmind",
+        ),
+    ])
+
+    rows = await read_active_dispositions(
+        db_session, market="TW", as_of=as_of,
+    )
+    assert len(rows) == 1
+    assert rows[0]["symbol"] == "6426"
+    assert rows[0]["period_start"] == "2026-03-23"
+    # period_end MUST be None in backtest mode regardless of DB state.
+    assert rows[0]["period_end"] is None, (
+        "period_end must be hidden in backtest mode (as_of != None) "
+        "to prevent look-ahead leakage when a disposition was "
+        "extended via later FinMind re-ingest."
+    )
+
+
+@pytest.mark.asyncio
+async def test_read_active_dispositions_keeps_period_end_in_live_mode(
+    db_session: AsyncSession,
+):
+    """Live mode (as_of=None) returns period_end as-is — the leak
+    only matters when reconstructing a past anchor. Don't punish
+    today's UI by hiding data that's legitimate for live discussions."""
+    from services.ingest.repository import (
+        DispositionRow, read_active_dispositions, upsert_dispositions,
+    )
+    await upsert_dispositions(db_session, [
+        DispositionRow(
+            "TW", "9999", date.today() - timedelta(days=5),
+            date.today() + timedelta(days=10),
+            "處置", 1, "5日漲跌", "finmind",
+        ),
+    ])
+
+    rows = await read_active_dispositions(db_session, market="TW")
+    assert len(rows) == 1
+    # Live mode shows the actual end date — don't punish today's UI
+    # for a leak that only exists in backtest reconstructions.
+    assert rows[0]["period_end"] is not None
+
+
+@pytest.mark.asyncio
 async def test_read_high_day_trading_ratio(db_session: AsyncSession):
     """Stock with > 60% day-trading ratio shows up; lower ones drop."""
     from services.ingest.repository import (

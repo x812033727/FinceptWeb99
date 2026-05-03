@@ -86,7 +86,8 @@ FinceptWeb/
 │   │   │                 #   0033 discussions.as_of_date (backtest mode) ·
 │   │   │                 #   0034 signal_audit_history (sparkline source) ·
 │   │   │                 #   0035 discussions.post_mortem_conclusion ·
-│   │   │                 #   0036 backtest_sweeps · 0037 sweep.auto_post_mortem
+│   │   │                 #   0036 backtest_sweeps · 0037 sweep.auto_post_mortem ·
+│   │   │                 #   0038 tw_stock_futures_oi · 0039 tw_vix_daily
 │   │   ├── base.py       # DeclarativeBase with naming convention
 │   │   ├── seed.py       # Admin user seed on first boot
 │   │   └── session.py    # Async engine + get_db dependency
@@ -102,7 +103,8 @@ FinceptWeb/
 │   │                     #   DiscussionRoundContext, SystemTaskConfig,
 │   │                     #   RuntimeSetting, TwInstitutionalDaily,
 │   │                     #   TwMarginDaily, TwRevenueMonthly,
-│   │                     #   SignalAuditHistory, BacktestSweep
+│   │                     #   SignalAuditHistory, BacktestSweep,
+│   │                     #   TwStockFuturesOi, TwVixDaily
 │   ├── services/         # Business logic (cached, waterfall)
 │   │   ├── _quote_helpers.py            # Shared market-quote sanitizer (±30%
 │   │   │                                #   daily-move bound, used by TW + US)
@@ -139,6 +141,11 @@ FinceptWeb/
 │   │   │                                #   + cancel + concurrency (PRs #274 #275)
 │   │   ├── overseas_market_service.py   # SOX/NDX/SPX/DJI/VIX snapshot via yfinance
 │   │   │                                #   (PRs #269-#271)
+│   │   ├── broker_concentration_service.py # 主力分點 5d aggregate per
+│   │   │                                #   focus_symbol (PR #285, FinMind sponsor
+│   │   │                                #   live-read + 24h Redis cache, no DB)
+│   │   ├── event_calendar_service.py    # Per-symbol + market-wide upcoming
+│   │   │                                #   法說/除息 calendar (PRs #238 #284)
 │   │   ├── tw_market_service.py         # TW: TWSE → FinMind → MOPS; don't-cache-empty
 │   │   ├── tw_trading_calendar.py       # TW market-hours / business-day helpers
 │   │   ├── us_market_service.py         # US: Polygon → yfinance → Stooq → Finnhub waterfall
@@ -431,6 +438,60 @@ FinceptWeb/
   `POST /api/discussion/sweeps/{id}/start`,
   `POST /api/discussion/sweeps/{id}/cancel`,
   `DELETE /api/discussion/sweeps/{id}`.
+
+### Sponsor-tier ctx blocks (PRs #282-#285)
+
+Layered onto the discussion ctx after the user's FinMind Sponsor
+upgrade. Each closes one item from PR #262's post-mortem-gap
+taxonomy. All 4 register their keys into
+`signal_audit_service._SIGNAL_KEYWORDS` so PR #263's sparkline
+trend cron picks them up automatically — no separate
+observability wiring per block.
+
+- **個股期貨 三大法人未平倉** (`single_stock_futures_oi`, PR #282,
+  migration `0038`). FinMind `TaiwanFuturesInstitutionalInvestors`
+  with `data_id=""` returns ALL contracts in one Sponsor call;
+  `tasks/ingest_stock_futures_oi_tw.py` filters out index futures
+  (TX/MTX/TE/TF/...) and aggregates per-investor-type rows
+  (foreign / SITC / dealer + their sub-types) into one row per
+  (stock, date) in `tw_stock_futures_oi`. Read tier
+  `read_top_foreign_stock_futures_buyers` returns top 10 by
+  5-day foreign-net-OI delta. Per-stock futures lead spot
+  moves by 1-2 days the same way taifex_positioning leads
+  TAIEX.
+- **TAIWAN VIX** (`taiwan_vix`, PR #283, migration `0039`).
+  TAIFEX public CSV download — free + public, not in FinMind's
+  catalogue. New `data/tw/taifex_connector.py` module hosts the
+  scraper (Big5-encoded, tolerant of column-order rotations).
+  Cron `tasks/ingest_tw_vix.py` pulls a 30-day window daily into
+  `tw_vix_daily`. Read tier returns latest + 5-day change.
+  Sits alongside `overseas_indicators` `^VIX` so personas can
+  spread TW vs US implied-vol regime ("台 VIX 22 vs ^VIX 16
+  → idiosyncratic 風險偏高").
+- **法說會 / 除息行事曆 (market-wide)** (`upcoming_events_calendar`,
+  PR #284). New `event_calendar_service.get_market_upcoming_events`
+  fans out the existing per-symbol yfinance calendar (PR #238)
+  across the symbols already in ctx (`top_foreign_buyers` +
+  `top_revenue_growers` + `single_stock_futures_oi` +
+  `focus_briefs` + `focus_symbols`) — biases coverage toward
+  what's actionable for THIS discussion, not a static large-cap
+  list. Output is sorted soonest-first, ties broken by symbol,
+  capped at 20. Each per-symbol read hits the existing 24h
+  cache, so a multi-discussion sweep over the same trending
+  stocks only fans yfinance once per symbol per day.
+- **主力分點** (`broker_concentration`, PR #285, **no DB table**).
+  Live FinMind `TaiwanStockTradingDailyReport` per-symbol with
+  Redis 24h cache. Architectural divergence from #282-#284:
+  per-stock fan-out at scale = ~1700 calls/day = the entire
+  Sponsor hourly budget; we don't need that for a per-stock
+  signal that only fires for `focus_symbols`. Per-discussion
+  fan-out hard-capped at 5 symbols (`_DEFAULT_MAX_SYMBOLS`).
+  Service splits aggregated rows into top_buyers (positive
+  net) + top_sellers (negative net), sentinels `_no_data` for
+  symbols FinMind has no breakdown on. Backtest mode just
+  queries FinMind with the historical date range (the
+  date-range query handles the as_of clamp inherently;
+  service additionally drops `date > anchor` rows defensively).
 
 ### TW news ingest
 - Hourly APScheduler job `tasks/ingest_news_tw.py` pulls TW market

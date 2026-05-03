@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import type { ScoreboardResponse, ScoreboardRow } from "@/types/discussion";
@@ -64,6 +64,18 @@ export function ScoreboardCard({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  // Auto-expand the moment a conclusion lands so the user sees the
+  // D1-D5 outcomes (especially in backtest mode where data is
+  // immediately available). One-shot — only fires on the
+  // `hasConclusion: false → true` transition, so a user who
+  // manually collapses the card later won't have it spring back open.
+  const prevHasConclusion = useRef(hasConclusion);
+  useEffect(() => {
+    if (!prevHasConclusion.current && hasConclusion) {
+      setOpen(true);
+    }
+    prevHasConclusion.current = hasConclusion;
+  }, [hasConclusion]);
 
   const { data, isLoading, isError, error } = useQuery<ScoreboardResponse>({
     queryKey: ["discussion-scoreboard", discussionId],

@@ -281,6 +281,14 @@ export default function DiscussionPage() {
     mutationFn: () => concludeSession(selectedId!),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["discussion-session", selectedId] });
+      // Bust any cached scoreboard response — including 400 errors
+      // from earlier attempts when the discussion had no conclusion
+      // yet. Without this, the ScoreboardCard would keep showing the
+      // pre-conclusion error state until the staleTime (60s) expires
+      // or the user manually re-opens the card. Backtest discussions
+      // are the worst-hit: their D1-D5 data is fully available the
+      // moment the conclusion lands, but the user can't see it.
+      queryClient.invalidateQueries({ queryKey: ["discussion-scoreboard", selectedId] });
     },
   });
 

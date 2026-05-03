@@ -431,3 +431,65 @@ async def test_read_recent_suspensions(db_session: AsyncSession):
     ])
     rows = await read_recent_suspensions(db_session, market="TW", days=7)
     assert {r["symbol"] for r in rows} == {"9999"}
+
+
+@pytest.mark.asyncio
+async def test_read_recent_suspensions_masks_status_in_backtest_mode(
+    db_session: AsyncSession,
+):
+    """Look-ahead protection (PR #260): the upsert's `update_cols`
+    includes `status` and `reason`, so a row originally inserted as
+    `status='halt'` whose status later flips to `'lifted'` (next
+    ingest tick) leaks the post-as_of recovery state to a backtest
+    reading at the suspension date. Reader must mask both fields
+    in backtest mode (`as_of != None`).
+
+    The decision-relevant info — that the stock IS suspended —
+    is conveyed by the row's presence in the result set.
+    """
+    from services.ingest.repository import (
+        SuspendedRow, read_recent_suspensions, upsert_suspensions,
+    )
+    as_of = date(2026, 3, 15)
+    # Row could be the original "halt" insert OR a later "lifted"
+    # overwrite — reader can't tell, so masks defensively.
+    await upsert_suspensions(db_session, [
+        SuspendedRow("TW", "6789", as_of,
+                     "lifted", "已恢復交易", "finmind"),
+    ])
+
+    rows = await read_recent_suspensions(
+        db_session, market="TW", days=7, as_of=as_of,
+    )
+    assert len(rows) == 1
+    assert rows[0]["symbol"] == "6789"
+    assert rows[0]["date"] == "2026-03-15"
+    assert rows[0]["status"] is None, (
+        "status must be hidden in backtest mode to prevent leakage "
+        "of post-as_of status flips (halt → lifted)."
+    )
+    assert rows[0]["reason"] is None, (
+        "reason must be hidden in backtest mode to prevent leakage "
+        "of post-as_of reason updates."
+    )
+
+
+@pytest.mark.asyncio
+async def test_read_recent_suspensions_keeps_status_in_live_mode(
+    db_session: AsyncSession,
+):
+    """Live mode (`as_of=None`) returns status / reason as-is — the
+    leak only matters when reconstructing a past anchor."""
+    from services.ingest.repository import (
+        SuspendedRow, read_recent_suspensions, upsert_suspensions,
+    )
+    today = date.today()
+    await upsert_suspensions(db_session, [
+        SuspendedRow("TW", "1234", today,
+                     "suspended", "重大訊息", "finmind"),
+    ])
+
+    rows = await read_recent_suspensions(db_session, market="TW", days=7)
+    assert len(rows) == 1
+    assert rows[0]["status"] == "suspended"
+    assert rows[0]["reason"] == "重大訊息"

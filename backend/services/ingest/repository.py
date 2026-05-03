@@ -1025,6 +1025,23 @@ async def read_recent_suspensions(
     db: AsyncSession, *, market: str = "TW", days: int = 7,
     limit: int = 30, as_of: date | None = None,
 ) -> list[dict[str, Any]]:
+    """Suspensions whose `ts` falls in the `[end-days, end]` window.
+
+    Backtest look-ahead protection (PR #260): when `as_of` is set,
+    `status` and `reason` are masked to None in the output.
+    Rationale: ``upsert_suspensions``'s ``update_cols`` includes
+    both fields, so a row originally inserted with
+    ``status="halt"`` whose status is later overwritten to
+    ``"lifted"`` (next ingest tick) would, at backtest read-time,
+    leak the post-as_of recovery state. The persona only needs the
+    LIST of suspended stocks (action: "avoid until cleared"),
+    which the row's presence already conveys; dropping the precise
+    status / reason eliminates the leak without losing
+    decision-relevant information.
+
+    Live mode (``as_of=None``) returns both fields as-is — the leak
+    only matters when reconstructing a past anchor.
+    """
     end = as_of or date.today()
     cutoff = end - timedelta(days=days)
     stmt = (
@@ -1038,12 +1055,15 @@ async def read_recent_suspensions(
         .limit(limit)
     )
     rows = (await db.scalars(stmt)).all()
+    is_backtest = as_of is not None
     return [
         {
             "symbol": r.symbol,
             "date":   r.ts.isoformat(),
-            "status": r.status,
-            "reason": r.reason,
+            # Backtest: mask retroactively-updatable fields. Live
+            # mode shows the real values.
+            "status": None if is_backtest else r.status,
+            "reason": None if is_backtest else r.reason,
         }
         for r in rows
     ]

@@ -326,6 +326,17 @@ export default function FinmindAdminCard() {
           {/* Resolved config — mirrors the lifespan startup log so
               the operator can verify env-var propagation directly in
               the UI. Renders regardless of /status outcome. */}
+          {configQuery.isError && (
+            <div className="rounded border border-amber-300 bg-amber-50 p-3 text-xs dark:border-amber-700 dark:bg-amber-950">
+              <div className="font-semibold">
+                Resolved config unavailable
+              </div>
+              <div className="mt-1 text-muted-foreground">
+                {errorDetail(configQuery.error)} — check whether the
+                /admin/finmind/config endpoint is wired up.
+              </div>
+            </div>
+          )}
           {configQuery.data && (() => {
             const c = configQuery.data;
             const modeLabel = {
@@ -406,7 +417,7 @@ export default function FinmindAdminCard() {
                       className={
                         statusQuery.data.alembic.at_head
                           ? "text-green-600"
-                          : "text-amber-600"
+                          : "text-amber-600 dark:text-amber-400"
                       }
                     >
                       {statusQuery.data.alembic.at_head ? "✓" : "✗"}{" "}
@@ -419,7 +430,7 @@ export default function FinmindAdminCard() {
                       className={
                         statusQuery.data.catalog.ok
                           ? "text-green-600"
-                          : "text-amber-600"
+                          : "text-amber-600 dark:text-amber-400"
                       }
                     >
                       {statusQuery.data.catalog.seeded}/
@@ -482,7 +493,7 @@ export default function FinmindAdminCard() {
                       className={
                         c.passed
                           ? "text-green-600"
-                          : "text-amber-600"
+                          : "text-amber-600 dark:text-amber-400"
                       }
                     >
                       {c.passed ? "✓" : "✗"}
@@ -709,7 +720,9 @@ export default function FinmindAdminCard() {
           {datasetsQuery.data && (
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
-                <thead className="border-b border-border text-left">
+                {/* Sticky header so column labels stay visible while
+                    scrolling the 80-row dataset list inside the card. */}
+                <thead className="sticky top-0 z-10 border-b border-border bg-card text-left">
                   <tr>
                     <th className="py-2 pr-2">Dataset</th>
                     <th className="py-2 pr-2">Category</th>

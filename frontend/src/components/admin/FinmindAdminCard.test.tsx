@@ -120,6 +120,17 @@ describe("FinmindAdminCard — render", () => {
     // confirms the DB is down. Generic errors stay short.
   });
 
+  it("renders 'config unavailable' banner when /config errors", async () => {
+    // Both /status and /config fail — config gets its own quiet
+    // banner above the status one so the operator knows the
+    // /admin/finmind/config endpoint itself isn't responding.
+    mockedApi.get.mockRejectedValue(new Error("config endpoint down"));
+    renderCard();
+    expect(
+      await screen.findByText(/Resolved config unavailable/i),
+    ).toBeInTheDocument();
+  });
+
   it("renders a calm 'DB unreachable' banner when status returns 503", async () => {
     // Build an axios-shaped error so the component's response.status
     // discriminator picks up the 503 branch.

@@ -203,6 +203,51 @@ async def update_finmind_dataset(
     )
 
 
+class FinmindConfigResponse(BaseModel):
+    """Resolved FinMind subsystem config — surfaces the same values
+    the lifespan startup log emits, so the operator can verify
+    env-var propagation directly in the UI without shell access to
+    `docker compose logs backend | grep "finmind config:"`.
+
+    Doesn't touch the DB — readable even when the FinMind clone is
+    unreachable, which is exactly when the operator most needs to
+    confirm whether their FINMIND_USE_MAIN_DB=true setting reached
+    the process."""
+
+    use_main_db: bool
+    auto_init: bool
+    effective_database_url: str  # password-masked
+    schema_: str | None  # `finmind` when sharing main DB on Postgres
+    mode: str  # 'separate-container' | 'shared-main-db' | 'sqlite-test'
+
+
+@router.get(
+    "/config",
+    response_model=FinmindConfigResponse,
+    summary="AdminPage: resolved FinMind env-var settings (no DB query)",
+)
+async def finmind_config(_: Admin) -> FinmindConfigResponse:
+    """Mirrors the startup log line. Operator opens AdminPage → sees
+    exactly which mode is active without needing to read backend logs."""
+    from finmind.config import finmind_settings
+
+    url = finmind_settings.effective_database_url_safe
+    schema_val = finmind_settings.schema
+    if url.startswith("sqlite"):
+        mode = "sqlite-test"
+    elif schema_val:
+        mode = "shared-main-db"
+    else:
+        mode = "separate-container"
+    return FinmindConfigResponse(
+        use_main_db=finmind_settings.FINMIND_USE_MAIN_DB,
+        auto_init=finmind_settings.FINMIND_AUTO_INIT,
+        effective_database_url=url,
+        schema_=schema_val,
+        mode=mode,
+    )
+
+
 @router.get(
     "/status",
     summary="AdminPage: catalog + Phase 1 coverage + backfill summary",

@@ -669,6 +669,53 @@ async def test_proxy_patch_phase_a_to_b_switch(
 
 
 @pytest.mark.asyncio
+async def test_proxy_config_returns_resolved_settings(
+    client, db_session, finmind_db_override,
+):
+    """`/config` mirrors the startup log line — surfaces resolved
+    FinMind env-var settings to the AdminPage UI without needing
+    shell access. Independent of DB; uses settings only."""
+    email = "admin_fm_config@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.get(
+        "/api/admin/finmind/config", headers=_auth(token),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body) == {
+        "use_main_db", "auto_init", "effective_database_url",
+        "schema_", "mode",
+    }
+    # Test env uses sqlite — mode should reflect that.
+    assert body["mode"] == "sqlite-test"
+    assert body["use_main_db"] is False  # default
+    assert body["auto_init"] is True  # default
+    # Password masking — even sqlite URLs round-trip cleanly with no creds.
+    assert "password" not in body["effective_database_url"].lower()
+
+
+@pytest.mark.asyncio
+async def test_proxy_config_requires_admin(client, db_session):
+    """Non-admin users get 403 — config exposes the (masked) DB URL
+    which is operationally sensitive."""
+    email = "viewer_fm_config@test.com"
+    await _register_login(client, email)
+    # Login as non-admin (default role is viewer).
+    r_login = await client.post(
+        "/api/auth/login",
+        json={"email": email, "password": "Test1234!"},
+    )
+    token = r_login.json()["access_token"]
+
+    r = await client.get(
+        "/api/admin/finmind/config", headers=_auth(token),
+    )
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_proxy_status_returns_collect_status_shape(
     client, db_session, finmind_db_override,
 ):

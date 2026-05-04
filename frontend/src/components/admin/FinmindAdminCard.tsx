@@ -82,6 +82,14 @@ interface FinmindStatus {
   generated_at: string;
 }
 
+interface FinmindConfig {
+  use_main_db: boolean;
+  auto_init: boolean;
+  effective_database_url: string;
+  schema_: string | null;
+  mode: "separate-container" | "shared-main-db" | "sqlite-test";
+}
+
 const VALID_SOURCES = ["finmind", "twse", "tpex", "taifex", "mops", "tdcc"];
 
 interface QuickStartResponse {
@@ -135,6 +143,19 @@ export default function FinmindAdminCard() {
     },
     enabled: open,
     refetchInterval: 30_000,
+  });
+
+  // Resolved env-var settings. Independent of /status because /config
+  // doesn't touch the DB — readable even when the FinMind clone is
+  // unreachable, which is exactly when the operator most needs to see
+  // whether FINMIND_USE_MAIN_DB actually propagated.
+  const configQuery = useQuery<FinmindConfig>({
+    queryKey: ["admin", "finmind", "config"],
+    queryFn: async () => {
+      const r = await api.get<FinmindConfig>("/admin/finmind/config");
+      return r.data;
+    },
+    enabled: open,
   });
 
   const [quickStartResult, setQuickStartResult] =
@@ -302,6 +323,49 @@ export default function FinmindAdminCard() {
 
       {open && (
         <div className="mt-4 space-y-6">
+          {/* Resolved config — mirrors the lifespan startup log so
+              the operator can verify env-var propagation directly in
+              the UI. Renders regardless of /status outcome. */}
+          {configQuery.data && (() => {
+            const c = configQuery.data;
+            const modeLabel = {
+              "separate-container": "Path A1 · separate postgres_finmind container",
+              "shared-main-db": "Path A2 · shared main DB via `finmind` schema",
+              "sqlite-test": "SQLite (test environment)",
+            }[c.mode];
+            const modeColor = c.mode === "shared-main-db"
+              ? "text-blue-700 dark:text-blue-300"
+              : "text-muted-foreground";
+            return (
+              <div className="rounded border border-border bg-muted/30 p-3 text-xs">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="font-semibold">Resolved config</span>
+                  <span className={`font-mono ${modeColor}`}>{modeLabel}</span>
+                </div>
+                <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+                  <div className="flex justify-between gap-2">
+                    <span className="text-muted-foreground">FINMIND_USE_MAIN_DB</span>
+                    <span className="font-mono">{String(c.use_main_db)}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span className="text-muted-foreground">FINMIND_AUTO_INIT</span>
+                    <span className="font-mono">{String(c.auto_init)}</span>
+                  </div>
+                  <div className="flex justify-between gap-2 sm:col-span-2">
+                    <span className="text-muted-foreground">effective URL</span>
+                    <span className="font-mono break-all text-right">
+                      {c.effective_database_url}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span className="text-muted-foreground">schema</span>
+                    <span className="font-mono">{c.schema_ ?? "(default)"}</span>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Status banner ─────────────────────────── */}
           {statusQuery.isError && (() => {
             const status =

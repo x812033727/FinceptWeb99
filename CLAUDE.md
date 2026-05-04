@@ -524,6 +524,30 @@ small / managed deployments that can't (or don't want to) spin up
 `SET search_path TO finmind, public` on every checked-out connection
 so application queries don't need to qualify table names.
 
+**Deployment env-var checklist**: three env vars control the
+subsystem and MUST be propagated through the deployment glue (the
+class of bug we hit pre-PR #304: setting `FINMIND_USE_MAIN_DB=true`
+in `.env` had no effect because `docker-compose.yml` and the Helm
+configmap didn't pass it through).
+
+  - `FINMIND_USE_MAIN_DB` — Path A1 (`false`, default) vs A2 (`true`).
+  - `FINMIND_AUTO_INIT` — auto-run alembic + seed on lifespan.
+  - `FINMIND_DATABASE_URL` — only consulted when A1; default points
+     at `postgres_finmind:5432` inside the compose network.
+
+  Wired in:
+  - `docker-compose.yml backend.environment` — explicit
+    `${VAR:-default}` passthrough lines.
+  - `helm/.../templates/configmap.yaml` — generic loop over
+    `.Values.env.backend`, so adding a new var = edit `values.yaml`
+    only.
+  - `.env.example` — "FinMind Clone Subsystem" stanza.
+
+  Verification: backend lifespan now logs
+  `finmind config: USE_MAIN_DB=..., effective_url=..., schema=...,
+  AUTO_INIT=...` immediately after auto-init. Single `grep` confirms
+  whether env-var propagation actually reached the process.
+
 **Module map** (everything under `backend/finmind/`):
 
 | Module | Purpose |

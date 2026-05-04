@@ -122,6 +122,21 @@ async def lifespan(app: FastAPI):
     # already surfaces the actionable hint.
     await _auto_init_finmind_clone()
 
+    # Verification handle for env-var propagation. Without this line,
+    # diagnosing "I set FINMIND_USE_MAIN_DB=true but it didn't take
+    # effect" requires inferring from absent errors. With it, a single
+    # `docker compose logs backend | grep "finmind config:"` prints
+    # exactly which mode + URL the engine actually bound to.
+    from finmind.config import finmind_settings as _fm_settings
+    log.info(
+        "finmind config: USE_MAIN_DB=%s, effective_url=%s, schema=%s, "
+        "AUTO_INIT=%s",
+        _fm_settings.FINMIND_USE_MAIN_DB,
+        _fm_settings.effective_database_url_safe,
+        _fm_settings.schema,
+        _fm_settings.FINMIND_AUTO_INIT,
+    )
+
     from tasks.scheduler import scheduler, setup_jobs
     from api.websocket.manager import push_alert_to_user, publish_update, start_pubsub_listener
     from services.notification_service import register_push_impl

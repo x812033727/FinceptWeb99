@@ -84,6 +84,13 @@ services:
       CORS_ORIGINS:      ${CORS_ORIGINS:-http://localhost}
       ADMIN_EMAIL:       ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD:    ${ADMIN_PASSWORD:-}
+      # FinMind clone subsystem — see backend/finmind/config.py.
+      # Without explicit passthrough here, .env edits never reach
+      # the container's process env (compose only enumerates listed
+      # keys; there's no env_file: .env directive on this service).
+      FINMIND_USE_MAIN_DB:    ${FINMIND_USE_MAIN_DB:-false}
+      FINMIND_AUTO_INIT:      ${FINMIND_AUTO_INIT:-true}
+      FINMIND_DATABASE_URL:   ${FINMIND_DATABASE_URL:-postgresql+asyncpg://finmind:finmind_dev_password@postgres_finmind:5432/finmind_clone}
     depends_on:
       postgres:
         condition: service_healthy

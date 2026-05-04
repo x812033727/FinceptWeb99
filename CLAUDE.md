@@ -548,6 +548,26 @@ configmap didn't pass it through).
   AUTO_INIT=...` immediately after auto-init. Single `grep` confirms
   whether env-var propagation actually reached the process.
 
+**Multi-pod deploys MUST set `FINMIND_AUTO_INIT=false`**: with
+`FINMIND_AUTO_INIT=true` (the default), every backend pod runs
+`alembic upgrade head` on startup. Two pods racing the upgrade
+relies on alembic's per-DB version-table lock — if Pod A acquires
+the lock and crashes mid-migration (OOM kill, network partition),
+Pod B times out and the DB is left half-migrated. Recommended
+pattern for k8s + horizontal scaling:
+
+  1. Add a Kubernetes pre-deploy `Job` (or use the existing compose
+     `migrate` service shape) that runs `python -m finmind.scripts.init_db`
+     to head BEFORE rolling out the backend Deployment.
+  2. Set `FINMIND_AUTO_INIT=false` on the backend Deployment so no
+     pod re-runs migrations during rolling restarts.
+  3. The lifespan verification log line still prints with
+     `AUTO_INIT=False`, so the operator can confirm the opt-out is
+     effective.
+
+Single-pod deployments (default `docker compose up`) keep
+`FINMIND_AUTO_INIT=true` — the race doesn't exist with one pod.
+
 **Module map** (everything under `backend/finmind/`):
 
 | Module | Purpose |
@@ -648,12 +668,21 @@ python -c "import asyncio; from finmind.db.session import \
   - Mappings: 19/80 datasets have a Phase A FinMind ingest mapping
     (5 headline + 10 direct + 4 wide-format pivots — the rest are
     sponsor-only / niche, append one entry to add)
-  - Phase B: 5/19 mapped datasets have a TWSE self-crawl handler
-  - Tests: 172 passing
-  - Deferred: Stripe Checkout / Customer Portal UI integration
-    (schema ready, depends on real Stripe account); MOPS / TPEX /
-    TAIFEX / TDCC self-crawl wrappers (stubs in selfcrawl/__init__);
-    AdminPage UsageCard frontend
+  - Phase B: 5 datasets via TWSE self-crawl + 1 via MOPS (revenue);
+    TPEX / TAIFEX / TDCC remain `_NotWiredYetClient` stubs.
+    `is_source_implemented()` blocks AdminPage flips to stubs (PR
+    #306) so an operator can't break the cron silently.
+  - Tests: 259 finmind subsystem tests + ~50 main-app integration
+    tests touching the FinMind clone (admin proxy, lifespan,
+    discussion ctx blocks)
+  - Deferred: Stripe Checkout / Customer Portal end-user flow
+    (schema ready, webhook handler in place — depends on real Stripe
+    account for end-to-end testing); TPEX / TAIFEX / TDCC self-crawl
+    handlers (stubs in selfcrawl/__init__, AdminPage refuses to
+    flip to them until wired); deep MOPS coverage beyond monthly
+    revenue (FinancialStatements / BalanceSheet / CashFlow scrapers).
+    AdminPage's FinmindAdminCard / UsageCard / KeysCard are all
+    shipped + tested.
 
 **TimescaleDB compression** is OFF by default in the main DB (not
 applied to `ohlcv_daily` etc.) but ON in the FinMind clone DB —

@@ -442,6 +442,21 @@ async def admin_update_dataset(
                     f"got '{body.active_source}'"
                 ),
             )
+        # Mirror the same stub-source guard as the main-app proxy
+        # (api/admin/finmind_proxy.py) — flipping to a stubbed
+        # source would break the next ingest cycle silently.
+        from finmind.ingest.selfcrawl import is_source_implemented
+
+        if not is_source_implemented(body.active_source):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"active_source='{body.active_source}' has no "
+                    f"connector wired up yet — implement "
+                    f"finmind/ingest/selfcrawl/{body.active_source}.py "
+                    f"+ register_connector() before flipping."
+                ),
+            )
         row.active_source = body.active_source
     await db.commit()
     await db.refresh(row)

@@ -93,6 +93,28 @@ _REGISTRY: dict[str, ConnectorFactory] = {
 }
 
 
+def is_source_implemented(source: str) -> bool:
+    """True when `source` has a real connector wired up; False when
+    it's a stub or unknown.
+
+    `finmind` is always implemented (FinmindClient lives in
+    `finmind.ingest.runner` and is imported lazily). Other sources
+    are real iff their factory does NOT return `_NotWiredYetClient`.
+    Used by the AdminPage PATCH endpoint to reject `active_source`
+    flips to stubbed sources before the cron blows up at runtime
+    with `NotImplementedError`."""
+    if source == "finmind":
+        return True
+    factory = _REGISTRY.get(source)
+    if factory is None:
+        return False
+    try:
+        instance = factory()
+    except Exception:
+        return False
+    return not isinstance(instance, _NotWiredYetClient)
+
+
 def register_connector(source: str, factory: ConnectorFactory) -> None:
     """Hot-pluggable registration — the eventual real implementations
     in `selfcrawl/{twse,tpex,...}.py` call this at import time so

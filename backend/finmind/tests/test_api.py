@@ -237,6 +237,37 @@ async def test_admin_update_validates_active_source(
 
 
 @pytest.mark.asyncio
+async def test_admin_update_rejects_unimplemented_source(
+    client, finmind_session, monkeypatch
+):
+    """Flipping `active_source` to a stubbed connector (tpex / taifex /
+    tdcc currently) must 400 — otherwise the next cron tick blows up
+    with NotImplementedError and the operator only finds out from the
+    failed-ingest count hours later."""
+    monkeypatch.setenv("FINMIND_ADMIN_API_KEY", "test-admin-secret")
+
+    await seed_dataset_sources()
+
+    # tpex is registered as a stub — _NotWiredYetClient.
+    resp = await client.patch(
+        "/api/finmind/admin/datasets/TaiwanStockPrice",
+        json={"active_source": "tpex"},
+        headers={"X-Finmind-Admin-Key": "test-admin-secret"},
+    )
+    assert resp.status_code == 400
+    assert "no connector wired up yet" in resp.json()["detail"]
+    assert "tpex" in resp.json()["detail"]
+
+    # twse IS wired — same endpoint, same auth, just a real source.
+    resp = await client.patch(
+        "/api/finmind/admin/datasets/TaiwanStockPrice",
+        json={"active_source": "twse"},
+        headers={"X-Finmind-Admin-Key": "test-admin-secret"},
+    )
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_admin_phase_a_to_b_transition(
     client, finmind_session, monkeypatch
 ):

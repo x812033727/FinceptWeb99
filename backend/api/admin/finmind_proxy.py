@@ -180,6 +180,25 @@ async def update_finmind_dataset(
                     f"{sorted(_VALID_SOURCES)}; got '{body.active_source}'"
                 ),
             )
+        # Stub sources (tpex / taifex / tdcc currently) raise
+        # NotImplementedError at runtime when the cron next fires —
+        # which means the operator can't tell from the AdminPage that
+        # the dataset has just been broken until the next scheduled
+        # run. Reject the flip up front instead.
+        from finmind.ingest.selfcrawl import is_source_implemented
+
+        if not is_source_implemented(body.active_source):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"active_source='{body.active_source}' has no "
+                    f"connector wired up yet — flipping to it would "
+                    f"break the next ingest cycle. Implement the "
+                    f"connector in finmind/ingest/selfcrawl/"
+                    f"{body.active_source}.py + register_connector() "
+                    f"before flipping."
+                ),
+            )
         row.active_source = body.active_source
     await db.commit()
     await db.refresh(row)

@@ -1,8 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { CollapsibleHeader, useCollapsible } from "@/components/Collapsible";
 import api, { errorDetail } from "@/lib/api";
+
+// Plaintext key auto-clear delay. Long enough for the operator to
+// copy + send to the customer; short enough that walking away from
+// the desk doesn't leave a credential lingering in the DOM forever.
+const PLAINTEXT_AUTO_CLEAR_MS = 120_000; // 2 minutes
+
+// Loose email regex — same shape as HTML5 input[type=email] uses
+// for client-side validation. The backend re-validates anyway, so
+// this is purely UX (disable submit + show inline hint).
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * AdminPage card for issuing + listing + revoking customer API keys.
@@ -59,8 +69,21 @@ export default function FinmindKeysCard() {
   const [keyName, setKeyName] = useState("");
   const [keyPlanCode, setKeyPlanCode] = useState<string>("");
   // Plaintext from the most recent issuance — sticks until operator
-  // dismisses or issues another key. NEVER persisted anywhere.
+  // dismisses, issues another key, or PLAINTEXT_AUTO_CLEAR_MS elapses.
+  // NEVER persisted anywhere.
   const [issuedKey, setIssuedKey] = useState<IssuedKeyResponse | null>(null);
+
+  // Auto-clear the plaintext after the timeout so an unattended
+  // browser tab doesn't leave a credential visible indefinitely.
+  // Resets on every new issuance; manual dismissal short-circuits.
+  useEffect(() => {
+    if (!issuedKey) return;
+    const t = setTimeout(
+      () => setIssuedKey(null),
+      PLAINTEXT_AUTO_CLEAR_MS,
+    );
+    return () => clearTimeout(t);
+  }, [issuedKey]);
 
   // Plan management — inline mini-form so the operator can create a
   // plan without opening a separate modal / page. Plans are
@@ -367,9 +390,10 @@ export default function FinmindKeysCard() {
               className="flex flex-wrap items-end gap-2 text-sm"
               onSubmit={(e) => {
                 e.preventDefault();
-                if (!ownerEmail.trim()) return;
+                const email = ownerEmail.trim();
+                if (!email || !EMAIL_RE.test(email)) return;
                 issueMutation.mutate({
-                  owner_email: ownerEmail.trim(),
+                  owner_email: email,
                   name: keyName.trim() || undefined,
                   plan_code: keyPlanCode.trim() || undefined,
                 });
@@ -387,6 +411,12 @@ export default function FinmindKeysCard() {
                   className="rounded border border-border bg-background px-2 py-1"
                   placeholder="customer@example.com"
                 />
+                {ownerEmail.trim().length > 0 &&
+                  !EMAIL_RE.test(ownerEmail.trim()) && (
+                    <span className="mt-0.5 text-[10px] text-destructive">
+                      Invalid email format
+                    </span>
+                  )}
               </label>
               <label className="flex flex-col">
                 <span className="text-xs text-muted-foreground">
@@ -419,7 +449,11 @@ export default function FinmindKeysCard() {
               </label>
               <button
                 type="submit"
-                disabled={issueMutation.isPending || !ownerEmail.trim()}
+                disabled={
+                  issueMutation.isPending ||
+                  !ownerEmail.trim() ||
+                  !EMAIL_RE.test(ownerEmail.trim())
+                }
                 className="rounded bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               >
                 {issueMutation.isPending ? "Issuing…" : "Issue key"}

@@ -1226,11 +1226,13 @@ async def test_issue_key_with_plan_creates_subscription(
 
 
 @pytest.mark.asyncio
-async def test_issue_key_with_unknown_plan_falls_back_to_free_tier(
+async def test_issue_key_with_unknown_plan_returns_400(
     client, db_session, finmind_db_override,
 ):
-    """Unknown plan_code shouldn't 4xx — operator notices the missing
-    link in the keys table and re-links explicitly."""
+    """Unknown plan_code → 400. The previous silent fallback (issue
+    free-tier key, surface plan_code=None) masked typos — the operator
+    typing a plan_code clearly intended that plan, so the mismatch
+    should fail loudly."""
     email = "admin_keys_unknownplan@test.com"
     await _register_login(client, email)
     token = await _promote_to_admin(db_session, email, client)
@@ -1243,16 +1245,17 @@ async def test_issue_key_with_unknown_plan_falls_back_to_free_tier(
         },
         headers=_auth(token),
     )
-    assert r.status_code == 200
-    assert r.json()["plan_code"] is None
-    assert r.json()["subscription_id"] is None
+    assert r.status_code == 400
+    assert "definitely_not_a_plan" in r.json()["detail"]
+    assert "does not exist" in r.json()["detail"]
 
 
 @pytest.mark.asyncio
-async def test_issue_key_with_disabled_plan_falls_back_to_free_tier(
+async def test_issue_key_with_disabled_plan_returns_400(
     client, db_session, finmind_db_override,
 ):
-    """Plan exists but enabled=false — same fallback as unknown."""
+    """Plan exists but enabled=false → 400 with a different hint
+    pointing to re-enabling vs. picking another plan."""
     email = "admin_keys_disabled@test.com"
     await _register_login(client, email)
     token = await _promote_to_admin(db_session, email, client)
@@ -1271,8 +1274,31 @@ async def test_issue_key_with_disabled_plan_falls_back_to_free_tier(
         json={"owner_email": "x@x.com", "plan_code": "sunset"},
         headers=_auth(token),
     )
+    assert r.status_code == 400
+    assert "sunset" in r.json()["detail"]
+    assert "disabled" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_issue_key_without_plan_code_still_works(
+    client, db_session, finmind_db_override,
+):
+    """Omitting plan_code (free-tier intent) keeps working. Confirms
+    the new strict validation only fires when plan_code is set."""
+    email = "admin_keys_noplan@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.post(
+        "/api/admin/finmind/keys",
+        json={"owner_email": "free@example.com"},
+        headers=_auth(token),
+    )
     assert r.status_code == 200
-    assert r.json()["plan_code"] is None
+    body = r.json()
+    assert body["plan_code"] is None
+    assert body["subscription_id"] is None
+    assert body["plaintext"].startswith("fck_live_")
 
 
 @pytest.mark.asyncio

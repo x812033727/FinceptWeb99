@@ -400,9 +400,11 @@ async def issue_finmind_key(
     links the new ApiKey to it. The customer's quota then comes
     from `plans.quota_daily_*` instead of free-tier defaults.
 
-    Unknown / disabled plan_code falls back silently to free-tier
-    (rather than 4xx-erroring) — operator can spot the missing link
-    in the keys table and re-link explicitly."""
+    Unknown / disabled plan_code → 400. The previous silent fallback
+    (issue free-tier key, surface plan_code=None in the response)
+    masked typos and disabled-plan oversights — the operator's intent
+    when they typed a plan_code was clearly to assign that plan, so
+    surfacing the mismatch loudly is the safer default."""
     from datetime import date
 
     from finmind.billing.keys import issue_key
@@ -412,22 +414,38 @@ async def issue_finmind_key(
     resolved_plan_code: str | None = None
     if body.plan_code:
         plan = await db.get(Plan, body.plan_code)
-        if plan is not None and plan.enabled:
-            sub = Subscription(
-                owner_email=body.owner_email,
-                plan_code=body.plan_code,
-                status="active",
-                started_at=date.today(),
-                expires_at=None,
-                external_provider=None,  # operator-issued, no Stripe link
-                external_sub_id=None,
-                auto_renew=False,
+        if plan is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"plan_code {body.plan_code!r} does not exist. "
+                    "Create the plan first via /admin/finmind/plans, "
+                    "or omit plan_code to issue a free-tier key."
+                ),
             )
-            db.add(sub)
-            await db.commit()
-            await db.refresh(sub)
-            subscription_id = sub.id
-            resolved_plan_code = body.plan_code
+        if not plan.enabled:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"plan_code {body.plan_code!r} is disabled. "
+                    "Re-enable the plan or pick a different one."
+                ),
+            )
+        sub = Subscription(
+            owner_email=body.owner_email,
+            plan_code=body.plan_code,
+            status="active",
+            started_at=date.today(),
+            expires_at=None,
+            external_provider=None,  # operator-issued, no Stripe link
+            external_sub_id=None,
+            auto_renew=False,
+        )
+        db.add(sub)
+        await db.commit()
+        await db.refresh(sub)
+        subscription_id = sub.id
+        resolved_plan_code = body.plan_code
 
     issued = await issue_key(
         db,

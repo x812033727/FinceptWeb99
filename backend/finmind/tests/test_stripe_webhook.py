@@ -120,6 +120,47 @@ async def test_process_event_records_unhandled_type_as_received(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event_type",
+    [
+        "customer.subscription.trial_will_end",
+        "invoice.upcoming",
+        "invoice.payment_method_attached",
+        "invoice.finalized",
+    ],
+)
+async def test_known_but_unhandled_event_types_round_trip(
+    finmind_session, event_type,
+):
+    """Stripe sends these events in normal subscription lifecycles.
+    We don't currently act on them (no notification system wired) but
+    the contract is: persist + ack 200 so Stripe stops retrying.
+    These tests pin that contract — the day we add a handler, the
+    test for that event_type will start failing on `outcome.status`
+    and the operator gets a clear signal to update assertions."""
+    event = {
+        "id": f"evt_{event_type.replace('.', '_')}",
+        "type": event_type,
+        "data": {"object": {"id": "obj_xyz"}},
+    }
+    outcome = await process_event(finmind_session, event)
+
+    # Until we wire handlers, these all fall through to the
+    # catch-all "unhandled" path.
+    assert outcome.status == "unhandled"
+    assert outcome.event_type == event_type
+
+    persisted = (
+        await finmind_session.execute(
+            select(PaymentEvent).where(PaymentEvent.event_type == event_type)
+        )
+    ).scalars().all()
+    assert len(persisted) == 1
+    assert persisted[0].processed_at is not None
+    assert persisted[0].error is None
+
+
+@pytest.mark.asyncio
 async def test_process_event_dedups_redelivery(finmind_session):
     """Stripe retries failed deliveries up to 3 days. Re-receiving
     the same event_id must NOT double-process."""

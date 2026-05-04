@@ -483,11 +483,23 @@ async def test_get_scoreboard_owner_scoped_404_for_others(
 
 @pytest.mark.asyncio
 async def test_get_scoreboard_returns_rows_when_concluded(
-    client: AsyncClient, db_session: AsyncSession,
+    client: AsyncClient, db_session: AsyncSession, monkeypatch,
 ):
     """Discussion with a conclusion → endpoint returns rows even
     when the cron hasn't persisted `daily_close_prices` yet (the
     on-demand compute path)."""
+    # Block the scoreboard service's live-fallback path
+    # (`tw_market_service.get_history`) so this test can't reach a
+    # real TWSE/FinMind upstream in CI. Without this, the on-demand
+    # compute finds zero archived bars, falls through to live, gets
+    # today's bar back, and `days_resolved` ends up 1 instead of 0.
+    from services import tw_market_service as _tw_svc
+
+    async def _no_history(symbol, months=12):
+        return []
+
+    monkeypatch.setattr(_tw_svc, "get_history", _no_history)
+
     h = await _register(client, "scoreboard_ondemand@example.com")
     r = await client.post(
         "/api/discussion/sessions",

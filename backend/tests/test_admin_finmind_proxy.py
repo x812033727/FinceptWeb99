@@ -21,14 +21,14 @@ os.environ.setdefault(
     "FINMIND_DATABASE_URL", "sqlite+aiosqlite:///:memory:"
 )
 
-import pytest
-import pytest_asyncio
-from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import (
+import pytest  # noqa: E402
+import pytest_asyncio  # noqa: E402
+from httpx import AsyncClient  # noqa: E402
+from sqlalchemy.ext.asyncio import (  # noqa: E402
     AsyncSession, async_sessionmaker, create_async_engine,
 )
 
-from models.user import User, UserRole
+from models.user import User, UserRole  # noqa: E402
 
 
 # ── Helpers (mirror test_admin_api.py) ──────────────────────────
@@ -1289,13 +1289,19 @@ async def test_run_due_invokes_runner_for_enabled_datasets(
         row.enabled = True
         await s.commit()
 
-    # Mock ingest_chunk so we don't actually call FinMind.
+    # Mock ingest_chunk so we don't actually call FinMind. Patch the
+    # binding inside `finmind.scheduler.runner` (the consumer), not
+    # `finmind.ingest.runner` (the source) — `scheduler.runner` does
+    # `from finmind.ingest.runner import ingest_chunk` at module load,
+    # so once that module has been imported (e.g. by a prior test in
+    # the same process) patching the source has no effect on the
+    # already-bound name in the scheduler.
     async def fake_ingest_chunk(session, **kwargs):
         from finmind.ingest.runner import ChunkResult
         return ChunkResult(status="done", rows_written=3, error=None)
 
-    import finmind.ingest.runner as _runner
-    monkeypatch.setattr(_runner, "ingest_chunk", fake_ingest_chunk)
+    import finmind.scheduler.runner as _sched_runner
+    monkeypatch.setattr(_sched_runner, "ingest_chunk", fake_ingest_chunk)
 
     email = "admin_fm_rd_run@test.com"
     await _register_login(client, email)

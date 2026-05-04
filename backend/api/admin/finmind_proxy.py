@@ -280,6 +280,7 @@ async def upsert_plan(
 @router.delete(
     "/plans/{code}",
     status_code=204,
+    response_model=None,
     summary="AdminPage: disable a plan (soft — keeps subscriptions valid)",
 )
 async def disable_plan(code: str, _: Admin, db: FmDb) -> None:
@@ -448,6 +449,7 @@ async def list_finmind_keys(_: Admin, db: FmDb) -> list[ApiKeyItem]:
 @router.delete(
     "/keys/{key_id}",
     status_code=204,
+    response_model=None,
     summary="AdminPage: disable a key (soft-revoke; keeps audit trail)",
 )
 async def revoke_finmind_key(key_id: int, _: Admin, db: FmDb) -> None:

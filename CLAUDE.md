@@ -573,8 +573,14 @@ configmap didn't pass it through).
 `alembic upgrade head` on startup. Two pods racing the upgrade
 relies on alembic's per-DB version-table lock — if Pod A acquires
 the lock and crashes mid-migration (OOM kill, network partition),
-Pod B times out and the DB is left half-migrated. Recommended
-pattern for k8s + horizontal scaling:
+Pod B times out and the DB is left half-migrated.
+
+**Severity escalated since PR #313**: with `FINMIND_USE_MAIN_DB=true`
+the default, the alembic race now happens against the **main
+production DB**, not an isolated `finmind_clone` DB. A failed
+migration there can leave your main app's schema half-applied —
+catastrophic. Operators on horizontal-scaling deployments must
+opt out of auto-init explicitly:
 
   1. Add a Kubernetes pre-deploy `Job` (or use the existing compose
      `migrate` service shape) that runs `python -m finmind.scripts.init_db`

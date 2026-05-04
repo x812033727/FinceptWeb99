@@ -85,8 +85,8 @@ def test_share_main_db_sqlite_skips_schema(monkeypatch):
 @pytest.mark.parametrize(
     "use_main_db, expected_schema",
     [
-        (False, None),  # default: separate container, no schema
-        (True, "finmind"),  # share main DB: schema=finmind
+        (False, None),  # Path A1 (opt-in): separate container, no schema
+        (True, "finmind"),  # Path A2 (default since PR #313): schema=finmind
     ],
 )
 def test_schema_property_matrix(monkeypatch, use_main_db, expected_schema):

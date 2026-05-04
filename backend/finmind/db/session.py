@@ -1,12 +1,13 @@
 """Async SQLAlchemy session factory for the FinMind clone DB.
 
 Same pool tuning as `db.session` (the main app). Binds to either
-`FINMIND_DATABASE_URL` (default — separate `postgres_finmind` container)
-or the main app's `DATABASE_URL` with a `finmind` Postgres schema
-(when `FINMIND_USE_MAIN_DB=true` — small / managed deploys that can't
-run a second container). Exposed as `FinmindAsyncSessionLocal` so a
-stray import is a loud name collision rather than silently writing
-into the wrong database.
+the main app's `DATABASE_URL` with a `finmind` Postgres schema
+(when `FINMIND_USE_MAIN_DB=true` — the default since PR #313, works
+out-of-box for any single-Postgres deploy) or `FINMIND_DATABASE_URL`
+(when `FINMIND_USE_MAIN_DB=false` — explicit opt-in for ops that
+want a separate `postgres_finmind` container at the database level).
+Exposed as `FinmindAsyncSessionLocal` so a stray import is a loud
+name collision rather than silently writing into the wrong database.
 """
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (

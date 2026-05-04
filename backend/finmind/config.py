@@ -31,6 +31,15 @@ class FinmindSettings(BaseSettings):
     # transition gradually rather than all-at-once.
     DEFAULT_PRIMARY_SOURCE: str = "finmind"
 
+    # When True, the main app's lifespan startup hook auto-runs
+    # `alembic upgrade head` + `seed_dataset_sources` + `seed_default_free_plan`
+    # on the FinMind clone DB. Skipped silently if the DB isn't
+    # reachable — operators with `postgres_finmind` not yet up still
+    # boot the main app. Set FINMIND_AUTO_INIT=false when ops want
+    # explicit control over migrations (e.g. multi-pod deploys where
+    # only one pod should migrate).
+    FINMIND_AUTO_INIT: bool = True
+
     DEBUG: bool = False
 
 

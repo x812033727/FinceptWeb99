@@ -1,5 +1,6 @@
 import asyncio
 import ipaddress
+import logging
 from contextlib import asynccontextmanager
 
 import sqlalchemy
@@ -40,6 +41,65 @@ from logging_config import setup_logging
 from middleware.metrics import PrometheusMiddleware, metrics_endpoint
 
 setup_logging()
+log = logging.getLogger("main")
+
+
+async def _auto_init_finmind_clone() -> None:
+    """Probe the FinMind clone DB; if reachable, run alembic upgrade
+    head + seed dataset_sources + seed default free plan.
+
+    Idempotent end-to-end (alembic + both seeds UPSERT semantics), so
+    safe to call on every cold start. Failure is logged + swallowed —
+    the FinMind subsystem is optional and the rest of the app must
+    boot regardless.
+
+    Skipped when `FINMIND_AUTO_INIT=false` (operator wants explicit
+    control over migrations, e.g. multi-pod deploy where only one pod
+    should migrate)."""
+    from finmind.config import finmind_settings
+
+    if not finmind_settings.FINMIND_AUTO_INIT:
+        log.info("finmind auto-init disabled via FINMIND_AUTO_INIT=false")
+        return
+
+    try:
+        from finmind.db.session import finmind_engine
+        from finmind.scripts.init_db import (
+            run_migrations,
+            seed_dataset_sources,
+            seed_default_free_plan,
+        )
+        from sqlalchemy import text as _text
+
+        async with finmind_engine.connect() as conn:
+            await conn.execute(_text("SELECT 1"))
+    except Exception as exc:
+        log.warning(
+            "finmind auto-init skipped — DB not reachable (%s: %s). "
+            "Start `postgres_finmind` and restart the backend to "
+            "auto-migrate + seed.",
+            exc.__class__.__name__,
+            exc,
+        )
+        return
+
+    try:
+        await asyncio.to_thread(run_migrations)
+        seeded, total = await seed_dataset_sources()
+        free_inserted = await seed_default_free_plan()
+        log.info(
+            "finmind auto-init done: alembic upgraded; seeded %d catalog "
+            "rows (total %d); 'free' plan %s",
+            seeded,
+            total,
+            "inserted" if free_inserted else "already present",
+        )
+    except Exception:
+        log.exception(
+            "finmind auto-init failed during migrate/seed — leaving "
+            "subsystem in whatever partial state it was in. AdminPage "
+            "Setup checklist will show the gap."
+        )
 
 
 @asynccontextmanager
@@ -53,6 +113,14 @@ async def lifespan(app: FastAPI):
 
     async with AsyncSessionLocal() as db:
         await seed_admin(db)
+
+    # FinMind clone DB auto-init — best-effort. When `postgres_finmind`
+    # is reachable, runs alembic + seeds catalog + seeds default free
+    # plan so the operator's only manual setup step is `docker compose
+    # --profile finmind up -d postgres_finmind`. When the DB is down,
+    # logs a warning and proceeds — the AdminPage's Setup checklist
+    # already surfaces the actionable hint.
+    await _auto_init_finmind_clone()
 
     from tasks.scheduler import scheduler, setup_jobs
     from api.websocket.manager import push_alert_to_user, publish_update, start_pubsub_listener

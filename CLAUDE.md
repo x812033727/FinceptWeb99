@@ -493,6 +493,133 @@ observability wiring per block.
   date-range query handles the as_of clamp inherently;
   service additionally drops `date > anchor` rows defensively).
 
+### FinMind clone subsystem (`backend/finmind/`, PRs #288 #289)
+
+Self-contained "FinMind-as-a-paid-service" sub-app. Lives in its
+own Postgres DB (`FINMIND_DATABASE_URL`, port 5433 via
+`postgres_finmind` docker-compose service under profile `finmind`)
+with its own Alembic version table (`alembic_version_finmind`).
+Zero schema overlap with the main `finceptweb` DB — different Base,
+different session factory, different migrations.
+
+**Path A architecture**: stays a separate database forever (not a
+schema in the main DB). Future microservice extraction is one
+`pg_dump | pg_restore` away. Main backend imports `finmind.api.router`
+to mount the public endpoints; internal tools call the subsystem
+via HTTP, not in-process imports.
+
+**Module map** (everything under `backend/finmind/`):
+
+| Module | Purpose |
+|---|---|
+| `config.py` | `FinmindSettings` — separate Pydantic Settings |
+| `db/{base,session}.py` + `db/migrations/` | Independent DeclarativeBase, `FinmindAsyncSessionLocal`, isolated Alembic with `version_table='alembic_version_finmind'` |
+| `dataset_catalog.py` | 80 FinMind datasets → local table + Phase A/B sources mapping; validates against `data.tw.finmind_datasets` at import |
+| `models/` | 9 ORM files: dataset_source, backfill_progress, master, technical, chip, fundamental, derivative, corporate, intraday, billing |
+| `ingest/` | Phase A FinMind backfill runner — `runner.ingest_chunk` is the single entry point; `mappings.py` has 19 dataset → local-table column maps (5 row_transform + 4 batch_transform pivots); `progress.py` is the resumable chunk ledger; `selfcrawl/` registers Phase B clients (`twse.py` wires 5 datasets) |
+| `scheduler/` | Auto-runner — `dispatcher.is_due` (pure due-detection), `runner.run_due_now` (DB-aware), `runner.get_universe_from_tw_stock_info` (auto-discover symbols) |
+| `billing/` | `keys.py` (issue/verify `fck_live_` API keys, sha256 + prefix), `quota.py` (per-key daily call+row counter), `stripe_webhook.py` (signature verify + event dispatch — no `stripe` SDK) |
+| `api/` | `router.py` mounts `/api/finmind/*` endpoints; `auth.py` resolves env-allowlist + `fck_live_` keys; `schemas.py` Pydantic responses |
+| `scripts/` | `init_db` (migrate + seed catalog), `status` (--watch / --json health report), `check` (cron exit-code), `backfill` (manual ingest), `run_due` (cron auto-runner) |
+| `tests/` | 172 tests, in-memory SQLite |
+
+**Migrations** (`finmind/db/migrations/versions/`):
+
+  - 0001 `dataset_sources` (routing table)
+  - 0002 `backfill_progress` (resumable ledger)
+  - 0003-0009 destination tables — 66 across master / technical /
+    chip / fundamental / derivative / corporate+CB+news / intraday
+  - 0010 enable TimescaleDB compression on every hypertable
+    (segmentby='market, symbol' for daily, retention 7d for
+    tick + broker_daily, 30d for daily-grain, 60d for market-wide)
+  - 0011 billing schema — `plans`, `subscriptions`, `api_keys`,
+    `api_usage_events` (hypertable), `payment_events`
+
+**Public endpoints** (`/api/finmind/...`):
+
+  - `GET /datasets` — catalog discovery (no quota cost)
+  - `GET /data/{dataset_code}?data_id=&start_date=&end_date=&limit=`
+    — FinMind-mirror response shape `{status, msg, data, metadata}`,
+    metadata adds `last_ingest_at` + `active_source` so callers can
+    reason about freshness without a separate call. Quota-gated for
+    `fck_live_` keys with `X-RateLimit-Limit/-Remaining/-Reset`
+    headers + 429 + Retry-After when exhausted.
+  - `GET /data/{dataset_code}/export?format=csv|jsonl&...&limit=`
+    — bulk streaming up to 1M rows. CSV (RFC 4180 quoted) or NDJSON.
+    Memory flat regardless of size (5K-row chunked yields).
+    Soft cap clamps to remaining row quota; hard cap 1M protects DB.
+  - `GET /admin/datasets` + `PATCH /admin/datasets/{code}` —
+    operator gate via `FINMIND_ADMIN_API_KEY`. Toggle `enabled` /
+    flip `active_source` (Phase A → B per dataset, no code change).
+  - `POST /webhooks/stripe` — verifies `Stripe-Signature` (HMAC-
+    SHA256, ±5min tolerance), dedups via UNIQUE (provider, event_id),
+    dispatches subscription.{created,updated,deleted} +
+    invoice.payment_failed.
+
+**Auth tiers**:
+
+  1. `X-Finmind-API-Key: fck_live_<32>` → resolved against `api_keys`
+     (sha256 + prefix lookup, hmac compare). Quota applies.
+  2. `X-Finmind-API-Key` matches `FINMIND_API_KEYS_ALLOWLIST` env
+     var → operator/dev key, no quota.
+  3. `DEBUG=true` + empty allowlist → open access for local dev.
+
+  All three log to `api_usage_events` for analytics; only #1 enforces
+  quota + populates `X-RateLimit-*` headers.
+
+**Operator wiring** (production):
+
+```bash
+# 1. Bring up the isolated DB (one-time)
+docker compose --profile finmind up -d postgres_finmind
+
+# 2. Migrate + seed catalog (idempotent, safe to re-run)
+cd backend && python -m finmind.scripts.init_db
+
+# 3. Configure the FinMind sponsor token via .env or admin UI
+
+# 4. Daily auto-run via cron (universe self-discovers from
+#    tw_stock_info as long as TaiwanStockInfo is enabled too)
+*/15 * * * * cd /app/backend && \
+    python -m finmind.scripts.run_due --universe-from-tw-stock-info
+
+# 5. Issue customer keys
+python -c "import asyncio; from finmind.db.session import \
+    FinmindAsyncSessionLocal; from finmind.billing.keys import issue_key; \
+    asyncio.run(...)"
+```
+
+**Phase A → B cutover** (when FinMind subscription expires):
+
+  Single `PATCH /admin/datasets/{code}` per dataset:
+  ```
+  PATCH active_source: 'finmind' → 'twse'
+  ```
+  No code change — runner picks `selfcrawl.resolve_client(source)`.
+  Currently 5 datasets ready: TaiwanStockPrice,
+  TaiwanStockInstitutionalInvestorsBuySell,
+  TaiwanStockMarginPurchaseShortSale, TaiwanStockInfo, TaiwanStockPER.
+  Adding more is one entry per dataset in `selfcrawl/twse.py:_DISPATCH`.
+
+**Status snapshot**:
+
+  - Schema: 66/80 destination tables built (realtime + sponsor-only-
+    no-self-crawl + derived skipped by design)
+  - Mappings: 19/80 datasets have a Phase A FinMind ingest mapping
+    (5 headline + 10 direct + 4 wide-format pivots — the rest are
+    sponsor-only / niche, append one entry to add)
+  - Phase B: 5/19 mapped datasets have a TWSE self-crawl handler
+  - Tests: 172 passing
+  - Deferred: Stripe Checkout / Customer Portal UI integration
+    (schema ready, depends on real Stripe account); MOPS / TPEX /
+    TAIFEX / TDCC self-crawl wrappers (stubs in selfcrawl/__init__);
+    AdminPage UsageCard frontend
+
+**TimescaleDB compression** is OFF by default in the main DB (not
+applied to `ohlcv_daily` etc.) but ON in the FinMind clone DB —
+migration 0010 enables it on every hypertable. Expected ratios:
+daily ~22×, tick ~15×, broker_daily ~20×.
+
 ### TW news ingest
 - Hourly APScheduler job `tasks/ingest_news_tw.py` pulls TW market
   news from Google News RSS (`hl=zh-TW&gl=TW&ceid=TW:zh-Hant`) — free,

@@ -61,6 +61,16 @@ router = APIRouter()
 Admin = Annotated[dict, Depends(require_admin)]
 DB = Annotated[AsyncSession, Depends(get_db)]
 
+# AdminPage proxy to the FinMind clone subsystem — separate sub-router
+# under /api/admin/finmind so the React app uses its existing JWT
+# admin auth instead of needing a separate X-Finmind-Admin-Key flow.
+# See finmind_proxy.py for rationale on the architectural boundary.
+from api.admin.finmind_proxy import router as _finmind_proxy_router  # noqa: E402
+
+router.include_router(
+    _finmind_proxy_router, prefix="/finmind", tags=["AdminFinMind"],
+)
+
 VALID_ROLES = {r.value for r in UserRole}
 RETRYABLE_INGEST_JOBS = {
     "ingest_news_tw": "Taiwan news ingest",

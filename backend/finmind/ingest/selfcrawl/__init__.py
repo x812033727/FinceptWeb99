@@ -68,8 +68,17 @@ class _NotWiredYetClient:
 ConnectorFactory = Callable[[], Any]
 
 
+def _twse_client_factory() -> Any:
+    """Late-imported factory — keeps the selfcrawl package import-safe
+    when `data.tw.twse_connector` isn't installed (e.g. in a stripped-
+    down deployment that only runs the FinMind A path)."""
+    from finmind.ingest.selfcrawl.twse import TwseClient
+
+    return TwseClient()
+
+
 _REGISTRY: dict[str, ConnectorFactory] = {
-    "twse":   lambda: _NotWiredYetClient("twse"),
+    "twse":   _twse_client_factory,
     "tpex":   lambda: _NotWiredYetClient("tpex"),
     "taifex": lambda: _NotWiredYetClient("taifex"),
     "mops":   lambda: _NotWiredYetClient("mops"),

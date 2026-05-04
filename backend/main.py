@@ -25,6 +25,12 @@ from api.tw_market.router import router as tw_router
 from api.us_market.router import router as us_router
 from api.watchlist.router import router as watchlist_router
 from api.websocket.router import router as ws_router
+# FinMind clone subsystem — separate sub-app under `backend/finmind/`,
+# isolated DB. Late-imported here only to mount the router; the
+# subsystem doesn't run any startup side-effects in the main process
+# beyond engine initialization (lazy connect, no DB roundtrip at
+# import time).
+from finmind.api.router import router as finmind_router
 from cache.redis_cache import ping as redis_ping
 from config import settings
 from db.seed import seed_admin
@@ -134,6 +140,7 @@ app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
 app.include_router(discussion_router, prefix="/api/discussion", tags=["Discussion"])
 app.include_router(global_router, prefix="/api/global", tags=["Global Market"])
 app.include_router(system_router, prefix="/api/system", tags=["System"])
+app.include_router(finmind_router, prefix="/api/finmind", tags=["FinMind Clone"])
 
 
 def _client_is_allowed(request: Request) -> bool:

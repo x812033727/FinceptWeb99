@@ -1,0 +1,276 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+
+import { CollapsibleHeader, useCollapsible } from "@/components/Collapsible";
+import api from "@/lib/api";
+
+/**
+ * AdminPage card for issuing + listing + revoking customer API keys.
+ *
+ * Plaintext is only readable ONCE at issuance — `IssuedKeyResponse`
+ * arrives in the POST response and the operator must copy it
+ * immediately. After that, only the prefix is shown anywhere; the
+ * sha256 is never exposed.
+ *
+ * Soft-revoke: DELETE flips `enabled=false` rather than removing
+ * the row, so api_usage_events FK references stay valid + the audit
+ * trail (issued at / revoked at) survives.
+ */
+
+interface ApiKeyItem {
+  id: number;
+  prefix: string;
+  owner_email: string;
+  name: string | null;
+  enabled: boolean;
+  expires_at: string | null;
+  last_used_at: string | null;
+  created_at: string;
+}
+
+interface IssuedKeyResponse {
+  record_id: number;
+  plaintext: string;
+  prefix: string;
+  owner_email: string;
+}
+
+export default function FinmindKeysCard() {
+  const { isOpen, toggle } = useCollapsible("admin-finmind-keys", false);
+  const queryClient = useQueryClient();
+
+  const [ownerEmail, setOwnerEmail] = useState("");
+  const [keyName, setKeyName] = useState("");
+  // Plaintext from the most recent issuance — sticks until operator
+  // dismisses or issues another key. NEVER persisted anywhere.
+  const [issuedKey, setIssuedKey] = useState<IssuedKeyResponse | null>(null);
+
+  const keysQuery = useQuery<ApiKeyItem[]>({
+    queryKey: ["admin", "finmind", "keys"],
+    queryFn: async () => {
+      const r = await api.get<ApiKeyItem[]>("/admin/finmind/keys");
+      return r.data;
+    },
+    enabled: isOpen,
+  });
+
+  const issueMutation = useMutation({
+    mutationFn: async (input: { owner_email: string; name?: string }) => {
+      const r = await api.post<IssuedKeyResponse>(
+        "/admin/finmind/keys",
+        input,
+      );
+      return r.data;
+    },
+    onSuccess: (data) => {
+      setIssuedKey(data);
+      setOwnerEmail("");
+      setKeyName("");
+      queryClient.invalidateQueries({
+        queryKey: ["admin", "finmind", "keys"],
+      });
+    },
+  });
+
+  const revokeMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await api.delete(`/admin/finmind/keys/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["admin", "finmind", "keys"],
+      });
+    },
+  });
+
+  const enabledCount =
+    (keysQuery.data ?? []).filter((k) => k.enabled).length;
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-4">
+      <CollapsibleHeader
+        title="FinMind API Keys"
+        subtitle={
+          keysQuery.data
+            ? `${enabledCount} active · ${keysQuery.data.length} total`
+            : "click to expand"
+        }
+        isOpen={isOpen}
+        onToggle={toggle}
+      />
+
+      {isOpen && (
+        <div className="mt-4 space-y-6">
+          {/* Issue form ────────────────────────── */}
+          <div className="rounded border border-border bg-muted/20 p-3">
+            <h3 className="mb-2 text-sm font-semibold">Issue new key</h3>
+            <form
+              className="flex flex-wrap items-end gap-2 text-sm"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!ownerEmail.trim()) return;
+                issueMutation.mutate({
+                  owner_email: ownerEmail.trim(),
+                  name: keyName.trim() || undefined,
+                });
+              }}
+            >
+              <label className="flex flex-col">
+                <span className="text-xs text-muted-foreground">
+                  Owner email
+                </span>
+                <input
+                  type="email"
+                  required
+                  value={ownerEmail}
+                  onChange={(e) => setOwnerEmail(e.target.value)}
+                  className="rounded border border-border bg-background px-2 py-1"
+                  placeholder="customer@example.com"
+                />
+              </label>
+              <label className="flex flex-col">
+                <span className="text-xs text-muted-foreground">
+                  Name (optional)
+                </span>
+                <input
+                  type="text"
+                  value={keyName}
+                  onChange={(e) => setKeyName(e.target.value)}
+                  className="rounded border border-border bg-background px-2 py-1"
+                  placeholder="e.g. prod-backtest"
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={issueMutation.isPending || !ownerEmail.trim()}
+                className="rounded bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              >
+                {issueMutation.isPending ? "Issuing…" : "Issue key"}
+              </button>
+            </form>
+
+            {issuedKey && (
+              <div className="mt-3 rounded border border-amber-400 bg-amber-50 p-3 text-xs dark:bg-amber-950">
+                <div className="mb-1 font-semibold text-amber-800 dark:text-amber-200">
+                  ⚠ Copy this key now — it will not be shown again.
+                </div>
+                <div className="break-all font-mono">
+                  {issuedKey.plaintext}
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(issuedKey.plaintext);
+                    }}
+                    className="rounded border border-border bg-background px-2 py-0.5 text-[11px]"
+                  >
+                    Copy
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIssuedKey(null)}
+                    className="rounded border border-border bg-background px-2 py-0.5 text-[11px]"
+                  >
+                    Dismiss
+                  </button>
+                  <span className="text-muted-foreground">
+                    Issued for {issuedKey.owner_email} · prefix{" "}
+                    <code>{issuedKey.prefix}</code>
+                  </span>
+                </div>
+              </div>
+            )}
+            {issueMutation.isError && (
+              <div className="mt-2 text-xs text-destructive">
+                Failed:{" "}
+                {String((issueMutation.error as Error).message)}
+              </div>
+            )}
+          </div>
+
+          {/* Keys table ─────────────────────────── */}
+          {keysQuery.isLoading && (
+            <div className="text-sm text-muted-foreground">Loading…</div>
+          )}
+          {keysQuery.data && keysQuery.data.length === 0 && (
+            <div className="rounded border border-border bg-muted/30 p-6 text-center text-sm text-muted-foreground">
+              No API keys yet. Issue one above to give a customer access
+              to <code className="rounded bg-muted px-1">/api/finmind/data/...</code>
+              .
+            </div>
+          )}
+          {keysQuery.data && keysQuery.data.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="border-b border-border text-left text-muted-foreground">
+                  <tr>
+                    <th className="py-1.5 pr-2">Prefix</th>
+                    <th className="py-1.5 pr-2">Owner</th>
+                    <th className="py-1.5 pr-2">Name</th>
+                    <th className="py-1.5 pr-2">Status</th>
+                    <th className="py-1.5 pr-2">Last used</th>
+                    <th className="py-1.5 pr-2">Created</th>
+                    <th className="py-1.5 pr-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {keysQuery.data.map((k) => (
+                    <tr
+                      key={k.id}
+                      className="border-b border-border last:border-b-0"
+                    >
+                      <td className="py-1.5 pr-2 font-mono">{k.prefix}…</td>
+                      <td className="py-1.5 pr-2">{k.owner_email}</td>
+                      <td className="py-1.5 pr-2 text-muted-foreground">
+                        {k.name || "—"}
+                      </td>
+                      <td className="py-1.5 pr-2">
+                        {k.enabled ? (
+                          <span className="text-green-600">enabled</span>
+                        ) : (
+                          <span className="text-muted-foreground">
+                            revoked
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-1.5 pr-2 text-muted-foreground">
+                        {k.last_used_at
+                          ? new Date(k.last_used_at).toLocaleString()
+                          : "never"}
+                      </td>
+                      <td className="py-1.5 pr-2 text-muted-foreground">
+                        {new Date(k.created_at).toLocaleDateString()}
+                      </td>
+                      <td className="py-1.5 pr-2">
+                        {k.enabled && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (
+                                confirm(
+                                  `Revoke key for ${k.owner_email}? ` +
+                                    `Their integration will start getting 401s immediately.`,
+                                )
+                              ) {
+                                revokeMutation.mutate(k.id);
+                              }
+                            }}
+                            disabled={revokeMutation.isPending}
+                            className="rounded border border-destructive px-1.5 py-0.5 text-[10px] text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                          >
+                            Revoke
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

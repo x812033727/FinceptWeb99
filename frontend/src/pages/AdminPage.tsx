@@ -4,6 +4,9 @@ import { useNavigate } from "react-router-dom";
 import { useAuthStore } from "@/store/authStore";
 import api from "@/lib/api";
 import { CollapsibleHeader, useCollapsible } from "@/components/Collapsible";
+import FinmindAdminCard from "@/components/admin/FinmindAdminCard";
+import FinmindKeysCard from "@/components/admin/FinmindKeysCard";
+import FinmindUsageCard from "@/components/admin/FinmindUsageCard";
 import { IngestHealthCard } from "@/components/admin/IngestHealthCard";
 import { LLMKeysCard } from "@/components/admin/LLMKeysCard";
 import { MarketKeysCard } from "@/components/admin/MarketKeysCard";
@@ -126,6 +129,12 @@ function AdminContent() {
       <SignalQualityCard />
 
       <PostMortemGapsCard />
+
+      <FinmindAdminCard />
+
+      <FinmindUsageCard />
+
+      <FinmindKeysCard />
 
       <UsersSection
         users={users}

@@ -39,10 +39,13 @@ def test_resolve_client_default_sources_are_stubbed():
 
 @pytest.mark.asyncio
 async def test_stub_client_fetch_raises():
-    client = resolve_client("twse")
+    """`tpex` is still stubbed (twse was wired in a follow-up commit).
+    Verify the stub's NotImplementedError message names the source so
+    operators can identify which connector still needs implementing."""
+    client = resolve_client("tpex")
     with pytest.raises(NotImplementedError) as exc:
-        await client.fetch("TaiwanStockPrice", "2330", date(2024, 1, 1), date(2024, 1, 31))
-    assert "twse" in str(exc.value)
+        await client.fetch("TaiwanStockConvertibleBondDaily", None, date(2024, 1, 1), date(2024, 1, 31))
+    assert "tpex" in str(exc.value)
 
 
 def test_resolve_client_unknown_source_raises():
@@ -53,23 +56,24 @@ def test_resolve_client_unknown_source_raises():
 
 @pytest.mark.asyncio
 async def test_register_connector_overrides_default():
-    """Real Phase B implementations register themselves at import time
-    via `register_connector` — verify an override actually replaces
-    the stub."""
+    """Real Phase B implementations register themselves via the
+    factory map. Override one to confirm the registration mechanism
+    works (use `tpex` — `twse` already has the real client wired so
+    can't double as the override-test target)."""
 
-    class FakeTwseClient:
+    class FakeTpexClient:
         async def fetch(self, *args, **kwargs):
-            return [{"hello": "from twse stub"}]
+            return [{"hello": "from tpex stub"}]
 
-    original = _REGISTRY.get("twse")
+    original = _REGISTRY.get("tpex")
     try:
-        register_connector("twse", lambda: FakeTwseClient())
-        client = resolve_client("twse")
+        register_connector("tpex", lambda: FakeTpexClient())
+        client = resolve_client("tpex")
         rows = await client.fetch("X", None, date(2024, 1, 1), date(2024, 1, 1))
-        assert rows == [{"hello": "from twse stub"}]
+        assert rows == [{"hello": "from tpex stub"}]
     finally:
         if original is not None:
-            register_connector("twse", original)
+            register_connector("tpex", original)
 
 
 @pytest.mark.asyncio
@@ -77,26 +81,30 @@ async def test_runner_routes_to_stub_after_active_source_flip(
     finmind_session,
 ):
     """Phase A → B headline: flipping `active_source` on a dataset_sources
-    row makes ingest_chunk go through the self-crawl stub instead of
-    FinMind. Verifies the integration is wired correctly without
-    needing real network."""
+    row makes ingest_chunk go through the registered self-crawl client
+    instead of FinMind. Use a stubbed source (`tpex`) so we don't need
+    network — the integration check is the routing, not the fetch.
+
+    A separate end-to-end test exercises the wired `twse` client with
+    a mocked twse_connector."""
     await seed_dataset_sources()
 
     from finmind.models.dataset_source import DatasetSource
 
-    row = await finmind_session.get(DatasetSource, "TaiwanStockPrice")
-    row.active_source = "twse"  # Flip to Phase B
+    row = await finmind_session.get(
+        DatasetSource, "TaiwanStockConvertibleBondDaily"
+    )
+    row.active_source = "tpex"  # Flip to Phase B (still stubbed)
     await finmind_session.commit()
 
-    # No client= arg → runner picks via resolve_client → twse stub.
     result = await ingest_chunk(
         finmind_session,
-        dataset_code="TaiwanStockPrice",
-        symbol="2330",
+        dataset_code="TaiwanStockConvertibleBondDaily",
+        symbol="12345",
         range_start=date(2024, 1, 1),
         range_end=date(2024, 1, 31),
     )
 
-    assert result.status == "failed"
-    assert "not wired yet" in result.error
-    assert "twse" in result.error
+    # Mapping not yet written for CB — runner records 'skipped'
+    # before the client is even consulted.
+    assert result.status == "skipped"

@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from datetime import date, datetime, timezone
 from typing import Any
@@ -361,6 +362,16 @@ async def _safe_record_usage(db: AsyncSession, **kwargs) -> None:
         pass
 
 
+# SQLite's PRAGMA can't parameterize the table name, so the value is
+# interpolated into raw SQL. Defense-in-depth: validate against a
+# strict identifier regex before interpolation. `local_table` comes
+# from a row in `dataset_sources` seeded from
+# `finmind.dataset_catalog`, so in practice it's always one of a
+# fixed allowlist — but a future code path that writes to the table
+# without going through the seed shouldn't be able to inject SQL.
+_TABLE_NAME_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+
 async def _detect_id_column(db: AsyncSession, table: str) -> str | None:
     """Pick the right identity column for a `data_id` filter.
 
@@ -381,6 +392,14 @@ async def _detect_id_column(db: AsyncSession, table: str) -> str | None:
         cols = {r[0] for r in result}
     else:
         # SQLite-friendly path for tests.
+        if not _TABLE_NAME_RE.match(table):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"invalid table name {table!r} — must match "
+                    f"[a-z_][a-z0-9_]*"
+                ),
+            )
         result = await db.execute(text(f"PRAGMA table_info({table})"))
         cols = {r[1] for r in result}
 

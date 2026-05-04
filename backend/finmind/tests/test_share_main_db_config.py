@@ -98,6 +98,25 @@ def test_effective_database_url_safe_masks_password():
     assert safe.startswith("postgresql+asyncpg://finmind:***@")
 
 
+def test_effective_database_url_safe_masks_password_with_at_sign():
+    """A password containing `@` previously broke the regex masker —
+    `split('@', 1)` would treat the password's @ as the cred/host
+    boundary and leak the password tail in the masked output. The
+    SQLAlchemy URL parser handles this correctly."""
+    # SQLAlchemy URL spec: passwords with special chars must be
+    # URL-encoded. `%40` is encoded `@`; this round-trips cleanly.
+    s = FinmindSettings(
+        FINMIND_DATABASE_URL=(
+            "postgresql+asyncpg://finmind:p%40ss@db.example.com:5433/finmind_clone"
+        ),
+    )
+    safe = s.effective_database_url_safe
+    assert "p%40ss" not in safe
+    assert "p@ss" not in safe  # decoded form must not leak either
+    assert "***" in safe
+    assert "db.example.com:5433" in safe
+
+
 def test_effective_database_url_safe_handles_no_password():
     """Plain `user@host` URLs (no password) round-trip unchanged —
     can't mask what isn't there."""

@@ -91,19 +91,23 @@ class FinmindSettings(BaseSettings):
         the operator needs to see WHICH host/port we're failing to
         reach (port 5433 = Path A1 / postgres_finmind container, port
         5432 = Path A2 / main DB), but we never want plaintext creds
-        in API response bodies."""
+        in API response bodies.
+
+        Uses SQLAlchemy's URL parser instead of string splitting so
+        edge cases like passwords with `@` / `:` / URL-encoded chars
+        round-trip safely. The previous regex-style split could leak
+        the partial password when a `@` appeared inside the password
+        (e.g., `postgresql://user:p@ss@host` would mask only `user:`)."""
         url = self.effective_database_url
-        # postgresql+asyncpg://user:pass@host:port/db → strip pass
-        if "://" not in url:
-            return url
-        scheme, rest = url.split("://", 1)
-        if "@" not in rest:
-            return url
-        creds, hostpart = rest.split("@", 1)
-        if ":" in creds:
-            user, _ = creds.split(":", 1)
-            return f"{scheme}://{user}:***@{hostpart}"
-        return url
+        try:
+            from sqlalchemy.engine import make_url
+
+            return make_url(url).render_as_string(hide_password=True)
+        except Exception:
+            # If the URL is malformed enough that SQLAlchemy can't
+            # parse it, return a fully redacted placeholder rather
+            # than risk leaking creds in a partial-parse fallback.
+            return "<unparseable URL — credentials redacted>"
 
 
 finmind_settings = FinmindSettings()

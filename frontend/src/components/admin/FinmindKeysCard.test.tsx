@@ -21,6 +21,8 @@ vi.mock("@/lib/api", () => ({
     post: vi.fn(),
     delete: vi.fn(),
   },
+  errorDetail: (err: unknown) =>
+    err instanceof Error ? err.message : String(err),
 }));
 
 const mockedApi = api as unknown as {
@@ -142,6 +144,8 @@ describe("FinmindKeysCard — listing + revoke", () => {
       expires_at: null,
       last_used_at: "2026-05-01T00:00:00+00:00",
       created_at: "2026-04-01T00:00:00+00:00",
+      plan_code: null,
+      subscription_id: null,
     },
     {
       id: 43,
@@ -152,11 +156,25 @@ describe("FinmindKeysCard — listing + revoke", () => {
       expires_at: null,
       last_used_at: null,
       created_at: "2026-04-15T00:00:00+00:00",
+      plan_code: null,
+      subscription_id: null,
     },
   ];
 
+  // The card now fetches BOTH /keys AND /plans in parallel; each
+  // useQuery renders independently. A mockResolvedValue that returned
+  // SAMPLE_KEYS for every URL would feed key-shaped objects into the
+  // plans render path, where `quota_daily_calls.toLocaleString()`
+  // crashes on undefined. Route by URL so each query gets its right
+  // shape.
+  function routeByUrl(url: string): { data: unknown } {
+    if (url.includes("/plans")) return { data: [] };
+    if (url.includes("/keys")) return { data: SAMPLE_KEYS };
+    return { data: [] };
+  }
+
   it("renders the keys table with prefix + owner + status", async () => {
-    mockedApi.get.mockResolvedValue({ data: SAMPLE_KEYS });
+    mockedApi.get.mockImplementation(async (url: string) => routeByUrl(url));
     renderCard();
 
     expect(await screen.findByText("alice@example.com")).toBeInTheDocument();
@@ -168,7 +186,7 @@ describe("FinmindKeysCard — listing + revoke", () => {
   });
 
   it("calls DELETE when Revoke is confirmed", async () => {
-    mockedApi.get.mockResolvedValue({ data: SAMPLE_KEYS });
+    mockedApi.get.mockImplementation(async (url: string) => routeByUrl(url));
     mockedApi.delete.mockResolvedValue({});
     // Auto-confirm the window.confirm prompt so the test doesn't hang.
     vi.spyOn(window, "confirm").mockReturnValue(true);
@@ -187,7 +205,7 @@ describe("FinmindKeysCard — listing + revoke", () => {
   });
 
   it("does NOT call DELETE if the operator cancels the confirm dialog", async () => {
-    mockedApi.get.mockResolvedValue({ data: SAMPLE_KEYS });
+    mockedApi.get.mockImplementation(async (url: string) => routeByUrl(url));
     mockedApi.delete.mockResolvedValue({});
     vi.spyOn(window, "confirm").mockReturnValue(false);
 

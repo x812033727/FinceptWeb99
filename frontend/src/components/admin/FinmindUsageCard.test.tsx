@@ -22,7 +22,39 @@ vi.mock("@/lib/api", () => ({
     post: vi.fn(),
     delete: vi.fn(),
   },
+  // Match `errorDetail`'s real signature so the error-banner tests
+  // can still assert their substring (e.g. "backend down"). The
+  // production helper extracts response.data.detail; here we return
+  // the raw error message which is enough for the test assertions.
+  errorDetail: (err: unknown) =>
+    err instanceof Error ? err.message : String(err),
 }));
+
+// Recharts' ResponsiveContainer measures its parent for width / height
+// at mount time, which doesn't work in jsdom (no layout system).
+// Replace with a static-size wrapper so the BarChart inside still
+// gets dimensions and renders without throwing. We don't assert on
+// the SVG itself — only on chart axis text + the surrounding labels
+// that exist regardless of size.
+vi.mock("recharts", async (importActual) => {
+  const actual = await importActual<typeof import("recharts")>();
+  const { Children, isValidElement, cloneElement } = await import("react");
+  return {
+    ...actual,
+    ResponsiveContainer: ({
+      children,
+    }: {
+      children: React.ReactNode;
+    }) => {
+      // Pass static width/height into the only child (the actual chart)
+      // so its internal layout calc works without measuring the DOM.
+      const child = Children.only(children);
+      return isValidElement(child)
+        ? cloneElement(child, { width: 600, height: 220 } as never)
+        : (child as React.ReactElement);
+    },
+  };
+});
 
 const mockedApi = api as unknown as {
   get: ReturnType<typeof vi.fn>;

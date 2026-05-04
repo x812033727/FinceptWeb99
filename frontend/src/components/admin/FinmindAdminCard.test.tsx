@@ -28,6 +28,10 @@ vi.mock("@/lib/api", () => ({
     post: vi.fn(),
     delete: vi.fn(),
   },
+  // Match the real export so error-banner branches can render
+  // without the mock raising "no errorDetail export" at access time.
+  errorDetail: (err: unknown) =>
+    err instanceof Error ? err.message : String(err),
 }));
 
 const mockedApi = api as unknown as {

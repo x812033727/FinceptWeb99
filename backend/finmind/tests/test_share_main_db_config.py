@@ -80,3 +80,41 @@ def test_schema_property_matrix(monkeypatch, use_main_db, expected_schema):
 
     s = FinmindSettings(FINMIND_USE_MAIN_DB=use_main_db)
     assert s.schema == expected_schema
+
+
+def test_effective_database_url_safe_masks_password():
+    """Diagnostic strings include the URL but never the plaintext
+    password — operator needs to see host/port to know which mode is
+    active without leaking creds in API response bodies."""
+    s = FinmindSettings(
+        FINMIND_DATABASE_URL=(
+            "postgresql+asyncpg://finmind:supersecret@db.example.com:5433/finmind_clone"
+        ),
+    )
+    safe = s.effective_database_url_safe
+    assert "supersecret" not in safe
+    assert "***" in safe
+    assert "db.example.com:5433" in safe
+    assert safe.startswith("postgresql+asyncpg://finmind:***@")
+
+
+def test_effective_database_url_safe_handles_no_password():
+    """Plain `user@host` URLs (no password) round-trip unchanged —
+    can't mask what isn't there."""
+    s = FinmindSettings(
+        FINMIND_DATABASE_URL="postgresql+asyncpg://finmind@h:5433/finmind_clone",
+    )
+    assert (
+        s.effective_database_url_safe
+        == "postgresql+asyncpg://finmind@h:5433/finmind_clone"
+    )
+
+
+def test_effective_database_url_safe_handles_sqlite():
+    """SQLite URLs have no creds at all — pass through untouched."""
+    s = FinmindSettings(
+        FINMIND_DATABASE_URL="sqlite+aiosqlite:///:memory:",
+    )
+    assert (
+        s.effective_database_url_safe == "sqlite+aiosqlite:///:memory:"
+    )

@@ -85,5 +85,25 @@ class FinmindSettings(BaseSettings):
             return None
         return FINMIND_PG_SCHEMA
 
+    @property
+    def effective_database_url_safe(self) -> str:
+        """The effective URL with password masked. For diagnostics —
+        the operator needs to see WHICH host/port we're failing to
+        reach (port 5433 = Path A1 / postgres_finmind container, port
+        5432 = Path A2 / main DB), but we never want plaintext creds
+        in API response bodies."""
+        url = self.effective_database_url
+        # postgresql+asyncpg://user:pass@host:port/db → strip pass
+        if "://" not in url:
+            return url
+        scheme, rest = url.split("://", 1)
+        if "@" not in rest:
+            return url
+        creds, hostpart = rest.split("@", 1)
+        if ":" in creds:
+            user, _ = creds.split(":", 1)
+            return f"{scheme}://{user}:***@{hostpart}"
+        return url
+
 
 finmind_settings = FinmindSettings()

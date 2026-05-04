@@ -65,14 +65,27 @@ async def _ensure_finmind_db_reachable(db: AsyncSession) -> None:
     handler body."""
     from sqlalchemy import text as _text
 
+    from finmind.config import finmind_settings
+
     try:
         await db.execute(_text("SELECT 1"))
     except Exception as exc:
+        # Surface the URL we're failing to reach (password masked) so
+        # the operator can immediately tell which mode is active —
+        # port 5433 = Path A1 (postgres_finmind container), main host =
+        # Path A2 (FINMIND_USE_MAIN_DB=true). Without this, the bare
+        # exception class doesn't tell you whether the env var took
+        # effect or not.
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=(
-                f"FinMind clone DB unreachable ({exc.__class__.__name__}). "
-                "See the Setup checklist below for the fix."
+                f"FinMind clone DB unreachable ({exc.__class__.__name__}) "
+                f"at {finmind_settings.effective_database_url_safe}"
+                + (
+                    f" (schema={finmind_settings.schema})"
+                    if finmind_settings.schema else ""
+                )
+                + ". See the Setup checklist below for the fix."
             ),
         ) from exc
 
@@ -952,6 +965,7 @@ async def setup_status(_: Admin, db: FmDb) -> SetupStatusResponse:
 
     Each check returns a fix_hint string; the frontend renders the
     first failing one as the headline "next action" prompt."""
+    from finmind.config import finmind_settings
     from finmind.dataset_catalog import all_entries
     from finmind.models.master import TwStockInfo
 
@@ -962,10 +976,24 @@ async def setup_status(_: Admin, db: FmDb) -> SetupStatusResponse:
         from sqlalchemy import text as _text
         await db.execute(_text("SELECT 1"))
         db_reachable = True
-        db_detail = ""
+        # On success, surface the effective URL so the operator can
+        # tell at a glance which mode is active (Path A1 vs A2).
+        db_detail = (
+            f"connected to {finmind_settings.effective_database_url_safe}"
+            + (
+                f" (schema={finmind_settings.schema})"
+                if finmind_settings.schema else ""
+            )
+        )
     except Exception as exc:
         db_reachable = False
-        db_detail = f"{exc.__class__.__name__}: {exc!s}"
+        # On failure, include the URL so the operator can verify
+        # whether FINMIND_USE_MAIN_DB took effect — port 5433 means
+        # still Path A1 (separate container), main host means Path A2.
+        db_detail = (
+            f"{exc.__class__.__name__}: {exc!s} "
+            f"(target={finmind_settings.effective_database_url_safe})"
+        )
     checks.append(SetupCheck(
         key="db_reachable",
         label="FinMind clone DB reachable",

@@ -145,12 +145,32 @@ async def current_daily_usage(
     return DailyUsage(calls=int(result[0] or 0), rows=int(result[1] or 0))
 
 
-# Defaults applied when an API key has no subscription / plan attached
-# yet (e.g. the operator issued a key for testing but hasn't created a
-# subscription row). Conservative — the operator can override per-key
-# via `api_keys.scope_datasets` plus a real plan once billing is wired.
-_FREE_TIER_CALL_LIMIT = 100
-_FREE_TIER_ROW_LIMIT = 10_000
+# Last-resort fallback applied when an API key has no subscription
+# AND no `free` plan row exists in the DB (e.g. seed didn't run on a
+# fresh deployment). Operators tune real limits via the `plans` table —
+# `init_db.seed_default_free_plan` UPSERTs a 'free' row with these same
+# numbers so the in-DB value can be edited at runtime without redeploy.
+FREE_PLAN_CODE = "free"
+_FALLBACK_CALL_LIMIT = 100
+_FALLBACK_ROW_LIMIT = 10_000
+
+# Re-exported for tests that pre-date the DB-driven free plan and
+# still pin against the old constant names. Both currently equal the
+# fallback values; new code should query `plans` instead.
+_FREE_TIER_CALL_LIMIT = _FALLBACK_CALL_LIMIT
+_FREE_TIER_ROW_LIMIT = _FALLBACK_ROW_LIMIT
+
+
+async def _resolve_free_plan_limits(
+    session: AsyncSession,
+) -> tuple[str | None, int, int]:
+    """Look up the 'free' plan in the DB; fall back to the in-code
+    constants when missing. Pulled out so tests can monkey-patch the
+    fallback path independently of the real plan-lookup path."""
+    free = await session.get(Plan, FREE_PLAN_CODE)
+    if free is not None and free.enabled:
+        return free.code, free.quota_daily_calls, free.quota_daily_rows
+    return None, _FALLBACK_CALL_LIMIT, _FALLBACK_ROW_LIMIT
 
 
 async def _resolve_plan_limits(
@@ -159,15 +179,20 @@ async def _resolve_plan_limits(
     """(plan_code, call_limit, row_limit). Free-tier defaults when
     the key has no subscription or the subscription has no plan row."""
     if api_key.subscription_id is None:
-        return None, _FREE_TIER_CALL_LIMIT, _FREE_TIER_ROW_LIMIT
+        return await _resolve_free_plan_limits(session)
 
     sub = await session.get(Subscription, api_key.subscription_id)
     if sub is None or sub.status not in ("trial", "active"):
-        return None, _FREE_TIER_CALL_LIMIT, _FREE_TIER_ROW_LIMIT
+        return await _resolve_free_plan_limits(session)
 
     plan = await session.get(Plan, sub.plan_code)
     if plan is None or not plan.enabled:
-        return sub.plan_code, _FREE_TIER_CALL_LIMIT, _FREE_TIER_ROW_LIMIT
+        # Subscription exists but its plan row is gone or disabled —
+        # surface the original plan_code for diagnostics (so the
+        # support team can see "this customer's plan was deleted")
+        # while applying free-tier limits.
+        _, calls, rows = await _resolve_free_plan_limits(session)
+        return sub.plan_code, calls, rows
 
     return plan.code, plan.quota_daily_calls, plan.quota_daily_rows
 

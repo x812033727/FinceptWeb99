@@ -34,12 +34,18 @@ if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
 from data.tw.finmind_datasets import find_dataset  # noqa: E402
+from finmind.billing.quota import (  # noqa: E402
+    FREE_PLAN_CODE,
+    _FALLBACK_CALL_LIMIT,
+    _FALLBACK_ROW_LIMIT,
+)
 from finmind.config import finmind_settings  # noqa: E402
 from finmind.dataset_catalog import all_entries  # noqa: E402
 from finmind.db.session import (  # noqa: E402
     FinmindAsyncSessionLocal,
     finmind_engine,
 )
+from finmind.models.billing import Plan  # noqa: E402
 from finmind.models.dataset_source import DatasetSource  # noqa: E402
 
 log = logging.getLogger("finmind.init_db")
@@ -177,6 +183,35 @@ async def seed_dataset_sources() -> tuple[int, int]:
     return len(rows), int(total)
 
 
+async def seed_default_free_plan() -> bool:
+    """Insert the default 'free' plan row if absent. Returns True when
+    inserted, False when it was already there.
+
+    Idempotent on every init_db run. Existing rows (operator may have
+    bumped the quota fields) are preserved — this only seeds a missing
+    one. Operators wanting to reset to defaults can `DELETE` the row
+    and re-run init_db."""
+    async with FinmindAsyncSessionLocal() as session:
+        existing = await session.get(Plan, FREE_PLAN_CODE)
+        if existing is not None:
+            return False
+        session.add(
+            Plan(
+                code=FREE_PLAN_CODE,
+                name="Free Tier",
+                price_monthly=None,
+                price_yearly=None,
+                currency="TWD",
+                allowed_datasets=None,
+                quota_daily_calls=_FALLBACK_CALL_LIMIT,
+                quota_daily_rows=_FALLBACK_ROW_LIMIT,
+                enabled=True,
+            )
+        )
+        await session.commit()
+        return True
+
+
 async def amain() -> int:
     parser = argparse.ArgumentParser(
         description="Initialize the FinMind clone DB (migrate + seed)."
@@ -212,6 +247,7 @@ async def amain() -> int:
 
     if not args.no_seed:
         seeded, total = await seed_dataset_sources()
+        free_inserted = await seed_default_free_plan()
         # `print` rather than `log.info` because alembic's env.py runs
         # `fileConfig()` on the alembic.ini, which silently overrides
         # the `basicConfig(force=True)` handlers above. A plain print
@@ -219,6 +255,10 @@ async def amain() -> int:
         print(
             f"finmind.init_db: seeded {seeded} catalog rows; "
             f"total in dataset_sources = {total}"
+        )
+        print(
+            "finmind.init_db: default 'free' plan "
+            + ("inserted" if free_inserted else "already present")
         )
 
     await finmind_engine.dispose()

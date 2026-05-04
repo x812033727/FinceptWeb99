@@ -28,6 +28,7 @@ const DiscussionPage = lazy(pageLoaders.discussion);
 const AlertsPage = lazy(pageLoaders.alerts);
 const SettingsPage = lazy(pageLoaders.settings);
 const AdminPage = lazy(pageLoaders.admin);
+const FinmindPage = lazy(pageLoaders.finmind);
 
 // ── Protected route ───────────────────────────────────────────────
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -96,6 +97,7 @@ export default function App() {
             <Route path="/ai" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><AIPage /></Suspense></ErrorBoundary>} />
             <Route path="/discussion" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><DiscussionPage /></Suspense></ErrorBoundary>} />
             <Route path="/settings" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><SettingsPage /></Suspense></ErrorBoundary>} />
+            <Route path="/finmind" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><FinmindPage /></Suspense></ErrorBoundary>} />
             <Route path="/admin" element={<RequireRole role="admin"><ErrorBoundary><Suspense fallback={<PageSkeleton />}><AdminPage /></Suspense></ErrorBoundary></RequireRole>} />
           </Route>
 

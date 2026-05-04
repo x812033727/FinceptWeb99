@@ -26,6 +26,7 @@ export const pageLoaders = {
   alerts: () => import("@/pages/AlertsPage"),
   settings: () => import("@/pages/SettingsPage"),
   admin: () => import("@/pages/AdminPage"),
+  finmind: () => import("@/pages/FinmindPage"),
 } as const;
 
 /** Map a top-level nav `to` path → a loader key. Returns undefined for
@@ -45,6 +46,7 @@ function loaderForPath(path: string): keyof typeof pageLoaders | undefined {
   if (path === "/alerts") return "alerts";
   if (path === "/settings") return "settings";
   if (path === "/admin") return "admin";
+  if (path === "/finmind") return "finmind";
   return undefined;
 }
 

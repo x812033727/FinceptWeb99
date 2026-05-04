@@ -60,3 +60,18 @@ class DatasetSourceUpdate(BaseModel):
 
     enabled: bool | None = None
     active_source: str | None = None
+
+
+class PublicCatalogItem(BaseModel):
+    """Slim, marketing-safe view of a dataset for `/catalog`. Drops
+    operator-only fields (last_error, last_ingest_at, primary_source,
+    fallback_source, active_source) and surfaces a single `available`
+    flag derived from `enabled AND local_table != ''`."""
+
+    dataset_code: str
+    category: str
+    description_zh: str
+    ingest_freq: str
+    per_symbol: bool
+    sponsor_tier: bool
+    available: bool

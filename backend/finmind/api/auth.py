@@ -19,9 +19,13 @@ from dataclasses import dataclass
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from finmind.billing.keys import KEY_PREFIX, verify_key
+from finmind.billing.keys import KEY_PREFIX, touch_last_used, verify_key
 from finmind.db.session import get_finmind_db
 from finmind.models.billing import ApiKey
+
+import logging
+
+log = logging.getLogger("finmind.api.auth")
 
 
 @dataclass
@@ -69,6 +73,15 @@ async def require_api_key(
     if x_finmind_api_key and x_finmind_api_key.startswith(KEY_PREFIX):
         api_key = await verify_key(db, x_finmind_api_key)
         if api_key is not None:
+            # Best-effort timestamp bump so FinmindKeysCard's "Last
+            # used" column isn't always NULL. A failure here mustn't
+            # break the request — log and proceed.
+            try:
+                await touch_last_used(db, api_key.id)
+            except Exception:
+                log.exception(
+                    "touch_last_used failed for api_key id=%s", api_key.id
+                )
             return AuthContext(
                 api_key=api_key,
                 plaintext=x_finmind_api_key,

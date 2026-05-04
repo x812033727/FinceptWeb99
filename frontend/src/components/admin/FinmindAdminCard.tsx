@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import type { AxiosError } from "axios";
 
 import { CollapsibleHeader, useCollapsible } from "@/components/Collapsible";
 import api, { errorDetail } from "@/lib/api";
@@ -302,22 +303,31 @@ export default function FinmindAdminCard() {
       {open && (
         <div className="mt-4 space-y-6">
           {/* Status banner ─────────────────────────── */}
-          {statusQuery.isError && (
-            <div className="rounded border border-destructive bg-destructive/10 p-3 text-sm">
-              Failed to load FinMind status:{" "}
-              {errorDetail(statusQuery.error)}
-              <div className="mt-1 text-xs text-muted-foreground">
-                Most likely the FinMind clone DB isn&apos;t reachable. Run{" "}
-                <code className="rounded bg-muted px-1">
-                  docker compose --profile finmind up -d postgres_finmind
-                </code>{" "}
-                + <code className="rounded bg-muted px-1">
-                  python -m finmind.scripts.init_db
-                </code>{" "}
-                to bring it up.
+          {statusQuery.isError && (() => {
+            const status =
+              (statusQuery.error as AxiosError | undefined)?.response?.status;
+            // 503 = backend confirmed DB is unreachable. Setup checklist
+            // below renders the actionable fix, so we just leave a quiet
+            // pointer instead of the alarming red banner.
+            if (status === 503) {
+              return (
+                <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm dark:bg-amber-950">
+                  <div className="font-semibold">
+                    FinMind clone DB unreachable
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {errorDetail(statusQuery.error)}
+                  </div>
+                </div>
+              );
+            }
+            return (
+              <div className="rounded border border-destructive bg-destructive/10 p-3 text-sm">
+                Failed to load FinMind status:{" "}
+                {errorDetail(statusQuery.error)}
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {statusQuery.data && (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -613,6 +623,25 @@ export default function FinmindAdminCard() {
           {datasetsQuery.isLoading && (
             <div className="text-sm text-muted-foreground">Loading…</div>
           )}
+          {datasetsQuery.isError && (() => {
+            const dsStatus =
+              (datasetsQuery.error as AxiosError | undefined)?.response?.status;
+            // 503 is already explained by the status banner above —
+            // keep this placeholder small so the page doesn't repeat
+            // the same diagnosis twice.
+            if (dsStatus === 503) {
+              return (
+                <div className="rounded border border-border bg-muted/20 p-3 text-xs text-muted-foreground">
+                  Dataset list unavailable while DB is unreachable.
+                </div>
+              );
+            }
+            return (
+              <div className="rounded border border-destructive bg-destructive/10 p-3 text-xs">
+                Failed to load datasets: {errorDetail(datasetsQuery.error)}
+              </div>
+            );
+          })()}
           {datasetsQuery.data && (
             <div className="overflow-x-auto">
               <table className="w-full text-xs">

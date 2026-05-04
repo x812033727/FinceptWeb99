@@ -48,6 +48,35 @@ FmDb = Annotated[AsyncSession, Depends(get_finmind_db)]
 _VALID_SOURCES = {"finmind", "twse", "tpex", "taifex", "mops", "tdcc"}
 
 
+async def _ensure_finmind_db_reachable(db: AsyncSession) -> None:
+    """Probe the FinMind clone DB and raise 503 on failure.
+
+    Read endpoints that the AdminPage auto-fires on mount call this
+    first so a fresh deployment (postgres_finmind not yet up) gets a
+    clean 503 banner instead of a generic 500. The Setup checklist
+    card on the same page renders the actionable fix hint, so the
+    response detail just names the underlying exception class and
+    points down to it.
+
+    Mutating endpoints (PATCH/POST/DELETE) deliberately skip this
+    probe — those are explicit operator actions where a generic
+    failure already reads as "your click didn't work" and the inline
+    error message surfaces the real cause via try/except in the
+    handler body."""
+    from sqlalchemy import text as _text
+
+    try:
+        await db.execute(_text("SELECT 1"))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"FinMind clone DB unreachable ({exc.__class__.__name__}). "
+                "See the Setup checklist below for the fix."
+            ),
+        ) from exc
+
+
 class FinmindDatasetItem(BaseModel):
     """One row in `GET /finmind/datasets`. Schema duplicated from
     `finmind.api.schemas.DatasetSourceItem` (rather than re-exported)
@@ -81,6 +110,7 @@ class FinmindDatasetUpdate(BaseModel):
     summary="AdminPage: list every FinMind dataset",
 )
 async def list_finmind_datasets(_: Admin, db: FmDb) -> list[FinmindDatasetItem]:
+    await _ensure_finmind_db_reachable(db)
     rows = (
         await db.execute(
             select(DatasetSource).order_by(DatasetSource.dataset_code)
@@ -167,10 +197,18 @@ async def update_finmind_dataset(
 async def finmind_status(_: Admin, db: FmDb) -> dict[str, Any]:
     """Calls into the existing `finmind.scripts.status.collect_status`
     so the AdminPage card and the CLI report show the same numbers.
-    Same dataclass, JSON-serialized."""
+    Same dataclass, JSON-serialized.
+
+    Probes the DB first so a `ConnectionRefusedError` on a fresh
+    deployment surfaces as a clean 503 (with the underlying exception
+    class in the body) instead of bubbling up as a generic 500. The
+    AdminPage's Setup checklist card already renders the actionable
+    fix hint, so the status banner can stay quiet on 503."""
     from dataclasses import asdict
 
     from finmind.scripts.status import collect_status
+
+    await _ensure_finmind_db_reachable(db)
 
     report = await collect_status(db)
     payload = asdict(report)
@@ -229,6 +267,7 @@ def _plan_to_item(p) -> PlanItem:
     summary="AdminPage: list every pricing plan",
 )
 async def list_plans(_: Admin, db: FmDb) -> list[PlanItem]:
+    await _ensure_finmind_db_reachable(db)
     from finmind.models.billing import Plan
 
     rows = (
@@ -415,6 +454,7 @@ async def list_finmind_keys(_: Admin, db: FmDb) -> list[ApiKeyItem]:
     """Joins api_keys → subscriptions to surface plan_code per row.
     Free-tier keys (no subscription) show plan_code=None — frontend
     renders these with a muted "free" badge."""
+    await _ensure_finmind_db_reachable(db)
     from finmind.models.billing import ApiKey, Subscription
 
     # LEFT JOIN — include keys with no subscription (free-tier).
@@ -684,6 +724,8 @@ async def finmind_usage(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="days must be between 1 and 90",
         )
+
+    await _ensure_finmind_db_reachable(db)
 
     from datetime import datetime, timedelta, timezone
 

@@ -443,3 +443,196 @@ async def test_data_endpoint_allowlist_path_skips_quota(
     ).scalars().all()
     assert len(events) == 1
     assert events[0].api_key_id is None
+
+
+# ── DB-driven free plan ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_free_plan_in_db_overrides_hardcoded_fallback(finmind_session):
+    """When a `free` plan row exists with custom quota numbers,
+    `check_quota` for a key without a subscription returns those —
+    not the in-code fallback constants."""
+    finmind_session.add(
+        Plan(
+            code="free",
+            name="Free Tier",
+            currency="TWD",
+            quota_daily_calls=42,
+            quota_daily_rows=4242,
+            enabled=True,
+        )
+    )
+    await finmind_session.commit()
+
+    issued = await issue_key(
+        finmind_session, owner_email="user@example.com",
+    )
+    api_key = await finmind_session.get(ApiKey, issued.record_id)
+
+    status = await check_quota(finmind_session, api_key)
+    assert status.plan_code == "free"
+    assert status.daily_call_limit == 42
+    assert status.daily_row_limit == 4242
+
+
+@pytest.mark.asyncio
+async def test_free_plan_disabled_falls_back_to_constants(finmind_session):
+    """A `free` plan row marked enabled=False shouldn't be honoured —
+    operators may have temporarily disabled the free tier and we don't
+    want to fail closed (a customer with a real subscription is
+    unaffected; a customer without one falls through to the hardcoded
+    safety-net values)."""
+    finmind_session.add(
+        Plan(
+            code="free",
+            name="Free Tier (paused)",
+            currency="TWD",
+            quota_daily_calls=999,
+            quota_daily_rows=99999,
+            enabled=False,
+        )
+    )
+    await finmind_session.commit()
+
+    issued = await issue_key(
+        finmind_session, owner_email="user@example.com",
+    )
+    api_key = await finmind_session.get(ApiKey, issued.record_id)
+
+    status = await check_quota(finmind_session, api_key)
+    assert status.daily_call_limit == _FREE_TIER_CALL_LIMIT
+    assert status.daily_row_limit == _FREE_TIER_ROW_LIMIT
+
+
+# ── Scope dataset enforcement ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_data_endpoint_403_when_dataset_outside_per_key_scope(
+    client, finmind_session,
+):
+    """A key with `scope_datasets=['TaiwanStockPER']` must 403 when
+    asked for TaiwanStockPrice — bulk export path included."""
+    await seed_dataset_sources()
+    await _seed_one_ohlcv_row(finmind_session)
+
+    issued = await issue_key(
+        finmind_session,
+        owner_email="user@example.com",
+        scope_datasets=["TaiwanStockPER"],
+    )
+
+    resp = await client.get(
+        "/api/finmind/data/TaiwanStockPrice",
+        params={"data_id": "2330"},
+        headers={"X-Finmind-API-Key": issued.plaintext},
+    )
+    assert resp.status_code == 403
+    assert "scope_datasets" in resp.json()["detail"]
+
+    resp_export = await client.get(
+        "/api/finmind/data/TaiwanStockPrice/export",
+        params={"data_id": "2330"},
+        headers={"X-Finmind-API-Key": issued.plaintext},
+    )
+    assert resp_export.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_data_endpoint_200_when_dataset_inside_per_key_scope(
+    client, finmind_session,
+):
+    """Same scoped key, but querying an in-scope dataset succeeds."""
+    await seed_dataset_sources()
+    await _seed_one_ohlcv_row(finmind_session)
+
+    issued = await issue_key(
+        finmind_session,
+        owner_email="user@example.com",
+        scope_datasets=["TaiwanStockPrice"],
+    )
+
+    resp = await client.get(
+        "/api/finmind/data/TaiwanStockPrice",
+        params={"data_id": "2330"},
+        headers={"X-Finmind-API-Key": issued.plaintext},
+    )
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_data_endpoint_403_when_outside_plan_allowlist(
+    client, finmind_session,
+):
+    """When the key has scope_datasets=NULL but its plan has an
+    `allowed_datasets` list, that allowlist still applies."""
+    await seed_dataset_sources()
+    await _seed_one_ohlcv_row(finmind_session)
+
+    finmind_session.add(
+        Plan(
+            code="basic",
+            name="Basic",
+            currency="TWD",
+            allowed_datasets=["TaiwanStockPER"],
+            quota_daily_calls=100,
+            quota_daily_rows=10_000,
+            enabled=True,
+        )
+    )
+    sub = Subscription(
+        owner_email="user@example.com",
+        plan_code="basic",
+        status="active",
+        started_at=date(2024, 1, 1),
+    )
+    finmind_session.add(sub)
+    await finmind_session.commit()
+
+    issued = await issue_key(
+        finmind_session,
+        owner_email="user@example.com",
+        subscription_id=sub.id,
+    )
+
+    resp = await client.get(
+        "/api/finmind/data/TaiwanStockPrice",
+        params={"data_id": "2330"},
+        headers={"X-Finmind-API-Key": issued.plaintext},
+    )
+    assert resp.status_code == 403
+    assert "basic" in resp.json()["detail"]
+
+
+# ── Auth-side last_used_at bump ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_real_key_request_bumps_last_used_at(
+    client, finmind_session,
+):
+    """A successful /data hit through `require_api_key` must populate
+    `api_keys.last_used_at` so FinmindKeysCard's column isn't always
+    NULL. Best-effort: failure here would log + proceed, but the happy
+    path must work."""
+    await seed_dataset_sources()
+    await _seed_one_ohlcv_row(finmind_session)
+
+    issued = await issue_key(
+        finmind_session, owner_email="user@example.com",
+    )
+
+    before = await finmind_session.get(ApiKey, issued.record_id)
+    assert before.last_used_at is None
+
+    resp = await client.get(
+        "/api/finmind/data/TaiwanStockPrice",
+        params={"data_id": "2330"},
+        headers={"X-Finmind-API-Key": issued.plaintext},
+    )
+    assert resp.status_code == 200
+
+    after = await finmind_session.get(ApiKey, issued.record_id)
+    await finmind_session.refresh(after)
+    assert after.last_used_at is not None

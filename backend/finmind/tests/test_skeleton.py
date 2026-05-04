@@ -181,3 +181,36 @@ async def test_backfill_progress_allows_same_chunk_from_different_sources(
         )
     ).scalar_one()
     assert count == 2
+
+
+@pytest.mark.asyncio
+async def test_seed_default_free_plan_inserts_once_then_no_op(finmind_session):
+    """`seed_default_free_plan` is called from init_db on every run.
+    First call inserts the row; subsequent calls return False without
+    overwriting operator customisations."""
+    from finmind.billing.quota import (
+        _FALLBACK_CALL_LIMIT,
+        _FALLBACK_ROW_LIMIT,
+        FREE_PLAN_CODE,
+    )
+    from finmind.models.billing import Plan
+    from finmind.scripts.init_db import seed_default_free_plan
+
+    inserted_first = await seed_default_free_plan()
+    assert inserted_first is True
+
+    plan = await finmind_session.get(Plan, FREE_PLAN_CODE)
+    assert plan is not None
+    assert plan.quota_daily_calls == _FALLBACK_CALL_LIMIT
+    assert plan.quota_daily_rows == _FALLBACK_ROW_LIMIT
+    assert plan.enabled is True
+
+    # Operator bumps the value.
+    plan.quota_daily_calls = 555
+    await finmind_session.commit()
+
+    inserted_second = await seed_default_free_plan()
+    assert inserted_second is False
+
+    plan_after = await finmind_session.get(Plan, FREE_PLAN_CODE)
+    assert plan_after.quota_daily_calls == 555  # operator change preserved

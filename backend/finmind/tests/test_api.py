@@ -65,6 +65,49 @@ async def test_list_datasets_returns_full_catalog(client, finmind_session):
 
 
 @pytest.mark.asyncio
+async def test_public_catalog_returns_slim_shape(client, finmind_session):
+    """`/catalog` drops operator fields and surfaces a single
+    `available` flag. Used by the public marketing page."""
+    await seed_dataset_sources()
+
+    resp = await client.get("/api/finmind/catalog")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 80
+    by_code = {row["dataset_code"]: row for row in body}
+    sample = by_code["TaiwanStockPrice"]
+    # Operator-only fields must be absent.
+    assert "last_error" not in sample
+    assert "last_ingest_at" not in sample
+    assert "active_source" not in sample
+    assert "primary_source" not in sample
+    assert "local_table" not in sample
+    # Marketing-facing fields are present.
+    assert sample["category"]
+    assert sample["description_zh"]
+    assert "available" in sample
+    # Seeded rows aren't enabled by default → not available yet.
+    assert sample["available"] is False
+
+
+@pytest.mark.asyncio
+async def test_public_catalog_no_auth_required(
+    finmind_session, monkeypatch, app
+):
+    """`/catalog` must work without `X-Finmind-API-Key` even when an
+    allowlist is set — otherwise a prospect can't browse before
+    signing up."""
+    monkeypatch.setenv("FINMIND_API_KEYS_ALLOWLIST", "valid-key-1")
+    monkeypatch.setenv("DEBUG", "false")
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as ac:
+        resp = await ac.get("/api/finmind/catalog")
+        assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_get_data_404_unknown_dataset(client):
     resp = await client.get("/api/finmind/data/TotallyMadeUp")
     assert resp.status_code == 404

@@ -24,6 +24,7 @@ const NAV: NavItemDef[] = [
   { to: "/macro", labelKey: "nav.macro", icon: "🌐" },
   { to: "/ai", labelKey: "nav.ai", icon: "🤖" },
   { to: "/discussion", labelKey: "nav.discussion", icon: "💬" },
+  { to: "/finmind", labelKey: "nav.finmind", icon: "🧬" },
   { to: "/settings", labelKey: "nav.settings", icon: "⚙" },
 ];
 

@@ -109,16 +109,40 @@ describe("FinmindAdminCard — render", () => {
     expect(screen.getByText("FinMind Clone Subsystem")).toBeInTheDocument();
   });
 
-  it("renders the helpful error banner when the status query fails", async () => {
+  it("renders the generic error banner when the status query fails (non-503)", async () => {
     mockedApi.get.mockRejectedValue(new Error("network down"));
     renderCard();
     expect(
       await screen.findByText(/Failed to load FinMind status/i),
     ).toBeInTheDocument();
-    // Operator hint with the docker compose command
+    // The actionable docker hint is no longer hardcoded here — the
+    // Setup checklist below renders the real fix when the backend
+    // confirms the DB is down. Generic errors stay short.
+  });
+
+  it("renders a calm 'DB unreachable' banner when status returns 503", async () => {
+    // Build an axios-shaped error so the component's response.status
+    // discriminator picks up the 503 branch.
+    const axiosLikeError = Object.assign(new Error("Request failed"), {
+      response: {
+        status: 503,
+        data: {
+          detail: (
+            "FinMind clone DB unreachable (ConnectionRefusedError). "
+            + "See the Setup checklist below for the fix."
+          ),
+        },
+      },
+    });
+    mockedApi.get.mockRejectedValue(axiosLikeError);
+    renderCard();
     expect(
-      screen.getByText(/postgres_finmind/i),
+      await screen.findByText(/FinMind clone DB unreachable/i),
     ).toBeInTheDocument();
+    // Generic loud banner copy must NOT show on the 503 branch.
+    expect(
+      screen.queryByText(/Failed to load FinMind status/i),
+    ).not.toBeInTheDocument();
   });
 
   it("renders status banner + dataset table on success", async () => {

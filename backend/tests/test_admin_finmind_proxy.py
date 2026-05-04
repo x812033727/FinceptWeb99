@@ -1316,3 +1316,74 @@ async def test_run_due_invokes_runner_for_enabled_datasets(
     assert body["done"] == 1
     assert body["rows_written"] == 3
     assert body["outcomes"][0]["dataset_code"] == "TaiwanStockTotalMarginPurchaseShortSale"
+
+
+# ── Status endpoint: clean 503 when DB is unreachable ─────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/admin/finmind/status",
+        "/api/admin/finmind/datasets",
+        "/api/admin/finmind/plans",
+        "/api/admin/finmind/keys",
+        "/api/admin/finmind/usage",
+    ],
+)
+async def test_read_endpoints_return_503_when_finmind_db_unreachable(
+    client, db_session, path,
+):
+    """Every read endpoint that the AdminPage auto-fires on mount
+    must convert a ConnectionRefusedError on the underlying session
+    into a clean 503. Otherwise a fresh deployment (postgres_finmind
+    not up yet) drops a generic 500 into multiple cards on the page."""
+    from finmind.db.session import get_finmind_db
+    from main import app
+
+    class _FailingSession:
+        async def execute(self, *args, **kwargs):
+            raise ConnectionRefusedError(
+                "[Errno 111] Connection refused"
+            )
+
+    async def _override():
+        yield _FailingSession()
+
+    app.dependency_overrides[get_finmind_db] = _override
+    try:
+        email = f"admin_fm_unreachable_{path.replace('/', '_')}@test.com"
+        await _register_login(client, email)
+        token = await _promote_to_admin(db_session, email, client)
+
+        r = await client.get(path, headers=_auth(token))
+        assert r.status_code == 503, (
+            f"{path} should 503 on DB-down, got {r.status_code}"
+        )
+        body = r.json()
+        assert "ConnectionRefusedError" in body["detail"]
+        assert "Setup checklist" in body["detail"]
+    finally:
+        app.dependency_overrides.pop(get_finmind_db, None)
+
+
+@pytest.mark.asyncio
+async def test_status_returns_200_when_db_reachable(
+    client, db_session, finmind_db_override,
+):
+    """Sanity check the happy path still works after adding the probe."""
+    SessionLocal = finmind_db_override
+    await _seed_catalog(SessionLocal)
+
+    email = "admin_fm_status_ok@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.get(
+        "/api/admin/finmind/status", headers=_auth(token),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert "alembic" in body
+    assert "catalog" in body

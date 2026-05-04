@@ -41,6 +41,7 @@ from finmind.api.schemas import (
     DataResponseMetadata,
     DatasetSourceItem,
     DatasetSourceUpdate,
+    PublicCatalogItem,
 )
 from finmind.billing.quota import check_quota, record_usage
 from finmind.billing.stripe_webhook import (
@@ -49,6 +50,7 @@ from finmind.billing.stripe_webhook import (
     verify_signature,
 )
 from finmind.db.session import get_finmind_db
+from finmind.models.billing import Plan, Subscription
 from finmind.models.dataset_source import DatasetSource
 
 log = logging.getLogger("finmind.api")
@@ -77,6 +79,35 @@ async def list_datasets(
     return [DatasetSourceItem.model_validate(r, from_attributes=True) for r in rows]
 
 
+@router.get(
+    "/catalog",
+    response_model=list[PublicCatalogItem],
+    summary="Public catalog (no API key) — drops operator-only fields",
+)
+async def public_catalog(
+    db: AsyncSession = Depends(get_finmind_db),
+) -> list[PublicCatalogItem]:
+    """Marketing-facing catalog. Auth-free so prospective customers
+    can browse what's on offer before they have a key. Returns a
+    slimmed-down shape — operational state (last_error, last_ingest_at,
+    active_source) stays in `/datasets` + `/admin/datasets`."""
+    rows = (
+        await db.execute(select(DatasetSource).order_by(DatasetSource.dataset_code))
+    ).scalars().all()
+    return [
+        PublicCatalogItem(
+            dataset_code=r.dataset_code,
+            category=r.category,
+            description_zh=r.description_zh,
+            ingest_freq=r.ingest_freq,
+            per_symbol=r.per_symbol,
+            sponsor_tier=r.sponsor_tier,
+            available=bool(r.enabled and r.local_table),
+        )
+        for r in rows
+    ]
+
+
 # ── Public data query ────────────────────────────────────────────
 
 
@@ -91,6 +122,54 @@ def _coerce_date(s: str | None) -> date | None:
     if not s:
         return None
     return datetime.strptime(s, "%Y-%m-%d").date()
+
+
+async def _authorize_dataset_scope(
+    db: AsyncSession, auth: AuthContext, dataset_code: str
+) -> None:
+    """Raise 403 if the caller's key doesn't cover `dataset_code`.
+
+    Two-level check:
+      1. `api_keys.scope_datasets` (per-key override) — if set,
+         dataset_code must be in the list.
+      2. Otherwise fall back to the subscription's plan
+         `allowed_datasets` — if set, dataset_code must be in the list.
+
+    Allowlist=NULL means "all datasets allowed" at that level. Operator/
+    dev-mode requests (api_key=None) bypass scope entirely — they're
+    implicitly trusted."""
+    if auth.api_key is None:
+        return
+
+    per_key = auth.api_key.scope_datasets
+    if per_key:
+        if dataset_code not in per_key:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"this key's scope_datasets does not include "
+                    f"{dataset_code!r}"
+                ),
+            )
+        return
+
+    sub_id = auth.api_key.subscription_id
+    if sub_id is None:
+        return
+    sub = await db.get(Subscription, sub_id)
+    if sub is None:
+        return
+    plan = await db.get(Plan, sub.plan_code)
+    if plan is None or not plan.allowed_datasets:
+        return
+    if dataset_code not in plan.allowed_datasets:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"plan {plan.code!r} does not include dataset "
+                f"{dataset_code!r}"
+            ),
+        )
 
 
 @router.get(
@@ -109,6 +188,11 @@ async def get_data(
     auth: AuthContext = Depends(require_api_key),
 ) -> DataResponse:
     started = time.monotonic()
+
+    # Scope gate — 403 if this key isn't allowed to read this dataset.
+    # Runs before quota so an out-of-scope request doesn't burn a
+    # quota slot.
+    await _authorize_dataset_scope(db, auth, dataset_code)
 
     # Quota gate (real `fck_live_` keys only — env-allowlist + dev
     # mode skip the quota path because operators set their own caps).
@@ -527,6 +611,10 @@ async def export_data(
     1M-row cap protects DB + memory from a single runaway request.
     """
     started = time.monotonic()
+
+    # Scope gate — same rules as /data. Bulk export is the more
+    # dangerous misuse path, so the check here is non-optional.
+    await _authorize_dataset_scope(db, auth, dataset_code)
 
     quota = None
     if auth.api_key is not None:

@@ -973,9 +973,14 @@ async def setup_status(_: Admin, db: FmDb) -> SetupStatusResponse:
         detail=db_detail,
         fix_hint=(
             "" if db_reachable else
-            "Start the isolated DB: `docker compose --profile finmind "
-            "up -d postgres_finmind`. Then verify FINMIND_DATABASE_URL "
-            "in the backend's .env points to it (default: port 5433)."
+            "Two options. (A) Run a separate Postgres: "
+            "`docker compose --profile finmind up -d postgres_finmind` "
+            "(default — needs docker socket access on the deploy host). "
+            "(B) Share the main app's Postgres: set "
+            "`FINMIND_USE_MAIN_DB=true` in .env so the subsystem binds "
+            "to DATABASE_URL with a `finmind` schema for isolation. "
+            "Then restart the backend — lifespan auto-init handles the "
+            "rest."
         ),
     ))
 

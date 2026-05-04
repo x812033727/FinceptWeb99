@@ -83,6 +83,26 @@ interface FinmindStatus {
 
 const VALID_SOURCES = ["finmind", "twse", "tpex", "taifex", "mops", "tdcc"];
 
+interface QuickStartResponse {
+  enabled_count: number;
+  skipped: string[];
+  enabled: string[];
+  note: string;
+}
+
+interface SetupCheck {
+  key: string;
+  label: string;
+  passed: boolean;
+  detail: string;
+  fix_hint: string;
+}
+
+interface SetupStatusResponse {
+  checks: SetupCheck[];
+  next_action: string | null;
+}
+
 function formatPct(built: number, total: number): string {
   if (total === 0) return "0%";
   return `${Math.round((built / total) * 100)}%`;
@@ -116,6 +136,42 @@ export default function FinmindAdminCard() {
     refetchInterval: 30_000,
   });
 
+  const [quickStartResult, setQuickStartResult] =
+    useState<QuickStartResponse | null>(null);
+
+  const quickStartMutation = useMutation({
+    mutationFn: async () => {
+      const r = await api.post<QuickStartResponse>(
+        "/admin/finmind/quick-start",
+      );
+      return r.data;
+    },
+    onSuccess: (data) => {
+      setQuickStartResult(data);
+      queryClient.invalidateQueries({
+        queryKey: ["admin", "finmind", "datasets"],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["admin", "finmind", "setup-status"],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["admin", "finmind", "status"],
+      });
+    },
+  });
+
+  const setupQuery = useQuery<SetupStatusResponse>({
+    queryKey: ["admin", "finmind", "setup-status"],
+    queryFn: async () => {
+      const r = await api.get<SetupStatusResponse>(
+        "/admin/finmind/setup-status",
+      );
+      return r.data;
+    },
+    enabled: open,
+    refetchInterval: 60_000,
+  });
+
   const datasetsQuery = useQuery<FinmindDataset[]>({
     queryKey: ["admin", "finmind", "datasets"],
     queryFn: async () => {
@@ -129,6 +185,30 @@ export default function FinmindAdminCard() {
   // result summary stays in component state until the next click so
   // the operator can read the breakdown.
   const [runDueResult, setRunDueResult] = useState<RunDueResponse | null>(null);
+  const [testConnectionResult, setTestConnectionResult] = useState<{
+    ok: boolean;
+    message: string;
+    token_present: boolean;
+    dataset_tested: string;
+    rows_returned: number;
+  } | null>(null);
+
+  const testConnectionMutation = useMutation({
+    mutationFn: async () => {
+      const r = await api.post<{
+        ok: boolean;
+        message: string;
+        token_present: boolean;
+        dataset_tested: string;
+        rows_returned: number;
+      }>("/admin/finmind/test-connection");
+      return r.data;
+    },
+    onSuccess: (data) => {
+      setTestConnectionResult(data);
+    },
+  });
+
   const runDueMutation = useMutation({
     mutationFn: async () => {
       const r = await api.post<RunDueResponse>("/admin/finmind/run-due");
@@ -303,6 +383,151 @@ export default function FinmindAdminCard() {
               </div>
             </div>
           )}
+
+          {/* Setup checklist (first-run wizard) ───── */}
+          {setupQuery.data && (
+            <div
+              className={`rounded border p-3 ${
+                setupQuery.data.next_action
+                  ? "border-amber-400 bg-amber-50 dark:bg-amber-950"
+                  : "border-green-400 bg-green-50 dark:bg-green-950"
+              }`}
+            >
+              <h3 className="mb-2 text-sm font-semibold">
+                {setupQuery.data.next_action
+                  ? "Setup checklist"
+                  : "✓ Setup complete"}
+              </h3>
+              <ul className="space-y-1 text-xs">
+                {setupQuery.data.checks.map((c) => (
+                  <li
+                    key={c.key}
+                    className="flex items-start gap-2"
+                  >
+                    <span
+                      className={
+                        c.passed
+                          ? "text-green-600"
+                          : "text-amber-600"
+                      }
+                    >
+                      {c.passed ? "✓" : "✗"}
+                    </span>
+                    <div className="flex-1">
+                      <div>{c.label}</div>
+                      {!c.passed && c.detail && (
+                        <div className="text-muted-foreground">
+                          {c.detail}
+                        </div>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              {setupQuery.data.next_action && (
+                <div className="mt-2 rounded border border-border bg-background p-2 text-xs">
+                  <span className="font-semibold">Next:</span>{" "}
+                  {setupQuery.data.next_action}
+                </div>
+              )}
+
+              {/* Quick Start — only surfaced once setup checklist
+                  passes catalog_seeded (so the bulk-enable can
+                  actually flip rows). For earlier failure modes
+                  the operator needs to fix the prerequisite first. */}
+              {setupQuery.data.checks.find(
+                (c) => c.key === "catalog_seeded",
+              )?.passed && (
+                <div className="mt-3 flex items-start justify-between gap-3 border-t border-border pt-2">
+                  <div className="text-xs">
+                    <div className="font-semibold">Quick Start</div>
+                    <div className="text-muted-foreground">
+                      One click bulk-enables a curated set of 11
+                      recommended datasets (master / price / chip /
+                      revenue / valuation / dividends). You can
+                      individually toggle the rest below.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => quickStartMutation.mutate()}
+                    disabled={quickStartMutation.isPending}
+                    className="shrink-0 rounded bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                  >
+                    {quickStartMutation.isPending
+                      ? "Enabling…"
+                      : "Enable recommended"}
+                  </button>
+                </div>
+              )}
+              {quickStartResult && (
+                <div className="mt-2 rounded border border-border bg-background p-2 text-xs">
+                  <div>{quickStartResult.note}</div>
+                  {quickStartResult.skipped.length > 0 && (
+                    <div className="mt-1 text-muted-foreground">
+                      Skipped:{" "}
+                      {quickStartResult.skipped.join(", ")}
+                    </div>
+                  )}
+                </div>
+              )}
+              {quickStartMutation.isError && (
+                <div className="mt-2 break-words text-xs text-destructive">
+                  Quick start failed:{" "}
+                  {errorDetail(quickStartMutation.error)}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Test FinMind connection ────────────── */}
+          <div className="rounded border border-border bg-muted/20 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="text-sm">
+                <div className="font-semibold">Test FinMind connection</div>
+                <div className="text-xs text-muted-foreground">
+                  Pings FinMind with a small free-tier query
+                  (TaiwanStockInfo). Use this to verify the
+                  FINMIND_TOKEN works + quota isn&apos;t exhausted before
+                  enabling datasets.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => testConnectionMutation.mutate()}
+                disabled={testConnectionMutation.isPending}
+                className="rounded border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+              >
+                {testConnectionMutation.isPending
+                  ? "Testing…"
+                  : "Test connection"}
+              </button>
+            </div>
+            {testConnectionResult && (
+              <div
+                className={`mt-2 rounded border p-2 text-xs ${
+                  testConnectionResult.ok
+                    ? "border-green-400 bg-green-50 dark:bg-green-950"
+                    : "border-amber-400 bg-amber-50 dark:bg-amber-950"
+                }`}
+              >
+                <div className="font-semibold">
+                  {testConnectionResult.ok ? "✓" : "⚠"}{" "}
+                  {testConnectionResult.message}
+                </div>
+                <div className="mt-0.5 text-muted-foreground">
+                  Token present:{" "}
+                  {testConnectionResult.token_present ? "yes" : "no"} ·
+                  rows returned: {testConnectionResult.rows_returned}
+                </div>
+              </div>
+            )}
+            {testConnectionMutation.isError && (
+              <div className="mt-2 break-words text-xs text-destructive">
+                Test failed: {errorDetail(testConnectionMutation.error)}
+              </div>
+            )}
+          </div>
 
           {/* Run-all-due button + last result ────── */}
           <div className="rounded border border-border bg-muted/20 p-3">

@@ -416,6 +416,61 @@ def _row_futures_inst(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _row_market_value_weight(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "market": row.get("market", "TWSE"),
+        "symbol": _to_str(row.get("symbol")),
+        "ts": _to_date(row.get("ts")),
+        "weight": _to_decimal(row.get("weight")),
+        "market_cap": _to_decimal(row.get("market_cap")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_price_limit(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "market": row.get("market", "TWSE"),
+        "symbol": _to_str(row.get("symbol")),
+        "ts": _to_date(row.get("ts")),
+        "upper_limit": _to_decimal(row.get("upper_limit")),
+        "lower_limit": _to_decimal(row.get("lower_limit")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_suspended(row: dict[str, Any]) -> dict[str, Any]:
+    """Sparse event row. PK is (symbol, suspended_at) — operator can
+    re-ingest historical suspensions any number of times without
+    duplicating rows."""
+    return {
+        "symbol": _to_str(row.get("symbol")),
+        "suspended_at": _to_date(row.get("suspended_at")),
+        "reason": _to_str(row.get("reason")),
+        "resumed_at": _to_date(row.get("resumed_at")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_business_indicator(row: dict[str, Any]) -> dict[str, Any]:
+    """國發會景氣對策信號 — one row per month with a numeric score
+    and a Chinese-label color signal (紅/黃紅/綠/黃藍/藍)."""
+    return {
+        "ts": _to_date(row.get("ts")),
+        "score": _to_int(row.get("score")),
+        "signal": _to_str(row.get("signal")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_delisting(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "symbol": _to_str(row.get("symbol")),
+        "delisted_at": _to_date(row.get("delisted_at")),
+        "reason": _to_str(row.get("reason")),
+        "source": row.get("source", "finmind"),
+    }
+
+
 # ── Wide-format pivots (batch_transform) ─────────────────────────
 #
 # FinMind's quarterly statements + market-wide totals return rows in
@@ -958,6 +1013,74 @@ MAPPINGS: dict[str, DatasetMapping] = {
         pk_columns=("contract", "ts", "session"),
         extra={"session": "night", "source": "finmind"},
         row_transform=_row_futures_inst,
+    ),
+    # ── 市值比重 ────────────────────────────────────────────────
+    "TaiwanStockMarketValueWeight": DatasetMapping(
+        dataset_code="TaiwanStockMarketValueWeight",
+        local_table="tw_market_value_weight",
+        column_map={
+            "date": "ts",
+            "stock_id": "symbol",
+            "weight_per": "weight",
+            "TotalMarketValue": "market_cap",
+        },
+        pk_columns=("market", "symbol", "ts"),
+        extra={"market": "TWSE", "source": "finmind"},
+        row_transform=_row_market_value_weight,
+    ),
+    # ── 漲跌停 ──────────────────────────────────────────────────
+    "TaiwanStockPriceLimit": DatasetMapping(
+        dataset_code="TaiwanStockPriceLimit",
+        local_table="tw_price_limit_daily",
+        column_map={
+            "date": "ts",
+            "stock_id": "symbol",
+            "PriceUpLimit": "upper_limit",
+            "PriceDownLimit": "lower_limit",
+        },
+        pk_columns=("market", "symbol", "ts"),
+        extra={"market": "TWSE", "source": "finmind"},
+        row_transform=_row_price_limit,
+    ),
+    # ── 暫停交易 ────────────────────────────────────────────────
+    "TaiwanStockSuspended": DatasetMapping(
+        dataset_code="TaiwanStockSuspended",
+        local_table="tw_suspended",
+        column_map={
+            "stock_id": "symbol",
+            "suspend_date": "suspended_at",
+            "resume_date": "resumed_at",
+            "reason": "reason",
+        },
+        pk_columns=("symbol", "suspended_at"),
+        extra={"source": "finmind"},
+        row_transform=_row_suspended,
+    ),
+    # ── 景氣對策信號 ────────────────────────────────────────────
+    "TaiwanBusinessIndicator": DatasetMapping(
+        dataset_code="TaiwanBusinessIndicator",
+        local_table="tw_business_indicator",
+        column_map={
+            "date": "ts",
+            "score": "score",
+            "signal": "signal",
+        },
+        pk_columns=("ts",),
+        extra={"source": "finmind"},
+        row_transform=_row_business_indicator,
+    ),
+    # ── 下市 ────────────────────────────────────────────────────
+    "TaiwanStockDelisting": DatasetMapping(
+        dataset_code="TaiwanStockDelisting",
+        local_table="tw_delisting",
+        column_map={
+            "stock_id": "symbol",
+            "date": "delisted_at",
+            "reason": "reason",
+        },
+        pk_columns=("symbol",),
+        extra={"source": "finmind"},
+        row_transform=_row_delisting,
     ),
     # ── 新聞 ────────────────────────────────────────────────────
     "TaiwanStockNews": DatasetMapping(

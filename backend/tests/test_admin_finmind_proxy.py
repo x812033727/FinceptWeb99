@@ -163,6 +163,423 @@ async def test_proxy_rejects_non_admin(client, finmind_db_override):
 # ── Catalog list + PATCH ────────────────────────────────────────
 
 
+# ── Setup checklist (first-run wizard) ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_setup_status_fresh_db_lists_unmet_steps(
+    client, db_session, finmind_db_override,
+):
+    """Fresh DB after just `create_all` (no init_db seed yet) →
+    db_reachable=True, catalog_seeded=False, etc. The first failing
+    step's fix_hint is surfaced as `next_action` so the operator
+    knows exactly what to do."""
+    email = "admin_fm_setup_fresh@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.get(
+        "/api/admin/finmind/setup-status", headers=_auth(token),
+    )
+    assert r.status_code == 200
+    body = r.json()
+
+    keys = [c["key"] for c in body["checks"]]
+    assert keys == [
+        "db_reachable",
+        "catalog_seeded",
+        "finmind_token_works",
+        "universe_populated",
+    ]
+
+    by_key = {c["key"]: c for c in body["checks"]}
+    # DB came up via the test fixture so step 1 passes.
+    assert by_key["db_reachable"]["passed"] is True
+    # No init_db seed → step 2 fails with a useful hint.
+    assert by_key["catalog_seeded"]["passed"] is False
+    assert "init_db" in by_key["catalog_seeded"]["fix_hint"]
+
+    # Steps 3+ skipped while step 2 unmet.
+    assert by_key["finmind_token_works"]["passed"] is False
+    assert "skipped" in by_key["finmind_token_works"]["detail"]
+
+    # next_action surfaces step 2's hint (first failure).
+    assert body["next_action"] is not None
+    assert "init_db" in body["next_action"]
+
+
+@pytest.mark.asyncio
+async def test_setup_status_after_seed_progresses_to_token_check(
+    client, db_session, finmind_db_override, monkeypatch,
+):
+    """After init_db seed, catalog passes → next failure is the
+    FinMind token probe. Verify the checklist walks forward."""
+    SessionLocal = finmind_db_override
+    await _seed_catalog(SessionLocal)
+
+    # Mock FinMind so we don't actually hit the network — token
+    # works, returns rows.
+    async def fake_query(dataset, data_id, start, end=None):
+        return [{"stock_id": "2330"}]
+
+    async def fake_get_token():
+        return "valid-token"
+
+    monkeypatch.setattr(
+        "data.tw.finmind_connector._query", fake_query,
+    )
+    monkeypatch.setattr(
+        "data.tw.finmind_connector._get_token", fake_get_token,
+    )
+
+    email = "admin_fm_setup_seeded@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.get(
+        "/api/admin/finmind/setup-status", headers=_auth(token),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    by_key = {c["key"]: c for c in body["checks"]}
+    assert by_key["catalog_seeded"]["passed"] is True
+    assert by_key["finmind_token_works"]["passed"] is True
+    # Universe still empty (TaiwanStockInfo never ran in this test) →
+    # step 4 fails with the right hint.
+    assert by_key["universe_populated"]["passed"] is False
+    assert "TaiwanStockInfo" in by_key["universe_populated"]["fix_hint"]
+    assert body["next_action"] is not None
+    assert "TaiwanStockInfo" in body["next_action"]
+
+
+@pytest.mark.asyncio
+async def test_setup_status_all_pass_returns_null_next_action(
+    client, db_session, finmind_db_override, monkeypatch,
+):
+    """All 4 checks green → next_action is None (UI graduates to
+    'Setup complete')."""
+    SessionLocal = finmind_db_override
+    await _seed_catalog(SessionLocal)
+
+    async def fake_query(dataset, data_id, start, end=None):
+        return [{"stock_id": "2330"}]
+
+    async def fake_get_token():
+        return "valid-token"
+
+    monkeypatch.setattr(
+        "data.tw.finmind_connector._query", fake_query,
+    )
+    monkeypatch.setattr(
+        "data.tw.finmind_connector._get_token", fake_get_token,
+    )
+
+    # Insert at least one tw_stock_info row to satisfy step 4.
+    from finmind.models.master import TwStockInfo
+    async with SessionLocal() as s:
+        s.add(TwStockInfo(
+            market="TWSE", symbol="2330",
+            name_zh="TSMC", source="finmind",
+        ))
+        await s.commit()
+
+    email = "admin_fm_setup_done@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.get(
+        "/api/admin/finmind/setup-status", headers=_auth(token),
+    )
+    body = r.json()
+    assert all(c["passed"] for c in body["checks"])
+    assert body["next_action"] is None
+
+
+@pytest.mark.asyncio
+async def test_setup_status_token_failure_surfaces_diagnostic(
+    client, db_session, finmind_db_override, monkeypatch,
+):
+    """Empty rows + no token → diagnostic distinguishes from the
+    'token present but quota exhausted' case."""
+    SessionLocal = finmind_db_override
+    await _seed_catalog(SessionLocal)
+
+    async def fake_query(dataset, data_id, start, end=None):
+        return []
+
+    async def fake_get_token():
+        return ""
+
+    monkeypatch.setattr(
+        "data.tw.finmind_connector._query", fake_query,
+    )
+    monkeypatch.setattr(
+        "data.tw.finmind_connector._get_token", fake_get_token,
+    )
+
+    email = "admin_fm_setup_notoken@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.get(
+        "/api/admin/finmind/setup-status", headers=_auth(token),
+    )
+    body = r.json()
+    by_key = {c["key"]: c for c in body["checks"]}
+    assert by_key["finmind_token_works"]["passed"] is False
+    assert "FINMIND_TOKEN empty" in by_key["finmind_token_works"]["detail"]
+
+
+# ── Quick Start ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_quick_start_enables_curated_set(
+    client, db_session, finmind_db_override,
+):
+    """Headline behavior: POST /quick-start flips enabled=true on the
+    11 curated datasets. Verify both the response shape AND the
+    underlying DB rows."""
+    SessionLocal = finmind_db_override
+    await _seed_catalog(SessionLocal)
+
+    email = "admin_fm_qs_curated@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.post(
+        "/api/admin/finmind/quick-start", headers=_auth(token),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    # Curated set has 11 datasets — but some may have empty
+    # local_table (Phase 1 incomplete for them) so enabled_count <=11.
+    assert body["enabled_count"] >= 5
+    assert "TaiwanStockInfo" in body["enabled"]
+    assert "TaiwanStockPrice" in body["enabled"]
+
+    # Verify side effects in DB.
+    from finmind.models.dataset_source import DatasetSource as DS
+    async with SessionLocal() as s:
+        info = await s.get(DS, "TaiwanStockInfo")
+        price = await s.get(DS, "TaiwanStockPrice")
+        assert info.enabled is True
+        assert price.enabled is True
+
+
+@pytest.mark.asyncio
+async def test_quick_start_skips_datasets_without_local_table(
+    client, db_session, finmind_db_override,
+):
+    """Datasets whose Phase 1 migration hasn't built a local_table
+    end up in `skipped` with a clear reason rather than 4xx-ing the
+    whole quick-start. The other recommended ones still flip on."""
+    SessionLocal = finmind_db_override
+    await _seed_catalog(SessionLocal)
+
+    # Force one of the curated datasets into "no local_table" state
+    # to simulate Phase 1 still in progress for it.
+    from finmind.models.dataset_source import DatasetSource as DS
+    async with SessionLocal() as s:
+        row = await s.get(DS, "TaiwanStockMonthRevenue")
+        row.local_table = ""
+        await s.commit()
+
+    email = "admin_fm_qs_skip@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.post(
+        "/api/admin/finmind/quick-start", headers=_auth(token),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    skipped_text = " ".join(body["skipped"])
+    assert "TaiwanStockMonthRevenue" in skipped_text
+    assert "no local_table" in skipped_text
+    # Other datasets still got enabled.
+    assert body["enabled_count"] >= 5
+
+
+@pytest.mark.asyncio
+async def test_quick_start_idempotent_on_second_call(
+    client, db_session, finmind_db_override,
+):
+    """Second call is a no-op (every recommended already enabled).
+    Response shows them in `enabled` but the count stays the same —
+    the operator can repeat the action without double-effect."""
+    SessionLocal = finmind_db_override
+    await _seed_catalog(SessionLocal)
+
+    email = "admin_fm_qs_idem@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r1 = await client.post(
+        "/api/admin/finmind/quick-start", headers=_auth(token),
+    )
+    r2 = await client.post(
+        "/api/admin/finmind/quick-start", headers=_auth(token),
+    )
+    assert r1.status_code == r2.status_code == 200
+    # Same enabled count both times (idempotent invariant).
+    assert r1.json()["enabled_count"] == r2.json()["enabled_count"]
+
+
+@pytest.mark.asyncio
+async def test_quick_start_requires_admin(
+    client, db_session, finmind_db_override,
+):
+    token = await _register_login(client, "viewer_qs@test.com")
+    r = await client.post(
+        "/api/admin/finmind/quick-start", headers=_auth(token),
+    )
+    assert r.status_code == 403
+
+
+# ── FinMind connection self-test ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_test_connection_ok_path(
+    client, db_session, finmind_db_override, monkeypatch,
+):
+    """Happy path: connector returns rows → test reports ok=True
+    with helpful message + counts."""
+    async def fake_query(dataset, data_id, start, end=None):
+        return [{"stock_id": "2330", "stock_name": "TSMC"}]
+
+    async def fake_get_token():
+        return "fake-token-for-test"
+
+    monkeypatch.setattr("data.tw.finmind_connector._query", fake_query)
+    monkeypatch.setattr(
+        "data.tw.finmind_connector._get_token", fake_get_token,
+    )
+
+    email = "admin_fm_test_ok@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.post(
+        "/api/admin/finmind/test-connection", headers=_auth(token),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["token_present"] is True
+    assert body["rows_returned"] == 1
+    assert body["dataset_tested"] == "TaiwanStockInfo"
+    assert "connection OK" in body["message"]
+
+
+@pytest.mark.asyncio
+async def test_test_connection_warns_when_token_missing(
+    client, db_session, finmind_db_override, monkeypatch,
+):
+    """Empty rows + no token → suggest setting FINMIND_TOKEN. The
+    message is the operator's first hint at what's wrong."""
+    async def fake_query(dataset, data_id, start, end=None):
+        return []
+
+    async def fake_get_token():
+        return ""
+
+    monkeypatch.setattr("data.tw.finmind_connector._query", fake_query)
+    monkeypatch.setattr(
+        "data.tw.finmind_connector._get_token", fake_get_token,
+    )
+
+    email = "admin_fm_test_notoken@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.post(
+        "/api/admin/finmind/test-connection", headers=_auth(token),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert body["token_present"] is False
+    assert "FINMIND_TOKEN is empty" in body["message"]
+
+
+@pytest.mark.asyncio
+async def test_test_connection_warns_when_quota_exhausted_with_token(
+    client, db_session, finmind_db_override, monkeypatch,
+):
+    """Empty rows + token present → quota exhausted or tier issue.
+    Different message from the no-token case so the operator can
+    diagnose without server logs."""
+    async def fake_query(dataset, data_id, start, end=None):
+        return []
+
+    async def fake_get_token():
+        return "valid-but-rate-limited-token"
+
+    monkeypatch.setattr("data.tw.finmind_connector._query", fake_query)
+    monkeypatch.setattr(
+        "data.tw.finmind_connector._get_token", fake_get_token,
+    )
+
+    email = "admin_fm_test_quota@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.post(
+        "/api/admin/finmind/test-connection", headers=_auth(token),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert body["token_present"] is True
+    assert "quota exhausted" in body["message"]
+
+
+@pytest.mark.asyncio
+async def test_test_connection_captures_connector_exception(
+    client, db_session, finmind_db_override, monkeypatch,
+):
+    """Network unreachable etc. → exception caught + exposed in message
+    rather than crashing to a 500. UI shows it as the diagnostic
+    banner instead of "Request failed with status code 500"."""
+    async def fake_query(dataset, data_id, start, end=None):
+        raise ConnectionError("FinMind unreachable")
+
+    async def fake_get_token():
+        return "x"
+
+    monkeypatch.setattr("data.tw.finmind_connector._query", fake_query)
+    monkeypatch.setattr(
+        "data.tw.finmind_connector._get_token", fake_get_token,
+    )
+
+    email = "admin_fm_test_err@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.post(
+        "/api/admin/finmind/test-connection", headers=_auth(token),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert "ConnectionError" in body["message"]
+    assert "FinMind unreachable" in body["message"]
+
+
+@pytest.mark.asyncio
+async def test_test_connection_requires_admin(
+    client, db_session, finmind_db_override,
+):
+    """Non-admin → 403. Gate same as every other admin proxy endpoint."""
+    token = await _register_login(client, "viewer_fm_test@test.com")
+    r = await client.post(
+        "/api/admin/finmind/test-connection", headers=_auth(token),
+    )
+    assert r.status_code == 403
+
+
 @pytest.mark.asyncio
 async def test_proxy_lists_catalog_for_admin(
     client, db_session, finmind_db_override,

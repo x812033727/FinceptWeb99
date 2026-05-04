@@ -61,8 +61,38 @@ def test_verify_signature_rejects_wrong_secret():
 
 def test_verify_signature_rejects_malformed_header():
     payload = b'{"id":"evt_1"}'
-    with pytest.raises(SignatureError, match="malformed"):
+    with pytest.raises(SignatureError, match="malformed") as exc_info:
         verify_signature(payload, "garbage,no,delimiters", _TEST_SECRET)
+    # Category attached for ops triage — distinguishes "bot probe"
+    # from "real Stripe event we mishandled".
+    assert exc_info.value.category == "malformed_header"
+
+
+def test_signature_error_categories_are_distinct():
+    """Each failure mode tags the exception with a distinct category
+    string so log parsers can route alerts (deploy misconfig vs
+    replay attack vs bot probe) without parsing the message."""
+    import time
+
+    payload = b'{"id":"evt_1"}'
+
+    with pytest.raises(SignatureError) as e1:
+        verify_signature(payload, "t=1,v1=x", "")
+    assert e1.value.category == "secret_unset"
+
+    with pytest.raises(SignatureError) as e2:
+        verify_signature(payload, "garbage", _TEST_SECRET)
+    assert e2.value.category == "malformed_header"
+
+    with pytest.raises(SignatureError) as e3:
+        verify_signature(payload, "t=0,v1=x", _TEST_SECRET, now=int(time.time()))
+    assert e3.value.category == "stale_timestamp"
+
+    # Real timestamp + wrong signature → mismatch.
+    now = int(time.time())
+    with pytest.raises(SignatureError) as e4:
+        verify_signature(payload, f"t={now},v1=deadbeef", _TEST_SECRET, now=now)
+    assert e4.value.category == "signature_mismatch"
 
 
 def test_verify_signature_rejects_stale_timestamp():

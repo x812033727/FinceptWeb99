@@ -525,10 +525,17 @@ async def stripe_webhook(
     try:
         verify_signature(body, stripe_signature, secret)
     except SignatureError as exc:
-        # Don't leak which check failed — same 401 for malformed,
-        # stale, mismatched, missing-secret. Avoids the endpoint
-        # becoming an oracle for attackers probing the secret.
-        log.warning("stripe webhook signature rejected: %s", exc)
+        # Don't leak which check failed in the HTTP response — same
+        # 401 for malformed / stale / mismatched / missing-secret.
+        # Avoids the endpoint becoming an oracle for attackers probing
+        # the secret. But DO surface the category in the structured
+        # log so ops can distinguish "deploy misconfig" from "replay
+        # attack" from "bot probe" without scrolling timestamps.
+        log.warning(
+            "stripe webhook signature rejected: category=%s detail=%s",
+            getattr(exc, "category", "unknown"),
+            exc,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="invalid Stripe signature",

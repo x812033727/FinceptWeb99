@@ -56,10 +56,18 @@ SIGNATURE_TOLERANCE_SECONDS = 5 * 60
 
 
 class SignatureError(Exception):
-    """Raised when the X-Stripe-Signature header is malformed, doesn't
-    verify against `secret`, or is older than the tolerance window.
-    Caller maps to HTTP 401 — never reveal which check failed (avoids
-    oracle attacks)."""
+    """Raised when a Stripe webhook fails signature verification.
+
+    `category` distinguishes the failure mode for OPS log triage —
+    `secret_unset` means deploy misconfig (we can't accept anything),
+    `malformed_header` means the header wasn't Stripe-format (bot
+    probe?), `stale_timestamp` means replay attack window exceeded,
+    `signature_mismatch` means wrong secret or tampered payload. The
+    HTTP response stays generic 401 to avoid being an oracle."""
+
+    def __init__(self, message: str, category: str = "unknown"):
+        super().__init__(message)
+        self.category = category
 
 
 @dataclass
@@ -91,7 +99,10 @@ def _parse_signature_header(header: str) -> tuple[int, list[str]]:
         elif k == "v1":
             sigs.append(v)
     if timestamp is None or not sigs:
-        raise SignatureError("malformed Stripe-Signature header")
+        raise SignatureError(
+            "malformed Stripe-Signature header",
+            category="malformed_header",
+        )
     return timestamp, sigs
 
 
@@ -105,13 +116,19 @@ def verify_signature(
     Comparison via `hmac.compare_digest` to dodge timing attacks.
     """
     if not secret:
-        raise SignatureError("STRIPE_WEBHOOK_SECRET not configured")
+        raise SignatureError(
+            "STRIPE_WEBHOOK_SECRET not configured",
+            category="secret_unset",
+        )
 
     ts, signatures = _parse_signature_header(signature_header)
 
     actual_now = int(time.time()) if now is None else now
     if abs(actual_now - ts) > SIGNATURE_TOLERANCE_SECONDS:
-        raise SignatureError("signature timestamp outside tolerance window")
+        raise SignatureError(
+            "signature timestamp outside tolerance window",
+            category="stale_timestamp",
+        )
 
     signed_payload = f"{ts}.".encode() + payload
     expected = hmac.new(
@@ -121,7 +138,10 @@ def verify_signature(
     for sig in signatures:
         if hmac.compare_digest(expected, sig):
             return
-    raise SignatureError("no signature matched")
+    raise SignatureError(
+        "no signature matched",
+        category="signature_mismatch",
+    )
 
 
 # ── Event dispatch ──────────────────────────────────────────────
@@ -382,7 +402,18 @@ async def process_event(
     try:
         note = await handler(session, obj)
     except Exception as exc:
-        log.exception("stripe webhook handler crashed: %s", event_type)
+        # Surface enough context for ops to manually audit the
+        # affected customer when the automated path crashes —
+        # `event_id` alone isn't human-debuggable, but with the
+        # subscription id + customer email a support engineer can
+        # cross-reference Stripe dashboard immediately.
+        sub_id = obj.get("id") if isinstance(obj, dict) else None
+        customer_email = _customer_email(obj) if isinstance(obj, dict) else None
+        log.exception(
+            "stripe webhook handler crashed: type=%s event_id=%s "
+            "stripe_object_id=%s customer_email=%s",
+            event_type, event_id, sub_id, customer_email,
+        )
         await _mark_processed(session, event_id, error=repr(exc))
         # Re-raise so the caller can return 500 → Stripe retries.
         raise

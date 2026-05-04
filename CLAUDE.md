@@ -508,6 +508,22 @@ schema in the main DB). Future microservice extraction is one
 to mount the public endpoints; internal tools call the subsystem
 via HTTP, not in-process imports.
 
+**Path A1: separate container (default + recommended)** — keeps
+`FINMIND_USE_MAIN_DB=false` (the default) so the FinMind subsystem
+binds to `FINMIND_DATABASE_URL` (port 5433 by default).
+
+**Path A2: shared main DB with `finmind` schema** — set
+`FINMIND_USE_MAIN_DB=true` to bind the FinMind engine to the main
+app's `DATABASE_URL` instead, with all FinMind tables (and the
+`alembic_version_finmind` ledger) in a dedicated `finmind` Postgres
+schema for namespace isolation. Same architectural property as
+Path A1 — `pg_dump --schema=finmind` ports it back to a standalone
+DB whenever the deployment can run a second container. Use this for
+small / managed deployments that can't (or don't want to) spin up
+`postgres_finmind` separately. Implemented via
+`SET search_path TO finmind, public` on every checked-out connection
+so application queries don't need to qualify table names.
+
 **Module map** (everything under `backend/finmind/`):
 
 | Module | Purpose |
@@ -839,6 +855,8 @@ POLYGON_API_KEY=          # optional — falls back to yfinance
 FRED_API_KEY=             # optional — macro data
 FINNHUB_API_KEY=          # optional — 4th-tier US quote fallback (60/min free)
 FINMIND_TOKEN=            # optional — TW institutional data
+FINMIND_USE_MAIN_DB=false # set true to share main DATABASE_URL via `finmind` schema instead of running postgres_finmind separately
+FINMIND_AUTO_INIT=true    # set false to opt out of lifespan auto-migrate + seed (multi-pod deploys)
 OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
 GEMINI_API_KEY=

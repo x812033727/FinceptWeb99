@@ -60,7 +60,9 @@ def _alembic_config() -> Config:
         raise FileNotFoundError(f"FinMind alembic.ini not found at {ini_path}")
     cfg = Config(str(ini_path))
     cfg.set_main_option("script_location", str(ini_path.parent / "migrations"))
-    cfg.set_main_option("sqlalchemy.url", finmind_settings.FINMIND_DATABASE_URL)
+    cfg.set_main_option(
+        "sqlalchemy.url", finmind_settings.effective_database_url,
+    )
     return cfg
 
 
@@ -68,8 +70,9 @@ def run_migrations() -> None:
     """Apply Alembic migrations up to head."""
     cfg = _alembic_config()
     log.info(
-        "running alembic upgrade head (db=%s)",
-        finmind_settings.FINMIND_DATABASE_URL.rsplit("@", 1)[-1],
+        "running alembic upgrade head (db=%s, schema=%s)",
+        finmind_settings.effective_database_url.rsplit("@", 1)[-1],
+        finmind_settings.schema or "<default>",
     )
     command.upgrade(cfg, "head")
 
@@ -85,7 +88,11 @@ async def check_head() -> int:
     async with finmind_engine.connect() as conn:
         current = await conn.run_sync(
             lambda c: MigrationContext.configure(
-                c, opts={"version_table": "alembic_version_finmind"}
+                c,
+                opts={
+                    "version_table": "alembic_version_finmind",
+                    "version_table_schema": finmind_settings.schema,
+                },
             ).get_current_heads()
         )
     current_set = set(current)

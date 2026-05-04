@@ -33,7 +33,9 @@ from finmind.db.base import Base  # noqa: E402
 import finmind.models  # noqa: E402,F401
 
 config = context.config
-config.set_main_option("sqlalchemy.url", finmind_settings.FINMIND_DATABASE_URL)
+config.set_main_option(
+    "sqlalchemy.url", finmind_settings.effective_database_url,
+)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -55,23 +57,35 @@ def include_object(object, name, type_, reflected, compare_to):
 
 
 _VERSION_TABLE = "alembic_version_finmind"
+_SCHEMA = finmind_settings.schema  # None or 'finmind' when sharing main DB
 
 
 def run_migrations_offline() -> None:
     context.configure(
-        url=finmind_settings.FINMIND_DATABASE_URL,
+        url=finmind_settings.effective_database_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         include_object=include_object,
         compare_type=True,
         version_table=_VERSION_TABLE,
+        version_table_schema=_SCHEMA,
+        include_schemas=_SCHEMA is not None,
     )
     with context.begin_transaction():
         context.run_migrations()
 
 
 def do_run_migrations(connection: Connection) -> None:
+    # When sharing the main DB, ensure the `finmind` schema exists +
+    # set search_path BEFORE any migration runs. Otherwise the first
+    # `op.create_table('dataset_sources', ...)` lands in `public.`.
+    if _SCHEMA is not None:
+        from sqlalchemy import text as _text
+
+        connection.execute(_text(f'CREATE SCHEMA IF NOT EXISTS "{_SCHEMA}"'))
+        connection.execute(_text(f'SET search_path TO "{_SCHEMA}", public'))
+
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
@@ -79,6 +93,8 @@ def do_run_migrations(connection: Connection) -> None:
         compare_type=True,
         transaction_per_migration=True,
         version_table=_VERSION_TABLE,
+        version_table_schema=_SCHEMA,
+        include_schemas=_SCHEMA is not None,
     )
     with context.begin_transaction():
         context.run_migrations()

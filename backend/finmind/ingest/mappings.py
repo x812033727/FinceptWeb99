@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -45,6 +45,17 @@ class DatasetMapping:
     # Optional per-row callback that runs AFTER `column_map` and
     # `extra` apply — for unit conversions, derived columns, etc.
     row_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+    # Optional whole-chunk transform — for wide-format datasets (e.g.
+    # quarterly statements that return one FinMind row per line item)
+    # that need to be pivoted into one local row per period. Mutually
+    # exclusive with row_transform; runner prefers batch_transform when
+    # both are set. Receives the raw FinMind payload (list[dict]) and
+    # returns local-table rows (list[dict]) directly — column_map and
+    # row_transform DO NOT apply on the batch path because the pivot
+    # logic owns column resolution itself.
+    batch_transform: (
+        Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None
+    ) = None
 
 
 class MappingNotFoundError(LookupError):
@@ -167,6 +178,345 @@ def _row_total_margin(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _row_per(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "market": row.get("market", "TWSE"),
+        "symbol": _to_str(row.get("symbol")),
+        "ts": _to_date(row.get("ts")),
+        "per": _to_decimal(row.get("per")),
+        "pbr": _to_decimal(row.get("pbr")),
+        "dividend_yield": _to_decimal(row.get("dividend_yield")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_shareholding(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "market": row.get("market", "TWSE"),
+        "symbol": _to_str(row.get("symbol")),
+        "ts": _to_date(row.get("ts")),
+        "foreign_holding_pct": _to_decimal(row.get("foreign_holding_pct")),
+        "foreign_holding_shares": _to_int(row.get("foreign_holding_shares")),
+        "available_shares": _to_int(row.get("available_shares")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_market_value(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "market": row.get("market", "TWSE"),
+        "symbol": _to_str(row.get("symbol")),
+        "ts": _to_date(row.get("ts")),
+        "market_cap": _to_decimal(row.get("market_cap")),
+        "issued_shares": _to_int(row.get("issued_shares")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_dividend(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "symbol": _to_str(row.get("symbol")),
+        "announce_date": _to_date(row.get("announce_date")),
+        "cash_dividend": _to_decimal(row.get("cash_dividend")),
+        "stock_dividend": _to_decimal(row.get("stock_dividend")),
+        "ex_dividend_date": _to_date(row.get("ex_dividend_date")),
+        "ex_rights_date": _to_date(row.get("ex_rights_date")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_futures_daily(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "contract": _to_str(row.get("contract")),
+        "ts": _to_date(row.get("ts")),
+        "open": _to_decimal(row.get("open")),
+        "high": _to_decimal(row.get("high")),
+        "low": _to_decimal(row.get("low")),
+        "close": _to_decimal(row.get("close")),
+        "volume": _to_int(row.get("volume")),
+        "open_interest": _to_int(row.get("open_interest")),
+        "settlement_price": _to_decimal(row.get("settlement_price")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_option_daily(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "contract": _to_str(row.get("contract")),
+        "strike": _to_decimal(row.get("strike")),
+        "call_put": _to_str(row.get("call_put")),
+        "ts": _to_date(row.get("ts")),
+        "open": _to_decimal(row.get("open")),
+        "high": _to_decimal(row.get("high")),
+        "low": _to_decimal(row.get("low")),
+        "close": _to_decimal(row.get("close")),
+        "volume": _to_int(row.get("volume")),
+        "open_interest": _to_int(row.get("open_interest")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_stock_info(row: dict[str, Any]) -> dict[str, Any]:
+    # FinMind's `industry_category` carries values like "半導體業";
+    # `type` carries the market code (twse / tpex). Normalize to our
+    # internal market labels.
+    market_raw = (row.get("market") or "").lower()
+    market = "TWSE" if "twse" in market_raw or market_raw == "twse" else (
+        "OTC" if market_raw in ("otc", "tpex") else market_raw.upper() or "TWSE"
+    )
+    return {
+        "market": market,
+        "symbol": _to_str(row.get("symbol")),
+        "name_zh": _to_str(row.get("name_zh")),
+        "industry_category": _to_str(row.get("industry_category")),
+        "listed_at": _to_date(row.get("listed_at")),
+        "is_warrant": False,  # FinMind's TaiwanStockInfo is equities only
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_buyback(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "symbol": _to_str(row.get("symbol")),
+        "announced_at": _to_date(row.get("announced_at")),
+        "started_at": _to_date(row.get("started_at")),
+        "ended_at": _to_date(row.get("ended_at")),
+        "plan_shares": _to_int(row.get("plan_shares")),
+        "actual_shares": _to_int(row.get("actual_shares")),
+        "avg_price": _to_decimal(row.get("avg_price")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_news(row: dict[str, Any]) -> dict[str, Any]:
+    """News articles need a sha256 dedup key — sha256(title || link).
+    Mirrors the existing news_articles ingest pattern in the main app
+    so backfilled and live-RSS rows don't double-count by accident."""
+    import hashlib
+
+    title = (row.get("title") or "")
+    link = (row.get("link") or "")
+    sha = hashlib.sha256((title + "||" + link).encode("utf-8")).hexdigest()
+
+    # FinMind's TaiwanStockNews returns `date` as a YYYY-MM-DD string,
+    # but our schema is DateTime — coerce to UTC-midnight so naive
+    # downstream consumers don't trip over date-vs-datetime types.
+    pub = row.get("published_at")
+    if isinstance(pub, str) and pub:
+        try:
+            pub = datetime.fromisoformat(pub[:10]).replace(tzinfo=timezone.utc)
+        except ValueError:
+            pub = None
+    elif isinstance(pub, date) and not isinstance(pub, datetime):
+        pub = datetime.combine(pub, datetime.min.time(), tzinfo=timezone.utc)
+
+    return {
+        "sha256": sha,
+        "market": row.get("market", "TW"),
+        "symbol": _to_str(row.get("symbol")),
+        "title": title[:512] if title else "(untitled)",
+        "link": link or None,
+        "summary": _to_str(row.get("summary")),
+        "published_at": pub,
+        "sentiment_score": None,  # Scored later by the sentiment cron
+        "sentiment_label": None,
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_price_adj(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "market": row.get("market", "TWSE"),
+        "symbol": _to_str(row.get("symbol")),
+        "ts": _to_date(row.get("ts")),
+        "adj_close": _to_decimal(row.get("adj_close")),
+        "adj_factor": _to_decimal(row.get("adj_factor")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+# ── Wide-format pivots (batch_transform) ─────────────────────────
+#
+# FinMind's quarterly statements + market-wide totals return rows in
+# long format — one FinMind row per (entity, period, line item). To
+# populate our wide local-table rows (one per entity-period with
+# typed canonical columns + raw JSONB) we GROUP BY (entity, period)
+# and pivot the `type`/`name` field onto columns. Common helpers live
+# here; per-dataset specifics in the four batch transforms below.
+
+
+def _normalize_period(date_str: str) -> tuple[str, date | None]:
+    """FinMind statement dates come in as either '2024-Q1' or
+    '2024-03-31'. Returns (period_code, period_end_date) — period_code
+    is always YYYYQN for the local schema, and period_end is the
+    quarter-end date when we can derive it.
+    """
+    if not date_str:
+        return "", None
+    s = str(date_str)
+    if "Q" in s:
+        # '2024-Q1' or '2024Q1' — period code as-is, derive quarter end.
+        period = s.replace("-", "")
+        try:
+            year = int(period[:4])
+            q = int(period[-1])
+            month = q * 3
+            day = 31 if month in (3, 12) else 30
+            return period, date(year, month, day)
+        except (ValueError, IndexError):
+            return period, None
+    # YYYY-MM-DD — derive quarter from month.
+    try:
+        d = _to_date(s)
+        if d is None:
+            return "", None
+        q = (d.month - 1) // 3 + 1
+        return f"{d.year}Q{q}", d
+    except Exception:
+        return "", None
+
+
+# FinMind's `type` field uses the English line-item name. Each
+# statement has dozens of types; we only promote the headline ones
+# to typed columns (the rest live in `raw` JSONB for ad-hoc queries).
+
+_INCOME_CANONICAL = {
+    "Revenue": "revenue",
+    "OperatingRevenue": "revenue",
+    "OperatingIncome": "operating_income",
+    "NetIncome": "net_income",
+    "NetIncomeAttributableToParent": "net_income",
+    "EPS": "eps",
+    "BasicEPS": "eps",
+}
+
+_BALANCE_CANONICAL = {
+    "TotalAssets": "total_assets",
+    "TotalLiabilities": "total_liabilities",
+    "Equity": "total_equity",
+    "TotalEquity": "total_equity",
+    "CashAndCashEquivalents": "cash",
+    "Cash": "cash",
+}
+
+_CASHFLOW_CANONICAL = {
+    "CashFlowsFromOperatingActivities": "operating_cash_flow",
+    "CashFlowsFromInvestingActivities": "investing_cash_flow",
+    "CashFlowsFromFinancingActivities": "financing_cash_flow",
+    "FreeCashFlow": "free_cash_flow",
+}
+
+
+def _pivot_statement(
+    rows: list[dict[str, Any]],
+    canonical: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Generic pivot for FinMind statement payloads.
+
+    Groups by (stock_id, date) and emits one row per group with:
+      - typed canonical columns where the line-item name maps
+      - `raw` JSONB containing every line item for ad-hoc queries
+        that need fields outside the canonical set
+    """
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for r in rows:
+        symbol = r.get("stock_id") or r.get("symbol")
+        date_field = r.get("date")
+        if not symbol or not date_field:
+            continue
+        key = (str(symbol), str(date_field))
+
+        period, period_end = _normalize_period(date_field)
+        bucket = grouped.setdefault(
+            key,
+            {
+                "symbol": str(symbol),
+                "period": period,
+                "period_end": period_end,
+                "raw": {},
+                "source": "finmind",
+            },
+        )
+
+        line_type = r.get("type") or ""
+        value = r.get("value")
+        if line_type:
+            bucket["raw"][line_type] = value
+            local_col = canonical.get(line_type)
+            if local_col is not None and local_col not in bucket:
+                bucket[local_col] = _to_decimal(value)
+
+    # Ensure every canonical column is present (None when absent) so
+    # the UPSERT statement has uniform keys across rows.
+    out = []
+    for bucket in grouped.values():
+        for col in set(canonical.values()):
+            bucket.setdefault(col, None)
+        out.append(bucket)
+    return out
+
+
+def _pivot_income_statement(rows):
+    return _pivot_statement(rows, _INCOME_CANONICAL)
+
+
+def _pivot_balance_sheet(rows):
+    return _pivot_statement(rows, _BALANCE_CANONICAL)
+
+
+def _pivot_cash_flow(rows):
+    return _pivot_statement(rows, _CASHFLOW_CANONICAL)
+
+
+# Total institutional investors is a different shape — one row per
+# (date, name) where `name` ∈ {外資/投信/自營商}. Pivot to one row per
+# date with foreign_net / sitc_net / dealer_net derived from buy-sell.
+_INST_NAME_TO_COL = {
+    # FinMind's exact strings — observed values vary slightly over time
+    # so we match on a substring rather than exact equality.
+    "外資": "foreign_net",
+    "Foreign": "foreign_net",
+    "投信": "sitc_net",
+    "Investment_Trust": "sitc_net",
+    "自營商": "dealer_net",
+    "Dealer": "dealer_net",
+}
+
+
+def _pivot_total_institutional(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[date, dict[str, Any]] = {}
+    for r in rows:
+        d = _to_date(r.get("date"))
+        if d is None:
+            continue
+        bucket = grouped.setdefault(
+            d,
+            {
+                "market": "TWSE",
+                "ts": d,
+                "foreign_net": None,
+                "sitc_net": None,
+                "dealer_net": None,
+                "source": "finmind",
+            },
+        )
+        name = str(r.get("name") or "")
+        col = None
+        for needle, candidate_col in _INST_NAME_TO_COL.items():
+            if needle in name:
+                col = candidate_col
+                break
+        if col is None:
+            continue
+        buy = _to_int(r.get("buy")) or 0
+        sell = _to_int(r.get("sell")) or 0
+        # Net = buy - sell. Multiple FinMind rows for the same name
+        # (e.g. 自營商 split into hedging vs proprietary) accumulate.
+        existing = bucket[col] or 0
+        bucket[col] = existing + buy - sell
+    return list(grouped.values())
+
+
 MAPPINGS: dict[str, DatasetMapping] = {
     "TaiwanStockPrice": DatasetMapping(
         dataset_code="TaiwanStockPrice",
@@ -247,6 +597,204 @@ MAPPINGS: dict[str, DatasetMapping] = {
         pk_columns=("market", "ts"),
         extra={"market": "TWSE", "source": "finmind"},
         row_transform=_row_total_margin,
+    ),
+    # ── PER / 估值 ──────────────────────────────────────────────
+    "TaiwanStockPER": DatasetMapping(
+        dataset_code="TaiwanStockPER",
+        local_table="tw_stock_per_daily",
+        column_map={
+            "date": "ts",
+            "stock_id": "symbol",
+            "PER": "per",
+            "PBR": "pbr",
+            "dividend_yield": "dividend_yield",
+        },
+        pk_columns=("market", "symbol", "ts"),
+        extra={"market": "TWSE", "source": "finmind"},
+        row_transform=_row_per,
+    ),
+    # ── 還原股價 ────────────────────────────────────────────────
+    "TaiwanStockPriceAdj": DatasetMapping(
+        dataset_code="TaiwanStockPriceAdj",
+        local_table="tw_stock_price_adj",
+        column_map={
+            "date": "ts",
+            "stock_id": "symbol",
+            # FinMind's TaiwanStockPriceAdj returns the same OHLCV
+            # shape as TaiwanStockPrice but with adjusted values; we
+            # pull the adjusted close into adj_close.
+            "close": "adj_close",
+        },
+        pk_columns=("market", "symbol", "ts"),
+        extra={"market": "TWSE", "source": "finmind"},
+        row_transform=_row_price_adj,
+    ),
+    # ── 外資持股 ────────────────────────────────────────────────
+    "TaiwanStockShareholding": DatasetMapping(
+        dataset_code="TaiwanStockShareholding",
+        local_table="tw_foreign_shareholding",
+        column_map={
+            "date": "ts",
+            "stock_id": "symbol",
+            "ForeignInvestmentRemainingRatio": "foreign_holding_pct",
+            "ForeignInvestmentRemainShares": "foreign_holding_shares",
+            "NumberOfSharesIssued": "available_shares",
+        },
+        pk_columns=("market", "symbol", "ts"),
+        extra={"market": "TWSE", "source": "finmind"},
+        row_transform=_row_shareholding,
+    ),
+    # ── 個股市值 ────────────────────────────────────────────────
+    "TaiwanStockMarketValue": DatasetMapping(
+        dataset_code="TaiwanStockMarketValue",
+        local_table="tw_market_value",
+        column_map={
+            "date": "ts",
+            "stock_id": "symbol",
+            "MarketValue": "market_cap",
+            "shares_issued": "issued_shares",
+        },
+        pk_columns=("market", "symbol", "ts"),
+        extra={"market": "TWSE", "source": "finmind"},
+        row_transform=_row_market_value,
+    ),
+    # ── 股利公告 ────────────────────────────────────────────────
+    "TaiwanStockDividend": DatasetMapping(
+        dataset_code="TaiwanStockDividend",
+        local_table="tw_dividend",
+        column_map={
+            # FinMind returns one row per (stock, year) — `date` is
+            # the announcement date, not ex-date, so it goes to PK.
+            "date": "announce_date",
+            "stock_id": "symbol",
+            "CashEarningsDistribution": "cash_dividend",
+            "StockEarningsDistribution": "stock_dividend",
+            "CashExDividendTradingDate": "ex_dividend_date",
+            "StockExDividendTradingDate": "ex_rights_date",
+        },
+        pk_columns=("symbol", "announce_date"),
+        extra={"source": "finmind"},
+        row_transform=_row_dividend,
+    ),
+    # ── 庫藏股 ──────────────────────────────────────────────────
+    "TaiwanStockBuyBack": DatasetMapping(
+        dataset_code="TaiwanStockBuyBack",
+        local_table="tw_buyback",
+        column_map={
+            "date": "announced_at",
+            "stock_id": "symbol",
+            "BuyBackStartDate": "started_at",
+            "BuyBackEndDate": "ended_at",
+            "BuyBackPlanQuantity": "plan_shares",
+            "BuyBackActualQuantity": "actual_shares",
+            "BuyBackAveragePrice": "avg_price",
+        },
+        pk_columns=("symbol", "announced_at"),
+        extra={"source": "finmind"},
+        row_transform=_row_buyback,
+    ),
+    # ── 上市櫃公司基本資料 ───────────────────────────────────────
+    "TaiwanStockInfo": DatasetMapping(
+        dataset_code="TaiwanStockInfo",
+        local_table="tw_stock_info",
+        column_map={
+            "stock_id": "symbol",
+            "stock_name": "name_zh",
+            "industry_category": "industry_category",
+            "type": "market",
+            "date": "listed_at",
+        },
+        pk_columns=("market", "symbol"),
+        extra={"source": "finmind"},
+        row_transform=_row_stock_info,
+    ),
+    # ── 期貨日成交資訊 ──────────────────────────────────────────
+    "TaiwanFuturesDaily": DatasetMapping(
+        dataset_code="TaiwanFuturesDaily",
+        local_table="tw_futures_daily",
+        column_map={
+            "date": "ts",
+            "futures_id": "contract",
+            "open": "open",
+            "max": "high",
+            "min": "low",
+            "close": "close",
+            "volume": "volume",
+            "open_interest": "open_interest",
+            "settlement_price": "settlement_price",
+        },
+        pk_columns=("contract", "ts"),
+        extra={"source": "finmind"},
+        row_transform=_row_futures_daily,
+    ),
+    # ── 選擇權日成交資訊 ─────────────────────────────────────────
+    "TaiwanOptionDaily": DatasetMapping(
+        dataset_code="TaiwanOptionDaily",
+        local_table="tw_option_daily",
+        column_map={
+            "date": "ts",
+            "option_id": "contract",
+            "strike_price": "strike",
+            "call_put": "call_put",
+            "open": "open",
+            "max": "high",
+            "min": "low",
+            "close": "close",
+            "volume": "volume",
+            "open_interest": "open_interest",
+        },
+        pk_columns=("contract", "strike", "call_put", "ts"),
+        extra={"source": "finmind"},
+        row_transform=_row_option_daily,
+    ),
+    # ── 季報三表 (wide-format batch_transform) ─────────────────
+    "TaiwanStockFinancialStatements": DatasetMapping(
+        dataset_code="TaiwanStockFinancialStatements",
+        local_table="tw_income_statement",
+        column_map={},  # ignored — batch_transform owns column resolution
+        pk_columns=("symbol", "period"),
+        batch_transform=_pivot_income_statement,
+    ),
+    "TaiwanStockBalanceSheet": DatasetMapping(
+        dataset_code="TaiwanStockBalanceSheet",
+        local_table="tw_balance_sheet",
+        column_map={},
+        pk_columns=("symbol", "period"),
+        batch_transform=_pivot_balance_sheet,
+    ),
+    "TaiwanStockCashFlowsStatement": DatasetMapping(
+        dataset_code="TaiwanStockCashFlowsStatement",
+        local_table="tw_cash_flow",
+        column_map={},
+        pk_columns=("symbol", "period"),
+        batch_transform=_pivot_cash_flow,
+    ),
+    # ── 整體市場三大法人 (long → wide pivot) ────────────────────
+    "TaiwanStockTotalInstitutionalInvestors": DatasetMapping(
+        dataset_code="TaiwanStockTotalInstitutionalInvestors",
+        local_table="tw_total_inst_daily",
+        column_map={},
+        pk_columns=("market", "ts"),
+        batch_transform=_pivot_total_institutional,
+    ),
+    # ── 新聞 ────────────────────────────────────────────────────
+    "TaiwanStockNews": DatasetMapping(
+        dataset_code="TaiwanStockNews",
+        local_table="tw_news_articles",
+        column_map={
+            "date": "published_at",
+            "stock_id": "symbol",
+            "title": "title",
+            "link": "link",
+            "description": "summary",
+        },
+        # `tw_news_articles` PK is `id` (autoincrement) with a UNIQUE
+        # on `sha256` for dedup. Listing `sha256` as the conflict key
+        # makes the UPSERT idempotent across re-ingest of the same
+        # article from different sources (FinMind + Google RSS).
+        pk_columns=("sha256",),
+        extra={"market": "TW", "source": "finmind"},
+        row_transform=_row_news,
     ),
 }
 

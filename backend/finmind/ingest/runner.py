@@ -120,15 +120,24 @@ def _build_upsert_sql(
 
 
 def _coerce_for_binding(value: Any) -> Any:
-    """SQLite's binary protocol rejects `decimal.Decimal` — round-trip
-    via str preserves precision in both Postgres NUMERIC and SQLite
-    TEXT columns, and the SQLAlchemy type coercion on read returns
-    Decimal again on Postgres. (PG's asyncpg accepts Decimal natively
-    so this no-op is harmless there.)"""
+    """Both DBAPIs (asyncpg, aiosqlite) reject some Python types when
+    bound through raw `text()` queries:
+
+      - `decimal.Decimal` → SQLite has no native Decimal support; we
+        round-trip via str which preserves precision in PG NUMERIC
+        and SQLite TEXT alike.
+      - `dict` / `list` (for JSON / JSONB columns) → SQLite needs a
+        JSON string. PG's asyncpg accepts native Python objects when
+        the column type is registered, but raw `text()` bypasses that
+        so we serialize for both.
+    """
+    import json
     from decimal import Decimal
 
     if isinstance(value, Decimal):
         return str(value)
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, default=str, ensure_ascii=False)
     return value
 
 
@@ -261,7 +270,15 @@ async def ingest_chunk(
         raw_rows = await upstream.fetch(
             dataset_code, symbol, range_start, range_end
         )
-        transformed = [transform_row(r, mapping) for r in raw_rows]
+        # Wide-format datasets (quarterly statements, market-wide
+        # institutional totals) need to pivot N FinMind rows → 1
+        # local row. When `batch_transform` is set on the mapping
+        # the runner delegates the entire chunk to it; otherwise
+        # the per-row `transform_row` path runs (the common case).
+        if mapping.batch_transform is not None:
+            transformed = mapping.batch_transform(raw_rows)
+        else:
+            transformed = [transform_row(r, mapping) for r in raw_rows]
         # Drop rows whose PK columns are NULL — corrupt upstream data
         # otherwise raises a constraint violation that aborts the
         # transaction and leaves the chunk stuck running.

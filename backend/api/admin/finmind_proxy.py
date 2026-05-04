@@ -683,7 +683,7 @@ async def run_due(_: Admin, db: FmDb) -> RunDueResponse:
 
     # Same defensive try/except pattern as run_dataset above —
     # surface the real cause (e.g. "OperationalError: relation
-    # 'tw_stock_info' does not exist" → operator forgot init_db,
+    # 'tw_stock_info' does not exist" → catalog seed didn't land,
     # or "ConnectionRefusedError" → finmind_clone DB not reachable)
     # to the frontend instead of a generic 500.
     try:
@@ -695,11 +695,10 @@ async def run_due(_: Admin, db: FmDb) -> RunDueResponse:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=(
                 f"run_due_now raised: {exc.__class__.__name__}: "
-                f"{exc!s}. Most likely causes: (1) `python -m "
-                f"finmind.scripts.init_db` not run yet — required "
-                f"after first deploy or after migrations 0001-0011; "
-                f"(2) finmind_clone DB unreachable at "
-                f"FINMIND_DATABASE_URL."
+                f"{exc!s}. Most likely cause: finmind_clone DB "
+                f"unreachable at FINMIND_DATABASE_URL — start the "
+                f"`postgres_finmind` container and restart the backend "
+                f"so the lifespan auto-init can migrate + seed."
             ),
         ) from exc
 
@@ -1008,8 +1007,9 @@ async def setup_status(_: Admin, db: FmDb) -> SetupStatusResponse:
         detail=catalog_detail,
         fix_hint=(
             "" if catalog_seeded else
-            "Run `cd backend && python -m finmind.scripts.init_db` "
-            "to apply migrations + seed the routing table."
+            "Restart the backend — the lifespan auto-init will run "
+            "alembic + seed the catalog automatically. (Or run "
+            "manually: `cd backend && python -m finmind.scripts.init_db`.)"
         ),
     ))
 

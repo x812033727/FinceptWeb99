@@ -24,6 +24,7 @@ so the frontend doesn't have to know it's a proxy.
 """
 from __future__ import annotations
 
+import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -35,6 +36,8 @@ from auth.permissions import require_admin
 from finmind.db.session import get_finmind_db
 from finmind.models.dataset_source import DatasetSource
 from models.user import User
+
+log = logging.getLogger("api.admin.finmind_proxy")
 
 router = APIRouter()
 
@@ -177,12 +180,139 @@ async def finmind_status(_: Admin, db: FmDb) -> dict[str, Any]:
     return payload
 
 
+# ── Plan management ─────────────────────────────────────────────
+
+
+class PlanItem(BaseModel):
+    code: str
+    name: str
+    price_monthly: float | None
+    price_yearly: float | None
+    currency: str
+    allowed_datasets: list[str] | None
+    quota_daily_calls: int
+    quota_daily_rows: int
+    enabled: bool
+
+
+class PlanUpsert(BaseModel):
+    """Both POST (create) and PUT (update) take this shape — `code` is
+    the primary key, idempotent UPSERT semantics."""
+
+    name: str
+    price_monthly: float | None = None
+    price_yearly: float | None = None
+    currency: str = "TWD"
+    allowed_datasets: list[str] | None = None
+    quota_daily_calls: int = 1000
+    quota_daily_rows: int = 100_000
+    enabled: bool = True
+
+
+def _plan_to_item(p) -> PlanItem:
+    return PlanItem(
+        code=p.code,
+        name=p.name,
+        price_monthly=float(p.price_monthly) if p.price_monthly else None,
+        price_yearly=float(p.price_yearly) if p.price_yearly else None,
+        currency=p.currency,
+        allowed_datasets=p.allowed_datasets,
+        quota_daily_calls=p.quota_daily_calls,
+        quota_daily_rows=p.quota_daily_rows,
+        enabled=p.enabled,
+    )
+
+
+@router.get(
+    "/plans",
+    response_model=list[PlanItem],
+    summary="AdminPage: list every pricing plan",
+)
+async def list_plans(_: Admin, db: FmDb) -> list[PlanItem]:
+    from finmind.models.billing import Plan
+
+    rows = (
+        await db.execute(select(Plan).order_by(Plan.code))
+    ).scalars().all()
+    return [_plan_to_item(p) for p in rows]
+
+
+@router.put(
+    "/plans/{code}",
+    response_model=PlanItem,
+    summary="AdminPage: create-or-update a plan (UPSERT on code)",
+)
+async def upsert_plan(
+    code: str, body: PlanUpsert, _: Admin, db: FmDb,
+) -> PlanItem:
+    """Idempotent UPSERT — same endpoint creates a new plan AND updates
+    an existing one. Path `code` is the source of truth."""
+    from finmind.models.billing import Plan
+
+    existing = await db.get(Plan, code)
+    if existing is None:
+        existing = Plan(
+            code=code,
+            name=body.name,
+            price_monthly=body.price_monthly,
+            price_yearly=body.price_yearly,
+            currency=body.currency,
+            allowed_datasets=body.allowed_datasets,
+            quota_daily_calls=body.quota_daily_calls,
+            quota_daily_rows=body.quota_daily_rows,
+            enabled=body.enabled,
+        )
+        db.add(existing)
+    else:
+        existing.name = body.name
+        existing.price_monthly = body.price_monthly
+        existing.price_yearly = body.price_yearly
+        existing.currency = body.currency
+        existing.allowed_datasets = body.allowed_datasets
+        existing.quota_daily_calls = body.quota_daily_calls
+        existing.quota_daily_rows = body.quota_daily_rows
+        existing.enabled = body.enabled
+    await db.commit()
+    await db.refresh(existing)
+    return _plan_to_item(existing)
+
+
+@router.delete(
+    "/plans/{code}",
+    status_code=204,
+    summary="AdminPage: disable a plan (soft — keeps subscriptions valid)",
+)
+async def disable_plan(code: str, _: Admin, db: FmDb) -> None:
+    """Soft disable — flips `enabled=false`. Existing subscriptions
+    on this plan keep working (the resolve-plan-limits path falls
+    back to free-tier defaults when the plan is disabled, so cust-
+    omers gracefully degrade rather than getting 503'd)."""
+    from sqlalchemy import update
+
+    from finmind.models.billing import Plan
+
+    result = await db.execute(
+        update(Plan).where(Plan.code == code).values(enabled=False)
+    )
+    if result.rowcount == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"unknown plan: {code}",
+        )
+    await db.commit()
+
+
 # ── API key management ─────────────────────────────────────────
 
 
 class IssueKeyRequest(BaseModel):
     owner_email: str
     name: str | None = None
+    # Optional: link to a plan via auto-created Subscription. When
+    # None / absent / unknown, key starts on free-tier defaults
+    # (100 calls / 10K rows per day per
+    # `finmind.billing.quota._FREE_TIER_*`).
+    plan_code: str | None = None
 
 
 class IssuedKeyResponse(BaseModel):
@@ -194,6 +324,8 @@ class IssuedKeyResponse(BaseModel):
     plaintext: str
     prefix: str
     owner_email: str
+    plan_code: str | None
+    subscription_id: int | None
 
 
 class ApiKeyItem(BaseModel):
@@ -207,36 +339,69 @@ class ApiKeyItem(BaseModel):
     expires_at: str | None
     last_used_at: str | None
     created_at: str
+    plan_code: str | None  # joined from subscriptions
+    subscription_id: int | None
 
 
 @router.post(
     "/keys",
     response_model=IssuedKeyResponse,
-    summary="AdminPage: issue a new fck_live_ key",
+    summary="AdminPage: issue a new fck_live_ key (with optional plan)",
 )
 async def issue_finmind_key(
     body: IssueKeyRequest, _: Admin, db: FmDb,
 ) -> IssuedKeyResponse:
     """Generates a fresh `fck_live_<prefix><suffix>` key, persists
     sha256 + prefix only, and returns the plaintext for one-time
-    display. Operator is responsible for delivering it to the
-    customer out-of-band; the record_id can be used later to revoke.
+    display.
 
-    No subscription wiring here — the key starts on free-tier limits
-    until an operator manually links it via SQL. A future PR can
-    add a subscription_id input + plan selector."""
+    When `plan_code` is supplied AND a matching enabled Plan exists,
+    creates a Subscription (status='active', started_at=today) and
+    links the new ApiKey to it. The customer's quota then comes
+    from `plans.quota_daily_*` instead of free-tier defaults.
+
+    Unknown / disabled plan_code falls back silently to free-tier
+    (rather than 4xx-erroring) — operator can spot the missing link
+    in the keys table and re-link explicitly."""
+    from datetime import date
+
     from finmind.billing.keys import issue_key
+    from finmind.models.billing import Plan, Subscription
+
+    subscription_id: int | None = None
+    resolved_plan_code: str | None = None
+    if body.plan_code:
+        plan = await db.get(Plan, body.plan_code)
+        if plan is not None and plan.enabled:
+            sub = Subscription(
+                owner_email=body.owner_email,
+                plan_code=body.plan_code,
+                status="active",
+                started_at=date.today(),
+                expires_at=None,
+                external_provider=None,  # operator-issued, no Stripe link
+                external_sub_id=None,
+                auto_renew=False,
+            )
+            db.add(sub)
+            await db.commit()
+            await db.refresh(sub)
+            subscription_id = sub.id
+            resolved_plan_code = body.plan_code
 
     issued = await issue_key(
         db,
         owner_email=body.owner_email,
         name=body.name,
+        subscription_id=subscription_id,
     )
     return IssuedKeyResponse(
         record_id=issued.record_id,
         plaintext=issued.plaintext,
         prefix=issued.prefix,
         owner_email=body.owner_email,
+        plan_code=resolved_plan_code,
+        subscription_id=subscription_id,
     )
 
 
@@ -246,25 +411,35 @@ async def issue_finmind_key(
     summary="AdminPage: list every issued key (no plaintext / hash)",
 )
 async def list_finmind_keys(_: Admin, db: FmDb) -> list[ApiKeyItem]:
-    from finmind.models.billing import ApiKey
+    """Joins api_keys → subscriptions to surface plan_code per row.
+    Free-tier keys (no subscription) show plan_code=None — frontend
+    renders these with a muted "free" badge."""
+    from finmind.models.billing import ApiKey, Subscription
 
+    # LEFT JOIN — include keys with no subscription (free-tier).
     rows = (
         await db.execute(
-            select(ApiKey).order_by(ApiKey.created_at.desc())
+            select(ApiKey, Subscription.plan_code)
+            .outerjoin(
+                Subscription, ApiKey.subscription_id == Subscription.id,
+            )
+            .order_by(ApiKey.created_at.desc())
         )
-    ).scalars().all()
+    ).all()
     return [
         ApiKeyItem(
-            id=r.id,
-            prefix=r.prefix,
-            owner_email=r.owner_email,
-            name=r.name,
-            enabled=r.enabled,
-            expires_at=r.expires_at.isoformat() if r.expires_at else None,
+            id=r[0].id,
+            prefix=r[0].prefix,
+            owner_email=r[0].owner_email,
+            name=r[0].name,
+            enabled=r[0].enabled,
+            expires_at=r[0].expires_at.isoformat() if r[0].expires_at else None,
             last_used_at=(
-                r.last_used_at.isoformat() if r.last_used_at else None
+                r[0].last_used_at.isoformat() if r[0].last_used_at else None
             ),
-            created_at=r.created_at.isoformat(),
+            created_at=r[0].created_at.isoformat(),
+            plan_code=r[1],
+            subscription_id=r[0].subscription_id,
         )
         for r in rows
     ]
@@ -377,13 +552,27 @@ async def run_dataset(
         else end - _td(days=7)
     )
 
-    result = await ingest_chunk(
-        db,
-        dataset_code=dataset_code,
-        symbol=body.symbol,
-        range_start=start,
-        range_end=end,
-    )
+    # Wrap in try/except so a runtime error inside ingest_chunk OR
+    # any of its transitive dependencies (FinMind connector, db
+    # transaction, mapping resolution) surfaces as a 500 with a
+    # human-readable detail field instead of FastAPI's default
+    # generic 500-page. Frontend reads `error.response.data.detail`
+    # to render the actual cause.
+    try:
+        result = await ingest_chunk(
+            db,
+            dataset_code=dataset_code,
+            symbol=body.symbol,
+            range_start=start,
+            range_end=end,
+        )
+    except Exception as exc:
+        log.exception("run_dataset crashed: %s", dataset_code)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"ingest_chunk raised: {exc.__class__.__name__}: {exc!s}",
+        ) from exc
+
     return RunDatasetResult(
         dataset_code=dataset_code,
         symbol=body.symbol,
@@ -432,8 +621,27 @@ async def run_due(_: Admin, db: FmDb) -> RunDueResponse:
         run_due_now,
     )
 
-    universe = await get_universe_from_tw_stock_info(db)
-    outcomes = await run_due_now(db, symbols=universe)
+    # Same defensive try/except pattern as run_dataset above —
+    # surface the real cause (e.g. "OperationalError: relation
+    # 'tw_stock_info' does not exist" → operator forgot init_db,
+    # or "ConnectionRefusedError" → finmind_clone DB not reachable)
+    # to the frontend instead of a generic 500.
+    try:
+        universe = await get_universe_from_tw_stock_info(db)
+        outcomes = await run_due_now(db, symbols=universe)
+    except Exception as exc:
+        log.exception("run_due crashed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                f"run_due_now raised: {exc.__class__.__name__}: "
+                f"{exc!s}. Most likely causes: (1) `python -m "
+                f"finmind.scripts.init_db` not run yet — required "
+                f"after first deploy or after migrations 0001-0011; "
+                f"(2) finmind_clone DB unreachable at "
+                f"FINMIND_DATABASE_URL."
+            ),
+        ) from exc
 
     items = [
         RunDatasetResult(

@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { CollapsibleHeader, useCollapsible } from "@/components/Collapsible";
-import api from "@/lib/api";
+import api, { errorDetail } from "@/lib/api";
 
 /**
  * AdminPage card for the FinMind clone subsystem (`backend/finmind/`).
@@ -101,7 +101,7 @@ function ProgressBar({ built, total }: { built: number; total: number }) {
 }
 
 export default function FinmindAdminCard() {
-  const { isOpen, toggle } = useCollapsible("admin-finmind", false);
+  const { open, toggle } = useCollapsible("admin-finmind", false);
   const queryClient = useQueryClient();
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [showOnlyEnabled, setShowOnlyEnabled] = useState(false);
@@ -112,7 +112,7 @@ export default function FinmindAdminCard() {
       const r = await api.get<FinmindStatus>("/admin/finmind/status");
       return r.data;
     },
-    enabled: isOpen,
+    enabled: open,
     refetchInterval: 30_000,
   });
 
@@ -122,7 +122,7 @@ export default function FinmindAdminCard() {
       const r = await api.get<FinmindDataset[]>("/admin/finmind/datasets");
       return r.data;
     },
-    enabled: isOpen,
+    enabled: open,
   });
 
   // "Run all due now" button — fires `run_due_now` server-side. The
@@ -215,17 +215,17 @@ export default function FinmindAdminCard() {
             ? `${statusQuery.data.catalog.seeded}/${statusQuery.data.catalog.expected} datasets · ${statusQuery.data.active_ingestion.enabled} enabled · alembic ${statusQuery.data.alembic.current ?? "n/a"}`
             : "click to expand"
         }
-        isOpen={isOpen}
-        onToggle={toggle}
+        open={open}
+        toggle={toggle}
       />
 
-      {isOpen && (
+      {open && (
         <div className="mt-4 space-y-6">
           {/* Status banner ─────────────────────────── */}
           {statusQuery.isError && (
             <div className="rounded border border-destructive bg-destructive/10 p-3 text-sm">
               Failed to load FinMind status:{" "}
-              {String((statusQuery.error as Error).message)}
+              {errorDetail(statusQuery.error)}
               <div className="mt-1 text-xs text-muted-foreground">
                 Most likely the FinMind clone DB isn&apos;t reachable. Run{" "}
                 <code className="rounded bg-muted px-1">
@@ -348,8 +348,8 @@ export default function FinmindAdminCard() {
               </div>
             )}
             {runDueMutation.isError && (
-              <div className="mt-2 text-xs text-destructive">
-                Run failed: {String((runDueMutation.error as Error).message)}
+              <div className="mt-2 break-words text-xs text-destructive">
+                Run failed: {errorDetail(runDueMutation.error)}
               </div>
             )}
           </div>

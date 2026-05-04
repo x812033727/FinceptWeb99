@@ -650,6 +650,214 @@ async def test_revoke_key_404_for_unknown(
     assert r.status_code == 404
 
 
+# ── Plans CRUD ──────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_list_plans_empty(
+    client, db_session, finmind_db_override,
+):
+    email = "admin_plans_empty@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.get(
+        "/api/admin/finmind/plans", headers=_auth(token),
+    )
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+@pytest.mark.asyncio
+async def test_upsert_plan_creates_then_updates(
+    client, db_session, finmind_db_override,
+):
+    """Same PUT endpoint creates the plan first time, updates the
+    second — idempotent contract the frontend relies on."""
+    email = "admin_plans_upsert@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.put(
+        "/api/admin/finmind/plans/pro",
+        json={
+            "name": "Pro",
+            "price_monthly": 990,
+            "quota_daily_calls": 10_000,
+            "quota_daily_rows": 1_000_000,
+        },
+        headers=_auth(token),
+    )
+    assert r.status_code == 200
+    assert r.json()["code"] == "pro"
+    assert r.json()["quota_daily_calls"] == 10_000
+
+    r = await client.put(
+        "/api/admin/finmind/plans/pro",
+        json={
+            "name": "Pro (updated)",
+            "price_monthly": 1990,
+            "quota_daily_calls": 20_000,
+            "quota_daily_rows": 2_000_000,
+        },
+        headers=_auth(token),
+    )
+    assert r.status_code == 200
+    assert r.json()["name"] == "Pro (updated)"
+    assert r.json()["quota_daily_calls"] == 20_000
+
+    listing = await client.get(
+        "/api/admin/finmind/plans", headers=_auth(token),
+    )
+    assert len(listing.json()) == 1
+
+
+@pytest.mark.asyncio
+async def test_disable_plan_soft_deletes(
+    client, db_session, finmind_db_override,
+):
+    """DELETE flips enabled=false rather than removing the row —
+    keeps subscriptions FK-valid."""
+    email = "admin_plans_disable@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    await client.put(
+        "/api/admin/finmind/plans/lite",
+        json={"name": "Lite", "quota_daily_calls": 500, "quota_daily_rows": 50_000},
+        headers=_auth(token),
+    )
+    r = await client.delete(
+        "/api/admin/finmind/plans/lite", headers=_auth(token),
+    )
+    assert r.status_code == 204
+
+    listing = await client.get(
+        "/api/admin/finmind/plans", headers=_auth(token),
+    )
+    plan = next(p for p in listing.json() if p["code"] == "lite")
+    assert plan["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_disable_plan_404_for_unknown(
+    client, db_session, finmind_db_override,
+):
+    email = "admin_plans_404@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.delete(
+        "/api/admin/finmind/plans/nope", headers=_auth(token),
+    )
+    assert r.status_code == 404
+
+
+# ── Key-to-plan linking ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_issue_key_with_plan_creates_subscription(
+    client, db_session, finmind_db_override,
+):
+    """Headline integration: POST /keys with plan_code → backend
+    creates an active Subscription and links the new ApiKey to it."""
+    SessionLocal = finmind_db_override
+
+    email = "admin_keys_plan@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    await client.put(
+        "/api/admin/finmind/plans/pro",
+        json={
+            "name": "Pro",
+            "price_monthly": 990,
+            "quota_daily_calls": 10_000,
+            "quota_daily_rows": 1_000_000,
+        },
+        headers=_auth(token),
+    )
+
+    r = await client.post(
+        "/api/admin/finmind/keys",
+        json={
+            "owner_email": "customer@example.com",
+            "plan_code": "pro",
+        },
+        headers=_auth(token),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["plan_code"] == "pro"
+    assert body["subscription_id"] is not None
+
+    listing = await client.get(
+        "/api/admin/finmind/keys", headers=_auth(token),
+    )
+    key = next(k for k in listing.json() if k["id"] == body["record_id"])
+    assert key["plan_code"] == "pro"
+    assert key["subscription_id"] == body["subscription_id"]
+
+    from finmind.models.billing import Subscription
+    async with SessionLocal() as s:
+        sub = await s.get(Subscription, body["subscription_id"])
+        assert sub is not None
+        assert sub.owner_email == "customer@example.com"
+        assert sub.plan_code == "pro"
+        assert sub.status == "active"
+
+
+@pytest.mark.asyncio
+async def test_issue_key_with_unknown_plan_falls_back_to_free_tier(
+    client, db_session, finmind_db_override,
+):
+    """Unknown plan_code shouldn't 4xx — operator notices the missing
+    link in the keys table and re-links explicitly."""
+    email = "admin_keys_unknownplan@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.post(
+        "/api/admin/finmind/keys",
+        json={
+            "owner_email": "customer@example.com",
+            "plan_code": "definitely_not_a_plan",
+        },
+        headers=_auth(token),
+    )
+    assert r.status_code == 200
+    assert r.json()["plan_code"] is None
+    assert r.json()["subscription_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_issue_key_with_disabled_plan_falls_back_to_free_tier(
+    client, db_session, finmind_db_override,
+):
+    """Plan exists but enabled=false — same fallback as unknown."""
+    email = "admin_keys_disabled@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    await client.put(
+        "/api/admin/finmind/plans/sunset",
+        json={"name": "Sunset", "quota_daily_calls": 100, "quota_daily_rows": 1_000},
+        headers=_auth(token),
+    )
+    await client.delete(
+        "/api/admin/finmind/plans/sunset", headers=_auth(token),
+    )
+
+    r = await client.post(
+        "/api/admin/finmind/keys",
+        json={"owner_email": "x@x.com", "plan_code": "sunset"},
+        headers=_auth(token),
+    )
+    assert r.status_code == 200
+    assert r.json()["plan_code"] is None
+
+
 @pytest.mark.asyncio
 async def test_run_due_invokes_runner_for_enabled_datasets(
     client, db_session, finmind_db_override, monkeypatch,

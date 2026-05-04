@@ -35,10 +35,22 @@ Datasets handled:
        TWSE BWIBBU_ALL — today's PER / PBR / 殖利率 cross-section
        in one call. No historical depth, so deep backfill stays on
        FinMind; Phase B coverage here is for daily-cron freshness.
+  - TaiwanStockTotalReturnIndex
+       TWSE FMTQIK (price-index close) — NOT the dividend-reinvested
+       TR index FinMind returns. Phase B fallback is "good enough
+       for daily-cron freshness"; operators wanting the actual TR
+       series should keep active_source='finmind' for this one.
 
-Future expansion: add `TaiwanStockTotalInstitutionalInvestors`,
-`TaiwanStockTotalMarginPurchaseShortSale`, `TaiwanStockMarketValueWeight`,
-etc. — each is one new branch in the dispatch table.
+Deferred (need NEW functions in `data.tw.twse_connector` before they
+can be wrapped):
+  - TaiwanStockShareholding (MI_QFIIS endpoint)
+  - TaiwanStockDayTrading (TWTB4U endpoint)
+  - TaiwanStockTotalMarginPurchaseShortSale (MI_MARGN_SUMMARY)
+  - TaiwanStockTotalInstitutionalInvestors (BFI82U)
+  - TaiwanStockMarketValueWeight (FMSRFK)
+Each is mechanical (wrap an HTTP call + Big5/JSON parse) but needs
+real-environment validation against TWSE's actual response shape
+before the handler is trustworthy.
 
 Caveats:
   - TWSE rate limit (`asyncio.Semaphore(1)` + 1.1s delay per request,
@@ -257,6 +269,46 @@ async def _fetch_per(
     return out
 
 
+async def _fetch_total_return_index(
+    symbol: str | None, start: date, end: date
+) -> list[dict[str, Any]]:
+    """TaiwanStockTotalReturnIndex — proxied via TWSE FMTQIK.
+
+    Honest caveat: FMTQIK is the price-index close (TAIEX), NOT the
+    true total-return index that includes dividends. FinMind's
+    TaiwanStockTotalReturnIndex returns the dividend-reinvested
+    series. Phase B coverage here is "good enough for daily-cron
+    freshness on the price index" — operators wanting the actual
+    TR series should keep active_source='finmind' for this dataset.
+
+    The wrapper iterates monthly chunks (FMTQIK returns one month
+    per call) and clips to [start, end]. Output shape matches the
+    existing TaiwanStockTotalReturnIndex row_transform input
+    (date / stock_id / value)."""
+    del symbol  # market-wide endpoint, no symbol filter (always TAIEX)
+    from data.tw.twse_connector import get_taiex_history
+
+    out: list[dict[str, Any]] = []
+    for month_start in _month_starts(start, end):
+        rows = await get_taiex_history(month_start)
+        for r in rows:
+            d = r.get("time")
+            if not d:
+                continue
+            try:
+                d_obj = date.fromisoformat(str(d))
+            except ValueError:
+                continue
+            if d_obj < start or d_obj > end:
+                continue
+            out.append({
+                "date": d_obj.isoformat(),
+                "stock_id": "TAIEX",
+                "value": r.get("close"),
+            })
+    return out
+
+
 # ── Dispatch table ──────────────────────────────────────────────
 
 _DISPATCH = {
@@ -265,6 +317,7 @@ _DISPATCH = {
     "TaiwanStockMarginPurchaseShortSale": _fetch_margin,
     "TaiwanStockInfo": _fetch_stock_info,
     "TaiwanStockPER": _fetch_per,
+    "TaiwanStockTotalReturnIndex": _fetch_total_return_index,
 }
 
 

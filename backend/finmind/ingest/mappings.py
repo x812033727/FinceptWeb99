@@ -335,6 +335,87 @@ def _row_price_adj(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _row_dividend_result(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "symbol": _to_str(row.get("symbol")),
+        "ex_date": _to_date(row.get("ex_date")),
+        "before_price": _to_decimal(row.get("before_price")),
+        "after_price": _to_decimal(row.get("after_price")),
+        "cash_dividend": _to_decimal(row.get("cash_dividend")),
+        "stock_dividend": _to_decimal(row.get("stock_dividend")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_split(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "symbol": _to_str(row.get("symbol")),
+        "ex_date": _to_date(row.get("ex_date")),
+        "before_price": _to_decimal(row.get("before_price")),
+        "after_price": _to_decimal(row.get("after_price")),
+        "split_ratio": _to_decimal(row.get("split_ratio")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_day_trade(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "market": row.get("market", "TWSE"),
+        "symbol": _to_str(row.get("symbol")),
+        "ts": _to_date(row.get("ts")),
+        "buy_volume": _to_int(row.get("buy_volume")),
+        "sell_volume": _to_int(row.get("sell_volume")),
+        "buy_amount": _to_decimal(row.get("buy_amount")),
+        "sell_amount": _to_decimal(row.get("sell_amount")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_securities_lending(row: dict[str, Any]) -> dict[str, Any]:
+    """tw_securities_lending PK is (market, symbol, ts,
+    transaction_type) — default transaction_type to '_' so FinMind
+    rows without that field still satisfy the NOT NULL PK column."""
+    return {
+        "market": row.get("market", "TWSE"),
+        "symbol": _to_str(row.get("symbol")),
+        "ts": _to_date(row.get("ts")),
+        "transaction_type": _to_str(row.get("transaction_type")) or "_",
+        "volume": _to_int(row.get("volume")),
+        "fee_rate": _to_decimal(row.get("fee_rate")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_futures_inst(row: dict[str, Any]) -> dict[str, Any]:
+    """Both day-session and night-session FinMind rows route through
+    here; the per-mapping `extra` dict injects the appropriate
+    `session` value ('day' / 'night')."""
+    return {
+        "contract": _to_str(row.get("contract")),
+        "ts": _to_date(row.get("ts")),
+        "session": row.get("session", "day"),
+        "foreign_long_open_interest": _to_int(
+            row.get("foreign_long_open_interest")
+        ),
+        "foreign_short_open_interest": _to_int(
+            row.get("foreign_short_open_interest")
+        ),
+        "sitc_long_open_interest": _to_int(
+            row.get("sitc_long_open_interest")
+        ),
+        "sitc_short_open_interest": _to_int(
+            row.get("sitc_short_open_interest")
+        ),
+        "dealer_long_open_interest": _to_int(
+            row.get("dealer_long_open_interest")
+        ),
+        "dealer_short_open_interest": _to_int(
+            row.get("dealer_short_open_interest")
+        ),
+        "source": row.get("source", "finmind"),
+    }
+
+
 # ── Wide-format pivots (batch_transform) ─────────────────────────
 #
 # FinMind's quarterly statements + market-wide totals return rows in
@@ -776,6 +857,107 @@ MAPPINGS: dict[str, DatasetMapping] = {
         column_map={},
         pk_columns=("market", "ts"),
         batch_transform=_pivot_total_institutional,
+    ),
+    # ── 除權息結果 ──────────────────────────────────────────────
+    "TaiwanStockDividendResult": DatasetMapping(
+        dataset_code="TaiwanStockDividendResult",
+        local_table="tw_dividend_result",
+        column_map={
+            "date": "ex_date",
+            "stock_id": "symbol",
+            "before_price": "before_price",
+            "after_price": "after_price",
+            "stock_or_cache_dividend_price": "cash_dividend",
+            "stock_dividend_price": "stock_dividend",
+        },
+        pk_columns=("symbol", "ex_date"),
+        extra={"source": "finmind"},
+        row_transform=_row_dividend_result,
+    ),
+    # ── 股票分割 ──────────────────────────────────────────────
+    "TaiwanStockSplitPrice": DatasetMapping(
+        dataset_code="TaiwanStockSplitPrice",
+        local_table="tw_split",
+        column_map={
+            "date": "ex_date",
+            "stock_id": "symbol",
+            "before_price": "before_price",
+            "after_price": "after_price",
+            "split_ratio": "split_ratio",
+        },
+        pk_columns=("symbol", "ex_date"),
+        extra={"source": "finmind"},
+        row_transform=_row_split,
+    ),
+    # ── 當沖 ────────────────────────────────────────────────────
+    "TaiwanStockDayTrading": DatasetMapping(
+        dataset_code="TaiwanStockDayTrading",
+        local_table="tw_day_trade_daily",
+        column_map={
+            "date": "ts",
+            "stock_id": "symbol",
+            "BuyAfterSale": "buy_volume",
+            "SellAfterBuy": "sell_volume",
+            "BuyAfterSaleAmount": "buy_amount",
+            "SellAfterBuyAmount": "sell_amount",
+        },
+        pk_columns=("market", "symbol", "ts"),
+        extra={"market": "TWSE", "source": "finmind"},
+        row_transform=_row_day_trade,
+    ),
+    # ── 借券 ────────────────────────────────────────────────────
+    "TaiwanStockSecuritiesLending": DatasetMapping(
+        dataset_code="TaiwanStockSecuritiesLending",
+        local_table="tw_securities_lending",
+        column_map={
+            "date": "ts",
+            "stock_id": "symbol",
+            "transaction_type": "transaction_type",
+            "volume": "volume",
+            "fee_rate": "fee_rate",
+        },
+        pk_columns=("market", "symbol", "ts", "transaction_type"),
+        extra={"market": "TWSE", "source": "finmind"},
+        row_transform=_row_securities_lending,
+    ),
+    # ── 期貨三大法人 (day session) ─────────────────────────────
+    # The night-session sibling (TaiwanFuturesInstitutionalInvestors-
+    # AfterHours) shares the same destination table — `extra.session`
+    # discriminates. Adding the night-session mapping is one entry
+    # below with extra={"session": "night"}.
+    "TaiwanFuturesInstitutionalInvestors": DatasetMapping(
+        dataset_code="TaiwanFuturesInstitutionalInvestors",
+        local_table="tw_futures_inst_daily",
+        column_map={
+            "date": "ts",
+            "futures_id": "contract",
+            "long_open_interest_balance_volume_foreign_investment": "foreign_long_open_interest",
+            "short_open_interest_balance_volume_foreign_investment": "foreign_short_open_interest",
+            "long_open_interest_balance_volume_investment_trust": "sitc_long_open_interest",
+            "short_open_interest_balance_volume_investment_trust": "sitc_short_open_interest",
+            "long_open_interest_balance_volume_dealer": "dealer_long_open_interest",
+            "short_open_interest_balance_volume_dealer": "dealer_short_open_interest",
+        },
+        pk_columns=("contract", "ts", "session"),
+        extra={"session": "day", "source": "finmind"},
+        row_transform=_row_futures_inst,
+    ),
+    "TaiwanFuturesInstitutionalInvestorsAfterHours": DatasetMapping(
+        dataset_code="TaiwanFuturesInstitutionalInvestorsAfterHours",
+        local_table="tw_futures_inst_daily",
+        column_map={
+            "date": "ts",
+            "futures_id": "contract",
+            "long_open_interest_balance_volume_foreign_investment": "foreign_long_open_interest",
+            "short_open_interest_balance_volume_foreign_investment": "foreign_short_open_interest",
+            "long_open_interest_balance_volume_investment_trust": "sitc_long_open_interest",
+            "short_open_interest_balance_volume_investment_trust": "sitc_short_open_interest",
+            "long_open_interest_balance_volume_dealer": "dealer_long_open_interest",
+            "short_open_interest_balance_volume_dealer": "dealer_short_open_interest",
+        },
+        pk_columns=("contract", "ts", "session"),
+        extra={"session": "night", "source": "finmind"},
+        row_transform=_row_futures_inst,
     ),
     # ── 新聞 ────────────────────────────────────────────────────
     "TaiwanStockNews": DatasetMapping(

@@ -77,11 +77,18 @@ def _twse_client_factory() -> Any:
     return TwseClient()
 
 
+def _mops_client_factory() -> Any:
+    """Same late-import shape as _twse — see docstring above."""
+    from finmind.ingest.selfcrawl.mops import MopsClient
+
+    return MopsClient()
+
+
 _REGISTRY: dict[str, ConnectorFactory] = {
     "twse":   _twse_client_factory,
     "tpex":   lambda: _NotWiredYetClient("tpex"),
     "taifex": lambda: _NotWiredYetClient("taifex"),
-    "mops":   lambda: _NotWiredYetClient("mops"),
+    "mops":   _mops_client_factory,
     "tdcc":   lambda: _NotWiredYetClient("tdcc"),
 }
 

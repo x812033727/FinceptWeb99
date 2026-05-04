@@ -77,8 +77,78 @@ def test_supported_datasets_pins_phase_b_set():
         "TaiwanStockMarginPurchaseShortSale",
         "TaiwanStockInfo",
         "TaiwanStockPER",
+        "TaiwanStockTotalReturnIndex",
     }
     assert expected.issubset(set(supported_datasets()))
+
+
+# ── TotalReturnIndex (TaiwanStockTotalReturnIndex) ──────────────
+
+
+@pytest.mark.asyncio
+async def test_fetch_total_return_index_translates_fmtqik_to_finmind(
+    monkeypatch,
+):
+    """FMTQIK rows arrive with `time/open/high/low/close/volume`;
+    wrapper rewrites to FinMind's `date/stock_id=TAIEX/value`."""
+    captured_dates: list = []
+
+    async def fake_get_taiex_history(query_date):
+        captured_dates.append(query_date)
+        return [
+            {"time": "2024-01-02", "open": 17500, "high": 17500,
+             "low": 17500, "close": 17600, "volume": 0},
+            {"time": "2024-01-03", "open": 17600, "high": 17600,
+             "low": 17600, "close": 17800, "volume": 0},
+            # Out-of-window — clipped.
+            {"time": "2024-02-15", "open": 18000, "high": 18000,
+             "low": 18000, "close": 18000, "volume": 0},
+        ]
+
+    monkeypatch.setattr(
+        "data.tw.twse_connector.get_taiex_history",
+        fake_get_taiex_history,
+    )
+
+    client = TwseClient()
+    rows = await client.fetch(
+        "TaiwanStockTotalReturnIndex", None,
+        date(2024, 1, 1), date(2024, 1, 31),
+    )
+
+    # Only Jan rows survive the [start, end] clip.
+    assert len(rows) == 2
+    assert {r["date"] for r in rows} == {"2024-01-02", "2024-01-03"}
+    assert all(r["stock_id"] == "TAIEX" for r in rows)
+    # Close used as the index value.
+    assert rows[0]["value"] == 17600
+
+
+@pytest.mark.asyncio
+async def test_fetch_total_return_index_iterates_months(monkeypatch):
+    """Range Jan–Mar → 3 monthly TWSE calls (FMTQIK serves one
+    month per request)."""
+    seen_dates: list = []
+
+    async def fake_get_taiex_history(query_date):
+        seen_dates.append(query_date)
+        return []
+
+    monkeypatch.setattr(
+        "data.tw.twse_connector.get_taiex_history",
+        fake_get_taiex_history,
+    )
+
+    client = TwseClient()
+    await client.fetch(
+        "TaiwanStockTotalReturnIndex", None,
+        date(2024, 1, 15), date(2024, 3, 5),
+    )
+    assert seen_dates == [
+        date(2024, 1, 1),
+        date(2024, 2, 1),
+        date(2024, 3, 1),
+    ]
 
 
 # ── Per-dataset key translation ─────────────────────────────────

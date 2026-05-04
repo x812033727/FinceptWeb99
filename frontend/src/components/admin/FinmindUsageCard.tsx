@@ -12,7 +12,7 @@ import {
 } from "recharts";
 
 import { CollapsibleHeader, useCollapsible } from "@/components/Collapsible";
-import api from "@/lib/api";
+import api, { errorDetail } from "@/lib/api";
 
 /**
  * AdminPage usage chart for the FinMind clone subsystem.
@@ -57,7 +57,7 @@ function formatNumber(n: number): string {
 }
 
 export default function FinmindUsageCard() {
-  const { isOpen, toggle } = useCollapsible("admin-finmind-usage", false);
+  const { open, toggle } = useCollapsible("admin-finmind-usage", false);
   const [days, setDays] = useState<Range>(7);
 
   const usageQuery = useQuery<UsagePayload>({
@@ -68,7 +68,7 @@ export default function FinmindUsageCard() {
       );
       return r.data;
     },
-    enabled: isOpen,
+    enabled: open,
     refetchInterval: 60_000,
   });
 
@@ -90,11 +90,11 @@ export default function FinmindUsageCard() {
             ? `${formatNumber(totalCalls)} calls · ${formatNumber(totalRows)} rows · last ${days}d`
             : "click to expand"
         }
-        isOpen={isOpen}
-        onToggle={toggle}
+        open={open}
+        toggle={toggle}
       />
 
-      {isOpen && (
+      {open && (
         <div className="mt-4 space-y-6">
           {/* Range selector ─────────────────── */}
           <div className="flex items-center gap-2 text-sm">
@@ -118,7 +118,7 @@ export default function FinmindUsageCard() {
           {usageQuery.isError && (
             <div className="rounded border border-destructive bg-destructive/10 p-3 text-sm">
               Failed to load usage:{" "}
-              {String((usageQuery.error as Error).message)}
+              {errorDetail(usageQuery.error)}
             </div>
           )}
 

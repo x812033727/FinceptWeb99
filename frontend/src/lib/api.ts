@@ -50,6 +50,37 @@ export function notifyRateLimited(detail?: string, retryAfterSec?: number): void
   });
 }
 
+/**
+ * Extract a useful error message from an axios rejection.
+ *
+ * FastAPI HTTPException renders as `{ "detail": "..." }` in the
+ * response body — much more useful than axios's generic
+ * "Request failed with status code 500". Falls back to:
+ *   1. response.data.detail (FastAPI happy path)
+ *   2. response.data (other backends / non-detail-shaped errors)
+ *   3. error.message (axios's default — e.g. network errors)
+ *   4. "unknown error"
+ *
+ * Usage in TanStack Query / mutation onError:
+ *   {mutation.isError && <p>{errorDetail(mutation.error)}</p>}
+ */
+export function errorDetail(err: unknown): string {
+  const e = err as AxiosError<{ detail?: unknown } | string>;
+  const data = e?.response?.data;
+  if (data && typeof data === "object" && "detail" in data) {
+    const d = (data as { detail?: unknown }).detail;
+    if (typeof d === "string" && d) return d;
+    if (Array.isArray(d) && d.length) return JSON.stringify(d);
+  }
+  if (typeof data === "string" && data) return data;
+  if (err && typeof err === "object" && "message" in err) {
+    const m = (err as { message?: unknown }).message;
+    if (typeof m === "string" && m) return m;
+  }
+  return "unknown error";
+}
+
+
 // ── Response interceptor: auto-refresh on 401, toast on 429 ──────
 let refreshing: Promise<string> | null = null;
 

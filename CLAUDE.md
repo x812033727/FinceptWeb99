@@ -508,21 +508,40 @@ schema in the main DB). Future microservice extraction is one
 to mount the public endpoints; internal tools call the subsystem
 via HTTP, not in-process imports.
 
-**Path A1: separate container (default + recommended)** — keeps
-`FINMIND_USE_MAIN_DB=false` (the default) so the FinMind subsystem
-binds to `FINMIND_DATABASE_URL` (port 5433 by default).
-
-**Path A2: shared main DB with `finmind` schema** — set
-`FINMIND_USE_MAIN_DB=true` to bind the FinMind engine to the main
-app's `DATABASE_URL` instead, with all FinMind tables (and the
+**Path A2: shared main DB with `finmind` schema (default since PR #313)** —
+`FINMIND_USE_MAIN_DB=true` is the default. The FinMind engine binds
+to the main app's `DATABASE_URL` with all FinMind tables (and the
 `alembic_version_finmind` ledger) in a dedicated `finmind` Postgres
-schema for namespace isolation. Same architectural property as
-Path A1 — `pg_dump --schema=finmind` ports it back to a standalone
-DB whenever the deployment can run a second container. Use this for
-small / managed deployments that can't (or don't want to) spin up
-`postgres_finmind` separately. Implemented via
+schema for namespace isolation. Implemented via
 `SET search_path TO finmind, public` on every checked-out connection
 so application queries don't need to qualify table names.
+Architectural separation preserved — `pg_dump --schema=finmind` ports
+the data to a standalone DB whenever the deployment grows enough to
+warrant it.
+
+**Path A1: separate `postgres_finmind` container (opt-in)** — set
+`FINMIND_USE_MAIN_DB=false` and run `docker compose --profile finmind
+up -d postgres_finmind`. Larger deployments that want isolation at
+the database level. Default flipped away from this in PR #313
+because every deploy that didn't bring up the sidecar container
+(majority case) was hitting `gaierror` on the `postgres_finmind`
+hostname.
+
+**Migration**: deploys that ran with the old default (Path A1
+implicit) had data in `postgres_finmind:5432/finmind_clone`. After
+PR #313 they will silently switch to writing into the main DB's
+`finmind` schema unless they set `FINMIND_USE_MAIN_DB=false`
+explicitly. The lifespan log line surfaces the active mode at
+startup so the operator can react. To migrate the old data in
+without losing it:
+```bash
+pg_dump -h <old_finmind_host> -U finmind -d finmind_clone --schema=public \
+  | psql -h <main_db_host> -U fincept -d finceptweb \
+       --set ON_ERROR_STOP=on -c "SET search_path TO finmind"
+```
+Or just let auto-init re-seed (the catalog is rebuildable; the
+ingest progress ledger gets re-derived from the destination tables
+on next cron tick).
 
 **Deployment env-var checklist**: three env vars control the
 subsystem and MUST be propagated through the deployment glue (the
@@ -530,7 +549,8 @@ class of bug we hit pre-PR #304: setting `FINMIND_USE_MAIN_DB=true`
 in `.env` had no effect because `docker-compose.yml` and the Helm
 configmap didn't pass it through).
 
-  - `FINMIND_USE_MAIN_DB` — Path A1 (`false`, default) vs A2 (`true`).
+  - `FINMIND_USE_MAIN_DB` — Path A2 (`true`, default since PR #313)
+    vs A1 (`false`).
   - `FINMIND_AUTO_INIT` — auto-run alembic + seed on lifespan.
   - `FINMIND_DATABASE_URL` — only consulted when A1; default points
      at `postgres_finmind:5432` inside the compose network.

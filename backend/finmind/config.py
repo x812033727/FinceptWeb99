@@ -28,13 +28,23 @@ class FinmindSettings(BaseSettings):
         "postgresql+asyncpg://finmind:password@localhost:5433/finmind_clone"
     )
 
-    # When True, the FinMind subsystem ignores FINMIND_DATABASE_URL and
-    # uses the main app's DATABASE_URL with a `finmind` Postgres schema
-    # for isolation. Useful for small/managed deployments that can't run
-    # a second Postgres container; preserves the future-extraction
-    # property because every FinMind object lives under one schema and
-    # `pg_dump --schema=finmind` ports it cleanly to a standalone DB.
-    FINMIND_USE_MAIN_DB: bool = False
+    # When True (default), the FinMind subsystem ignores
+    # FINMIND_DATABASE_URL and uses the main app's DATABASE_URL with
+    # a `finmind` Postgres schema for isolation. Useful for the
+    # common case (single-Postgres deploys, managed PaaS, anyone
+    # not running `docker compose --profile finmind`). Preserves the
+    # future-extraction property because every FinMind object lives
+    # under one schema and `pg_dump --schema=finmind` ports it cleanly
+    # to a standalone DB.
+    #
+    # Set to False explicitly when you want to run the separate
+    # `postgres_finmind` container (Path A1) — typically larger
+    # deployments that want isolation at the database level.
+    #
+    # Default flipped from False → True in PR #313 because the
+    # previous default broke every deploy that didn't opt in to
+    # the `finmind` compose profile (which is most of them).
+    FINMIND_USE_MAIN_DB: bool = True
 
     # Sponsor tier = 1500 req/hour. Anonymous = 300/hr; registered free = 600/hr.
     # Keep ~100 req/hr headroom for the live cron when backfill is running.

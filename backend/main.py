@@ -74,12 +74,25 @@ async def _auto_init_finmind_clone() -> None:
         async with finmind_engine.connect() as conn:
             await conn.execute(_text("SELECT 1"))
     except Exception as exc:
+        # Specifically helpful when the operator opted into Path A1
+        # but didn't actually start `postgres_finmind` — the gaierror
+        # / ConnectionRefusedError is just symptoms; the actionable
+        # fix is "set FINMIND_USE_MAIN_DB=true" (since PR #313 the
+        # default, but explicitly setting it false reverts to the
+        # separate-container path).
+        is_path_a1 = not finmind_settings.FINMIND_USE_MAIN_DB
+        hint = (
+            "Either start the `postgres_finmind` container "
+            "(`docker compose --profile finmind up -d postgres_finmind`) "
+            "or set FINMIND_USE_MAIN_DB=true to share the main DB."
+            if is_path_a1
+            else "Check main DATABASE_URL connectivity."
+        )
         log.warning(
-            "finmind auto-init skipped — DB not reachable (%s: %s). "
-            "Start `postgres_finmind` and restart the backend to "
-            "auto-migrate + seed.",
+            "finmind auto-init skipped — DB not reachable (%s: %s). %s",
             exc.__class__.__name__,
             exc,
+            hint,
         )
         return
 

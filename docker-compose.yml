@@ -88,7 +88,11 @@ services:
       # Without explicit passthrough here, .env edits never reach
       # the container's process env (compose only enumerates listed
       # keys; there's no env_file: .env directive on this service).
-      FINMIND_USE_MAIN_DB:    ${FINMIND_USE_MAIN_DB:-false}
+      # Default `USE_MAIN_DB=true` shares the main Postgres via a
+      # `finmind` schema — works without spinning up the separate
+      # `postgres_finmind` container. Set to `false` if running
+      # `docker compose --profile finmind up` for the sidecar DB.
+      FINMIND_USE_MAIN_DB:    ${FINMIND_USE_MAIN_DB:-true}
       FINMIND_AUTO_INIT:      ${FINMIND_AUTO_INIT:-true}
       FINMIND_DATABASE_URL:   ${FINMIND_DATABASE_URL:-postgresql+asyncpg://finmind:finmind_dev_password@postgres_finmind:5432/finmind_clone}
     depends_on:

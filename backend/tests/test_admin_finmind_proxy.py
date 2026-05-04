@@ -688,9 +688,14 @@ async def test_proxy_config_returns_resolved_settings(
         "use_main_db", "auto_init", "effective_database_url",
         "schema_", "mode",
     }
-    # Test env uses sqlite — mode should reflect that.
-    assert body["mode"] == "sqlite-test"
-    assert body["use_main_db"] is False  # default
+    # Default since PR #313: FINMIND_USE_MAIN_DB=True. The main
+    # DATABASE_URL in this test env points at a postgres URL (set by
+    # the parent test conftest), so resolved mode is `shared-main-db`
+    # with `schema=finmind`. This pin documents that the default-
+    # default (no env vars touched) lands in Path A2.
+    assert body["use_main_db"] is True
+    assert body["mode"] == "shared-main-db"
+    assert body["schema_"] == "finmind"
     assert body["auto_init"] is True  # default
     # Password masking — even sqlite URLs round-trip cleanly with no creds.
     assert "password" not in body["effective_database_url"].lower()

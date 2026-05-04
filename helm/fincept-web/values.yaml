@@ -104,10 +104,11 @@ env:
     JWT_SECRET_KEY: ""
     CORS_ORIGINS: "https://fincept.example.com"
     # FinMind clone subsystem.
-    # USE_MAIN_DB=true shares the main Postgres via a `finmind` schema —
-    # avoids running a second Postgres pod. Default false keeps the legacy
-    # separate-database path for ops who want it.
-    FINMIND_USE_MAIN_DB: "false"
+    # USE_MAIN_DB=true (default) shares the main Postgres via a
+    # `finmind` schema — avoids running a second Postgres pod. Set
+    # to "false" explicitly if you want to run the separate
+    # `postgres_finmind` container.
+    FINMIND_USE_MAIN_DB: "true"
     # Lifespan auto-runs alembic + seed on backend boot. Set "false" for
     # multi-pod deploys where only one pod should run migrations.
     FINMIND_AUTO_INIT: "true"

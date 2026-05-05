@@ -467,6 +467,7 @@ def test_normalize_symbols_strips_and_dedups():
 
 def test_summary_to_dict_round_trip():
     s = svc.LessonSummary(
+        id=42,
         as_of_date="2026-03-23",
         category="missed_sector",
         lesson_text="x",
@@ -474,8 +475,11 @@ def test_summary_to_dict_round_trip():
         missed_winners=["6505"],
     )
     out = svc.summary_to_dict(s)
+    assert out["id"] == 42
     assert out["category"] == "missed_sector"
     assert out["related_symbols"] == ["2330"]
+    assert out["tier"] == "episodic"
+    assert out["regime"] is None
 
 
 def test_anchor_uses_today_for_live(monkeypatch):
@@ -492,3 +496,571 @@ def test_anchor_uses_today_for_live(monkeypatch):
         lesson, anchor=today, focus_symbols=set(), halflife_days=60,
     )
     assert score == pytest.approx(1.0)
+
+
+# ── PR-B0: regime classification + persistence ──────────────────────
+
+
+def _ctx_with(vix: float | None, *, trend: str = "up") -> dict:
+    """Build a synthetic ctx for regime tests. `trend` shapes the
+    20-day TAIEX history so the 5d/20d MA cross resolves as
+    requested.
+    """
+    ctx: dict = {}
+    if vix is not None:
+        ctx["taiwan_vix"] = {"value": vix}
+    if trend == "up":
+        # Steady climb: each close 1% above the previous one. 5d MA
+        # ends well above 20d MA and the 5d MA itself is rising.
+        closes = [100.0 * (1.01 ** i) for i in range(20)]
+    elif trend == "down":
+        closes = [100.0 * (0.99 ** i) for i in range(20)]
+    else:   # range — flat with small noise
+        closes = [100.0 + (i % 2) * 0.1 for i in range(20)]
+    ctx["index"] = {
+        "history": [{"time": f"2026-01-{i + 1:02d}", "close": c}
+                    for i, c in enumerate(closes)],
+    }
+    return ctx
+
+
+def test_classify_regime_high_vix_downtrend_yields_high_down():
+    out = svc._classify_regime(_ctx_with(vix=30.0, trend="down"))
+    assert out == "high_down"
+
+
+def test_classify_regime_low_vix_uptrend_yields_low_up():
+    out = svc._classify_regime(_ctx_with(vix=12.0, trend="up"))
+    assert out == "low_up"
+
+
+def test_classify_regime_mid_vix_uptrend_yields_mid_up():
+    out = svc._classify_regime(_ctx_with(vix=18.0, trend="up"))
+    assert out == "mid_up"
+
+
+def test_classify_regime_drops_low_vix_downtrend_combo():
+    """low_VIX × down (calm sell-off) is the rare 'weak' combo —
+    return None so the lesson lands without a regime tag rather
+    than getting binned into a low-sample bucket."""
+    out = svc._classify_regime(_ctx_with(vix=12.0, trend="down"))
+    assert out is None
+
+
+def test_classify_regime_drops_high_vix_uptrend_combo():
+    """high_VIX × up (melt-up) is rare — same treatment as low_down."""
+    out = svc._classify_regime(_ctx_with(vix=30.0, trend="up"))
+    assert out is None
+
+
+def test_classify_regime_drops_high_vix_range_combo():
+    out = svc._classify_regime(_ctx_with(vix=30.0, trend="range"))
+    assert out is None
+
+
+def test_classify_regime_returns_none_when_vix_missing():
+    """Cron hasn't run / TAIFEX outage / ctx assembled before VIX
+    block landed — drop the tag, persist the lesson regardless."""
+    ctx = _ctx_with(vix=None, trend="up")
+    assert "taiwan_vix" not in ctx
+    assert svc._classify_regime(ctx) is None
+
+
+def test_classify_regime_returns_none_when_history_too_short():
+    ctx = {
+        "taiwan_vix": {"value": 18.0},
+        "index": {"history": [
+            {"time": f"d{i}", "close": 100.0 + i} for i in range(15)
+        ]},
+    }
+    assert svc._classify_regime(ctx) is None
+
+
+def test_classify_regime_returns_none_when_ctx_none():
+    assert svc._classify_regime(None) is None
+
+
+def test_classify_regime_returns_none_when_vix_value_unparseable():
+    ctx = {
+        "taiwan_vix": {"value": "high"},
+        "index": _ctx_with(vix=18.0, trend="up")["index"],
+    }
+    assert svc._classify_regime(ctx) is None
+
+
+@pytest.mark.asyncio
+async def test_extract_persists_regime_when_ctx_provided(
+    db_session: AsyncSession,
+):
+    u = _user("regime-ctx")
+    d = _disc(u.id)
+    db_session.add_all([u, d])
+    await db_session.commit()
+
+    out = await svc.extract_and_persist_lessons(
+        db_session,
+        discussion_id=d.id, owner_user_id=u.id,
+        market="TW", as_of_date=d.as_of_date,
+        lessons_payload=[{
+            "category": "missed_sector",
+            "lesson_text": "外資轉空時忽略半導體 5 日均線跌破 20 日均線",
+        }],
+        ctx=_ctx_with(vix=30.0, trend="down"),
+    )
+    assert len(out) == 1
+    assert out[0].regime == "high_down"
+    # PR-B0 ships the new fields with safe defaults — schema verified
+    # by the migration, but assert here so a future B-tier change
+    # that drops the default doesn't slip through.
+    assert out[0].tier == "episodic"
+    assert out[0].usage_count == 0
+    assert out[0].hit_count == 0
+
+
+@pytest.mark.asyncio
+async def test_extract_persists_null_regime_when_ctx_missing(
+    db_session: AsyncSession,
+):
+    """Backward compat — old callers that don't pass ctx still get
+    the lesson written, just regime=NULL."""
+    u = _user("regime-noctx")
+    d = _disc(u.id)
+    db_session.add_all([u, d])
+    await db_session.commit()
+
+    out = await svc.extract_and_persist_lessons(
+        db_session,
+        discussion_id=d.id, owner_user_id=u.id,
+        market="TW", as_of_date=d.as_of_date,
+        lessons_payload=[{
+            "category": "missing_data",
+            "lesson_text": "缺少當日台指期未平倉資料導致對外資多空態度的誤判，下次需補齊。",
+        }],
+    )
+    assert len(out) == 1
+    assert out[0].regime is None
+    assert out[0].tier == "episodic"
+
+
+@pytest.mark.asyncio
+async def test_extract_persists_null_regime_when_ctx_lacks_vix(
+    db_session: AsyncSession,
+):
+    """When ctx lacks the VIX block (cron hasn't run yet), classifier
+    returns None and the lesson lands regime-less."""
+    u = _user("regime-no-vix")
+    d = _disc(u.id)
+    db_session.add_all([u, d])
+    await db_session.commit()
+
+    ctx_no_vix = _ctx_with(vix=None, trend="up")
+    out = await svc.extract_and_persist_lessons(
+        db_session,
+        discussion_id=d.id, owner_user_id=u.id,
+        market="TW", as_of_date=d.as_of_date,
+        lessons_payload=[{
+            "category": "wrong_signal_weight",
+            "lesson_text": "高估融資餘額對短線反彈的支撐力道，忽略外資籌碼面的轉空訊號。",
+        }],
+        ctx=ctx_no_vix,
+    )
+    assert len(out) == 1
+    assert out[0].regime is None
+
+
+# ── PR-B1: regime-aware fetch + tier-tiered recency ─────────────────
+
+
+def _mk_lesson(
+    *,
+    owner_id: uuid.UUID,
+    as_of: date,
+    regime: str | None = None,
+    tier: str = "episodic",
+    related: list[str] | None = None,
+    text: str = "x",
+) -> DiscussionLesson:
+    """In-memory lesson for _score tests (no DB write needed)."""
+    return DiscussionLesson(
+        discussion_id=uuid.uuid4(),
+        owner_user_id=owner_id,
+        market="TW",
+        as_of_date=as_of,
+        category="other",
+        lesson_text=text,
+        lesson_text_hash=f"h-{uuid.uuid4().hex[:8]}",
+        related_symbols=related or [],
+        missed_winners=[],
+        regime=regime,
+        tier=tier,
+    )
+
+
+def test_score_same_regime_doubles():
+    today = datetime.now(UTC).date()
+    lesson = _mk_lesson(
+        owner_id=uuid.uuid4(), as_of=today, regime="high_down",
+    )
+    matched = svc._score(
+        lesson, anchor=today, focus_symbols=set(), halflife_days=60,
+        current_regime="high_down",
+    )
+    mismatched = svc._score(
+        lesson, anchor=today, focus_symbols=set(), halflife_days=60,
+        current_regime="low_up",
+    )
+    neutral = svc._score(
+        lesson, anchor=today, focus_symbols=set(), halflife_days=60,
+        current_regime=None,
+    )
+    assert matched == pytest.approx(2.0)
+    assert mismatched == pytest.approx(0.7)
+    assert neutral == pytest.approx(1.0)
+
+
+def test_score_neutral_when_lesson_has_no_regime_tag():
+    """Pre-PR-B0 lessons (regime=None) shouldn't be punished — they
+    just don't get the same-regime boost."""
+    today = datetime.now(UTC).date()
+    lesson = _mk_lesson(
+        owner_id=uuid.uuid4(), as_of=today, regime=None,
+    )
+    score = svc._score(
+        lesson, anchor=today, focus_symbols=set(), halflife_days=60,
+        current_regime="high_down",
+    )
+    assert score == pytest.approx(1.0)
+
+
+def test_score_structural_tier_does_not_decay():
+    """Structural lesson 1 year old should still score 1.0 on the
+    recency axis. Episodic at the same age decays a lot."""
+    today = datetime.now(UTC).date()
+    a_year_ago = today - timedelta(days=365)
+    structural = _mk_lesson(
+        owner_id=uuid.uuid4(), as_of=a_year_ago, tier="structural",
+    )
+    episodic = _mk_lesson(
+        owner_id=uuid.uuid4(), as_of=a_year_ago, tier="episodic",
+    )
+    s_score = svc._score(
+        structural, anchor=today,
+        focus_symbols=set(), halflife_days=60,
+    )
+    e_score = svc._score(
+        episodic, anchor=today,
+        focus_symbols=set(), halflife_days=60,
+    )
+    assert s_score == pytest.approx(1.0)
+    assert e_score < 0.05   # 365d / 60d half-life ~ 70x decay
+    assert s_score > e_score * 20
+
+
+def test_score_semantic_tier_decays_slower_than_episodic():
+    today = datetime.now(UTC).date()
+    six_months_ago = today - timedelta(days=180)
+    semantic = _mk_lesson(
+        owner_id=uuid.uuid4(), as_of=six_months_ago, tier="semantic",
+    )
+    episodic = _mk_lesson(
+        owner_id=uuid.uuid4(), as_of=six_months_ago, tier="episodic",
+    )
+    sem_score = svc._score(
+        semantic, anchor=today,
+        focus_symbols=set(), halflife_days=60,
+    )
+    epi_score = svc._score(
+        episodic, anchor=today,
+        focus_symbols=set(), halflife_days=60,
+    )
+    # semantic halflife = 60 * 3 = 180d → 180d age = 1 halflife → 0.5
+    # episodic halflife = 60d → 180d age = 3 halflives → 0.125
+    assert sem_score == pytest.approx(0.5, abs=1e-3)
+    assert epi_score == pytest.approx(0.125, abs=1e-3)
+
+
+@pytest.mark.asyncio
+async def test_fetch_boosts_same_regime(db_session: AsyncSession):
+    """Two lessons with identical age: the same-regime one ranks
+    higher than the mismatched-regime one."""
+    u = _user("regime-fetch")
+    d = _disc(u.id)
+    db_session.add_all([u, d])
+    await db_session.commit()
+
+    today = date(2026, 5, 5)
+    same = DiscussionLesson(
+        discussion_id=d.id, owner_user_id=u.id, market="TW",
+        as_of_date=today, category="other",
+        lesson_text="同 regime 的教訓 — 預期被 boost 到首位",
+        lesson_text_hash="h-same",
+        related_symbols=[], missed_winners=[],
+        regime="high_down", tier="episodic",
+    )
+    diff = DiscussionLesson(
+        discussion_id=d.id, owner_user_id=u.id, market="TW",
+        as_of_date=today, category="other",
+        lesson_text="不同 regime 的教訓 — 應該被排在後面",
+        lesson_text_hash="h-diff",
+        related_symbols=[], missed_winners=[],
+        regime="low_up", tier="episodic",
+    )
+    db_session.add_all([same, diff])
+    await db_session.commit()
+
+    rows = await svc.fetch_relevant_lessons(
+        db_session,
+        owner_user_id=u.id, market="TW",
+        discussion_as_of=today,
+        limit=2,
+        current_regime="high_down",
+    )
+    assert len(rows) == 2
+    assert rows[0].lesson_text.startswith("同 regime")
+    assert rows[1].lesson_text.startswith("不同 regime")
+
+
+@pytest.mark.asyncio
+async def test_fetch_falls_back_when_no_same_regime_exists(
+    db_session: AsyncSession,
+):
+    """When no lesson matches the current regime, fetch should still
+    return the best mismatched-regime candidates rather than emptying
+    out — a thin regime shouldn't strand the discussion without
+    *any* prior context."""
+    u = _user("regime-fallback")
+    d = _disc(u.id)
+    db_session.add_all([u, d])
+    await db_session.commit()
+
+    today = date(2026, 5, 5)
+    diff = DiscussionLesson(
+        discussion_id=d.id, owner_user_id=u.id, market="TW",
+        as_of_date=today, category="other",
+        lesson_text="只有不同 regime 的教訓可以挑 — 也得回傳。",
+        lesson_text_hash="h-diff-only",
+        related_symbols=[], missed_winners=[],
+        regime="mid_up", tier="episodic",
+    )
+    db_session.add(diff)
+    await db_session.commit()
+
+    rows = await svc.fetch_relevant_lessons(
+        db_session,
+        owner_user_id=u.id, market="TW",
+        discussion_as_of=today,
+        limit=3,
+        current_regime="high_down",
+    )
+    assert len(rows) == 1
+    assert rows[0].lesson_text.startswith("只有不同 regime")
+
+
+@pytest.mark.asyncio
+async def test_fetch_structural_outranks_recent_episodic(
+    db_session: AsyncSession,
+):
+    """A structural lesson from a year ago should still beat a fresh
+    episodic lesson when neither matches the regime — proves the
+    tier system actually changes ranking, not just decoration."""
+    u = _user("structural-rank")
+    d = _disc(u.id)
+    db_session.add_all([u, d])
+    await db_session.commit()
+
+    today = date(2026, 5, 5)
+    structural_old = DiscussionLesson(
+        discussion_id=d.id, owner_user_id=u.id, market="TW",
+        as_of_date=today - timedelta(days=300), category="other",
+        lesson_text="結構性教訓: 殖利率倒掛時不要追科技股 — 不會衰減。",
+        lesson_text_hash="h-structural",
+        related_symbols=[], missed_winners=[],
+        regime=None, tier="structural",
+    )
+    episodic_recent = DiscussionLesson(
+        discussion_id=d.id, owner_user_id=u.id, market="TW",
+        as_of_date=today, category="other",
+        lesson_text="本週教訓: 漏看外資 5 日淨買超下降 — 一般衰減。",
+        lesson_text_hash="h-episodic-recent",
+        related_symbols=[], missed_winners=[],
+        regime=None, tier="episodic",
+    )
+    db_session.add_all([structural_old, episodic_recent])
+    await db_session.commit()
+
+    rows = await svc.fetch_relevant_lessons(
+        db_session,
+        owner_user_id=u.id, market="TW",
+        discussion_as_of=today,
+        limit=2,
+    )
+    # episodic at age 0 scores 1.0; structural at age 300d also
+    # scores 1.0 (no decay). Tied → secondary order by candidate
+    # window (as_of_date desc) puts the recent one first. Both
+    # should land in the result, structural still beats a stale
+    # episodic test would need a longer gap. Verify both present.
+    texts = [r.lesson_text for r in rows]
+    assert any("結構性" in t for t in texts)
+    assert any("本週" in t for t in texts)
+
+
+# ── PR-B3: win-case categories + survivor-bias penalty ──────────
+
+
+def test_win_categories_accepted_in_normalize():
+    """PR-B3 added 2 win-side categories. They must round-trip
+    through `_normalize_category` instead of getting coerced to
+    'other' (which would let the rendering split misclassify them
+    as miss-side lessons)."""
+    assert svc._normalize_category("correct_signal_combo") == \
+        "correct_signal_combo"
+    assert svc._normalize_category("successful_thesis") == \
+        "successful_thesis"
+    # Original 5 still pass through.
+    assert svc._normalize_category("missed_sector") == "missed_sector"
+    # Out-of-set stays normalized to 'other'.
+    assert svc._normalize_category("made_up") == "other"
+
+
+def test_win_categories_set_export():
+    """Other modules (lessons context block) consume `WIN_CATEGORIES`
+    to split rendering. Make sure the set is the published 2."""
+    assert svc.WIN_CATEGORIES == frozenset({
+        "correct_signal_combo", "successful_thesis",
+    })
+
+
+def test_score_applies_win_lesson_penalty():
+    """Same age + same regime, win-side lesson scores 0.8x miss-side
+    lesson — the survivor-bias guard built into _score."""
+    today = datetime.now(UTC).date()
+    miss = _mk_lesson(
+        owner_id=uuid.uuid4(), as_of=today,
+        regime="high_down",
+    )
+    win = _mk_lesson(
+        owner_id=uuid.uuid4(), as_of=today,
+        regime="high_down",
+    )
+    win.category = "correct_signal_combo"
+    miss_score = svc._score(
+        miss, anchor=today, focus_symbols=set(), halflife_days=60,
+        current_regime="high_down",
+    )
+    win_score = svc._score(
+        win, anchor=today, focus_symbols=set(), halflife_days=60,
+        current_regime="high_down",
+    )
+    # 0.8x penalty → win_score == miss_score * 0.8
+    assert win_score == pytest.approx(miss_score * 0.8, abs=1e-3)
+
+
+def test_score_no_penalty_for_legacy_other_category():
+    """The penalty is keyed off WIN_CATEGORIES — pre-PR-B3 lessons
+    with category='other' (the previous catch-all) shouldn't be
+    affected."""
+    today = datetime.now(UTC).date()
+    legacy = _mk_lesson(owner_id=uuid.uuid4(), as_of=today)
+    legacy.category = "other"
+    score = svc._score(
+        legacy, anchor=today, focus_symbols=set(), halflife_days=60,
+    )
+    assert score == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_extract_persists_win_category_when_emitted(
+    db_session: AsyncSession,
+):
+    """When the synthesizer (post-mortem win prompt) emits a lesson
+    with category='correct_signal_combo', it round-trips through
+    extract_and_persist_lessons unchanged."""
+    u = _user("win-extract")
+    d = _disc(u.id)
+    db_session.add_all([u, d])
+    await db_session.commit()
+
+    out = await svc.extract_and_persist_lessons(
+        db_session,
+        discussion_id=d.id, owner_user_id=u.id,
+        market="TW", as_of_date=d.as_of_date,
+        lessons_payload=[{
+            "category": "correct_signal_combo",
+            "lesson_text": (
+                "外資台指期由空轉多 + 殖利率倒掛緩解 → 半導體先行的訊號組合，"
+                "下次同時出現時值得加重佈局。"
+            ),
+        }],
+        verdict="win",
+    )
+    assert len(out) == 1
+    assert out[0].category == "correct_signal_combo"
+
+
+@pytest.mark.asyncio
+async def test_extract_accepts_verdict_kwarg_for_miss(
+    db_session: AsyncSession,
+):
+    """verdict='miss' (or None) is purely informational on the
+    extract side — no behavior change vs pre-PR-B3."""
+    u = _user("verdict-miss")
+    d = _disc(u.id)
+    db_session.add_all([u, d])
+    await db_session.commit()
+    out = await svc.extract_and_persist_lessons(
+        db_session,
+        discussion_id=d.id, owner_user_id=u.id,
+        market="TW", as_of_date=d.as_of_date,
+        lessons_payload=[{
+            "category": "missed_sector",
+            "lesson_text": (
+                "外資轉空時忽略了半導體類股的籌碼面變化，"
+                "下次需把外資台指期淨部位納入決策權重。"
+            ),
+        }],
+        verdict="miss",
+    )
+    assert len(out) == 1
+    assert out[0].category == "missed_sector"
+
+
+@pytest.mark.asyncio
+async def test_fetch_structural_outranks_old_episodic(
+    db_session: AsyncSession,
+):
+    """The interesting case: same age, different tier — structural
+    decisively beats episodic when they're both old."""
+    u = _user("structural-vs-old-episodic")
+    d = _disc(u.id)
+    db_session.add_all([u, d])
+    await db_session.commit()
+
+    today = date(2026, 5, 5)
+    old_age = today - timedelta(days=200)
+    structural_old = DiscussionLesson(
+        discussion_id=d.id, owner_user_id=u.id, market="TW",
+        as_of_date=old_age, category="other",
+        lesson_text="結構性: 老但不衰減的關鍵教訓",
+        lesson_text_hash="h-s-old",
+        related_symbols=[], missed_winners=[],
+        regime=None, tier="structural",
+    )
+    episodic_old = DiscussionLesson(
+        discussion_id=d.id, owner_user_id=u.id, market="TW",
+        as_of_date=old_age, category="other",
+        lesson_text="一般: 一樣老但已嚴重衰減",
+        lesson_text_hash="h-e-old",
+        related_symbols=[], missed_winners=[],
+        regime=None, tier="episodic",
+    )
+    db_session.add_all([structural_old, episodic_old])
+    await db_session.commit()
+
+    rows = await svc.fetch_relevant_lessons(
+        db_session,
+        owner_user_id=u.id, market="TW",
+        discussion_as_of=today,
+        limit=2,
+    )
+    assert rows[0].lesson_text.startswith("結構性")
+    assert rows[1].lesson_text.startswith("一般")

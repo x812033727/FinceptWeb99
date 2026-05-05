@@ -69,9 +69,17 @@ async def fetch_recent_lessons(
             return
 
         from services.discussion_lesson_service import (
+            _classify_regime,
             fetch_relevant_lessons,
             summary_to_dict,
         )
+
+        # PR-B1: classify the current ctx's regime so fetch can boost
+        # lessons learned in the same market state. Builder runs this
+        # block after `fetch_index` + `fetch_taiwan_vix` so the inputs
+        # are already populated. NULL when ctx lacks signal — the
+        # service treats that as neutral (no boost, no penalty).
+        current_regime = _classify_regime(ctx)
 
         market_rows = await fetch_relevant_lessons(
             db,
@@ -80,6 +88,7 @@ async def fetch_recent_lessons(
             focus_symbols=set(),
             discussion_as_of=as_of,
             limit=market_limit,
+            current_regime=current_regime,
         )
 
         per_symbol: dict[str, list[dict[str, Any]]] = {}
@@ -96,14 +105,80 @@ async def fetch_recent_lessons(
                     focus_symbols={sym},
                     discussion_as_of=as_of,
                     limit=symbol_limit,
+                    current_regime=current_regime,
                 )
                 if rows:
                     per_symbol[sym] = [summary_to_dict(r) for r in rows]
 
+        # PR-B3: split market lessons into two buckets so the LLM
+        # sees positive vs negative cases unambiguously. The fetch
+        # ranking already tilts win-side lessons down 0.8x to fight
+        # survivor bias; the rendering split makes the framing
+        # explicit ("過去命中經驗 — 為什麼這樣的組合對過了") vs
+        # ("過去失誤教訓 — 哪些訊號當時被忽略").
+        from services.discussion_lesson_service import WIN_CATEGORIES
+        market_misses = [
+            summary_to_dict(r) for r in market_rows
+            if r.category not in WIN_CATEGORIES
+        ]
+        market_wins = [
+            summary_to_dict(r) for r in market_rows
+            if r.category in WIN_CATEGORIES
+        ]
+
+        # per-symbol payload: mirrors the same split for parity.
+        per_symbol_misses: dict[str, list[dict[str, Any]]] = {}
+        per_symbol_wins: dict[str, list[dict[str, Any]]] = {}
+        for sym, rows in per_symbol.items():
+            misses = [
+                e for e in rows
+                if e.get("category") not in WIN_CATEGORIES
+            ]
+            wins = [
+                e for e in rows
+                if e.get("category") in WIN_CATEGORIES
+            ]
+            if misses:
+                per_symbol_misses[sym] = misses
+            if wins:
+                per_symbol_wins[sym] = wins
+
         ctx["recent_lessons"] = {
+            # Legacy keys preserved so callers reading the merged
+            # view (older code paths, tests, audit tooling) stay
+            # functional. New code should prefer the split keys.
             "market": [summary_to_dict(r) for r in market_rows],
             "per_symbol": per_symbol,
+            # PR-B3 split keys
+            "market_misses": market_misses,
+            "market_wins": market_wins,
+            "per_symbol_misses": per_symbol_misses,
+            "per_symbol_wins": per_symbol_wins,
         }
+
+        # PR-B2: bump usage telemetry for every lesson that actually
+        # made it into the prompt. Uses the same lesson_ids we just
+        # passed to summary_to_dict — record_lesson_usage is best-
+        # effort and won't disturb the ctx assembly on failure.
+        used_ids: list[int] = [r.id for r in market_rows]
+        for sym in focus_symbols or []:
+            sym_rows = per_symbol.get(sym) or []
+            used_ids.extend(
+                int(e.get("id"))
+                for e in sym_rows
+                if isinstance(e, dict) and e.get("id") is not None
+            )
+        if used_ids:
+            try:
+                from services.lesson_tier_service import (
+                    record_lesson_usage,
+                )
+                await record_lesson_usage(db, lesson_ids=used_ids)
+            except Exception as exc:
+                log.debug(
+                    "recent_lessons.usage_record_failed",
+                    extra={"error": str(exc)},
+                )
 
         try:
             from middleware.metrics import LESSONS_INJECTED_TOTAL

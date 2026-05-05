@@ -356,6 +356,34 @@ def test_format_prompt_carries_both_sections_and_four_questions():
     assert "缺失的資料" in text
 
 
+def test_format_win_prompt_carries_survivor_bias_guards():
+    """PR-B3 win prompt must include the explicit survivor-bias
+    guards (questions 2 + 3) — without them the LLM tends to spin
+    a confident retrospective narrative that overfits the success."""
+    days, rec, _ = _sample_payload()
+    text = svc.format_post_mortem_win_prompt(
+        as_of=date(2026, 3, 23),
+        trading_days=days,
+        recommended_performance=rec,
+        recommended_symbols=["2330"],
+        verdict=svc.OutcomeVerdict(
+            status="win", threshold_pct=3.0, window_days=5,
+            winners=[svc.WinnerEntry("2330", 8.0, days[1])],
+            best_pct=8.0, reason="ok",
+        ),
+    )
+    # Header + window
+    assert "事後檢討 — 命中經驗" in text
+    assert "2026-03-23" in text
+    assert "通過" in text and "3" in text   # 通過 ${threshold}% 門檻
+    # Survivor-bias guards
+    assert "當時的不確定點" in text
+    assert "沒有特別不確定的訊號" in text   # admit-luck escape hatch
+    # Category steering
+    assert "correct_signal_combo" in text
+    assert "successful_thesis" in text
+
+
 def test_format_prompt_handles_empty_recommendations():
     """Synthesizer sometimes can't extract recommended_symbols.
     Section A surfaces an empty-state line; the rest still renders."""
@@ -552,12 +580,14 @@ def test_miss_prompt_omits_self_eval_section_and_includes_threshold_note():
 
 
 @pytest.mark.asyncio
-async def test_build_post_mortem_message_returns_skip_payload_on_win(
+async def test_build_post_mortem_message_returns_win_prompt(
     db_session: AsyncSession,
 ):
-    """When the win threshold is met, build_post_mortem_message
-    returns trading_days + verdict but an EMPTY prompt_text so the
-    caller short-circuits the inject + new-round chain."""
+    """PR-B3: when the win threshold is met, build_post_mortem_message
+    now returns a win-flavored prompt asking personas to identify
+    *why* it worked (so post-mortem captures correct_signal_combo /
+    successful_thesis lessons) rather than skipping. Prior to PR-B3
+    this returned an empty prompt_text."""
     from datetime import datetime as _dt
     from uuid import uuid4
 
@@ -586,7 +616,16 @@ async def test_build_post_mortem_message_returns_skip_payload_on_win(
     payload = await svc.build_post_mortem_message(db_session, fake_disc)
     assert payload.verdict is not None
     assert payload.verdict.status == "win"
-    assert payload.prompt_text == ""
+    assert payload.prompt_text   # non-empty (PR-B3)
+    assert "事後檢討 — 命中經驗" in payload.prompt_text
+    # Survivor-bias guard text must surface so the LLM doesn't just
+    # spin a confident retrospective narrative.
+    assert "survivor bias" in payload.prompt_text.lower() or \
+        "事後諸葛" in payload.prompt_text
+    # Win-side category names appear so the synthesizer steers
+    # toward them.
+    assert "correct_signal_combo" in payload.prompt_text
+    assert "successful_thesis" in payload.prompt_text
     assert payload.trading_days   # non-empty
 
 

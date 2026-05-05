@@ -66,6 +66,21 @@ class DiscussionStrategyTemplate(Base):
         DateTime(timezone=True), nullable=True,
     )
 
+    # PR-C2: isotonic confidence-calibration curve fitted from the
+    # rolling pool of (raw_confidence, outcome_binary) pairs across
+    # this strategy's child sweeps. NULL until the pool reaches
+    # MIN_SAMPLES_FOR_FIT (=30) outcomes; the synthesizer falls
+    # back to raw confidence in the meantime.
+    calibration_curve: Mapped[list[dict] | None] = mapped_column(
+        JSON, nullable=True,
+    )
+    calibration_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    calibration_sample_count: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+    )
+
     # PR-D: auto-schedule fields. Disabled by default — explicit
     # opt-in so a fresh template doesn't fire LLM cost on its own.
     auto_schedule_enabled: Mapped[bool] = mapped_column(

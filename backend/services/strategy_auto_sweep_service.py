@@ -76,6 +76,27 @@ async def process_due_strategies() -> list[UUID]:
                     offset_days=tmpl.auto_schedule_anchor_offset_days,
                     market=tmpl.market,
                 )
+                # PR-A2: prefer walk-forward validated weights when
+                # available so the auto-scheduled production sweep
+                # runs against an OOS-clean weight map. Falls back
+                # to the legacy in-sample path (template weights +
+                # Phase 3 retrain) when no validated weights exist
+                # yet — strategies without walk-forward history
+                # behave identically to today.
+                from services import strategy_template_service as svc_tmpl
+                validated = await svc_tmpl.latest_validated_weights(
+                    db,
+                    owner_id=tmpl.owner_id,
+                    strategy_id=tmpl.id,
+                )
+                if validated:
+                    log.info(
+                        "strategy_auto_sweep.using_validated_weights",
+                        extra={
+                            "strategy_id": str(tmpl.id),
+                            "personas": len(validated),
+                        },
+                    )
                 sweep = await sweep_svc.create_sweep(
                     db,
                     owner_id=tmpl.owner_id,
@@ -89,6 +110,7 @@ async def process_due_strategies() -> list[UUID]:
                     concurrency=tmpl.default_concurrency,
                     auto_post_mortem=tmpl.default_auto_post_mortem,
                     strategy_id=tmpl.id,
+                    weights_override=validated,
                 )
                 tmpl.auto_schedule_last_run_at = now
                 await db.commit()

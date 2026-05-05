@@ -60,14 +60,31 @@ from models.discussion_lesson import DiscussionLesson
 
 log = logging.getLogger(__name__)
 
-# Five categories the synthesizer must constrain itself to. Anything
+# Seven categories the synthesizer must constrain itself to. Anything
 # outside this set is coerced to "other" at write time.
+#
+# PR-B0 shipped 5 miss-side categories. PR-B3 adds 2 win-side
+# categories so the post-mortem on a successful discussion can capture
+# *why* it worked (which signal combo + thesis actually played out)
+# without poisoning the existing miss-side accounting.
 ALLOWED_CATEGORIES: frozenset[str] = frozenset({
+    # miss-side (PR-B0)
     "missed_sector",
     "wrong_signal_weight",
     "missing_data",
     "over_confidence",
     "other",
+    # win-side (PR-B3)
+    "correct_signal_combo",
+    "successful_thesis",
+})
+
+# Win-side categories — used by PR-B3 to split the fetch render into
+# 「過去命中經驗」vs 「過去失誤教訓」blocks so the LLM sees positive
+# vs negative cases unambiguously rather than mixed in one list.
+WIN_CATEGORIES: frozenset[str] = frozenset({
+    "correct_signal_combo",
+    "successful_thesis",
 })
 
 _MIN_LESSON_LEN = 20
@@ -75,15 +92,92 @@ _MAX_LESSON_LEN = 200
 _MAX_LESSONS_PER_DISCUSSION = 5
 _DEDUP_WINDOW_DAYS = 60
 
+# PR-B0: Regime tagging at lesson-write time. The 6 valid combinations
+# of (VIX bucket × TAIEX trend); the 3 weak combinations
+# (low_VIX × down, high_VIX × up, high_VIX × range) classify as None
+# so the lesson lands without a regime tag rather than mis-tagged.
+_VALID_REGIME_LABELS: frozenset[str] = frozenset({
+    "low_up", "low_range", "mid_up", "mid_down", "mid_range", "high_down",
+})
+
+
+def _classify_regime(ctx: dict[str, Any] | None) -> str | None:
+    """Classify the market state at lesson-write time using two
+    signals already in ctx — TAIWAN VIX (`taiwan_vix.value`) and
+    TAIEX 5d/20d MA cross (from `index.history[].close`).
+
+    Returns one of 6 labels: low_up / low_range / mid_up / mid_down /
+    mid_range / high_down, or None when:
+      - ctx is missing / wrong shape
+      - VIX field is absent (cron hasn't populated, weekend, outage)
+      - TAIEX history has fewer than 20 closes
+      - the (VIX, trend) combination falls into the 3 weak buckets
+
+    Persistence is best-effort: caller writes the lesson regardless,
+    NULL regime just means PR-B1 doesn't get the same-regime fetch
+    boost for this row.
+    """
+    if not isinstance(ctx, dict):
+        return None
+    vix_block = ctx.get("taiwan_vix")
+    if not isinstance(vix_block, dict):
+        return None
+    try:
+        vix_value = float(vix_block.get("value"))
+    except (TypeError, ValueError):
+        return None
+    if vix_value < 15:
+        vix_bucket = "low"
+    elif vix_value > 25:
+        vix_bucket = "high"
+    else:
+        vix_bucket = "mid"
+
+    index_block = ctx.get("index")
+    if not isinstance(index_block, dict):
+        return None
+    history = index_block.get("history")
+    if not isinstance(history, list) or len(history) < 20:
+        return None
+    closes: list[float] = []
+    for bar in history:
+        if not isinstance(bar, dict):
+            continue
+        try:
+            closes.append(float(bar.get("close")))
+        except (TypeError, ValueError):
+            continue
+    if len(closes) < 20:
+        return None
+
+    ma5_now = sum(closes[-5:]) / 5
+    ma20_now = sum(closes[-20:]) / 20
+    # Slope of the 5d MA: compare to itself 5 bars ago. When history
+    # is exactly 20 bars we still have closes[-10:-5] available.
+    ma5_then = sum(closes[-10:-5]) / 5 if len(closes) >= 10 else ma5_now
+
+    if ma5_now > ma20_now and ma5_now > ma5_then:
+        trend = "up"
+    elif ma5_now < ma20_now and ma5_now < ma5_then:
+        trend = "down"
+    else:
+        trend = "range"
+
+    label = f"{vix_bucket}_{trend}"
+    return label if label in _VALID_REGIME_LABELS else None
+
 
 @dataclass(frozen=True)
 class LessonSummary:
     """Compact view of a lesson surfaced into the ctx prompt."""
+    id: int
     as_of_date: str        # ISO
     category: str
     lesson_text: str
     related_symbols: list[str]
     missed_winners: list[str]
+    tier: str = "episodic"
+    regime: str | None = None
 
 
 def _hash_text(text: str) -> str:
@@ -120,6 +214,8 @@ async def extract_and_persist_lessons(
     market: str,
     as_of_date: date,
     lessons_payload: Any,
+    ctx: dict[str, Any] | None = None,
+    verdict: str | None = None,
 ) -> list[DiscussionLesson]:
     """Parse + persist lessons from a synthesizer payload.
 
@@ -128,6 +224,21 @@ async def extract_and_persist_lessons(
     handled gracefully for any other shape (None / dict / str all
     return [] silently). Quality-gated per the module docstring.
 
+    `ctx` is the `gather_market_context` snapshot the synthesizer
+    reasoned over; PR-B0 reads it once to compute the `regime`
+    label persisted on every new lesson row. Optional + best-effort
+    — older callers passing nothing get the legacy regime=NULL
+    behavior.
+
+    `verdict` (PR-B3) — when 'win', the synthesizer was prompted
+    with the win-case template so any emitted lessons are expected
+    to use the win-side categories (`correct_signal_combo`,
+    `successful_thesis`). When 'miss' or None, the legacy miss-
+    side categories apply. We don't enforce the category mapping
+    here (the synthesizer's free-form output is normalized to
+    'other' on mismatch) — the gate is purely informational so
+    callers can post-process telemetry by win/miss split.
+
     Returns the list of newly-persisted rows (0..5). Caller can use
     the count for telemetry but does not need to flush — this
     function commits.
@@ -135,6 +246,7 @@ async def extract_and_persist_lessons(
     if not isinstance(lessons_payload, list) or not lessons_payload:
         return []
 
+    regime_label = _classify_regime(ctx)
     written: list[DiscussionLesson] = []
     seen_hashes_in_payload: set[str] = set()
     dedup_threshold = datetime.now(UTC) - timedelta(days=_DEDUP_WINDOW_DAYS)
@@ -191,6 +303,7 @@ async def extract_and_persist_lessons(
             lesson_text_hash=h,
             related_symbols=_normalize_symbols(raw.get("related_symbols")),
             missed_winners=_normalize_symbols(raw.get("missed_winners")),
+            regime=regime_label,
         )
         db.add(row)
         written.append(row)
@@ -228,25 +341,81 @@ async def _resolve_halflife(db: AsyncSession) -> int:
         return settings.LESSONS_DECAY_HALFLIFE_DAYS
 
 
+# PR-B1: tier-aware half-life multipliers. base = the runtime
+# configured `LESSONS_DECAY_HALFLIFE_DAYS` (default 60). episodic
+# lessons keep that exact half-life; semantic ones decay 3x slower
+# (180d default); structural lessons don't decay at all.
+_TIER_HALFLIFE_MULTIPLIER: dict[str, float | None] = {
+    "episodic":   1.0,
+    "semantic":   3.0,
+    "structural": None,   # never decays
+}
+
+# PR-B1: regime-match boost. Same regime doubles the score, opposite
+# regime cuts it to 0.7 (still kept as a tail candidate so a sweep
+# in a thin regime still gets *some* prior context). NULL on either
+# side stays neutral — we don't punish lessons that landed before
+# regime tagging existed (B0).
+_REGIME_MATCH_BOOST = 2.0
+_REGIME_MISMATCH_BOOST = 0.7
+
+# PR-B3: win-side lessons (correct_signal_combo / successful_thesis)
+# get a multiplicative penalty so the ranking treats them with
+# slightly more skepticism than miss-side lessons. Survivor-bias
+# motivation: the LLM is much more likely to spin a confident-looking
+# narrative in hindsight than to honestly identify failure modes,
+# so the calibrated long-term value of a win lesson is roughly 80%
+# of a miss lesson at the same age + regime.
+_WIN_LESSON_BOOST = 0.8
+
+
 def _score(
     lesson: DiscussionLesson, *,
     anchor: date, focus_symbols: set[str], halflife_days: int,
+    current_regime: str | None = None,
 ) -> float:
+    tier = getattr(lesson, "tier", None) or "episodic"
+    multiplier = _TIER_HALFLIFE_MULTIPLIER.get(tier, 1.0)
+
     age_days = max(0, (anchor - lesson.as_of_date).days)
-    half = max(1, halflife_days)
-    recency = math.exp(-age_days * math.log(2) / half)
+    if multiplier is None:
+        recency = 1.0   # structural lessons don't decay
+    else:
+        half = max(1, int(halflife_days * multiplier))
+        recency = math.exp(-age_days * math.log(2) / half)
+
     related = set(lesson.related_symbols or [])
-    boost = 1.5 if focus_symbols and (focus_symbols & related) else 1.0
-    return recency * boost
+    symbol_boost = (
+        1.5 if focus_symbols and (focus_symbols & related) else 1.0
+    )
+
+    lesson_regime = getattr(lesson, "regime", None)
+    if not current_regime or not lesson_regime:
+        regime_boost = 1.0
+    elif lesson_regime == current_regime:
+        regime_boost = _REGIME_MATCH_BOOST
+    else:
+        regime_boost = _REGIME_MISMATCH_BOOST
+
+    # PR-B3: 0.8x penalty on win-side lessons so survivor bias
+    # doesn't make them outrank a same-age miss-side lesson at
+    # the top of the ranking.
+    category = getattr(lesson, "category", "") or ""
+    win_boost = _WIN_LESSON_BOOST if category in WIN_CATEGORIES else 1.0
+
+    return recency * symbol_boost * regime_boost * win_boost
 
 
 def _to_summary(lesson: DiscussionLesson) -> LessonSummary:
     return LessonSummary(
+        id=lesson.id,
         as_of_date=lesson.as_of_date.isoformat(),
         category=lesson.category,
         lesson_text=lesson.lesson_text[:_MAX_LESSON_LEN],
         related_symbols=list(lesson.related_symbols or []),
         missed_winners=list(lesson.missed_winners or []),
+        tier=getattr(lesson, "tier", None) or "episodic",
+        regime=getattr(lesson, "regime", None),
     )
 
 
@@ -258,6 +427,7 @@ async def fetch_relevant_lessons(
     focus_symbols: set[str] | None = None,
     discussion_as_of: date | None = None,
     limit: int = 5,
+    current_regime: str | None = None,
 ) -> list[LessonSummary]:
     """Owner+market scoped fetch with backtest-safe time filter.
 
@@ -266,8 +436,15 @@ async def fetch_relevant_lessons(
     can't peek at lessons learned in its future); when None
     (live mode) the filter is bypassed.
 
+    `current_regime` (PR-B1) is the regime label for the current
+    discussion's market state — when provided, lessons learned
+    under the same regime get a 2x boost in the ranking, lessons
+    from a different regime drop to 0.7x (still eligible — never
+    fully dropped so a thin regime can still surface fallback
+    context). NULL on either side is neutral.
+
     Returns up to `limit` `LessonSummary` rows ranked by the
-    time-decay + symbol-boost score, descending.
+    time-decay × symbol-boost × regime-boost score, descending.
     """
     if limit <= 0 or owner_user_id is None or not market:
         return []
@@ -305,6 +482,7 @@ async def fetch_relevant_lessons(
             _score(
                 lesson, anchor=anchor, focus_symbols=focus,
                 halflife_days=halflife,
+                current_regime=current_regime,
             ),
             lesson,
         ))
@@ -313,12 +491,22 @@ async def fetch_relevant_lessons(
 
 
 def summary_to_dict(s: LessonSummary) -> dict[str, Any]:
+    """Serialize a LessonSummary for ctx injection. Includes the
+    `id` so the round-context snapshot carries it through —
+    `lesson_tier_service.record_lesson_outcome` walks the snapshot
+    to bump hit_count after a verdict lands. The ID is an internal
+    autoincrement PK; the LLM ignores it but the audit path
+    depends on it.
+    """
     return {
+        "id":             s.id,
         "as_of_date":     s.as_of_date,
         "category":       s.category,
         "lesson_text":    s.lesson_text,
         "related_symbols": list(s.related_symbols),
         "missed_winners":  list(s.missed_winners),
+        "tier":           s.tier,
+        "regime":         s.regime,
     }
 
 

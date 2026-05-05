@@ -357,6 +357,22 @@ async def _set_verdict(
     d.verified_at = now
     d.day1_open_prices = day1_opens or None
     d.day5_close_prices = closes or None
+
+    # PR-B2: bump hit_count on every lesson cited by this discussion's
+    # round contexts when the verdict turns positive. record_lesson_outcome
+    # is gated on verdict=='win' internally so calling unconditionally
+    # is safe; failure only logs.
+    if verdict == "win":
+        try:
+            from services.lesson_tier_service import (
+                record_lesson_outcome,
+            )
+            await record_lesson_outcome(db, discussion_id=d.id)
+        except Exception as exc:
+            log.debug(
+                "verify_discussion_outcome.record_lesson_outcome_failed",
+                extra={"id": str(d.id), "error": str(exc)},
+            )
     log.info(
         "verify_discussion_outcome.verdict",
         extra={

@@ -806,3 +806,100 @@ async def test_delete_sweep_removes_row(
         select(BacktestSweep).where(BacktestSweep.id == sweep.id)
     )
     assert fetched is None
+
+
+# ── PR-A0: fold_kind metadata ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_create_sweep_defaults_to_production_fold(
+    db_session: AsyncSession, owner: User,
+):
+    """Direct API callers don't set fold_kind — the existing
+    'production' default keeps every legacy code path working."""
+    sweep = await svc.create_sweep(
+        db_session, owner_id=owner.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["buffett"],
+        anchor_date=date(2026, 1, 5), trading_days_count=3,
+    )
+    assert sweep.fold_kind == "production"
+    assert sweep.parent_sweep_id is None
+
+
+@pytest.mark.asyncio
+async def test_create_sweep_with_train_fold_kind(
+    db_session: AsyncSession, owner: User,
+):
+    sweep = await svc.create_sweep(
+        db_session, owner_id=owner.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["buffett"],
+        anchor_date=date(2026, 1, 5), trading_days_count=3,
+        fold_kind="train",
+    )
+    assert sweep.fold_kind == "train"
+
+
+@pytest.mark.asyncio
+async def test_create_test_sweep_links_to_parent(
+    db_session: AsyncSession, owner: User,
+):
+    """The walk-forward orchestrator (PR-A1) creates a test sweep
+    that points at its train sibling so the aggregate UI can pair
+    them up."""
+    train = await svc.create_sweep(
+        db_session, owner_id=owner.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["buffett"],
+        anchor_date=date(2026, 1, 5), trading_days_count=3,
+        fold_kind="train",
+    )
+    test = await svc.create_sweep(
+        db_session, owner_id=owner.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["buffett"],
+        anchor_date=date(2026, 4, 1), trading_days_count=3,
+        fold_kind="test", parent_sweep_id=train.id,
+    )
+    assert test.fold_kind == "test"
+    assert test.parent_sweep_id == train.id
+
+
+@pytest.mark.asyncio
+async def test_create_sweep_rejects_invalid_fold_kind(
+    db_session: AsyncSession, owner: User,
+):
+    with pytest.raises(ValueError, match="fold_kind"):
+        await svc.create_sweep(
+            db_session, owner_id=owner.id,
+            topic="t", rules="r", market="TW",
+            persona_ids=["buffett"],
+            anchor_date=date(2026, 1, 5), trading_days_count=3,
+            fold_kind="validation",
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_sweep_rejects_parent_on_production(
+    db_session: AsyncSession, owner: User,
+):
+    """parent_sweep_id only makes sense for fold halves — guard
+    against an API caller wiring a production sweep to a parent
+    by mistake."""
+    train = await svc.create_sweep(
+        db_session, owner_id=owner.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["buffett"],
+        anchor_date=date(2026, 1, 5), trading_days_count=3,
+        fold_kind="train",
+    )
+    with pytest.raises(ValueError, match="parent_sweep_id"):
+        await svc.create_sweep(
+            db_session, owner_id=owner.id,
+            topic="t", rules="r", market="TW",
+            persona_ids=["buffett"],
+            anchor_date=date(2026, 4, 1), trading_days_count=3,
+            fold_kind="production",
+            parent_sweep_id=train.id,
+        )

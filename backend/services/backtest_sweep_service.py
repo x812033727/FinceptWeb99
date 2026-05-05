@@ -62,6 +62,11 @@ LOOKAHEAD_CALENDAR_DAYS_PER_TRADING_DAY = 5   # weekend + holiday slack
 # ── CRUD helpers ──────────────────────────────────────────────────
 
 
+VALID_FOLD_KINDS: frozenset[str] = frozenset(
+    {"train", "test", "production"}
+)
+
+
 async def create_sweep(
     db: AsyncSession,
     *,
@@ -76,10 +81,26 @@ async def create_sweep(
     concurrency: int = 1,
     auto_post_mortem: bool = True,
     strategy_id: UUID | None = None,
+    fold_kind: str = "production",
+    parent_sweep_id: UUID | None = None,
+    weights_override: dict[str, float] | None = None,
 ) -> BacktestSweep:
     """Persist a new sweep row in `pending` state. Validates input
     bounds; raises ValueError on invalid input so the API layer
-    can surface 400."""
+    can surface 400.
+
+    `fold_kind` (PR-A0) labels the sweep as part of a walk-forward
+    fold — `train` / `test` are spawned by the walk-forward
+    orchestrator and link back at each other via `parent_sweep_id`.
+    Direct API callers default to `production` and don't need to
+    set either.
+
+    `weights_override` (PR-A1) is the frozen persona weights from a
+    completed train fold; the test fold spawned for that pair
+    consults this map ahead of the parent strategy template so the
+    OOS evaluation runs against the train-derived weights without
+    leaking back into the template.
+    """
     if not persona_ids:
         raise ValueError("persona_ids must not be empty")
     if trading_days_count < 1 or trading_days_count > MAX_TRADING_DAYS:
@@ -101,6 +122,29 @@ async def create_sweep(
         raise ValueError("topic and rules are required")
     if market not in ("TW", "US", "GLOBAL"):
         raise ValueError(f"market must be TW / US / GLOBAL, got {market!r}")
+    if fold_kind not in VALID_FOLD_KINDS:
+        raise ValueError(
+            "fold_kind must be train / test / production, "
+            f"got {fold_kind!r}"
+        )
+    if parent_sweep_id is not None and fold_kind == "production":
+        # Production sweeps are top-level; only fold halves should
+        # link to a sibling. This catches accidental misuse from
+        # the API layer.
+        raise ValueError(
+            "parent_sweep_id is only valid when fold_kind is "
+            "'train' or 'test'"
+        )
+    if weights_override is not None and fold_kind == "train":
+        # Train folds learn their own weights from their own
+        # discussions — overriding would short-circuit the very
+        # thing the train fold exists to compute. Production is
+        # allowed (PR-A2: auto-schedule injects walk-forward
+        # validated weights), test is allowed (PR-A1: orchestrator
+        # injects the frozen train weights).
+        raise ValueError(
+            "weights_override is not valid on a 'train' fold"
+        )
 
     sweep = BacktestSweep(
         owner_id=owner_id,
@@ -114,6 +158,9 @@ async def create_sweep(
         concurrency=concurrency,
         auto_post_mortem=auto_post_mortem,
         strategy_id=strategy_id,
+        fold_kind=fold_kind,
+        parent_sweep_id=parent_sweep_id,
+        weights_override=weights_override,
     )
     db.add(sweep)
     await db.commit()
@@ -500,7 +547,30 @@ async def run_sweep_worker(sweep_id: UUID) -> None:
         # validated track record. Best-effort — any failure logs
         # but does NOT roll back the sweep completion (the operator
         # can recompute manually via POST /strategies/{id}/learn).
-        if not cancelled_mid_flight and sweep.strategy_id is not None:
+        #
+        # PR-A1: skip the in-sample retraining when this sweep is
+        # the test half of a walk-forward fold — letting test fold
+        # results modify the template's weights would re-introduce
+        # the very in-sample bias the OOS validation is meant to
+        # surface. Train folds also skip (they hand off to the
+        # walk-forward orchestrator's frozen-weights pipeline);
+        # only `production` sweeps trigger the in-place learner.
+        #
+        # PR-A2: production sweeps that ran against a walk-forward
+        # validated `weights_override` ALSO skip — the OOS-clean
+        # weights are already in place, retraining in-sample on top
+        # would re-poison them. Production sweeps WITHOUT a frozen
+        # weights override (i.e. strategies that haven't run a
+        # walk-forward yet) keep the legacy in-sample retrain so
+        # the existing operator workflow stays intact during the
+        # rollout.
+        should_learn_weights = (
+            not cancelled_mid_flight
+            and sweep.strategy_id is not None
+            and sweep.fold_kind == "production"
+            and not sweep.weights_override
+        )
+        if should_learn_weights:
             try:
                 from services import persona_weight_learner
                 await persona_weight_learner.learn_weights_for_strategy(
@@ -514,6 +584,52 @@ async def run_sweep_worker(sweep_id: UUID) -> None:
                     extra={
                         "sweep_id": str(sweep_id),
                         "strategy_id": str(sweep.strategy_id),
+                        "error": str(exc),
+                    },
+                )
+
+            # PR-C2: refit the isotonic calibration curve from the
+            # rolling pool of (confidence, outcome) pairs the parent
+            # strategy has accumulated across its sweeps. Best-effort
+            # — failure logs but doesn't roll back the sweep
+            # completion, identical contract to the weight learner.
+            # Sample-size gate inside the fitter handles the
+            # cold-start case (strategy with <30 resolved pairs
+            # gets `updated=False` and the curve stays NULL).
+            try:
+                from services import confidence_calibrator
+                await confidence_calibrator.fit_isotonic_for_strategy(
+                    db,
+                    owner_id=sweep.owner_id,
+                    strategy_id=sweep.strategy_id,
+                )
+            except Exception as exc:
+                log.warning(
+                    "backtest_sweep.fit_calibration_failed",
+                    extra={
+                        "sweep_id": str(sweep_id),
+                        "strategy_id": str(sweep.strategy_id),
+                        "error": str(exc),
+                    },
+                )
+
+        # PR-B2: promote eligible episodic lessons to semantic when
+        # they've been cited enough times AND the citing discussions
+        # ended in win often enough. Runs on every fold_kind so the
+        # promotion accounting reflects all completed work, not just
+        # production sweeps. Best-effort — bad rollup doesn't
+        # affect the sweep status.
+        if not cancelled_mid_flight:
+            try:
+                from services.lesson_tier_service import (
+                    promote_eligible_lessons,
+                )
+                await promote_eligible_lessons(db, market=sweep.market)
+            except Exception as exc:
+                log.warning(
+                    "backtest_sweep.promote_lessons_failed",
+                    extra={
+                        "sweep_id": str(sweep_id),
                         "error": str(exc),
                     },
                 )

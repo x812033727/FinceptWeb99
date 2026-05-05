@@ -305,3 +305,188 @@ async def test_aggregate_strategy_returns_empty_when_no_sweeps(
     assert payload["sweep_count"] == 0
     assert payload["discussions_total"] == 0
     assert payload["per_persona"] == []
+
+
+# ── PR-A0: fold_kind passes through to aggregate payload ──────────
+
+
+@pytest.mark.asyncio
+async def test_aggregate_sweep_exposes_fold_metadata(
+    db_session: AsyncSession, owner: User,
+):
+    train = _make_sweep(owner.id)
+    train.fold_kind = "train"
+    db_session.add(train)
+    await db_session.commit()
+    await db_session.refresh(train)
+
+    test = _make_sweep(owner.id)
+    test.fold_kind = "test"
+    test.parent_sweep_id = train.id
+    db_session.add(test)
+    await db_session.commit()
+    await db_session.refresh(test)
+
+    payload_train = await svc.aggregate_sweep(db_session, train)
+    assert payload_train["fold_kind"] == "train"
+    assert payload_train["parent_sweep_id"] is None
+
+    payload_test = await svc.aggregate_sweep(db_session, test)
+    assert payload_test["fold_kind"] == "test"
+    assert payload_test["parent_sweep_id"] == str(train.id)
+
+
+@pytest.mark.asyncio
+async def test_aggregate_sweep_legacy_sweeps_default_to_production(
+    db_session: AsyncSession, owner: User,
+):
+    """Pre-PR-A0 sweep rows already in the DB get fold_kind defaulted
+    to 'production' by the migration's server_default. The aggregate
+    output should surface that without erroring."""
+    sweep = _make_sweep(owner.id)
+    db_session.add(sweep)
+    await db_session.commit()
+    await db_session.refresh(sweep)
+
+    payload = await svc.aggregate_sweep(db_session, sweep)
+    assert payload["fold_kind"] == "production"
+    assert payload["parent_sweep_id"] is None
+
+
+# ── PR-C1: Brier score + reliability rolled up at sweep level ────────
+
+
+@pytest.mark.asyncio
+async def test_aggregate_includes_brier_when_discussions_resolved(
+    db_session: AsyncSession, owner: User,
+):
+    sweep = _make_sweep(owner.id, completed=["2026-01-05", "2026-01-06"])
+    db_session.add(sweep)
+    await db_session.commit()
+    await db_session.refresh(sweep)
+
+    # Discussion A: confidence 0.8, outcome 1, loss = 0.04
+    a = _make_disc(
+        owner_id=owner.id, sweep_id=sweep.id,
+        verdict="win",
+        opens={"2330": 100.0},
+        daily={"2330": [110.0, 105.0, 102.0, 108.0, 109.0]},
+    )
+    a.brier_score = 0.04
+    a.outcome_vector = [
+        {"symbol": "2330", "confidence": 0.8, "outcome_binary": 1},
+    ]
+    # Discussion B: confidence 0.7, outcome 0, loss = 0.49
+    b = _make_disc(
+        owner_id=owner.id, sweep_id=sweep.id,
+        verdict="loss",
+        opens={"2454": 100.0},
+        daily={"2454": [101.0, 102.0, 100.5, 100.0, 99.5]},
+    )
+    b.brier_score = 0.49
+    b.outcome_vector = [
+        {"symbol": "2454", "confidence": 0.7, "outcome_binary": 0},
+    ]
+    db_session.add_all([a, b])
+    await db_session.commit()
+
+    payload = await svc.aggregate_sweep(db_session, sweep)
+    # weighted average: (0.04*1 + 0.49*1) / (1+1) = 0.265
+    assert payload["brier_score"] == pytest.approx(0.265, abs=1e-6)
+    assert payload["brier_samples"] == 2
+    # Reliability buckets always have 10 entries (with empty placeholders)
+    assert len(payload["reliability"]) == 10
+
+
+@pytest.mark.asyncio
+async def test_aggregate_brier_weighted_by_sample_count(
+    db_session: AsyncSession, owner: User,
+):
+    """Discussion with more recommendations should pull the average
+    proportionally more than a 1-pick discussion."""
+    sweep = _make_sweep(owner.id, completed=["2026-01-05", "2026-01-06"])
+    db_session.add(sweep)
+    await db_session.commit()
+    await db_session.refresh(sweep)
+
+    # A has 4 picks all loss=0.04 → discussion brier=0.04, samples=4
+    a = _make_disc(owner_id=owner.id, sweep_id=sweep.id, verdict="win")
+    a.brier_score = 0.04
+    a.outcome_vector = [
+        {"symbol": f"S{i}", "confidence": 0.8, "outcome_binary": 1}
+        for i in range(4)
+    ]
+    # B has 1 pick loss=0.81 → discussion brier=0.81, samples=1
+    b = _make_disc(owner_id=owner.id, sweep_id=sweep.id, verdict="loss")
+    b.brier_score = 0.81
+    b.outcome_vector = [
+        {"symbol": "X", "confidence": 0.9, "outcome_binary": 0},
+    ]
+    db_session.add_all([a, b])
+    await db_session.commit()
+
+    payload = await svc.aggregate_sweep(db_session, sweep)
+    # weighted: (0.04*4 + 0.81*1) / (4+1) = 0.97 / 5 = 0.194
+    assert payload["brier_score"] == pytest.approx(0.194, abs=1e-6)
+    assert payload["brier_samples"] == 5
+
+
+@pytest.mark.asyncio
+async def test_aggregate_brier_skips_unresolved_discussions(
+    db_session: AsyncSession, owner: User,
+):
+    """Mix of resolved + pending — only the resolved one contributes
+    to brier; unresolved rows shouldn't poison the average."""
+    sweep = _make_sweep(owner.id, completed=["2026-01-05", "2026-01-06"])
+    db_session.add(sweep)
+    await db_session.commit()
+    await db_session.refresh(sweep)
+
+    a = _make_disc(owner_id=owner.id, sweep_id=sweep.id, verdict="win")
+    a.brier_score = 0.04
+    a.outcome_vector = [
+        {"symbol": "S", "confidence": 0.8, "outcome_binary": 1},
+    ]
+    pending = _make_disc(owner_id=owner.id, sweep_id=sweep.id)
+    # leave pending.brier_score = None
+    db_session.add_all([a, pending])
+    await db_session.commit()
+
+    payload = await svc.aggregate_sweep(db_session, sweep)
+    assert payload["brier_score"] == pytest.approx(0.04, abs=1e-6)
+    assert payload["brier_samples"] == 1
+
+
+@pytest.mark.asyncio
+async def test_aggregate_brier_null_when_no_resolved_discussions(
+    db_session: AsyncSession, owner: User,
+):
+    sweep = _make_sweep(owner.id)
+    db_session.add(sweep)
+    await db_session.commit()
+    await db_session.refresh(sweep)
+    pending = _make_disc(owner_id=owner.id, sweep_id=sweep.id)
+    db_session.add(pending)
+    await db_session.commit()
+
+    payload = await svc.aggregate_sweep(db_session, sweep)
+    assert payload["brier_score"] is None
+    assert payload["brier_samples"] == 0
+    assert payload["reliability"] == []
+
+
+@pytest.mark.asyncio
+async def test_empty_sweep_includes_brier_keys_in_payload(
+    db_session: AsyncSession, owner: User,
+):
+    """Empty payload still has the Brier keys so the dashboard can
+    `payload.brier_score ?? "n/a"` without `undefined` checks."""
+    sweep = _make_sweep(owner.id)
+    db_session.add(sweep)
+    await db_session.commit()
+    await db_session.refresh(sweep)
+
+    payload = await svc.aggregate_sweep(db_session, sweep)
+    assert "brier_score" in payload
+    assert "brier_samples" in payload
+    assert "reliability" in payload

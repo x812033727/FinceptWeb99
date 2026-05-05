@@ -245,8 +245,76 @@ async def set_persona_weights(
     return tmpl
 
 
+async def latest_validated_weights(
+    db: AsyncSession,
+    *,
+    owner_id: UUID,
+    strategy_id: UUID,
+    max_age_days: int | None = None,
+) -> dict[str, float] | None:
+    """PR-A2: return the persona weights from this strategy's most
+    recently completed walk-forward fold, or None when no validated
+    weights exist.
+
+    The "validated" definition is operationally:
+
+      1. find the most recent successfully-completed test sweep
+         (`fold_kind == 'test'`, `status == 'completed'`) belonging
+         to this strategy + owner
+      2. that sweep's `weights_override` IS the train fold's frozen
+         weights (PR-A1 stuffs them there at sweep creation time)
+
+    Production sweeps consult this at create time so they run
+    against an OOS-validated weight map instead of the in-sample
+    `template.persona_weights`. Returning None means "no walk-
+    forward history yet, fall back to in-sample".
+
+    `max_age_days` (optional) — refuse to surface validated weights
+    older than this many days, so a stale walk-forward from 6 months
+    ago doesn't permanently anchor production. None disables the
+    cutoff entirely.
+    """
+    # Imported lazily to avoid a circular import — backtest_sweep
+    # imports from this service via `learn_weights_for_strategy`'s
+    # call chain.
+    from models.backtest_sweep import BacktestSweep
+
+    stmt = (
+        select(BacktestSweep)
+        .where(
+            BacktestSweep.strategy_id == strategy_id,
+            BacktestSweep.owner_id == owner_id,
+            BacktestSweep.fold_kind == "test",
+            BacktestSweep.status == "completed",
+            BacktestSweep.weights_override.is_not(None),
+        )
+        .order_by(BacktestSweep.completed_at.desc())
+        .limit(1)
+    )
+    sweep = await db.scalar(stmt)
+    if sweep is None:
+        return None
+    if max_age_days is not None and sweep.completed_at is not None:
+        age_days = (datetime.now(UTC) - sweep.completed_at).days
+        if age_days > max_age_days:
+            return None
+    weights = sweep.weights_override
+    if not weights:
+        return None
+    # Defensive copy + cast — JSON may surface ints / strings the
+    # float-keyed downstream consumers can't directly use.
+    out: dict[str, float] = {}
+    for pid, w in weights.items():
+        try:
+            out[str(pid)] = float(w)
+        except (TypeError, ValueError):
+            continue
+    return out or None
+
+
 __all__ = [
     "MAX_NAME_LEN", "MAX_ROUNDS", "MAX_CONCURRENCY", "ALLOWED_MARKETS",
     "create_template", "list_templates", "get_template",
     "update_template", "soft_delete_template", "set_persona_weights",
+    "latest_validated_weights",
 ]

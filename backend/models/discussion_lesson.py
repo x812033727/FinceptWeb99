@@ -45,6 +45,10 @@ class DiscussionLesson(Base):
             "ix_discussion_lessons_hash_recent",
             "owner_user_id", "lesson_text_hash", "created_at",
         ),
+        Index(
+            "ix_discussion_lessons_market_tier_regime_asof",
+            "market", "tier", "regime", "as_of_date",
+        ),
     )
 
     id: Mapped[int] = mapped_column(
@@ -72,6 +76,38 @@ class DiscussionLesson(Base):
     )
     missed_winners: Mapped[list[str]] = mapped_column(
         JSON, nullable=False, default=list, server_default="[]",
+    )
+    # PR-B0: regime tag captured at extraction time (the market state
+    # this lesson was *learned in*, not the state it should be applied
+    # to). NULL when ctx didn't carry enough signal at write time —
+    # the lesson is still persisted, fetch just doesn't get the
+    # regime-match boost.
+    regime: Mapped[str | None] = mapped_column(
+        String(32), nullable=True,
+    )
+    # PR-B0 / B2: memory layering — episodic (default 60d decay) →
+    # semantic (180d decay, B2 auto-promote) → structural (no decay,
+    # admin-only manual promote). Schema lands here; B1 wires it into
+    # the fetch scoring, B2 implements the promotion job.
+    tier: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False, default="episodic", server_default="episodic",
+    )
+    # PR-B0 / B2: usage telemetry — every fetch that includes this
+    # lesson in the prompt bumps `usage_count`; every win-verdict
+    # discussion that consumed it bumps `hit_count`. Promotion rule
+    # in B2 reads `hit_count / usage_count`.
+    usage_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    hit_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    promoted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

@@ -213,3 +213,193 @@ async def test_set_persona_weights_stamps_timestamp(
         db_session, tmpl, weights={"newbie": 1.0},
     )
     assert updated2.persona_weights == {"newbie": 1.0}
+
+
+# ── PR-A2: latest_validated_weights ─────────────────────────────
+
+
+def _make_completed_test_sweep(
+    *,
+    owner_id: uuid.UUID,
+    strategy_id: uuid.UUID,
+    weights: dict[str, float],
+    completed_at,
+):
+    """Helper for the PR-A2 walk-forward weight resolver tests."""
+    from datetime import date as _date
+
+    from models.backtest_sweep import BacktestSweep
+    return BacktestSweep(
+        id=uuid.uuid4(),
+        owner_id=owner_id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["a"],
+        anchor_date=_date(2026, 1, 5),
+        trading_days_count=5,
+        rounds_per_discussion=1,
+        concurrency=1,
+        auto_post_mortem=False,
+        strategy_id=strategy_id,
+        fold_kind="test",
+        weights_override=weights,
+        status="completed",
+        completed_at=completed_at,
+    )
+
+
+@pytest.mark.asyncio
+async def test_latest_validated_weights_returns_none_without_history(
+    db_session: AsyncSession, owner: User,
+):
+    tmpl = await svc.create_template(
+        db_session, owner_id=owner.id, **_kw()
+    )
+    out = await svc.latest_validated_weights(
+        db_session, owner_id=owner.id, strategy_id=tmpl.id,
+    )
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_latest_validated_weights_returns_most_recent_test_sweep(
+    db_session: AsyncSession, owner: User,
+):
+    from datetime import UTC, datetime, timedelta
+
+    tmpl = await svc.create_template(
+        db_session, owner_id=owner.id, **_kw()
+    )
+
+    older = _make_completed_test_sweep(
+        owner_id=owner.id, strategy_id=tmpl.id,
+        weights={"bull": 1.2, "bear": 0.8},
+        completed_at=datetime.now(UTC) - timedelta(days=20),
+    )
+    newer = _make_completed_test_sweep(
+        owner_id=owner.id, strategy_id=tmpl.id,
+        weights={"bull": 1.7, "bear": 0.6},
+        completed_at=datetime.now(UTC) - timedelta(days=2),
+    )
+    db_session.add_all([older, newer])
+    await db_session.commit()
+
+    out = await svc.latest_validated_weights(
+        db_session, owner_id=owner.id, strategy_id=tmpl.id,
+    )
+    assert out == {"bull": 1.7, "bear": 0.6}
+
+
+@pytest.mark.asyncio
+async def test_latest_validated_weights_respects_max_age(
+    db_session: AsyncSession, owner: User,
+):
+    """A 6-month-old walk-forward shouldn't anchor today's
+    production sweep — `max_age_days` filters it out."""
+    from datetime import UTC, datetime, timedelta
+
+    tmpl = await svc.create_template(
+        db_session, owner_id=owner.id, **_kw()
+    )
+    stale = _make_completed_test_sweep(
+        owner_id=owner.id, strategy_id=tmpl.id,
+        weights={"bull": 1.2},
+        completed_at=datetime.now(UTC) - timedelta(days=180),
+    )
+    db_session.add(stale)
+    await db_session.commit()
+
+    out = await svc.latest_validated_weights(
+        db_session,
+        owner_id=owner.id, strategy_id=tmpl.id,
+        max_age_days=30,
+    )
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_latest_validated_weights_skips_other_owners(
+    db_session: AsyncSession, owner: User, other_owner: User,
+):
+    from datetime import UTC, datetime, timedelta
+
+    tmpl = await svc.create_template(
+        db_session, owner_id=owner.id, **_kw()
+    )
+    foreign = _make_completed_test_sweep(
+        owner_id=other_owner.id, strategy_id=tmpl.id,
+        weights={"bull": 9.9},
+        completed_at=datetime.now(UTC) - timedelta(days=1),
+    )
+    db_session.add(foreign)
+    await db_session.commit()
+
+    out = await svc.latest_validated_weights(
+        db_session, owner_id=owner.id, strategy_id=tmpl.id,
+    )
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_latest_validated_weights_skips_non_test_folds(
+    db_session: AsyncSession, owner: User,
+):
+    from datetime import UTC, date, datetime, timedelta
+
+    from models.backtest_sweep import BacktestSweep
+
+    tmpl = await svc.create_template(
+        db_session, owner_id=owner.id, **_kw()
+    )
+    train_only = BacktestSweep(
+        id=uuid.uuid4(), owner_id=owner.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["a"],
+        anchor_date=date(2026, 1, 5),
+        trading_days_count=5, rounds_per_discussion=1,
+        concurrency=1, auto_post_mortem=False,
+        strategy_id=tmpl.id,
+        fold_kind="train",
+        status="completed",
+        completed_at=datetime.now(UTC) - timedelta(days=2),
+    )
+    db_session.add(train_only)
+    await db_session.commit()
+
+    out = await svc.latest_validated_weights(
+        db_session, owner_id=owner.id, strategy_id=tmpl.id,
+    )
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_latest_validated_weights_skips_in_flight_sweep(
+    db_session: AsyncSession, owner: User,
+):
+    """A test sweep that's still running shouldn't be returned —
+    its weights might mid-update."""
+    from datetime import date
+
+    from models.backtest_sweep import BacktestSweep
+
+    tmpl = await svc.create_template(
+        db_session, owner_id=owner.id, **_kw()
+    )
+    in_flight = BacktestSweep(
+        id=uuid.uuid4(), owner_id=owner.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["a"],
+        anchor_date=date(2026, 1, 5),
+        trading_days_count=5, rounds_per_discussion=1,
+        concurrency=1, auto_post_mortem=False,
+        strategy_id=tmpl.id,
+        fold_kind="test",
+        weights_override={"a": 1.5},
+        status="running",
+    )
+    db_session.add(in_flight)
+    await db_session.commit()
+
+    out = await svc.latest_validated_weights(
+        db_session, owner_id=owner.id, strategy_id=tmpl.id,
+    )
+    assert out is None

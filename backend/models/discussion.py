@@ -24,6 +24,7 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -118,6 +119,16 @@ class Discussion(Base):
     # window expires; left NULL for active discussions so the cron
     # knows to retry on the next tick.
     daily_close_prices: Mapped[dict[str, list[float | None]] | None] = mapped_column(
+        JSON, nullable=True,
+    )
+    # PR-C1: Brier score + per-symbol outcome breakdown computed once
+    # the D1-D5 window resolves. NULL until then (the cron retries on
+    # the next tick) and on every pre-PR-C0 row that has no per-symbol
+    # confidence to score against.
+    brier_score: Mapped[float | None] = mapped_column(
+        Float, nullable=True,
+    )
+    outcome_vector: Mapped[list[dict[str, Any]] | None] = mapped_column(
         JSON, nullable=True,
     )
     verify_after_date: Mapped[date | None] = mapped_column(

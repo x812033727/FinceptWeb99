@@ -531,6 +531,101 @@ def format_post_mortem_miss_prompt(
     return "\n".join(lines)
 
 
+def format_post_mortem_win_prompt(
+    *,
+    as_of: date,
+    trading_days: list[date],
+    recommended_performance: list[RecommendedPerformance],
+    recommended_symbols: list[str],
+    verdict: OutcomeVerdict,
+    company_name_lookup: dict[str, str | None] | None = None,
+) -> str:
+    """PR-B3 — win-side post-mortem prompt.
+
+    Asks the personas to identify *what specifically worked* so the
+    learning loop captures the signal combinations and thesis
+    elements that pay off, rather than letting the success roll by
+    untaught. The hard guard against survivor bias is question 2:
+    "list at least one signal that was uncertain at the time but
+    turned out to be key." Without that explicit ask the LLM tends
+    to spin a confident retrospective narrative that overfits the
+    one win.
+
+    The win-prompt feeds the synthesizer's `lessons` extraction; the
+    synthesizer is expected to use the new categories
+    `correct_signal_combo` (specific signal interactions) and
+    `successful_thesis` (the broader thesis that played out) on
+    win-case post-mortems.
+    """
+    name_lookup = company_name_lookup or {}
+    lines: list[str] = ["【事後檢討 — 命中經驗】", ""]
+
+    last_day_label = (
+        f"D{len(trading_days)} ({trading_days[-1].isoformat()})"
+        if trading_days else "（無資料）"
+    )
+    lines.append(
+        f"回測日期 **{as_of.isoformat()}**，"
+        f"評估窗口 **D1 ({trading_days[0].isoformat()}) ~ {last_day_label}**。"
+        if trading_days
+        else f"回測日期 **{as_of.isoformat()}**，但評估窗口的 ohlcv 尚未抵達。"
+    )
+    lines.append("")
+
+    best = (
+        f"{verdict.best_pct:+.2f}%"
+        if verdict.best_pct is not None else "（無資料）"
+    )
+    lines.append(
+        f"✅ 你的推薦 {', '.join(recommended_symbols) or '（無）'} 在 "
+        f"{verdict.window_days} 個交易日內最高達 {best}，"
+        f"通過 {verdict.threshold_pct:g}% 門檻。"
+    )
+    lines.append("")
+
+    lines.append("## A. 你的推薦 D1-D5 表現")
+    lines.append("")
+    lines.extend(_format_recommended_table(
+        recommended_performance, trading_days, name_lookup,
+    ))
+    lines.append("")
+
+    lines.append("## B. 反思（要誠實面對 survivor bias，不要事後諸葛）")
+    lines.append("")
+    lines.append(
+        "1. **真正的關鍵訊號**：哪一筆 ctx 資料"
+        "（focus_briefs / news_sentiment / 外資台指期 / industry_rs / "
+        "single_stock_futures_oi / day_trading_trend / 借券 / "
+        "overseas_indicators / upcoming_event 等）是這次命中的**充分必要**訊號？"
+        "請只點名 1-3 筆，不要把所有訊號都歸功一遍。"
+    )
+    lines.append(
+        "2. **當時的不確定點**：圈出 round 1 中你**沒把握、評估為弱訊號**的 "
+        "≥1 條判讀，事後證明卻是關鍵。如果你想不到，這次命中很可能是運氣，"
+        "請明說「沒有特別不確定的訊號」而不要硬找一個。"
+    )
+    lines.append(
+        "3. **可重現的訊號組合**：把命中的關鍵抽象化成 `correct_signal_combo`"
+        "（例：「外資台指期由空轉多 + 單日五日均量爆量 + 殖利率倒掛緩解」）。"
+        "這個組合在歷史上出現幾次？你預期下次再出現時的勝率？"
+    )
+    lines.append(
+        "4. **可推廣的論點**：把這次命中的 thesis 抽象化成 `successful_thesis`"
+        "（例：「外資轉多 + 風險偏好回升 → 半導體先行」）。"
+        "下一次同 thesis 但不同 sector / region 還能成立嗎？"
+    )
+    lines.append("")
+    lines.append(
+        "請務必使用 `correct_signal_combo` 跟 `successful_thesis` 作為 "
+        "lessons 的 category，這樣下次討論的 ctx 才能正確分類為命中經驗。"
+    )
+    lines.append(
+        "請聚焦在「為什麼這次對了，且什麼時候會再對一次」，不要泛泛吹捧自己。"
+        "回答完後本輪結束，使用者會再彙整一次最終結論。"
+    )
+    return "\n".join(lines)
+
+
 def format_post_mortem_prompt(
     *,
     as_of: date,
@@ -721,10 +816,22 @@ async def build_post_mortem_message(
                       extra={"error": str(exc)})
 
     if verdict.status == "win":
-        # Skip-branch — leave prompt empty so the caller short-circuits
-        # the inject + round chain. Callers still get the perf/daily
-        # tables for UI surfacing of "why it was skipped".
-        text = ""
+        # PR-B3: instead of skipping the post-mortem on wins, run a
+        # win-flavored prompt so the personas extract WHY it worked.
+        # The synthesizer will emit `correct_signal_combo` /
+        # `successful_thesis` lessons that PR-B1's regime-aware
+        # fetch surfaces in 「過去命中經驗」blocks for future
+        # discussions. Survivor-bias guardrails live in the prompt
+        # itself (question 2 demands an uncertain-at-the-time signal,
+        # question 3 forces an abstract `correct_signal_combo`).
+        text = format_post_mortem_win_prompt(
+            as_of=discussion.as_of_date,
+            trading_days=trading_days[:window_days],
+            recommended_performance=rec_perf,
+            recommended_symbols=recommended,
+            verdict=verdict,
+            company_name_lookup=name_lookup,
+        )
     elif verdict.status == "miss":
         text = format_post_mortem_miss_prompt(
             as_of=discussion.as_of_date,

@@ -2885,14 +2885,21 @@ _SYNTHESIZER_USER_TEMPLATE = (
     "**直接輸出合法 JSON**（不要包 markdown code fence、不要在 JSON 之前或之後加任何解釋、"
     "不要寫 // 或 /* */ 註解）：\n"
     "{{\n"
-    '  "recommended_symbols": ["2330", "0050"],\n'
+    '  "recommendations": [\n'
+    '    {{"symbol": "2330", "confidence": 0.75}},\n'
+    '    {{"symbol": "0050", "confidence": 0.55}}\n'
+    "  ],\n"
     '  "reasoning": "結論摘要，≤200字，繁體中文，引用至少2位專家",\n'
     '  "risks": ["風險1", "風險2"],\n'
     '  "time_horizon": "short_term",\n'
     '  "consensus_score": 0.7\n'
     "}}\n\n"
     "欄位規則：\n"
-    "- recommended_symbols：最多 5 檔，要有市場共識且風險可控\n"
+    "- recommendations：最多 5 檔，要有市場共識且風險可控。每檔包含：\n"
+    "  - symbol：股票代號（字串）\n"
+    "  - confidence：0.0-1.0，你對這檔在「未來 5 個交易日內收盤至少出現一次顯著正向報酬」的把握程度。"
+    "請保守估計：有重大不確定性給 0.5 以下；極度有把握再給 0.8 以上；"
+    "全 conclusion 不應全部 ≥ 0.8（這代表沒有風險意識）。\n"
     "- time_horizon：只能是 short_term / medium_term / long_term 三選一\n"
     "- consensus_score：0.0 到 1.0 之間的數字，0 代表完全分歧，1 代表完全共識\n"
 )
@@ -3035,15 +3042,35 @@ def _safe_conclusion(raw: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         return {
             "recommended_symbols": [],
+            "recommendations": [],
             "reasoning": raw.strip()[:500] or "無法解析結論",
             "risks": [],
             "time_horizon": "short_term",
             "consensus_score": 0.0,
             "_parse_error": True,
         }
-    symbols = data.get("recommended_symbols") or []
-    if not isinstance(symbols, list):
-        symbols = []
+
+    # PR-C0: prefer the structured `recommendations: [{symbol, confidence}]`
+    # shape (each pick gets a per-symbol confidence). Old discussions and
+    # LLMs that miss the field fall through to the flat
+    # `recommended_symbols` list with a neutral 0.5 confidence so
+    # downstream Brier scoring (PR-C1) can always assume the structured
+    # shape exists.
+    recommendations = _parse_recommendations(data)
+    if not recommendations:
+        legacy_symbols = data.get("recommended_symbols") or []
+        if isinstance(legacy_symbols, list):
+            seen: set[str] = set()
+            for raw_symbol in legacy_symbols:
+                symbol = str(raw_symbol).strip()
+                if not symbol or symbol in seen:
+                    continue
+                seen.add(symbol)
+                recommendations.append({"symbol": symbol, "confidence": 0.5})
+                if len(recommendations) >= 5:
+                    break
+    recommended_symbols = [entry["symbol"] for entry in recommendations]
+
     risks = data.get("risks") or []
     if not isinstance(risks, list):
         risks = []
@@ -3056,12 +3083,47 @@ def _safe_conclusion(raw: str) -> dict[str, Any]:
         consensus = 0.0
     consensus = max(0.0, min(1.0, consensus))
     return {
-        "recommended_symbols": [str(s).strip() for s in symbols if str(s).strip()][:5],
+        "recommended_symbols": recommended_symbols,
+        "recommendations": recommendations,
         "reasoning": str(data.get("reasoning", ""))[:1000],
         "risks": [str(r).strip() for r in risks if str(r).strip()][:10],
         "time_horizon": horizon,
         "consensus_score": round(consensus, 3),
     }
+
+
+def _parse_recommendations(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Parse and validate the `recommendations` list out of the
+    synthesizer JSON. Each entry must have a non-empty `symbol`; bad
+    `confidence` values (string, NaN, out of range) clamp to [0, 1] with
+    a neutral 0.5 fallback. Symbols dedup by first occurrence and the
+    list is capped at 5 to match the historical `recommended_symbols`
+    cap. Returns `[]` when the field is missing or unusable so the
+    caller can fall back to the legacy flat list.
+    """
+    raw = data.get("recommendations")
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        symbol = str(entry.get("symbol", "")).strip()
+        if not symbol or symbol in seen:
+            continue
+        try:
+            conf = float(entry.get("confidence", 0.5))
+        except (TypeError, ValueError):
+            conf = 0.5
+        if conf != conf:   # NaN guard
+            conf = 0.5
+        conf = max(0.0, min(1.0, conf))
+        seen.add(symbol)
+        out.append({"symbol": symbol, "confidence": round(conf, 3)})
+        if len(out) >= 5:
+            break
+    return out
 
 
 async def synthesize_conclusion(
@@ -3137,6 +3199,13 @@ async def synthesize_conclusion(
     # with a track record. Returns "" when no weights are available
     # (live discussions, sweeps not tied to a template, fresh
     # templates not yet trained).
+    #
+    # PR-A1: when the sweep carries `weights_override` (set by the
+    # walk-forward orchestrator on a test fold), it takes priority
+    # over the parent template's `persona_weights`. This is what
+    # actually executes the OOS evaluation: the test fold runs
+    # against weights frozen from its train sibling instead of
+    # the live (and potentially in-sample-trained) template.
     if discussion.sweep_id is not None:
         from models.backtest_sweep import BacktestSweep
         from models.discussion_strategy_template import (
@@ -3148,16 +3217,21 @@ async def synthesize_conclusion(
         sweep_row = await db.scalar(
             select(BacktestSweep).where(BacktestSweep.id == discussion.sweep_id)
         )
-        if sweep_row is not None and sweep_row.strategy_id is not None:
-            tmpl = await db.scalar(
-                select(DiscussionStrategyTemplate).where(
-                    DiscussionStrategyTemplate.id == sweep_row.strategy_id,
+        weights_to_use: dict[str, float] | None = None
+        if sweep_row is not None:
+            override = getattr(sweep_row, "weights_override", None)
+            if override:
+                weights_to_use = dict(override)
+            elif sweep_row.strategy_id is not None:
+                tmpl = await db.scalar(
+                    select(DiscussionStrategyTemplate).where(
+                        DiscussionStrategyTemplate.id == sweep_row.strategy_id,
+                    )
                 )
-            )
-            if tmpl is not None and tmpl.persona_weights:
-                user_prompt += format_weights_for_synthesizer(
-                    dict(tmpl.persona_weights),
-                )
+                if tmpl is not None and tmpl.persona_weights:
+                    weights_to_use = dict(tmpl.persona_weights)
+        if weights_to_use:
+            user_prompt += format_weights_for_synthesizer(weights_to_use)
 
     if has_post_mortem:
         user_prompt += (
@@ -3324,6 +3398,8 @@ async def synthesize_conclusion(
                     market=discussion.market,
                     as_of_date=discussion.as_of_date,
                     lessons_payload=raw_obj,
+                    ctx=context,
+                    verdict=discussion.verdict,
                 )
         except Exception as exc:
             log.warning("discussion.lessons.persist_failed",

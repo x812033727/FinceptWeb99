@@ -775,6 +775,76 @@ def _batch_govt_bank_flow(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+_OPTION_INVESTOR_MAP = {
+    "自營商": "dealer",
+    "投信": "sitc",
+    "外資": "foreign",
+    "外資及陸資": "foreign",  # alt form sometimes seen on TWSE Stock variants
+}
+_OPTION_CALLPUT_MAP = {
+    "買權": "C",
+    "賣權": "P",
+    "C": "C",
+    "P": "P",
+}
+
+
+def _make_batch_option_inst(session_label: str):
+    """Returns a batch_transform that pivots FinMind's long-form option
+    institutional rows (one per (option, date, call_put, investor_type))
+    into local wide-form rows (one per (contract, ts, session, call_put)
+    with foreign/sitc/dealer × long/short_open_interest as columns).
+
+    `session_label` distinguishes regular session from after-hours so
+    both feeds can target the same `tw_option_inst_daily` table without
+    collisions on PK (contract, ts, session, call_put). FinMind doesn't
+    ship `deal_volume`/`deal_amount` separately for the local schema —
+    only the open-interest balance columns survive the pivot."""
+
+    def _pivot(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        groups: dict[tuple[str, date | None, str], dict[str, Any]] = {}
+        for r in rows:
+            contract = _to_str(r.get("option_id"))
+            ts = _to_date(r.get("date"))
+            cp_raw = str(r.get("call_put") or "")
+            cp = _OPTION_CALLPUT_MAP.get(cp_raw, cp_raw[:4])
+            key = (contract or "", ts, cp)
+            if key not in groups:
+                groups[key] = {
+                    "contract": contract,
+                    "ts": ts,
+                    "session": session_label,
+                    "call_put": cp,
+                    "foreign_long_open_interest": None,
+                    "foreign_short_open_interest": None,
+                    "sitc_long_open_interest": None,
+                    "sitc_short_open_interest": None,
+                    "dealer_long_open_interest": None,
+                    "dealer_short_open_interest": None,
+                    "source": "finmind",
+                }
+            inv_raw = str(r.get("institutional_investors") or "")
+            prefix = _OPTION_INVESTOR_MAP.get(inv_raw)
+            if prefix is None:
+                # Unknown investor type — skip rather than dropping the
+                # whole pivot row, so a new FinMind investor label
+                # surfaces as missing data rather than corrupted rows.
+                continue
+            groups[key][f"{prefix}_long_open_interest"] = _to_int(
+                r.get("long_open_interest_balance_volume")
+            )
+            groups[key][f"{prefix}_short_open_interest"] = _to_int(
+                r.get("short_open_interest_balance_volume")
+            )
+        return list(groups.values())
+
+    return _pivot
+
+
+_batch_option_inst_regular = _make_batch_option_inst("reg")
+_batch_option_inst_afterhours = _make_batch_option_inst("AH")
+
+
 def _row_broker_daily_report(row: dict[str, Any]) -> dict[str, Any]:
     """TaiwanStockTradingDailyReport row → tw_broker_daily_report.
     Per-symbol (data_id=stock_id) + single-day. Each FinMind row is
@@ -1639,6 +1709,20 @@ MAPPINGS: dict[str, DatasetMapping] = {
         extra={"market": "TWSE", "source": "finmind"},
         row_transform=_row_broker_daily_report,
         single_day=True,
+    ),
+    "TaiwanOptionInstitutionalInvestors": DatasetMapping(
+        dataset_code="TaiwanOptionInstitutionalInvestors",
+        local_table="tw_option_inst_daily",
+        column_map={},  # batch_transform owns the pivot
+        pk_columns=("contract", "ts", "session", "call_put"),
+        batch_transform=_batch_option_inst_regular,
+    ),
+    "TaiwanOptionInstitutionalInvestorsAfterHours": DatasetMapping(
+        dataset_code="TaiwanOptionInstitutionalInvestorsAfterHours",
+        local_table="tw_option_inst_daily",
+        column_map={},
+        pk_columns=("contract", "ts", "session", "call_put"),
+        batch_transform=_batch_option_inst_afterhours,
     ),
 }
 

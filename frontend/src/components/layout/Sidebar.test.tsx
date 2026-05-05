@@ -1,29 +1,18 @@
 /**
- * Tests for Sidebar's mobile-drawer behaviour (#38) and prefetch
- * wiring (#41).
- *
- * Sidebar pulls in NavLink + useNavigate, the auth store, the logout
- * helper, and prefetchPage. We mock all four so the test stays
- * focused on the drawer/onClose/prefetch contract — not on the
- * router or any real network.
+ * Tests for Sidebar's mobile-drawer behaviour, grouped-nav rendering,
+ * and prefetch wiring.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 
-// ── Mocks ─────────────────────────────────────────────────────────
-// vi.hoisted lifts these declarations alongside the vi.mock calls so
-// the factory functions below can close over them without tripping
-// vitest's "before initialization" guard.
-const { navigateMock, logoutMock, prefetchPageMock } = vi.hoisted(() => ({
+const { navigateMock, logoutMock, prefetchPageMock, locationMock } = vi.hoisted(() => ({
   navigateMock: vi.fn(),
   logoutMock: vi.fn(() => Promise.resolve()),
   prefetchPageMock: vi.fn(),
+  locationMock: { pathname: "/dashboard" } as { pathname: string },
 }));
 
 vi.mock("react-router-dom", () => ({
-  // NavLink: render a plain anchor so onClick / onMouseEnter / etc.
-  // bubble like the real component. The className-fn signature is
-  // imitated so the active/inactive class branch still runs.
   NavLink: ({
     to,
     onClick,
@@ -54,6 +43,7 @@ vi.mock("react-router-dom", () => ({
     </a>
   ),
   useNavigate: () => navigateMock,
+  useLocation: () => locationMock,
 }));
 
 vi.mock("@/lib/auth", () => ({
@@ -73,7 +63,14 @@ vi.mock("@/pageLoaders", () => ({
 
 import Sidebar from "./Sidebar";
 
-// ── helpers ───────────────────────────────────────────────────────
+function expandAllGroups() {
+  // useCollapsible reads "1" → open, "0" → closed. Force every nav
+  // group open so tests can assert against the full item list.
+  ["markets", "workspace", "ai", "data", "system"].forEach((k) =>
+    localStorage.setItem(`sidebar.group.${k}`, "1")
+  );
+}
+
 function renderSidebar(open: boolean) {
   const onClose = vi.fn();
   const utils = render(<Sidebar open={open} onClose={onClose} />);
@@ -83,9 +80,11 @@ function renderSidebar(open: boolean) {
 beforeEach(() => {
   vi.clearAllMocks();
   authState.user = null;
+  localStorage.clear();
+  locationMock.pathname = "/dashboard";
+  expandAllGroups();
 });
 
-// ── Tests ─────────────────────────────────────────────────────────
 describe("Sidebar drawer state", () => {
   it("aside is off-screen on `<lg:` when closed and on-screen when open", () => {
     const { container, rerender, onClose } = renderSidebar(false);
@@ -99,7 +98,6 @@ describe("Sidebar drawer state", () => {
 
   it("backdrop is pointer-events-none when closed so it doesn't block clicks", () => {
     const { container } = renderSidebar(false);
-    // Backdrop is the first <div> in the document — sibling of <aside>.
     const backdrop = container.firstChild as HTMLElement;
     expect(backdrop.getAttribute("aria-hidden")).toBe("true");
     expect(backdrop.className).toContain("pointer-events-none");
@@ -127,7 +125,7 @@ describe("Sidebar drawer state", () => {
   });
 });
 
-describe("Sidebar nav items", () => {
+describe("Sidebar grouped nav", () => {
   it("renders the 14 base nav items (admin link hidden for non-admins)", () => {
     const { container } = renderSidebar(true);
     const links = container.querySelectorAll("a[data-to]");
@@ -140,6 +138,23 @@ describe("Sidebar nav items", () => {
     authState.user = { role: "admin" };
     const { container } = renderSidebar(true);
     expect(container.querySelector('a[data-to="/admin"]')).not.toBeNull();
+  });
+
+  it("renders 5 group headers", () => {
+    renderSidebar(true);
+    expect(screen.getByText("Markets")).toBeInTheDocument();
+    expect(screen.getByText("Workspace")).toBeInTheDocument();
+    expect(screen.getByText("AI")).toBeInTheDocument();
+    expect(screen.getByText("Data")).toBeInTheDocument();
+    expect(screen.getByText("System")).toBeInTheDocument();
+  });
+
+  it("collapsing a group hides its items but keeps the header visible", () => {
+    const { container } = renderSidebar(true);
+    expect(container.querySelector('a[data-to="/portfolio"]')).not.toBeNull();
+    fireEvent.click(screen.getByText("Workspace"));
+    expect(container.querySelector('a[data-to="/portfolio"]')).toBeNull();
+    expect(screen.getByText("Workspace")).toBeInTheDocument();
   });
 
   it("clicking a nav item closes the drawer", () => {
@@ -165,14 +180,19 @@ describe("Sidebar nav items", () => {
     fireEvent.touchStart(container.querySelector('a[data-to="/ai"]') as HTMLElement);
     expect(prefetchPageMock).toHaveBeenCalledWith("/ai");
   });
+
+  it("opening the drawer warm-prefetches every destination", () => {
+    renderSidebar(true);
+    expect(prefetchPageMock).toHaveBeenCalledWith("/dashboard");
+    expect(prefetchPageMock).toHaveBeenCalledWith("/screener");
+    expect(prefetchPageMock).toHaveBeenCalledWith("/finmind");
+  });
 });
 
 describe("Sidebar logout", () => {
   it("calls logout(), closes the drawer, then redirects to /login", async () => {
     const { onClose } = renderSidebar(true);
     fireEvent.click(screen.getByText("Sign out"));
-    // logout() returns a promise — let it resolve before asserting on
-    // the navigate call that fires after the await.
     await Promise.resolve();
     await Promise.resolve();
     expect(logoutMock).toHaveBeenCalledTimes(1);

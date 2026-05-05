@@ -15,7 +15,38 @@
     "finmind": "FinMind API",
     "settings": "設定",
     "admin": "管理後台",
-    "sign_out": "登出"
+    "sign_out": "登出",
+    "group": {
+      "markets": "市場",
+      "workspace": "我的工作區",
+      "ai": "AI",
+      "data": "資料",
+      "system": "系統"
+    }
+  },
+  "bottom_nav": {
+    "aria": "主要導覽",
+    "dashboard": "首頁",
+    "markets": "市場",
+    "portfolio": "持倉",
+    "ai": "AI",
+    "more": "更多"
+  },
+  "palette": {
+    "title": "命令面板",
+    "placeholder": "搜尋股票、頁面、動作…",
+    "empty": "找不到符合項目",
+    "section": {
+      "symbols": "股票",
+      "pages": "頁面",
+      "actions": "動作"
+    },
+    "action": {
+      "toggle_theme": "切換主題",
+      "toggle_language": "切換語言",
+      "api_keys": "管理 API 金鑰",
+      "sign_out": "登出"
+    }
   },
   "topbar": {
     "search_placeholder": "搜尋股票代號… (AAPL, 2330)",
@@ -33,7 +64,10 @@
     "switch_to_light": "切換淺色模式",
     "language": "語言",
     "menu": "開啟選單",
-    "close_menu": "關閉選單"
+    "close_menu": "關閉選單",
+    "more": "更多選項",
+    "preferences": "偏好設定",
+    "status": "狀態"
   },
   "common": {
     "loading": "載入中…",

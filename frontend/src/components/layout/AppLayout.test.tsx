@@ -51,6 +51,11 @@ vi.mock("./Sidebar", () => ({
 // so AppLayout's tree mounts without trying to talk to a real server
 // or websocket.
 vi.mock("./UpdateBadge", () => ({ default: () => null }));
+vi.mock("./BottomNav", () => ({ default: () => <nav data-testid="bottom-nav-stub" /> }));
+vi.mock("@/components/CommandPalette", () => ({
+  CommandPaletteProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  useCommandPalette: () => ({ open: false, setOpen: () => {}, toggle: () => {} }),
+}));
 vi.mock("@/hooks/useWebSocket", () => ({
   useAlertSocket: () => undefined,
   useWsConnected: () => true,

@@ -7,6 +7,7 @@ import AppLayout from "@/components/layout/AppLayout";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { PageSkeleton } from "@/components/Skeleton";
 import Toaster from "@/components/Toaster";
+import { CommandPaletteProvider } from "@/components/CommandPalette";
 import LoginPage from "@/pages/LoginPage";
 import { pageLoaders } from "@/pageLoaders";
 
@@ -77,11 +78,15 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
 
-          {/* All authenticated pages share the AppLayout (sidebar + main area) */}
+          {/* All authenticated pages share the AppLayout (sidebar + main area).
+              CommandPaletteProvider sits inside RequireAuth so its global
+              ⌘K listener and quick-actions only attach for logged-in users. */}
           <Route
             element={
               <RequireAuth>
-                <AppLayout />
+                <CommandPaletteProvider>
+                  <AppLayout />
+                </CommandPaletteProvider>
               </RequireAuth>
             }
           >

@@ -11,50 +11,25 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { prefetchPage } from "@/pageLoaders";
-import api from "@/lib/api";
+import { useSymbolSearch, type SearchResult } from "@/hooks/useSymbolSearch";
 
-export type SearchResult = { symbol: string; market: "US" | "TW" | "CRYPTO" };
+export type { SearchResult } from "@/hooks/useSymbolSearch";
 
 export default function GlobalSearch() {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<SearchResult[]>([]);
+  const { results } = useSymbolSearch(query);
   const [open, setOpen] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (query.trim().length === 0) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setResults([]);
-      setOpen(false);
-      return;
-    }
-    debounceRef.current = setTimeout(async () => {
-      try {
-        const [usRes, twRes, cryptoRes] = await Promise.allSettled([
-          api.get<SearchResult[]>(`/us/search?q=${encodeURIComponent(query)}&limit=6`),
-          api.get<SearchResult[]>(`/tw/search?q=${encodeURIComponent(query)}&limit=2`),
-          api.get<SearchResult[]>(`/crypto/search?q=${encodeURIComponent(query)}&limit=2`),
-        ]);
-        const combined: SearchResult[] = [
-          ...(usRes.status === "fulfilled" ? usRes.value.data : []),
-          ...(twRes.status === "fulfilled" ? twRes.value.data : []),
-          ...(cryptoRes.status === "fulfilled" ? cryptoRes.value.data : []),
-        ];
-        setResults(combined.slice(0, 10));
-        setActiveIdx(0);
-        setOpen(combined.length > 0);
-      } catch {
-        setResults([]);
-        setOpen(false);
-      }
-    }, 300);
-  }, [query]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setActiveIdx(0);
+    setOpen(results.length > 0);
+  }, [results]);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {

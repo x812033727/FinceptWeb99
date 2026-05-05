@@ -375,6 +375,54 @@ export interface CreateStrategyInput {
 
 export type UpdateStrategyInput = Partial<CreateStrategyInput>;
 
+
+// ── Walk-forward orchestrator (PR-A1 follow-up #341) ──────────
+
+
+export interface WalkForwardRequest {
+  /** ISO YYYY-MM-DD — most-recent day the test fold should cover.
+   *  The orchestrator walks back N folds from here. */
+  anchor_date: string;
+  train_window_days?: number;   // default 60
+  test_window_days?: number;    // default 20
+  n_folds?: number;             // default 2, max 6
+  rounds_per_discussion?: number;
+  concurrency?: number;
+  auto_post_mortem?: boolean;
+}
+
+export interface WalkForwardFold {
+  fold_index: number;
+  train_anchor: string;
+  train_dates: string[];
+  test_anchor: string;
+  test_dates: string[];
+}
+
+export interface WalkForwardPlanResponse {
+  strategy_id: string;
+  market: string;
+  train_window_days: number;
+  test_window_days: number;
+  folds: WalkForwardFold[];
+  /** True when the background orchestrator was scheduled. The
+   *  actual sweep rows appear via `GET /sweeps?strategy_id=...`
+   *  as the worker creates them — poll there to follow progress. */
+  started: boolean;
+}
+
+export async function triggerWalkForward(
+  strategyId: string,
+  body: WalkForwardRequest,
+): Promise<WalkForwardPlanResponse> {
+  const r = await api.post<WalkForwardPlanResponse>(
+    `/discussion/strategies/${strategyId}/walk-forward`,
+    body,
+  );
+  return r.data;
+}
+
+
 export async function fetchStrategies(): Promise<StrategyTemplate[]> {
   const r = await api.get<StrategyTemplate[]>("/discussion/strategies");
   return r.data;

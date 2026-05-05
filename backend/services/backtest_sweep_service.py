@@ -576,6 +576,31 @@ async def run_sweep_worker(sweep_id: UUID) -> None:
                     },
                 )
 
+            # PR-C2: refit the isotonic calibration curve from the
+            # rolling pool of (confidence, outcome) pairs the parent
+            # strategy has accumulated across its sweeps. Best-effort
+            # — failure logs but doesn't roll back the sweep
+            # completion, identical contract to the weight learner.
+            # Sample-size gate inside the fitter handles the
+            # cold-start case (strategy with <30 resolved pairs
+            # gets `updated=False` and the curve stays NULL).
+            try:
+                from services import confidence_calibrator
+                await confidence_calibrator.fit_isotonic_for_strategy(
+                    db,
+                    owner_id=sweep.owner_id,
+                    strategy_id=sweep.strategy_id,
+                )
+            except Exception as exc:
+                log.warning(
+                    "backtest_sweep.fit_calibration_failed",
+                    extra={
+                        "sweep_id": str(sweep_id),
+                        "strategy_id": str(sweep.strategy_id),
+                        "error": str(exc),
+                    },
+                )
+
 
 def start_sweep_in_background(sweep_id: UUID) -> asyncio.Task:
     """Public entry point for the API layer. Detaches the worker

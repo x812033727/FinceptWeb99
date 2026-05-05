@@ -115,6 +115,78 @@ async def _run_symbols(
         await _run_one(dataset_code, sym, start, end)
 
 
+async def _reset_stuck_running(
+    dataset_code: str | None, stuck_after_minutes: int
+) -> int:
+    """Flip `running` chunks older than the threshold back to `pending`
+    so the next claim re-fetches them. Returns the number reset.
+
+    Used by `--reset-stuck` and as a precondition for `--retry-failed`
+    so a stale `running` chunk doesn't get filtered out from retry just
+    because its status hasn't been written back as `failed` yet."""
+    from sqlalchemy import text
+
+    where_dataset = (
+        " AND dataset_code = :dataset"
+        if dataset_code else ""
+    )
+    sql = text(
+        f"UPDATE backfill_progress "
+        f"   SET status='pending', error_message='reset by --reset-stuck' "
+        f" WHERE status='running' "
+        f"   AND started_at < (now() at time zone 'utc') - "
+        f"       (':mins minutes')::interval"
+        f"   {where_dataset}".replace(":mins", str(int(stuck_after_minutes)))
+    )
+    params: dict = {}
+    if dataset_code:
+        params["dataset"] = dataset_code
+    async with FinmindAsyncSessionLocal() as session:
+        result = await session.execute(sql, params)
+        await session.commit()
+    return int(result.rowcount or 0)
+
+
+async def _retry_failed(
+    dataset_code: str, start: date, end: date,
+) -> None:
+    """Read pending + failed chunks for `dataset_code` from the ledger
+    and re-run them. Bypasses the equity universe entirely — only the
+    symbols that actually need a retry get touched, instead of the
+    full fan-out wasting API calls on already-done chunks.
+
+    Includes `pending` because `--reset-stuck` flips stale `running`
+    chunks to `pending`, and an operator chaining `--reset-stuck
+    --retry-failed` should pick those up too."""
+    from sqlalchemy import text
+
+    async with FinmindAsyncSessionLocal() as session:
+        result = await session.execute(
+            text(
+                "SELECT DISTINCT symbol FROM backfill_progress "
+                " WHERE dataset_code = :dataset "
+                "   AND status IN ('failed', 'pending') "
+                "   AND symbol IS NOT NULL "
+                " ORDER BY symbol"
+            ),
+            {"dataset": dataset_code},
+        )
+        symbols = [row[0] for row in result]
+
+    print(
+        f"backfill: --retry-failed {dataset_code} × {len(symbols)} symbols "
+        f"({start}..{end})"
+    )
+    if not symbols:
+        # Either the dataset is healthy or it's market-wide. Try the
+        # market-wide path so a missing-symbols ledger row also gets
+        # retried — better than silently doing nothing.
+        await _run_one(dataset_code, None, start, end)
+        return
+    for sym in symbols:
+        await _run_one(dataset_code, sym, start, end)
+
+
 async def _run_warrant(args, start: date, end: date) -> None:
     """Mirror of `_run_symbols` but for warrant-indexed datasets. Picks
     the warrant universe from either `--warrant-symbols-file` or
@@ -178,6 +250,38 @@ async def amain() -> int:
         help="Walk every enabled dataset (no per-symbol fan-out)",
     )
     parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help=(
+            "With --dataset X, retry only the symbols whose ledger "
+            "status is 'failed' or 'pending'. Skips already-done "
+            "symbols entirely so a flaky-network recovery doesn't "
+            "burn quota on UPSERTs that would no-op. For market-wide "
+            "datasets (no symbol axis), retries the single chunk."
+        ),
+    )
+    parser.add_argument(
+        "--reset-stuck",
+        action="store_true",
+        help=(
+            "Before running, flip ledger rows in `status='running'` "
+            "older than --stuck-after minutes back to 'pending'. "
+            "Used to recover from a backfill killed mid-flight (e.g. "
+            "deploy or SIGTERM). Pairs naturally with --retry-failed."
+        ),
+    )
+    parser.add_argument(
+        "--stuck-after",
+        type=int,
+        default=5,
+        metavar="MINS",
+        help=(
+            "Stuck-running threshold in minutes for --reset-stuck "
+            "(default: 5). Smaller = more aggressive; larger = "
+            "tolerates longer in-flight chunks."
+        ),
+    )
+    parser.add_argument(
         "--start", help="Range start YYYY-MM-DD (default: --days ago)",
     )
     parser.add_argument(
@@ -224,18 +328,36 @@ async def amain() -> int:
         or args.warrant_symbols_file is not None
     )
 
+    # Optional pre-step: reset stuck-running chunks first so the
+    # subsequent --retry-failed pass picks them up. Useful after a
+    # deploy / SIGTERM that left chunks half-done in the ledger.
+    if args.reset_stuck:
+        n = await _reset_stuck_running(args.dataset, args.stuck_after)
+        scope = f"in {args.dataset}" if args.dataset else "(all datasets)"
+        print(
+            f"backfill: --reset-stuck flipped {n} chunks "
+            f"running→pending {scope} (older than {args.stuck_after}min)"
+        )
+
     if args.enabled:
         await _run_enabled(start, end)
+    elif args.dataset and args.retry_failed:
+        await _retry_failed(args.dataset, start, end)
     elif args.dataset and is_warrant_dataset and has_warrant_flag:
         await _run_warrant(args, start, end)
     elif args.dataset and args.symbols_file:
         await _run_symbols(args.dataset, args.symbols_file, start, end)
     elif args.dataset:
         await _run_one(args.dataset, args.symbol, start, end)
+    elif args.reset_stuck:
+        # `--reset-stuck` alone (no --dataset, no other action) is a
+        # legitimate use case: just clean up stale running chunks.
+        return 0
     else:
         parser.error(
             "specify one of: --enabled | --dataset [--symbol|--symbols-file"
-            "|--warrant-symbols-file|--warrant-universe-from-tw-stock-info]"
+            "|--warrant-symbols-file|--warrant-universe-from-tw-stock-info"
+            "|--retry-failed] | --reset-stuck"
         )
 
     await finmind_engine.dispose()

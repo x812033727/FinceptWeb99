@@ -33,6 +33,10 @@ interface StrategyFormState {
   defaultRounds: number;
   defaultConcurrency: number;
   defaultAutoPostMortem: boolean;
+  autoScheduleEnabled: boolean;
+  autoScheduleCadenceHours: number;
+  autoScheduleAnchorOffsetDays: number;
+  autoScheduleTradingDaysCount: number;
 }
 
 const DEFAULT_FORM: StrategyFormState = {
@@ -45,6 +49,10 @@ const DEFAULT_FORM: StrategyFormState = {
   defaultRounds: 1,
   defaultConcurrency: 1,
   defaultAutoPostMortem: true,
+  autoScheduleEnabled: false,
+  autoScheduleCadenceHours: 24,
+  autoScheduleAnchorOffsetDays: -1,
+  autoScheduleTradingDaysCount: 1,
 };
 
 export function StrategyTemplateCard({
@@ -107,6 +115,10 @@ export function StrategyTemplateCard({
       default_rounds: form.defaultRounds,
       default_concurrency: form.defaultConcurrency,
       default_auto_post_mortem: form.defaultAutoPostMortem,
+      auto_schedule_enabled: form.autoScheduleEnabled,
+      auto_schedule_cadence_hours: form.autoScheduleCadenceHours,
+      auto_schedule_anchor_offset_days: form.autoScheduleAnchorOffsetDays,
+      auto_schedule_trading_days_count: form.autoScheduleTradingDaysCount,
     };
     createMut.mutate(body);
   }
@@ -300,6 +312,73 @@ function StrategyFormBlock({
           {t("strategy.default_auto_post_mortem", "預設啟用事後檢討")}
         </span>
       </label>
+
+      <fieldset className="border border-border rounded p-2 mt-1 space-y-1.5">
+        <legend className="text-[10px] text-muted-foreground uppercase tracking-wider px-1">
+          {t("strategy.auto_schedule", "自動排程（PR-D）")}
+        </legend>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={form.autoScheduleEnabled}
+            onChange={(e) =>
+              setForm({ ...form, autoScheduleEnabled: e.target.checked })
+            }
+          />
+          <span className="text-muted-foreground">
+            {t("strategy.auto_schedule_enabled",
+               "啟用後依下列設定自動 launch sweep")}
+          </span>
+        </label>
+        {form.autoScheduleEnabled && (
+          <div className="grid grid-cols-3 gap-2">
+            <label className="flex flex-col gap-1">
+              <span className="text-muted-foreground">
+                {t("strategy.cadence_hours", "間隔（小時）")}
+              </span>
+              <input
+                type="number" min={1} max={720}
+                value={form.autoScheduleCadenceHours}
+                onChange={(e) => setForm({
+                  ...form,
+                  autoScheduleCadenceHours: Number(e.target.value),
+                })}
+                className="bg-background border border-border rounded px-2 py-1"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-muted-foreground"
+                    title={t("strategy.anchor_offset_tip",
+                             "0=今天，-1=昨天")}>
+                {t("strategy.anchor_offset", "錨點偏移（天）")}
+              </span>
+              <input
+                type="number" min={-30} max={0}
+                value={form.autoScheduleAnchorOffsetDays}
+                onChange={(e) => setForm({
+                  ...form,
+                  autoScheduleAnchorOffsetDays: Number(e.target.value),
+                })}
+                className="bg-background border border-border rounded px-2 py-1"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-muted-foreground">
+                {t("strategy.auto_trading_days", "每次掃幾日")}
+              </span>
+              <input
+                type="number" min={1} max={30}
+                value={form.autoScheduleTradingDaysCount}
+                onChange={(e) => setForm({
+                  ...form,
+                  autoScheduleTradingDaysCount: Number(e.target.value),
+                })}
+                className="bg-background border border-border rounded px-2 py-1"
+              />
+            </label>
+          </div>
+        )}
+      </fieldset>
       {error ? (
         <p className="text-[11px] text-red-300">
           {(error as { response?: { data?: { detail?: string } } })
@@ -352,6 +431,22 @@ function StrategyRow({
               {t("strategy.personas", "專家")} · r={strategy.default_rounds}
               · c={strategy.default_concurrency}
             </span>
+            {strategy.auto_schedule_enabled ? (
+              <span
+                className="ml-2 text-[10px] bg-emerald-900/40 text-emerald-300 border border-emerald-800/50 rounded px-1 py-0.5"
+                title={t(
+                  "strategy.auto_schedule_active_tip",
+                  "每 {{h}}h 自動掃 {{n}} 日（offset {{off}}）",
+                  {
+                    h: strategy.auto_schedule_cadence_hours,
+                    n: strategy.auto_schedule_trading_days_count,
+                    off: strategy.auto_schedule_anchor_offset_days,
+                  },
+                )}
+              >
+                ⏱ auto
+              </span>
+            ) : null}
           </p>
           {strategy.description ? (
             <p className="text-[11px] text-muted-foreground truncate">

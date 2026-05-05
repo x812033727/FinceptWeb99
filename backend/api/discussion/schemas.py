@@ -274,6 +274,11 @@ class StrategyTemplateCreate(BaseModel):
     default_rounds: int = Field(default=1, ge=1, le=5)
     default_concurrency: int = Field(default=1, ge=1, le=3)
     default_auto_post_mortem: bool = True
+    # PR-D: optional auto-schedule fields. Disabled by default.
+    auto_schedule_enabled: bool = False
+    auto_schedule_cadence_hours: int = Field(default=24, ge=1, le=720)
+    auto_schedule_anchor_offset_days: int = Field(default=-1, ge=-30, le=0)
+    auto_schedule_trading_days_count: int = Field(default=1, ge=1, le=30)
 
 
 class StrategyTemplateUpdate(BaseModel):
@@ -289,6 +294,16 @@ class StrategyTemplateUpdate(BaseModel):
     default_rounds: int | None = Field(default=None, ge=1, le=5)
     default_concurrency: int | None = Field(default=None, ge=1, le=3)
     default_auto_post_mortem: bool | None = None
+    auto_schedule_enabled: bool | None = None
+    auto_schedule_cadence_hours: int | None = Field(
+        default=None, ge=1, le=720,
+    )
+    auto_schedule_anchor_offset_days: int | None = Field(
+        default=None, ge=-30, le=0,
+    )
+    auto_schedule_trading_days_count: int | None = Field(
+        default=None, ge=1, le=30,
+    )
 
 
 class SweepAggregatePersona(BaseModel):
@@ -351,6 +366,11 @@ class StrategyTemplateResponse(BaseModel):
     default_auto_post_mortem: bool
     persona_weights: dict[str, float]
     weights_updated_at: datetime | None
+    auto_schedule_enabled: bool
+    auto_schedule_cadence_hours: int
+    auto_schedule_anchor_offset_days: int
+    auto_schedule_trading_days_count: int
+    auto_schedule_last_run_at: datetime | None
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None

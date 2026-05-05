@@ -66,6 +66,24 @@ class DiscussionStrategyTemplate(Base):
         DateTime(timezone=True), nullable=True,
     )
 
+    # PR-D: auto-schedule fields. Disabled by default — explicit
+    # opt-in so a fresh template doesn't fire LLM cost on its own.
+    auto_schedule_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false",
+    )
+    auto_schedule_cadence_hours: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=24, server_default="24",
+    )
+    auto_schedule_anchor_offset_days: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=-1, server_default="-1",
+    )
+    auto_schedule_trading_days_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1",
+    )
+    auto_schedule_last_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.current_timestamp(), nullable=False,

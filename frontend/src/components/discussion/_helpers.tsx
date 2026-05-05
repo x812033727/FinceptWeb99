@@ -346,6 +346,12 @@ export interface StrategyTemplate {
   /** PR-C: persona_id -> learned weight. Empty = uniform. */
   persona_weights: Record<string, number>;
   weights_updated_at: string | null;
+  /** PR-D: auto-schedule fields. Disabled by default. */
+  auto_schedule_enabled: boolean;
+  auto_schedule_cadence_hours: number;
+  auto_schedule_anchor_offset_days: number;
+  auto_schedule_trading_days_count: number;
+  auto_schedule_last_run_at: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -361,6 +367,10 @@ export interface CreateStrategyInput {
   default_rounds?: number;
   default_concurrency?: number;
   default_auto_post_mortem?: boolean;
+  auto_schedule_enabled?: boolean;
+  auto_schedule_cadence_hours?: number;
+  auto_schedule_anchor_offset_days?: number;
+  auto_schedule_trading_days_count?: number;
 }
 
 export type UpdateStrategyInput = Partial<CreateStrategyInput>;

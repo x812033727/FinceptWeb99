@@ -33,9 +33,12 @@ dataset.
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from datetime import date
 from typing import Any
+
+log = logging.getLogger("finmind.selfcrawl")
 
 
 class _NotWiredYetClient:
@@ -140,3 +143,92 @@ def resolve_client(source: str) -> Any:
             f"Known sources: {['finmind', *sorted(_REGISTRY)]}"
         )
     return factory()
+
+
+# ── Per-dataset coverage map ────────────────────────────────────
+#
+# `is_source_implemented(source)` answers "does THIS source have a real
+# connector wired up at all?" — coarse-grained, returns True as soon
+# as one dataset is handled. `supported_datasets(source)` answers
+# "exactly which dataset_codes does this source's connector know how
+# to fetch?" — finer-grained, used by the AdminPage flip gatekeeper to
+# reject e.g. flipping `TaiwanFuturesDaily` to source='twse' (TWSE has
+# a working client but no futures handler).
+#
+# Each real source's module exposes its own `supported_datasets()`
+# function returning a sorted list of handled dataset_codes; the
+# registry below late-imports them so this package stays import-light.
+SupportedDatasetsProvider = Callable[[], set[str]]
+
+
+def _twse_supported_datasets() -> set[str]:
+    from finmind.ingest.selfcrawl.twse import supported_datasets as _s
+
+    return set(_s())
+
+
+def _mops_supported_datasets() -> set[str]:
+    from finmind.ingest.selfcrawl.mops import supported_datasets as _s
+
+    return set(_s())
+
+
+def _finmind_supported_datasets() -> set[str]:
+    """FinMind covers every dataset in the catalog — the whole point of
+    Phase A is the paid sub serves all 80. Load lazily because catalog
+    import pulls the upstream-truth registry."""
+    from finmind.dataset_catalog import all_entries
+
+    return {entry.dataset_code for _, entry in all_entries()}
+
+
+_SUPPORTED_DATASETS_PROVIDERS: dict[str, SupportedDatasetsProvider] = {
+    "finmind": _finmind_supported_datasets,
+    "twse":    _twse_supported_datasets,
+    "mops":    _mops_supported_datasets,
+    # tpex / taifex / tdcc currently route to `_NotWiredYetClient`, so
+    # their supported set is empty by definition. A real connector
+    # registers here via `register_supported_datasets()` below at
+    # import time alongside `register_connector()`.
+}
+
+
+def register_supported_datasets(
+    source: str, provider: SupportedDatasetsProvider
+) -> None:
+    """Companion to `register_connector` — when a Phase B module wires
+    its real client, it should also tell the registry which dataset
+    codes it covers so the AdminPage gatekeeper can pre-emptively
+    reject flips to unsupported (source, dataset) combinations."""
+    _SUPPORTED_DATASETS_PROVIDERS[source] = provider
+
+
+def supported_datasets(source: str) -> set[str]:
+    """Return the set of dataset_codes the given source can fetch.
+
+    Returns an empty set for sources that are stubbed
+    (`_NotWiredYetClient`) or unknown — the AdminPage uses
+    `dataset in supported_datasets(target_source)` to decide whether
+    the flip is safe. An empty result is loud-by-design: stub
+    sources can never accept flips."""
+    provider = _SUPPORTED_DATASETS_PROVIDERS.get(source)
+    if provider is None:
+        return set()
+    try:
+        return provider()
+    except Exception:
+        # A misconfigured provider shouldn't break the AdminPage. Log
+        # loudly so the operator sees it and treat as unsupported —
+        # the flip will be rejected, the alternative (silent True)
+        # would let the operator break ingest by flipping to a source
+        # whose `supported_datasets()` import is broken.
+        log.exception("supported_datasets(%r) provider raised", source)
+        return set()
+
+
+def covers_dataset(source: str, dataset_code: str) -> bool:
+    """Convenience predicate — `True` when `source` can serve
+    `dataset_code` end-to-end. Equivalent to
+    `dataset_code in supported_datasets(source)` but reads better at
+    the call site (e.g. AdminPage gatekeeper)."""
+    return dataset_code in supported_datasets(source)

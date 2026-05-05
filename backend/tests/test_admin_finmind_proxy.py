@@ -665,6 +665,59 @@ async def test_proxy_patch_phase_a_to_b_switch(
     assert r.json()["active_source"] == "twse"
 
 
+@pytest.mark.asyncio
+async def test_proxy_patch_rejects_uncovered_dataset_on_real_source(
+    client, db_session, finmind_db_override,
+):
+    """Per-dataset gatekeeper: source='twse' is implemented but only
+    covers 6 datasets. Flipping `TaiwanFuturesDaily` → twse must be
+    rejected with a 400 + remediation hint, NOT silently land in the
+    DB and break the next ingest."""
+    SessionLocal = finmind_db_override
+    await _seed_catalog(SessionLocal)
+
+    email = "admin_fm_partial@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.patch(
+        "/api/admin/finmind/datasets/TaiwanFuturesDaily",
+        json={"active_source": "twse"},
+        headers=_auth(token),
+    )
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "no handler for dataset" in detail
+    assert "TaiwanFuturesDaily" in detail
+    assert "twse" in detail
+
+
+@pytest.mark.asyncio
+async def test_proxy_patch_rejects_fully_stubbed_source(
+    client, db_session, finmind_db_override,
+):
+    """Existing 'no connector wired up yet' check must keep working
+    end-to-end. tpex/taifex/tdcc all hit `_NotWiredYetClient` →
+    every flip targeting them must 400 with the source name in the
+    detail message so the operator knows where to look."""
+    SessionLocal = finmind_db_override
+    await _seed_catalog(SessionLocal)
+
+    email = "admin_fm_stub@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.patch(
+        "/api/admin/finmind/datasets/TaiwanFuturesDaily",
+        json={"active_source": "taifex"},
+        headers=_auth(token),
+    )
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "taifex" in detail
+    assert "no connector wired up yet" in detail
+
+
 # ── Status + usage ──────────────────────────────────────────────
 
 

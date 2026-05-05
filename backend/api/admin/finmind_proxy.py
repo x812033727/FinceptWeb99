@@ -180,12 +180,20 @@ async def update_finmind_dataset(
                     f"{sorted(_VALID_SOURCES)}; got '{body.active_source}'"
                 ),
             )
-        # Stub sources (tpex / taifex / tdcc currently) raise
-        # NotImplementedError at runtime when the cron next fires —
-        # which means the operator can't tell from the AdminPage that
-        # the dataset has just been broken until the next scheduled
-        # run. Reject the flip up front instead.
-        from finmind.ingest.selfcrawl import is_source_implemented
+        # Two-layer gatekeeper:
+        #   1. is_source_implemented() — does the source even have a
+        #      real connector? Catches flips to fully-stubbed
+        #      sources (tpex / taifex / tdcc currently).
+        #   2. covers_dataset() — does THAT connector know how to
+        #      fetch THIS dataset? Catches partial coverage, e.g.
+        #      flipping `TaiwanFuturesDaily` to source='twse' (TWSE
+        #      client exists but doesn't handle futures).
+        # Both raise loud 400s with the exact remediation hint so the
+        # operator can grep the codebase and find the missing piece.
+        from finmind.ingest.selfcrawl import (
+            covers_dataset,
+            is_source_implemented,
+        )
 
         if not is_source_implemented(body.active_source):
             raise HTTPException(
@@ -197,6 +205,18 @@ async def update_finmind_dataset(
                     f"connector in finmind/ingest/selfcrawl/"
                     f"{body.active_source}.py + register_connector() "
                     f"before flipping."
+                ),
+            )
+        if not covers_dataset(body.active_source, dataset_code):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"active_source='{body.active_source}' has a "
+                    f"connector but no handler for dataset "
+                    f"'{dataset_code}'. Add a `_fetch_*` entry to "
+                    f"finmind/ingest/selfcrawl/{body.active_source}"
+                    f".py:_DISPATCH before flipping, OR keep the "
+                    f"current active_source for this dataset."
                 ),
             )
         row.active_source = body.active_source

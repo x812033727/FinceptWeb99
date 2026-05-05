@@ -3386,6 +3386,7 @@ async def synthesize_conclusion(
                     market=discussion.market,
                     as_of_date=discussion.as_of_date,
                     lessons_payload=raw_obj,
+                    ctx=context,
                 )
         except Exception as exc:
             log.warning("discussion.lessons.persist_failed",

@@ -75,6 +75,80 @@ _MAX_LESSON_LEN = 200
 _MAX_LESSONS_PER_DISCUSSION = 5
 _DEDUP_WINDOW_DAYS = 60
 
+# PR-B0: Regime tagging at lesson-write time. The 6 valid combinations
+# of (VIX bucket × TAIEX trend); the 3 weak combinations
+# (low_VIX × down, high_VIX × up, high_VIX × range) classify as None
+# so the lesson lands without a regime tag rather than mis-tagged.
+_VALID_REGIME_LABELS: frozenset[str] = frozenset({
+    "low_up", "low_range", "mid_up", "mid_down", "mid_range", "high_down",
+})
+
+
+def _classify_regime(ctx: dict[str, Any] | None) -> str | None:
+    """Classify the market state at lesson-write time using two
+    signals already in ctx — TAIWAN VIX (`taiwan_vix.value`) and
+    TAIEX 5d/20d MA cross (from `index.history[].close`).
+
+    Returns one of 6 labels: low_up / low_range / mid_up / mid_down /
+    mid_range / high_down, or None when:
+      - ctx is missing / wrong shape
+      - VIX field is absent (cron hasn't populated, weekend, outage)
+      - TAIEX history has fewer than 20 closes
+      - the (VIX, trend) combination falls into the 3 weak buckets
+
+    Persistence is best-effort: caller writes the lesson regardless,
+    NULL regime just means PR-B1 doesn't get the same-regime fetch
+    boost for this row.
+    """
+    if not isinstance(ctx, dict):
+        return None
+    vix_block = ctx.get("taiwan_vix")
+    if not isinstance(vix_block, dict):
+        return None
+    try:
+        vix_value = float(vix_block.get("value"))
+    except (TypeError, ValueError):
+        return None
+    if vix_value < 15:
+        vix_bucket = "low"
+    elif vix_value > 25:
+        vix_bucket = "high"
+    else:
+        vix_bucket = "mid"
+
+    index_block = ctx.get("index")
+    if not isinstance(index_block, dict):
+        return None
+    history = index_block.get("history")
+    if not isinstance(history, list) or len(history) < 20:
+        return None
+    closes: list[float] = []
+    for bar in history:
+        if not isinstance(bar, dict):
+            continue
+        try:
+            closes.append(float(bar.get("close")))
+        except (TypeError, ValueError):
+            continue
+    if len(closes) < 20:
+        return None
+
+    ma5_now = sum(closes[-5:]) / 5
+    ma20_now = sum(closes[-20:]) / 20
+    # Slope of the 5d MA: compare to itself 5 bars ago. When history
+    # is exactly 20 bars we still have closes[-10:-5] available.
+    ma5_then = sum(closes[-10:-5]) / 5 if len(closes) >= 10 else ma5_now
+
+    if ma5_now > ma20_now and ma5_now > ma5_then:
+        trend = "up"
+    elif ma5_now < ma20_now and ma5_now < ma5_then:
+        trend = "down"
+    else:
+        trend = "range"
+
+    label = f"{vix_bucket}_{trend}"
+    return label if label in _VALID_REGIME_LABELS else None
+
 
 @dataclass(frozen=True)
 class LessonSummary:
@@ -120,6 +194,7 @@ async def extract_and_persist_lessons(
     market: str,
     as_of_date: date,
     lessons_payload: Any,
+    ctx: dict[str, Any] | None = None,
 ) -> list[DiscussionLesson]:
     """Parse + persist lessons from a synthesizer payload.
 
@@ -128,6 +203,12 @@ async def extract_and_persist_lessons(
     handled gracefully for any other shape (None / dict / str all
     return [] silently). Quality-gated per the module docstring.
 
+    `ctx` is the `gather_market_context` snapshot the synthesizer
+    reasoned over; PR-B0 reads it once to compute the `regime`
+    label persisted on every new lesson row. Optional + best-effort
+    — older callers passing nothing get the legacy regime=NULL
+    behavior.
+
     Returns the list of newly-persisted rows (0..5). Caller can use
     the count for telemetry but does not need to flush — this
     function commits.
@@ -135,6 +216,7 @@ async def extract_and_persist_lessons(
     if not isinstance(lessons_payload, list) or not lessons_payload:
         return []
 
+    regime_label = _classify_regime(ctx)
     written: list[DiscussionLesson] = []
     seen_hashes_in_payload: set[str] = set()
     dedup_threshold = datetime.now(UTC) - timedelta(days=_DEDUP_WINDOW_DAYS)
@@ -191,6 +273,7 @@ async def extract_and_persist_lessons(
             lesson_text_hash=h,
             related_symbols=_normalize_symbols(raw.get("related_symbols")),
             missed_winners=_normalize_symbols(raw.get("missed_winners")),
+            regime=regime_label,
         )
         db.add(row)
         written.append(row)

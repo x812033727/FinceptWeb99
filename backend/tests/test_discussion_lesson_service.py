@@ -492,3 +492,173 @@ def test_anchor_uses_today_for_live(monkeypatch):
         lesson, anchor=today, focus_symbols=set(), halflife_days=60,
     )
     assert score == pytest.approx(1.0)
+
+
+# ── PR-B0: regime classification + persistence ──────────────────────
+
+
+def _ctx_with(vix: float | None, *, trend: str = "up") -> dict:
+    """Build a synthetic ctx for regime tests. `trend` shapes the
+    20-day TAIEX history so the 5d/20d MA cross resolves as
+    requested.
+    """
+    ctx: dict = {}
+    if vix is not None:
+        ctx["taiwan_vix"] = {"value": vix}
+    if trend == "up":
+        # Steady climb: each close 1% above the previous one. 5d MA
+        # ends well above 20d MA and the 5d MA itself is rising.
+        closes = [100.0 * (1.01 ** i) for i in range(20)]
+    elif trend == "down":
+        closes = [100.0 * (0.99 ** i) for i in range(20)]
+    else:   # range — flat with small noise
+        closes = [100.0 + (i % 2) * 0.1 for i in range(20)]
+    ctx["index"] = {
+        "history": [{"time": f"2026-01-{i + 1:02d}", "close": c}
+                    for i, c in enumerate(closes)],
+    }
+    return ctx
+
+
+def test_classify_regime_high_vix_downtrend_yields_high_down():
+    out = svc._classify_regime(_ctx_with(vix=30.0, trend="down"))
+    assert out == "high_down"
+
+
+def test_classify_regime_low_vix_uptrend_yields_low_up():
+    out = svc._classify_regime(_ctx_with(vix=12.0, trend="up"))
+    assert out == "low_up"
+
+
+def test_classify_regime_mid_vix_uptrend_yields_mid_up():
+    out = svc._classify_regime(_ctx_with(vix=18.0, trend="up"))
+    assert out == "mid_up"
+
+
+def test_classify_regime_drops_low_vix_downtrend_combo():
+    """low_VIX × down (calm sell-off) is the rare 'weak' combo —
+    return None so the lesson lands without a regime tag rather
+    than getting binned into a low-sample bucket."""
+    out = svc._classify_regime(_ctx_with(vix=12.0, trend="down"))
+    assert out is None
+
+
+def test_classify_regime_drops_high_vix_uptrend_combo():
+    """high_VIX × up (melt-up) is rare — same treatment as low_down."""
+    out = svc._classify_regime(_ctx_with(vix=30.0, trend="up"))
+    assert out is None
+
+
+def test_classify_regime_drops_high_vix_range_combo():
+    out = svc._classify_regime(_ctx_with(vix=30.0, trend="range"))
+    assert out is None
+
+
+def test_classify_regime_returns_none_when_vix_missing():
+    """Cron hasn't run / TAIFEX outage / ctx assembled before VIX
+    block landed — drop the tag, persist the lesson regardless."""
+    ctx = _ctx_with(vix=None, trend="up")
+    assert "taiwan_vix" not in ctx
+    assert svc._classify_regime(ctx) is None
+
+
+def test_classify_regime_returns_none_when_history_too_short():
+    ctx = {
+        "taiwan_vix": {"value": 18.0},
+        "index": {"history": [
+            {"time": f"d{i}", "close": 100.0 + i} for i in range(15)
+        ]},
+    }
+    assert svc._classify_regime(ctx) is None
+
+
+def test_classify_regime_returns_none_when_ctx_none():
+    assert svc._classify_regime(None) is None
+
+
+def test_classify_regime_returns_none_when_vix_value_unparseable():
+    ctx = {
+        "taiwan_vix": {"value": "high"},
+        "index": _ctx_with(vix=18.0, trend="up")["index"],
+    }
+    assert svc._classify_regime(ctx) is None
+
+
+@pytest.mark.asyncio
+async def test_extract_persists_regime_when_ctx_provided(
+    db_session: AsyncSession,
+):
+    u = _user("regime-ctx")
+    d = _disc(u.id)
+    db_session.add_all([u, d])
+    await db_session.commit()
+
+    out = await svc.extract_and_persist_lessons(
+        db_session,
+        discussion_id=d.id, owner_user_id=u.id,
+        market="TW", as_of_date=d.as_of_date,
+        lessons_payload=[{
+            "category": "missed_sector",
+            "lesson_text": "外資轉空時忽略半導體 5 日均線跌破 20 日均線",
+        }],
+        ctx=_ctx_with(vix=30.0, trend="down"),
+    )
+    assert len(out) == 1
+    assert out[0].regime == "high_down"
+    # PR-B0 ships the new fields with safe defaults — schema verified
+    # by the migration, but assert here so a future B-tier change
+    # that drops the default doesn't slip through.
+    assert out[0].tier == "episodic"
+    assert out[0].usage_count == 0
+    assert out[0].hit_count == 0
+
+
+@pytest.mark.asyncio
+async def test_extract_persists_null_regime_when_ctx_missing(
+    db_session: AsyncSession,
+):
+    """Backward compat — old callers that don't pass ctx still get
+    the lesson written, just regime=NULL."""
+    u = _user("regime-noctx")
+    d = _disc(u.id)
+    db_session.add_all([u, d])
+    await db_session.commit()
+
+    out = await svc.extract_and_persist_lessons(
+        db_session,
+        discussion_id=d.id, owner_user_id=u.id,
+        market="TW", as_of_date=d.as_of_date,
+        lessons_payload=[{
+            "category": "missing_data",
+            "lesson_text": "缺少當日台指期未平倉資料導致對外資多空態度的誤判，下次需補齊。",
+        }],
+    )
+    assert len(out) == 1
+    assert out[0].regime is None
+    assert out[0].tier == "episodic"
+
+
+@pytest.mark.asyncio
+async def test_extract_persists_null_regime_when_ctx_lacks_vix(
+    db_session: AsyncSession,
+):
+    """When ctx lacks the VIX block (cron hasn't run yet), classifier
+    returns None and the lesson lands regime-less."""
+    u = _user("regime-no-vix")
+    d = _disc(u.id)
+    db_session.add_all([u, d])
+    await db_session.commit()
+
+    ctx_no_vix = _ctx_with(vix=None, trend="up")
+    out = await svc.extract_and_persist_lessons(
+        db_session,
+        discussion_id=d.id, owner_user_id=u.id,
+        market="TW", as_of_date=d.as_of_date,
+        lessons_payload=[{
+            "category": "wrong_signal_weight",
+            "lesson_text": "高估融資餘額對短線反彈的支撐力道，忽略外資籌碼面的轉空訊號。",
+        }],
+        ctx=ctx_no_vix,
+    )
+    assert len(out) == 1
+    assert out[0].regime is None

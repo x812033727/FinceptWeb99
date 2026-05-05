@@ -3,6 +3,13 @@ import { useTranslation } from "react-i18next";
 import { useUpdateTransaction } from "@/hooks/usePortfolio";
 import { fetchSuggestedFxRate } from "./_shared";
 import type { TransactionRow } from "./_shared";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 export function EditTransactionModal({
   portfolioId, tx, onClose,
@@ -62,36 +69,40 @@ export function EditTransactionModal({
   const label = "block text-xs text-muted-foreground mb-1";
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <form onSubmit={submit} className="bg-card border border-border rounded-lg p-6 w-full max-w-md space-y-4">
-        <h3 className="text-foreground font-semibold">{t("portfolio.transactions.edit")}</h3>
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className={label}>{t("alerts.symbol")}</label><input required className={input} value={form.symbol} onChange={set("symbol")} /></div>
-          <div><label className={label}>{t("alerts.market")}</label>
-            <select className={input} value={form.market} onChange={set("market")}>
-              <option value="US">US</option><option value="TW">TW</option><option value="CRYPTO">CRYPTO</option>
-            </select>
+    <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{t("portfolio.transactions.edit")}</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className={label}>{t("alerts.symbol")}</label><input required className={input} value={form.symbol} onChange={set("symbol")} /></div>
+            <div><label className={label}>{t("alerts.market")}</label>
+              <select className={input} value={form.market} onChange={set("market")}>
+                <option value="US">US</option><option value="TW">TW</option><option value="CRYPTO">CRYPTO</option>
+              </select>
+            </div>
+            <div><label className={label}>{t("portfolio.transactions.type")}</label>
+              <select className={input} value={form.tx_type} onChange={set("tx_type")}>
+                <option value="buy">{t("portfolio.transactions.buy")}</option>
+                <option value="sell">{t("portfolio.transactions.sell")}</option>
+                <option value="dividend">Dividend</option>
+              </select>
+            </div>
+            <div><label className={label}>{t("portfolio.transactions.executed_at")}</label><input type="date" required className={input} value={form.tx_date} onChange={set("tx_date")} /></div>
+            <div><label className={label}>{t("portfolio.transactions.qty")}</label><input type="number" required min="0" step="any" className={input} value={form.quantity} onChange={set("quantity")} /></div>
+            <div><label className={label}>{t("portfolio.transactions.price")}</label><input type="number" required min="0" step="any" className={input} value={form.price} onChange={set("price")} /></div>
+            <div><label className={label}>FX Rate</label><input type="number" min="0" step="any" className={input} value={form.fx_rate} onChange={set("fx_rate")} /></div>
+            <div><label className={label}>Notes</label><input className={input} value={form.notes} onChange={set("notes")} /></div>
           </div>
-          <div><label className={label}>{t("portfolio.transactions.type")}</label>
-            <select className={input} value={form.tx_type} onChange={set("tx_type")}>
-              <option value="buy">{t("portfolio.transactions.buy")}</option>
-              <option value="sell">{t("portfolio.transactions.sell")}</option>
-              <option value="dividend">Dividend</option>
-            </select>
-          </div>
-          <div><label className={label}>{t("portfolio.transactions.executed_at")}</label><input type="date" required className={input} value={form.tx_date} onChange={set("tx_date")} /></div>
-          <div><label className={label}>{t("portfolio.transactions.qty")}</label><input type="number" required min="0" step="any" className={input} value={form.quantity} onChange={set("quantity")} /></div>
-          <div><label className={label}>{t("portfolio.transactions.price")}</label><input type="number" required min="0" step="any" className={input} value={form.price} onChange={set("price")} /></div>
-          <div><label className={label}>FX Rate</label><input type="number" min="0" step="any" className={input} value={form.fx_rate} onChange={set("fx_rate")} /></div>
-          <div><label className={label}>Notes</label><input className={input} value={form.notes} onChange={set("notes")} /></div>
-        </div>
-        <div className="flex gap-3 justify-end">
-          <button type="button" onClick={onClose} className="px-4 py-1.5 text-sm text-muted-foreground hover:text-foreground">{t("common.cancel")}</button>
-          <button type="submit" disabled={update.isPending} className="px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:opacity-90 disabled:opacity-50">
-            {update.isPending ? t("common.saving") : t("common.save")}
-          </button>
-        </div>
-      </form>
-    </div>
+          <DialogFooter className="gap-3 sm:gap-2">
+            <button type="button" onClick={onClose} className="px-4 py-1.5 text-sm text-muted-foreground hover:text-foreground min-h-[36px]">{t("common.cancel")}</button>
+            <button type="submit" disabled={update.isPending} className="px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:opacity-90 disabled:opacity-50 min-h-[36px]">
+              {update.isPending ? t("common.saving") : t("common.save")}
+            </button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -299,6 +299,9 @@ export interface BacktestSweep {
    *  spawned discussion's conclude. Older backends omit; treat as
    *  true since that's the new default. */
   auto_post_mortem?: boolean;
+  /** PR-A: source strategy template, if the sweep was launched
+   *  from one. Lets the dashboard group sweeps per template. */
+  strategy_id?: string | null;
   resolved_dates: string[];
   completed_dates: string[];
   failed_dates: BacktestSweepFailedDate[];
@@ -310,10 +313,14 @@ export interface BacktestSweep {
 }
 
 export interface CreateBacktestSweepInput {
-  topic: string;
-  rules: string;
-  market: DiscussionMarket;
-  persona_ids: string[];
+  /** PR-A: when set, server back-fills any unspecified field from
+   *  the template. Submit just {strategy_id, anchor_date,
+   *  trading_days_count} for a load-and-go flow. */
+  strategy_id?: string;
+  topic?: string;
+  rules?: string;
+  market?: DiscussionMarket;
+  persona_ids?: string[];
   anchor_date: string;
   trading_days_count: number;
   rounds_per_discussion?: number;
@@ -321,6 +328,66 @@ export interface CreateBacktestSweepInput {
   /** Defaults to true on the backend; sent explicitly so the
    *  toggle's off-state is respected. */
   auto_post_mortem?: boolean;
+}
+
+// ── Strategy templates (PR-A) ────────────────────────────────────
+
+export interface StrategyTemplate {
+  id: string;
+  name: string;
+  description: string | null;
+  topic: string;
+  rules: string;
+  market: DiscussionMarket;
+  persona_ids: string[];
+  default_rounds: number;
+  default_concurrency: number;
+  default_auto_post_mortem: boolean;
+  /** PR-C: persona_id -> learned weight. Empty = uniform. */
+  persona_weights: Record<string, number>;
+  weights_updated_at: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface CreateStrategyInput {
+  name: string;
+  description?: string | null;
+  topic: string;
+  rules: string;
+  market: DiscussionMarket;
+  persona_ids: string[];
+  default_rounds?: number;
+  default_concurrency?: number;
+  default_auto_post_mortem?: boolean;
+}
+
+export type UpdateStrategyInput = Partial<CreateStrategyInput>;
+
+export async function fetchStrategies(): Promise<StrategyTemplate[]> {
+  const r = await api.get<StrategyTemplate[]>("/discussion/strategies");
+  return r.data;
+}
+
+export async function createStrategy(
+  body: CreateStrategyInput,
+): Promise<StrategyTemplate> {
+  const r = await api.post<StrategyTemplate>("/discussion/strategies", body);
+  return r.data;
+}
+
+export async function updateStrategy(
+  id: string, body: UpdateStrategyInput,
+): Promise<StrategyTemplate> {
+  const r = await api.patch<StrategyTemplate>(
+    `/discussion/strategies/${id}`, body,
+  );
+  return r.data;
+}
+
+export async function deleteStrategy(id: string): Promise<void> {
+  await api.delete(`/discussion/strategies/${id}`);
 }
 
 export async function fetchSweeps(): Promise<BacktestSweep[]> {

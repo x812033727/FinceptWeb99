@@ -3130,6 +3130,35 @@ async def synthesize_conclusion(
         context=json.dumps(context, ensure_ascii=False, indent=2),
         transcript=_format_transcript(turns),
     )
+
+    # PR-C: when this discussion was spawned by a sweep whose
+    # parent strategy has learned persona weights, surface them as
+    # a tie-breaker hint so the synthesizer can lean on personas
+    # with a track record. Returns "" when no weights are available
+    # (live discussions, sweeps not tied to a template, fresh
+    # templates not yet trained).
+    if discussion.sweep_id is not None:
+        from models.backtest_sweep import BacktestSweep
+        from models.discussion_strategy_template import (
+            DiscussionStrategyTemplate,
+        )
+        from services.persona_weight_learner import (
+            format_weights_for_synthesizer,
+        )
+        sweep_row = await db.scalar(
+            select(BacktestSweep).where(BacktestSweep.id == discussion.sweep_id)
+        )
+        if sweep_row is not None and sweep_row.strategy_id is not None:
+            tmpl = await db.scalar(
+                select(DiscussionStrategyTemplate).where(
+                    DiscussionStrategyTemplate.id == sweep_row.strategy_id,
+                )
+            )
+            if tmpl is not None and tmpl.persona_weights:
+                user_prompt += format_weights_for_synthesizer(
+                    dict(tmpl.persona_weights),
+                )
+
     if has_post_mortem:
         user_prompt += (
             "\n\n## 補充提示（事後檢討模式）\n"

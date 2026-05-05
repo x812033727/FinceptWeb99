@@ -37,6 +37,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.discussion.schemas import (
+    PersonaWeightLearnResponse,
     StrategyTemplateCreate,
     StrategyTemplateResponse,
     StrategyTemplateUpdate,
@@ -1233,6 +1234,32 @@ async def aggregate_strategy_route(
         db, owner_id=_coerce_owner_uuid(user), strategy_id=template_id,
     )
     return SweepAggregateResponse(**payload)
+
+
+@router.post(
+    "/strategies/{template_id}/learn",
+    response_model=PersonaWeightLearnResponse,
+)
+async def learn_strategy_weights(
+    template_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """PR-C: recompute persona weights from this template's
+    aggregate history. Sweep completion auto-triggers this for
+    its parent template; this manual endpoint exists so the
+    operator can force a re-learn after editing the roster or
+    importing external sweeps."""
+    from services import persona_weight_learner
+    try:
+        result = await persona_weight_learner.learn_weights_for_strategy(
+            db,
+            owner_id=_coerce_owner_uuid(user),
+            strategy_id=template_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return PersonaWeightLearnResponse(**result)
 
 
 @router.delete(

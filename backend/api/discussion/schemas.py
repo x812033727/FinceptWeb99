@@ -251,6 +251,18 @@ class BacktestSweepCreate(BaseModel):
     strategy_id: uuid.UUID | None = None
 
 
+class PersonaWeightLearnResponse(BaseModel):
+    """PR-C: outcome of a strategy weight-learn pass.
+
+    `updated=False` is not an error — it surfaces "no eligible
+    persona has reached MIN_SAMPLES yet" so the UI can render
+    a hint instead of a generic failure."""
+    updated: bool
+    reason: str | None
+    weights: dict[str, float]
+    samples: dict[str, int]
+
+
 class StrategyTemplateCreate(BaseModel):
     """POST body for creating a strategy template (PR-A)."""
     name: str = Field(..., min_length=1, max_length=120)

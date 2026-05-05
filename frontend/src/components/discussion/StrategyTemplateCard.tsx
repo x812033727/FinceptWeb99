@@ -5,7 +5,9 @@ import {
   createStrategy,
   deleteStrategy,
   fetchStrategies,
+  learnStrategyWeights,
   type CreateStrategyInput,
+  type PersonaWeightLearnResult,
   type StrategyTemplate,
 } from "./_helpers";
 import type { DiscussionMarket } from "@/types/discussion";
@@ -326,7 +328,15 @@ function StrategyRow({
   isDeleting: boolean;
 }) {
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
   const [showAggregate, setShowAggregate] = useState(false);
+  const learnMut = useMutation({
+    mutationFn: () => learnStrategyWeights(strategy.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["strategy-templates"] });
+    },
+  });
+  const learnResult = learnMut.data as PersonaWeightLearnResult | undefined;
   const weightEntries = useMemo(
     () => Object.entries(strategy.persona_weights ?? {}),
     [strategy.persona_weights],
@@ -373,15 +383,55 @@ function StrategyRow({
             ))}
         </div>
       ) : null}
-      <button
-        type="button"
-        onClick={() => setShowAggregate((v) => !v)}
-        className="text-[10px] text-blue-300 hover:text-blue-200"
-      >
-        {showAggregate
-          ? t("strategy.hide_aggregate", "▼ 收起跨 sweep 績效")
-          : t("strategy.show_aggregate", "▶ 展開跨 sweep 績效")}
-      </button>
+      <div className="flex items-center gap-3 text-[10px]">
+        <button
+          type="button"
+          onClick={() => setShowAggregate((v) => !v)}
+          className="text-blue-300 hover:text-blue-200"
+        >
+          {showAggregate
+            ? t("strategy.hide_aggregate", "▼ 收起跨 sweep 績效")
+            : t("strategy.show_aggregate", "▶ 展開跨 sweep 績效")}
+        </button>
+        <button
+          type="button"
+          onClick={() => learnMut.mutate()}
+          disabled={learnMut.isPending}
+          className="text-emerald-300 hover:text-emerald-200 disabled:opacity-50"
+          title={t("strategy.learn_tooltip",
+                   "依過往 sweep 命中率重算 persona 權重")}
+        >
+          {learnMut.isPending
+            ? t("strategy.learning", "學習中…")
+            : t("strategy.learn", "🧠 重新學習權重")}
+        </button>
+        {strategy.weights_updated_at ? (
+          <span className="text-muted-foreground" title={strategy.weights_updated_at}>
+            {t("strategy.last_learned", "上次學習")}：
+            {new Date(strategy.weights_updated_at).toLocaleDateString()}
+          </span>
+        ) : null}
+      </div>
+      {learnResult ? (
+        <p className={
+          learnResult.updated
+            ? "text-[10px] text-emerald-300"
+            : "text-[10px] text-amber-300"
+        }>
+          {learnResult.updated
+            ? t("strategy.learn_done",
+                "✔ 已更新 {{n}} 位專家的權重",
+                { n: Object.keys(learnResult.weights).length })
+            : t("strategy.learn_skipped", "⚠ 跳過：{{r}}",
+                { r: learnResult.reason ?? "" })}
+        </p>
+      ) : null}
+      {learnMut.error ? (
+        <p className="text-[10px] text-red-300">
+          {(learnMut.error as { response?: { data?: { detail?: string } } })
+            ?.response?.data?.detail ?? (learnMut.error as Error).message}
+        </p>
+      ) : null}
       {showAggregate && (
         <SweepAggregateCard strategyId={strategy.id} />
       )}

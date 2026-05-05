@@ -428,6 +428,22 @@ export interface SweepAggregate {
   lessons: AggregateLesson[];
 }
 
+export interface PersonaWeightLearnResult {
+  updated: boolean;
+  reason: string | null;
+  weights: Record<string, number>;
+  samples: Record<string, number>;
+}
+
+export async function learnStrategyWeights(
+  templateId: string,
+): Promise<PersonaWeightLearnResult> {
+  const r = await api.post<PersonaWeightLearnResult>(
+    `/discussion/strategies/${templateId}/learn`,
+  );
+  return r.data;
+}
+
 export async function fetchSweepAggregate(
   sweepId: string,
 ): Promise<SweepAggregate> {

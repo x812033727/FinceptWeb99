@@ -495,6 +495,29 @@ async def run_sweep_worker(sweep_id: UUID) -> None:
             sweep.failed_dates = list(failed)
         await db.commit()
 
+        # PR-C: re-learn persona weights for the parent strategy
+        # template so the next sweep using it picks up the freshly
+        # validated track record. Best-effort — any failure logs
+        # but does NOT roll back the sweep completion (the operator
+        # can recompute manually via POST /strategies/{id}/learn).
+        if not cancelled_mid_flight and sweep.strategy_id is not None:
+            try:
+                from services import persona_weight_learner
+                await persona_weight_learner.learn_weights_for_strategy(
+                    db,
+                    owner_id=sweep.owner_id,
+                    strategy_id=sweep.strategy_id,
+                )
+            except Exception as exc:
+                log.warning(
+                    "backtest_sweep.learn_weights_failed",
+                    extra={
+                        "sweep_id": str(sweep_id),
+                        "strategy_id": str(sweep.strategy_id),
+                        "error": str(exc),
+                    },
+                )
+
 
 def start_sweep_in_background(sweep_id: UUID) -> asyncio.Task:
     """Public entry point for the API layer. Detaches the worker

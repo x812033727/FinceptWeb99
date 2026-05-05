@@ -10,6 +10,7 @@ import {
 } from "./_helpers";
 import type { DiscussionMarket } from "@/types/discussion";
 import { useCollapsible, CollapsibleHeader } from "@/components/Collapsible";
+import { SweepAggregateCard } from "./SweepAggregateCard";
 
 /** Strategy templates (PR-A).
  *
@@ -325,6 +326,7 @@ function StrategyRow({
   isDeleting: boolean;
 }) {
   const { t } = useTranslation();
+  const [showAggregate, setShowAggregate] = useState(false);
   const weightEntries = useMemo(
     () => Object.entries(strategy.persona_weights ?? {}),
     [strategy.persona_weights],
@@ -371,6 +373,18 @@ function StrategyRow({
             ))}
         </div>
       ) : null}
+      <button
+        type="button"
+        onClick={() => setShowAggregate((v) => !v)}
+        className="text-[10px] text-blue-300 hover:text-blue-200"
+      >
+        {showAggregate
+          ? t("strategy.hide_aggregate", "▼ 收起跨 sweep 績效")
+          : t("strategy.show_aggregate", "▶ 展開跨 sweep 績效")}
+      </button>
+      {showAggregate && (
+        <SweepAggregateCard strategyId={strategy.id} />
+      )}
     </li>
   );
 }

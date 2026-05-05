@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { SweepAggregateCard } from "./SweepAggregateCard";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -232,6 +233,7 @@ function SweepProgressRow({
   onDelete: (id: string) => void;
 }) {
   const { t } = useTranslation();
+  const [showAggregate, setShowAggregate] = useState(false);
   const total = sweep.resolved_dates.length || sweep.trading_days_count;
   const done = sweep.completed_dates.length;
   const failed = sweep.failed_dates.length;
@@ -346,6 +348,25 @@ function SweepProgressRow({
             ))}
           </ul>
         </details>
+      ) : null}
+
+      {/* PR-B: aggregate panel — lazy-mounted on click so the
+          query doesn't fire for every collapsed row. */}
+      {done > 0 ? (
+        <div className="pt-1.5 border-t border-border/40 space-y-1.5">
+          <button
+            type="button"
+            onClick={() => setShowAggregate((v) => !v)}
+            className="text-[10px] text-blue-300 hover:text-blue-200"
+          >
+            {showAggregate
+              ? t("sweep.hide_aggregate", "▼ 收起聚合儀表板")
+              : t("sweep.show_aggregate", "▶ 展開聚合儀表板")}
+          </button>
+          {showAggregate && (
+            <SweepAggregateCard sweepId={sweep.id} />
+          )}
+        </div>
       ) : null}
     </li>
   );

@@ -390,6 +390,62 @@ export async function deleteStrategy(id: string): Promise<void> {
   await api.delete(`/discussion/strategies/${id}`);
 }
 
+// ── Sweep / strategy aggregates (PR-B) ───────────────────────────
+
+export interface AggregatePersona {
+  persona_id: string;
+  discussions_count: number;
+  win_count: number;
+  hit_rate: number | null;
+  agree_turn_count: number;
+  dissent_turn_count: number;
+}
+
+export interface AggregateLesson {
+  category: string;
+  lesson_text: string;
+  as_of_date: string;
+  related_symbols: string[];
+  created_at: string | null;
+}
+
+export interface SweepAggregate {
+  scope: "sweep" | "strategy";
+  sweep_id?: string | null;
+  strategy_id?: string | null;
+  sweep_count?: number | null;
+  anchor_date?: string | null;
+  trading_days_count?: number | null;
+  completed_count?: number | null;
+  failed_count?: number | null;
+  discussions_total: number;
+  verdict_counts: {
+    win: number; loss: number; unverifiable: number; pending: number;
+  };
+  win_rate: number | null;
+  avg_pnl_pct: (number | null)[];
+  per_persona: AggregatePersona[];
+  lessons: AggregateLesson[];
+}
+
+export async function fetchSweepAggregate(
+  sweepId: string,
+): Promise<SweepAggregate> {
+  const r = await api.get<SweepAggregate>(
+    `/discussion/sweeps/${sweepId}/aggregate`,
+  );
+  return r.data;
+}
+
+export async function fetchStrategyAggregate(
+  templateId: string,
+): Promise<SweepAggregate> {
+  const r = await api.get<SweepAggregate>(
+    `/discussion/strategies/${templateId}/aggregate`,
+  );
+  return r.data;
+}
+
 export async function fetchSweeps(): Promise<BacktestSweep[]> {
   const r = await api.get<BacktestSweep[]>("/discussion/sweeps");
   return r.data;

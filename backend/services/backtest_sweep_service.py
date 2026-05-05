@@ -135,13 +135,15 @@ async def create_sweep(
             "parent_sweep_id is only valid when fold_kind is "
             "'train' or 'test'"
         )
-    if weights_override is not None and fold_kind != "test":
-        # weights_override only makes sense on a test fold —
-        # training a sweep against its own learned weights is the
-        # exact in-sample anti-pattern walk-forward is meant to
-        # catch.
+    if weights_override is not None and fold_kind == "train":
+        # Train folds learn their own weights from their own
+        # discussions — overriding would short-circuit the very
+        # thing the train fold exists to compute. Production is
+        # allowed (PR-A2: auto-schedule injects walk-forward
+        # validated weights), test is allowed (PR-A1: orchestrator
+        # injects the frozen train weights).
         raise ValueError(
-            "weights_override is only valid when fold_kind is 'test'"
+            "weights_override is not valid on a 'train' fold"
         )
 
     sweep = BacktestSweep(
@@ -553,10 +555,20 @@ async def run_sweep_worker(sweep_id: UUID) -> None:
         # surface. Train folds also skip (they hand off to the
         # walk-forward orchestrator's frozen-weights pipeline);
         # only `production` sweeps trigger the in-place learner.
+        #
+        # PR-A2: production sweeps that ran against a walk-forward
+        # validated `weights_override` ALSO skip — the OOS-clean
+        # weights are already in place, retraining in-sample on top
+        # would re-poison them. Production sweeps WITHOUT a frozen
+        # weights override (i.e. strategies that haven't run a
+        # walk-forward yet) keep the legacy in-sample retrain so
+        # the existing operator workflow stays intact during the
+        # rollout.
         should_learn_weights = (
             not cancelled_mid_flight
             and sweep.strategy_id is not None
             and sweep.fold_kind == "production"
+            and not sweep.weights_override
         )
         if should_learn_weights:
             try:

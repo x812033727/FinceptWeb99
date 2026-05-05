@@ -197,3 +197,82 @@ def _session_ctx(session: AsyncSession):
         async def __aexit__(self_inner, exc_type, exc, tb):
             return False
     return _Ctx()
+
+
+# ── PR-A2: production sweep picks up walk-forward validated weights ──
+
+
+@pytest.mark.asyncio
+async def test_process_uses_validated_weights_when_available(
+    db_session: AsyncSession, owner: User,
+):
+    """When a strategy has a recently completed walk-forward test
+    sweep, the auto-schedule's production sweep should be created
+    with that fold's weights as `weights_override`."""
+    tmpl = _make_template(owner.id)
+    db_session.add(tmpl)
+    await db_session.commit()
+    await db_session.refresh(tmpl)
+
+    # Seed a completed test sweep carrying frozen weights.
+    validated_weights = {"bull": 1.7, "bear": 0.6}
+    db_session.add(BacktestSweep(
+        owner_id=owner.id, strategy_id=tmpl.id,
+        topic=tmpl.topic, rules=tmpl.rules, market=tmpl.market,
+        persona_ids=list(tmpl.persona_ids),
+        anchor_date=date(2026, 5, 1),
+        trading_days_count=20, rounds_per_discussion=1,
+        concurrency=1, auto_post_mortem=False,
+        fold_kind="test",
+        weights_override=validated_weights,
+        status="completed",
+        completed_at=datetime.now(UTC) - timedelta(days=1),
+    ))
+    await db_session.commit()
+
+    with patch(
+        "services.strategy_auto_sweep_service.AsyncSessionLocal",
+        return_value=_session_ctx(db_session),
+    ):
+        with patch(
+            "services.strategy_auto_sweep_service.sweep_svc."
+            "start_sweep_in_background",
+            new=AsyncMock(),
+        ):
+            launched = await svc.process_due_strategies()
+
+    assert len(launched) == 1
+    sweep = await db_session.get(BacktestSweep, launched[0])
+    assert sweep is not None
+    assert sweep.fold_kind == "production"
+    assert sweep.weights_override == validated_weights
+
+
+@pytest.mark.asyncio
+async def test_process_falls_back_to_no_override_when_no_validation(
+    db_session: AsyncSession, owner: User,
+):
+    """Strategies without any walk-forward history get the legacy
+    behavior: production sweep created without weights_override,
+    Phase 3 will run the in-sample retrain."""
+    tmpl = _make_template(owner.id)
+    db_session.add(tmpl)
+    await db_session.commit()
+    await db_session.refresh(tmpl)
+
+    with patch(
+        "services.strategy_auto_sweep_service.AsyncSessionLocal",
+        return_value=_session_ctx(db_session),
+    ):
+        with patch(
+            "services.strategy_auto_sweep_service.sweep_svc."
+            "start_sweep_in_background",
+            new=AsyncMock(),
+        ):
+            launched = await svc.process_due_strategies()
+
+    assert len(launched) == 1
+    sweep = await db_session.get(BacktestSweep, launched[0])
+    assert sweep is not None
+    assert sweep.fold_kind == "production"
+    assert sweep.weights_override is None

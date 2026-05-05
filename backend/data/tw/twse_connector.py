@@ -402,3 +402,148 @@ async def get_all_valuation_ratios() -> dict[str, dict[str, float | None]]:
             "dividend_yield": _tw_num(r.get("DividendYield") or r.get("殖利率(%)")),
         }
     return out
+
+
+# ── 外資及陸資投資持股 (MI_QFIIS) ────────────────────────────────
+
+async def get_foreign_shareholding(
+    query_date: date | None = None,
+) -> list[dict[str, Any]]:
+    """All TWSE-listed stocks' foreign-holding ratio + outstanding
+    foreign shares for one date (`MI_QFIIS`).
+
+    Output shape (per row):
+        symbol           : 證券代號
+        name_zh          : 證券名稱
+        issued_shares    : 發行股數
+        foreign_shares   : 全體外資及陸資持有股數
+        foreign_pct      : 全體外資及陸資持有比率 (%)
+
+    The TWSE column names are inconsistent across endpoint revisions
+    (`持有股數` vs `投資餘額`, `持有比率` vs `投資比率`) — we read both
+    variants so a future column rename doesn't silently zero out the
+    foreign-holding numbers.
+    """
+    raw = await _get(
+        f"{_LEGACY_BASE}/fund/MI_QFIIS",
+        params={
+            "response": "json",
+            "date": _twse_date(query_date),
+            "selectType": "ALLBUT0999",
+        },
+    )
+    rows = _unwrap_legacy_table(raw)
+    if not rows and isinstance(raw, list):
+        rows = raw
+    result: list[dict[str, Any]] = []
+    for r in rows:
+        symbol = (r.get("證券代號") or "").strip()
+        if not symbol:
+            continue
+        result.append({
+            "symbol":         symbol,
+            "name_zh":        (r.get("證券名稱") or "").strip(),
+            "issued_shares":  _tw_int(r.get("發行股數")),
+            "foreign_shares": _tw_int(
+                r.get("全體外資及陸資持有股數")
+                or r.get("全體外資及陸資投資餘額")
+            ),
+            "foreign_pct":    _tw_num(
+                r.get("全體外資及陸資持有比率")
+                or r.get("全體外資及陸資投資比率")
+            ),
+        })
+    return result
+
+
+# ── 大盤三大法人買賣金額 (BFI82U) ────────────────────────────────
+
+async def get_total_institutional(
+    query_date: date | None = None,
+) -> list[dict[str, Any]]:
+    """Market-wide 三大法人 (foreign / SITC / dealer) buy + sell totals
+    for one date via TWSE BFI82U.
+
+    Returns one row per institutional unit. The "name" field carries
+    the unit name as TWSE labels it (外資及陸資, 投信, 自營商, etc.) —
+    the caller's pivot pass matches on substring so the row count
+    stays correct even when TWSE adds sub-categories (e.g. splitting
+    自營商 into 自行買賣 / 避險).
+    """
+    data = await _get(
+        f"{_BASE}/fund/BFI82U",
+        params={
+            "response": "json",
+            "dayDate": _twse_date(query_date),
+            "type": "day",
+        },
+    )
+    rows = data if isinstance(data, list) else []
+    # OpenAPI variant returns a flat list; legacy returns the wrapped
+    # `{stat, fields, data}` envelope. Handle both.
+    if not rows and isinstance(data, dict):
+        rows = _unwrap_legacy_table(data)
+    result: list[dict[str, Any]] = []
+    for r in rows:
+        name = (
+            r.get("單位名稱")
+            or r.get("name")
+            or r.get("Name")
+            or ""
+        ).strip()
+        if not name:
+            continue
+        result.append({
+            "name":  name,
+            "buy":   _tw_int(
+                r.get("買進金額") or r.get("buy_amount") or r.get("BuyAmount")
+            ),
+            "sell":  _tw_int(
+                r.get("賣出金額") or r.get("sell_amount") or r.get("SellAmount")
+            ),
+        })
+    return result
+
+
+# ── 現股當沖交易統計 (TWTB4U) ────────────────────────────────────
+
+async def get_day_trading(
+    query_date: date | None = None,
+) -> list[dict[str, Any]]:
+    """All TWSE-listed stocks' current-day trade volume + amount for
+    one date via TWSE TWTB4U.
+
+    Output shape (per row):
+        symbol         : 證券代號
+        name_zh        : 證券名稱
+        volume         : 當日沖銷交易股數 (single number — buy = sell
+                         by definition in day trading)
+        buy_amount     : 當日沖銷交易買進成交金額
+        sell_amount    : 當日沖銷交易賣出成交金額
+    """
+    raw = await _get(
+        f"{_LEGACY_BASE}/exchangeReport/TWTB4U",
+        params={
+            "response": "json",
+            "date": _twse_date(query_date),
+            "selectType": "All",
+        },
+    )
+    rows = _unwrap_legacy_table(raw)
+    if not rows and isinstance(raw, list):
+        rows = raw
+    result: list[dict[str, Any]] = []
+    for r in rows:
+        symbol = (r.get("證券代號") or "").strip()
+        if not symbol:
+            continue
+        result.append({
+            "symbol":      symbol,
+            "name_zh":     (r.get("證券名稱") or "").strip(),
+            "volume":      _tw_int(
+                r.get("當日沖銷交易股數") or r.get("成交股數")
+            ),
+            "buy_amount":  _tw_num(r.get("當日沖銷交易買進成交金額")),
+            "sell_amount": _tw_num(r.get("當日沖銷交易賣出成交金額")),
+        })
+    return result

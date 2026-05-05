@@ -39,6 +39,17 @@ class CatalogEntry:
     primary_source: str         # 'finmind' default
     fallback_source: str | None # 'twse' | 'tpex' | 'taifex' | 'mops' | 'tdcc' | None
     ingest_freq: str            # 'daily' | 'monthly' | 'quarterly' | 'realtime' | 'on_demand'
+    # FinMind only serves one day per call for these datasets (KBar,
+    # PriceTick, BlockTradingDailyReport, GovernmentBankBuySell,
+    # {Trading,Warrant}TradingDailyReport — the FinMind validator
+    # rejects multi-day queries with "size is too large, end_date
+    # parameter need be none"). When True, the scheduler emits one
+    # DueChunk per day in the suggested range instead of one chunk for
+    # the whole window — gives per-day retry granularity in
+    # `backfill_progress`. The runner has its own mapping-level
+    # `single_day` flag as a backstop for callers that bypass the
+    # scheduler (CLI backfill with --days N, direct ingest_chunk).
+    single_day: bool = False
 
 
 # ── Technical (價量) ──────────────────────────────────────────────
@@ -49,14 +60,14 @@ TECHNICAL: tuple[CatalogEntry, ...] = (
     CatalogEntry("TaiwanStockTradingDate",                   "tw_trading_calendar",  "finmind", "twse",   "monthly"),
     CatalogEntry("TaiwanStockPrice",                         "ohlcv_daily",          "finmind", "twse",   "daily"),
     CatalogEntry("TaiwanStockPriceAdj",                      "tw_stock_price_adj",   "finmind", None,     "daily"),
-    CatalogEntry("TaiwanStockPriceTick",                     "tw_stock_tick",        "finmind", None,     "daily"),
+    CatalogEntry("TaiwanStockPriceTick",                     "tw_stock_tick",        "finmind", None,     "daily", single_day=True),
     CatalogEntry("TaiwanStockPER",                           "tw_stock_per_daily",   "finmind", "twse",   "daily"),
     CatalogEntry("TaiwanStockStatisticsOfOrderBookAndTrade", "", "finmind", None,     "daily"),
     CatalogEntry("TaiwanVariousIndicators5Seconds",          "", "finmind", None,     "realtime"),
     CatalogEntry("TaiwanStockDayTrading",                    "tw_day_trade_daily",       "finmind", "twse",   "daily"),
     CatalogEntry("TaiwanStockTotalReturnIndex",              "tw_total_return_index",    "finmind", "twse",   "daily"),
     CatalogEntry("TaiwanStock10Year",                        "", "finmind", None,     "on_demand"),
-    CatalogEntry("TaiwanStockKBar",                          "tw_stock_minute",      "finmind", None,     "daily"),
+    CatalogEntry("TaiwanStockKBar",                          "tw_stock_minute",      "finmind", None,     "daily", single_day=True),
     CatalogEntry("TaiwanStockWeekPrice",                     "", "finmind", None,     "on_demand"),
     CatalogEntry("TaiwanStockMonthPrice",                    "", "finmind", None,     "on_demand"),
     CatalogEntry("TaiwanStockEvery5SecondsIndex",            "", "finmind", None,     "realtime"),
@@ -78,12 +89,12 @@ CHIP: tuple[CatalogEntry, ...] = (
     CatalogEntry("TaiwanStockMarginShortSaleSuspension",        "tw_short_sale_suspension",   "finmind", "twse", "daily"),
     CatalogEntry("TaiwanDailyShortSaleBalances",                "tw_short_sale_balance_daily","finmind", "twse", "daily"),
     CatalogEntry("TaiwanSecuritiesTraderInfo",                  "tw_broker_master",           "finmind", "twse", "monthly"),
-    CatalogEntry("TaiwanStockTradingDailyReport",               "tw_broker_daily_report",     "finmind", None,   "daily"),
-    CatalogEntry("TaiwanStockWarrantTradingDailyReport",        "tw_broker_daily_report",     "finmind", None,   "daily"),
-    CatalogEntry("TaiwanStockGovernmentBankBuySell",            "tw_govt_bank_flow",          "finmind", None,   "daily"),
+    CatalogEntry("TaiwanStockTradingDailyReport",               "tw_broker_daily_report",     "finmind", None,   "daily", single_day=True),
+    CatalogEntry("TaiwanStockWarrantTradingDailyReport",        "tw_broker_daily_report",     "finmind", None,   "daily", single_day=True),
+    CatalogEntry("TaiwanStockGovernmentBankBuySell",            "tw_govt_bank_flow",          "finmind", None,   "daily", single_day=True),
     CatalogEntry("TaiwanTotalExchangeMarginMaintenance",        "tw_margin_maintenance",      "finmind", "twse", "daily"),
     CatalogEntry("TaiwanStockTradingDailyReportSecIdAgg",       "",                           "finmind", None,   "daily"),
-    CatalogEntry("TaiwanStockBlockTradingDailyReport",          "tw_block_trade",             "finmind", "twse", "daily"),
+    CatalogEntry("TaiwanStockBlockTradingDailyReport",          "tw_block_trade",             "finmind", "twse", "daily", single_day=True),
     CatalogEntry("TaiwanStockBlockTrade",                       "tw_block_trade",             "finmind", "twse", "daily"),
     CatalogEntry("TaiwanStockLoanCollateralBalance",            "tw_loan_collateral",         "finmind", "twse", "daily"),
     CatalogEntry("TaiwanStockDispositionSecuritiesPeriod",      "tw_disposition",             "finmind", "twse", "daily"),

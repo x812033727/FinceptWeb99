@@ -135,6 +135,7 @@ async def seed_dataset_sources() -> tuple[int, int]:
                     "active_source": entry.primary_source,
                     "sponsor_tier": spec.sponsor_tier,
                     "ingest_freq": entry.ingest_freq,
+                    "single_day": entry.single_day,
                 }
             )
 
@@ -156,6 +157,7 @@ async def seed_dataset_sources() -> tuple[int, int]:
                     # are runtime state that a seed re-run mustn't clobber.
                     "sponsor_tier": stmt.excluded.sponsor_tier,
                     "ingest_freq": stmt.excluded.ingest_freq,
+                    "single_day": stmt.excluded.single_day,
                 },
             )
             await session.execute(stmt)
@@ -172,6 +174,7 @@ async def seed_dataset_sources() -> tuple[int, int]:
                     "fallback_source": stmt.excluded.fallback_source,
                     "sponsor_tier": stmt.excluded.sponsor_tier,
                     "ingest_freq": stmt.excluded.ingest_freq,
+                    "single_day": stmt.excluded.single_day,
                 },
             )
             await session.execute(stmt)

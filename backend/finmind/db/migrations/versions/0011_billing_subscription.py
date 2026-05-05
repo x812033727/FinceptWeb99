@@ -152,7 +152,7 @@ def upgrade() -> None:
         sa.Column("latency_ms", sa.Integer(), nullable=True),
         sa.Column("status_code", sa.Integer(), nullable=False),
         sa.Column("error_message", sa.Text(), nullable=True),
-        sa.PrimaryKeyConstraint("id", name="pk_api_usage_events"),
+        sa.PrimaryKeyConstraint("id", "ts", name="pk_api_usage_events"),
     )
     op.create_index(
         "ix_api_usage_events_key_ts",

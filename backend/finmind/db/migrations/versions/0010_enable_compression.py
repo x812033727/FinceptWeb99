@@ -94,10 +94,12 @@ def upgrade() -> None:
     for table, segmentby, retention in COMPRESSION_PLAN:
         # Skip silently if the hypertable doesn't exist — happens when
         # downgrade runs out of order or in tests.
-        exists = bind.exec_driver_sql(
-            "SELECT 1 FROM timescaledb_information.hypertables "
-            "WHERE hypertable_name = %s",
-            (table,),
+        exists = bind.execute(
+            sa.text(
+                "SELECT 1 FROM timescaledb_information.hypertables "
+                "WHERE hypertable_name = :name"
+            ),
+            {"name": table},
         ).scalar()
         if not exists:
             continue
@@ -125,10 +127,12 @@ def downgrade() -> None:
 
     bind = op.get_bind()
     for table, _segmentby, _retention in COMPRESSION_PLAN:
-        exists = bind.exec_driver_sql(
-            "SELECT 1 FROM timescaledb_information.hypertables "
-            "WHERE hypertable_name = %s",
-            (table,),
+        exists = bind.execute(
+            sa.text(
+                "SELECT 1 FROM timescaledb_information.hypertables "
+                "WHERE hypertable_name = :name"
+            ),
+            {"name": table},
         ).scalar()
         if not exists:
             continue

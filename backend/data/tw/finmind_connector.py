@@ -5,6 +5,7 @@ Tracks usage in Redis with a 1-hour rolling window; falls silent (returns
 """
 import contextvars
 import logging
+from contextlib import contextmanager
 from typing import Any
 
 import httpx
@@ -75,10 +76,26 @@ async def _query(dataset: str, data_id: str, start_date: str, end_date: str | No
         log.debug("finmind.empty_token", extra={"dataset": dataset})
 
     # 3600s = 1h. FinMind's actual rate limit is per-hour (600/hr for
-    # registered free tier, 300/hr anonymous), so the counter window
-    # has to match — a 24h TTL was wasting 24× the available budget.
+    # registered free tier, 300/hr anonymous, 6000/hr for sponsor).
+    # The counter window matches — a 24h TTL was wasting 24× the
+    # available budget.
     count = await cache_incr(key_finmind_counter(), ttl_seconds=3600)
     if count > await _resolve_hourly_limit():
+        # Two callers, two semantics:
+        #   - Live serving (get_news, screener cache fillers, …) wants
+        #     `[]` so the call falls back to TWSE / cached values
+        #     without erroring the request.
+        #   - Backfill / scheduler wants a hard fail so the chunk
+        #     records as `failed`, not `done (0 rows)` — otherwise
+        #     `run_due` thinks the chunk is fresh and never retries it
+        #     when quota recovers, silently losing real data.
+        # The contextvar `_strict_quota` (default False) toggles
+        # behavior. `quota_strict()` is the recommended setter.
+        if _strict_quota.get():
+            raise FinMindQuotaExhausted(
+                f"FinMind hourly quota exhausted "
+                f"(local count={count}, dataset={dataset})"
+            )
         return []
 
     params: dict = {
@@ -115,6 +132,35 @@ async def _query(dataset: str, data_id: str, start_date: str, end_date: str | No
         return []
     _last_silent_deny.set(None)
     return body.get("data", [])
+
+
+class FinMindQuotaExhausted(Exception):
+    """Raised by `_query` when the local hourly counter has overrun
+    the configured `FINMIND_HOURLY_REQUEST_LIMIT` AND the caller has
+    opted into strict mode via :func:`quota_strict`. Live-serving
+    callers (default mode) get an empty list instead so they fall
+    back gracefully to the secondary source. Backfill / scheduler
+    paths set strict mode so a quota overrun marks the chunk as
+    failed — preventing the silent `done (0 rows)` failure mode
+    that would let `run_due` skip the chunk forever."""
+
+
+_strict_quota: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "finmind_strict_quota", default=False,
+)
+
+
+@contextmanager
+def quota_strict():
+    """Context manager that switches `_query` from quiet-on-quota
+    (`[]`) to raise-on-quota (`FinMindQuotaExhausted`). Use from the
+    runner / backfill paths so an overrun records as a failed chunk
+    instead of a fake-done one."""
+    tok = _strict_quota.set(True)
+    try:
+        yield
+    finally:
+        _strict_quota.reset(tok)
 
 
 # Per-task contextvar that captures the most recent silent-deny msg

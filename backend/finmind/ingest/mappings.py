@@ -449,21 +449,34 @@ def _row_suspended(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _row_stock_info_with_warrant(row: dict[str, Any]) -> dict[str, Any]:
-    # FinMind's `TaiwanStockInfoWithWarrant` shares the same column shape
-    # as `TaiwanStockInfo` but includes warrants (call/put leveraged
-    # certificates). `industry_category == '全部(不含大盤、指數)'` distinguishes
-    # warrants from equities since warrants don't have a real industry.
+    # FinMind's `TaiwanStockInfoWithWarrant` ships ALL listings — equities,
+    # ETFs, warrants, and DRs — under industry_category `全部(不含大盤、
+    # 指數)`. The previous heuristic flagged every row as `is_warrant=True`
+    # which polluted `tw_stock_info` (2330 was being flagged as a warrant)
+    # and forced downstream universe filtering to fall back to symbol-
+    # length regex. The proper signal is in `stock_name`:
+    #   - Warrants embed `認購` (call) / `認售` (put) verbatim
+    #   - Bull/bear certificates embed `牛` / `熊`
+    #   - Plain `權證` also appears in some issuer-specific names
+    # ETFs and DRs (e.g. `元大台商50`, `恒大健-DR`) match none of the
+    # above and stay `is_warrant=False`.
     market_raw = (row.get("market") or "").lower()
     market = "TWSE" if "twse" in market_raw or market_raw == "twse" else (
         "OTC" if market_raw in ("otc", "tpex") else market_raw.upper() or "TWSE"
     )
-    industry = _to_str(row.get("industry_category"))
-    is_warrant = bool(industry and "不含大盤" in industry)
+    name = row.get("name_zh") or ""
+    is_warrant = any(tag in name for tag in ("認購", "認售", "權證")) or (
+        # `牛` / `熊` only when followed by a digit (e.g. `牛01`) to
+        # avoid false positives on company names containing those
+        # characters legitimately.
+        any(t in name for t in ("牛", "熊"))
+        and any(c.isdigit() for c in name)
+    )
     return {
         "market": market,
         "symbol": _to_str(row.get("symbol")),
-        "name_zh": _to_str(row.get("name_zh")),
-        "industry_category": industry,
+        "name_zh": _to_str(name),
+        "industry_category": _to_str(row.get("industry_category")),
         "listed_at": _to_date(row.get("listed_at")),
         "is_warrant": is_warrant,
         "source": row.get("source", "finmind"),

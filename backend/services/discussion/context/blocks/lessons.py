@@ -69,9 +69,17 @@ async def fetch_recent_lessons(
             return
 
         from services.discussion_lesson_service import (
+            _classify_regime,
             fetch_relevant_lessons,
             summary_to_dict,
         )
+
+        # PR-B1: classify the current ctx's regime so fetch can boost
+        # lessons learned in the same market state. Builder runs this
+        # block after `fetch_index` + `fetch_taiwan_vix` so the inputs
+        # are already populated. NULL when ctx lacks signal — the
+        # service treats that as neutral (no boost, no penalty).
+        current_regime = _classify_regime(ctx)
 
         market_rows = await fetch_relevant_lessons(
             db,
@@ -80,6 +88,7 @@ async def fetch_recent_lessons(
             focus_symbols=set(),
             discussion_as_of=as_of,
             limit=market_limit,
+            current_regime=current_regime,
         )
 
         per_symbol: dict[str, list[dict[str, Any]]] = {}
@@ -96,6 +105,7 @@ async def fetch_recent_lessons(
                     focus_symbols={sym},
                     discussion_as_of=as_of,
                     limit=symbol_limit,
+                    current_regime=current_regime,
                 )
                 if rows:
                     per_symbol[sym] = [summary_to_dict(r) for r in rows]

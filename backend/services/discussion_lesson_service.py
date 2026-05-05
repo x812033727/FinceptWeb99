@@ -311,16 +311,54 @@ async def _resolve_halflife(db: AsyncSession) -> int:
         return settings.LESSONS_DECAY_HALFLIFE_DAYS
 
 
+# PR-B1: tier-aware half-life multipliers. base = the runtime
+# configured `LESSONS_DECAY_HALFLIFE_DAYS` (default 60). episodic
+# lessons keep that exact half-life; semantic ones decay 3x slower
+# (180d default); structural lessons don't decay at all.
+_TIER_HALFLIFE_MULTIPLIER: dict[str, float | None] = {
+    "episodic":   1.0,
+    "semantic":   3.0,
+    "structural": None,   # never decays
+}
+
+# PR-B1: regime-match boost. Same regime doubles the score, opposite
+# regime cuts it to 0.7 (still kept as a tail candidate so a sweep
+# in a thin regime still gets *some* prior context). NULL on either
+# side stays neutral — we don't punish lessons that landed before
+# regime tagging existed (B0).
+_REGIME_MATCH_BOOST = 2.0
+_REGIME_MISMATCH_BOOST = 0.7
+
+
 def _score(
     lesson: DiscussionLesson, *,
     anchor: date, focus_symbols: set[str], halflife_days: int,
+    current_regime: str | None = None,
 ) -> float:
+    tier = getattr(lesson, "tier", None) or "episodic"
+    multiplier = _TIER_HALFLIFE_MULTIPLIER.get(tier, 1.0)
+
     age_days = max(0, (anchor - lesson.as_of_date).days)
-    half = max(1, halflife_days)
-    recency = math.exp(-age_days * math.log(2) / half)
+    if multiplier is None:
+        recency = 1.0   # structural lessons don't decay
+    else:
+        half = max(1, int(halflife_days * multiplier))
+        recency = math.exp(-age_days * math.log(2) / half)
+
     related = set(lesson.related_symbols or [])
-    boost = 1.5 if focus_symbols and (focus_symbols & related) else 1.0
-    return recency * boost
+    symbol_boost = (
+        1.5 if focus_symbols and (focus_symbols & related) else 1.0
+    )
+
+    lesson_regime = getattr(lesson, "regime", None)
+    if not current_regime or not lesson_regime:
+        regime_boost = 1.0
+    elif lesson_regime == current_regime:
+        regime_boost = _REGIME_MATCH_BOOST
+    else:
+        regime_boost = _REGIME_MISMATCH_BOOST
+
+    return recency * symbol_boost * regime_boost
 
 
 def _to_summary(lesson: DiscussionLesson) -> LessonSummary:
@@ -341,6 +379,7 @@ async def fetch_relevant_lessons(
     focus_symbols: set[str] | None = None,
     discussion_as_of: date | None = None,
     limit: int = 5,
+    current_regime: str | None = None,
 ) -> list[LessonSummary]:
     """Owner+market scoped fetch with backtest-safe time filter.
 
@@ -349,8 +388,15 @@ async def fetch_relevant_lessons(
     can't peek at lessons learned in its future); when None
     (live mode) the filter is bypassed.
 
+    `current_regime` (PR-B1) is the regime label for the current
+    discussion's market state — when provided, lessons learned
+    under the same regime get a 2x boost in the ranking, lessons
+    from a different regime drop to 0.7x (still eligible — never
+    fully dropped so a thin regime can still surface fallback
+    context). NULL on either side is neutral.
+
     Returns up to `limit` `LessonSummary` rows ranked by the
-    time-decay + symbol-boost score, descending.
+    time-decay × symbol-boost × regime-boost score, descending.
     """
     if limit <= 0 or owner_user_id is None or not market:
         return []
@@ -388,6 +434,7 @@ async def fetch_relevant_lessons(
             _score(
                 lesson, anchor=anchor, focus_symbols=focus,
                 halflife_days=halflife,
+                current_regime=current_regime,
             ),
             lesson,
         ))

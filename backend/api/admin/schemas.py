@@ -325,3 +325,17 @@ class SignalQualityOut(BaseModel):
     market: str | None
     numeric: list[NumericSignalRow]
     categorical: list[CategoricalSignalRow]
+
+
+class LessonPromoteOut(BaseModel):
+    """PR-B2 admin endpoint response. Echoes the post-promotion
+    state of a single lesson row so the operator UI can confirm
+    the tier flip stuck."""
+    id: int
+    market: str
+    category: str
+    tier: str
+    usage_count: int
+    hit_count: int
+    promoted_at: datetime | None
+    lesson_text: str

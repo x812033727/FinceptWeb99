@@ -62,6 +62,11 @@ LOOKAHEAD_CALENDAR_DAYS_PER_TRADING_DAY = 5   # weekend + holiday slack
 # ── CRUD helpers ──────────────────────────────────────────────────
 
 
+VALID_FOLD_KINDS: frozenset[str] = frozenset(
+    {"train", "test", "production"}
+)
+
+
 async def create_sweep(
     db: AsyncSession,
     *,
@@ -76,10 +81,19 @@ async def create_sweep(
     concurrency: int = 1,
     auto_post_mortem: bool = True,
     strategy_id: UUID | None = None,
+    fold_kind: str = "production",
+    parent_sweep_id: UUID | None = None,
 ) -> BacktestSweep:
     """Persist a new sweep row in `pending` state. Validates input
     bounds; raises ValueError on invalid input so the API layer
-    can surface 400."""
+    can surface 400.
+
+    `fold_kind` (PR-A0) labels the sweep as part of a walk-forward
+    fold — `train` / `test` are spawned by the walk-forward
+    orchestrator and link back at each other via `parent_sweep_id`.
+    Direct API callers default to `production` and don't need to
+    set either.
+    """
     if not persona_ids:
         raise ValueError("persona_ids must not be empty")
     if trading_days_count < 1 or trading_days_count > MAX_TRADING_DAYS:
@@ -101,6 +115,19 @@ async def create_sweep(
         raise ValueError("topic and rules are required")
     if market not in ("TW", "US", "GLOBAL"):
         raise ValueError(f"market must be TW / US / GLOBAL, got {market!r}")
+    if fold_kind not in VALID_FOLD_KINDS:
+        raise ValueError(
+            "fold_kind must be train / test / production, "
+            f"got {fold_kind!r}"
+        )
+    if parent_sweep_id is not None and fold_kind == "production":
+        # Production sweeps are top-level; only fold halves should
+        # link to a sibling. This catches accidental misuse from
+        # the API layer.
+        raise ValueError(
+            "parent_sweep_id is only valid when fold_kind is "
+            "'train' or 'test'"
+        )
 
     sweep = BacktestSweep(
         owner_id=owner_id,
@@ -114,6 +141,8 @@ async def create_sweep(
         concurrency=concurrency,
         auto_post_mortem=auto_post_mortem,
         strategy_id=strategy_id,
+        fold_kind=fold_kind,
+        parent_sweep_id=parent_sweep_id,
     )
     db.add(sweep)
     await db.commit()

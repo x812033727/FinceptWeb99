@@ -60,6 +60,14 @@ async def aggregate_sweep(
         "trading_days_count": sweep.trading_days_count,
         "completed_count": len(sweep.completed_dates or []),
         "failed_count": len(sweep.failed_dates or []),
+        # PR-A0: walk-forward fold metadata so the aggregate UI can
+        # render the train / test badge and link back to the
+        # sibling fold for side-by-side KPIs.
+        "fold_kind": getattr(sweep, "fold_kind", "production"),
+        "parent_sweep_id": (
+            str(sweep.parent_sweep_id)
+            if getattr(sweep, "parent_sweep_id", None) else None
+        ),
     })
     payload["lessons"] = await _recent_lessons(
         db,

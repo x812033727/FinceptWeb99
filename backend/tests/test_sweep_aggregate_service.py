@@ -305,3 +305,49 @@ async def test_aggregate_strategy_returns_empty_when_no_sweeps(
     assert payload["sweep_count"] == 0
     assert payload["discussions_total"] == 0
     assert payload["per_persona"] == []
+
+
+# ── PR-A0: fold_kind passes through to aggregate payload ──────────
+
+
+@pytest.mark.asyncio
+async def test_aggregate_sweep_exposes_fold_metadata(
+    db_session: AsyncSession, owner: User,
+):
+    train = _make_sweep(owner.id)
+    train.fold_kind = "train"
+    db_session.add(train)
+    await db_session.commit()
+    await db_session.refresh(train)
+
+    test = _make_sweep(owner.id)
+    test.fold_kind = "test"
+    test.parent_sweep_id = train.id
+    db_session.add(test)
+    await db_session.commit()
+    await db_session.refresh(test)
+
+    payload_train = await svc.aggregate_sweep(db_session, train)
+    assert payload_train["fold_kind"] == "train"
+    assert payload_train["parent_sweep_id"] is None
+
+    payload_test = await svc.aggregate_sweep(db_session, test)
+    assert payload_test["fold_kind"] == "test"
+    assert payload_test["parent_sweep_id"] == str(train.id)
+
+
+@pytest.mark.asyncio
+async def test_aggregate_sweep_legacy_sweeps_default_to_production(
+    db_session: AsyncSession, owner: User,
+):
+    """Pre-PR-A0 sweep rows already in the DB get fold_kind defaulted
+    to 'production' by the migration's server_default. The aggregate
+    output should surface that without erroring."""
+    sweep = _make_sweep(owner.id)
+    db_session.add(sweep)
+    await db_session.commit()
+    await db_session.refresh(sweep)
+
+    payload = await svc.aggregate_sweep(db_session, sweep)
+    assert payload["fold_kind"] == "production"
+    assert payload["parent_sweep_id"] is None

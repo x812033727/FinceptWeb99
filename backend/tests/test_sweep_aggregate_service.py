@@ -489,4 +489,125 @@ async def test_empty_sweep_includes_brier_keys_in_payload(
     payload = await svc.aggregate_sweep(db_session, sweep)
     assert "brier_score" in payload
     assert "brier_samples" in payload
+    assert "calibrated_brier_score" in payload
+    assert "calibrated_brier_samples" in payload
     assert "reliability" in payload
+
+
+# ── PR-C2 follow-up: calibrated_brier sweep-level aggregate ─────────
+
+
+@pytest.mark.asyncio
+async def test_aggregate_includes_calibrated_brier_when_present(
+    db_session: AsyncSession, owner: User,
+):
+    """Two discussions, both fully calibrated. Sweep-level
+    calibrated_brier is the sample-weighted mean."""
+    sweep = _make_sweep(owner.id, completed=["2026-01-05", "2026-01-06"])
+    db_session.add(sweep)
+    await db_session.commit()
+    await db_session.refresh(sweep)
+
+    a = _make_disc(owner_id=owner.id, sweep_id=sweep.id, verdict="win")
+    a.brier_score = 0.04
+    a.calibrated_brier_score = 0.02
+    a.outcome_vector = [
+        {
+            "symbol": "A", "confidence": 0.8,
+            "calibrated_confidence": 0.6, "outcome_binary": 1,
+        },
+    ]
+    b = _make_disc(owner_id=owner.id, sweep_id=sweep.id, verdict="loss")
+    b.brier_score = 0.49
+    b.calibrated_brier_score = 0.16
+    b.outcome_vector = [
+        {
+            "symbol": "B", "confidence": 0.7,
+            "calibrated_confidence": 0.4, "outcome_binary": 0,
+        },
+    ]
+    db_session.add_all([a, b])
+    await db_session.commit()
+
+    payload = await svc.aggregate_sweep(db_session, sweep)
+    # raw: (0.04 + 0.49) / 2 = 0.265
+    assert payload["brier_score"] == pytest.approx(0.265, abs=1e-6)
+    # calibrated: (0.02 + 0.16) / 2 = 0.09 — the curve is helping
+    assert payload["calibrated_brier_score"] == pytest.approx(
+        0.09, abs=1e-6,
+    )
+    assert payload["brier_samples"] == 2
+    assert payload["calibrated_brier_samples"] == 2
+
+
+@pytest.mark.asyncio
+async def test_aggregate_calibrated_brier_skips_uncalibrated_discussions(
+    db_session: AsyncSession, owner: User,
+):
+    """Only discussions with calibrated_brier_score contribute;
+    cold-start / pre-PR-C2 discussions stay out of the calibrated
+    rollup but still count toward the raw brier."""
+    sweep = _make_sweep(owner.id, completed=["2026-01-05", "2026-01-06"])
+    db_session.add(sweep)
+    await db_session.commit()
+    await db_session.refresh(sweep)
+
+    fully_calibrated = _make_disc(
+        owner_id=owner.id, sweep_id=sweep.id, verdict="win",
+    )
+    fully_calibrated.brier_score = 0.04
+    fully_calibrated.calibrated_brier_score = 0.02
+    fully_calibrated.outcome_vector = [
+        {
+            "symbol": "A", "confidence": 0.8,
+            "calibrated_confidence": 0.6, "outcome_binary": 1,
+        },
+    ]
+
+    raw_only = _make_disc(
+        owner_id=owner.id, sweep_id=sweep.id, verdict="loss",
+    )
+    raw_only.brier_score = 0.49
+    # No calibrated_brier_score — pre-PR-C2 row.
+    raw_only.outcome_vector = [
+        {"symbol": "B", "confidence": 0.7, "outcome_binary": 0},
+    ]
+
+    db_session.add_all([fully_calibrated, raw_only])
+    await db_session.commit()
+
+    payload = await svc.aggregate_sweep(db_session, sweep)
+    # raw averages over both
+    assert payload["brier_score"] == pytest.approx(0.265, abs=1e-6)
+    assert payload["brier_samples"] == 2
+    # calibrated only counts the fully calibrated discussion
+    assert payload["calibrated_brier_score"] == pytest.approx(
+        0.02, abs=1e-6,
+    )
+    assert payload["calibrated_brier_samples"] == 1
+
+
+@pytest.mark.asyncio
+async def test_aggregate_calibrated_brier_null_when_none(
+    db_session: AsyncSession, owner: User,
+):
+    """Sweep with no calibrated discussions at all — calibrated_
+    brier_score is NULL so the dashboard renders "n/a" instead
+    of misleading 0."""
+    sweep = _make_sweep(owner.id, completed=["2026-01-05"])
+    db_session.add(sweep)
+    await db_session.commit()
+    await db_session.refresh(sweep)
+
+    a = _make_disc(owner_id=owner.id, sweep_id=sweep.id, verdict="win")
+    a.brier_score = 0.04
+    a.outcome_vector = [
+        {"symbol": "A", "confidence": 0.8, "outcome_binary": 1},
+    ]
+    db_session.add(a)
+    await db_session.commit()
+
+    payload = await svc.aggregate_sweep(db_session, sweep)
+    assert payload["brier_score"] == pytest.approx(0.04, abs=1e-6)
+    assert payload["calibrated_brier_score"] is None
+    assert payload["calibrated_brier_samples"] == 0

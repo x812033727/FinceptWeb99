@@ -128,6 +128,16 @@ class Discussion(Base):
     brier_score: Mapped[float | None] = mapped_column(
         Float, nullable=True,
     )
+    # PR-C2 follow-up: same Brier metric but using
+    # `calibrated_confidence` instead of raw `confidence`. NULL when
+    # either no calibration curve was applied (cold-start strategy /
+    # live discussion) or no recommendation actually carried a
+    # calibrated value. Comparing this against `brier_score` over a
+    # strategy's history is how we tell if calibration is reducing
+    # error.
+    calibrated_brier_score: Mapped[float | None] = mapped_column(
+        Float, nullable=True,
+    )
     outcome_vector: Mapped[list[dict[str, Any]] | None] = mapped_column(
         JSON, nullable=True,
     )

@@ -56,6 +56,16 @@ class DatasetMapping:
     batch_transform: (
         Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None
     ) = None
+    # FinMind has a class of intraday-grain datasets (KBar, PriceTick,
+    # BlockTradingDailyReport, GovernmentBankBuySell) that reject any
+    # multi-day query with HTTP 400 *"the dataset … size is too large,
+    # we only send one day data, so end_date parameter need be none"*.
+    # When this flag is set, the runner iterates the requested
+    # [range_start, range_end] day-by-day and concatenates the per-day
+    # responses, omitting the `end_date` query param on each call.
+    # The chunk in `backfill_progress` still spans the full range —
+    # the day-level fan-out is internal to one chunk's fetch step.
+    single_day: bool = False
 
 
 class MappingNotFoundError(LookupError):
@@ -608,6 +618,178 @@ def _row_delisting(row: dict[str, Any]) -> dict[str, Any]:
         "symbol": _to_str(row.get("symbol")),
         "delisted_at": _to_date(row.get("delisted_at")),
         "reason": _to_str(row.get("reason")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+# ── Single-day datasets (batch transforms) ───────────────────────
+#
+# FinMind's intraday-grain endpoints (KBar, PriceTick,
+# BlockTradingDailyReport, GovernmentBankBuySell) only accept one date
+# per call (`single_day=True` on the mapping). The day-by-day fan-out
+# happens in `runner.FinmindClient.fetch`; these transforms handle the
+# response shape — most need either a `seq` counter (per-day index) or
+# a roll-up aggregation (GovernmentBankBuySell sums to one row/day).
+
+
+def _row_stock_minute(row: dict[str, Any]) -> dict[str, Any]:
+    """KBar row → tw_stock_minute. Combines `date` + `minute` (HH:MM[:SS])
+    into a UTC-naive timestamp (TWSE local time; downstream consumers
+    that need TZ-aware values can apply Asia/Taipei)."""
+    d = row.get("ts")  # already renamed from `date` by column_map
+    minute_str = row.get("minute_str")
+    ts: datetime | None = None
+    if d and minute_str:
+        d_obj = _to_date(d)
+        if d_obj:
+            try:
+                hh, mm, *rest = str(minute_str).split(":")
+                ss = int(rest[0]) if rest else 0
+                ts = datetime(d_obj.year, d_obj.month, d_obj.day,
+                              int(hh), int(mm), ss, tzinfo=timezone.utc)
+            except (ValueError, IndexError):
+                ts = None
+    return {
+        "market": row.get("market", "TWSE"),
+        "symbol": _to_str(row.get("symbol")),
+        "ts": ts,
+        "open": _to_decimal(row.get("open")),
+        "high": _to_decimal(row.get("high")),
+        "low": _to_decimal(row.get("low")),
+        "close": _to_decimal(row.get("close")),
+        "volume": _to_int(row.get("volume")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _batch_stock_tick(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """PriceTick payload → tw_stock_tick. Builds the timestamp from
+    `date` + `Time` (HH:MM:SS.ffffff) and assigns a per-day per-symbol
+    sequential `seq` so the (market, symbol, ts, seq) PK is unique even
+    when multiple ticks land on the same microsecond.
+    """
+    out: list[dict[str, Any]] = []
+    counters: dict[tuple[str, str], int] = {}
+    for r in rows:
+        sym = str(r.get("stock_id") or "")
+        d = str(r.get("date") or "")[:10]
+        time_str = str(r.get("Time") or "")
+        ts: datetime | None = None
+        if d and time_str:
+            try:
+                d_obj = date.fromisoformat(d)
+                hh_mm_ss = time_str.split(".")[0]
+                hh, mm, ss = (int(x) for x in hh_mm_ss.split(":"))
+                micro = 0
+                if "." in time_str:
+                    frac = time_str.split(".", 1)[1][:6].ljust(6, "0")
+                    micro = int(frac)
+                ts = datetime(d_obj.year, d_obj.month, d_obj.day,
+                              hh, mm, ss, micro, tzinfo=timezone.utc)
+            except (ValueError, IndexError):
+                ts = None
+        key = (sym, d)
+        counters[key] = counters.get(key, 0) + 1
+        out.append({
+            "market": "TWSE",
+            "symbol": sym or None,
+            "ts": ts,
+            "seq": counters[key],
+            "price": _to_decimal(r.get("deal_price")),
+            "volume": _to_int(r.get("volume")),
+            "bid": None,
+            "ask": None,
+            "tick_type": _to_str(r.get("TickType")),
+            "source": "finmind",
+        })
+    return out
+
+
+def _batch_block_trade(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """BlockTradingDailyReport payload → tw_block_trade. The local
+    schema only carries the trade economics (price/volume/amount), not
+    the broker counterparty — broker_id/securities_trader columns are
+    dropped here (they're reachable via `tw_broker_master` joins if
+    needed). Sequential `seq` per (symbol, date) makes the PK unique."""
+    out: list[dict[str, Any]] = []
+    counters: dict[tuple[str, str], int] = {}
+    for r in rows:
+        sym = str(r.get("stock_id") or "")
+        d = _to_date(r.get("date"))
+        key = (sym, str(d) if d else "")
+        counters[key] = counters.get(key, 0) + 1
+        # FinMind reports `buy` and `sell` separately in matched block
+        # trades; they're equal for a paired transaction. Surface
+        # `volume` = `buy` and `amount` = price × volume since the
+        # endpoint doesn't ship a notional column directly.
+        volume = _to_int(r.get("buy"))
+        price = _to_decimal(r.get("price"))
+        amount = None
+        if price is not None and volume is not None:
+            from decimal import Decimal
+            amount = price * Decimal(volume)
+        out.append({
+            "market": "TWSE",
+            "symbol": sym or None,
+            "ts": d,
+            "seq": counters[key],
+            "price": price,
+            "volume": volume,
+            "amount": amount,
+            "source": "finmind",
+        })
+    return out
+
+
+def _batch_govt_bank_flow(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """GovernmentBankBuySell payload → tw_govt_bank_flow. Roll up the
+    per-(stock, bank) rows into one (market, ts) total per day —
+    summing buy_amount and sell_amount, deriving net_amount. The
+    per-stock breakout is intentionally not stored; downstream
+    consumers wanting it can re-fetch."""
+    from decimal import Decimal
+
+    by_date: dict[date, dict[str, Decimal]] = {}
+    for r in rows:
+        d = _to_date(r.get("date"))
+        if d is None:
+            continue
+        bucket = by_date.setdefault(d, {"buy": Decimal(0), "sell": Decimal(0)})
+        bb = _to_decimal(r.get("buy_amount"))
+        ss = _to_decimal(r.get("sell_amount"))
+        if bb is not None:
+            bucket["buy"] += bb
+        if ss is not None:
+            bucket["sell"] += ss
+
+    return [
+        {
+            "market": "TWSE",
+            "ts": d,
+            "buy_amount": agg["buy"],
+            "sell_amount": agg["sell"],
+            "net_amount": agg["buy"] - agg["sell"],
+            "source": "finmind",
+        }
+        for d, agg in sorted(by_date.items())
+    ]
+
+
+def _row_broker_daily_report(row: dict[str, Any]) -> dict[str, Any]:
+    """TaiwanStockTradingDailyReport row → tw_broker_daily_report.
+    Per-symbol (data_id=stock_id) + single-day. Each FinMind row is
+    one (broker, price) leg of trading on the symbol that day; PK is
+    (market, symbol, ts, broker_id, price) so the same broker can have
+    multiple price legs without collisions. The `securities_trader`
+    name is dropped — joinable via `tw_broker_master.broker_id`."""
+    return {
+        "market": row.get("market", "TWSE"),
+        "symbol": _to_str(row.get("symbol")),
+        "ts": _to_date(row.get("ts")),
+        "broker_id": _to_str(row.get("broker_id")),
+        "price": _to_decimal(row.get("price")),
+        "buy_volume": _to_int(row.get("buy_volume")),
+        "sell_volume": _to_int(row.get("sell_volume")),
         "source": row.get("source", "finmind"),
     }
 
@@ -1394,6 +1576,69 @@ MAPPINGS: dict[str, DatasetMapping] = {
         pk_columns=("symbol", "ex_date"),
         extra={"source": "finmind"},
         row_transform=_row_par_value_change,
+    ),
+    "TaiwanStockKBar": DatasetMapping(
+        dataset_code="TaiwanStockKBar",
+        local_table="tw_stock_minute",
+        column_map={
+            "stock_id": "symbol",
+            "date": "ts",
+            "minute": "minute_str",
+            "open": "open",
+            "high": "high",
+            "low": "low",
+            "close": "close",
+            "volume": "volume",
+        },
+        pk_columns=("market", "symbol", "ts"),
+        extra={"market": "TWSE", "source": "finmind"},
+        row_transform=_row_stock_minute,
+        single_day=True,
+    ),
+    "TaiwanStockPriceTick": DatasetMapping(
+        dataset_code="TaiwanStockPriceTick",
+        local_table="tw_stock_tick",
+        # batch_transform owns column resolution; column_map kept empty
+        # so the runner doesn't double-rename.
+        column_map={},
+        pk_columns=("market", "symbol", "ts", "seq"),
+        batch_transform=_batch_stock_tick,
+        single_day=True,
+    ),
+    "TaiwanStockBlockTradingDailyReport": DatasetMapping(
+        dataset_code="TaiwanStockBlockTradingDailyReport",
+        local_table="tw_block_trade",
+        column_map={},
+        pk_columns=("market", "symbol", "ts", "seq"),
+        batch_transform=_batch_block_trade,
+        single_day=True,
+    ),
+    "TaiwanStockGovernmentBankBuySell": DatasetMapping(
+        dataset_code="TaiwanStockGovernmentBankBuySell",
+        local_table="tw_govt_bank_flow",
+        column_map={},
+        pk_columns=("market", "ts"),
+        batch_transform=_batch_govt_bank_flow,
+        single_day=True,
+    ),
+    "TaiwanStockTradingDailyReport": DatasetMapping(
+        dataset_code="TaiwanStockTradingDailyReport",
+        local_table="tw_broker_daily_report",
+        column_map={
+            "stock_id": "symbol",
+            "date": "ts",
+            "securities_trader_id": "broker_id",
+            "price": "price",
+            "buy": "buy_volume",
+            "sell": "sell_volume",
+        },
+        # PK includes `price` because the same broker can have multiple
+        # price legs (buy/sell at different fills) for the same stock
+        # on the same day.
+        pk_columns=("market", "symbol", "ts", "broker_id", "price"),
+        extra={"market": "TWSE", "source": "finmind"},
+        row_transform=_row_broker_daily_report,
+        single_day=True,
     ),
 }
 

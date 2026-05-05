@@ -85,7 +85,33 @@ class FinmindClient:
         start_date: date,
         end_date: date,
     ) -> list[dict[str, Any]]:
+        from datetime import timedelta
+
         from data.tw.finmind_connector import _query
+        from finmind.ingest.mappings import MAPPINGS
+
+        mapping = MAPPINGS.get(dataset_code)
+        if mapping is not None and mapping.single_day:
+            # Day-by-day fan-out: FinMind rejects multi-day queries on
+            # KBar / PriceTick / BlockTradingDailyReport /
+            # GovernmentBankBuySell with HTTP 400. Iterate dates and
+            # concatenate per-day responses; omit end_date so FinMind's
+            # validator doesn't reject the request. Sponsor quota is
+            # 1500/hr, so a 7-day window across these datasets stays
+            # well under budget.
+            rows: list[dict[str, Any]] = []
+            cursor = start_date
+            one = timedelta(days=1)
+            while cursor <= end_date:
+                day_rows = await _query(
+                    dataset_code,
+                    symbol or "",
+                    cursor.isoformat(),
+                    None,
+                )
+                rows.extend(day_rows)
+                cursor += one
+            return rows
 
         return await _query(
             dataset_code,

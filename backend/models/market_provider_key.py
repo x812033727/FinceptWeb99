@@ -21,9 +21,10 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.base import Base
+from models.user import User  # noqa: F401  -- register with mapper registry; otherwise connector-path imports raise InvalidRequestError when resolving the `updated_by` relationship.
 
 if TYPE_CHECKING:
-    from models.user import User
+    pass
 
 
 class MarketProviderKey(Base):

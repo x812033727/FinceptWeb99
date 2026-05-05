@@ -2166,6 +2166,20 @@ MAPPINGS: dict[str, DatasetMapping] = {
         pk_columns=("ts", "dealer_id", "contract"),
         batch_transform=_batch_option_dealer_volume,
     ),
+    "TaiwanFutOptDailyInfo": DatasetMapping(
+        dataset_code="TaiwanFutOptDailyInfo",
+        local_table="tw_futopt_master",
+        # FinMind ships master data — one row per futures/option contract
+        # code: {code, type, name}. Migration 0017 replaced the placeholder
+        # `tw_futopt_daily_info` table with `tw_futopt_master`.
+        column_map={
+            "code": "code",
+            "type": "type",
+            "name": "name_zh",
+        },
+        pk_columns=("code",),
+        extra={"source": "finmind"},
+    ),
     "TaiwanFuturesOpenInterestLargeTraders": DatasetMapping(
         dataset_code="TaiwanFuturesOpenInterestLargeTraders",
         local_table="tw_futures_oi_largetraders",

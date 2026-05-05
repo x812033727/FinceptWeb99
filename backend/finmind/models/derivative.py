@@ -20,7 +20,7 @@ Settlement:
   - tw_option_settlement        ← TaiwanOptionFinalSettlementPrice
 
 Misc:
-  - tw_futopt_daily_info        ← TaiwanFutOptDailyInfo (market overview)
+  - tw_futopt_master            ← TaiwanFutOptDailyInfo (contract master list)
   - tw_futures_dealer_volume    ← TaiwanFuturesDealerTradingVolumeDaily
   - tw_option_dealer_volume     ← TaiwanOptionDealerTradingVolumeDaily
   - tw_futures_spread           ← TaiwanFuturesSpreadTrading
@@ -169,15 +169,18 @@ class TwOptionSettlement(Base):
     )
 
 
-class TwFutoptDailyInfo(Base):
-    """Aggregate market overview row per ts. One row per day."""
+class TwFutoptMaster(Base):
+    """Contract master list — one row per futures or option contract
+    code. Sourced from FinMind's `TaiwanFutOptDailyInfo` (despite the
+    name, the response is master data: code, type, name, not daily
+    aggregates). Used as the universe for per-symbol fan-out into
+    `TaiwanFuturesDaily` / `TaiwanOptionDaily`.
+    """
 
-    __tablename__ = "tw_futopt_daily_info"
-    ts: Mapped[date] = mapped_column(Date, primary_key=True)
-    futures_volume: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    options_volume: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    futures_open_interest: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    options_open_interest: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    __tablename__ = "tw_futopt_master"
+    code: Mapped[str] = mapped_column(String(20), primary_key=True)
+    type: Mapped[str] = mapped_column(String(32), nullable=False)
+    name_zh: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source: Mapped[str] = mapped_column(String(16), nullable=False)
     ingested_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

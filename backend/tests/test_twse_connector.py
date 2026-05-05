@@ -72,6 +72,31 @@ def test_to_utc8_ts_returns_input_unchanged_on_unparseable_string():
     assert twse._to_utc8_ts("not-a-date") == "not-a-date"
 
 
+@pytest.mark.parametrize("raw,expected", [
+    # ROC slash with leading zeros stripped
+    ("113/04/01",   "2024-04-01"),
+    ("113/12/31",   "2024-12-31"),
+    # ROC slash without zero-pad
+    ("113/4/1",     "2024-04-01"),
+    # ISO already
+    ("2024-04-01",  "2024-04-01"),
+    # ROC compact 7-digit
+    ("1130401",     "2024-04-01"),
+    # ISO compact 8-digit
+    ("20240401",    "2024-04-01"),
+    # Bad inputs
+    (None,          None),
+    ("",            None),
+    ("not-a-date",  None),
+    ("113/04",      None),  # incomplete
+])
+def test_tw_date_to_iso_handles_every_known_twse_format(raw, expected):
+    """TWSE rotates date formats across endpoints. The helper must
+    accept every documented variant + reject junk so callers can
+    drop unfilterable rows cleanly without surprise crashes."""
+    assert twse._tw_date_to_iso(raw) == expected
+
+
 # ── Helper: install _get mock ─────────────────────────────────────
 
 def install_get(payload):
@@ -396,3 +421,103 @@ async def test_get_valuation_ratios_handles_short_rows_without_crashing():
     assert out["dividend_yield"] == 2.5
     assert out["pe_ratio"] is None
     assert out["pb_ratio"] is None
+
+
+# ── Buyback / Delisting (Phase 1B corporate-action) ──────────────
+
+
+@pytest.mark.asyncio
+async def test_get_buyback_announcements_normalises_dates_and_keys():
+    """t187ap43_L returns Chinese keys + ROC dates. Connector must
+    normalise to a stable English schema with ISO dates so the Phase B
+    selfcrawl wrapper can rename to FinMind's column_map keys without
+    re-parsing per-call."""
+    payload = [
+        {
+            "公司代號":     "2330",
+            "公司名稱":     "台積電",
+            "董事會決議日期": "113/04/15",
+            "預定買回起日":  "113/04/16",
+            "預定買回迄日":  "113/06/15",
+            "預定買回股數":  "10,000,000",
+            "已買回股數":    "5,000,000",
+            "已買回平均價格": "850.0",
+        },
+    ]
+    patcher, _ = install_get(payload)
+    with patcher:
+        rows = await twse.get_buyback_announcements()
+
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["symbol"] == "2330"
+    assert r["name_zh"] == "台積電"
+    assert r["announced_at"] == "2024-04-15"
+    assert r["started_at"] == "2024-04-16"
+    assert r["ended_at"] == "2024-06-15"
+    assert r["plan_shares"] == 10_000_000
+    assert r["actual_shares"] == 5_000_000
+    assert r["avg_price"] == 850.0
+
+
+@pytest.mark.asyncio
+async def test_get_buyback_announcements_drops_rows_missing_symbol():
+    """A junk row without `公司代號` must be silently dropped — the
+    `(symbol, announced_at)` PK on tw_buyback would NOT NULL-fail on
+    insert, so dropping at the connector layer keeps the chunk healthy."""
+    payload = [
+        {"公司代號": "2330", "董事會決議日期": "113/04/15"},
+        {"公司代號": "",     "董事會決議日期": "113/04/15"},  # drop
+        {"公司代號": None,   "董事會決議日期": "113/04/15"},  # drop
+    ]
+    patcher, _ = install_get(payload)
+    with patcher:
+        rows = await twse.get_buyback_announcements()
+    assert len(rows) == 1
+    assert rows[0]["symbol"] == "2330"
+
+
+@pytest.mark.asyncio
+async def test_get_buyback_announcements_returns_empty_on_non_list():
+    patcher, _ = install_get({"some": "object", "not": "a list"})
+    with patcher:
+        rows = await twse.get_buyback_announcements()
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_get_delisted_companies_normalises_dates_and_keys():
+    payload = [
+        {
+            "公司代號":     "2520",
+            "公司名稱":     "冠德",
+            "終止上市日期": "2023-08-22",
+            "終止上市原因": "申請終止上市",
+        },
+    ]
+    patcher, _ = install_get(payload)
+    with patcher:
+        rows = await twse.get_delisted_companies()
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["symbol"] == "2520"
+    assert r["delisted_at"] == "2023-08-22"
+    assert "終止" in r["reason"]
+
+
+@pytest.mark.asyncio
+async def test_get_delisted_companies_handles_roc_compact_date():
+    """Some t187ap08_L revisions return the date as 7-digit ROC
+    compact (e.g. `1120822`). Make sure the date helper picks it up."""
+    payload = [
+        {
+            "公司代號":     "2520",
+            "公司名稱":     "冠德",
+            "終止上市日期": "1120822",
+            "終止上市原因": "申請終止上市",
+        },
+    ]
+    patcher, _ = install_get(payload)
+    with patcher:
+        rows = await twse.get_delisted_companies()
+    assert rows[0]["delisted_at"] == "2023-08-22"

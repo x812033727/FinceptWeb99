@@ -181,6 +181,50 @@ def _tw_int(s: str | None) -> int:
         return 0
 
 
+def _tw_date_to_iso(s: str | None) -> str | None:
+    """Parse a TWSE-emitted date string into ISO `YYYY-MM-DD`.
+
+    TWSE returns at least three date conventions across different
+    OpenAPI endpoints:
+      - ROC slash format: `113/04/01`         → +1911 = `2024-04-01`
+      - ROC compact:      `1130401`           → split + +1911
+      - ISO:              `2024-04-01`        → passthrough
+      - ISO compact:      `20240401`          → reformat
+    Returns None when the string can't be parsed (None / empty /
+    junk) so callers can drop unfilterable rows cleanly."""
+    if not s:
+        return None
+    txt = str(s).strip()
+    if not txt:
+        return None
+    # ISO with hyphens: 2024-04-01
+    if len(txt) == 10 and txt[4] == "-" and txt[7] == "-":
+        return txt
+    # ROC slash: 113/04/01
+    if "/" in txt:
+        parts = txt.split("/")
+        if len(parts) == 3:
+            try:
+                y, m, d = int(parts[0]), int(parts[1]), int(parts[2])
+                # Heuristic: ROC if year < 200 (民國 1-150-ish), else CE.
+                if y < 200:
+                    y += 1911
+                return f"{y:04d}-{m:02d}-{d:02d}"
+            except ValueError:
+                return None
+    # Compact 8-digit ISO: 20240401
+    if len(txt) == 8 and txt.isdigit():
+        return f"{txt[:4]}-{txt[4:6]}-{txt[6:]}"
+    # Compact 7-digit ROC: 1130401
+    if len(txt) == 7 and txt.isdigit():
+        try:
+            y = int(txt[:3]) + 1911
+            return f"{y:04d}-{txt[3:5]}-{txt[5:]}"
+        except ValueError:
+            return None
+    return None
+
+
 # ── Real-time quote (best available — TWSE is ~3-5 min delayed) ──
 
 async def get_realtime_quote(symbol: str) -> dict[str, Any] | None:
@@ -547,3 +591,95 @@ async def get_day_trading(
             "sell_amount": _tw_num(r.get("當日沖銷交易賣出成交金額")),
         })
     return result
+
+
+# ── 庫藏股公告 (t187ap43_L) ──────────────────────────────────────
+
+async def get_buyback_announcements() -> list[dict[str, Any]]:
+    """All recent 上市公司公告買回本公司股份(庫藏股) records via TWSE
+    `t187ap43_L`. One-shot snapshot — TWSE serves the entire window
+    of recent announcements (~12 months) in a single call, so the
+    Phase B caller iterates the snapshot in-process and clips by
+    announcement date.
+
+    Output shape (per row):
+        symbol         : 公司代號
+        name_zh        : 公司名稱
+        announced_at   : 董事會決議日期 (ISO YYYY-MM-DD)
+        started_at     : 預定買回起日   (ISO)
+        ended_at       : 預定買回迄日   (ISO)
+        plan_shares    : 預定買回股數
+        actual_shares  : 已買回股數
+        avg_price      : 已買回平均價格
+
+    Date columns are best-effort parsed via `_tw_date_to_iso` since
+    TWSE rotates between ROC slash and ISO formats across this
+    endpoint.
+    """
+    data = await _get(f"{_BASE}/opendata/t187ap43_L")
+    rows = data if isinstance(data, list) else []
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        symbol = (
+            r.get("公司代號") or r.get("Code") or ""
+        ).strip()
+        if not symbol:
+            continue
+        out.append({
+            "symbol":        symbol,
+            "name_zh":       (r.get("公司名稱") or r.get("公司簡稱") or "").strip(),
+            "announced_at":  _tw_date_to_iso(
+                r.get("董事會決議日期") or r.get("公告日期")
+            ),
+            "started_at":    _tw_date_to_iso(
+                r.get("預定買回起日") or r.get("預定買回期間-起")
+            ),
+            "ended_at":      _tw_date_to_iso(
+                r.get("預定買回迄日") or r.get("預定買回期間-迄")
+            ),
+            "plan_shares":   _tw_int(r.get("預定買回股數")),
+            "actual_shares": _tw_int(
+                r.get("已買回股數") or r.get("實際買回股數")
+            ),
+            "avg_price":     _tw_num(
+                r.get("已買回平均價格") or r.get("買回均價")
+            ),
+        })
+    return out
+
+
+# ── 終止上市 (t187ap08_L) ──────────────────────────────────────
+
+async def get_delisted_companies() -> list[dict[str, Any]]:
+    """Master list of TWSE-delisted companies via `t187ap08_L`. One-shot
+    endpoint — returns every delisting record TWSE retains (~from
+    2010 onwards). The Phase B caller iterates and clips by
+    `delisted_at` window so a backfill of "delistings in 2024" is
+    one HTTP regardless of the requested window.
+
+    Output shape (per row):
+        symbol         : 公司代號
+        name_zh        : 公司名稱
+        delisted_at    : 終止上市日期 (ISO YYYY-MM-DD)
+        reason         : 終止上市原因
+    """
+    data = await _get(f"{_BASE}/opendata/t187ap08_L")
+    rows = data if isinstance(data, list) else []
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        symbol = (
+            r.get("公司代號") or r.get("Code") or ""
+        ).strip()
+        if not symbol:
+            continue
+        out.append({
+            "symbol":      symbol,
+            "name_zh":     (r.get("公司名稱") or r.get("公司簡稱") or "").strip(),
+            "delisted_at": _tw_date_to_iso(
+                r.get("終止上市日期") or r.get("date")
+            ),
+            "reason":      (
+                r.get("終止上市原因") or r.get("reason") or ""
+            ).strip(),
+        })
+    return out

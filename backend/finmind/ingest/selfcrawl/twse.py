@@ -468,6 +468,94 @@ async def _fetch_day_trading(
     return out
 
 
+async def _fetch_buyback(
+    symbol: str | None, start: date, end: date
+) -> list[dict[str, Any]]:
+    """TaiwanStockBuyBack — TWSE 庫藏股公告 via t187ap43_L.
+
+    One-shot endpoint: TWSE serves the entire window of recent
+    announcements (~12 months) in one call, so a multi-day chunk
+    only ever costs 1 HTTP. Filter happens in-process by
+    `announced_at` against the requested [start, end] window.
+
+    FinMind's TaiwanStockBuyBack column_map expects:
+        date / stock_id / BuyBackStartDate / BuyBackEndDate /
+        BuyBackPlanQuantity / BuyBackActualQuantity /
+        BuyBackAveragePrice
+    """
+    from data.tw.twse_connector import get_buyback_announcements
+
+    rows = await get_buyback_announcements()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        sym = r.get("symbol") or ""
+        if not sym:
+            continue
+        if symbol and sym != symbol:
+            continue
+        announced = r.get("announced_at")
+        if not announced:
+            continue
+        try:
+            d_obj = date.fromisoformat(announced)
+        except (ValueError, TypeError):
+            continue
+        if d_obj < start or d_obj > end:
+            continue
+        out.append({
+            "date":                  announced,
+            "stock_id":              sym,
+            "BuyBackStartDate":      r.get("started_at"),
+            "BuyBackEndDate":        r.get("ended_at"),
+            "BuyBackPlanQuantity":   r.get("plan_shares"),
+            "BuyBackActualQuantity": r.get("actual_shares"),
+            "BuyBackAveragePrice":   r.get("avg_price"),
+        })
+    return out
+
+
+async def _fetch_delisting(
+    symbol: str | None, start: date, end: date
+) -> list[dict[str, Any]]:
+    """TaiwanStockDelisting — TWSE 終止上市股票 via t187ap08_L.
+
+    One-shot snapshot — returns every delisting on file (~2010+).
+    Filter in-process by `delisted_at` against the requested window.
+
+    FinMind's TaiwanStockDelisting column_map expects:
+        stock_id / date / reason
+
+    The local PK is `(symbol,)` only — one row per delisted stock —
+    so re-running the same chunk is idempotent (UPSERT updates the
+    reason field without duplicating the row).
+    """
+    from data.tw.twse_connector import get_delisted_companies
+
+    rows = await get_delisted_companies()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        sym = r.get("symbol") or ""
+        if not sym:
+            continue
+        if symbol and sym != symbol:
+            continue
+        delisted = r.get("delisted_at")
+        if not delisted:
+            continue
+        try:
+            d_obj = date.fromisoformat(delisted)
+        except (ValueError, TypeError):
+            continue
+        if d_obj < start or d_obj > end:
+            continue
+        out.append({
+            "date":     delisted,
+            "stock_id": sym,
+            "reason":   r.get("reason") or "",
+        })
+    return out
+
+
 # ── Dispatch table ──────────────────────────────────────────────
 
 _DISPATCH = {
@@ -482,6 +570,9 @@ _DISPATCH = {
     "TaiwanStockTotalInstitutionalInvestors": _fetch_total_institutional,
     "TaiwanStockTotalMarginPurchaseShortSale": _fetch_total_margin,
     "TaiwanStockDayTrading": _fetch_day_trading,
+    # Phase 1B — corporate-action batch
+    "TaiwanStockBuyBack": _fetch_buyback,
+    "TaiwanStockDelisting": _fetch_delisting,
 }
 
 

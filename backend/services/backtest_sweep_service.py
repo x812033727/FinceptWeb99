@@ -75,6 +75,7 @@ async def create_sweep(
     rounds_per_discussion: int = 1,
     concurrency: int = 1,
     auto_post_mortem: bool = True,
+    strategy_id: UUID | None = None,
 ) -> BacktestSweep:
     """Persist a new sweep row in `pending` state. Validates input
     bounds; raises ValueError on invalid input so the API layer
@@ -112,6 +113,7 @@ async def create_sweep(
         rounds_per_discussion=rounds_per_discussion,
         concurrency=concurrency,
         auto_post_mortem=auto_post_mortem,
+        strategy_id=strategy_id,
     )
     db.add(sweep)
     await db.commit()

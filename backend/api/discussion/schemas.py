@@ -234,20 +234,67 @@ class ScoreboardResponse(BaseModel):
 
 
 class BacktestSweepCreate(BaseModel):
-    """POST body for creating a sweep job."""
+    """POST body for creating a sweep job. When `strategy_id` is
+    set, server resolves the template and uses its fields for any
+    omitted-or-empty caller field — letting the UI submit just
+    `{strategy_id, anchor_date, trading_days_count}` for a
+    "load + go" flow."""
+    topic: str | None = None
+    rules: str | None = None
+    market: str | None = None
+    persona_ids: list[str] | None = None
+    anchor_date: str   # ISO date — coerced to date in the service layer
+    trading_days_count: int = Field(..., ge=1, le=60)
+    rounds_per_discussion: int | None = Field(default=None, ge=1, le=5)
+    concurrency: int | None = Field(default=None, ge=1, le=3)
+    auto_post_mortem: bool | None = None
+    strategy_id: uuid.UUID | None = None
+
+
+class StrategyTemplateCreate(BaseModel):
+    """POST body for creating a strategy template (PR-A)."""
+    name: str = Field(..., min_length=1, max_length=120)
+    description: str | None = None
     topic: str = Field(..., min_length=1)
     rules: str = Field(..., min_length=1)
     market: str
     persona_ids: list[str] = Field(..., min_length=1)
-    anchor_date: str   # ISO date — coerced to date in the service layer
-    trading_days_count: int = Field(..., ge=1, le=60)
-    rounds_per_discussion: int = Field(default=1, ge=1, le=5)
-    concurrency: int = Field(default=1, ge=1, le=3)
-    # PR #275: auto-trigger the post-mortem self-critique after each
-    # spawned discussion's conclude. Default True — if you're
-    # running a multi-day backtest you almost always want the
-    # critique attached.
-    auto_post_mortem: bool = True
+    default_rounds: int = Field(default=1, ge=1, le=5)
+    default_concurrency: int = Field(default=1, ge=1, le=3)
+    default_auto_post_mortem: bool = True
+
+
+class StrategyTemplateUpdate(BaseModel):
+    """PATCH body — every field optional. Server validates the
+    merged shape so a partial update can't leave an uncreatable
+    template behind."""
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = None
+    topic: str | None = Field(default=None, min_length=1)
+    rules: str | None = Field(default=None, min_length=1)
+    market: str | None = None
+    persona_ids: list[str] | None = Field(default=None, min_length=1)
+    default_rounds: int | None = Field(default=None, ge=1, le=5)
+    default_concurrency: int | None = Field(default=None, ge=1, le=3)
+    default_auto_post_mortem: bool | None = None
+
+
+class StrategyTemplateResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: str | None
+    topic: str
+    rules: str
+    market: str
+    persona_ids: list[str]
+    default_rounds: int
+    default_concurrency: int
+    default_auto_post_mortem: bool
+    persona_weights: dict[str, float]
+    weights_updated_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    deleted_at: datetime | None
 
 
 class BacktestSweepFailedDate(BaseModel):
@@ -271,6 +318,7 @@ class BacktestSweepResponse(BaseModel):
     rounds_per_discussion: int
     concurrency: int
     auto_post_mortem: bool   # PR #275
+    strategy_id: uuid.UUID | None   # PR-A: source template, if any
     resolved_dates: list[str]
     completed_dates: list[str]
     failed_dates: list[BacktestSweepFailedDate]

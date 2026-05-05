@@ -66,6 +66,14 @@ class BacktestSweep(Base):
         Boolean, nullable=False, default=True, server_default="true",
     )
 
+    strategy_id: Mapped[UUID | None] = mapped_column(
+        SqlUUID(as_uuid=True),
+        ForeignKey(
+            "discussion_strategy_templates.id", ondelete="SET NULL",
+        ),
+        nullable=True,
+    )
+
     topic: Mapped[str] = mapped_column(Text, nullable=False)
     rules: Mapped[str] = mapped_column(Text, nullable=False)
     market: Mapped[str] = mapped_column(String(12), nullable=False)

@@ -70,6 +70,20 @@ class DatasetSource(Base):
     # 'daily' | 'monthly' | 'quarterly' | 'realtime' | 'on_demand'
     ingest_freq: Mapped[str] = mapped_column(String(16), nullable=False)
 
+    # FinMind only serves one date per call for these datasets (KBar,
+    # PriceTick, BlockTradingDailyReport, GovernmentBankBuySell,
+    # {Trading,Warrant}TradingDailyReport). The scheduler reads this
+    # flag in `dispatcher.expand_due_datasets` and emits one DueChunk
+    # per day inside the suggested range, instead of a single multi-
+    # day chunk that would only get unwound at fetch time. Per-day
+    # ledger granularity = per-day retry granularity. The mapping
+    # layer has its own `single_day` flag as a runner backstop for
+    # callers that bypass the scheduler (CLI backfill, direct
+    # ingest_chunk).
+    single_day: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false()
+    )
+
     # Run telemetry — written by ingest workers, read by AdminPage.
     last_ingest_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

@@ -138,6 +138,24 @@ def expand_due_datasets(
 
         rs, re = suggested_range(ds.ingest_freq, now)
 
+        # Single-day datasets get one chunk per day inside the suggested
+        # range, instead of one multi-day chunk that the runner would
+        # internally split. This makes ledger granularity per-day —
+        # retries reach individual days, status reports show a 7-of-30
+        # progress bar instead of 1 catch-all chunk that's "running"
+        # while internally on day 4 of 30. The flag was also mirrored
+        # into the runner's mapping layer for callers that bypass the
+        # scheduler (CLI backfill, direct ingest_chunk).
+        if getattr(ds, "single_day", False):
+            range_starts = []
+            cur = rs
+            one = timedelta(days=1)
+            while cur <= re:
+                range_starts.append(cur)
+                cur += one
+        else:
+            range_starts = [rs]
+
         if ds.per_symbol:
             universe = (
                 warrant_symbols
@@ -146,23 +164,27 @@ def expand_due_datasets(
             )
             if universe:
                 for sym in universe:
-                    chunks.append(DueChunk(
-                        dataset_code=ds.dataset_code,
-                        local_table=ds.local_table,
-                        active_source=ds.active_source,
-                        per_symbol=True,
-                        symbol=sym,
-                        range_start=rs,
-                        range_end=re,
-                    ))
+                    for start_day in range_starts:
+                        end_day = start_day if getattr(ds, "single_day", False) else re
+                        chunks.append(DueChunk(
+                            dataset_code=ds.dataset_code,
+                            local_table=ds.local_table,
+                            active_source=ds.active_source,
+                            per_symbol=True,
+                            symbol=sym,
+                            range_start=start_day,
+                            range_end=end_day,
+                        ))
                 continue
-        chunks.append(DueChunk(
-            dataset_code=ds.dataset_code,
-            local_table=ds.local_table,
-            active_source=ds.active_source,
-            per_symbol=ds.per_symbol,
-            symbol=None,
-            range_start=rs,
-            range_end=re,
-        ))
+        for start_day in range_starts:
+            end_day = start_day if getattr(ds, "single_day", False) else re
+            chunks.append(DueChunk(
+                dataset_code=ds.dataset_code,
+                local_table=ds.local_table,
+                active_source=ds.active_source,
+                per_symbol=ds.per_symbol,
+                symbol=None,
+                range_start=start_day,
+                range_end=end_day,
+            ))
     return chunks

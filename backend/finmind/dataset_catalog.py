@@ -110,7 +110,7 @@ FUNDAMENTAL: tuple[CatalogEntry, ...] = (
 
 # ── Derivative (期權) ─────────────────────────────────────────────
 DERIVATIVE: tuple[CatalogEntry, ...] = (
-    CatalogEntry("TaiwanFutOptDailyInfo",                              "tw_futopt_daily_info",            "finmind", "taifex", "daily"),
+    CatalogEntry("TaiwanFutOptDailyInfo",                              "tw_futopt_master",                "finmind", "taifex", "daily"),
     CatalogEntry("TaiwanFuturesDaily",                                 "tw_futures_daily",                "finmind", "taifex", "daily"),
     CatalogEntry("TaiwanOptionDaily",                                  "tw_option_daily",                 "finmind", "taifex", "daily"),
     CatalogEntry("TaiwanFuturesTick",                                  "",                                "finmind", None,     "daily"),

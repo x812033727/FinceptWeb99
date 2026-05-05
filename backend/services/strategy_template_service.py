@@ -28,6 +28,29 @@ MAX_CONCURRENCY = 3
 ALLOWED_MARKETS = ("TW", "US", "GLOBAL")
 
 
+def _validate_schedule(
+    *,
+    cadence_hours: int,
+    anchor_offset_days: int,
+    trading_days_count: int,
+) -> None:
+    if cadence_hours < 1 or cadence_hours > 720:
+        raise ValueError(
+            f"auto_schedule_cadence_hours must be in [1, 720], "
+            f"got {cadence_hours}"
+        )
+    if anchor_offset_days < -30 or anchor_offset_days > 0:
+        raise ValueError(
+            f"auto_schedule_anchor_offset_days must be in [-30, 0], "
+            f"got {anchor_offset_days}"
+        )
+    if trading_days_count < 1 or trading_days_count > 30:
+        raise ValueError(
+            f"auto_schedule_trading_days_count must be in [1, 30], "
+            f"got {trading_days_count}"
+        )
+
+
 def _validate_common(
     *,
     name: str,
@@ -71,12 +94,21 @@ async def create_template(
     default_rounds: int = 1,
     default_concurrency: int = 1,
     default_auto_post_mortem: bool = True,
+    auto_schedule_enabled: bool = False,
+    auto_schedule_cadence_hours: int = 24,
+    auto_schedule_anchor_offset_days: int = -1,
+    auto_schedule_trading_days_count: int = 1,
 ) -> DiscussionStrategyTemplate:
     _validate_common(
         name=name, topic=topic, rules=rules, market=market,
         persona_ids=persona_ids,
         default_rounds=default_rounds,
         default_concurrency=default_concurrency,
+    )
+    _validate_schedule(
+        cadence_hours=auto_schedule_cadence_hours,
+        anchor_offset_days=auto_schedule_anchor_offset_days,
+        trading_days_count=auto_schedule_trading_days_count,
     )
     tmpl = DiscussionStrategyTemplate(
         owner_id=owner_id,
@@ -89,6 +121,10 @@ async def create_template(
         default_rounds=default_rounds,
         default_concurrency=default_concurrency,
         default_auto_post_mortem=default_auto_post_mortem,
+        auto_schedule_enabled=auto_schedule_enabled,
+        auto_schedule_cadence_hours=auto_schedule_cadence_hours,
+        auto_schedule_anchor_offset_days=auto_schedule_anchor_offset_days,
+        auto_schedule_trading_days_count=auto_schedule_trading_days_count,
     )
     db.add(tmpl)
     await db.commit()
@@ -150,12 +186,28 @@ async def update_template(
     merged.update({k: v for k, v in patch.items() if k in merged})
     _validate_common(**merged)
 
+    schedule_keys = {
+        "auto_schedule_cadence_hours": tmpl.auto_schedule_cadence_hours,
+        "auto_schedule_anchor_offset_days": tmpl.auto_schedule_anchor_offset_days,
+        "auto_schedule_trading_days_count": tmpl.auto_schedule_trading_days_count,
+    }
+    schedule_keys.update({
+        k: v for k, v in patch.items() if k in schedule_keys
+    })
+    _validate_schedule(
+        cadence_hours=schedule_keys["auto_schedule_cadence_hours"],
+        anchor_offset_days=schedule_keys["auto_schedule_anchor_offset_days"],
+        trading_days_count=schedule_keys["auto_schedule_trading_days_count"],
+    )
+
     for k, v in patch.items():
         if k == "description":
             tmpl.description = v or None
         elif k == "default_auto_post_mortem":
             tmpl.default_auto_post_mortem = bool(v)
-        elif k in merged:
+        elif k == "auto_schedule_enabled":
+            tmpl.auto_schedule_enabled = bool(v)
+        elif k in merged or k in schedule_keys:
             setattr(tmpl, k, v)
 
     tmpl.updated_at = datetime.now(UTC)

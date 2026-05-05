@@ -888,6 +888,11 @@ def _template_to_response(t) -> StrategyTemplateResponse:
         default_auto_post_mortem=bool(t.default_auto_post_mortem),
         persona_weights=dict(t.persona_weights or {}),
         weights_updated_at=t.weights_updated_at,
+        auto_schedule_enabled=bool(t.auto_schedule_enabled),
+        auto_schedule_cadence_hours=t.auto_schedule_cadence_hours,
+        auto_schedule_anchor_offset_days=t.auto_schedule_anchor_offset_days,
+        auto_schedule_trading_days_count=t.auto_schedule_trading_days_count,
+        auto_schedule_last_run_at=t.auto_schedule_last_run_at,
         created_at=t.created_at,
         updated_at=t.updated_at,
         deleted_at=t.deleted_at,
@@ -1133,6 +1138,10 @@ async def create_strategy(
             default_rounds=body.default_rounds,
             default_concurrency=body.default_concurrency,
             default_auto_post_mortem=body.default_auto_post_mortem,
+            auto_schedule_enabled=body.auto_schedule_enabled,
+            auto_schedule_cadence_hours=body.auto_schedule_cadence_hours,
+            auto_schedule_anchor_offset_days=body.auto_schedule_anchor_offset_days,
+            auto_schedule_trading_days_count=body.auto_schedule_trading_days_count,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

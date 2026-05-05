@@ -485,3 +485,21 @@ def setup_jobs() -> None:
         max_instances=1,
         coalesce=True,
     )
+
+    # ── PR-D: strategy auto-sweep dispatcher ─────────────────────
+    # Every 5 min checks the discussion_strategy_templates table
+    # for templates that are auto_schedule_enabled and whose
+    # last_run_at is older than their cadence_hours. For each, it
+    # creates+starts a sweep using the template's defaults so the
+    # backtest architecture runs without operator intervention.
+    # No-op when no template is due, so the 5-min interval is
+    # cheap (one indexed COUNT lookup).
+    from services.strategy_auto_sweep_service import process_due_strategies
+    scheduler.add_job(
+        process_due_strategies,
+        trigger=IntervalTrigger(minutes=5),
+        id="strategy_auto_sweep_dispatcher",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )

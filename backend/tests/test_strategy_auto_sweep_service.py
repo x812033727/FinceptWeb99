@@ -1,0 +1,199 @@
+"""Tests for `services.strategy_auto_sweep_service` (PR-D)."""
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, date, datetime, timedelta
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from models.backtest_sweep import BacktestSweep
+from models.discussion_strategy_template import DiscussionStrategyTemplate
+from models.user import User, UserRole
+from services import strategy_auto_sweep_service as svc
+
+
+@pytest.fixture
+async def owner(db_session: AsyncSession) -> User:
+    u = User(
+        email=f"autosched-{uuid.uuid4().hex[:8]}@test.com",
+        hashed_password="x", role=UserRole.analyst,
+    )
+    db_session.add(u)
+    await db_session.commit()
+    await db_session.refresh(u)
+    return u
+
+
+def _make_template(
+    owner_id: uuid.UUID,
+    *,
+    enabled: bool = True,
+    cadence_hours: int = 24,
+    last_run_at: datetime | None = None,
+    deleted_at: datetime | None = None,
+) -> DiscussionStrategyTemplate:
+    return DiscussionStrategyTemplate(
+        owner_id=owner_id,
+        name="auto", topic="t", rules="r", market="TW",
+        persona_ids=["bull", "bear"],
+        default_rounds=1, default_concurrency=1,
+        default_auto_post_mortem=True,
+        auto_schedule_enabled=enabled,
+        auto_schedule_cadence_hours=cadence_hours,
+        auto_schedule_anchor_offset_days=-1,
+        auto_schedule_trading_days_count=1,
+        auto_schedule_last_run_at=last_run_at,
+        deleted_at=deleted_at,
+    )
+
+
+# ── _resolve_anchor (pure) ─────────────────────────────────────
+
+
+def test_resolve_anchor_applies_calendar_offset():
+    today = date(2026, 5, 5)
+    assert svc._resolve_anchor(
+        base_today=today, offset_days=-1, market="TW",
+    ) == date(2026, 5, 4)
+    assert svc._resolve_anchor(
+        base_today=today, offset_days=0, market="US",
+    ) == today
+
+
+# ── _fetch_due_templates ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_fetch_due_excludes_disabled(
+    db_session: AsyncSession, owner: User,
+):
+    t1 = _make_template(owner.id, enabled=False)
+    t2 = _make_template(owner.id, enabled=True)
+    db_session.add_all([t1, t2])
+    await db_session.commit()
+    rows = await svc._fetch_due_templates(db_session)
+    assert {r.id for r in rows} == {t2.id}
+
+
+@pytest.mark.asyncio
+async def test_fetch_due_excludes_soft_deleted(
+    db_session: AsyncSession, owner: User,
+):
+    t = _make_template(
+        owner.id, enabled=True, deleted_at=datetime.now(UTC),
+    )
+    db_session.add(t)
+    await db_session.commit()
+    assert await svc._fetch_due_templates(db_session) == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_due_respects_cadence(
+    db_session: AsyncSession, owner: User,
+):
+    now = datetime.now(UTC)
+    fresh = _make_template(
+        owner.id, cadence_hours=24,
+        last_run_at=now - timedelta(hours=1),  # too fresh
+    )
+    stale = _make_template(
+        owner.id, cadence_hours=24,
+        last_run_at=now - timedelta(hours=25),  # past cadence
+    )
+    never = _make_template(owner.id, last_run_at=None)
+    db_session.add_all([fresh, stale, never])
+    await db_session.commit()
+    rows = await svc._fetch_due_templates(db_session)
+    assert {r.id for r in rows} == {stale.id, never.id}
+
+
+# ── process_due_strategies (DB-backed, sweep mocked) ──────────
+
+
+@pytest.mark.asyncio
+async def test_process_creates_and_starts_sweep(
+    db_session: AsyncSession, owner: User,
+):
+    tmpl = _make_template(owner.id)
+    db_session.add(tmpl)
+    await db_session.commit()
+    await db_session.refresh(tmpl)
+
+    with patch(
+        "services.strategy_auto_sweep_service.AsyncSessionLocal",
+        return_value=_session_ctx(db_session),
+    ):
+        with patch(
+            "services.strategy_auto_sweep_service.sweep_svc."
+            "start_sweep_in_background",
+            new=AsyncMock(),
+        ) as start_mock:
+            launched = await svc.process_due_strategies()
+
+    assert len(launched) == 1
+    # Sweep row was persisted with strategy_id back-pointing to the
+    # template — PR-B's aggregator depends on this link.
+    sweep_id = launched[0]
+    sweep = await db_session.get(BacktestSweep, sweep_id)
+    assert sweep is not None
+    assert sweep.strategy_id == tmpl.id
+    assert sweep.market == tmpl.market
+    assert sweep.persona_ids == tmpl.persona_ids
+    start_mock.assert_called_once_with(sweep_id)
+
+    # last_run_at bumped so the next tick won't immediately re-fire.
+    await db_session.refresh(tmpl)
+    assert tmpl.auto_schedule_last_run_at is not None
+
+
+@pytest.mark.asyncio
+async def test_process_skips_when_active_sweep_exists(
+    db_session: AsyncSession, owner: User,
+):
+    tmpl = _make_template(owner.id)
+    db_session.add(tmpl)
+    await db_session.commit()
+    await db_session.refresh(tmpl)
+
+    db_session.add(BacktestSweep(
+        owner_id=owner.id, strategy_id=tmpl.id,
+        topic=tmpl.topic, rules=tmpl.rules, market=tmpl.market,
+        persona_ids=list(tmpl.persona_ids),
+        anchor_date=date(2026, 5, 5),
+        trading_days_count=1, rounds_per_discussion=1,
+        concurrency=1, auto_post_mortem=True,
+        status="running",
+    ))
+    await db_session.commit()
+
+    with patch(
+        "services.strategy_auto_sweep_service.AsyncSessionLocal",
+        return_value=_session_ctx(db_session),
+    ):
+        with patch(
+            "services.strategy_auto_sweep_service.sweep_svc."
+            "start_sweep_in_background",
+            new=AsyncMock(),
+        ) as start_mock:
+            launched = await svc.process_due_strategies()
+
+    assert launched == []
+    # No new background start because an active sweep already exists.
+    start_mock.assert_not_called()
+    # last_run_at still bumped so we don't re-check every tick.
+    await db_session.refresh(tmpl)
+    assert tmpl.auto_schedule_last_run_at is not None
+
+
+def _session_ctx(session: AsyncSession):
+    """Return a context-manager-like object that yields the test
+    session so `async with AsyncSessionLocal() as db` reuses our
+    in-memory test transaction instead of opening a real one."""
+    class _Ctx:
+        async def __aenter__(self_inner):
+            return session
+        async def __aexit__(self_inner, exc_type, exc, tb):
+            return False
+    return _Ctx()

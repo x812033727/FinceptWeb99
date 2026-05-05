@@ -748,6 +748,30 @@
     "audited": "{{count}} discussions analyzed (out of last {{requested}})",
     "row_tooltip": "{{mentions}} mentions across {{discussions}} discussions / {{personas}} personas"
   },
+  "discussion_lessons": {
+    "title": "Post-mortem Lessons Archive",
+    "subtitle": "Reusable takeaways from past post-mortems; auto-injected into new discussions on the same market",
+    "refresh": "Refresh",
+    "empty": "No lessons recorded yet — run a few miss-verdict post-mortems to populate",
+    "delete": "Delete",
+    "confirm_delete": "Delete this lesson? This cannot be undone.",
+    "related": "Related",
+    "missed": "Missed winners"
+  },
+  "discussion_post_mortem_skipped": {
+    "title": "✅ Recommendation already cleared the bar — skipping post-mortem",
+    "best_pct": "Best peak",
+    "threshold": "Threshold",
+    "winners_label": "Winners",
+    "reason_prefix": "Reason",
+    "explanation": "At least one recommendation hit {{threshold}}% within {{window}} trading days; the critique round + LLM budget were saved."
+  },
+  "discussion_recent_lessons": {
+    "title": "📚 Lessons learned this session",
+    "no_lessons": "No reusable lessons extracted from this session",
+    "category_label": "Category",
+    "as_of_label": "As-of date"
+  },
   "screener": {
     "title": "Screener",
     "subtitle": "Filter stocks by any metric",

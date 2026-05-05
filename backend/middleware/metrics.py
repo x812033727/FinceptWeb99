@@ -27,6 +27,42 @@ REQUEST_LATENCY = Histogram(
 )
 ACTIVE_REQUESTS = Gauge("http_active_requests", "Currently active HTTP requests")
 
+# Discussion learning loop counters. `post_mortem_skipped_total` /
+# `_ran_total` together let operators reason about the win-rate of
+# recommendations (skip rate close to 0 ⇒ threshold too tight; close
+# to 1 ⇒ too loose). `lessons_*` track the feedback loop's health.
+POST_MORTEM_SKIPPED_TOTAL = Counter(
+    "post_mortem_skipped_total",
+    "Backtest discussions whose post-mortem was skipped because the "
+    "recommendation already cleared the win threshold.",
+    ["market"],
+)
+POST_MORTEM_RAN_TOTAL = Counter(
+    "post_mortem_ran_total",
+    "Backtest discussions whose post-mortem self-critique was actually "
+    "fired (recommendation missed the win threshold).",
+    ["market"],
+)
+LESSONS_PERSISTED_TOTAL = Counter(
+    "lessons_persisted_total",
+    "Lessons written into discussion_lessons after a post-mortem "
+    "synthesizer pass.",
+    ["market", "category"],
+)
+LESSONS_INJECTED_TOTAL = Counter(
+    "lessons_injected_total",
+    "Lessons surfaced inside gather_market_context. `scope=market` "
+    "rolls up the market-wide bucket; `scope=per_symbol` rolls up "
+    "the focus-symbol buckets.",
+    ["market", "scope"],
+)
+LESSONS_DEDUP_SKIPPED_TOTAL = Counter(
+    "lessons_dedup_skipped_total",
+    "Lessons rejected at write time because an identical "
+    "lesson_text was persisted within the dedup window.",
+    ["market"],
+)
+
 # ── Core Web Vitals (reported by the frontend) ────────────────────
 # LCP / INP / FCP / TTFB are time metrics in seconds; bucket
 # boundaries are tuned around Google's "Good / Needs improvement /

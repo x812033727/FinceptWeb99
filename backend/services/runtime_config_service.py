@@ -194,6 +194,80 @@ _REGISTRY: dict[str, RuntimeSettingSpec] = {
         min_value=512,
         max_value=131_072,
     ),
+    "POST_MORTEM_WIN_THRESHOLD_PCT": RuntimeSettingSpec(
+        key="POST_MORTEM_WIN_THRESHOLD_PCT",
+        type="float",
+        name="Post-mortem win threshold (%)",
+        description=(
+            "Backtest discussions whose recommended symbols hit at least "
+            "this peak cumulative-return % within the D1-D{window} "
+            "evaluation window are scored as 'win' and skip the "
+            "self-critique entirely (saving LLM quota). Lower the bar "
+            "to make personas defend marginal calls; raise it to only "
+            "celebrate strong signals."
+        ),
+        min_value=0.5,
+        max_value=20.0,
+    ),
+    "POST_MORTEM_WINDOW_DAYS": RuntimeSettingSpec(
+        key="POST_MORTEM_WINDOW_DAYS",
+        type="int",
+        name="Post-mortem evaluation window (days)",
+        description=(
+            "Number of trading days after as_of_date the post-mortem "
+            "evaluator looks at when judging win vs miss. 5 matches "
+            "the verifier window; tighten to 3 for swing-trading "
+            "personas, widen to 10 for medium-term horizons."
+        ),
+        min_value=1,
+        max_value=10,
+    ),
+    "LESSONS_INJECTION_ENABLED": RuntimeSettingSpec(
+        key="LESSONS_INJECTION_ENABLED",
+        type="bool",
+        name="Inject past discussion lessons",
+        description=(
+            "Master switch for the learning loop. When ON, "
+            "gather_market_context appends a recent_lessons block "
+            "carrying past post-mortem takeaways for the same market "
+            "(and per focus symbol). Flip OFF if personas appear to "
+            "anchor on outdated lessons."
+        ),
+    ),
+    "LESSONS_DECAY_HALFLIFE_DAYS": RuntimeSettingSpec(
+        key="LESSONS_DECAY_HALFLIFE_DAYS",
+        type="int",
+        name="Lessons time-decay half-life (days)",
+        description=(
+            "Half-life of the recency-weighted score used to rank "
+            "lessons before injection. Lower = forget faster (recent "
+            "drama dominates); higher = older lessons stay competitive."
+        ),
+        min_value=7,
+        max_value=365,
+    ),
+    "LESSONS_PER_MARKET_LIMIT": RuntimeSettingSpec(
+        key="LESSONS_PER_MARKET_LIMIT",
+        type="int",
+        name="Lessons per market (top-N)",
+        description=(
+            "Maximum number of market-wide lessons injected per "
+            "discussion. Caps the round-1 prompt token budget."
+        ),
+        min_value=1,
+        max_value=10,
+    ),
+    "LESSONS_PER_SYMBOL_LIMIT": RuntimeSettingSpec(
+        key="LESSONS_PER_SYMBOL_LIMIT",
+        type="int",
+        name="Lessons per focus symbol (top-N)",
+        description=(
+            "Maximum number of per-symbol lessons injected for each "
+            "focus_symbol the discussion topic mentions."
+        ),
+        min_value=1,
+        max_value=10,
+    ),
 }
 
 

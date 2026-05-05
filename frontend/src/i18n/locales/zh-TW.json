@@ -748,6 +748,30 @@
     "audited": "已分析 {{count}} 場有事後檢討的討論（最近 {{requested}} 場中）",
     "row_tooltip": "命中 {{mentions}} 次 / 跨 {{discussions}} 場討論 / {{personas}} 位 persona"
   },
+  "discussion_lessons": {
+    "title": "事後檢討教訓庫",
+    "subtitle": "過去事後檢討抽出的可重用教訓；下次同市場開新討論時會自動注入 ctx",
+    "refresh": "重新整理",
+    "empty": "尚未累積任何教訓——跑幾場 verdict=miss 的事後檢討即會出現",
+    "delete": "刪除",
+    "confirm_delete": "刪除這條教訓？此動作無法復原。",
+    "related": "相關標的",
+    "missed": "錯過的贏家"
+  },
+  "discussion_post_mortem_skipped": {
+    "title": "✅ 推薦已達標 — 跳過事後檢討",
+    "best_pct": "最高漲幅",
+    "threshold": "達標門檻",
+    "winners_label": "達標標的",
+    "reason_prefix": "原因",
+    "explanation": "至少有一檔推薦在 {{window}} 個交易日內達到 {{threshold}}% 漲幅；事後檢討輪次與 LLM 預算已自動省下。"
+  },
+  "discussion_recent_lessons": {
+    "title": "📚 本次學到的事",
+    "no_lessons": "本次沒有抽出可重用教訓",
+    "category_label": "類別",
+    "as_of_label": "回測日期"
+  },
   "screener": {
     "title": "篩選器",
     "subtitle": "依條件篩選個股",

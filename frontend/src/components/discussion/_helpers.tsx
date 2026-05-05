@@ -216,6 +216,21 @@ export interface PostMortemRecommendedPerformance {
   days: PostMortemDayPerformance[];
 }
 
+export interface PostMortemWinner {
+  symbol: string;
+  peak_pct: number;
+  peak_day: string;
+}
+
+export interface PostMortemVerdict {
+  status: "win" | "miss" | "insufficient_data";
+  threshold_pct: number;
+  window_days: number;
+  winners: PostMortemWinner[];
+  best_pct: number | null;
+  reason: string;
+}
+
 export interface PostMortemResponse {
   /** PR #273: D1-D5 trading-day window. Older backends omit the
    *  field; frontend treats it as `[next_trading_day]` for the
@@ -233,7 +248,14 @@ export interface PostMortemResponse {
   next_trading_day: string;
   top_gainers: PostMortemGainer[];
 
-  injected_turn_id: number;
+  /** Learning-loop addition: "ran" when the personas were asked to
+   * critique, "skipped" when the recommendation already cleared the
+   * win threshold so no critique round was fired. Older backends
+   * omit; frontend treats undefined as "ran" for back-compat. */
+  status?: "ran" | "skipped";
+  verdict?: PostMortemVerdict | null;
+  /** Null when status === "skipped" — no turn was injected. */
+  injected_turn_id: number | null;
 }
 
 /** Triggers the post-mortem self-critique injection. Backtest mode +
@@ -354,10 +376,13 @@ export async function deleteSweep(id: string): Promise<void> {
  *  `current_round`. */
 export interface PostMortemFlowDeps {
   canStart: () => boolean;
-  runPostMortem: () => Promise<void>;
+  runPostMortem: () => Promise<PostMortemResponse | void>;
   runRound: () => Promise<void>;
   runConclude: () => void;
   onError: (detail: string) => void;
+  /** Optional: caller wants to be told the post-mortem was skipped
+   *  (so it can flash a toast like "推薦已達標，無需檢討"). */
+  onSkipped?: (verdict: PostMortemVerdict | null) => void;
   /** Defer hook — defaults to `setTimeout(fn, 0)`. Tests inject a
    *  synchronous runner so they can assert ordering without
    *  fake-timer plumbing. */
@@ -370,18 +395,28 @@ export async function runPostMortemFlowSteps({
   runRound,
   runConclude,
   onError,
+  onSkipped,
   defer = (fn) => {
     setTimeout(fn, 0);
   },
 }: PostMortemFlowDeps): Promise<void> {
   if (!canStart()) return;
+  let result: PostMortemResponse | void;
   try {
-    await runPostMortem();
+    result = await runPostMortem();
   } catch (err) {
     const detail =
       (err as { response?: { data?: { detail?: string } } })?.response?.data
         ?.detail ?? (err as Error).message;
     onError(detail);
+    return;
+  }
+  // Win-skip path (learning loop): backend already short-circuited
+  // because the recommendation cleared the win threshold. No round
+  // to run, no synthesizer to fire — just notify the UI so it can
+  // surface the success badge and stop the spinner.
+  if (result && (result as PostMortemResponse).status === "skipped") {
+    onSkipped?.((result as PostMortemResponse).verdict ?? null);
     return;
   }
   await runRound();

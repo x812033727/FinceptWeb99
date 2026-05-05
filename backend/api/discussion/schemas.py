@@ -158,6 +158,28 @@ class PostMortemRecommendedPerformanceOut(BaseModel):
     days: list[PostMortemDayPerformanceOut]
 
 
+class PostMortemWinnerOut(BaseModel):
+    """One recommended symbol that crossed the win threshold inside
+    the evaluation window. Surfaced both in the `verdict` block (for
+    clients that want to render badges) and used by the backend to
+    label the skip reason."""
+    symbol: str
+    peak_pct: float
+    peak_day: str
+
+
+class PostMortemVerdictOut(BaseModel):
+    """The win/miss/insufficient_data scoring of the recommendation
+    against the D1-D{window} window. `status='win'` means the
+    self-critique was skipped — no LLM round was injected."""
+    status: str
+    threshold_pct: float
+    window_days: int
+    winners: list[PostMortemWinnerOut]
+    best_pct: float | None
+    reason: str
+
+
 class PostMortemResponse(BaseModel):
     """Result of `POST /sessions/{id}/post-mortem`.
 
@@ -172,6 +194,12 @@ class PostMortemResponse(BaseModel):
     with older clients — populated from D1's leaderboard so the
     field still reflects "next-day gainers". `next_trading_day`
     similarly aliases to `trading_days[0]` when present.
+
+    Win-skip: when `status="skipped"` the recommendation already
+    cleared the win threshold so no critique LLM round is fired.
+    `verdict.winners` carries the symbols that hit the bar; the
+    UI renders a "✅ 推薦已達標" badge instead of the critique
+    flow. `injected_turn_id` is null in that case.
     """
     # New shape (PR #273).
     trading_days: list[str] = []
@@ -182,7 +210,10 @@ class PostMortemResponse(BaseModel):
     next_trading_day: str
     top_gainers: list[PostMortemGainerOut]
 
-    injected_turn_id: int
+    # Outcome-aware fields (learning-loop PR).
+    status: str = "ran"   # "ran" | "skipped"
+    verdict: PostMortemVerdictOut | None = None
+    injected_turn_id: int | None = None
 
 
 class ScoreboardResponse(BaseModel):

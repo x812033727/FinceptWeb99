@@ -325,12 +325,29 @@ async def _run_post_mortem_pass(
         return
 
     payload = await build_post_mortem_message(db, discussion)
-    if not payload.trading_days or not payload.prompt_text:
+    if not payload.trading_days:
+        return
+    # Win-skip: recommendation already cleared the threshold so no
+    # critique round is fired (saves N personas × LLM cost per
+    # winning date during a multi-day sweep).
+    if payload.verdict is not None and payload.verdict.status == "win":
+        try:
+            from middleware.metrics import POST_MORTEM_SKIPPED_TOTAL
+            POST_MORTEM_SKIPPED_TOTAL.labels(market=discussion.market).inc()
+        except Exception:
+            pass
+        return
+    if not payload.prompt_text:
         return
 
     await discussion_service.inject_user_message(
         db, discussion, content=payload.prompt_text,
     )
+    try:
+        from middleware.metrics import POST_MORTEM_RAN_TOTAL
+        POST_MORTEM_RAN_TOTAL.labels(market=discussion.market).inc()
+    except Exception:
+        pass
     # One reflection round so personas critique against the ground
     # truth surfaced in the prompt.
     async for _ev in discussion_service.run_round(

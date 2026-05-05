@@ -166,6 +166,24 @@ class Settings(BaseSettings):
     # hanging the whole round indefinitely.
     DISCUSSION_PERSONA_TIMEOUT_SECONDS: int = 60
 
+    # Post-mortem trigger: a backtest discussion is considered a "win" (and
+    # its post-mortem self-critique skipped) when ANY recommended symbol's
+    # peak D1-D{window} cumulative-return reaches at least this %. 3% is
+    # comfortably above intra-day noise on TW large-caps without selecting
+    # only momentum spikes; tune from 1.5 to 5 depending on the operator's
+    # appetite.
+    POST_MORTEM_WIN_THRESHOLD_PCT: float = 3.0
+    POST_MORTEM_WINDOW_DAYS: int = 5
+
+    # Discussion learning loop. Each post-mortem (status=miss) extracts
+    # structured lessons into `discussion_lessons`; subsequent discussions
+    # gather them into ctx as `recent_lessons.market` + per_symbol blocks
+    # so personas see "what past discussions on this market got wrong".
+    LESSONS_INJECTION_ENABLED: bool = True
+    LESSONS_DECAY_HALFLIFE_DAYS: int = 60   # exp half-life for time decay
+    LESSONS_PER_MARKET_LIMIT: int = 5
+    LESSONS_PER_SYMBOL_LIMIT: int = 3
+
     # Per-call LLM `max_tokens` budgets. 8192 is generous for non-thinking
     # models (their actual output is far smaller — the cap only ceilings
     # them) and gives reasoning models like MiniMax-M2.7 / DeepSeek-R1

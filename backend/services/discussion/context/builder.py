@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from .blocks import (
-    chip, derivatives, http, news, overseas, owner, risk, technical,
+    chip, derivatives, http, lessons, news, overseas, owner, risk, technical,
 )
 
 # Progress callback type. Caller (e.g. `run_round`) provides one so
@@ -131,6 +131,15 @@ def _initial_ctx(*, market: str, as_of: date | None) -> dict[str, Any]:
         # cache; no DB table. Bounded fan-out (≤ 5 focus_symbols)
         # to cap Sponsor quota burn per discussion.
         "broker_concentration": [],
+        # Past-discussion lessons retrieved by `discussion_lesson_service`
+        # for the same market + per focus_symbol. Shape:
+        # `{market: [LessonSummary, ...], per_symbol: {sym: [...], ...}}`.
+        # Stays empty when the learning loop is disabled
+        # (`LESSONS_INJECTION_ENABLED=False`) or the owner has no
+        # priors yet. Owner-scoped + backtest-time-safe (a sweep
+        # discussion at as_of=2025-06-01 only sees lessons from
+        # before that date).
+        "recent_lessons": {"market": [], "per_symbol": {}},
         # Overseas index snapshot (PR #269): SOX / NDX / SPX / DJI /
         # VIX latest close + 1-day % change. Wired in for ALL
         # markets — TW personas need overnight US direction, US
@@ -329,6 +338,13 @@ async def build_market_context(
                 exclude_discussion_id=exclude_discussion_id,
                 as_of_dt=as_of_dt, record_error=record_error,
             )
+        # Past-discussion lessons are owner-scoped — only fired when
+        # we have an owner_id. Backtest-time-safe via `as_of`.
+        await lessons.fetch_recent_lessons(
+            ctx, db, owner_id=owner_id, market=market,
+            focus_symbols=focus_symbols, as_of=as_of,
+            record_error=record_error,
+        )
 
     await _progress("ctx_ready")
     return ctx

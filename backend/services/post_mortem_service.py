@@ -32,11 +32,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import settings
 from models.discussion import Discussion
 from models.ohlcv_daily import OhlcvDaily
 
@@ -50,6 +51,9 @@ log = logging.getLogger(__name__)
 _MAX_LOOKAHEAD_DAYS = 21
 _DEFAULT_TOP_N = 5
 _DEFAULT_DAYS = 5
+
+
+OutcomeStatus = Literal["win", "miss", "insufficient_data"]
 
 
 # ── Data structures ──────────────────────────────────────────────
@@ -88,6 +92,26 @@ class DailyGainers:
     gainers: list[GainerRow]
 
 
+@dataclass(frozen=True)
+class WinnerEntry:
+    """One recommended symbol that hit the win threshold."""
+    symbol: str
+    peak_pct: float        # max cumulative change % across the window
+    peak_day: date         # which trading day the peak landed on
+
+
+@dataclass(frozen=True)
+class OutcomeVerdict:
+    """Result of `evaluate_recommendation_outcome`. Drives whether the
+    post-mortem self-critique runs at all (skip on `win`)."""
+    status: OutcomeStatus
+    threshold_pct: float
+    window_days: int
+    winners: list[WinnerEntry]
+    best_pct: float | None
+    reason: str
+
+
 @dataclass
 class PostMortemPayload:
     """Everything `build_post_mortem_message` returns. Keeps the
@@ -98,6 +122,7 @@ class PostMortemPayload:
     )
     daily_top_gainers: list[DailyGainers] = field(default_factory=list)
     prompt_text: str = ""
+    verdict: OutcomeVerdict | None = None
 
 
 # ── Trading-day resolution ───────────────────────────────────────
@@ -350,6 +375,162 @@ def _format_daily_gainers(
     return lines
 
 
+def evaluate_recommendation_outcome(
+    rec_perf: list[RecommendedPerformance],
+    *,
+    threshold_pct: float,
+    window_days: int,
+    trading_days: list[date],
+) -> OutcomeVerdict:
+    """Pure function: derive a `win` / `miss` / `insufficient_data`
+    verdict from the per-recommendation D1-D{window} table.
+
+    `win`  — at least one symbol's peak cumulative change % within
+             the (truncated to `window_days`) window meets `threshold_pct`.
+    `miss` — every recommendation's peak fell short.
+    `insufficient_data` — no trading days resolved at all (archive
+             didn't reach as_of+1) or no recommended symbols had
+             entry-day bars.
+    """
+    if not trading_days:
+        return OutcomeVerdict(
+            status="insufficient_data",
+            threshold_pct=threshold_pct,
+            window_days=window_days,
+            winners=[],
+            best_pct=None,
+            reason="no trading days resolved past as_of",
+        )
+    window = trading_days[:window_days]
+    if not rec_perf:
+        return OutcomeVerdict(
+            status="insufficient_data",
+            threshold_pct=threshold_pct,
+            window_days=window_days,
+            winners=[],
+            best_pct=None,
+            reason="no recommended symbols had entry-day bars",
+        )
+
+    best_pct: float | None = None
+    winners: list[WinnerEntry] = []
+    for r in rec_perf:
+        peak_in_window: tuple[float, date] | None = None
+        for dp in r.days:
+            if dp.trading_day not in window:
+                continue
+            if peak_in_window is None or dp.change_pct > peak_in_window[0]:
+                peak_in_window = (dp.change_pct, dp.trading_day)
+        if peak_in_window is None:
+            continue
+        peak_pct, peak_day = peak_in_window
+        if best_pct is None or peak_pct > best_pct:
+            best_pct = peak_pct
+        if peak_pct >= threshold_pct:
+            winners.append(WinnerEntry(
+                symbol=r.symbol,
+                peak_pct=round(peak_pct, 4),
+                peak_day=peak_day,
+            ))
+
+    if winners:
+        return OutcomeVerdict(
+            status="win",
+            threshold_pct=threshold_pct,
+            window_days=window_days,
+            winners=sorted(winners, key=lambda w: w.peak_pct, reverse=True),
+            best_pct=round(best_pct, 4) if best_pct is not None else None,
+            reason=(
+                f"{len(winners)} symbol(s) reached >= {threshold_pct:g}% "
+                f"within {window_days} trading days"
+            ),
+        )
+    return OutcomeVerdict(
+        status="miss",
+        threshold_pct=threshold_pct,
+        window_days=window_days,
+        winners=[],
+        best_pct=round(best_pct, 4) if best_pct is not None else None,
+        reason=(
+            f"all recommendations peaked below {threshold_pct:g}% "
+            f"within {window_days} trading days"
+        ),
+    )
+
+
+def format_post_mortem_miss_prompt(
+    *,
+    as_of: date,
+    trading_days: list[date],
+    daily_top_gainers: list[DailyGainers],
+    recommended_symbols: list[str],
+    verdict: OutcomeVerdict,
+    company_name_lookup: dict[str, str | None] | None = None,
+) -> str:
+    """Miss-branch prompt: omit the self-eval section entirely. The
+    recommendation already lost, asking personas to re-grade their own
+    picks adds noise; we want them focused on which signals would have
+    surfaced the actual winners.
+    """
+    name_lookup = company_name_lookup or {}
+    lines: list[str] = ["【事後檢討 — 漲幅榜複盤】", ""]
+
+    last_day_label = (
+        f"D{len(trading_days)} ({trading_days[-1].isoformat()})"
+        if trading_days else "（無資料）"
+    )
+    lines.append(
+        f"回測日期 **{as_of.isoformat()}**，"
+        f"評估窗口 **D1 ({trading_days[0].isoformat()}) ~ {last_day_label}**。"
+        if trading_days
+        else f"回測日期 **{as_of.isoformat()}**，但評估窗口的 ohlcv 尚未抵達。"
+    )
+    lines.append("")
+
+    best = (
+        f"{verdict.best_pct:+.2f}%"
+        if verdict.best_pct is not None else "（無資料）"
+    )
+    lines.append(
+        f"❌ 你的推薦 {', '.join(recommended_symbols) or '（無）'} 在 "
+        f"{verdict.window_days} 個交易日內最高僅 {best}，"
+        f"未達 {verdict.threshold_pct:g}% 門檻。"
+    )
+    lines.append("")
+
+    lines.append("## 真正的贏家（你錯過了誰）")
+    lines.append("")
+    lines.extend(_format_daily_gainers(daily_top_gainers, name_lookup))
+
+    lines.append("## 反思（聚焦在「漏看」，不要 defensive）")
+    lines.append("")
+    lines.append(
+        "1. **缺漏的主題**：上面榜單上的贏家是否屬於你當初忽略的產業 / 主題？"
+        "請點出共通的 sector 或 catalyst。"
+    )
+    lines.append(
+        "2. **回頭翻 ctx**：回頭看 round 1 的 ctx 區塊"
+        "（focus_briefs / news_sentiment / 外資台指期 / industry_rs / "
+        "day_trading_trend / 借券 / overseas_indicators / "
+        "single_stock_futures_oi / upcoming_event 等），"
+        "哪些徵兆其實已存在但被你忽略？請具體點名是哪一筆數據。"
+    )
+    lines.append(
+        "3. **訊號權重檢討**：哪些訊號 round 1 給太高權重、結果是雜訊？"
+        "哪些反過來太低權重、其實是真訊號？"
+    )
+    lines.append(
+        "4. **缺失的資料**：要正確預測這些動能標的，"
+        "目前 ctx 還缺哪一類資料？建議下次加入什麼新訊號？"
+    )
+    lines.append("")
+    lines.append(
+        "請聚焦在「為什麼當時沒看到」，不要重複自評你的推薦。"
+        "回答完後本輪結束，使用者會再彙整一次最終結論。"
+    )
+    return "\n".join(lines)
+
+
 def format_post_mortem_prompt(
     *,
     as_of: date,
@@ -439,31 +620,68 @@ def format_post_mortem_prompt(
 # ── High-level entry point ───────────────────────────────────────
 
 
+async def _resolve_thresholds(db: AsyncSession) -> tuple[float, int]:
+    """Read the win threshold + window from runtime config, with the
+    compiled defaults as fallback. Best-effort — any resolver hiccup
+    just falls back to settings, never blocks the post-mortem."""
+    threshold = settings.POST_MORTEM_WIN_THRESHOLD_PCT
+    window = settings.POST_MORTEM_WINDOW_DAYS
+    try:
+        from services.runtime_config_service import (
+            get_float as _get_float,
+            get_int as _get_int,
+        )
+        threshold = await _get_float(db, "POST_MORTEM_WIN_THRESHOLD_PCT")
+        window = await _get_int(db, "POST_MORTEM_WINDOW_DAYS")
+    except Exception as exc:
+        log.debug("post_mortem.runtime_config_fallback",
+                  extra={"error": str(exc)})
+    return threshold, window
+
+
 async def build_post_mortem_message(
     db: AsyncSession,
     discussion: Discussion,
     *,
     n: int = _DEFAULT_TOP_N,
-    days: int = _DEFAULT_DAYS,
+    days: int | None = None,
 ) -> PostMortemPayload:
     """Compute both ground-truth views + format the prompt.
 
-    Returns a `PostMortemPayload`. Caller should treat
-    `payload.trading_days == []` as "no data available" and surface
-    a 400 to the user (e.g. as_of is today / future, or the
-    archive doesn't reach 1 day past as_of).
+    Returns a `PostMortemPayload`:
+      - `trading_days == []` → archive doesn't reach 1 day past as_of.
+        Caller surfaces a 400.
+      - `verdict.status == "win"` → `prompt_text == ""` so the caller
+        knows to skip the inject + new round entirely.
+      - `verdict.status == "miss"` → `prompt_text` carries the
+        漲幅榜複盤 prompt, ready for `inject_user_message`.
     """
     if discussion.as_of_date is None:
         raise ValueError(
             "post_mortem requires a backtest discussion (as_of_date is null)"
         )
 
+    threshold_pct, window_days = await _resolve_thresholds(db)
+    effective_days = days if days is not None else window_days
+    # Resolve enough trading days to honour both the runtime window
+    # AND any caller override; computed as max so bigger N still works.
+    fetch_days = max(effective_days, _DEFAULT_DAYS)
+
     trading_days = await _resolve_trading_days_after(
         db, market=discussion.market,
-        as_of=discussion.as_of_date, days=days,
+        as_of=discussion.as_of_date, days=fetch_days,
     )
     if not trading_days:
-        return PostMortemPayload()
+        return PostMortemPayload(
+            verdict=OutcomeVerdict(
+                status="insufficient_data",
+                threshold_pct=threshold_pct,
+                window_days=window_days,
+                winners=[],
+                best_pct=None,
+                reason="ohlcv_daily archive does not reach as_of+1",
+            ),
+        )
 
     recommended = []
     if discussion.conclusion:
@@ -478,10 +696,16 @@ async def build_post_mortem_message(
         db, market=discussion.market, trading_days=trading_days, n=n,
     )
 
+    verdict = evaluate_recommendation_outcome(
+        rec_perf,
+        threshold_pct=threshold_pct,
+        window_days=window_days,
+        trading_days=trading_days,
+    )
+
     # Best-effort: enrich symbol → 公司簡稱 from the in-memory map
     # populated by the daily `tw_symbol_map` cron. None when the
-    # symbol isn't in the map; format_post_mortem_prompt handles
-    # that gracefully.
+    # symbol isn't in the map; format_*_prompt handle that gracefully.
     name_lookup: dict[str, str | None] = {}
     if discussion.market == "TW":
         try:
@@ -496,19 +720,30 @@ async def build_post_mortem_message(
             log.debug("post_mortem.name_lookup_failed",
                       extra={"error": str(exc)})
 
-    text = format_post_mortem_prompt(
-        as_of=discussion.as_of_date,
-        trading_days=trading_days,
-        recommended_performance=rec_perf,
-        daily_top_gainers=daily,
-        recommended_symbols=recommended,
-        company_name_lookup=name_lookup,
-    )
+    if verdict.status == "win":
+        # Skip-branch — leave prompt empty so the caller short-circuits
+        # the inject + round chain. Callers still get the perf/daily
+        # tables for UI surfacing of "why it was skipped".
+        text = ""
+    elif verdict.status == "miss":
+        text = format_post_mortem_miss_prompt(
+            as_of=discussion.as_of_date,
+            trading_days=trading_days[:window_days],
+            daily_top_gainers=daily[:window_days],
+            recommended_symbols=recommended,
+            verdict=verdict,
+            company_name_lookup=name_lookup,
+        )
+    else:   # insufficient_data with trading_days present (rare:
+            # window > 0 but no recommended symbols had bars)
+        text = ""
+
     return PostMortemPayload(
         trading_days=trading_days,
         recommended_performance=rec_perf,
         daily_top_gainers=daily,
         prompt_text=text,
+        verdict=verdict,
     )
 
 
@@ -547,4 +782,22 @@ def daily_gainers_to_dict(d: DailyGainers) -> dict[str, Any]:
     return {
         "trading_day": d.trading_day.isoformat(),
         "gainers":     [gainer_row_to_dict(g) for g in d.gainers],
+    }
+
+
+def verdict_to_dict(v: OutcomeVerdict) -> dict[str, Any]:
+    return {
+        "status":         v.status,
+        "threshold_pct":  v.threshold_pct,
+        "window_days":    v.window_days,
+        "winners": [
+            {
+                "symbol":   w.symbol,
+                "peak_pct": w.peak_pct,
+                "peak_day": w.peak_day.isoformat(),
+            }
+            for w in v.winners
+        ],
+        "best_pct":       v.best_pct,
+        "reason":         v.reason,
     }

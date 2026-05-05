@@ -52,6 +52,7 @@ import models.alert  # noqa: E402,F401
 import models.backtest_sweep  # noqa: E402,F401
 import models.discussion  # noqa: E402,F401
 import models.discussion_auto_run_config  # noqa: E402,F401
+import models.discussion_lesson  # noqa: E402,F401
 import models.discussion_round_context  # noqa: E402,F401
 import models.fundamentals_snapshot  # noqa: E402,F401
 import models.llm_provider_key  # noqa: E402,F401

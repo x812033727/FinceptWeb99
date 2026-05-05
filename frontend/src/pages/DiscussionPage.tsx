@@ -12,6 +12,7 @@ import type {
 import { AutoRunConfigCard } from "@/components/discussion/AutoRunConfigCard";
 import { BacktestSweepCard } from "@/components/discussion/BacktestSweepCard";
 import { ConclusionCard } from "@/components/discussion/ConclusionCard";
+import { PostMortemSkippedCard } from "@/components/discussion/PostMortemSkippedCard";
 import { PostMortemGainersCard } from "@/components/discussion/PostMortemGainersCard";
 import { RoundContextsCard } from "@/components/discussion/RoundContextsCard";
 import { RoundSection } from "@/components/discussion/RoundSection";
@@ -271,12 +272,22 @@ export default function DiscussionPage() {
     await runPostMortemFlowSteps({
       canStart: () =>
         Boolean(selectedId) && !isStreaming && !postMortemMut.isPending,
-      runPostMortem: () => postMortemMut.mutateAsync().then(() => undefined),
+      runPostMortem: () => postMortemMut.mutateAsync(),
       runRound,
       runConclude: () => {
         if (selectedId) concludeMut.mutate();
       },
       onError: (detail) => setStreamError(detail),
+      onSkipped: (verdict) => {
+        // Win-skip: surface a toast-style banner. The PostMortemSkipped
+        // card (rendered alongside ConclusionCard) carries the full
+        // verdict detail; this is just acknowledging the click.
+        const best = verdict?.best_pct;
+        const msg = best != null
+          ? `✅ 推薦已達標 (peak ${best >= 0 ? "+" : ""}${best.toFixed(2)}%) — 跳過事後檢討`
+          : "✅ 推薦已達標 — 跳過事後檢討";
+        setStreamError(msg);
+      },
     });
   }
 
@@ -1168,6 +1179,14 @@ export default function DiscussionPage() {
               operator can see "what was the post-mortem about" after
               coming back to the discussion. */}
           <PostMortemGainersCard
+            data={postMortemMut.data ?? persistedPostMortem}
+          />
+          {/* Win-skip card (learning-loop PR). Renders only when the
+              backend returned status="skipped" — i.e. the recommendation
+              already cleared the threshold so no critique round was
+              fired. Pulls from both the in-memory mutation result AND
+              the persisted snapshot so it survives a page reload. */}
+          <PostMortemSkippedCard
             data={postMortemMut.data ?? persistedPostMortem}
           />
           {detail && (

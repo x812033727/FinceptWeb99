@@ -1815,6 +1815,17 @@ _BLOCK_ANNOTATIONS: dict[str, str] = {
         "必須在 content 中明確說明改變理由（例如「上週起殖利率下行 +30bp，重新評估」），"
         "不可默默翻盤。引用過去討論時請優先以 as_of_date（若有）為錨，更貼近「在那一天的判斷」。"
     ),
+    "recent_lessons": (
+        "- recent_lessons：**過去事後檢討學到的教訓**——`market` 為全市場通用教訓"
+        "（time-decay 排序），`per_symbol` 為主題提及之標的的歷史教訓"
+        "（同 symbol 加權）。每條含 `as_of_date` / `category` "
+        "(missed_sector | wrong_signal_weight | missing_data | "
+        "over_confidence | other) / `lesson_text` (≤ 80 字反思) / "
+        "`related_symbols` / `missed_winners`。**這是「上次踩坑的具體紀錄」**——"
+        "回應前先掃過，避免重蹈覆轍；若這次的論點正好在 lesson_text 警示的"
+        "範圍內，必須明確處理（要麼提出新證據反駁，要麼承認並調整）。"
+        "若 lessons 為空表示尚未累積足夠歷史教訓，正常進行即可。"
+    ),
     "errors":                    "- errors：本次抓取的連接器錯誤清單；非空時務必聲明資料不完整。",
 }
 
@@ -2245,6 +2256,12 @@ _ALWAYS_INCLUDED_BLOCKS: frozenset[str] = frozenset({
     # see when their last momentum call was wrong). Cheap because
     # it's per-symbol-overlap-only.
     "prior_discussions",
+    # `recent_lessons` carries past post-mortem takeaways for the
+    # same market + per focus_symbol — every archetype benefits
+    # from "what we got wrong last time" so it's universal. The
+    # block is bounded by the runtime LESSONS_PER_*_LIMIT
+    # tunables so token cost stays predictable.
+    "recent_lessons",
 })
 
 # Full block set — used as the fall-through profile and the union the
@@ -2263,6 +2280,7 @@ _ALL_PERSONA_BLOCKS: frozenset[str] = frozenset({
     "broker_concentration",      # PR #285: per-focus-symbol 主力分點
     "overseas_indicators",   # PR #270: SOX/NDX/SPX/DJI/VIX overnight snapshot
     "focus_briefs", "macro", "user_context", "prior_discussions",
+    "recent_lessons",
 })
 
 # Five archetypes cover the 19 personas without enumerating each one.
@@ -3117,7 +3135,19 @@ async def synthesize_conclusion(
             "請以 personas 在事後檢討輪 (latest round) 的最終立場為主，"
             "整理出修正後的結論。\n"
             "**仍然只能輸出合法 JSON**，不要回答事後檢討提示中的問題、"
-            "不要在 JSON 外加任何解說。"
+            "不要在 JSON 外加任何解說。\n"
+            "\n"
+            "**額外輸出 `lessons` 欄位**：在 conclusion JSON 內加入 "
+            '`"lessons": [...]` 陣列（最多 5 條），把這場事後檢討'
+            "學到的事拆成可重用的教訓供未來討論參考。每條 shape：\n"
+            "  - `category`：missed_sector | wrong_signal_weight | "
+            "missing_data | over_confidence | other 五選一\n"
+            "  - `lesson_text`：**繁體中文 ≤ 80 字**，具體點名訊號 / 產業 / "
+            "股票，避免「下次要更小心」這類空話\n"
+            "  - `related_symbols`：教訓涉及的股票代號（陣列，可空）\n"
+            "  - `missed_winners`：漲幅榜上錯過的代號（陣列，可空）\n"
+            "若這場討論沒有具體可重用的教訓（純粹是 random walk），"
+            "回傳空陣列 `\"lessons\": []`，不要硬擠。"
         )
 
     messages = [
@@ -3240,4 +3270,54 @@ async def synthesize_conclusion(
         discussion.verify_after_date = add_trading_days_estimate(anchor, 5)
     await db.commit()
     await db.refresh(discussion)
+
+    # Best-effort: extract structured lessons from the post-mortem
+    # synthesizer pass + persist them for the learning loop. Only
+    # fires under post-mortem mode (the prompt's `lessons` ask is
+    # only included then) and only for backtest discussions
+    # (`as_of_date` carries the anchor needed for time-decay
+    # scoring). Failure here is non-fatal — the conclusion is
+    # already committed; missing a write just means this run
+    # didn't contribute to the learning archive.
+    if has_post_mortem and discussion.as_of_date is not None:
+        try:
+            raw_obj = _extract_lessons_payload(assembled)
+            if raw_obj:
+                from services.discussion_lesson_service import (
+                    extract_and_persist_lessons,
+                )
+                await extract_and_persist_lessons(
+                    db,
+                    discussion_id=discussion.id,
+                    owner_user_id=discussion.owner_id,
+                    market=discussion.market,
+                    as_of_date=discussion.as_of_date,
+                    lessons_payload=raw_obj,
+                )
+        except Exception as exc:
+            log.warning("discussion.lessons.persist_failed",
+                        extra={"id": str(discussion.id),
+                               "error": str(exc)})
     return conclusion
+
+
+def _extract_lessons_payload(raw: str) -> Any:
+    """Re-parse the synthesizer's raw output to surface the optional
+    `lessons` array. `_safe_conclusion` strips it out (only the
+    five canonical fields are kept) so we re-run the lenient parse
+    here. Returns the raw `lessons` value (`list` when the model
+    obeyed; anything else is filtered downstream)."""
+    try:
+        cleaned = _strip_code_fence(strip_think_blocks(raw))
+        data = _loads_lenient(cleaned)
+    except (json.JSONDecodeError, ValueError):
+        salvaged = _extract_json_object(cleaned) if cleaned else None
+        if salvaged is None:
+            return None
+        try:
+            data = _loads_lenient(salvaged)
+        except (json.JSONDecodeError, ValueError):
+            return None
+    if not isinstance(data, dict):
+        return None
+    return data.get("lessons")

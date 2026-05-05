@@ -52,6 +52,8 @@ from api.discussion.schemas import (
     PostMortemGainerOut,
     PostMortemRecommendedPerformanceOut,
     PostMortemResponse,
+    PostMortemVerdictOut,
+    PostMortemWinnerOut,
     ScoreboardResponse,
     ScoreboardRow,
     TurnResponse,
@@ -684,12 +686,58 @@ async def run_post_mortem(
                    "window — archive may not reach this date.",
         )
 
-    try:
-        turn = await discussion_service.inject_user_message(
-            db, row, content=payload.prompt_text,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    verdict = payload.verdict
+    verdict_out = PostMortemVerdictOut(
+        status=verdict.status,
+        threshold_pct=verdict.threshold_pct,
+        window_days=verdict.window_days,
+        winners=[
+            PostMortemWinnerOut(
+                symbol=w.symbol,
+                peak_pct=w.peak_pct,
+                peak_day=w.peak_day.isoformat(),
+            )
+            for w in verdict.winners
+        ],
+        best_pct=verdict.best_pct,
+        reason=verdict.reason,
+    ) if verdict is not None else None
+
+    # Win-skip: recommendation already cleared the threshold so we
+    # short-circuit the inject + new round entirely. UI surfaces a
+    # success badge based on `status="skipped"` + `verdict.winners`.
+    skipped = verdict is not None and verdict.status == "win"
+    if skipped:
+        try:
+            from middleware.metrics import POST_MORTEM_SKIPPED_TOTAL
+            POST_MORTEM_SKIPPED_TOTAL.labels(market=row.market).inc()
+        except Exception:
+            pass
+        injected_turn_id: int | None = None
+    else:
+        if not payload.prompt_text:
+            # `insufficient_data` with non-empty trading_days (rare:
+            # window > 0 but no recommended symbols had bars) — bail
+            # so we don't inject an empty user_input turn.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    verdict.reason if verdict is not None
+                    else "Cannot build post-mortem prompt"
+                ),
+            )
+        try:
+            turn = await discussion_service.inject_user_message(
+                db, row, content=payload.prompt_text,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        injected_turn_id = turn.id
+        try:
+            from middleware.metrics import POST_MORTEM_RAN_TOTAL
+            POST_MORTEM_RAN_TOTAL.labels(market=row.market).inc()
+        except Exception:
+            pass
 
     # PR #273: serialise the new D1-D5 shape. Back-compat aliases
     # `next_trading_day` + `top_gainers` populated from D1's
@@ -742,8 +790,52 @@ async def run_post_mortem(
             )
             for g in d1_gainers
         ],
-        injected_turn_id=turn.id,
+        status="skipped" if skipped else "ran",
+        verdict=verdict_out,
+        injected_turn_id=injected_turn_id,
     )
+
+
+# ── Lessons CRUD (learning loop, PR #learning-mechanism) ─────────
+
+
+@router.get("/lessons")
+async def list_lessons(
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    market: str | None = None,
+    limit: int = 50,
+):
+    """Return the caller's most-recent post-mortem lessons. Owner-
+    scoped — admin gets their own bucket only. Drives the
+    DiscussionLessonsCard in AdminPage and the per-discussion
+    "本次學到的事" collapsible."""
+    from services import discussion_lesson_service as svc
+    rows = await svc.list_recent_lessons(
+        db,
+        owner_user_id=_coerce_owner_uuid(user),
+        market=market,
+        limit=limit,
+    )
+    return [svc.lesson_to_dict(r) for r in rows]
+
+
+@router.delete("/lessons/{lesson_id}", status_code=204)
+async def delete_lesson(
+    lesson_id: int,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Owner-scoped hard delete. 404 when the row doesn't exist
+    or belongs to another user — silent rejection prevents
+    enumeration via the timing channel."""
+    from services import discussion_lesson_service as svc
+    deleted = await svc.delete_lesson(
+        db, lesson_id=lesson_id,
+        owner_user_id=_coerce_owner_uuid(user),
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="lesson not found")
 
 
 # ── Backtest sweep (PR #274) ─────────────────────────────────────

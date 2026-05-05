@@ -431,3 +431,214 @@ def test_daily_gainers_to_dict_serialises_block():
     out = svc.daily_gainers_to_dict(block)
     assert out["trading_day"] == "2026-03-24"
     assert out["gainers"][0]["symbol"] == "2330"
+
+
+# ── evaluate_recommendation_outcome ──────────────────────────────
+
+
+def _perf(symbol: str, days_pct: list[tuple[date, float]]) -> svc.RecommendedPerformance:
+    return svc.RecommendedPerformance(
+        symbol=symbol, base_close=100.0,
+        days=[svc.DayPerformance(d, 100.0 * (1 + p / 100), p) for d, p in days_pct],
+    )
+
+
+_W_DAYS = [
+    date(2026, 3, 24), date(2026, 3, 25), date(2026, 3, 26),
+    date(2026, 3, 27), date(2026, 3, 28),
+]
+
+
+def test_evaluate_outcome_marks_win_when_any_symbol_peak_reaches_threshold():
+    """One symbol clears 3% peak → status=win; the other's miss
+    doesn't downgrade the verdict (any-symbol semantic)."""
+    rec = [
+        _perf("2330", [(_W_DAYS[0], 1.0), (_W_DAYS[1], 5.0), (_W_DAYS[2], 2.0)]),
+        _perf("2454", [(_W_DAYS[0], 0.5), (_W_DAYS[1], -2.0)]),
+    ]
+    v = svc.evaluate_recommendation_outcome(
+        rec, threshold_pct=3.0, window_days=5, trading_days=_W_DAYS,
+    )
+    assert v.status == "win"
+    assert v.best_pct == 5.0
+    assert {w.symbol for w in v.winners} == {"2330"}
+    assert v.winners[0].peak_day == _W_DAYS[1]
+
+
+def test_evaluate_outcome_marks_miss_when_all_peaks_below_threshold():
+    """All recs peak below 3% → status=miss; best_pct still surfaced
+    so the operator can see how close it came."""
+    rec = [
+        _perf("2330", [(_W_DAYS[0], 1.0), (_W_DAYS[1], 1.5)]),
+        _perf("2454", [(_W_DAYS[0], -0.5), (_W_DAYS[1], 2.5)]),
+    ]
+    v = svc.evaluate_recommendation_outcome(
+        rec, threshold_pct=3.0, window_days=5, trading_days=_W_DAYS,
+    )
+    assert v.status == "miss"
+    assert v.winners == []
+    assert v.best_pct == 2.5
+
+
+def test_evaluate_outcome_marks_insufficient_data_with_empty_window():
+    v = svc.evaluate_recommendation_outcome(
+        [], threshold_pct=3.0, window_days=5, trading_days=[],
+    )
+    assert v.status == "insufficient_data"
+    assert v.best_pct is None
+
+
+def test_evaluate_outcome_marks_insufficient_data_with_no_recs_having_bars():
+    """Trading days resolved but every recommendation lacks bars
+    inside the window → can't grade → insufficient_data."""
+    v = svc.evaluate_recommendation_outcome(
+        [], threshold_pct=3.0, window_days=5, trading_days=_W_DAYS,
+    )
+    assert v.status == "insufficient_data"
+
+
+def test_evaluate_outcome_window_narrows_horizon():
+    """Peak that lands on D5 doesn't count when the runtime window
+    is set to 3 days — important for shorter horizon backtests."""
+    rec = [_perf("2330", [
+        (_W_DAYS[0], 0.5), (_W_DAYS[1], 0.5), (_W_DAYS[2], 1.0),
+        (_W_DAYS[3], 5.0),
+    ])]
+    v = svc.evaluate_recommendation_outcome(
+        rec, threshold_pct=3.0, window_days=3, trading_days=_W_DAYS,
+    )
+    assert v.status == "miss"
+    assert v.best_pct == 1.0
+
+
+# ── format_post_mortem_miss_prompt ───────────────────────────────
+
+
+def test_miss_prompt_omits_self_eval_section_and_includes_threshold_note():
+    """The miss branch removes the A self-eval block — personas already
+    lost, asking them to re-grade adds noise. The prompt must instead
+    surface the threshold + best_pct so the negative framing is honest."""
+    days = [_W_DAYS[0], _W_DAYS[1]]
+    daily = [svc.DailyGainers(
+        trading_day=days[0],
+        gainers=[svc.GainerRow("6505", 9.83, 110.0, 100.16, days[0])],
+    )]
+    verdict = svc.OutcomeVerdict(
+        status="miss",
+        threshold_pct=3.0, window_days=5, winners=[],
+        best_pct=1.5, reason="all peaks below threshold",
+    )
+    text = svc.format_post_mortem_miss_prompt(
+        as_of=date(2026, 3, 23),
+        trading_days=days,
+        daily_top_gainers=daily,
+        recommended_symbols=["2330"],
+        verdict=verdict,
+    )
+    # Negative framing
+    assert "事後檢討 — 漲幅榜複盤" in text
+    assert "+1.50%" in text
+    assert "未達 3%" in text
+    # Section A explicitly removed in the miss branch
+    assert "A. 你的推薦 D1-D5 自評" not in text
+    # B-equivalent (winners) still present
+    assert "6505" in text
+    # Reflection prompts focus on "missed", not self-grading
+    assert "缺漏的主題" in text or "漏看" in text
+    assert "自評勝負" not in text
+
+
+# ── build_post_mortem_message routing (verdict propagation) ──────
+
+
+@pytest.mark.asyncio
+async def test_build_post_mortem_message_returns_skip_payload_on_win(
+    db_session: AsyncSession,
+):
+    """When the win threshold is met, build_post_mortem_message
+    returns trading_days + verdict but an EMPTY prompt_text so the
+    caller short-circuits the inject + new-round chain."""
+    from datetime import datetime as _dt
+    from uuid import uuid4
+
+    base = date(2026, 3, 23)
+    # 1 entry bar + 5 future days (Mon-Fri)
+    days = [date(2026, 3, 24), date(2026, 3, 25), date(2026, 3, 26),
+            date(2026, 3, 27), date(2026, 3, 30)]
+    db_session.add_all([
+        _bar("2330", base, 100.0),
+        _bar("2330", days[0], 102.0),
+        _bar("2330", days[1], 108.0),    # +8 % vs entry → clear win
+        _bar("2330", days[2], 105.0),
+        _bar("2330", days[3], 103.0),
+        _bar("2330", days[4], 99.0),
+    ])
+    await db_session.commit()
+
+    fake_disc = type("Disc", (), {})()
+    fake_disc.id = uuid4()
+    fake_disc.owner_id = uuid4()
+    fake_disc.market = "TW"
+    fake_disc.as_of_date = base
+    fake_disc.conclusion = {"recommended_symbols": ["2330"]}
+    fake_disc.created_at = _dt.now()
+
+    payload = await svc.build_post_mortem_message(db_session, fake_disc)
+    assert payload.verdict is not None
+    assert payload.verdict.status == "win"
+    assert payload.prompt_text == ""
+    assert payload.trading_days   # non-empty
+
+
+@pytest.mark.asyncio
+async def test_build_post_mortem_message_returns_miss_prompt_when_below_threshold(
+    db_session: AsyncSession,
+):
+    """All recs peak below 3% → prompt_text is the miss-branch
+    prompt (without the self-eval section)."""
+    from datetime import datetime as _dt
+    from uuid import uuid4
+
+    base = date(2026, 3, 23)
+    days = [date(2026, 3, 24), date(2026, 3, 25), date(2026, 3, 26),
+            date(2026, 3, 27), date(2026, 3, 30)]
+    db_session.add_all([
+        _bar("2330", base, 100.0),
+        _bar("2330", days[0], 100.5),
+        _bar("2330", days[1], 101.0),
+        _bar("2330", days[2], 99.0),
+        _bar("2330", days[3], 98.0),
+        _bar("2330", days[4], 97.0),
+    ])
+    await db_session.commit()
+
+    fake_disc = type("Disc", (), {})()
+    fake_disc.id = uuid4()
+    fake_disc.owner_id = uuid4()
+    fake_disc.market = "TW"
+    fake_disc.as_of_date = base
+    fake_disc.conclusion = {"recommended_symbols": ["2330"]}
+    fake_disc.created_at = _dt.now()
+
+    payload = await svc.build_post_mortem_message(db_session, fake_disc)
+    assert payload.verdict is not None
+    assert payload.verdict.status == "miss"
+    assert payload.prompt_text
+    assert "事後檢討 — 漲幅榜複盤" in payload.prompt_text
+    assert "A. 你的推薦 D1-D5 自評" not in payload.prompt_text
+
+
+# ── verdict serialiser ───────────────────────────────────────────
+
+
+def test_verdict_to_dict_round_trip():
+    v = svc.OutcomeVerdict(
+        status="win", threshold_pct=3.0, window_days=5,
+        winners=[svc.WinnerEntry("2330", 5.0, _W_DAYS[1])],
+        best_pct=5.0, reason="ok",
+    )
+    out = svc.verdict_to_dict(v)
+    assert out["status"] == "win"
+    assert out["winners"][0]["symbol"] == "2330"
+    assert out["winners"][0]["peak_day"] == "2026-03-25"
+    assert out["best_pct"] == 5.0

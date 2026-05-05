@@ -608,6 +608,7 @@ async def test_build_market_context_initialises_default_shape(
         "upcoming_events_calendar",  # PR #284
         "broker_concentration",      # PR #285
         "overseas_indicators",       # PR #269
+        "recent_lessons",            # learning loop
         "errors",
     }
 

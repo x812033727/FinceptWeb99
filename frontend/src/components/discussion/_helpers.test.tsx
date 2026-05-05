@@ -711,6 +711,76 @@ describe("runPostMortemFlowSteps", () => {
     );
   });
 
+  it("calls onSkipped + skips round/conclude when post-mortem returns status=skipped", async () => {
+    /* Learning-loop addition: when the recommendation already cleared
+       the win threshold the backend short-circuits — no critique
+       round is needed. The flow helper must respect that and stop
+       firing round + conclude, while letting the page surface a
+       success badge via onSkipped. */
+    const runPostMortem = vi.fn(async () => ({
+      next_trading_day: "2026-03-24",
+      top_gainers: [],
+      status: "skipped" as const,
+      verdict: {
+        status: "win" as const,
+        threshold_pct: 3.0,
+        window_days: 5,
+        winners: [{ symbol: "2330", peak_pct: 5.2, peak_day: "2026-03-26" }],
+        best_pct: 5.2,
+        reason: "ok",
+      },
+      injected_turn_id: null,
+    }));
+    const runRound = vi.fn(async () => undefined);
+    const runConclude = vi.fn();
+    const onSkipped = vi.fn();
+
+    await runPostMortemFlowSteps({
+      canStart: () => true,
+      runPostMortem,
+      runRound,
+      runConclude,
+      onError: vi.fn(),
+      onSkipped,
+      defer: syncDefer,
+    });
+
+    expect(runPostMortem).toHaveBeenCalledOnce();
+    expect(runRound).not.toHaveBeenCalled();
+    expect(runConclude).not.toHaveBeenCalled();
+    expect(onSkipped).toHaveBeenCalledOnce();
+    expect(onSkipped.mock.calls[0][0]?.best_pct).toBe(5.2);
+  });
+
+  it("falls through to the run/conclude chain when status is missing or 'ran'", async () => {
+    /* Older backends (pre-learning-loop) omit the status field;
+       newer backends emit "ran" explicitly. Both paths must run
+       the full 3-step chain. */
+    const runPostMortem = vi.fn(async () => ({
+      next_trading_day: "2026-03-24",
+      top_gainers: [],
+      injected_turn_id: 42,
+      // no status field at all
+    }));
+    const runRound = vi.fn(async () => undefined);
+    const runConclude = vi.fn();
+    const onSkipped = vi.fn();
+
+    await runPostMortemFlowSteps({
+      canStart: () => true,
+      runPostMortem,
+      runRound,
+      runConclude,
+      onError: vi.fn(),
+      onSkipped,
+      defer: syncDefer,
+    });
+
+    expect(runRound).toHaveBeenCalledOnce();
+    expect(runConclude).toHaveBeenCalledOnce();
+    expect(onSkipped).not.toHaveBeenCalled();
+  });
+
   it("defers conclude through the defer hook (real setTimeout in production)", async () => {
     /* Production wiring uses `setTimeout(fn, 0)` so React state
        updates from runRound flush before the synthesizer fetch.

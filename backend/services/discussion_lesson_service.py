@@ -1,0 +1,389 @@
+"""Persistence + retrieval for the discussion learning loop.
+
+Each post-mortem (verdict=miss) re-synthesizer pass extracts a small
+list of structured "what we got wrong" lessons. They land in
+`discussion_lessons` (migration 0040) and are read back into the
+ctx of subsequent discussions on the same market via
+`fetch_relevant_lessons` so personas see prior failures alongside
+the live signals.
+
+Quality gates at write time
+---------------------------
+  - `len(lesson_text.strip()) >= 20` — drop fragments that don't carry
+    enough signal to be useful in a future prompt.
+  - `len(lesson_text) <= 200` — truncate verbose LLM emissions so a
+    single oversized lesson can't blow the round-1 token budget.
+  - `lesson_text_hash` dedup — if the same exact text was persisted
+    for the same owner within the last 60 days, drop the duplicate
+    (pointlessly re-injecting identical advice trains the personas to
+    over-anchor on it).
+  - Hard cap of 5 lessons written per discussion so an over-eager
+    synthesizer can't dump 30 wandering takeaways in one pass.
+
+Backtest correctness
+--------------------
+  `fetch_relevant_lessons` filters by `as_of_date <= anchor` (where
+  anchor is `Discussion.as_of_date` for backtest mode, or `None` for
+  live which matches everything). Without this filter, sweep
+  discussions anchored at 2025-06-01 would see lessons learned
+  AFTER that date — using future knowledge to grade past
+  decisions, invalidating the entire backtest signal.
+
+Score formula
+-------------
+  `recency = exp(-age_days * ln(2) / halflife)` * symbol_boost
+  where halflife defaults to 60 days (admin-tunable via runtime
+  config) and symbol_boost = 1.5 when `focus_symbols ∩
+  related_symbols` is non-empty.
+
+  Anchor for `age_days` is `discussion.as_of_date` (backtest) or
+  today (live). Using `lesson.as_of_date` rather than `created_at`
+  for the lesson side means freshness is governed by when the
+  lesson's event occurred, not when the synthesizer happened to
+  emit it — important if you backfill lessons retroactively.
+"""
+from __future__ import annotations
+
+import hashlib
+import logging
+import math
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
+
+from sqlalchemy import and_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from config import settings
+from models.discussion_lesson import DiscussionLesson
+
+log = logging.getLogger(__name__)
+
+# Five categories the synthesizer must constrain itself to. Anything
+# outside this set is coerced to "other" at write time.
+ALLOWED_CATEGORIES: frozenset[str] = frozenset({
+    "missed_sector",
+    "wrong_signal_weight",
+    "missing_data",
+    "over_confidence",
+    "other",
+})
+
+_MIN_LESSON_LEN = 20
+_MAX_LESSON_LEN = 200
+_MAX_LESSONS_PER_DISCUSSION = 5
+_DEDUP_WINDOW_DAYS = 60
+
+
+@dataclass(frozen=True)
+class LessonSummary:
+    """Compact view of a lesson surfaced into the ctx prompt."""
+    as_of_date: str        # ISO
+    category: str
+    lesson_text: str
+    related_symbols: list[str]
+    missed_winners: list[str]
+
+
+def _hash_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _normalize_category(raw: Any) -> str:
+    if not isinstance(raw, str):
+        return "other"
+    cleaned = raw.strip().lower()
+    return cleaned if cleaned in ALLOWED_CATEGORIES else "other"
+
+
+def _normalize_symbols(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for s in raw:
+        if not isinstance(s, str):
+            continue
+        s = s.strip()
+        if not s or len(s) > 32:
+            continue
+        if s not in out:
+            out.append(s)
+    return out[:20]
+
+
+async def extract_and_persist_lessons(
+    db: AsyncSession,
+    *,
+    discussion_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    market: str,
+    as_of_date: date,
+    lessons_payload: Any,
+) -> list[DiscussionLesson]:
+    """Parse + persist lessons from a synthesizer payload.
+
+    `lessons_payload` is whatever the synthesizer emitted under the
+    `lessons` key — defensively assumed to be `list[dict]` but
+    handled gracefully for any other shape (None / dict / str all
+    return [] silently). Quality-gated per the module docstring.
+
+    Returns the list of newly-persisted rows (0..5). Caller can use
+    the count for telemetry but does not need to flush — this
+    function commits.
+    """
+    if not isinstance(lessons_payload, list) or not lessons_payload:
+        return []
+
+    written: list[DiscussionLesson] = []
+    seen_hashes_in_payload: set[str] = set()
+    dedup_threshold = datetime.now(UTC) - timedelta(days=_DEDUP_WINDOW_DAYS)
+
+    for raw in lessons_payload:
+        if len(written) >= _MAX_LESSONS_PER_DISCUSSION:
+            break
+        if not isinstance(raw, dict):
+            continue
+        text_raw = raw.get("lesson_text") or ""
+        if not isinstance(text_raw, str):
+            continue
+        text = text_raw.strip()
+        if len(text) < _MIN_LESSON_LEN:
+            continue
+        if len(text) > _MAX_LESSON_LEN:
+            text = text[:_MAX_LESSON_LEN]
+
+        h = _hash_text(text)
+        if h in seen_hashes_in_payload:
+            continue
+        seen_hashes_in_payload.add(h)
+
+        # DB-side dedup: same owner, same hash, written in the last
+        # 60 days. Best-effort — any DB hiccup falls through to write
+        # (a duplicated lesson is annoying but not corrupting).
+        try:
+            existing = await db.scalar(
+                select(DiscussionLesson.id).where(
+                    DiscussionLesson.owner_user_id == owner_user_id,
+                    DiscussionLesson.lesson_text_hash == h,
+                    DiscussionLesson.created_at >= dedup_threshold,
+                ).limit(1)
+            )
+        except Exception as exc:
+            log.debug("discussion_lessons.dedup_check_failed",
+                      extra={"error": str(exc)})
+            existing = None
+        if existing is not None:
+            try:
+                from middleware.metrics import LESSONS_DEDUP_SKIPPED_TOTAL
+                LESSONS_DEDUP_SKIPPED_TOTAL.labels(market=market).inc()
+            except Exception:
+                pass
+            continue
+
+        row = DiscussionLesson(
+            discussion_id=discussion_id,
+            owner_user_id=owner_user_id,
+            market=market,
+            as_of_date=as_of_date,
+            category=_normalize_category(raw.get("category")),
+            lesson_text=text,
+            lesson_text_hash=h,
+            related_symbols=_normalize_symbols(raw.get("related_symbols")),
+            missed_winners=_normalize_symbols(raw.get("missed_winners")),
+        )
+        db.add(row)
+        written.append(row)
+
+    if not written:
+        return []
+
+    try:
+        await db.commit()
+    except Exception as exc:
+        log.warning("discussion_lessons.commit_failed: %s", exc)
+        await db.rollback()
+        return []
+
+    try:
+        from middleware.metrics import LESSONS_PERSISTED_TOTAL
+        for row in written:
+            LESSONS_PERSISTED_TOTAL.labels(
+                market=market, category=row.category,
+            ).inc()
+    except Exception:
+        pass
+
+    return written
+
+
+# ── retrieval ────────────────────────────────────────────────────
+
+
+async def _resolve_halflife(db: AsyncSession) -> int:
+    try:
+        from services.runtime_config_service import get_int as _get_int
+        return await _get_int(db, "LESSONS_DECAY_HALFLIFE_DAYS")
+    except Exception:
+        return settings.LESSONS_DECAY_HALFLIFE_DAYS
+
+
+def _score(
+    lesson: DiscussionLesson, *,
+    anchor: date, focus_symbols: set[str], halflife_days: int,
+) -> float:
+    age_days = max(0, (anchor - lesson.as_of_date).days)
+    half = max(1, halflife_days)
+    recency = math.exp(-age_days * math.log(2) / half)
+    related = set(lesson.related_symbols or [])
+    boost = 1.5 if focus_symbols and (focus_symbols & related) else 1.0
+    return recency * boost
+
+
+def _to_summary(lesson: DiscussionLesson) -> LessonSummary:
+    return LessonSummary(
+        as_of_date=lesson.as_of_date.isoformat(),
+        category=lesson.category,
+        lesson_text=lesson.lesson_text[:_MAX_LESSON_LEN],
+        related_symbols=list(lesson.related_symbols or []),
+        missed_winners=list(lesson.missed_winners or []),
+    )
+
+
+async def fetch_relevant_lessons(
+    db: AsyncSession,
+    *,
+    owner_user_id: uuid.UUID,
+    market: str,
+    focus_symbols: set[str] | None = None,
+    discussion_as_of: date | None = None,
+    limit: int = 5,
+) -> list[LessonSummary]:
+    """Owner+market scoped fetch with backtest-safe time filter.
+
+    `discussion_as_of` is the anchor. When set, only lessons with
+    `as_of_date <= anchor` are returned (so a backtest discussion
+    can't peek at lessons learned in its future); when None
+    (live mode) the filter is bypassed.
+
+    Returns up to `limit` `LessonSummary` rows ranked by the
+    time-decay + symbol-boost score, descending.
+    """
+    if limit <= 0 or owner_user_id is None or not market:
+        return []
+
+    halflife = await _resolve_halflife(db)
+    anchor = discussion_as_of or datetime.now(UTC).date()
+
+    # Cap candidate fan-out to avoid pathological growth of
+    # discussion_lessons making the per-discussion fetch slow.
+    # 200 = ~6 months of typical usage; well above what we'd ever
+    # want to inject.
+    candidate_window = max(limit * 20, 50)
+
+    conditions = [
+        DiscussionLesson.owner_user_id == owner_user_id,
+        DiscussionLesson.market == market,
+    ]
+    if discussion_as_of is not None:
+        conditions.append(DiscussionLesson.as_of_date <= discussion_as_of)
+
+    stmt = (
+        select(DiscussionLesson)
+        .where(and_(*conditions))
+        .order_by(DiscussionLesson.as_of_date.desc())
+        .limit(candidate_window)
+    )
+    rows = (await db.scalars(stmt)).all()
+    if not rows:
+        return []
+
+    focus = focus_symbols or set()
+    scored: list[tuple[float, DiscussionLesson]] = []
+    for lesson in rows:
+        scored.append((
+            _score(
+                lesson, anchor=anchor, focus_symbols=focus,
+                halflife_days=halflife,
+            ),
+            lesson,
+        ))
+    scored.sort(key=lambda t: t[0], reverse=True)
+    return [_to_summary(lesson) for _score_val, lesson in scored[:limit]]
+
+
+def summary_to_dict(s: LessonSummary) -> dict[str, Any]:
+    return {
+        "as_of_date":     s.as_of_date,
+        "category":       s.category,
+        "lesson_text":    s.lesson_text,
+        "related_symbols": list(s.related_symbols),
+        "missed_winners":  list(s.missed_winners),
+    }
+
+
+# ── admin CRUD ───────────────────────────────────────────────────
+
+
+async def list_recent_lessons(
+    db: AsyncSession,
+    *,
+    owner_user_id: uuid.UUID,
+    market: str | None = None,
+    limit: int = 50,
+) -> list[DiscussionLesson]:
+    """Admin / owner readback for the DiscussionLessonsCard. Scoped
+    to the requesting owner; admin sees their own bucket only (a
+    future enhancement could expose an `all_users` toggle when role
+    == admin). Most-recent first."""
+    conditions = [DiscussionLesson.owner_user_id == owner_user_id]
+    if market:
+        conditions.append(DiscussionLesson.market == market)
+    stmt = (
+        select(DiscussionLesson)
+        .where(and_(*conditions))
+        .order_by(DiscussionLesson.created_at.desc())
+        .limit(min(max(limit, 1), 200))
+    )
+    return list((await db.scalars(stmt)).all())
+
+
+async def delete_lesson(
+    db: AsyncSession,
+    *,
+    lesson_id: int,
+    owner_user_id: uuid.UUID,
+) -> bool:
+    """Owner-scoped hard delete. Returns True iff a row was removed.
+    No-op (returns False) when the row belongs to another user or
+    doesn't exist — silently ignoring foreign deletes prevents
+    accidental cross-owner mutation through enumeration."""
+    row = await db.scalar(
+        select(DiscussionLesson).where(
+            and_(
+                DiscussionLesson.id == lesson_id,
+                DiscussionLesson.owner_user_id == owner_user_id,
+            )
+        )
+    )
+    if row is None:
+        return False
+    await db.delete(row)
+    await db.commit()
+    return True
+
+
+def lesson_to_dict(row: DiscussionLesson) -> dict[str, Any]:
+    """Admin/list serialisation. Includes the row id so the UI can
+    issue deletes."""
+    return {
+        "id":              row.id,
+        "discussion_id":   str(row.discussion_id),
+        "market":          row.market,
+        "as_of_date":      row.as_of_date.isoformat(),
+        "category":        row.category,
+        "lesson_text":     row.lesson_text,
+        "related_symbols": list(row.related_symbols or []),
+        "missed_winners":  list(row.missed_winners or []),
+        "created_at":      row.created_at.isoformat() if row.created_at else None,
+    }

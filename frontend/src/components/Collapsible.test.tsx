@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { renderHook, act, render, screen, fireEvent } from "@testing-library/react";
-import { CollapsibleHeader, useCollapsible } from "./Collapsible";
+import { CollapsibleHeader } from "./Collapsible";
+import { useCollapsible } from "@/hooks/useCollapsible";
 
 beforeEach(() => {
   localStorage.clear();

@@ -41,7 +41,8 @@ vi.mock("@/store/themeStore", () => ({
     selector({ theme: "dark", toggle: themeToggleMock }),
 }));
 
-import { CommandPaletteProvider, useCommandPalette } from "./CommandPalette";
+import { CommandPaletteProvider } from "./CommandPalette";
+import { useCommandPalette } from "@/hooks/useCommandPalette";
 
 function Probe() {
   const { open, setOpen } = useCommandPalette();

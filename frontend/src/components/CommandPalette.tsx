@@ -1,7 +1,5 @@
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useState,
@@ -41,24 +39,11 @@ import {
   CommandShortcut,
 } from "@/components/ui/command";
 import { useSymbolSearch } from "@/hooks/useSymbolSearch";
+import { useCommandPalette, PaletteContext } from "@/hooks/useCommandPalette";
 import { prefetchPage } from "@/pageLoaders";
 import { useAuthStore } from "@/store/authStore";
 import { useThemeStore } from "@/store/themeStore";
 import { logout } from "@/lib/auth";
-
-interface PaletteContextValue {
-  open: boolean;
-  setOpen: (v: boolean) => void;
-  toggle: () => void;
-}
-
-const PaletteContext = createContext<PaletteContextValue | null>(null);
-
-export function useCommandPalette(): PaletteContextValue {
-  const ctx = useContext(PaletteContext);
-  if (!ctx) throw new Error("useCommandPalette must be used within <CommandPaletteProvider>");
-  return ctx;
-}
 
 export function CommandPaletteProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);

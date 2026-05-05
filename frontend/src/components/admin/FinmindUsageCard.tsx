@@ -11,7 +11,8 @@ import {
   YAxis,
 } from "recharts";
 
-import { CollapsibleHeader, useCollapsible } from "@/components/Collapsible";
+import { CollapsibleHeader } from "@/components/Collapsible";
+import { useCollapsible } from "@/hooks/useCollapsible";
 import api, { errorDetail } from "@/lib/api";
 
 /**

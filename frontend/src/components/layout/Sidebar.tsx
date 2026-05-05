@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { logout } from "@/lib/auth";
 import { useAuthStore } from "@/store/authStore";
-import { useCollapsible } from "@/components/Collapsible";
+import { useCollapsible } from "@/hooks/useCollapsible";
 import { prefetchPage } from "@/pageLoaders";
 import { cn } from "@/lib/utils";
 

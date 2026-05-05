@@ -1,5 +1,6 @@
 import { useCheckForUpdates, useTriggerUpdate, useVersion } from "@/hooks/useVersion";
-import { CollapsibleHeader, useCollapsible } from "@/components/Collapsible";
+import { CollapsibleHeader } from "@/components/Collapsible";
+import { useCollapsible } from "@/hooks/useCollapsible";
 
 export function SystemUpdateCard() {
   const { open, toggle } = useCollapsible("admin.system-update");

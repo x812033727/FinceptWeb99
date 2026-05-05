@@ -9,7 +9,7 @@ import BottomNav from "./BottomNav";
 import { useAlertSocket, useWsConnected } from "@/hooks/useWebSocket";
 import { useNotificationStore } from "@/store/notificationStore";
 import { useThemeStore } from "@/store/themeStore";
-import { useCommandPalette } from "@/components/CommandPalette";
+import { useCommandPalette } from "@/hooks/useCommandPalette";
 import {
   DropdownMenu,
   DropdownMenuContent,

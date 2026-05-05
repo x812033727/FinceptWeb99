@@ -9,7 +9,6 @@ want a separate `postgres_finmind` container at the database level).
 Exposed as `FinmindAsyncSessionLocal` so a stray import is a loud
 name collision rather than silently writing into the wrong database.
 """
-from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -22,26 +21,35 @@ _effective_url = finmind_settings.effective_database_url
 
 _engine_kwargs: dict = {"echo": finmind_settings.DEBUG}
 if not _effective_url.startswith("sqlite"):
-    _engine_kwargs.update(pool_pre_ping=True, pool_size=10, max_overflow=20)
-
-finmind_engine = create_async_engine(_effective_url, **_engine_kwargs)
-
+    # `pool_pre_ping=True` is unsafe with asyncpg when an ORM lazy-load
+    # triggers a connection checkout from a non-greenlet stack frame:
+    # the pre-ping calls `connection.ping()`, which on asyncpg needs to
+    # `await` the underlying coroutine via SQLAlchemy's greenlet bridge,
+    # and dies with `MissingGreenlet: greenlet_spawn has not been
+    # called` mid-backfill. Use `pool_recycle` instead — same goal
+    # (drop connections older than the typical idle timeout) without
+    # any per-checkout IO.
+    _engine_kwargs.update(pool_recycle=1800, pool_size=10, max_overflow=20)
 
 # When sharing the main DB, force every checked-out connection to
 # search the `finmind` schema first so unqualified table references
 # (`SELECT * FROM dataset_sources`) resolve to `finmind.dataset_sources`
-# rather than `public.dataset_sources`. Same trick the Alembic env uses;
-# kept here so app-runtime queries don't have to qualify either.
+# rather than `public.dataset_sources`. The previous approach used a
+# `@event.listens_for(sync_engine, "connect")` listener that ran a
+# `SET search_path` per fresh DBAPI connection, but that path is
+# unreliable on asyncpg — fresh connections sometimes started a query
+# before the listener's cursor had executed, which surfaced as
+# `relation "dataset_sources" does not exist` mid-backfill. asyncpg
+# accepts `server_settings` directly via `connect_args`, which it
+# applies as part of the connection handshake, so the schema lookup is
+# in place before the first query and never races.
 _schema = finmind_settings.schema
-if _schema is not None:
+if _schema is not None and not _effective_url.startswith("sqlite"):
+    _engine_kwargs.setdefault("connect_args", {})["server_settings"] = {
+        "search_path": f"{_schema},public",
+    }
 
-    @event.listens_for(finmind_engine.sync_engine, "connect")
-    def _set_finmind_search_path(dbapi_conn, _conn_record) -> None:
-        cur = dbapi_conn.cursor()
-        try:
-            cur.execute(f'SET search_path TO "{_schema}", public')
-        finally:
-            cur.close()
+finmind_engine = create_async_engine(_effective_url, **_engine_kwargs)
 
 FinmindAsyncSessionLocal = async_sessionmaker(
     bind=finmind_engine,

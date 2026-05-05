@@ -473,6 +473,32 @@ def _row_trading_calendar(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _row_total_return_index(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "market": row.get("market", "TWSE"),
+        "symbol": _to_str(row.get("symbol")),
+        "ts": _to_date(row.get("ts")),
+        "value": _to_decimal(row.get("value")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_par_value_change(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "symbol": _to_str(row.get("symbol")),
+        "ex_date": _to_date(row.get("ex_date")),
+        # FinMind's TaiwanStockParValueChange doesn't ship the actual
+        # old/new par values — only reference prices around the change.
+        # Surface `after_ref_close` as the post-change reference and
+        # leave the par columns None; operators needing those need a
+        # TPEx capital-change announcement join.
+        "old_par": None,
+        "new_par": None,
+        "reference_price": _to_decimal(row.get("reference_price")),
+        "source": row.get("source", "finmind"),
+    }
+
+
 def _row_day_trade(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "market": row.get("market", "TWSE"),
@@ -1339,6 +1365,35 @@ MAPPINGS: dict[str, DatasetMapping] = {
         pk_columns=("market", "ts"),
         extra={"market": "TWSE", "source": "finmind"},
         row_transform=_row_trading_calendar,
+    ),
+    "TaiwanStockTotalReturnIndex": DatasetMapping(
+        dataset_code="TaiwanStockTotalReturnIndex",
+        local_table="tw_total_return_index",
+        column_map={
+            "stock_id": "symbol",
+            "date": "ts",
+            "price": "value",
+        },
+        pk_columns=("market", "symbol", "ts"),
+        extra={"market": "TWSE", "source": "finmind"},
+        # FinMind requires `data_id` for this dataset — TWSE indices like
+        # 'TAIEX', 'OTC', 'FRMSA'. The market-wide flow (data_id="") gets
+        # HTTP 400. Operators must invoke via `backfill --dataset
+        # TaiwanStockTotalReturnIndex --symbols-file <indices.txt>` or
+        # set per_symbol=True in the catalog with an indices universe.
+        row_transform=_row_total_return_index,
+    ),
+    "TaiwanStockParValueChange": DatasetMapping(
+        dataset_code="TaiwanStockParValueChange",
+        local_table="tw_par_value_change",
+        column_map={
+            "stock_id": "symbol",
+            "date": "ex_date",
+            "after_ref_close": "reference_price",
+        },
+        pk_columns=("symbol", "ex_date"),
+        extra={"source": "finmind"},
+        row_transform=_row_par_value_change,
     ),
 }
 

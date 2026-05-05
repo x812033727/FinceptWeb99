@@ -452,3 +452,279 @@ async def test_persist_scoreboard_backtest_writes_anchor_aligned_closes(
         1000, 1010, 1005, 1020, 1015,
     ]
     assert refreshed.day1_open_prices == {"2454": 995.0}
+
+
+# ── PR-C1: Brier score + reliability buckets ────────────────────────
+
+
+def _disc_for_brier(
+    *,
+    recommendations: list[dict],
+    daily: dict[str, list[float | None]],
+    opens: dict[str, float],
+) -> Discussion:
+    """Lightweight Discussion stub for compute_brier_for_discussion
+    tests — no DB session needed since the function reads off the
+    in-memory ORM instance."""
+    return Discussion(
+        id=uuid.uuid4(),
+        owner_id=uuid.uuid4(),
+        topic="t", rules="r",
+        persona_ids=["a"],
+        status="done",
+        current_round=1,
+        conclusion={
+            "recommended_symbols": [r["symbol"] for r in recommendations],
+            "recommendations": recommendations,
+            "reasoning": "x", "risks": [],
+            "time_horizon": "short_term",
+            "consensus_score": 0.5,
+        },
+        daily_close_prices=daily,
+        day1_open_prices=opens,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+
+
+def test_brier_basic_textbook_example():
+    """Conf 0.8, outcome 1 (peak ≥ threshold) → loss = (0.8 - 1)² = 0.04."""
+    d = _disc_for_brier(
+        recommendations=[{"symbol": "2330", "confidence": 0.8}],
+        # peak D1-D5 = (110 - 100) / 100 = 10% > threshold 5% → outcome 1
+        daily={"2330": [110.0, 105.0, 102.0, 108.0, 109.0]},
+        opens={"2330": 100.0},
+    )
+    out = discussion_scoreboard_service.compute_brier_for_discussion(d)
+    assert out is not None
+    assert out["brier_score"] == pytest.approx(0.04, abs=1e-6)
+    assert out["samples"] == 1
+    assert out["outcome_vector"][0]["outcome_binary"] == 1
+
+
+def test_brier_handles_outcome_zero_when_below_threshold():
+    """Conf 0.7, outcome 0 (peak < threshold) → loss = 0.49."""
+    d = _disc_for_brier(
+        recommendations=[{"symbol": "2330", "confidence": 0.7}],
+        # peak = 2% < 5% → outcome 0
+        daily={"2330": [101.0, 102.0, 100.5, 100.0, 99.5]},
+        opens={"2330": 100.0},
+    )
+    out = discussion_scoreboard_service.compute_brier_for_discussion(d)
+    assert out is not None
+    assert out["brier_score"] == pytest.approx(0.49, abs=1e-6)
+    assert out["outcome_vector"][0]["outcome_binary"] == 0
+
+
+def test_brier_averages_across_multiple_symbols():
+    d = _disc_for_brier(
+        recommendations=[
+            {"symbol": "A", "confidence": 0.8},   # outcome 1, loss 0.04
+            {"symbol": "B", "confidence": 0.3},   # outcome 0, loss 0.09
+        ],
+        daily={
+            "A": [110.0, 105.0, 102.0, 108.0, 109.0],
+            "B": [101.0, 102.0, 100.5, 100.0, 99.5],
+        },
+        opens={"A": 100.0, "B": 100.0},
+    )
+    out = discussion_scoreboard_service.compute_brier_for_discussion(d)
+    assert out is not None
+    # mean of (0.04, 0.09) = 0.065
+    assert out["brier_score"] == pytest.approx(0.065, abs=1e-6)
+    assert out["samples"] == 2
+
+
+def test_brier_returns_none_when_recommendations_missing():
+    """Pre-PR-C0 conclusion that bypassed the parser fallback —
+    no recommendations means nothing to score against."""
+    d = Discussion(
+        id=uuid.uuid4(), owner_id=uuid.uuid4(),
+        topic="t", rules="r", persona_ids=["a"],
+        status="done", current_round=1,
+        conclusion={"recommended_symbols": ["2330"]},   # no 'recommendations'
+        daily_close_prices={"2330": [110.0] * 5},
+        day1_open_prices={"2330": 100.0},
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    assert discussion_scoreboard_service.compute_brier_for_discussion(d) is None
+
+
+def test_brier_returns_none_when_no_resolved_symbols():
+    """Window completely unresolved (closes all None) → no samples
+    contribute, so the function returns None rather than a Brier of 0."""
+    d = _disc_for_brier(
+        recommendations=[{"symbol": "2330", "confidence": 0.7}],
+        daily={"2330": [None, None, None, None, None]},
+        opens={"2330": 100.0},
+    )
+    assert discussion_scoreboard_service.compute_brier_for_discussion(d) is None
+
+
+def test_brier_skips_symbol_with_missing_open():
+    """One symbol resolved, one missing day1_open — only the resolved
+    one contributes to the average. Brier = 0.04 (single sample)."""
+    d = _disc_for_brier(
+        recommendations=[
+            {"symbol": "A", "confidence": 0.8},
+            {"symbol": "B", "confidence": 0.4},
+        ],
+        daily={
+            "A": [110.0, 105.0, 102.0, 108.0, 109.0],
+            "B": [101.0, 102.0, 100.5, 100.0, 99.5],
+        },
+        opens={"A": 100.0},   # B missing
+    )
+    out = discussion_scoreboard_service.compute_brier_for_discussion(d)
+    assert out is not None
+    assert out["brier_score"] == pytest.approx(0.04, abs=1e-6)
+    assert out["samples"] == 1
+
+
+def test_brier_clamps_invalid_confidence():
+    """LLM occasionally emits 1.5 or -0.3 even after the C0 parser
+    clamp — defensive bound here so a bad row in a sweep can't
+    poison the aggregate."""
+    d = _disc_for_brier(
+        recommendations=[
+            {"symbol": "2330", "confidence": 1.5},  # clamps to 1.0
+        ],
+        # outcome 0 → loss = (1 - 0)² = 1.0
+        daily={"2330": [101.0, 102.0, 100.5, 100.0, 99.5]},
+        opens={"2330": 100.0},
+    )
+    out = discussion_scoreboard_service.compute_brier_for_discussion(d)
+    assert out is not None
+    assert out["brier_score"] == pytest.approx(1.0, abs=1e-6)
+
+
+def test_reliability_buckets_basic_monotonicity():
+    """Perfectly calibrated synthesizer: every bucket's hit_rate
+    matches its bucket midpoint. Monotonicity check."""
+    pairs: list[tuple[float, int]] = []
+    # bucket 0.0-0.1 → hit_rate 0.0
+    pairs.extend([(0.05, 0)] * 10)
+    # bucket 0.5-0.6 → hit_rate ~ 0.5
+    pairs.extend([(0.55, 1)] * 5 + [(0.55, 0)] * 5)
+    # bucket 0.9-1.0 → hit_rate ~ 0.9
+    pairs.extend([(0.95, 1)] * 9 + [(0.95, 0)] * 1)
+    buckets = discussion_scoreboard_service.compute_reliability_buckets(pairs)
+    assert len(buckets) == 10
+    rate_lookup = {b["bucket_lower"]: b["hit_rate"] for b in buckets}
+    assert rate_lookup[0.0] == pytest.approx(0.0)
+    assert rate_lookup[0.5] == pytest.approx(0.5)
+    assert rate_lookup[0.9] == pytest.approx(0.9)
+
+
+def test_reliability_buckets_emit_empty_buckets_with_count_zero():
+    """Empty buckets must still appear in the output so the frontend
+    can render a continuous diagram instead of stitching gaps."""
+    pairs = [(0.05, 0)] * 10
+    buckets = discussion_scoreboard_service.compute_reliability_buckets(pairs)
+    assert len(buckets) == 10
+    populated = [b for b in buckets if b["count"] > 0]
+    empty = [b for b in buckets if b["count"] == 0]
+    assert len(populated) == 1
+    assert len(empty) == 9
+    for b in empty:
+        assert b["mean_confidence"] is None
+        assert b["hit_rate"] is None
+
+
+def test_reliability_buckets_includes_confidence_at_one():
+    """Edge case — confidence = 1.0 must land in the last bucket
+    rather than getting dropped because the upper bound is exclusive
+    everywhere except the final bucket."""
+    pairs = [(1.0, 1)] * 5
+    buckets = discussion_scoreboard_service.compute_reliability_buckets(pairs)
+    last = buckets[-1]
+    assert last["count"] == 5
+    assert last["hit_rate"] == pytest.approx(1.0)
+
+
+def test_reliability_buckets_rejects_too_few_buckets():
+    with pytest.raises(ValueError, match="n_buckets"):
+        discussion_scoreboard_service.compute_reliability_buckets(
+            [(0.5, 1)], n_buckets=1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_persist_scoreboard_writes_brier_when_resolved(
+    db_session: AsyncSession,
+):
+    """End-to-end: a backtest discussion with PR-C0 recommendations
+    + a fully resolved D1-D5 window gets `brier_score` + `outcome_vector`
+    written alongside `daily_close_prices`."""
+    user = await _make_user(db_session, "brier@example.com")
+    anchor = date(2026, 5, 5)
+    d = await _make_discussion(
+        db_session,
+        owner_id=user.id,
+        created_at=datetime(2026, 5, 5, 9, 0, tzinfo=UTC),
+        recommended=["2330"],
+        day1_open_prices={"2330": 100.0},
+        as_of_date=anchor - timedelta(days=1),
+    )
+    # Patch the in-memory conclusion to add `recommendations` —
+    # simulates a post-PR-C0 row.
+    d.conclusion = {
+        **(d.conclusion or {}),
+        "recommendations": [{"symbol": "2330", "confidence": 0.8}],
+    }
+    await db_session.commit()
+    await db_session.refresh(d)
+
+    await _seed_bars(
+        db_session, "2330", start=anchor,
+        closes=[110.0, 105.0, 102.0, 108.0, 109.0],
+        opens=[100.0, 100.0, 100.0, 100.0, 100.0],
+    )
+    fully = await discussion_scoreboard_service.persist_scoreboard(
+        db_session, d,
+    )
+    assert fully is True
+    refreshed = await db_session.get(Discussion, d.id)
+    assert refreshed.brier_score == pytest.approx(0.04, abs=1e-6)
+    assert refreshed.outcome_vector is not None
+    assert refreshed.outcome_vector[0]["outcome_binary"] == 1
+    assert refreshed.outcome_vector[0]["confidence"] == pytest.approx(0.8)
+
+
+@pytest.mark.asyncio
+async def test_persist_scoreboard_no_brier_when_partial(
+    db_session: AsyncSession,
+):
+    """Partial window — fully_resolved is False, brier_score must
+    stay NULL so the next cron tick can complete it."""
+    user = await _make_user(db_session, "brier-partial@example.com")
+    anchor = date(2026, 5, 5)
+    d = await _make_discussion(
+        db_session,
+        owner_id=user.id,
+        created_at=datetime(2026, 5, 5, 9, 0, tzinfo=UTC),
+        recommended=["2330"],
+        day1_open_prices={"2330": 100.0},
+        as_of_date=anchor - timedelta(days=1),
+    )
+    d.conclusion = {
+        **(d.conclusion or {}),
+        "recommendations": [{"symbol": "2330", "confidence": 0.8}],
+    }
+    await db_session.commit()
+    await db_session.refresh(d)
+
+    # only 3 bars seeded — D4 and D5 still NULL
+    await _seed_bars(
+        db_session, "2330", start=anchor,
+        closes=[110.0, 105.0, 102.0],
+        opens=[100.0, 100.0, 100.0],
+    )
+    fully = await discussion_scoreboard_service.persist_scoreboard(
+        db_session, d,
+    )
+    assert fully is False
+    refreshed = await db_session.get(Discussion, d.id)
+    assert refreshed.brier_score is None
+    assert refreshed.outcome_vector is None

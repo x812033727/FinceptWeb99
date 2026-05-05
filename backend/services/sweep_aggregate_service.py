@@ -165,6 +165,9 @@ def _empty_payload(**extra: Any) -> dict[str, Any]:
         },
         "win_rate": None,
         "avg_pnl_pct": [None] * WINDOW_DAYS,
+        "brier_score": None,
+        "brier_samples": 0,
+        "reliability": [],
         "per_persona": [],
         "lessons": [],
     }
@@ -218,6 +221,18 @@ def _aggregate_discussions(
     pnl_sum = [0.0] * WINDOW_DAYS
     pnl_n = [0] * WINDOW_DAYS
 
+    # PR-C1: Brier accumulators. `brier_sum_loss` is the sum of
+    # squared errors weighted by per-discussion sample count;
+    # dividing by `brier_total_samples` at the end yields the
+    # population mean across every (recommendation, outcome) pair
+    # in the sweep — equivalent to letting one discussion with 5
+    # picks count for 5x as much as a discussion with 1 pick.
+    # Reliability pairs hold every (confidence, outcome_binary)
+    # tuple for `compute_reliability_buckets`.
+    brier_sum_loss = 0.0
+    brier_total_samples = 0
+    reliability_pairs: list[tuple[float, int]] = []
+
     # Per-persona aggregates. The roster is sweep-defined; we do
     # NOT auto-discover personas off the discussions because a
     # roster mid-sweep edit (currently impossible in API but cheap
@@ -241,6 +256,27 @@ def _aggregate_discussions(
                     continue
                 pnl_sum[i] += (c - base_open) / base_open
                 pnl_n[i] += 1
+
+        # PR-C1: roll up the Brier loss + reliability pairs from each
+        # resolved discussion. Pre-PR-C0 / unresolved discussions
+        # have NULL brier_score and are skipped silently.
+        d_brier = getattr(d, "brier_score", None)
+        d_outcomes = getattr(d, "outcome_vector", None) or []
+        if d_brier is not None and isinstance(d_outcomes, list) and d_outcomes:
+            samples = len(d_outcomes)
+            brier_sum_loss += d_brier * samples
+            brier_total_samples += samples
+            for entry in d_outcomes:
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    conf = float(entry.get("confidence"))
+                    outcome = int(entry.get("outcome_binary"))
+                except (TypeError, ValueError):
+                    continue
+                if outcome not in (0, 1):
+                    continue
+                reliability_pairs.append((conf, outcome))
 
         # Persona attribution (in-roster only).
         roster_set = set(roster)
@@ -280,6 +316,22 @@ def _aggregate_discussions(
             "dissent_turn_count": 0,
         })
 
+    # PR-C1: emit the rolled-up Brier + reliability diagram alongside
+    # the existing KPIs. NULL when no resolved discussion contributed
+    # — the dashboard renders that as "calibration data not yet
+    # available" instead of misleading 0.0.
+    from services.discussion_scoreboard_service import (
+        compute_reliability_buckets,
+    )
+    if brier_total_samples > 0:
+        avg_brier: float | None = round(
+            brier_sum_loss / brier_total_samples, 6,
+        )
+        reliability = compute_reliability_buckets(reliability_pairs)
+    else:
+        avg_brier = None
+        reliability = []
+
     return {
         "discussions_total": len(discussions),
         "verdict_counts": {
@@ -290,6 +342,9 @@ def _aggregate_discussions(
         },
         "win_rate": win_rate,
         "avg_pnl_pct": avg_pnl,
+        "brier_score": avg_brier,
+        "brier_samples": brier_total_samples,
+        "reliability": reliability,
         "per_persona": per_persona,
         "lessons": [],   # filled by caller
     }

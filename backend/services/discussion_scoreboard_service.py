@@ -1,5 +1,11 @@
 """Per-discussion scoreboard service: D1-D5 daily close vs day-1 open.
 
+PR-C1 also exposes Brier score + reliability bucketing on top of
+the same scoreboard computation, so PR-C2's calibration fitter
+and the sweep aggregate dashboard can surface "did the synthesizer
+say 0.8 confidence and was that right 80% of the time?" without a
+second pass over OHLCV.
+
 Builds the data behind the "對答案" UI on the discussion detail
 page. For each recommended symbol, walks the 5 trading days
 starting from the discussion's anchor date and reports:
@@ -121,22 +127,41 @@ async def persist_scoreboard(
         if r["day1_open"] is not None and r["symbol"] not in existing_opens:
             existing_opens[r["symbol"]] = r["day1_open"]
 
-    await db.execute(
-        update(Discussion)
-        .where(Discussion.id == discussion.id)
-        .values(
-            daily_close_prices=daily,
-            day1_open_prices=existing_opens or None,
-        )
-        .execution_options(synchronize_session=False)
-    )
-    await db.commit()
-    discussion.daily_close_prices = daily
-    discussion.day1_open_prices = existing_opens or None
-
     fully_resolved = bool(rows) and all(
         r["days_resolved"] == WINDOW_DAYS for r in rows
     )
+
+    # PR-C1: stage the daily_close_prices write before computing
+    # Brier so the snapshot the function produces sees the freshly-
+    # resolved closes. Scratch attribute on the in-memory row so
+    # `compute_brier_for_discussion` (which reads off the ORM
+    # instance, not the DB) finds the new closes without a refresh
+    # round-trip.
+    discussion.daily_close_prices = daily
+    discussion.day1_open_prices = existing_opens or None
+
+    brier_payload: dict[str, Any] | None = None
+    if fully_resolved:
+        brier_payload = compute_brier_for_discussion(discussion)
+
+    update_values: dict[str, Any] = {
+        "daily_close_prices": daily,
+        "day1_open_prices": existing_opens or None,
+    }
+    if brier_payload is not None:
+        update_values["brier_score"] = brier_payload["brier_score"]
+        update_values["outcome_vector"] = brier_payload["outcome_vector"]
+        discussion.brier_score = brier_payload["brier_score"]
+        discussion.outcome_vector = brier_payload["outcome_vector"]
+
+    await db.execute(
+        update(Discussion)
+        .where(Discussion.id == discussion.id)
+        .values(**update_values)
+        .execution_options(synchronize_session=False)
+    )
+    await db.commit()
+
     return fully_resolved
 
 
@@ -276,3 +301,163 @@ async def _compute_for_symbol(
         "change_pcts": change_pcts,
         "days_resolved": days_resolved,
     }
+
+
+# ── PR-C1: Brier score + reliability bucketing ──────────────────────
+
+
+# Default win threshold mirrors the post_mortem service. Lifted to a
+# parameter so unit tests can pin it without poking the runtime
+# config plumbing.
+DEFAULT_BRIER_THRESHOLD_PCT = 5.0
+
+
+def compute_brier_for_discussion(
+    discussion: Discussion,
+    *,
+    threshold_pct: float = DEFAULT_BRIER_THRESHOLD_PCT,
+    window_days: int = WINDOW_DAYS,
+) -> dict[str, Any] | None:
+    """Compute the per-discussion Brier score from `conclusion.
+    recommendations` and `daily_close_prices`.
+
+    Returns:
+      `{"brier_score": float,
+        "outcome_vector": [{symbol, confidence, outcome_binary}, ...],
+        "samples": int,
+        "threshold_pct": float}`
+
+    or `None` when:
+      - the discussion has no `recommendations` (pre-PR-C0 row that
+        slipped past the parser's fallback — defensive)
+      - `daily_close_prices` is empty / missing
+      - none of the recommendations have a fully-resolved D1-D5
+        window (so every outcome would be skipped)
+
+    `outcome_binary` per symbol = 1 iff the symbol's peak D1-D5
+    change_pct is `>= threshold_pct`. Symbols with insufficient bars
+    are skipped (not counted as 0) — caller's `samples` field tells
+    the consumer how many actually contributed.
+    """
+    conclusion = discussion.conclusion or {}
+    recommendations = conclusion.get("recommendations")
+    if not isinstance(recommendations, list) or not recommendations:
+        return None
+    daily = discussion.daily_close_prices or {}
+    opens = discussion.day1_open_prices or {}
+    if not daily and not opens:
+        return None
+
+    outcome_vector: list[dict[str, Any]] = []
+    losses: list[float] = []
+    for entry in recommendations:
+        if not isinstance(entry, dict):
+            continue
+        symbol = str(entry.get("symbol", "")).strip()
+        if not symbol:
+            continue
+        try:
+            confidence = float(entry.get("confidence", 0.5))
+        except (TypeError, ValueError):
+            confidence = 0.5
+        confidence = max(0.0, min(1.0, confidence))
+
+        closes = daily.get(symbol) or []
+        day1_open = opens.get(symbol)
+        peak_pct = _peak_change_pct(
+            closes, day1_open=day1_open, window_days=window_days,
+        )
+        if peak_pct is None:
+            continue   # insufficient data — skip the symbol entirely
+        outcome_binary = 1 if peak_pct >= threshold_pct else 0
+        outcome_vector.append({
+            "symbol": symbol,
+            "confidence": round(confidence, 4),
+            "outcome_binary": outcome_binary,
+            "peak_pct": round(peak_pct, 4),
+        })
+        losses.append((confidence - outcome_binary) ** 2)
+
+    if not losses:
+        return None
+    return {
+        "brier_score": round(sum(losses) / len(losses), 6),
+        "outcome_vector": outcome_vector,
+        "samples": len(losses),
+        "threshold_pct": threshold_pct,
+    }
+
+
+def compute_reliability_buckets(
+    pairs: list[tuple[float, int]],
+    *,
+    n_buckets: int = 10,
+) -> list[dict[str, Any]]:
+    """Slice `(confidence, outcome_binary)` pairs into `n_buckets`
+    equal-width bins on [0, 1] and report each bin's mean predicted
+    probability vs observed hit rate.
+
+    Output: list of dicts in ascending bucket order
+    `{bucket_lower, bucket_upper, mean_confidence, hit_rate, count}`.
+    Empty buckets are included with `count=0` and NULL means/rates
+    so the frontend renders a continuous diagram.
+
+    Used by both the sweep aggregate dashboard (one chart per
+    sweep) and PR-C2's isotonic regression fitter (sanity check
+    that the curve really is monotonic in the right direction).
+    """
+    if n_buckets < 2:
+        raise ValueError("n_buckets must be >= 2")
+    width = 1.0 / n_buckets
+    buckets: list[dict[str, Any]] = []
+    for i in range(n_buckets):
+        lo = i * width
+        hi = (i + 1) * width if i < n_buckets - 1 else 1.0 + 1e-9
+        in_bucket = [
+            (c, o) for c, o in pairs
+            if lo <= c < hi
+        ]
+        if in_bucket:
+            mean_conf = sum(c for c, _ in in_bucket) / len(in_bucket)
+            hit_rate = sum(o for _, o in in_bucket) / len(in_bucket)
+            buckets.append({
+                "bucket_lower": round(lo, 4),
+                "bucket_upper": round(min(hi, 1.0), 4),
+                "mean_confidence": round(mean_conf, 4),
+                "hit_rate": round(hit_rate, 4),
+                "count": len(in_bucket),
+            })
+        else:
+            buckets.append({
+                "bucket_lower": round(lo, 4),
+                "bucket_upper": round(min(hi, 1.0), 4),
+                "mean_confidence": None,
+                "hit_rate": None,
+                "count": 0,
+            })
+    return buckets
+
+
+def _peak_change_pct(
+    closes: list[float | None] | None,
+    *,
+    day1_open: float | None,
+    window_days: int,
+) -> float | None:
+    """Best (max) D1-D`window_days` close-vs-day1-open percent move.
+
+    Returns None when `day1_open` is missing/zero or none of the
+    daily closes resolved — the caller treats that as "skip this
+    symbol's contribution to the Brier sum".
+    """
+    if day1_open is None or not day1_open or not isinstance(closes, list):
+        return None
+    truncated = closes[:window_days]
+    pcts = [
+        (c - day1_open) / day1_open * 100
+        for c in truncated
+        if isinstance(c, (int, float))
+    ]
+    if not pcts:
+        return None
+    return max(pcts)

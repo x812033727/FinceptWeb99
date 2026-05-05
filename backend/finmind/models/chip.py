@@ -14,7 +14,7 @@ Market-wide daily:
   - tw_short_sale_balance_daily ← TaiwanDailyShortSaleBalances
   - tw_short_sale_suspension    ← TaiwanStockMarginShortSaleSuspension
   - tw_margin_maintenance       ← TaiwanTotalExchangeMarginMaintenance
-  - tw_govt_bank_flow           ← TaiwanstockGovernmentBankBuySell
+  - tw_govt_bank_flow           ← TaiwanStockGovernmentBankBuySell
 
 Sparse / event:
   - tw_block_trade              ← TaiwanStockBlockTrade

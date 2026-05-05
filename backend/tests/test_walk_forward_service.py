@@ -485,6 +485,197 @@ async def test_fit_frozen_weights_returns_empty_dict_for_missing_sweep(
     assert weights == {}
 
 
+# ── Audit follow-up #1: orchestrator observability ───────────────
+
+
+@pytest.mark.asyncio
+async def test_execute_logs_summary_and_emits_success_metric(
+    db_session: AsyncSession, owner: User, caplog,
+):
+    """Happy path emits the start + complete log lines AND bumps
+    the `success` counter on WALK_FORWARD_RUNS_TOTAL exactly once."""
+    import logging as _logging
+
+    from middleware import metrics as _metrics
+
+    tmpl = await _make_strategy(db_session, owner_id=owner.id)
+    seeded = await _seed_trading_days(
+        db_session, market="TW",
+        start=date(2026, 1, 5), n=80,
+    )
+    plan = await wf.plan_walk_forward(
+        db_session,
+        strategy_id=tmpl.id, market="TW",
+        anchor_date=seeded[-1],
+        train_window_days=20, test_window_days=10,
+        n_folds=1,
+    )
+
+    async def stub_worker(sweep_id: UUID) -> None:
+        return
+
+    before = _metrics.WALK_FORWARD_RUNS_TOTAL.labels(
+        status="success",
+    )._value.get()
+
+    caplog.set_level(_logging.INFO, logger="services.walk_forward_service")
+    results = await wf.execute_walk_forward(
+        owner_id=owner.id, strategy_id=tmpl.id, plan=plan,
+        rounds_per_discussion=1, concurrency=1,
+        auto_post_mortem=False, sweep_worker=stub_worker,
+    )
+    assert len(results) == 1
+    assert all(r.error is None for r in results)
+
+    after = _metrics.WALK_FORWARD_RUNS_TOTAL.labels(
+        status="success",
+    )._value.get()
+    assert after == before + 1
+
+    log_messages = [r.message for r in caplog.records]
+    assert any(m == "walk_forward.start" for m in log_messages)
+    assert any(m == "walk_forward.complete" for m in log_messages)
+
+
+@pytest.mark.asyncio
+async def test_execute_emits_partial_metric_when_some_folds_fail(
+    db_session: AsyncSession, owner: User,
+):
+    """A run where some folds succeed and some fail bumps the
+    `partial` counter (not `success`, not `failed`). Operator can
+    triage to find the broken fold."""
+    from middleware import metrics as _metrics
+
+    tmpl = await _make_strategy(db_session, owner_id=owner.id)
+    seeded = await _seed_trading_days(
+        db_session, market="TW",
+        start=date(2026, 1, 5), n=120,
+    )
+    plan = await wf.plan_walk_forward(
+        db_session,
+        strategy_id=tmpl.id, market="TW",
+        anchor_date=seeded[-1],
+        train_window_days=20, test_window_days=10,
+        n_folds=2,
+    )
+
+    call_count = {"n": 0}
+
+    async def flaky_worker(sweep_id: UUID) -> None:
+        call_count["n"] += 1
+        # fail the first fold's train sweep only
+        if call_count["n"] == 1:
+            raise RuntimeError("simulated infra error")
+
+    before = _metrics.WALK_FORWARD_RUNS_TOTAL.labels(
+        status="partial",
+    )._value.get()
+
+    results = await wf.execute_walk_forward(
+        owner_id=owner.id, strategy_id=tmpl.id, plan=plan,
+        rounds_per_discussion=1, concurrency=1,
+        auto_post_mortem=False, sweep_worker=flaky_worker,
+    )
+
+    after = _metrics.WALK_FORWARD_RUNS_TOTAL.labels(
+        status="partial",
+    )._value.get()
+    assert after == before + 1
+    # 1 errored, 1 succeeded
+    assert sum(1 for r in results if r.error is not None) == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_emits_failed_metric_on_orchestrator_exception(
+    db_session: AsyncSession, owner: User,
+):
+    """When something escapes past the per-fold try/except
+    (infrastructure failure during the loop body itself), the
+    top-level handler logs at WARNING and bumps the `failed`
+    counter so a Prometheus alert can fire."""
+    from middleware import metrics as _metrics
+
+    tmpl = await _make_strategy(db_session, owner_id=owner.id)
+    seeded = await _seed_trading_days(
+        db_session, market="TW",
+        start=date(2026, 1, 5), n=80,
+    )
+    plan = await wf.plan_walk_forward(
+        db_session,
+        strategy_id=tmpl.id, market="TW",
+        anchor_date=seeded[-1],
+        train_window_days=20, test_window_days=10,
+        n_folds=1,
+    )
+
+    before = _metrics.WALK_FORWARD_RUNS_TOTAL.labels(
+        status="failed",
+    )._value.get()
+
+    # Patch _record_fold_metric to raise — this simulates an
+    # unexpected exception escaping past the per-fold try/except.
+    async def stub_worker(sweep_id: UUID) -> None:
+        return
+
+    from unittest.mock import patch
+    with patch.object(
+        wf, "_record_fold_metric",
+        side_effect=RuntimeError("metric infrastructure broken"),
+    ):
+        with pytest.raises(RuntimeError, match="metric infrastructure"):
+            await wf.execute_walk_forward(
+                owner_id=owner.id, strategy_id=tmpl.id, plan=plan,
+                rounds_per_discussion=1, concurrency=1,
+                auto_post_mortem=False, sweep_worker=stub_worker,
+            )
+
+    after = _metrics.WALK_FORWARD_RUNS_TOTAL.labels(
+        status="failed",
+    )._value.get()
+    assert after == before + 1
+
+
+@pytest.mark.asyncio
+async def test_execute_records_per_fold_metric(
+    db_session: AsyncSession, owner: User,
+):
+    """Per-fold counter (`completed` / `failed`) bumps once per
+    fold so dashboards can show fold-level success rate, not just
+    run-level."""
+    from middleware import metrics as _metrics
+
+    tmpl = await _make_strategy(db_session, owner_id=owner.id)
+    seeded = await _seed_trading_days(
+        db_session, market="TW",
+        start=date(2026, 1, 5), n=120,
+    )
+    plan = await wf.plan_walk_forward(
+        db_session,
+        strategy_id=tmpl.id, market="TW",
+        anchor_date=seeded[-1],
+        train_window_days=20, test_window_days=10,
+        n_folds=2,
+    )
+
+    completed_before = _metrics.WALK_FORWARD_FOLDS_TOTAL.labels(
+        outcome="completed",
+    )._value.get()
+
+    async def stub_worker(sweep_id: UUID) -> None:
+        return
+
+    await wf.execute_walk_forward(
+        owner_id=owner.id, strategy_id=tmpl.id, plan=plan,
+        rounds_per_discussion=1, concurrency=1,
+        auto_post_mortem=False, sweep_worker=stub_worker,
+    )
+
+    completed_after = _metrics.WALK_FORWARD_FOLDS_TOTAL.labels(
+        outcome="completed",
+    )._value.get()
+    assert completed_after == completed_before + 2
+
+
 def test_walk_forward_plan_dataclass_field_default_factory():
     """Mutable default check — folds list shouldn't be shared
     across instances (regression guard for a common dataclass

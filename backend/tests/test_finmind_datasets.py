@@ -114,11 +114,11 @@ def test_connector_typed_wrappers_use_registered_datasets():
         "TaiwanFuturesInstitutionalInvestorsAfterHours",
         "TaiwanOptionInstitutionalInvestors",
         "TaiwanBusinessIndicator",
-        # `TaiwanstockGovernmentBankBuySell` (lowercase 's' in 'stock')
-        # is what FinMind documents — connector uses a slightly
-        # different cased string. Both are in the registry under the
-        # documented name.
-        "TaiwanstockGovernmentBankBuySell",
+        # `TaiwanStockGovernmentBankBuySell` (capital S in `Stock`) is
+        # what FinMind's API actually accepts; the previous catalog
+        # entry had a typo'd lowercase 's' that 422'd at the FinMind
+        # endpoint validator before any tier/quota check.
+        "TaiwanStockGovernmentBankBuySell",
     }
     registered_names = {spec.name for spec in fd.all_datasets()}
     missing = expected - registered_names

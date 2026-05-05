@@ -80,7 +80,7 @@ CHIP: tuple[CatalogEntry, ...] = (
     CatalogEntry("TaiwanSecuritiesTraderInfo",                  "tw_broker_master",           "finmind", "twse", "monthly"),
     CatalogEntry("TaiwanStockTradingDailyReport",               "tw_broker_daily_report",     "finmind", None,   "daily"),
     CatalogEntry("TaiwanStockWarrantTradingDailyReport",        "tw_broker_daily_report",     "finmind", None,   "daily"),
-    CatalogEntry("TaiwanstockGovernmentBankBuySell",            "tw_govt_bank_flow",          "finmind", None,   "daily"),
+    CatalogEntry("TaiwanStockGovernmentBankBuySell",            "tw_govt_bank_flow",          "finmind", None,   "daily"),
     CatalogEntry("TaiwanTotalExchangeMarginMaintenance",        "tw_margin_maintenance",      "finmind", "twse", "daily"),
     CatalogEntry("TaiwanStockTradingDailyReportSecIdAgg",       "",                           "finmind", None,   "daily"),
     CatalogEntry("TaiwanStockBlockTradingDailyReport",          "tw_block_trade",             "finmind", "twse", "daily"),

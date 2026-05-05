@@ -60,14 +60,31 @@ from models.discussion_lesson import DiscussionLesson
 
 log = logging.getLogger(__name__)
 
-# Five categories the synthesizer must constrain itself to. Anything
+# Seven categories the synthesizer must constrain itself to. Anything
 # outside this set is coerced to "other" at write time.
+#
+# PR-B0 shipped 5 miss-side categories. PR-B3 adds 2 win-side
+# categories so the post-mortem on a successful discussion can capture
+# *why* it worked (which signal combo + thesis actually played out)
+# without poisoning the existing miss-side accounting.
 ALLOWED_CATEGORIES: frozenset[str] = frozenset({
+    # miss-side (PR-B0)
     "missed_sector",
     "wrong_signal_weight",
     "missing_data",
     "over_confidence",
     "other",
+    # win-side (PR-B3)
+    "correct_signal_combo",
+    "successful_thesis",
+})
+
+# Win-side categories — used by PR-B3 to split the fetch render into
+# 「過去命中經驗」vs 「過去失誤教訓」blocks so the LLM sees positive
+# vs negative cases unambiguously rather than mixed in one list.
+WIN_CATEGORIES: frozenset[str] = frozenset({
+    "correct_signal_combo",
+    "successful_thesis",
 })
 
 _MIN_LESSON_LEN = 20
@@ -198,6 +215,7 @@ async def extract_and_persist_lessons(
     as_of_date: date,
     lessons_payload: Any,
     ctx: dict[str, Any] | None = None,
+    verdict: str | None = None,
 ) -> list[DiscussionLesson]:
     """Parse + persist lessons from a synthesizer payload.
 
@@ -211,6 +229,15 @@ async def extract_and_persist_lessons(
     label persisted on every new lesson row. Optional + best-effort
     — older callers passing nothing get the legacy regime=NULL
     behavior.
+
+    `verdict` (PR-B3) — when 'win', the synthesizer was prompted
+    with the win-case template so any emitted lessons are expected
+    to use the win-side categories (`correct_signal_combo`,
+    `successful_thesis`). When 'miss' or None, the legacy miss-
+    side categories apply. We don't enforce the category mapping
+    here (the synthesizer's free-form output is normalized to
+    'other' on mismatch) — the gate is purely informational so
+    callers can post-process telemetry by win/miss split.
 
     Returns the list of newly-persisted rows (0..5). Caller can use
     the count for telemetry but does not need to flush — this
@@ -332,6 +359,15 @@ _TIER_HALFLIFE_MULTIPLIER: dict[str, float | None] = {
 _REGIME_MATCH_BOOST = 2.0
 _REGIME_MISMATCH_BOOST = 0.7
 
+# PR-B3: win-side lessons (correct_signal_combo / successful_thesis)
+# get a multiplicative penalty so the ranking treats them with
+# slightly more skepticism than miss-side lessons. Survivor-bias
+# motivation: the LLM is much more likely to spin a confident-looking
+# narrative in hindsight than to honestly identify failure modes,
+# so the calibrated long-term value of a win lesson is roughly 80%
+# of a miss lesson at the same age + regime.
+_WIN_LESSON_BOOST = 0.8
+
 
 def _score(
     lesson: DiscussionLesson, *,
@@ -361,7 +397,13 @@ def _score(
     else:
         regime_boost = _REGIME_MISMATCH_BOOST
 
-    return recency * symbol_boost * regime_boost
+    # PR-B3: 0.8x penalty on win-side lessons so survivor bias
+    # doesn't make them outrank a same-age miss-side lesson at
+    # the top of the ranking.
+    category = getattr(lesson, "category", "") or ""
+    win_boost = _WIN_LESSON_BOOST if category in WIN_CATEGORIES else 1.0
+
+    return recency * symbol_boost * regime_boost * win_boost
 
 
 def _to_summary(lesson: DiscussionLesson) -> LessonSummary:

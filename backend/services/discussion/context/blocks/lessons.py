@@ -110,9 +110,50 @@ async def fetch_recent_lessons(
                 if rows:
                     per_symbol[sym] = [summary_to_dict(r) for r in rows]
 
+        # PR-B3: split market lessons into two buckets so the LLM
+        # sees positive vs negative cases unambiguously. The fetch
+        # ranking already tilts win-side lessons down 0.8x to fight
+        # survivor bias; the rendering split makes the framing
+        # explicit ("過去命中經驗 — 為什麼這樣的組合對過了") vs
+        # ("過去失誤教訓 — 哪些訊號當時被忽略").
+        from services.discussion_lesson_service import WIN_CATEGORIES
+        market_misses = [
+            summary_to_dict(r) for r in market_rows
+            if r.category not in WIN_CATEGORIES
+        ]
+        market_wins = [
+            summary_to_dict(r) for r in market_rows
+            if r.category in WIN_CATEGORIES
+        ]
+
+        # per-symbol payload: mirrors the same split for parity.
+        per_symbol_misses: dict[str, list[dict[str, Any]]] = {}
+        per_symbol_wins: dict[str, list[dict[str, Any]]] = {}
+        for sym, rows in per_symbol.items():
+            misses = [
+                e for e in rows
+                if e.get("category") not in WIN_CATEGORIES
+            ]
+            wins = [
+                e for e in rows
+                if e.get("category") in WIN_CATEGORIES
+            ]
+            if misses:
+                per_symbol_misses[sym] = misses
+            if wins:
+                per_symbol_wins[sym] = wins
+
         ctx["recent_lessons"] = {
+            # Legacy keys preserved so callers reading the merged
+            # view (older code paths, tests, audit tooling) stay
+            # functional. New code should prefer the split keys.
             "market": [summary_to_dict(r) for r in market_rows],
             "per_symbol": per_symbol,
+            # PR-B3 split keys
+            "market_misses": market_misses,
+            "market_wins": market_wins,
+            "per_symbol_misses": per_symbol_misses,
+            "per_symbol_wins": per_symbol_wins,
         }
 
         # PR-B2: bump usage telemetry for every lesson that actually

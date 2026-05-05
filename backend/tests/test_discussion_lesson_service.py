@@ -904,6 +904,126 @@ async def test_fetch_structural_outranks_recent_episodic(
     assert any("本週" in t for t in texts)
 
 
+# ── PR-B3: win-case categories + survivor-bias penalty ──────────
+
+
+def test_win_categories_accepted_in_normalize():
+    """PR-B3 added 2 win-side categories. They must round-trip
+    through `_normalize_category` instead of getting coerced to
+    'other' (which would let the rendering split misclassify them
+    as miss-side lessons)."""
+    assert svc._normalize_category("correct_signal_combo") == \
+        "correct_signal_combo"
+    assert svc._normalize_category("successful_thesis") == \
+        "successful_thesis"
+    # Original 5 still pass through.
+    assert svc._normalize_category("missed_sector") == "missed_sector"
+    # Out-of-set stays normalized to 'other'.
+    assert svc._normalize_category("made_up") == "other"
+
+
+def test_win_categories_set_export():
+    """Other modules (lessons context block) consume `WIN_CATEGORIES`
+    to split rendering. Make sure the set is the published 2."""
+    assert svc.WIN_CATEGORIES == frozenset({
+        "correct_signal_combo", "successful_thesis",
+    })
+
+
+def test_score_applies_win_lesson_penalty():
+    """Same age + same regime, win-side lesson scores 0.8x miss-side
+    lesson — the survivor-bias guard built into _score."""
+    today = datetime.now(UTC).date()
+    miss = _mk_lesson(
+        owner_id=uuid.uuid4(), as_of=today,
+        regime="high_down",
+    )
+    win = _mk_lesson(
+        owner_id=uuid.uuid4(), as_of=today,
+        regime="high_down",
+    )
+    win.category = "correct_signal_combo"
+    miss_score = svc._score(
+        miss, anchor=today, focus_symbols=set(), halflife_days=60,
+        current_regime="high_down",
+    )
+    win_score = svc._score(
+        win, anchor=today, focus_symbols=set(), halflife_days=60,
+        current_regime="high_down",
+    )
+    # 0.8x penalty → win_score == miss_score * 0.8
+    assert win_score == pytest.approx(miss_score * 0.8, abs=1e-3)
+
+
+def test_score_no_penalty_for_legacy_other_category():
+    """The penalty is keyed off WIN_CATEGORIES — pre-PR-B3 lessons
+    with category='other' (the previous catch-all) shouldn't be
+    affected."""
+    today = datetime.now(UTC).date()
+    legacy = _mk_lesson(owner_id=uuid.uuid4(), as_of=today)
+    legacy.category = "other"
+    score = svc._score(
+        legacy, anchor=today, focus_symbols=set(), halflife_days=60,
+    )
+    assert score == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_extract_persists_win_category_when_emitted(
+    db_session: AsyncSession,
+):
+    """When the synthesizer (post-mortem win prompt) emits a lesson
+    with category='correct_signal_combo', it round-trips through
+    extract_and_persist_lessons unchanged."""
+    u = _user("win-extract")
+    d = _disc(u.id)
+    db_session.add_all([u, d])
+    await db_session.commit()
+
+    out = await svc.extract_and_persist_lessons(
+        db_session,
+        discussion_id=d.id, owner_user_id=u.id,
+        market="TW", as_of_date=d.as_of_date,
+        lessons_payload=[{
+            "category": "correct_signal_combo",
+            "lesson_text": (
+                "外資台指期由空轉多 + 殖利率倒掛緩解 → 半導體先行的訊號組合，"
+                "下次同時出現時值得加重佈局。"
+            ),
+        }],
+        verdict="win",
+    )
+    assert len(out) == 1
+    assert out[0].category == "correct_signal_combo"
+
+
+@pytest.mark.asyncio
+async def test_extract_accepts_verdict_kwarg_for_miss(
+    db_session: AsyncSession,
+):
+    """verdict='miss' (or None) is purely informational on the
+    extract side — no behavior change vs pre-PR-B3."""
+    u = _user("verdict-miss")
+    d = _disc(u.id)
+    db_session.add_all([u, d])
+    await db_session.commit()
+    out = await svc.extract_and_persist_lessons(
+        db_session,
+        discussion_id=d.id, owner_user_id=u.id,
+        market="TW", as_of_date=d.as_of_date,
+        lessons_payload=[{
+            "category": "missed_sector",
+            "lesson_text": (
+                "外資轉空時忽略了半導體類股的籌碼面變化，"
+                "下次需把外資台指期淨部位納入決策權重。"
+            ),
+        }],
+        verdict="miss",
+    )
+    assert len(out) == 1
+    assert out[0].category == "missed_sector"
+
+
 @pytest.mark.asyncio
 async def test_fetch_structural_outranks_old_episodic(
     db_session: AsyncSession,

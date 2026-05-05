@@ -29,8 +29,23 @@ export interface Turn {
 
 export type TimeHorizon = "short_term" | "medium_term" | "long_term";
 
+export interface Recommendation {
+  symbol: string;
+  /** 0.0-1.0 — synthesizer's per-pick confidence that the symbol will
+   * see a meaningful positive 5-day move. Pre-PR-C0 conclusions don't
+   * carry this; the parser fills 0.5 (neutral) so consumers can
+   * always rely on the field. PR-C2 will add a calibrated_confidence
+   * sibling field once isotonic regression has enough samples. */
+  confidence: number;
+}
+
 export interface Conclusion {
   recommended_symbols: string[];
+  /** Per-pick confidence breakdown (PR-C0). Optional for forward-
+   * compat with old conclusions read out of the DB before this PR
+   * landed. New conclusions always carry it; consumers should prefer
+   * this over the flat `recommended_symbols` when available. */
+  recommendations?: Recommendation[];
   reasoning: string;
   risks: string[];
   time_horizon: TimeHorizon;

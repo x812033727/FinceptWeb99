@@ -3133,6 +3133,136 @@ def test_safe_conclusion_still_flags_unparseable_garbage():
     raw = "I'm sorry, I cannot answer this question."
     out = discussion_service._safe_conclusion(raw)
     assert out["_parse_error"] is True
+    assert out["recommendations"] == []
+
+
+# ── PR-C0: per-symbol confidence in conclusion ─────────────────────
+
+
+def test_safe_conclusion_parses_recommendations_with_confidence():
+    raw = (
+        '{"recommendations": ['
+        '{"symbol": "2330", "confidence": 0.75}, '
+        '{"symbol": "0050", "confidence": 0.55}'
+        '], "reasoning": "ok", "risks": [], '
+        '"time_horizon": "short_term", "consensus_score": 0.7}'
+    )
+    out = discussion_service._safe_conclusion(raw)
+    assert "_parse_error" not in out
+    assert out["recommendations"] == [
+        {"symbol": "2330", "confidence": 0.75},
+        {"symbol": "0050", "confidence": 0.55},
+    ]
+    # recommended_symbols stays in sync — derived from recommendations
+    # so existing consumers keep working.
+    assert out["recommended_symbols"] == ["2330", "0050"]
+
+
+def test_safe_conclusion_falls_back_when_recommendations_missing():
+    """Old discussions / pre-C0 LLM outputs only emit
+    `recommended_symbols`. Parser fills in a neutral 0.5 confidence so
+    downstream Brier scoring (PR-C1) can always assume the structured
+    shape exists."""
+    raw = (
+        '{"recommended_symbols": ["2330", "2454"], '
+        '"reasoning": "ok", "risks": [], '
+        '"time_horizon": "short_term", "consensus_score": 0.5}'
+    )
+    out = discussion_service._safe_conclusion(raw)
+    assert "_parse_error" not in out
+    assert out["recommended_symbols"] == ["2330", "2454"]
+    assert out["recommendations"] == [
+        {"symbol": "2330", "confidence": 0.5},
+        {"symbol": "2454", "confidence": 0.5},
+    ]
+
+
+def test_safe_conclusion_clamps_invalid_confidence():
+    """LLMs occasionally emit confidence > 1, < 0, NaN, or strings.
+    Clamp to [0, 1] and treat unparseable as the neutral default."""
+    raw = (
+        '{"recommendations": ['
+        '{"symbol": "A", "confidence": 1.5}, '
+        '{"symbol": "B", "confidence": -0.3}, '
+        '{"symbol": "C", "confidence": "high"}, '
+        '{"symbol": "D", "confidence": null}'
+        '], "reasoning": "x", "risks": [], '
+        '"time_horizon": "short_term", "consensus_score": 0.5}'
+    )
+    out = discussion_service._safe_conclusion(raw)
+    confs = {r["symbol"]: r["confidence"] for r in out["recommendations"]}
+    assert confs["A"] == 1.0
+    assert confs["B"] == 0.0
+    assert confs["C"] == 0.5   # unparseable string → neutral
+    assert confs["D"] == 0.5   # null → neutral
+
+
+def test_safe_conclusion_dedupes_recommendations_keeping_first():
+    raw = (
+        '{"recommendations": ['
+        '{"symbol": "2330", "confidence": 0.8}, '
+        '{"symbol": "2330", "confidence": 0.4}, '
+        '{"symbol": "0050", "confidence": 0.6}'
+        '], "reasoning": "ok", "risks": [], '
+        '"time_horizon": "short_term", "consensus_score": 0.5}'
+    )
+    out = discussion_service._safe_conclusion(raw)
+    assert out["recommended_symbols"] == ["2330", "0050"]
+    confs = {r["symbol"]: r["confidence"] for r in out["recommendations"]}
+    assert confs["2330"] == 0.8   # first occurrence wins
+
+
+def test_safe_conclusion_caps_recommendations_at_five():
+    entries = ", ".join(
+        f'{{"symbol": "S{i}", "confidence": 0.5}}' for i in range(8)
+    )
+    raw = (
+        f'{{"recommendations": [{entries}], '
+        '"reasoning": "ok", "risks": [], '
+        '"time_horizon": "short_term", "consensus_score": 0.5}'
+    )
+    out = discussion_service._safe_conclusion(raw)
+    assert len(out["recommendations"]) == 5
+    assert len(out["recommended_symbols"]) == 5
+
+
+def test_safe_conclusion_prefers_recommendations_over_legacy_symbols():
+    """When LLM emits both fields and they conflict, recommendations
+    is the source of truth — recommended_symbols gets reconstructed
+    from it."""
+    raw = (
+        '{"recommendations": ['
+        '{"symbol": "2454", "confidence": 0.7}'
+        '], "recommended_symbols": ["WRONG", "STILL_WRONG"], '
+        '"reasoning": "ok", "risks": [], '
+        '"time_horizon": "short_term", "consensus_score": 0.5}'
+    )
+    out = discussion_service._safe_conclusion(raw)
+    assert out["recommended_symbols"] == ["2454"]
+    assert out["recommendations"] == [{"symbol": "2454", "confidence": 0.7}]
+
+
+def test_safe_conclusion_skips_recommendation_entries_without_symbol():
+    raw = (
+        '{"recommendations": ['
+        '{"symbol": "", "confidence": 0.7}, '
+        '{"confidence": 0.6}, '
+        '{"symbol": "2330", "confidence": 0.65}'
+        '], "reasoning": "ok", "risks": [], '
+        '"time_horizon": "short_term", "consensus_score": 0.5}'
+    )
+    out = discussion_service._safe_conclusion(raw)
+    assert out["recommended_symbols"] == ["2330"]
+    assert len(out["recommendations"]) == 1
+
+
+def test_safe_conclusion_parse_error_returns_empty_recommendations():
+    out = discussion_service._safe_conclusion(
+        "I'm sorry, I cannot answer."
+    )
+    assert out["_parse_error"] is True
+    assert out["recommended_symbols"] == []
+    assert out["recommendations"] == []
 
 
 def test_format_transcript_renders_user_input_as_directive():

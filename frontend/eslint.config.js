@@ -1,5 +1,6 @@
 import tseslint from "typescript-eslint";
 import reactHooks from "eslint-plugin-react-hooks";
+import reactRefresh from "eslint-plugin-react-refresh";
 
 export default tseslint.config(
   // Global ignores
@@ -13,6 +14,32 @@ export default tseslint.config(
     plugins: { "react-hooks": reactHooks },
     rules: {
       ...reactHooks.configs.recommended.rules,
+    },
+  },
+
+  // React Refresh — flags modules that mix component exports with
+  // non-component exports, which breaks Vite's HMR boundary detection
+  // and forces a full reload on every edit.
+  //
+  // Skipped patterns:
+  //   - test / setup / i18n: legitimate non-component exports.
+  //   - components/ui/**: shadcn-ui convention exports variant fns
+  //     (cva) alongside the component; not worth splitting per file.
+  //   - components/admin/**: existing cards co-locate small pure
+  //     helpers used by their own tests; refactoring is out of scope
+  //     for HMR ergonomics work.
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: [
+      "src/**/*.test.{ts,tsx}",
+      "src/test/**",
+      "src/i18n/**",
+      "src/components/ui/**",
+      "src/components/admin/**",
+    ],
+    plugins: { "react-refresh": reactRefresh },
+    rules: {
+      "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
     },
   },
 

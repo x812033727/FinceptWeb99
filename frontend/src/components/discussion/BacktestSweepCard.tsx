@@ -17,7 +17,8 @@ import type {
   StrategyTemplate,
 } from "./_helpers";
 import type { DiscussionMarket } from "@/types/discussion";
-import { useCollapsible, CollapsibleHeader } from "@/components/Collapsible";
+import { CollapsibleHeader } from "@/components/Collapsible";
+import { useCollapsible } from "@/hooks/useCollapsible";
 
 /**
  * Operator panel for automated multi-day backtest sweeps (PR #274).

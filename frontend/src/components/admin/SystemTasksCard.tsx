@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import api from "@/lib/api";
-import { CollapsibleHeader, useCollapsible } from "@/components/Collapsible";
+import { CollapsibleHeader } from "@/components/Collapsible";
+import { useCollapsible } from "@/hooks/useCollapsible";
 import type {
   SystemTaskConfig,
   SystemTaskTestResult,

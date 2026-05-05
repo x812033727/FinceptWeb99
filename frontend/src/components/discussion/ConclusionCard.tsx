@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import type { Conclusion, DiscussionDetail, Turn } from "@/types/discussion";
-import { useCollapsible } from "@/components/Collapsible";
+import { useCollapsible } from "@/hooks/useCollapsible";
 import { renderInlineMarkdown } from "./_helpers";
 
 function buildMarkdownExport(

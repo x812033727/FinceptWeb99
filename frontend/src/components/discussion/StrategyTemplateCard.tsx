@@ -13,7 +13,8 @@ import {
   type WalkForwardPlanResponse,
 } from "./_helpers";
 import type { DiscussionMarket } from "@/types/discussion";
-import { useCollapsible, CollapsibleHeader } from "@/components/Collapsible";
+import { CollapsibleHeader } from "@/components/Collapsible";
+import { useCollapsible } from "@/hooks/useCollapsible";
 import { SweepAggregateCard } from "./SweepAggregateCard";
 
 /** Strategy templates (PR-A).

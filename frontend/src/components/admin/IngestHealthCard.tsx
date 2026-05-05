@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import api from "@/lib/api";
-import { CollapsibleHeader, useCollapsible } from "@/components/Collapsible";
+import { CollapsibleHeader } from "@/components/Collapsible";
+import { useCollapsible } from "@/hooks/useCollapsible";
 
 interface IngestHealth {
   job_id: string;

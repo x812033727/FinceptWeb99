@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { useCollapsible } from "@/components/Collapsible";
+import { useCollapsible } from "@/hooks/useCollapsible";
 import type { Turn } from "@/types/discussion";
 import { STANCE_BADGE, renderInlineMarkdown } from "./_helpers";
 

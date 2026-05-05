@@ -4,7 +4,8 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useAuthStore } from "@/store/authStore";
 import api from "@/lib/api";
-import { CollapsibleHeader, useCollapsible } from "@/components/Collapsible";
+import { CollapsibleHeader } from "@/components/Collapsible";
+import { useCollapsible } from "@/hooks/useCollapsible";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,

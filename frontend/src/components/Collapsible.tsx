@@ -1,35 +1,4 @@
-import { ReactNode, useEffect, useState } from "react";
-
-/**
- * Per-card collapse state, persisted to localStorage so users keep
- * their layout preference across reloads / new tabs. Originally lived
- * in `AdminPage` (PR #153 made every admin card collapsible); pulled
- * out here so DiscussionPage / StockDetailPage / PortfolioPage's
- * future card extractions can reuse it without copy-paste.
- *
- * Pair with `<CollapsibleHeader>` below — `useCollapsible` returns
- * `{ open, toggle }`, the header takes both as props.
- */
-export function useCollapsible(storageKey: string, defaultOpen = true) {
-  const [open, setOpen] = useState<boolean>(() => {
-    try {
-      const raw = localStorage.getItem(storageKey);
-      if (raw === "0") return false;
-      if (raw === "1") return true;
-    } catch {
-      /* private mode / quota — fall through to default */
-    }
-    return defaultOpen;
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem(storageKey, open ? "1" : "0");
-    } catch {
-      /* see above */
-    }
-  }, [storageKey, open]);
-  return { open, toggle: () => setOpen((v) => !v) };
-}
+import { ReactNode } from "react";
 
 interface CollapsibleHeaderProps {
   open: boolean;

@@ -775,6 +775,25 @@ def _batch_govt_bank_flow(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def _row_broker_daily_report(row: dict[str, Any]) -> dict[str, Any]:
+    """TaiwanStockTradingDailyReport row → tw_broker_daily_report.
+    Per-symbol (data_id=stock_id) + single-day. Each FinMind row is
+    one (broker, price) leg of trading on the symbol that day; PK is
+    (market, symbol, ts, broker_id, price) so the same broker can have
+    multiple price legs without collisions. The `securities_trader`
+    name is dropped — joinable via `tw_broker_master.broker_id`."""
+    return {
+        "market": row.get("market", "TWSE"),
+        "symbol": _to_str(row.get("symbol")),
+        "ts": _to_date(row.get("ts")),
+        "broker_id": _to_str(row.get("broker_id")),
+        "price": _to_decimal(row.get("price")),
+        "buy_volume": _to_int(row.get("buy_volume")),
+        "sell_volume": _to_int(row.get("sell_volume")),
+        "source": row.get("source", "finmind"),
+    }
+
+
 # ── Wide-format pivots (batch_transform) ─────────────────────────
 #
 # FinMind's quarterly statements + market-wide totals return rows in
@@ -1600,6 +1619,25 @@ MAPPINGS: dict[str, DatasetMapping] = {
         column_map={},
         pk_columns=("market", "ts"),
         batch_transform=_batch_govt_bank_flow,
+        single_day=True,
+    ),
+    "TaiwanStockTradingDailyReport": DatasetMapping(
+        dataset_code="TaiwanStockTradingDailyReport",
+        local_table="tw_broker_daily_report",
+        column_map={
+            "stock_id": "symbol",
+            "date": "ts",
+            "securities_trader_id": "broker_id",
+            "price": "price",
+            "buy": "buy_volume",
+            "sell": "sell_volume",
+        },
+        # PK includes `price` because the same broker can have multiple
+        # price legs (buy/sell at different fills) for the same stock
+        # on the same day.
+        pk_columns=("market", "symbol", "ts", "broker_id", "price"),
+        extra={"market": "TWSE", "source": "finmind"},
+        row_transform=_row_broker_daily_report,
         single_day=True,
     ),
 }

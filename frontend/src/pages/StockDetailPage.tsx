@@ -166,8 +166,11 @@ export default function StockDetailPage() {
       </div>
 
       {/* Tab strip — horizontal scroll on small screens so 6-8 TW tabs
-          don't wrap or overflow. */}
-      <div className="flex border-b border-border overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+          don't wrap or overflow. The right-edge fade is a visual hint
+          that more tabs are reachable beyond the cut-off; sm:hidden
+          since the full strip fits at >=640px. */}
+      <div className="relative -mx-4 sm:mx-0">
+        <div className="flex border-b border-border overflow-x-auto px-4 sm:px-0">
         {mkt === "US" ? (
           <>
             <TabButton active={usTab === "chart"} label={t("stock.history")} onClick={() => setUsTab("chart")} />
@@ -201,6 +204,11 @@ export default function StockDetailPage() {
             <TabButton active={twTab === "news"} label={t("stock.news")} onClick={() => setTwTab("news")} />
           </>
         )}
+        </div>
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute top-0 right-0 h-full w-8 bg-gradient-to-l from-background to-transparent sm:hidden"
+        />
       </div>
 
       {showChart && (

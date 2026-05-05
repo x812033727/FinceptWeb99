@@ -139,7 +139,7 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
-        className={`max-w-[78%] rounded-lg px-4 py-2.5 text-sm whitespace-pre-wrap leading-relaxed ${
+        className={`max-w-[90%] sm:max-w-[78%] rounded-lg px-4 py-2.5 text-sm whitespace-pre-wrap leading-relaxed ${
           isUser
             ? "bg-primary text-primary-foreground"
             : "bg-card border border-border text-foreground"

@@ -3092,6 +3092,63 @@ def _safe_conclusion(raw: str) -> dict[str, Any]:
     }
 
 
+async def _apply_calibration_to_conclusion(
+    db: AsyncSession,
+    discussion: Discussion,
+    conclusion: dict[str, Any],
+) -> None:
+    """PR-C2 follow-up: layer the strategy's isotonic calibration
+    curve over the conclusion's `recommendations`. In place;
+    no-op when:
+
+      - the discussion has no sweep parent
+      - the parent sweep has no strategy_id
+      - the strategy has no calibration_curve yet (cold-start)
+      - the conclusion has no recommendations (parse error
+        placeholder, unrecoverable LLM output)
+
+    Each recommendation gains a `calibrated_confidence` sibling to
+    the existing `confidence` field; the raw value is preserved so
+    PR-C1's outcome_vector still records what the synthesizer
+    originally emitted (needed for the next isotonic re-fit).
+    """
+    sweep_id = getattr(discussion, "sweep_id", None)
+    if sweep_id is None:
+        return
+    recommendations = conclusion.get("recommendations") or []
+    if not isinstance(recommendations, list) or not recommendations:
+        return
+
+    from models.backtest_sweep import BacktestSweep
+    from models.discussion_strategy_template import (
+        DiscussionStrategyTemplate,
+    )
+    sweep_row = await db.scalar(
+        select(BacktestSweep).where(BacktestSweep.id == sweep_id),
+    )
+    if sweep_row is None or sweep_row.strategy_id is None:
+        return
+    tmpl = await db.scalar(
+        select(DiscussionStrategyTemplate).where(
+            DiscussionStrategyTemplate.id == sweep_row.strategy_id,
+        )
+    )
+    if tmpl is None or not tmpl.calibration_curve:
+        return
+
+    from services.confidence_calibrator import apply_calibration
+    for rec in recommendations:
+        if not isinstance(rec, dict):
+            continue
+        try:
+            raw = float(rec.get("confidence", 0.5))
+        except (TypeError, ValueError):
+            raw = 0.5
+        rec["calibrated_confidence"] = round(
+            apply_calibration(raw, tmpl.calibration_curve), 4,
+        )
+
+
 def _parse_recommendations(data: dict[str, Any]) -> list[dict[str, Any]]:
     """Parse and validate the `recommendations` list out of the
     synthesizer JSON. Each entry must have a non-empty `symbol`; bad
@@ -3335,6 +3392,16 @@ async def synthesize_conclusion(
         )
 
     conclusion = _safe_conclusion(assembled)
+    # PR-C2 follow-up: if this discussion is part of a strategy that
+    # has accumulated enough samples for calibration, map every
+    # raw confidence through the isotonic curve and store both
+    # values. The synthesizer's emitted confidence (`confidence`)
+    # is preserved for telemetry / future re-fits; downstream
+    # consumers (UI, scoreboard Brier, calibration audit) read
+    # `calibrated_confidence` for the post-correction value. Only
+    # touches when a curve exists — bare strategies + cold-start
+    # behave identically to today.
+    await _apply_calibration_to_conclusion(db, discussion, conclusion)
     # PR #272: route the write based on whether the transcript already
     # carries a post-mortem self-critique. With post-mortem present,
     # land the synthesizer's output in `post_mortem_conclusion` so

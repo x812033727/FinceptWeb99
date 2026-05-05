@@ -3265,6 +3265,193 @@ def test_safe_conclusion_parse_error_returns_empty_recommendations():
     assert out["recommendations"] == []
 
 
+# ── PR-C2 follow-up: calibration apply in synthesize_conclusion ──
+
+
+@pytest.mark.asyncio
+async def test_apply_calibration_overlays_calibrated_confidence(
+    db_session: AsyncSession, owner: User,
+):
+    """When the strategy template has a calibration curve, every
+    recommendation gains a `calibrated_confidence` field looking
+    up the raw value through the isotonic curve."""
+    from datetime import date as _date
+
+    from models.backtest_sweep import BacktestSweep
+    from models.discussion_strategy_template import (
+        DiscussionStrategyTemplate,
+    )
+
+    tmpl = DiscussionStrategyTemplate(
+        id=uuid.uuid4(),
+        owner_id=owner.id,
+        name="t", topic="t", rules="r", market="TW",
+        persona_ids=["a"],
+        default_rounds=1, default_concurrency=1,
+        default_auto_post_mortem=False,
+        persona_weights={},
+        # Synthesizer is over-confident at 0.9 → curve maps to 0.4.
+        # Lower buckets are well-calibrated.
+        calibration_curve=[
+            {"raw": 0.5, "calibrated": 0.5},
+            {"raw": 0.9, "calibrated": 0.4},
+        ],
+    )
+    db_session.add(tmpl)
+    await db_session.commit()
+
+    sweep = BacktestSweep(
+        id=uuid.uuid4(),
+        owner_id=owner.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["a"],
+        anchor_date=_date(2026, 5, 1),
+        trading_days_count=5, rounds_per_discussion=1,
+        concurrency=1, auto_post_mortem=False,
+        strategy_id=tmpl.id,
+    )
+    db_session.add(sweep)
+    await db_session.commit()
+    await db_session.refresh(sweep)
+
+    discussion = Discussion(
+        id=uuid.uuid4(), owner_id=owner.id,
+        topic="t", rules="r", persona_ids=["a"],
+        market="TW", status="running", current_round=1,
+        sweep_id=sweep.id,
+    )
+    conclusion = {
+        "recommended_symbols": ["A", "B"],
+        "recommendations": [
+            {"symbol": "A", "confidence": 0.9},   # high → calibrate to 0.4
+            {"symbol": "B", "confidence": 0.5},   # mid → calibrate to 0.5
+        ],
+        "reasoning": "x", "risks": [],
+        "time_horizon": "short_term", "consensus_score": 0.5,
+    }
+
+    await discussion_service._apply_calibration_to_conclusion(
+        db_session, discussion, conclusion,
+    )
+
+    confs = {r["symbol"]: r for r in conclusion["recommendations"]}
+    # Raw values preserved so future re-fits stay grounded in
+    # what the synthesizer originally emitted.
+    assert confs["A"]["confidence"] == 0.9
+    assert confs["B"]["confidence"] == 0.5
+    # Calibrated values applied per the curve.
+    assert confs["A"]["calibrated_confidence"] == 0.4
+    assert confs["B"]["calibrated_confidence"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_apply_calibration_noop_when_no_sweep(
+    db_session: AsyncSession, owner: User,
+):
+    """Live discussions (no sweep_id) skip calibration entirely —
+    nothing is added to the recommendations."""
+    discussion = Discussion(
+        id=uuid.uuid4(), owner_id=owner.id,
+        topic="t", rules="r", persona_ids=["a"],
+        market="TW", status="running", current_round=1,
+        sweep_id=None,
+    )
+    conclusion = {
+        "recommended_symbols": ["A"],
+        "recommendations": [{"symbol": "A", "confidence": 0.9}],
+        "reasoning": "x", "risks": [],
+        "time_horizon": "short_term", "consensus_score": 0.5,
+    }
+    await discussion_service._apply_calibration_to_conclusion(
+        db_session, discussion, conclusion,
+    )
+    assert "calibrated_confidence" not in conclusion["recommendations"][0]
+
+
+@pytest.mark.asyncio
+async def test_apply_calibration_noop_when_curve_empty(
+    db_session: AsyncSession, owner: User,
+):
+    """Strategy hasn't accumulated enough samples to fit a curve
+    yet — calibration_curve is None / empty. The function must
+    leave the recommendations unchanged."""
+    from datetime import date as _date
+
+    from models.backtest_sweep import BacktestSweep
+    from models.discussion_strategy_template import (
+        DiscussionStrategyTemplate,
+    )
+
+    tmpl = DiscussionStrategyTemplate(
+        id=uuid.uuid4(),
+        owner_id=owner.id,
+        name="t", topic="t", rules="r", market="TW",
+        persona_ids=["a"],
+        default_rounds=1, default_concurrency=1,
+        default_auto_post_mortem=False,
+        persona_weights={},
+        calibration_curve=None,
+    )
+    db_session.add(tmpl)
+    await db_session.commit()
+
+    sweep = BacktestSweep(
+        id=uuid.uuid4(), owner_id=owner.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["a"],
+        anchor_date=_date(2026, 5, 1),
+        trading_days_count=5, rounds_per_discussion=1,
+        concurrency=1, auto_post_mortem=False,
+        strategy_id=tmpl.id,
+    )
+    db_session.add(sweep)
+    await db_session.commit()
+    await db_session.refresh(sweep)
+
+    discussion = Discussion(
+        id=uuid.uuid4(), owner_id=owner.id,
+        topic="t", rules="r", persona_ids=["a"],
+        market="TW", status="running", current_round=1,
+        sweep_id=sweep.id,
+    )
+    conclusion = {
+        "recommended_symbols": ["A"],
+        "recommendations": [{"symbol": "A", "confidence": 0.9}],
+        "reasoning": "x", "risks": [],
+        "time_horizon": "short_term", "consensus_score": 0.5,
+    }
+    await discussion_service._apply_calibration_to_conclusion(
+        db_session, discussion, conclusion,
+    )
+    assert "calibrated_confidence" not in conclusion["recommendations"][0]
+
+
+@pytest.mark.asyncio
+async def test_apply_calibration_skips_parse_error_conclusion(
+    db_session: AsyncSession, owner: User,
+):
+    """A parse-error placeholder conclusion has empty recommendations.
+    The function must not crash trying to map an empty list."""
+    discussion = Discussion(
+        id=uuid.uuid4(), owner_id=owner.id,
+        topic="t", rules="r", persona_ids=["a"],
+        market="TW", status="running", current_round=1,
+        sweep_id=uuid.uuid4(),
+    )
+    conclusion = {
+        "recommended_symbols": [],
+        "recommendations": [],
+        "reasoning": "parse failed", "risks": [],
+        "time_horizon": "short_term", "consensus_score": 0.0,
+        "_parse_error": True,
+    }
+    # Should not raise even though the sweep_id won't resolve.
+    await discussion_service._apply_calibration_to_conclusion(
+        db_session, discussion, conclusion,
+    )
+    assert conclusion["recommendations"] == []
+
+
 def test_format_transcript_renders_user_input_as_directive():
     """The post-mortem injection lands as a `_user/user_input` turn.
     The synthesizer's `_format_transcript` must render it as a

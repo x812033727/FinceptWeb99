@@ -622,6 +622,114 @@ def _row_delisting(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _row_short_sale_suspension(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "symbol": _to_str(row.get("symbol")),
+        "suspended_at": _to_date(row.get("suspended_at")),
+        "resumed_at": _to_date(row.get("resumed_at")),
+        "reason": _to_str(row.get("reason")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_day_trade_fee(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "market": row.get("market", "TWSE"),
+        "symbol": _to_str(row.get("symbol")),
+        "ts": _to_date(row.get("ts")),
+        "fee_rate": _to_decimal(row.get("fee_rate")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_cb_inst_daily(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "cb_id": _to_str(row.get("cb_id")),
+        "ts": _to_date(row.get("ts")),
+        "foreign_buy": _to_int(row.get("foreign_buy")),
+        "foreign_sell": _to_int(row.get("foreign_sell")),
+        "sitc_buy": _to_int(row.get("sitc_buy")),
+        "sitc_sell": _to_int(row.get("sitc_sell")),
+        "dealer_buy": _to_int(row.get("dealer_buy")),
+        "dealer_sell": _to_int(row.get("dealer_sell")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_futures_settlement(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "contract": _to_str(row.get("contract")),
+        "settlement_date": _to_date(row.get("settlement_date")),
+        "final_settlement_price": _to_decimal(row.get("final_settlement_price")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_futures_spread(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ts": _to_date(row.get("ts")),
+        "spread_pair": _to_str(row.get("spread_pair")),
+        "open": _to_decimal(row.get("open")),
+        "close": _to_decimal(row.get("close")),
+        "volume": _to_int(row.get("volume")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _batch_cb_daily(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """ConvertibleBondDaily emits multiple rows per (cb_id, date) — one
+    per `transaction_type` ('等價' / '買盤' / '賣盤'). The local
+    `tw_cb_daily` schema is one OHLCV row per (cb_id, date); we keep
+    only the regular `等價` (matched-trade) leg so the PK is
+    collision-free and the OHLCV reflects actual market prints rather
+    than indicative bid/ask quotes from the buy/sell legs."""
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        if str(r.get("transaction_type") or "").strip() != "等價":
+            continue
+        out.append({
+            "cb_id": _to_str(r.get("cb_id")),
+            "ts": _to_date(r.get("date")),
+            "open": _to_decimal(r.get("open")),
+            "high": _to_decimal(r.get("max")),
+            "low": _to_decimal(r.get("min")),
+            "close": _to_decimal(r.get("close")),
+            # FinMind ships unit count (張); local schema's `volume` is
+            # the same convention. trading_value would be the notional
+            # in TWD but the schema doesn't have a column for it.
+            "volume": _to_int(r.get("unit")),
+            "source": "finmind",
+        })
+    return out
+
+
+def _batch_futures_dealer_volume(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Each FinMind row is one (date, dealer, contract, session). Local
+    schema PK is (ts, dealer_id, contract) — no session axis — so we
+    aggregate day + after-hours volumes for the same (dealer, contract)
+    into one local row. is_after_hour split is lost; operators wanting
+    the breakdown can re-fetch and split client-side."""
+    agg: dict[tuple[date | None, str, str], int] = {}
+    for r in rows:
+        key = (
+            _to_date(r.get("date")),
+            str(r.get("dealer_code") or ""),
+            str(r.get("futures_id") or ""),
+        )
+        v = _to_int(r.get("volume")) or 0
+        agg[key] = agg.get(key, 0) + v
+    return [
+        {
+            "ts": ts,
+            "dealer_id": dealer or None,
+            "contract": contract or None,
+            "volume": vol,
+            "source": "finmind",
+        }
+        for (ts, dealer, contract), vol in agg.items()
+    ]
+
+
 # ── Single-day datasets (batch transforms) ───────────────────────
 #
 # FinMind's intraday-grain endpoints (KBar, PriceTick,
@@ -1745,6 +1853,88 @@ MAPPINGS: dict[str, DatasetMapping] = {
         extra={"market": "TWSE", "source": "finmind"},
         row_transform=_row_broker_daily_report,
         single_day=True,
+    ),
+    "TaiwanStockMarginShortSaleSuspension": DatasetMapping(
+        dataset_code="TaiwanStockMarginShortSaleSuspension",
+        local_table="tw_short_sale_suspension",
+        column_map={
+            "stock_id": "symbol",
+            "date": "suspended_at",
+            "end_date": "resumed_at",
+            "reason": "reason",
+        },
+        pk_columns=("symbol", "suspended_at"),
+        extra={"source": "finmind"},
+        row_transform=_row_short_sale_suspension,
+    ),
+    "TaiwanStockDayTradingBorrowingFeeRate": DatasetMapping(
+        dataset_code="TaiwanStockDayTradingBorrowingFeeRate",
+        local_table="tw_day_trade_fee",
+        column_map={
+            "date": "ts",
+            "stock_id": "symbol",
+            "InvestorBorrowingFeeRate": "fee_rate",
+        },
+        pk_columns=("market", "symbol", "ts"),
+        extra={"market": "TWSE", "source": "finmind"},
+        row_transform=_row_day_trade_fee,
+    ),
+    "TaiwanStockConvertibleBondInstitutionalInvestors": DatasetMapping(
+        dataset_code="TaiwanStockConvertibleBondInstitutionalInvestors",
+        local_table="tw_cb_inst_daily",
+        column_map={
+            "cb_id": "cb_id",
+            "date": "ts",
+            "Foreign_Investor_Buy": "foreign_buy",
+            "Foreign_Investor_Sell": "foreign_sell",
+            "Investment_Trust_Buy": "sitc_buy",
+            "Investment_Trust_Sell": "sitc_sell",
+            "Dealer_self_Buy": "dealer_buy",
+            "Dealer_self_Sell": "dealer_sell",
+        },
+        pk_columns=("cb_id", "ts"),
+        extra={"source": "finmind"},
+        row_transform=_row_cb_inst_daily,
+    ),
+    "TaiwanFuturesFinalSettlementPrice": DatasetMapping(
+        dataset_code="TaiwanFuturesFinalSettlementPrice",
+        local_table="tw_futures_settlement",
+        column_map={
+            "futures_id": "contract",
+            "date": "settlement_date",
+            "settlement_price": "final_settlement_price",
+        },
+        pk_columns=("contract", "settlement_date"),
+        extra={"source": "finmind"},
+        row_transform=_row_futures_settlement,
+    ),
+    "TaiwanFuturesSpreadTrading": DatasetMapping(
+        dataset_code="TaiwanFuturesSpreadTrading",
+        local_table="tw_futures_spread",
+        column_map={
+            "date": "ts",
+            "contract_date": "spread_pair",
+            "open": "open",
+            "close": "close",
+            "spread_to_spread_volume": "volume",
+        },
+        pk_columns=("ts", "spread_pair"),
+        extra={"source": "finmind"},
+        row_transform=_row_futures_spread,
+    ),
+    "TaiwanStockConvertibleBondDaily": DatasetMapping(
+        dataset_code="TaiwanStockConvertibleBondDaily",
+        local_table="tw_cb_daily",
+        column_map={},  # batch_transform owns column resolution
+        pk_columns=("cb_id", "ts"),
+        batch_transform=_batch_cb_daily,
+    ),
+    "TaiwanFuturesDealerTradingVolumeDaily": DatasetMapping(
+        dataset_code="TaiwanFuturesDealerTradingVolumeDaily",
+        local_table="tw_futures_dealer_volume",
+        column_map={},
+        pk_columns=("ts", "dealer_id", "contract"),
+        batch_transform=_batch_futures_dealer_volume,
     ),
 }
 

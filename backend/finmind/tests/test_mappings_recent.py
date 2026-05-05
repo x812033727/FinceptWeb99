@@ -29,8 +29,6 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-import pytest
-
 from finmind.ingest.mappings import (
     MAPPINGS,
     _batch_cb_daily,
@@ -40,7 +38,6 @@ from finmind.ingest.mappings import (
     _batch_option_inst_regular,
     _batch_stock_tick,
     _row_stock_info_with_warrant,
-    transform_row,
 )
 
 
@@ -76,39 +73,45 @@ def test_row_stock_info_with_warrant_etf_is_not_warrant():
 
 
 def test_row_stock_info_with_warrant_call_warrant_is_warrant():
-    """`認購` (call warrant) in stock_name flags is_warrant=True."""
-    out = _row_stock_info_with_warrant({
+    """`認購` (call warrant) in stock_name flags is_warrant=True. The
+    bare character `購` alone (e.g. `智邦凱基53購02`) doesn't trigger
+    — only the full keyword does, which avoids false positives on
+    abbreviated issuer codes."""
+    bare = _row_stock_info_with_warrant({
         "symbol": "089999",
-        "name_zh": "智邦凱基53購02",  # contains 購
+        "name_zh": "智邦凱基53購02",  # contains 購, but not 認購
         "industry_category": "全部(不含大盤、指數)",
         "market": "twse",
     })
-    # 'X購Y' alone doesn't trigger — full keyword `認購` does.
-    # Real warrant names include `認購` explicitly. Verify with one:
-    out2 = _row_stock_info_with_warrant({
+    assert bare["is_warrant"] is False
+
+    full = _row_stock_info_with_warrant({
         "symbol": "057178",
         "name_zh": "中華電認購03",
         "industry_category": "全部(不含大盤、指數)",
         "market": "twse",
     })
-    assert out2["is_warrant"] is True
+    assert full["is_warrant"] is True
 
 
 def test_row_stock_info_with_warrant_put_warrant_is_warrant():
-    out = _row_stock_info_with_warrant({
+    """Same shape as the call-warrant test: bare `售` doesn't trigger,
+    full `認售` does."""
+    bare = _row_stock_info_with_warrant({
         "symbol": "08999P",
-        "name_zh": "臺股指凱基54售08",  # contains 售
+        "name_zh": "臺股指凱基54售08",  # contains 售, but not 認售
         "industry_category": "全部(不含大盤、指數)",
         "market": "twse",
     })
-    # Just `售` alone doesn't trigger; `認售` does.
-    out2 = _row_stock_info_with_warrant({
+    assert bare["is_warrant"] is False
+
+    full = _row_stock_info_with_warrant({
         "symbol": "08999P",
         "name_zh": "臺股指凱基認售54",
         "industry_category": "全部(不含大盤、指數)",
         "market": "twse",
     })
-    assert out2["is_warrant"] is True
+    assert full["is_warrant"] is True
 
 
 def test_row_stock_info_with_warrant_bull_with_digit_is_warrant():

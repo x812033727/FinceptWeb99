@@ -97,23 +97,37 @@ def suggested_range(
     return end - timedelta(days=days), end
 
 
+# Datasets whose `data_id` is a warrant code (not an equity stock_id).
+# When fanning per-symbol, these datasets read from the warrant
+# universe (`is_warrant=true` rows in `tw_stock_info`) instead of the
+# default equity universe. Kept as an explicit set rather than a name
+# heuristic because `TaiwanStockInfoWithWarrant` *is* market-wide and
+# would be misclassified by a substring match.
+_WARRANT_UNIVERSE_DATASETS: frozenset[str] = frozenset({
+    "TaiwanStockWarrantTradingDailyReport",
+})
+
+
 def expand_due_datasets(
     datasets: list[DatasetSource],
     now: datetime,
     *,
     symbols: list[str] | None = None,
+    warrant_symbols: list[str] | None = None,
 ) -> list[DueChunk]:
     """Pure expansion — turns enabled+due dataset rows into a flat
     work list of DueChunks the runner can iterate.
 
-    `symbols` is the universe to fan per-symbol datasets across. When
-    None, per-symbol datasets are returned with `symbol=None` (the
+    `symbols` is the equity universe to fan default per-symbol datasets
+    across. `warrant_symbols` is the warrant universe used by datasets
+    listed in `_WARRANT_UNIVERSE_DATASETS`. When the relevant universe
+    is None, per-symbol datasets are returned with `symbol=None` (the
     runner is responsible for handling that — most upstream sources
     will fail without a symbol; the chunk gets recorded as failed
-    with a clear error). When `symbols` is non-empty, one DueChunk
+    with a clear error). When the universe is non-empty, one DueChunk
     is emitted per (dataset, symbol).
 
-    Market-wide datasets ignore `symbols` and emit one chunk each.
+    Market-wide datasets ignore both universes and emit one chunk each.
     """
     chunks: list[DueChunk] = []
     for ds in datasets:
@@ -124,25 +138,31 @@ def expand_due_datasets(
 
         rs, re = suggested_range(ds.ingest_freq, now)
 
-        if ds.per_symbol and symbols:
-            for sym in symbols:
-                chunks.append(DueChunk(
-                    dataset_code=ds.dataset_code,
-                    local_table=ds.local_table,
-                    active_source=ds.active_source,
-                    per_symbol=True,
-                    symbol=sym,
-                    range_start=rs,
-                    range_end=re,
-                ))
-        else:
-            chunks.append(DueChunk(
-                dataset_code=ds.dataset_code,
-                local_table=ds.local_table,
-                active_source=ds.active_source,
-                per_symbol=ds.per_symbol,
-                symbol=None,
-                range_start=rs,
-                range_end=re,
-            ))
+        if ds.per_symbol:
+            universe = (
+                warrant_symbols
+                if ds.dataset_code in _WARRANT_UNIVERSE_DATASETS
+                else symbols
+            )
+            if universe:
+                for sym in universe:
+                    chunks.append(DueChunk(
+                        dataset_code=ds.dataset_code,
+                        local_table=ds.local_table,
+                        active_source=ds.active_source,
+                        per_symbol=True,
+                        symbol=sym,
+                        range_start=rs,
+                        range_end=re,
+                    ))
+                continue
+        chunks.append(DueChunk(
+            dataset_code=ds.dataset_code,
+            local_table=ds.local_table,
+            active_source=ds.active_source,
+            per_symbol=ds.per_symbol,
+            symbol=None,
+            range_start=rs,
+            range_end=re,
+        ))
     return chunks

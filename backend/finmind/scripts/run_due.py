@@ -45,15 +45,17 @@ from finmind.db.session import (  # noqa: E402
 )
 from finmind.scheduler.runner import (  # noqa: E402
     get_universe_from_tw_stock_info,
+    get_warrant_universe_from_tw_stock_info,
     run_due_now,
 )
 
 
 async def _load_symbols(args, session) -> list[str] | None:
-    """Resolve the per-symbol universe per the CLI flags. Mutually
-    exclusive — checked at parse time. Returns None when no source
-    is specified (per-symbol datasets fall through to symbol=None
-    and the runner records them as failed unless --skip-per-symbol)."""
+    """Resolve the per-symbol equity universe per the CLI flags.
+    Mutually exclusive — checked at parse time. Returns None when no
+    source is specified (per-symbol datasets fall through to
+    symbol=None and the runner records them as failed unless
+    --skip-per-symbol)."""
     if args.symbols:
         return [s.strip() for s in args.symbols.split(",") if s.strip()]
     if args.symbols_file:
@@ -75,6 +77,22 @@ async def _load_symbols(args, session) -> list[str] | None:
                 "this flag (or fall back to --symbols-file)."
             )
         return symbols
+    return None
+
+
+async def _load_warrant_symbols(args, session) -> list[str] | None:
+    """Resolve the warrant-only universe — independent of the equity
+    universe because the two are routed to different dataset codes.
+    Returns None when neither flag is set (warrant per-symbol datasets
+    record as failed unless skipped)."""
+    if args.warrant_symbols_file:
+        return [
+            line.strip()
+            for line in Path(args.warrant_symbols_file).read_text().splitlines()
+            if line.strip() and not line.startswith("#")
+        ]
+    if args.warrant_universe_from_tw_stock_info:
+        return await get_warrant_universe_from_tw_stock_info(session)
     return None
 
 
@@ -117,6 +135,24 @@ async def amain() -> int:
         ),
     )
     parser.add_argument(
+        "--warrant-universe-from-tw-stock-info",
+        action="store_true",
+        help=(
+            "Auto-discover the warrant universe from `tw_stock_info` "
+            "(`is_warrant=true` rows, 6-char codes only). Only datasets "
+            "in dispatcher._WARRANT_UNIVERSE_DATASETS use this — equity "
+            "per-symbol datasets continue to use the equity universe."
+        ),
+    )
+    parser.add_argument(
+        "--warrant-symbols-file",
+        help=(
+            "File with one warrant code per line, used by datasets in "
+            "dispatcher._WARRANT_UNIVERSE_DATASETS. Mutually exclusive "
+            "with --warrant-universe-from-tw-stock-info."
+        ),
+    )
+    parser.add_argument(
         "--skip-per-symbol",
         action="store_true",
         help=(
@@ -145,12 +181,20 @@ async def amain() -> int:
         force=True,
     )
 
+    if args.warrant_universe_from_tw_stock_info and args.warrant_symbols_file:
+        parser.error(
+            "specify at most one of --warrant-universe-from-tw-stock-info / "
+            "--warrant-symbols-file"
+        )
+
     async with FinmindAsyncSessionLocal() as session:
         symbols = await _load_symbols(args, session)
+        warrant_symbols = await _load_warrant_symbols(args, session)
 
         outcomes = await run_due_now(
             session,
             symbols=symbols,
+            warrant_symbols=warrant_symbols,
             now=datetime.now(tz=timezone.utc),
         )
 

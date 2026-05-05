@@ -1724,6 +1724,28 @@ MAPPINGS: dict[str, DatasetMapping] = {
         pk_columns=("contract", "ts", "session", "call_put"),
         batch_transform=_batch_option_inst_afterhours,
     ),
+    # Same shape as TaiwanStockTradingDailyReport, but indexed by a
+    # warrant code instead of an equity stock_id. The runner picks the
+    # warrant universe via `dispatcher._WARRANT_UNIVERSE_DATASETS`, so
+    # a `--warrant-universe-from-tw-stock-info` invocation reaches it
+    # without bleeding the warrant fan-out into equity per-symbol
+    # datasets.
+    "TaiwanStockWarrantTradingDailyReport": DatasetMapping(
+        dataset_code="TaiwanStockWarrantTradingDailyReport",
+        local_table="tw_broker_daily_report",
+        column_map={
+            "stock_id": "symbol",
+            "date": "ts",
+            "securities_trader_id": "broker_id",
+            "price": "price",
+            "buy": "buy_volume",
+            "sell": "sell_volume",
+        },
+        pk_columns=("market", "symbol", "ts", "broker_id", "price"),
+        extra={"market": "TWSE", "source": "finmind"},
+        row_transform=_row_broker_daily_report,
+        single_day=True,
+    ),
 }
 
 

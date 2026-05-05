@@ -1,6 +1,27 @@
 import { useEffect } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import {
+  Activity,
+  Bell,
+  Bitcoin,
+  Bot,
+  Briefcase,
+  ChevronDown,
+  ChevronRight,
+  Database,
+  Globe,
+  LayoutGrid,
+  LineChart,
+  Calculator,
+  MessagesSquare,
+  Search,
+  Settings,
+  Shield,
+  Star,
+  X,
+  type LucideIcon,
+} from "lucide-react";
 import { logout } from "@/lib/auth";
 import { useAuthStore } from "@/store/authStore";
 import { useCollapsible } from "@/components/Collapsible";
@@ -10,7 +31,7 @@ import { cn } from "@/lib/utils";
 interface NavItemDef {
   to: string;
   labelKey: string;
-  icon: string;
+  Icon: LucideIcon;
   adminOnly?: boolean;
 }
 
@@ -25,43 +46,43 @@ const NAV_GROUPS: NavGroupDef[] = [
     key: "markets",
     labelKey: "nav.group.markets",
     items: [
-      { to: "/dashboard", labelKey: "nav.dashboard", icon: "⊞" },
-      { to: "/market/US", labelKey: "nav.us_market", icon: "🇺🇸" },
-      { to: "/market/TW", labelKey: "nav.tw_market", icon: "🇹🇼" },
-      { to: "/market/CRYPTO", labelKey: "nav.crypto", icon: "₿" },
-      { to: "/screener", labelKey: "nav.screener", icon: "🔍" },
-      { to: "/macro", labelKey: "nav.macro", icon: "🌐" },
+      { to: "/dashboard", labelKey: "nav.dashboard", Icon: LayoutGrid },
+      { to: "/market/US", labelKey: "nav.us_market", Icon: LineChart },
+      { to: "/market/TW", labelKey: "nav.tw_market", Icon: Activity },
+      { to: "/market/CRYPTO", labelKey: "nav.crypto", Icon: Bitcoin },
+      { to: "/screener", labelKey: "nav.screener", Icon: Search },
+      { to: "/macro", labelKey: "nav.macro", Icon: Globe },
     ],
   },
   {
     key: "workspace",
     labelKey: "nav.group.workspace",
     items: [
-      { to: "/watchlist", labelKey: "nav.watchlist", icon: "⭐" },
-      { to: "/alerts", labelKey: "nav.alerts", icon: "🔔" },
-      { to: "/portfolio", labelKey: "nav.portfolio", icon: "📊" },
-      { to: "/analytics", labelKey: "nav.analytics", icon: "📐" },
+      { to: "/watchlist", labelKey: "nav.watchlist", Icon: Star },
+      { to: "/alerts", labelKey: "nav.alerts", Icon: Bell },
+      { to: "/portfolio", labelKey: "nav.portfolio", Icon: Briefcase },
+      { to: "/analytics", labelKey: "nav.analytics", Icon: Calculator },
     ],
   },
   {
     key: "ai",
     labelKey: "nav.group.ai",
     items: [
-      { to: "/ai", labelKey: "nav.ai", icon: "🤖" },
-      { to: "/discussion", labelKey: "nav.discussion", icon: "💬" },
+      { to: "/ai", labelKey: "nav.ai", Icon: Bot },
+      { to: "/discussion", labelKey: "nav.discussion", Icon: MessagesSquare },
     ],
   },
   {
     key: "data",
     labelKey: "nav.group.data",
-    items: [{ to: "/finmind", labelKey: "nav.finmind", icon: "🧬" }],
+    items: [{ to: "/finmind", labelKey: "nav.finmind", Icon: Database }],
   },
   {
     key: "system",
     labelKey: "nav.group.system",
     items: [
-      { to: "/settings", labelKey: "nav.settings", icon: "⚙" },
-      { to: "/admin", labelKey: "nav.admin", icon: "🛡", adminOnly: true },
+      { to: "/settings", labelKey: "nav.settings", Icon: Settings },
+      { to: "/admin", labelKey: "nav.admin", Icon: Shield, adminOnly: true },
     ],
   },
 ];
@@ -69,6 +90,7 @@ const NAV_GROUPS: NavGroupDef[] = [
 function NavItem({ item, onNavigate }: { item: NavItemDef; onNavigate?: () => void }) {
   const { t } = useTranslation();
   const prefetch = () => prefetchPage(item.to);
+  const Icon = item.Icon;
   return (
     <NavLink
       to={item.to}
@@ -85,7 +107,7 @@ function NavItem({ item, onNavigate }: { item: NavItemDef; onNavigate?: () => vo
         )
       }
     >
-      <span className="text-base leading-none w-4">{item.icon}</span>
+      <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
       {t(item.labelKey)}
     </NavLink>
   );
@@ -110,9 +132,11 @@ function NavGroup({ group, visibleItems, defaultOpen, onNavigate }: NavGroupProp
         className="w-full flex items-center justify-between px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors min-h-[28px]"
       >
         <span>{t(group.labelKey)}</span>
-        <span className="text-[9px]" aria-hidden="true">
-          {open ? "▾" : "▸"}
-        </span>
+        {open ? (
+          <ChevronDown className="h-3 w-3" aria-hidden="true" />
+        ) : (
+          <ChevronRight className="h-3 w-3" aria-hidden="true" />
+        )}
       </button>
       {open && (
         <div className="space-y-0.5">
@@ -186,9 +210,9 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
           <button
             onClick={onClose}
             aria-label={t("topbar.close_menu")}
-            className="lg:hidden p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent/10 text-base leading-none min-h-[32px] min-w-[32px]"
+            className="lg:hidden p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent/10 min-h-[32px] min-w-[32px] flex items-center justify-center"
           >
-            ×
+            <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
 

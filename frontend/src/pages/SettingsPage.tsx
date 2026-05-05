@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { Moon, Shield, Sun, X } from "lucide-react";
 import api from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 import { useThemeStore } from "@/store/themeStore";
@@ -150,11 +151,19 @@ export default function SettingsPage() {
             </div>
             <button
               onClick={toggleTheme}
-              className="px-3 py-1.5 rounded border border-border text-sm hover:bg-accent/10 transition-colors min-h-[36px]"
+              className="px-3 py-1.5 rounded border border-border text-sm hover:bg-accent/10 transition-colors min-h-[36px] inline-flex items-center gap-2"
             >
-              {theme === "dark"
-                ? `☀ ${t("settings.preferences.switch_to_light")}`
-                : `🌙 ${t("settings.preferences.switch_to_dark")}`}
+              {theme === "dark" ? (
+                <>
+                  <Sun className="h-3.5 w-3.5" aria-hidden="true" />
+                  {t("settings.preferences.switch_to_light")}
+                </>
+              ) : (
+                <>
+                  <Moon className="h-3.5 w-3.5" aria-hidden="true" />
+                  {t("settings.preferences.switch_to_dark")}
+                </>
+              )}
             </button>
           </div>
 
@@ -266,9 +275,10 @@ export default function SettingsPage() {
                 </div>
                 <button
                   onClick={() => deleteKey.mutate(k.id)}
-                  className="text-muted-foreground hover:text-red-400 transition-colors text-base leading-none ml-3 min-h-[32px] min-w-[32px] flex items-center justify-center"
+                  aria-label="Delete API key"
+                  className="text-muted-foreground hover:text-red-400 transition-colors ml-3 min-h-[32px] min-w-[32px] flex items-center justify-center rounded hover:bg-accent/10"
                 >
-                  ×
+                  <X className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>
               </li>
             ))}
@@ -283,9 +293,10 @@ export default function SettingsPage() {
         <div className="text-center pt-2">
           <Link
             to="/admin"
-            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
-            🛡 {t("settings.admin_link")} →
+            <Shield className="h-3.5 w-3.5" aria-hidden="true" />
+            {t("settings.admin_link")} →
           </Link>
         </div>
       )}

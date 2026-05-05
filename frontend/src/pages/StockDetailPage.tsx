@@ -7,7 +7,8 @@ import CandlestickChart from "@/components/charts/CandlestickChart";
 import { DataSourceBadge } from "@/components/DataSourceBadge";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import type { Market } from "@/types/market";
-import { PeriodButton, StatRow, TabButton } from "@/components/stock/_atoms";
+import { PeriodButton, StatRow } from "@/components/stock/_atoms";
+import { TabStrip, type TabDef } from "@/components/stock/TabStrip";
 import {
   fetchEarnings,
   fetchFundamentals,
@@ -98,6 +99,43 @@ export default function StockDetailPage() {
     : mkt === "US" ? usTab === "chart"
     : twTab === "chart";
 
+  const tabDefs: TabDef[] = (() => {
+    if (mkt === "US") {
+      return [
+        { key: "chart", label: t("stock.history"), active: usTab === "chart", onClick: () => setUsTab("chart") },
+        { key: "financials", label: t("stock.fundamentals"), active: usTab === "financials", onClick: () => setUsTab("financials") },
+        { key: "options", label: t("stock.options"), active: usTab === "options", onClick: () => setUsTab("options") },
+        { key: "news", label: t("stock.news"), active: usTab === "news", onClick: () => setUsTab("news") },
+      ];
+    }
+    if (mkt === "CRYPTO") {
+      return [
+        { key: "chart", label: t("stock.history"), active: cryptoTab === "chart", onClick: () => setCryptoTab("chart") },
+        { key: "news", label: t("stock.news"), active: cryptoTab === "news", onClick: () => setCryptoTab("news") },
+      ];
+    }
+    if (isETF) {
+      return [
+        { key: "chart", label: t("stock.history"), active: twTab === "chart", onClick: () => setTwTab("chart") },
+        { key: "holdings", label: t("stock.etf.holdings_tab"), active: twTab === "holdings", onClick: () => setTwTab("holdings") },
+        { key: "dividends", label: t("stock.dividends.tab"), active: twTab === "dividends", onClick: () => setTwTab("dividends") },
+        { key: "institutional", label: "法人買賣超", active: twTab === "institutional", onClick: () => setTwTab("institutional") },
+        { key: "margin", label: "融資融券", active: twTab === "margin", onClick: () => setTwTab("margin") },
+        { key: "news", label: t("stock.news"), active: twTab === "news", onClick: () => setTwTab("news") },
+      ];
+    }
+    return [
+      { key: "chart", label: t("stock.history"), active: twTab === "chart", onClick: () => setTwTab("chart") },
+      { key: "health", label: t("stock.health.tab"), active: twTab === "health", onClick: () => setTwTab("health") },
+      { key: "valuation", label: t("stock.valuation.tab"), active: twTab === "valuation", onClick: () => setTwTab("valuation") },
+      { key: "dividends", label: t("stock.dividends.tab"), active: twTab === "dividends", onClick: () => setTwTab("dividends") },
+      { key: "institutional", label: "法人買賣超", active: twTab === "institutional", onClick: () => setTwTab("institutional") },
+      { key: "margin", label: "融資融券", active: twTab === "margin", onClick: () => setTwTab("margin") },
+      { key: "revenue", label: "月營收", active: twTab === "revenue", onClick: () => setTwTab("revenue") },
+      { key: "news", label: t("stock.news"), active: twTab === "news", onClick: () => setTwTab("news") },
+    ];
+  })();
+
   return (
     <div className="p-4 sm:p-6 space-y-4 sm:space-y-5">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -165,51 +203,11 @@ export default function StockDetailPage() {
         </div>
       </div>
 
-      {/* Tab strip — horizontal scroll on small screens so 6-8 TW tabs
-          don't wrap or overflow. The right-edge fade is a visual hint
-          that more tabs are reachable beyond the cut-off; sm:hidden
-          since the full strip fits at >=640px. */}
-      <div className="relative -mx-4 sm:mx-0">
-        <div className="flex border-b border-border overflow-x-auto px-4 sm:px-0">
-        {mkt === "US" ? (
-          <>
-            <TabButton active={usTab === "chart"} label={t("stock.history")} onClick={() => setUsTab("chart")} />
-            <TabButton active={usTab === "financials"} label={t("stock.fundamentals")} onClick={() => setUsTab("financials")} />
-            <TabButton active={usTab === "options"} label={t("stock.options")} onClick={() => setUsTab("options")} />
-            <TabButton active={usTab === "news"} label={t("stock.news")} onClick={() => setUsTab("news")} />
-          </>
-        ) : mkt === "CRYPTO" ? (
-          <>
-            <TabButton active={cryptoTab === "chart"} label={t("stock.history")} onClick={() => setCryptoTab("chart")} />
-            <TabButton active={cryptoTab === "news"} label={t("stock.news")} onClick={() => setCryptoTab("news")} />
-          </>
-        ) : isETF ? (
-          <>
-            <TabButton active={twTab === "chart"} label={t("stock.history")} onClick={() => setTwTab("chart")} />
-            <TabButton active={twTab === "holdings"} label={t("stock.etf.holdings_tab")} onClick={() => setTwTab("holdings")} />
-            <TabButton active={twTab === "dividends"} label={t("stock.dividends.tab")} onClick={() => setTwTab("dividends")} />
-            <TabButton active={twTab === "institutional"} label="法人買賣超" onClick={() => setTwTab("institutional")} />
-            <TabButton active={twTab === "margin"} label="融資融券" onClick={() => setTwTab("margin")} />
-            <TabButton active={twTab === "news"} label={t("stock.news")} onClick={() => setTwTab("news")} />
-          </>
-        ) : (
-          <>
-            <TabButton active={twTab === "chart"} label={t("stock.history")} onClick={() => setTwTab("chart")} />
-            <TabButton active={twTab === "health"} label={t("stock.health.tab")} onClick={() => setTwTab("health")} />
-            <TabButton active={twTab === "valuation"} label={t("stock.valuation.tab")} onClick={() => setTwTab("valuation")} />
-            <TabButton active={twTab === "dividends"} label={t("stock.dividends.tab")} onClick={() => setTwTab("dividends")} />
-            <TabButton active={twTab === "institutional"} label="法人買賣超" onClick={() => setTwTab("institutional")} />
-            <TabButton active={twTab === "margin"} label="融資融券" onClick={() => setTwTab("margin")} />
-            <TabButton active={twTab === "revenue"} label="月營收" onClick={() => setTwTab("revenue")} />
-            <TabButton active={twTab === "news"} label={t("stock.news")} onClick={() => setTwTab("news")} />
-          </>
-        )}
-        </div>
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute top-0 right-0 h-full w-8 bg-gradient-to-l from-background to-transparent sm:hidden"
-        />
-      </div>
+      {/* TabStrip collapses tabs 5+ into a "More" dropdown below md
+          so 8-tab TW stocks don't force horizontal scroll on phones.
+          Active tab is preserved in the visible row even if it would
+          otherwise sit in the overflow zone. */}
+      <TabStrip tabs={tabDefs} />
 
       {showChart && (
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-5">

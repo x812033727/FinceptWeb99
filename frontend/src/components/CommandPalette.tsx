@@ -10,6 +10,27 @@ import {
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
+  Activity,
+  Bell,
+  Bitcoin,
+  Bot,
+  Briefcase,
+  Calculator,
+  Database,
+  Globe,
+  KeyRound,
+  LayoutGrid,
+  LineChart,
+  LogOut,
+  MessagesSquare,
+  Palette,
+  Search,
+  Settings as SettingsIcon,
+  Shield,
+  Star,
+  type LucideIcon,
+} from "lucide-react";
+import {
   CommandDialog,
   CommandEmpty,
   CommandGroup,
@@ -67,26 +88,26 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
 interface RouteEntry {
   to: string;
   labelKey: string;
-  icon: string;
+  Icon: LucideIcon;
   adminOnly?: boolean;
 }
 
 const ROUTE_ENTRIES: RouteEntry[] = [
-  { to: "/dashboard", labelKey: "nav.dashboard", icon: "⊞" },
-  { to: "/market/US", labelKey: "nav.us_market", icon: "🇺🇸" },
-  { to: "/market/TW", labelKey: "nav.tw_market", icon: "🇹🇼" },
-  { to: "/market/CRYPTO", labelKey: "nav.crypto", icon: "₿" },
-  { to: "/screener", labelKey: "nav.screener", icon: "🔍" },
-  { to: "/macro", labelKey: "nav.macro", icon: "🌐" },
-  { to: "/watchlist", labelKey: "nav.watchlist", icon: "⭐" },
-  { to: "/alerts", labelKey: "nav.alerts", icon: "🔔" },
-  { to: "/portfolio", labelKey: "nav.portfolio", icon: "📊" },
-  { to: "/analytics", labelKey: "nav.analytics", icon: "📐" },
-  { to: "/ai", labelKey: "nav.ai", icon: "🤖" },
-  { to: "/discussion", labelKey: "nav.discussion", icon: "💬" },
-  { to: "/finmind", labelKey: "nav.finmind", icon: "🧬" },
-  { to: "/settings", labelKey: "nav.settings", icon: "⚙" },
-  { to: "/admin", labelKey: "nav.admin", icon: "🛡", adminOnly: true },
+  { to: "/dashboard", labelKey: "nav.dashboard", Icon: LayoutGrid },
+  { to: "/market/US", labelKey: "nav.us_market", Icon: LineChart },
+  { to: "/market/TW", labelKey: "nav.tw_market", Icon: Activity },
+  { to: "/market/CRYPTO", labelKey: "nav.crypto", Icon: Bitcoin },
+  { to: "/screener", labelKey: "nav.screener", Icon: Search },
+  { to: "/macro", labelKey: "nav.macro", Icon: Globe },
+  { to: "/watchlist", labelKey: "nav.watchlist", Icon: Star },
+  { to: "/alerts", labelKey: "nav.alerts", Icon: Bell },
+  { to: "/portfolio", labelKey: "nav.portfolio", Icon: Briefcase },
+  { to: "/analytics", labelKey: "nav.analytics", Icon: Calculator },
+  { to: "/ai", labelKey: "nav.ai", Icon: Bot },
+  { to: "/discussion", labelKey: "nav.discussion", Icon: MessagesSquare },
+  { to: "/finmind", labelKey: "nav.finmind", Icon: Database },
+  { to: "/settings", labelKey: "nav.settings", Icon: SettingsIcon },
+  { to: "/admin", labelKey: "nav.admin", Icon: Shield, adminOnly: true },
 ];
 
 function CommandPaletteDialog() {
@@ -145,18 +166,21 @@ function CommandPaletteDialog() {
         )}
 
         <CommandGroup heading={t("palette.section.pages")}>
-          {visibleRoutes.map((r) => (
-            <CommandItem
-              key={r.to}
-              value={`${t(r.labelKey)} ${r.to}`}
-              onSelect={() => go(r.to)}
-              onMouseEnter={() => prefetchPage(r.to)}
-            >
-              <span className="text-base leading-none w-4">{r.icon}</span>
-              <span>{t(r.labelKey)}</span>
-              <CommandShortcut>{r.to}</CommandShortcut>
-            </CommandItem>
-          ))}
+          {visibleRoutes.map((r) => {
+            const Icon = r.Icon;
+            return (
+              <CommandItem
+                key={r.to}
+                value={`${t(r.labelKey)} ${r.to}`}
+                onSelect={() => go(r.to)}
+                onMouseEnter={() => prefetchPage(r.to)}
+              >
+                <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span>{t(r.labelKey)}</span>
+                <CommandShortcut>{r.to}</CommandShortcut>
+              </CommandItem>
+            );
+          })}
         </CommandGroup>
 
         <CommandSeparator />
@@ -169,7 +193,7 @@ function CommandPaletteDialog() {
               setOpen(false);
             }}
           >
-            <span className="text-base leading-none w-4">🎨</span>
+            <Palette className="h-4 w-4 shrink-0" aria-hidden="true" />
             {t("palette.action.toggle_theme")}
           </CommandItem>
           <CommandItem
@@ -180,14 +204,14 @@ function CommandPaletteDialog() {
               setOpen(false);
             }}
           >
-            <span className="text-base leading-none w-4">🌐</span>
+            <Globe className="h-4 w-4 shrink-0" aria-hidden="true" />
             {t("palette.action.toggle_language")}
           </CommandItem>
           <CommandItem
             value="api keys settings"
             onSelect={() => go("/settings")}
           >
-            <span className="text-base leading-none w-4">🔑</span>
+            <KeyRound className="h-4 w-4 shrink-0" aria-hidden="true" />
             {t("palette.action.api_keys")}
           </CommandItem>
           <CommandItem
@@ -198,7 +222,7 @@ function CommandPaletteDialog() {
               navigate("/login");
             }}
           >
-            <span className="text-base leading-none w-4">↩</span>
+            <LogOut className="h-4 w-4 shrink-0" aria-hidden="true" />
             {t("palette.action.sign_out")}
           </CommandItem>
         </CommandGroup>

@@ -243,7 +243,7 @@ async def test_lessons_filtered_by_owner_market_and_window(
     await db_session.commit()
 
     payload = await svc.aggregate_sweep(db_session, sweep)
-    texts = [l["lesson_text"] for l in payload["lessons"]]
+    texts = [item["lesson_text"] for item in payload["lessons"]]
     assert texts == ["忽略了 2330 的高成交量"]
 
 

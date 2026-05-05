@@ -613,6 +613,27 @@ async def run_sweep_worker(sweep_id: UUID) -> None:
                     },
                 )
 
+        # PR-B2: promote eligible episodic lessons to semantic when
+        # they've been cited enough times AND the citing discussions
+        # ended in win often enough. Runs on every fold_kind so the
+        # promotion accounting reflects all completed work, not just
+        # production sweeps. Best-effort — bad rollup doesn't
+        # affect the sweep status.
+        if not cancelled_mid_flight:
+            try:
+                from services.lesson_tier_service import (
+                    promote_eligible_lessons,
+                )
+                await promote_eligible_lessons(db, market=sweep.market)
+            except Exception as exc:
+                log.warning(
+                    "backtest_sweep.promote_lessons_failed",
+                    extra={
+                        "sweep_id": str(sweep_id),
+                        "error": str(exc),
+                    },
+                )
+
 
 def start_sweep_in_background(sweep_id: UUID) -> asyncio.Task:
     """Public entry point for the API layer. Detaches the worker

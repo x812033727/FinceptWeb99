@@ -467,6 +467,7 @@ def test_normalize_symbols_strips_and_dedups():
 
 def test_summary_to_dict_round_trip():
     s = svc.LessonSummary(
+        id=42,
         as_of_date="2026-03-23",
         category="missed_sector",
         lesson_text="x",
@@ -474,8 +475,11 @@ def test_summary_to_dict_round_trip():
         missed_winners=["6505"],
     )
     out = svc.summary_to_dict(s)
+    assert out["id"] == 42
     assert out["category"] == "missed_sector"
     assert out["related_symbols"] == ["2330"]
+    assert out["tier"] == "episodic"
+    assert out["regime"] is None
 
 
 def test_anchor_uses_today_for_live(monkeypatch):

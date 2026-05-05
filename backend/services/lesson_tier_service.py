@@ -1,0 +1,264 @@
+"""Lesson usage telemetry + tier promotion (PR-B2).
+
+PR-B0 added the columns; PR-B1 wired regime + tier into the fetch
+ranking; PR-B2 closes the loop by tracking which lessons actually
+got cited in a discussion's prompt and how often those discussions
+ended in a win, then promoting consistently-useful episodic
+lessons up to the longer-lived `semantic` tier.
+
+Flow:
+
+  - Every fetch that lands a lesson in a discussion's ctx prompt
+    bumps `usage_count` and stamps `last_used_at` via
+    `record_lesson_usage`. Called from the lessons context block
+    after the per-round ctx is assembled.
+
+  - When a discussion's verdict resolves to win, every lesson that
+    appeared in any of its persisted round-context snapshots gets
+    its `hit_count` bumped via `record_lesson_outcome`. Hooked
+    from `post_mortem_service.evaluate_recommendation_outcome`'s
+    write path (or any other verdict resolver) so live + backtest
+    + auto-run all funnel through the same accounting.
+
+  - `promote_eligible_lessons` walks episodic lessons in a market
+    and promotes those meeting `usage_count >= 5 AND
+    hit_count / usage_count >= 0.6` to `semantic`. Phase 3 of the
+    sweep worker calls this so promotion happens roughly once per
+    sweep without a separate cron.
+
+The structural tier is admin-only — `promote_to_structural` is
+exposed via `/admin/lessons/{id}/promote` for the operator's
+manual override; nothing else writes to it. This is the
+intentional escape valve: episodic / semantic should never
+auto-promote to structural because the threshold of "permanent
+advice" is qualitative judgement the system can't reliably
+infer. Once an admin marks a lesson structural the recency decay
+is fully turned off and the only way out is another admin call.
+"""
+from __future__ import annotations
+
+import logging
+from datetime import UTC, datetime
+from typing import Any, Iterable
+from uuid import UUID
+
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from models.discussion import Discussion
+from models.discussion_lesson import DiscussionLesson
+from models.discussion_round_context import DiscussionRoundContext
+
+log = logging.getLogger(__name__)
+
+
+PROMOTE_MIN_USAGE = 5
+PROMOTE_MIN_HIT_RATE = 0.6
+VALID_TIERS = ("episodic", "semantic", "structural")
+
+
+async def record_lesson_usage(
+    db: AsyncSession,
+    *,
+    lesson_ids: Iterable[int],
+) -> int:
+    """Bump `usage_count` + stamp `last_used_at` on every supplied
+    lesson row. Returns the number of rows touched. Best-effort —
+    a transient DB hiccup logs and returns 0 rather than raising
+    so the caller's prompt assembly isn't disturbed.
+    """
+    ids = [int(i) for i in lesson_ids if i is not None]
+    if not ids:
+        return 0
+    try:
+        result = await db.execute(
+            update(DiscussionLesson)
+            .where(DiscussionLesson.id.in_(ids))
+            .values(
+                usage_count=DiscussionLesson.usage_count + 1,
+                last_used_at=datetime.now(UTC),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+        return result.rowcount or 0
+    except Exception as exc:
+        log.warning(
+            "lesson_tier.record_usage_failed",
+            extra={"error": str(exc), "n_ids": len(ids)},
+        )
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        return 0
+
+
+async def record_lesson_outcome(
+    db: AsyncSession,
+    *,
+    discussion_id: UUID,
+) -> dict[str, Any]:
+    """Walk every persisted round context for `discussion_id`,
+    extract the lesson IDs that landed in any prompt, and bump
+    `hit_count` when the discussion's verdict is `win`.
+
+    Returns a status dict for telemetry:
+      `{"verdict": str | None, "lesson_ids": [...], "updated": int}`.
+
+    Idempotency: the function bumps once per call. Callers (the
+    verdict-write path) should only call it on the verdict
+    transition, not on every save. We don't enforce that here —
+    overcounting is a soft failure (mostly just inflates
+    promotion eligibility), under-counting would be silent which
+    is worse.
+    """
+    discussion = await db.scalar(
+        select(Discussion).where(Discussion.id == discussion_id)
+    )
+    status_payload: dict[str, Any] = {
+        "verdict": None, "lesson_ids": [], "updated": 0,
+    }
+    if discussion is None:
+        return status_payload
+    status_payload["verdict"] = discussion.verdict
+    if discussion.verdict != "win":
+        return status_payload
+
+    snapshots_q = select(DiscussionRoundContext.context).where(
+        DiscussionRoundContext.discussion_id == discussion_id,
+    )
+    snapshots = list((await db.scalars(snapshots_q)).all())
+    lesson_ids: set[int] = set()
+    for snap in snapshots:
+        if not isinstance(snap, dict):
+            continue
+        recent = snap.get("recent_lessons") or {}
+        if not isinstance(recent, dict):
+            continue
+        for entry in recent.get("market") or []:
+            _id = _extract_lesson_id(entry)
+            if _id is not None:
+                lesson_ids.add(_id)
+        per_symbol = recent.get("per_symbol") or {}
+        if isinstance(per_symbol, dict):
+            for entries in per_symbol.values():
+                for entry in entries or []:
+                    _id = _extract_lesson_id(entry)
+                    if _id is not None:
+                        lesson_ids.add(_id)
+
+    if not lesson_ids:
+        return status_payload
+    status_payload["lesson_ids"] = sorted(lesson_ids)
+
+    try:
+        result = await db.execute(
+            update(DiscussionLesson)
+            .where(DiscussionLesson.id.in_(lesson_ids))
+            .values(hit_count=DiscussionLesson.hit_count + 1)
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+        status_payload["updated"] = result.rowcount or 0
+    except Exception as exc:
+        log.warning(
+            "lesson_tier.record_outcome_failed",
+            extra={
+                "discussion_id": str(discussion_id),
+                "error": str(exc),
+            },
+        )
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+    return status_payload
+
+
+async def promote_eligible_lessons(
+    db: AsyncSession,
+    *,
+    market: str,
+) -> list[dict[str, Any]]:
+    """Promote every episodic lesson in `market` that meets
+    `usage_count >= PROMOTE_MIN_USAGE AND hit_count / usage_count
+    >= PROMOTE_MIN_HIT_RATE` up to `semantic`. Returns the list of
+    promoted rows for audit purposes.
+
+    Doesn't promote semantic → structural automatically — that
+    transition is qualitative judgement the system can't infer.
+    Operators flip individual rows via
+    `promote_to_structural` (admin endpoint).
+    """
+    stmt = select(DiscussionLesson).where(
+        DiscussionLesson.market == market,
+        DiscussionLesson.tier == "episodic",
+        DiscussionLesson.usage_count >= PROMOTE_MIN_USAGE,
+    )
+    rows = list((await db.scalars(stmt)).all())
+    promoted: list[dict[str, Any]] = []
+    now = datetime.now(UTC)
+    for row in rows:
+        usage = row.usage_count or 0
+        hits = row.hit_count or 0
+        if usage <= 0:
+            continue
+        rate = hits / usage
+        if rate < PROMOTE_MIN_HIT_RATE:
+            continue
+        row.tier = "semantic"
+        row.promoted_at = now
+        promoted.append({
+            "lesson_id": row.id,
+            "usage_count": usage,
+            "hit_count": hits,
+            "hit_rate": round(rate, 4),
+        })
+    if promoted:
+        await db.commit()
+    return promoted
+
+
+async def promote_to_structural(
+    db: AsyncSession,
+    *,
+    lesson_id: int,
+) -> DiscussionLesson | None:
+    """Admin manual promotion to structural. Idempotent — calling
+    on an already-structural lesson re-stamps `promoted_at` but
+    doesn't error. Returns None when the lesson doesn't exist.
+    """
+    row = await db.scalar(
+        select(DiscussionLesson).where(DiscussionLesson.id == lesson_id)
+    )
+    if row is None:
+        return None
+    row.tier = "structural"
+    row.promoted_at = datetime.now(UTC)
+    await db.commit()
+    await db.refresh(row)
+    return row
+
+
+def _extract_lesson_id(entry: Any) -> int | None:
+    if not isinstance(entry, dict):
+        return None
+    raw = entry.get("id")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+__all__ = [
+    "PROMOTE_MIN_USAGE",
+    "PROMOTE_MIN_HIT_RATE",
+    "VALID_TIERS",
+    "record_lesson_usage",
+    "record_lesson_outcome",
+    "promote_eligible_lessons",
+    "promote_to_structural",
+]

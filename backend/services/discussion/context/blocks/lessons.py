@@ -115,6 +115,30 @@ async def fetch_recent_lessons(
             "per_symbol": per_symbol,
         }
 
+        # PR-B2: bump usage telemetry for every lesson that actually
+        # made it into the prompt. Uses the same lesson_ids we just
+        # passed to summary_to_dict — record_lesson_usage is best-
+        # effort and won't disturb the ctx assembly on failure.
+        used_ids: list[int] = [r.id for r in market_rows]
+        for sym in focus_symbols or []:
+            sym_rows = per_symbol.get(sym) or []
+            used_ids.extend(
+                int(e.get("id"))
+                for e in sym_rows
+                if isinstance(e, dict) and e.get("id") is not None
+            )
+        if used_ids:
+            try:
+                from services.lesson_tier_service import (
+                    record_lesson_usage,
+                )
+                await record_lesson_usage(db, lesson_ids=used_ids)
+            except Exception as exc:
+                log.debug(
+                    "recent_lessons.usage_record_failed",
+                    extra={"error": str(exc)},
+                )
+
         try:
             from middleware.metrics import LESSONS_INJECTED_TOTAL
             if market_rows:

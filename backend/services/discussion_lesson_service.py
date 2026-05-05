@@ -153,11 +153,14 @@ def _classify_regime(ctx: dict[str, Any] | None) -> str | None:
 @dataclass(frozen=True)
 class LessonSummary:
     """Compact view of a lesson surfaced into the ctx prompt."""
+    id: int
     as_of_date: str        # ISO
     category: str
     lesson_text: str
     related_symbols: list[str]
     missed_winners: list[str]
+    tier: str = "episodic"
+    regime: str | None = None
 
 
 def _hash_text(text: str) -> str:
@@ -363,11 +366,14 @@ def _score(
 
 def _to_summary(lesson: DiscussionLesson) -> LessonSummary:
     return LessonSummary(
+        id=lesson.id,
         as_of_date=lesson.as_of_date.isoformat(),
         category=lesson.category,
         lesson_text=lesson.lesson_text[:_MAX_LESSON_LEN],
         related_symbols=list(lesson.related_symbols or []),
         missed_winners=list(lesson.missed_winners or []),
+        tier=getattr(lesson, "tier", None) or "episodic",
+        regime=getattr(lesson, "regime", None),
     )
 
 
@@ -443,12 +449,22 @@ async def fetch_relevant_lessons(
 
 
 def summary_to_dict(s: LessonSummary) -> dict[str, Any]:
+    """Serialize a LessonSummary for ctx injection. Includes the
+    `id` so the round-context snapshot carries it through —
+    `lesson_tier_service.record_lesson_outcome` walks the snapshot
+    to bump hit_count after a verdict lands. The ID is an internal
+    autoincrement PK; the LLM ignores it but the audit path
+    depends on it.
+    """
     return {
+        "id":             s.id,
         "as_of_date":     s.as_of_date,
         "category":       s.category,
         "lesson_text":    s.lesson_text,
         "related_symbols": list(s.related_symbols),
         "missed_winners":  list(s.missed_winners),
+        "tier":           s.tier,
+        "regime":         s.regime,
     }
 
 

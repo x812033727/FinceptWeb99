@@ -467,6 +467,20 @@ export interface AggregateLesson {
   created_at: string | null;
 }
 
+export interface ReliabilityBucket {
+  bucket_lower: number;
+  bucket_upper: number;
+  /** Mean of the raw confidences that landed in this bucket. NULL
+   *  when the bucket has zero samples — the chart should render
+   *  it as a grey gap so the diagram stays continuous. */
+  mean_confidence: number | null;
+  /** Observed positive rate (outcome=1) for this bucket. NULL when
+   *  the bucket is empty. Perfect calibration: hit_rate ≈ bucket
+   *  midpoint across the row. */
+  hit_rate: number | null;
+  count: number;
+}
+
 export interface SweepAggregate {
   scope: "sweep" | "strategy";
   sweep_id?: string | null;
@@ -476,12 +490,28 @@ export interface SweepAggregate {
   trading_days_count?: number | null;
   completed_count?: number | null;
   failed_count?: number | null;
+  /** PR-A0 walk-forward fold metadata. Only present on
+   *  scope="sweep" responses; strategy-level aggregates roll up
+   *  across all fold kinds and don't expose this field. */
+  fold_kind?: "train" | "test" | "production" | null;
+  parent_sweep_id?: string | null;
   discussions_total: number;
   verdict_counts: {
     win: number; loss: number; unverifiable: number; pending: number;
   };
   win_rate: number | null;
   avg_pnl_pct: (number | null)[];
+  /** PR-C1 sample-weighted Brier over raw synthesizer
+   *  confidence. NULL when no resolved discussion contributed. */
+  brier_score?: number | null;
+  brier_samples?: number;
+  /** PR-C2 follow-up: parallel Brier over post-curve calibrated
+   *  confidence. NULL when no discussion had complete
+   *  calibration coverage; comparing against `brier_score` is
+   *  the "is the curve helping?" diagnostic. */
+  calibrated_brier_score?: number | null;
+  calibrated_brier_samples?: number;
+  reliability?: ReliabilityBucket[];
   per_persona: AggregatePersona[];
   lessons: AggregateLesson[];
 }

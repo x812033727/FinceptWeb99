@@ -562,3 +562,40 @@ async def test_admin_promote_lesson_returns_404_for_unknown_id(
         headers=_auth(admin_tok),
     )
     assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_admin_promote_lesson_cross_owner_rejected(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """Admin-B can't promote a lesson that belongs to admin-A's
+    learning history. Returns 404 (matches the unknown-id shape so
+    we don't leak the existence of foreign-owner rows). This guards
+    against multi-admin deployments silently mixing up each
+    operator's regime/tier memory."""
+    # Admin A owns a lesson.
+    email_a = "admin_promote_owner_a@test.com"
+    await _register_login(client, email_a)
+    await _promote_to_admin(db_session, email_a)
+    lesson_id = await _seed_lesson_for_admin_test(db_session, email_a)
+
+    # Admin B is also admin but owns no lessons.
+    email_b = "admin_promote_owner_b@test.com"
+    await _register_login(client, email_b)
+    admin_b_tok = await _promote_to_admin(
+        db_session, email_b, client=client,
+    )
+
+    r = await client.post(
+        f"/api/admin/lessons/{lesson_id}/promote",
+        headers=_auth(admin_b_tok),
+    )
+    assert r.status_code == 404
+
+    # Defensive: original lesson must remain episodic — no side
+    # effect from the rejected call.
+    from models.discussion_lesson import DiscussionLesson
+    row = await db_session.get(DiscussionLesson, lesson_id)
+    assert row is not None
+    await db_session.refresh(row)
+    assert row.tier == "episodic"

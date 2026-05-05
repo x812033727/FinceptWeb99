@@ -224,13 +224,26 @@ async def promote_to_structural(
     db: AsyncSession,
     *,
     lesson_id: int,
+    owner_id: UUID,
 ) -> DiscussionLesson | None:
-    """Admin manual promotion to structural. Idempotent — calling
-    on an already-structural lesson re-stamps `promoted_at` but
-    doesn't error. Returns None when the lesson doesn't exist.
+    """Admin manual promotion to structural. Owner-scoped: an admin
+    can only promote lessons within their own learning history,
+    matching the rest of the lesson API surface (`fetch_relevant_
+    lessons`, `delete_lesson`, etc. all filter by `owner_user_id`).
+    Cross-tenant promotion would silently leak one operator's
+    learning history into another's.
+
+    Idempotent — calling on an already-structural lesson re-stamps
+    `promoted_at` but doesn't error. Returns None when the lesson
+    doesn't exist OR belongs to a different owner; the caller
+    surfaces 404 either way (don't distinguish so we don't leak
+    the existence of foreign rows).
     """
     row = await db.scalar(
-        select(DiscussionLesson).where(DiscussionLesson.id == lesson_id)
+        select(DiscussionLesson).where(
+            DiscussionLesson.id == lesson_id,
+            DiscussionLesson.owner_user_id == owner_id,
+        )
     )
     if row is None:
         return None

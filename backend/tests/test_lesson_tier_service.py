@@ -445,7 +445,7 @@ async def test_promote_to_structural_flips_tier(
 ):
     a = await _seed_lesson(db_session, owner_id=owner.id)
     refreshed = await svc.promote_to_structural(
-        db_session, lesson_id=a.id,
+        db_session, lesson_id=a.id, owner_id=owner.id,
     )
     assert refreshed is not None
     assert refreshed.tier == "structural"
@@ -460,7 +460,7 @@ async def test_promote_to_structural_idempotent(
         db_session, owner_id=owner.id, tier="structural",
     )
     refreshed = await svc.promote_to_structural(
-        db_session, lesson_id=a.id,
+        db_session, lesson_id=a.id, owner_id=owner.id,
     )
     assert refreshed is not None
     assert refreshed.tier == "structural"
@@ -470,8 +470,29 @@ async def test_promote_to_structural_idempotent(
 async def test_promote_to_structural_returns_none_for_unknown_id(
     db_session: AsyncSession,
 ):
-    out = await svc.promote_to_structural(db_session, lesson_id=99999)
+    out = await svc.promote_to_structural(
+        db_session, lesson_id=99999, owner_id=uuid.uuid4(),
+    )
     assert out is None
+
+
+@pytest.mark.asyncio
+async def test_promote_to_structural_owner_scoped(
+    db_session: AsyncSession, owner: User,
+):
+    """Cross-owner promote must return None — admin-A can't promote
+    a lesson belonging to user-B even though admin-A has the
+    lesson_id. Returns None (caller surfaces 404) rather than
+    leaking the existence of the foreign row."""
+    a = await _seed_lesson(db_session, owner_id=owner.id)
+    foreign = uuid.uuid4()
+    out = await svc.promote_to_structural(
+        db_session, lesson_id=a.id, owner_id=foreign,
+    )
+    assert out is None
+    # The original row stays episodic — no side effect.
+    await db_session.refresh(a)
+    assert a.tier == "episodic"
 
 
 # ── constants sanity ─────────────────────────────────────────────

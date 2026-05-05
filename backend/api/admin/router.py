@@ -878,7 +878,7 @@ async def signal_quality(
 )
 async def promote_lesson_to_structural(
     lesson_id: int,
-    _admin: Admin,
+    admin: Admin,
     db: DB,
 ) -> LessonPromoteOut:
     """PR-B2 follow-up — admin manual promotion of a lesson into the
@@ -894,11 +894,20 @@ async def promote_lesson_to_structural(
     promote_to_structural` is idempotent so re-flipping a row
     doesn't error.
 
+    Owner-scoped: each admin operates on their OWN learning
+    history, mirroring the rest of the lesson API. Cross-owner
+    promote returns 404 (don't reveal foreign-owner row
+    existence). Multi-admin deployments where one admin needs to
+    promote another's lessons should use a future explicitly-
+    cross-tenant endpoint (none today by design).
+
     Returns the post-promotion state so the AdminPage UI can
     confirm the tier flip stuck without a follow-up GET.
     """
     from services.lesson_tier_service import promote_to_structural
-    row = await promote_to_structural(db, lesson_id=lesson_id)
+    row = await promote_to_structural(
+        db, lesson_id=lesson_id, owner_id=uuid.UUID(admin["id"]),
+    )
     if row is None:
         raise HTTPException(
             status_code=404,

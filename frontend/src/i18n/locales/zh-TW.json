@@ -1,4 +1,34 @@
 {
+  "admin": {
+    "title": "管理後台",
+    "tab": {
+      "ops": "維運",
+      "ai": "AI 與 LLM",
+      "data": "資料來源",
+      "quality": "訊號品質",
+      "users": "使用者",
+      "usage": "用量"
+    },
+    "stats": {
+      "total_users": "使用者總數",
+      "active": "啟用中",
+      "viewers": "訪客",
+      "alerts": "警示數",
+      "watchlists": "自選股清單"
+    }
+  },
+  "settings": {
+    "preferences": {
+      "title": "偏好設定",
+      "theme": "主題",
+      "theme_dark_desc": "深色終端機模式（預設）",
+      "theme_light_desc": "明亮環境用淺色模式",
+      "switch_to_dark": "切換深色",
+      "switch_to_light": "切換淺色",
+      "language": "語言"
+    },
+    "admin_link": "開啟系統管理"
+  },
   "nav": {
     "dashboard": "儀表板",
     "us_market": "美股",

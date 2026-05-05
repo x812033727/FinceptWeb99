@@ -1,4 +1,34 @@
 {
+  "admin": {
+    "title": "Admin",
+    "tab": {
+      "ops": "Operations",
+      "ai": "AI & LLM",
+      "data": "Data Sources",
+      "quality": "Signal Quality",
+      "users": "Users",
+      "usage": "Usage"
+    },
+    "stats": {
+      "total_users": "Total Users",
+      "active": "Active",
+      "viewers": "Viewers",
+      "alerts": "Alerts",
+      "watchlists": "Watchlists"
+    }
+  },
+  "settings": {
+    "preferences": {
+      "title": "Preferences",
+      "theme": "Theme",
+      "theme_dark_desc": "Dark terminal mode (default).",
+      "theme_light_desc": "Light mode for bright environments.",
+      "switch_to_dark": "Switch to dark",
+      "switch_to_light": "Switch to light",
+      "language": "Language"
+    },
+    "admin_link": "Open system admin"
+  },
   "nav": {
     "dashboard": "Dashboard",
     "us_market": "US Market",

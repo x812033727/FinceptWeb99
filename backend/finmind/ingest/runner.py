@@ -76,7 +76,14 @@ class SourceClient(Protocol):
 class FinmindClient:
     """Wraps `data.tw.finmind_connector._query` to satisfy
     `SourceClient`. Late-imports the connector so tests can run the
-    runner without httpx in the import chain."""
+    runner without httpx in the import chain.
+
+    All calls run inside `quota_strict()` so an hourly-cap overrun
+    raises `FinMindQuotaExhausted` and the chunk records as `failed`,
+    not `done (0 rows)`. Without this, the live-serving fallback path
+    (return `[]` on overrun) would silently let `run_due` mark a chunk
+    fresh when there's actually data we couldn't fetch.
+    """
 
     async def fetch(
         self,
@@ -87,38 +94,37 @@ class FinmindClient:
     ) -> list[dict[str, Any]]:
         from datetime import timedelta
 
-        from data.tw.finmind_connector import _query
+        from data.tw.finmind_connector import _query, quota_strict
         from finmind.ingest.mappings import MAPPINGS
 
         mapping = MAPPINGS.get(dataset_code)
-        if mapping is not None and mapping.single_day:
-            # Day-by-day fan-out: FinMind rejects multi-day queries on
-            # KBar / PriceTick / BlockTradingDailyReport /
-            # GovernmentBankBuySell with HTTP 400. Iterate dates and
-            # concatenate per-day responses; omit end_date so FinMind's
-            # validator doesn't reject the request. Sponsor quota is
-            # 1500/hr, so a 7-day window across these datasets stays
-            # well under budget.
-            rows: list[dict[str, Any]] = []
-            cursor = start_date
-            one = timedelta(days=1)
-            while cursor <= end_date:
-                day_rows = await _query(
-                    dataset_code,
-                    symbol or "",
-                    cursor.isoformat(),
-                    None,
-                )
-                rows.extend(day_rows)
-                cursor += one
-            return rows
+        with quota_strict():
+            if mapping is not None and mapping.single_day:
+                # Day-by-day fan-out: FinMind rejects multi-day queries on
+                # KBar / PriceTick / BlockTradingDailyReport /
+                # GovernmentBankBuySell with HTTP 400. Iterate dates and
+                # concatenate per-day responses; omit end_date so FinMind's
+                # validator doesn't reject the request.
+                rows: list[dict[str, Any]] = []
+                cursor = start_date
+                one = timedelta(days=1)
+                while cursor <= end_date:
+                    day_rows = await _query(
+                        dataset_code,
+                        symbol or "",
+                        cursor.isoformat(),
+                        None,
+                    )
+                    rows.extend(day_rows)
+                    cursor += one
+                return rows
 
-        return await _query(
-            dataset_code,
-            symbol or "",
-            start_date.isoformat(),
-            end_date.isoformat(),
-        )
+            return await _query(
+                dataset_code,
+                symbol or "",
+                start_date.isoformat(),
+                end_date.isoformat(),
+            )
 
 
 def _build_upsert_sql(

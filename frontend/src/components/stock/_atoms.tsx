@@ -13,7 +13,7 @@ export function TabButton({ active, label, onClick }: { active: boolean; label: 
   return (
     <button
       onClick={onClick}
-      className={`shrink-0 whitespace-nowrap px-3 sm:px-4 py-2 text-sm border-b-2 transition-colors ${
+      className={`shrink-0 whitespace-nowrap px-3 sm:px-4 py-2 text-sm border-b-2 transition-colors min-h-[44px] ${
         active
           ? "border-primary text-foreground font-medium"
           : "border-transparent text-muted-foreground hover:text-foreground"
@@ -28,7 +28,7 @@ export function PeriodButton({ active, label, onClick }: { active: boolean; labe
   return (
     <button
       onClick={onClick}
-      className={`px-3 py-1.5 sm:px-2.5 sm:py-1 text-xs rounded transition-colors touch-manipulation ${
+      className={`px-3 py-1.5 sm:px-2.5 sm:py-1 text-xs rounded transition-colors touch-manipulation min-h-[36px] sm:min-h-0 ${
         active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
       }`}
     >

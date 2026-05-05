@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
+import { useAuthStore } from "@/store/authStore";
+import { useThemeStore } from "@/store/themeStore";
 import { UsageCard } from "@/components/admin/UsageCard";
 
 interface UserProfile {
@@ -39,14 +43,15 @@ function Field({ label, value }: { label: string; value: string }) {
 
 export default function SettingsPage() {
   const qc = useQueryClient();
+  const { t, i18n } = useTranslation();
+  const role = useAuthStore((s) => s.user?.role);
+  const { theme, toggle: toggleTheme } = useThemeStore();
 
-  // ── Profile ───────────────────────────────────────────────────
   const { data: me } = useQuery<UserProfile>({
     queryKey: ["me"],
     queryFn: () => api.get("/auth/me").then((r) => r.data),
   });
 
-  // ── Change password ───────────────────────────────────────────
   const [pwForm, setPwForm] = useState({ current: "", next: "", confirm: "" });
   const [pwError, setPwError] = useState("");
   const [pwSuccess, setPwSuccess] = useState(false);
@@ -60,8 +65,9 @@ export default function SettingsPage() {
       setPwSuccess(true);
       setTimeout(() => setPwSuccess(false), 3000);
     },
-    onError: (err: any) => {
-      setPwError(err?.response?.data?.detail ?? "Failed to change password.");
+    onError: (err: Error) => {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setPwError(detail ?? "Failed to change password.");
     },
   });
 
@@ -78,7 +84,6 @@ export default function SettingsPage() {
     changePw.mutate({ current_password: pwForm.current, new_password: pwForm.next });
   }
 
-  // ── API Keys ──────────────────────────────────────────────────
   const { data: apiKeys = [] } = useQuery<ApiKey[]>({
     queryKey: ["api-keys"],
     queryFn: () => api.get("/auth/api-keys").then((r) => r.data),
@@ -131,6 +136,45 @@ export default function SettingsPage() {
         )}
       </Section>
 
+      {/* Preferences */}
+      <Section title={t("settings.preferences.title")}>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">{t("settings.preferences.theme")}</p>
+              <p className="text-xs text-muted-foreground">
+                {theme === "dark"
+                  ? t("settings.preferences.theme_dark_desc")
+                  : t("settings.preferences.theme_light_desc")}
+              </p>
+            </div>
+            <button
+              onClick={toggleTheme}
+              className="px-3 py-1.5 rounded border border-border text-sm hover:bg-accent/10 transition-colors min-h-[36px]"
+            >
+              {theme === "dark"
+                ? `☀ ${t("settings.preferences.switch_to_light")}`
+                : `🌙 ${t("settings.preferences.switch_to_dark")}`}
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">{t("settings.preferences.language")}</p>
+              <p className="text-xs text-muted-foreground">
+                {i18n.language === "zh-TW" ? "繁體中文" : "English"}
+              </p>
+            </div>
+            <button
+              onClick={() => void i18n.changeLanguage(i18n.language === "zh-TW" ? "en" : "zh-TW")}
+              className="px-3 py-1.5 rounded border border-border text-sm hover:bg-accent/10 transition-colors min-h-[36px]"
+            >
+              {i18n.language === "zh-TW" ? "Switch to English" : "切換為繁體中文"}
+            </button>
+          </div>
+        </div>
+      </Section>
+
       {/* Change password */}
       <Section title="Change Password">
         <form onSubmit={handlePwSubmit} className="space-y-3">
@@ -161,7 +205,7 @@ export default function SettingsPage() {
           <button
             type="submit"
             disabled={changePw.isPending}
-            className="px-4 py-1.5 rounded bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
+            className="px-4 py-1.5 rounded bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50 min-h-[36px]"
           >
             {changePw.isPending ? "Saving…" : "Update Password"}
           </button>
@@ -177,7 +221,7 @@ export default function SettingsPage() {
             </p>
             <code className="block break-all text-foreground">{newKey}</code>
             <button
-              className="text-muted-foreground hover:text-foreground mt-1"
+              className="text-muted-foreground hover:text-foreground mt-1 min-h-[28px]"
               onClick={() => setNewKey(null)}
             >
               Dismiss
@@ -185,7 +229,6 @@ export default function SettingsPage() {
           </div>
         )}
 
-        {/* Create */}
         <div className="flex gap-2">
           <input
             className="flex-1 bg-background border border-border rounded px-3 py-1.5 text-sm"
@@ -196,14 +239,13 @@ export default function SettingsPage() {
           <button
             onClick={() => keyName.trim() && createKey.mutate(keyName.trim())}
             disabled={createKey.isPending || !keyName.trim()}
-            className="px-3 py-1.5 rounded bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
+            className="px-3 py-1.5 rounded bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50 min-h-[36px]"
           >
             {createKey.isPending ? "…" : "Generate"}
           </button>
         </div>
         {keyError && <p className="text-xs text-red-400">{keyError}</p>}
 
-        {/* List */}
         {apiKeys.length === 0 ? (
           <p className="text-xs text-muted-foreground">No API keys yet.</p>
         ) : (
@@ -224,7 +266,7 @@ export default function SettingsPage() {
                 </div>
                 <button
                   onClick={() => deleteKey.mutate(k.id)}
-                  className="text-muted-foreground hover:text-red-400 transition-colors text-base leading-none ml-3"
+                  className="text-muted-foreground hover:text-red-400 transition-colors text-base leading-none ml-3 min-h-[32px] min-w-[32px] flex items-center justify-center"
                 >
                   ×
                 </button>
@@ -235,6 +277,18 @@ export default function SettingsPage() {
       </Section>
 
       <UsageCard scope="me" />
+
+      {/* Admin shortcut — only rendered for admins; non-disruptive footer link. */}
+      {role === "admin" && (
+        <div className="text-center pt-2">
+          <Link
+            to="/admin"
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            🛡 {t("settings.admin_link")} →
+          </Link>
+        </div>
+      )}
     </div>
   );
 }

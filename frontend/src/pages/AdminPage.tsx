@@ -1,9 +1,18 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { useAuthStore } from "@/store/authStore";
 import api from "@/lib/api";
 import { CollapsibleHeader, useCollapsible } from "@/components/Collapsible";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import FinmindAdminCard from "@/components/admin/FinmindAdminCard";
 import FinmindKeysCard from "@/components/admin/FinmindKeysCard";
 import FinmindUsageCard from "@/components/admin/FinmindUsageCard";
@@ -42,6 +51,10 @@ const ROLE_COLORS: Record<string, string> = {
   admin: "border-amber-400/30 text-amber-400 bg-amber-400/10",
 };
 
+const TAB_KEYS = ["ops", "ai", "data", "quality", "users", "usage"] as const;
+type TabKey = (typeof TAB_KEYS)[number];
+const DEFAULT_TAB: TabKey = "ops";
+
 export default function AdminPage() {
   const user = useAuthStore((s) => s.user);
   const navigate = useNavigate();
@@ -55,7 +68,91 @@ export default function AdminPage() {
 }
 
 function AdminContent() {
+  const { t } = useTranslation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get("tab") as TabKey | null;
+  const activeTab: TabKey = tabParam && TAB_KEYS.includes(tabParam) ? tabParam : DEFAULT_TAB;
+
+  function setActiveTab(next: string) {
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("tab", next);
+    setSearchParams(nextParams, { replace: true });
+  }
+
+  return (
+    <div className="p-4 sm:p-6 space-y-5 max-w-5xl">
+      <h1 className="text-xl font-semibold">{t("admin.title")}</h1>
+
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+        {/* md+ — full tab strip. */}
+        <TabsList className="hidden md:inline-flex h-auto flex-wrap">
+          {TAB_KEYS.map((k) => (
+            <TabsTrigger key={k} value={k}>
+              {t(`admin.tab.${k}`)}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+
+        {/* <md — tab list overflows on narrow screens, so we surface a
+            Select dropdown instead. URL state is the single source of
+            truth, so both controls stay in sync. */}
+        <div className="md:hidden">
+          <Select value={activeTab} onValueChange={setActiveTab}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TAB_KEYS.map((k) => (
+                <SelectItem key={k} value={k}>
+                  {t(`admin.tab.${k}`)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <TabsContent value="ops" className="space-y-4 mt-4">
+          <SystemUpdateCard />
+          <IngestHealthCard />
+          <RuntimeTunablesCard />
+        </TabsContent>
+
+        <TabsContent value="ai" className="space-y-4 mt-4">
+          <LLMKeysCard />
+          <SystemTasksCard />
+          <PersonasCard />
+        </TabsContent>
+
+        <TabsContent value="data" className="space-y-4 mt-4">
+          <MarketKeysCard />
+          <FinmindAdminCard />
+          <FinmindKeysCard />
+        </TabsContent>
+
+        <TabsContent value="quality" className="space-y-4 mt-4">
+          <SignalAuditCard />
+          <SignalQualityCard />
+          <PostMortemGapsCard />
+          <DiscussionLessonsCard />
+        </TabsContent>
+
+        <TabsContent value="users" className="space-y-4 mt-4">
+          <UsersTab />
+        </TabsContent>
+
+        <TabsContent value="usage" className="space-y-4 mt-4">
+          <UsageCard scope="admin" />
+          <FinmindUsageCard />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+function UsersTab() {
+  const { t } = useTranslation();
   const qc = useQueryClient();
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const { data: stats } = useQuery<SystemStats>({
     queryKey: ["admin", "stats"],
@@ -66,8 +163,6 @@ function AdminContent() {
     queryKey: ["admin", "users"],
     queryFn: () => api.get("/admin/users?limit=200").then((r) => r.data),
   });
-
-  const [editingId, setEditingId] = useState<string | null>(null);
 
   const updateRole = useMutation({
     mutationFn: ({ id, role }: { id: string; role: string }) =>
@@ -85,59 +180,23 @@ function AdminContent() {
   });
 
   return (
-    <div className="p-6 space-y-6 max-w-5xl">
-      <h1 className="text-xl font-semibold">Admin</h1>
-
-      {/* Stats */}
+    <div className="space-y-4">
       {stats && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
           {[
-            { label: "Total Users", value: stats.total_users },
-            { label: "Active", value: stats.active_users },
-            { label: "Viewers", value: stats.users_by_role.viewer ?? 0 },
-            { label: "Alerts", value: stats.total_alerts },
-            { label: "Watchlists", value: stats.total_watchlists },
+            { label: t("admin.stats.total_users"), value: stats.total_users },
+            { label: t("admin.stats.active"), value: stats.active_users },
+            { label: t("admin.stats.viewers"), value: stats.users_by_role.viewer ?? 0 },
+            { label: t("admin.stats.alerts"), value: stats.total_alerts },
+            { label: t("admin.stats.watchlists"), value: stats.total_watchlists },
           ].map(({ label, value }) => (
-            <div
-              key={label}
-              className="bg-card border border-border rounded-lg p-3 text-center"
-            >
+            <div key={label} className="bg-card border border-border rounded-lg p-3 text-center">
               <p className="text-2xl font-bold tabular-nums">{value}</p>
               <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
             </div>
           ))}
         </div>
       )}
-
-      <SystemUpdateCard />
-
-      <LLMKeysCard />
-
-      <MarketKeysCard />
-
-      <UsageCard scope="admin" />
-
-      <IngestHealthCard />
-
-      <PersonasCard />
-
-      <SystemTasksCard />
-
-      <RuntimeTunablesCard />
-
-      <SignalAuditCard />
-
-      <SignalQualityCard />
-
-      <PostMortemGapsCard />
-
-      <DiscussionLessonsCard />
-
-      <FinmindAdminCard />
-
-      <FinmindUsageCard />
-
-      <FinmindKeysCard />
 
       <UsersSection
         users={users}
@@ -151,102 +210,103 @@ function AdminContent() {
   );
 }
 
-// Inline collapsible wrapper for the Users table — kept as a child
-// component (not refactored fully out of AdminContent) so the
-// mutation callbacks + state handlers stay where they were defined.
 function UsersSection({
-  users, isLoading, editingId, setEditingId, updateRole, toggleActive,
+  users,
+  isLoading,
+  editingId,
+  setEditingId,
+  updateRole,
+  toggleActive,
 }: {
   users: AdminUser[];
   isLoading: boolean;
   editingId: string | null;
   setEditingId: (id: string | null) => void;
-  updateRole: any;
-  toggleActive: any;
+  updateRole: ReturnType<typeof useMutation<unknown, Error, { id: string; role: string }>>;
+  toggleActive: ReturnType<typeof useMutation<unknown, Error, { id: string; is_active: boolean }>>;
 }) {
   const { open, toggle } = useCollapsible("admin.users");
   return (
     <div className="bg-card border border-border rounded-lg p-4 space-y-3">
-      <CollapsibleHeader
-        open={open} toggle={toggle}
-        title={`Users (${users.length})`}
-      />
-      {open && (<div className="-mx-4 -mb-4 overflow-hidden rounded-b-lg">
-        {isLoading ? (
-          <p className="p-4 text-xs text-muted-foreground animate-pulse">Loading…</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border">
-                  {["Email", "Role", "Status", "Joined", "Actions"].map((h) => (
-                    <th
-                      key={h}
-                      className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground"
-                    >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {users.map((u) => (
-                  <tr key={u.id} className="hover:bg-accent/5">
-                    <td className="px-4 py-2.5 text-xs">{u.email}</td>
-                    <td className="px-4 py-2.5">
-                      {editingId === u.id ? (
-                        <select
-                          defaultValue={u.role}
-                          className="bg-background border border-border rounded px-1.5 py-0.5 text-xs"
-                          onChange={(e) =>
-                            updateRole.mutate({ id: u.id, role: e.target.value })
-                          }
-                          onBlur={() => setEditingId(null)}
-                          autoFocus
-                        >
-                          <option value="viewer">viewer</option>
-                          <option value="analyst">analyst</option>
-                          <option value="admin">admin</option>
-                        </select>
-                      ) : (
-                        <button
-                          onClick={() => setEditingId(u.id)}
-                          className={`text-xs border rounded px-1.5 py-0.5 ${ROLE_COLORS[u.role]}`}
-                          title="Click to change role"
-                        >
-                          {u.role}
-                        </button>
-                      )}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <span
-                        className={`text-xs ${
-                          u.is_active ? "text-green-400" : "text-red-400"
-                        }`}
+      <CollapsibleHeader open={open} toggle={toggle} title={`Users (${users.length})`} />
+      {open && (
+        <div className="-mx-4 -mb-4 overflow-hidden rounded-b-lg">
+          {isLoading ? (
+            <p className="p-4 text-xs text-muted-foreground animate-pulse">Loading…</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border">
+                    {["Email", "Role", "Status", "Joined", "Actions"].map((h) => (
+                      <th
+                        key={h}
+                        className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground"
                       >
-                        {u.is_active ? "active" : "disabled"}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                      {new Date(u.created_at).toLocaleDateString()}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <button
-                        onClick={() =>
-                          toggleActive.mutate({ id: u.id, is_active: !u.is_active })
-                        }
-                        className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        {u.is_active ? "Disable" : "Enable"}
-                      </button>
-                    </td>
+                        {h}
+                      </th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>)}
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {users.map((u) => (
+                    <tr key={u.id} className="hover:bg-accent/5">
+                      <td className="px-4 py-2.5 text-xs">{u.email}</td>
+                      <td className="px-4 py-2.5">
+                        {editingId === u.id ? (
+                          <select
+                            defaultValue={u.role}
+                            className="bg-background border border-border rounded px-1.5 py-0.5 text-xs"
+                            onChange={(e) =>
+                              updateRole.mutate({ id: u.id, role: e.target.value })
+                            }
+                            onBlur={() => setEditingId(null)}
+                            autoFocus
+                          >
+                            <option value="viewer">viewer</option>
+                            <option value="analyst">analyst</option>
+                            <option value="admin">admin</option>
+                          </select>
+                        ) : (
+                          <button
+                            onClick={() => setEditingId(u.id)}
+                            className={`text-xs border rounded px-1.5 py-0.5 ${ROLE_COLORS[u.role]}`}
+                            title="Click to change role"
+                          >
+                            {u.role}
+                          </button>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span
+                          className={`text-xs ${
+                            u.is_active ? "text-green-400" : "text-red-400"
+                          }`}
+                        >
+                          {u.is_active ? "active" : "disabled"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                        {new Date(u.created_at).toLocaleDateString()}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <button
+                          onClick={() =>
+                            toggleActive.mutate({ id: u.id, is_active: !u.is_active })
+                          }
+                          className="text-xs text-muted-foreground hover:text-foreground transition-colors min-h-[28px]"
+                        >
+                          {u.is_active ? "Disable" : "Enable"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -83,6 +83,7 @@ async def create_sweep(
     strategy_id: UUID | None = None,
     fold_kind: str = "production",
     parent_sweep_id: UUID | None = None,
+    weights_override: dict[str, float] | None = None,
 ) -> BacktestSweep:
     """Persist a new sweep row in `pending` state. Validates input
     bounds; raises ValueError on invalid input so the API layer
@@ -93,6 +94,12 @@ async def create_sweep(
     orchestrator and link back at each other via `parent_sweep_id`.
     Direct API callers default to `production` and don't need to
     set either.
+
+    `weights_override` (PR-A1) is the frozen persona weights from a
+    completed train fold; the test fold spawned for that pair
+    consults this map ahead of the parent strategy template so the
+    OOS evaluation runs against the train-derived weights without
+    leaking back into the template.
     """
     if not persona_ids:
         raise ValueError("persona_ids must not be empty")
@@ -128,6 +135,14 @@ async def create_sweep(
             "parent_sweep_id is only valid when fold_kind is "
             "'train' or 'test'"
         )
+    if weights_override is not None and fold_kind != "test":
+        # weights_override only makes sense on a test fold —
+        # training a sweep against its own learned weights is the
+        # exact in-sample anti-pattern walk-forward is meant to
+        # catch.
+        raise ValueError(
+            "weights_override is only valid when fold_kind is 'test'"
+        )
 
     sweep = BacktestSweep(
         owner_id=owner_id,
@@ -143,6 +158,7 @@ async def create_sweep(
         strategy_id=strategy_id,
         fold_kind=fold_kind,
         parent_sweep_id=parent_sweep_id,
+        weights_override=weights_override,
     )
     db.add(sweep)
     await db.commit()
@@ -529,7 +545,20 @@ async def run_sweep_worker(sweep_id: UUID) -> None:
         # validated track record. Best-effort — any failure logs
         # but does NOT roll back the sweep completion (the operator
         # can recompute manually via POST /strategies/{id}/learn).
-        if not cancelled_mid_flight and sweep.strategy_id is not None:
+        #
+        # PR-A1: skip the in-sample retraining when this sweep is
+        # the test half of a walk-forward fold — letting test fold
+        # results modify the template's weights would re-introduce
+        # the very in-sample bias the OOS validation is meant to
+        # surface. Train folds also skip (they hand off to the
+        # walk-forward orchestrator's frozen-weights pipeline);
+        # only `production` sweeps trigger the in-place learner.
+        should_learn_weights = (
+            not cancelled_mid_flight
+            and sweep.strategy_id is not None
+            and sweep.fold_kind == "production"
+        )
+        if should_learn_weights:
             try:
                 from services import persona_weight_learner
                 await persona_weight_learner.learn_weights_for_strategy(

@@ -97,6 +97,16 @@ class BacktestSweep(Base):
         nullable=True,
     )
 
+    # PR-A1: frozen weights injected into a test fold. When set,
+    # `synthesize_conclusion` reads this map ahead of the parent
+    # strategy template's `persona_weights` so the test fold uses
+    # the train fold's learned weights without polluting the
+    # template (which would defeat the OOS validation). Format:
+    # {persona_id: weight_float}. NULL on production sweeps.
+    weights_override: Mapped[dict[str, float] | None] = mapped_column(
+        JSON, nullable=True,
+    )
+
     topic: Mapped[str] = mapped_column(Text, nullable=False)
     rules: Mapped[str] = mapped_column(Text, nullable=False)
     market: Mapped[str] = mapped_column(String(12), nullable=False)

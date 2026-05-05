@@ -3199,6 +3199,13 @@ async def synthesize_conclusion(
     # with a track record. Returns "" when no weights are available
     # (live discussions, sweeps not tied to a template, fresh
     # templates not yet trained).
+    #
+    # PR-A1: when the sweep carries `weights_override` (set by the
+    # walk-forward orchestrator on a test fold), it takes priority
+    # over the parent template's `persona_weights`. This is what
+    # actually executes the OOS evaluation: the test fold runs
+    # against weights frozen from its train sibling instead of
+    # the live (and potentially in-sample-trained) template.
     if discussion.sweep_id is not None:
         from models.backtest_sweep import BacktestSweep
         from models.discussion_strategy_template import (
@@ -3210,16 +3217,21 @@ async def synthesize_conclusion(
         sweep_row = await db.scalar(
             select(BacktestSweep).where(BacktestSweep.id == discussion.sweep_id)
         )
-        if sweep_row is not None and sweep_row.strategy_id is not None:
-            tmpl = await db.scalar(
-                select(DiscussionStrategyTemplate).where(
-                    DiscussionStrategyTemplate.id == sweep_row.strategy_id,
+        weights_to_use: dict[str, float] | None = None
+        if sweep_row is not None:
+            override = getattr(sweep_row, "weights_override", None)
+            if override:
+                weights_to_use = dict(override)
+            elif sweep_row.strategy_id is not None:
+                tmpl = await db.scalar(
+                    select(DiscussionStrategyTemplate).where(
+                        DiscussionStrategyTemplate.id == sweep_row.strategy_id,
+                    )
                 )
-            )
-            if tmpl is not None and tmpl.persona_weights:
-                user_prompt += format_weights_for_synthesizer(
-                    dict(tmpl.persona_weights),
-                )
+                if tmpl is not None and tmpl.persona_weights:
+                    weights_to_use = dict(tmpl.persona_weights)
+        if weights_to_use:
+            user_prompt += format_weights_for_synthesizer(weights_to_use)
 
     if has_post_mortem:
         user_prompt += (

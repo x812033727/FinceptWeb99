@@ -635,6 +635,77 @@ def _row_delisting(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# FinMind `TaiwanStockLoanCollateralBalance` field map: 5 product
+# groups × 6–7 lifecycle fields. Defined as a tuple so the row
+# transform stays declarative and the matching migration can keep
+# the column list in sync.
+_LOAN_COLLATERAL_FIELDS: tuple[tuple[str, str], ...] = (
+    # (FinMind field name,  local column name)
+    # Margin (融資) — 6 fields
+    ("MarginPreviousDayBalance",  "margin_previous_day_balance"),
+    ("MarginBuy",                 "margin_buy"),
+    ("MarginSell",                "margin_sell"),
+    ("MarginCashRedemption",      "margin_cash_redemption"),
+    ("MarginCurrentDayBalance",   "margin_current_day_balance"),
+    ("MarginNextDayQuota",        "margin_next_day_quota"),
+    # SecuritiesFirmLoan (券商借券) — 7 fields
+    ("SecuritiesFirmLoanPreviousDayBalance", "securities_firm_loan_previous_day_balance"),
+    ("SecuritiesFirmLoanBuy",                "securities_firm_loan_buy"),
+    ("SecuritiesFirmLoanSell",               "securities_firm_loan_sell"),
+    ("SecuritiesFirmLoanCashRedemption",     "securities_firm_loan_cash_redemption"),
+    ("SecuritiesFirmLoanReplacement",        "securities_firm_loan_replacement"),
+    ("SecuritiesFirmLoanCurrentDayBalance",  "securities_firm_loan_current_day_balance"),
+    ("SecuritiesFirmLoanNextDayQuota",       "securities_firm_loan_next_day_quota"),
+    # UnrestrictedLoan (一般借券) — 7 fields
+    ("UnrestrictedLoanPreviousDayBalance",   "unrestricted_loan_previous_day_balance"),
+    ("UnrestrictedLoanBuy",                  "unrestricted_loan_buy"),
+    ("UnrestrictedLoanSell",                 "unrestricted_loan_sell"),
+    ("UnrestrictedLoanCashRedemption",       "unrestricted_loan_cash_redemption"),
+    ("UnrestrictedLoanReplacement",          "unrestricted_loan_replacement"),
+    ("UnrestrictedLoanCurrentDayBalance",    "unrestricted_loan_current_day_balance"),
+    ("UnrestrictedLoanNextDayQuota",         "unrestricted_loan_next_day_quota"),
+    # SecuritiesFinanceSecuredLoan (集保有擔保借券) — 7 fields
+    ("SecuritiesFinanceSecuredLoanPreviousDayBalance", "securities_finance_secured_loan_previous_day_balance"),
+    ("SecuritiesFinanceSecuredLoanBuy",                "securities_finance_secured_loan_buy"),
+    ("SecuritiesFinanceSecuredLoanSell",               "securities_finance_secured_loan_sell"),
+    ("SecuritiesFinanceSecuredLoanCashRedemption",     "securities_finance_secured_loan_cash_redemption"),
+    ("SecuritiesFinanceSecuredLoanReplacement",        "securities_finance_secured_loan_replacement"),
+    ("SecuritiesFinanceSecuredLoanCurrentDayBalance",  "securities_finance_secured_loan_current_day_balance"),
+    ("SecuritiesFinanceSecuredLoanNextDayQuota",       "securities_finance_secured_loan_next_day_quota"),
+    # SettlementMargin (交割融資) — 7 fields
+    ("SettlementMarginPreviousDayBalance",  "settlement_margin_previous_day_balance"),
+    ("SettlementMarginBuy",                 "settlement_margin_buy"),
+    ("SettlementMarginSell",                "settlement_margin_sell"),
+    ("SettlementMarginCashRedemption",      "settlement_margin_cash_redemption"),
+    ("SettlementMarginReplacement",         "settlement_margin_replacement"),
+    ("SettlementMarginCurrentDayBalance",   "settlement_margin_current_day_balance"),
+    ("SettlementMarginNextDayQuota",        "settlement_margin_next_day_quota"),
+)
+
+
+def _row_loan_collateral(row: dict[str, Any]) -> dict[str, Any]:
+    """TaiwanStockLoanCollateralBalance → tw_loan_collateral. column_map
+    handles the per-field rename; here we coerce numerics to int (the
+    schema is BIGINT) and fold FinMind's `市場別` label `集中市場` /
+    `店頭市場` into our internal market codes."""
+    market_raw = (row.get("market") or "").strip()
+    if market_raw in ("集中市場", "TWSE"):
+        market = "TWSE"
+    elif market_raw in ("店頭市場", "OTC", "TPEX"):
+        market = "OTC"
+    else:
+        market = "TWSE"
+    out: dict[str, Any] = {
+        "market": market,
+        "symbol": _to_str(row.get("symbol")),
+        "ts": _to_date(row.get("ts")),
+        "source": row.get("source", "finmind"),
+    }
+    for _, local_col in _LOAN_COLLATERAL_FIELDS:
+        out[local_col] = _to_int(row.get(local_col))
+    return out
+
+
 def _row_short_sale_suspension(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "symbol": _to_str(row.get("symbol")),
@@ -1949,6 +2020,19 @@ MAPPINGS: dict[str, DatasetMapping] = {
         pk_columns=("symbol", "suspended_at"),
         extra={"source": "finmind"},
         row_transform=_row_short_sale_suspension,
+    ),
+    "TaiwanStockLoanCollateralBalance": DatasetMapping(
+        dataset_code="TaiwanStockLoanCollateralBalance",
+        local_table="tw_loan_collateral",
+        column_map={
+            "date": "ts",
+            "stock_id": "symbol",
+            "market": "market",
+            **{fm: lc for fm, lc in _LOAN_COLLATERAL_FIELDS},
+        },
+        pk_columns=("market", "symbol", "ts"),
+        extra={"source": "finmind"},
+        row_transform=_row_loan_collateral,
     ),
     "TaiwanStockDayTradingBorrowingFeeRate": DatasetMapping(
         dataset_code="TaiwanStockDayTradingBorrowingFeeRate",

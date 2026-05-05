@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { SweepAggregateCard } from "./SweepAggregateCard";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -6,12 +7,14 @@ import {
   createSweep,
   deleteSweep,
   fetchSweeps,
+  fetchStrategies,
   startSweep,
 } from "./_helpers";
 import type {
   BacktestSweep,
   BacktestSweepStatus,
   CreateBacktestSweepInput,
+  StrategyTemplate,
 } from "./_helpers";
 import type { DiscussionMarket } from "@/types/discussion";
 import { useCollapsible, CollapsibleHeader } from "@/components/Collapsible";
@@ -47,12 +50,13 @@ interface SweepFormProps {
   rules: string;
   market: DiscussionMarket;
   personaIds: string[];
+  strategies: StrategyTemplate[];
   onSubmit: (body: CreateBacktestSweepInput) => void;
   isSubmitting: boolean;
 }
 
 function SweepForm({
-  topic, rules, market, personaIds, onSubmit, isSubmitting,
+  topic, rules, market, personaIds, strategies, onSubmit, isSubmitting,
 }: SweepFormProps) {
   const { t } = useTranslation();
   const today = new Date().toISOString().slice(0, 10);
@@ -61,17 +65,31 @@ function SweepForm({
   const [roundsPerDiscussion, setRoundsPerDiscussion] = useState<number>(1);
   const [concurrency, setConcurrency] = useState<number>(1);
   const [autoPostMortem, setAutoPostMortem] = useState<boolean>(true);
+  // PR-A: when chosen, server back-fills topic/rules/personas/etc
+  // from the template. Caller-supplied fields still win, so the
+  // form's runtime knobs (rounds/concurrency/auto_post_mortem) are
+  // sent inline to give the operator a per-launch override.
+  const [strategyId, setStrategyId] = useState<string>("");
 
   function submit() {
-    if (!anchorDate || personaIds.length === 0) return;
-    onSubmit({
-      topic, rules, market, persona_ids: personaIds,
+    if (!anchorDate) return;
+    if (!strategyId && personaIds.length === 0) return;
+    const body: CreateBacktestSweepInput = {
       anchor_date: anchorDate,
       trading_days_count: tradingDays,
       rounds_per_discussion: roundsPerDiscussion,
       concurrency,
       auto_post_mortem: autoPostMortem,
-    });
+    };
+    if (strategyId) {
+      body.strategy_id = strategyId;
+    } else {
+      body.topic = topic;
+      body.rules = rules;
+      body.market = market;
+      body.persona_ids = personaIds;
+    }
+    onSubmit(body);
   }
 
   return (
@@ -79,6 +97,29 @@ function SweepForm({
       <p className="text-[11px] text-muted-foreground leading-relaxed">
         {t("sweep.intro")}
       </p>
+      {strategies.length > 0 && (
+        <label className="flex flex-col gap-1 text-xs">
+          <span className="text-muted-foreground">
+            {t("sweep.strategy_picker", "從策略模板載入（可選）")}
+          </span>
+          <select
+            value={strategyId}
+            onChange={(e) => setStrategyId(e.target.value)}
+            className="bg-background border border-border rounded px-2 py-1"
+          >
+            <option value="">
+              {t("sweep.strategy_inline",
+                 "（不使用模板，套用上方主討論的題目+規則）")}
+            </option>
+            {strategies.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name} · {s.market} · {s.persona_ids.length}
+                {t("strategy.personas", "專家")}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <div className="grid grid-cols-2 gap-2 text-xs">
         <label className="flex flex-col gap-1">
           <span className="text-muted-foreground">{t("sweep.anchor_date")}</span>
@@ -192,6 +233,7 @@ function SweepProgressRow({
   onDelete: (id: string) => void;
 }) {
   const { t } = useTranslation();
+  const [showAggregate, setShowAggregate] = useState(false);
   const total = sweep.resolved_dates.length || sweep.trading_days_count;
   const done = sweep.completed_dates.length;
   const failed = sweep.failed_dates.length;
@@ -307,6 +349,25 @@ function SweepProgressRow({
           </ul>
         </details>
       ) : null}
+
+      {/* PR-B: aggregate panel — lazy-mounted on click so the
+          query doesn't fire for every collapsed row. */}
+      {done > 0 ? (
+        <div className="pt-1.5 border-t border-border/40 space-y-1.5">
+          <button
+            type="button"
+            onClick={() => setShowAggregate((v) => !v)}
+            className="text-[10px] text-blue-300 hover:text-blue-200"
+          >
+            {showAggregate
+              ? t("sweep.hide_aggregate", "▼ 收起聚合儀表板")
+              : t("sweep.show_aggregate", "▶ 展開聚合儀表板")}
+          </button>
+          {showAggregate && (
+            <SweepAggregateCard sweepId={sweep.id} />
+          )}
+        </div>
+      ) : null}
     </li>
   );
 }
@@ -325,6 +386,12 @@ export function BacktestSweepCard({
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { open, toggle } = useCollapsible("discussion.sweep_panel", false);
+
+  const strategiesQuery = useQuery({
+    queryKey: ["strategy-templates"],
+    queryFn: fetchStrategies,
+    enabled: open,
+  });
 
   const sweepsQuery = useQuery({
     queryKey: ["backtest-sweeps"],
@@ -384,6 +451,7 @@ export function BacktestSweepCard({
             rules={rules}
             market={market}
             personaIds={personaIds}
+            strategies={strategiesQuery.data ?? []}
             onSubmit={(body) => createMut.mutate(body)}
             isSubmitting={createMut.isPending}
           />

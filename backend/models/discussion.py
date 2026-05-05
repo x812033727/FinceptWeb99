@@ -130,6 +130,14 @@ class Discussion(Base):
     as_of_date: Mapped[date | None] = mapped_column(
         Date, nullable=True,
     )
+    # PR-B: back-pointer to the sweep that spawned this discussion.
+    # NULL for live / non-sweep discussions. ON DELETE SET NULL so a
+    # purged sweep doesn't cascade-kill the spawned threads.
+    sweep_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("backtest_sweeps.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
     )

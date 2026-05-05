@@ -75,6 +75,7 @@ async def create_sweep(
     rounds_per_discussion: int = 1,
     concurrency: int = 1,
     auto_post_mortem: bool = True,
+    strategy_id: UUID | None = None,
 ) -> BacktestSweep:
     """Persist a new sweep row in `pending` state. Validates input
     bounds; raises ValueError on invalid input so the API layer
@@ -112,6 +113,7 @@ async def create_sweep(
         rounds_per_discussion=rounds_per_discussion,
         concurrency=concurrency,
         auto_post_mortem=auto_post_mortem,
+        strategy_id=strategy_id,
     )
     db.add(sweep)
     await db.commit()
@@ -253,6 +255,7 @@ async def _process_one_date(
                     persona_ids=list(sweep.persona_ids or []),
                     market=sweep.market,
                     as_of_date=target_date,
+                    sweep_id=sweep.id,
                 )
                 # Run the configured number of rounds. Each round
                 # consumes the round generator to completion.
@@ -491,6 +494,29 @@ async def run_sweep_worker(sweep_id: UUID) -> None:
             sweep.completed_dates = list(completed)
             sweep.failed_dates = list(failed)
         await db.commit()
+
+        # PR-C: re-learn persona weights for the parent strategy
+        # template so the next sweep using it picks up the freshly
+        # validated track record. Best-effort — any failure logs
+        # but does NOT roll back the sweep completion (the operator
+        # can recompute manually via POST /strategies/{id}/learn).
+        if not cancelled_mid_flight and sweep.strategy_id is not None:
+            try:
+                from services import persona_weight_learner
+                await persona_weight_learner.learn_weights_for_strategy(
+                    db,
+                    owner_id=sweep.owner_id,
+                    strategy_id=sweep.strategy_id,
+                )
+            except Exception as exc:
+                log.warning(
+                    "backtest_sweep.learn_weights_failed",
+                    extra={
+                        "sweep_id": str(sweep_id),
+                        "strategy_id": str(sweep.strategy_id),
+                        "error": str(exc),
+                    },
+                )
 
 
 def start_sweep_in_background(sweep_id: UUID) -> asyncio.Task:

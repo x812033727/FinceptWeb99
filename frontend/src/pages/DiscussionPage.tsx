@@ -11,6 +11,7 @@ import type {
 } from "@/types/discussion";
 import { AutoRunConfigCard } from "@/components/discussion/AutoRunConfigCard";
 import { BacktestSweepCard } from "@/components/discussion/BacktestSweepCard";
+import { StrategyTemplateCard } from "@/components/discussion/StrategyTemplateCard";
 import { ConclusionCard } from "@/components/discussion/ConclusionCard";
 import { PostMortemSkippedCard } from "@/components/discussion/PostMortemSkippedCard";
 import { PostMortemGainersCard } from "@/components/discussion/PostMortemGainersCard";
@@ -559,6 +560,18 @@ export default function DiscussionPage() {
           collapsed={collapse.autoRun}
           onToggleCollapse={() => toggleCollapse("autoRun")}
           personaName={personaName}
+        />
+
+        {/* PR-A: strategy template manager. The sweep card below
+            reads from the same query so saving here makes a new
+            entry appear in the sweep form's picker immediately. */}
+        <StrategyTemplateCard
+          prefill={{
+            topic,
+            rules,
+            market,
+            personaIdsCsv: personaIds.join(", "),
+          }}
         />
 
         {/* PR #274: multi-day backtest sweep panel. Reuses the

@@ -25,6 +25,7 @@ from .schemas import (
     AdminUserItem,
     IngestHealthOut,
     IngestRetryResult,
+    LessonPromoteOut,
     LLMKeyInfo,
     LLMKeyUpsert,
     LLMKeyValidation,
@@ -868,4 +869,48 @@ async def signal_quality(
         market=report.market,
         numeric=numeric_rows,
         categorical=categorical_rows,
+    )
+
+
+@router.post(
+    "/lessons/{lesson_id}/promote",
+    response_model=LessonPromoteOut,
+)
+async def promote_lesson_to_structural(
+    lesson_id: int,
+    _admin: Admin,
+    db: DB,
+) -> LessonPromoteOut:
+    """PR-B2 follow-up — admin manual promotion of a lesson into the
+    `structural` tier so it stops decaying entirely.
+
+    The automatic episodic→semantic promotion lives in
+    `lesson_tier_service.promote_eligible_lessons` (driven by
+    Phase 3 of the sweep worker via usage + hit-rate gates).
+    structural is intentionally admin-only because the threshold
+    of "this is permanent advice" is qualitative judgement the
+    system can't reliably infer. Once promoted, the only way out
+    is another admin call — `services.lesson_tier_service.
+    promote_to_structural` is idempotent so re-flipping a row
+    doesn't error.
+
+    Returns the post-promotion state so the AdminPage UI can
+    confirm the tier flip stuck without a follow-up GET.
+    """
+    from services.lesson_tier_service import promote_to_structural
+    row = await promote_to_structural(db, lesson_id=lesson_id)
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"lesson {lesson_id} not found",
+        )
+    return LessonPromoteOut(
+        id=row.id,
+        market=row.market,
+        category=row.category,
+        tier=row.tier,
+        usage_count=row.usage_count,
+        hit_count=row.hit_count,
+        promoted_at=row.promoted_at,
+        lesson_text=row.lesson_text,
     )

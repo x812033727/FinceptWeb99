@@ -406,3 +406,42 @@ class BacktestSweepResponse(BaseModel):
     started_at: datetime | None
     completed_at: datetime | None
     cancelled_at: datetime | None
+
+
+class WalkForwardRequest(BaseModel):
+    """PR-A1 follow-up — kick off a walk-forward run for a strategy.
+
+    `anchor_date` is the *most-recent* day the test fold should
+    cover; the orchestrator walks back N folds from there. Default
+    train/test windows match the C-axis paper anchors agreed in
+    PR-A1 (rolling 60d train + 20d test).
+    """
+    anchor_date: str   # ISO date — coerced to date in the service
+    train_window_days: int = Field(default=60, ge=1, le=120)
+    test_window_days: int = Field(default=20, ge=1, le=120)
+    n_folds: int = Field(default=2, ge=1, le=6)
+    rounds_per_discussion: int = Field(default=1, ge=1, le=5)
+    concurrency: int = Field(default=1, ge=1, le=3)
+    auto_post_mortem: bool = True
+
+
+class WalkForwardFoldOut(BaseModel):
+    fold_index: int
+    train_anchor: str
+    train_dates: list[str]
+    test_anchor: str
+    test_dates: list[str]
+
+
+class WalkForwardPlanResponse(BaseModel):
+    """Returned at /walk-forward kick-off — the resolved plan plus
+    the orchestrator-task handle indicator. The actual sweep IDs
+    are NOT in the response because the worker creates them
+    asynchronously; clients poll
+    GET /sweeps?fold_kind=train|test to follow progress."""
+    strategy_id: uuid.UUID
+    market: str
+    train_window_days: int
+    test_window_days: int
+    folds: list[WalkForwardFoldOut]
+    started: bool   # True when the background task was scheduled

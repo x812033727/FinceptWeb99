@@ -34,9 +34,14 @@ export interface Recommendation {
   /** 0.0-1.0 — synthesizer's per-pick confidence that the symbol will
    * see a meaningful positive 5-day move. Pre-PR-C0 conclusions don't
    * carry this; the parser fills 0.5 (neutral) so consumers can
-   * always rely on the field. PR-C2 will add a calibrated_confidence
-   * sibling field once isotonic regression has enough samples. */
+   * always rely on the field. */
   confidence: number;
+  /** Calibrated confidence after the strategy's isotonic curve has
+   * been applied (PR-C2 follow-up). Optional — only present when the
+   * strategy has accumulated enough samples (>= 30) to fit a curve.
+   * Cold-start strategies emit only `confidence`; the UI should
+   * fall back to that when this field is absent. */
+  calibrated_confidence?: number;
 }
 
 export interface Conclusion {

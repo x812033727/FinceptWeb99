@@ -153,6 +153,17 @@ async def persist_scoreboard(
         update_values["outcome_vector"] = brier_payload["outcome_vector"]
         discussion.brier_score = brier_payload["brier_score"]
         discussion.outcome_vector = brier_payload["outcome_vector"]
+        # PR-C2 follow-up: persist calibrated_brier alongside raw so
+        # the sweep aggregate + calibration audit can compare.
+        # NULL is a valid value (means no calibrated_confidence
+        # was present on the picks); we still write it to clear
+        # any stale value from an earlier compute.
+        update_values["calibrated_brier_score"] = brier_payload.get(
+            "calibrated_brier_score",
+        )
+        discussion.calibrated_brier_score = brier_payload.get(
+            "calibrated_brier_score",
+        )
 
     await db.execute(
         update(Discussion)
@@ -322,8 +333,10 @@ def compute_brier_for_discussion(
     recommendations` and `daily_close_prices`.
 
     Returns:
-      `{"brier_score": float,
-        "outcome_vector": [{symbol, confidence, outcome_binary}, ...],
+      `{"brier_score": float,         # raw confidence
+        "calibrated_brier_score": float | None,  # PR-C2 follow-up
+        "outcome_vector": [{symbol, confidence, calibrated_confidence,
+                            outcome_binary, peak_pct}, ...],
         "samples": int,
         "threshold_pct": float}`
 
@@ -338,6 +351,14 @@ def compute_brier_for_discussion(
     change_pct is `>= threshold_pct`. Symbols with insufficient bars
     are skipped (not counted as 0) — caller's `samples` field tells
     the consumer how many actually contributed.
+
+    PR-C2 follow-up: when a recommendation also carries a
+    `calibrated_confidence` (set by the calibration apply step in
+    `synthesize_conclusion` when the strategy has a fitted curve),
+    a parallel `calibrated_brier_score` is computed. NULL when no
+    recommendation carried a calibrated value — comparing the two
+    requires both to exist so the metric is left absent rather
+    than silently falling back to raw.
     """
     conclusion = discussion.conclusion or {}
     recommendations = conclusion.get("recommendations")
@@ -350,6 +371,7 @@ def compute_brier_for_discussion(
 
     outcome_vector: list[dict[str, Any]] = []
     losses: list[float] = []
+    calibrated_losses: list[float] = []
     for entry in recommendations:
         if not isinstance(entry, dict):
             continue
@@ -362,6 +384,14 @@ def compute_brier_for_discussion(
             confidence = 0.5
         confidence = max(0.0, min(1.0, confidence))
 
+        calibrated: float | None = None
+        raw_calibrated = entry.get("calibrated_confidence")
+        if raw_calibrated is not None:
+            try:
+                calibrated = max(0.0, min(1.0, float(raw_calibrated)))
+            except (TypeError, ValueError):
+                calibrated = None
+
         closes = daily.get(symbol) or []
         day1_open = opens.get(symbol)
         peak_pct = _peak_change_pct(
@@ -370,18 +400,37 @@ def compute_brier_for_discussion(
         if peak_pct is None:
             continue   # insufficient data — skip the symbol entirely
         outcome_binary = 1 if peak_pct >= threshold_pct else 0
-        outcome_vector.append({
+        vector_entry: dict[str, Any] = {
             "symbol": symbol,
             "confidence": round(confidence, 4),
             "outcome_binary": outcome_binary,
             "peak_pct": round(peak_pct, 4),
-        })
+        }
+        if calibrated is not None:
+            vector_entry["calibrated_confidence"] = round(calibrated, 4)
+            calibrated_losses.append((calibrated - outcome_binary) ** 2)
+        outcome_vector.append(vector_entry)
         losses.append((confidence - outcome_binary) ** 2)
 
     if not losses:
         return None
+
+    # Calibrated Brier requires every contributing pick to have
+    # had a calibrated value — partial coverage would let raw +
+    # calibrated entries get averaged together which makes the
+    # comparison meaningless. NULL when the coverage isn't
+    # complete.
+    calibrated_brier: float | None
+    if calibrated_losses and len(calibrated_losses) == len(losses):
+        calibrated_brier = round(
+            sum(calibrated_losses) / len(calibrated_losses), 6,
+        )
+    else:
+        calibrated_brier = None
+
     return {
         "brier_score": round(sum(losses) / len(losses), 6),
+        "calibrated_brier_score": calibrated_brier,
         "outcome_vector": outcome_vector,
         "samples": len(losses),
         "threshold_pct": threshold_pct,

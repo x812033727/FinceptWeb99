@@ -692,6 +692,148 @@ async def test_persist_scoreboard_writes_brier_when_resolved(
     assert refreshed.outcome_vector[0]["confidence"] == pytest.approx(0.8)
 
 
+# ── PR-C2 follow-up: calibrated_brier_score ─────────────────────────
+
+
+def test_brier_includes_calibrated_when_recommendation_has_it():
+    """When every recommendation carries calibrated_confidence, the
+    function returns BOTH brier_score (raw) and
+    calibrated_brier_score (post-curve). They differ when the
+    curve actually corrected the synthesizer's overconfidence."""
+    d = _disc_for_brier(
+        recommendations=[
+            # raw 0.9, calibrated 0.4 — synthesizer was 5x over-
+            # confident, curve compresses it. Outcome 0 (peak < 5%)
+            # so raw loss = (0.9-0)² = 0.81, calibrated loss = 0.16.
+            {
+                "symbol": "A",
+                "confidence": 0.9,
+                "calibrated_confidence": 0.4,
+            },
+        ],
+        daily={"A": [101.0, 102.0, 100.5, 100.0, 99.5]},
+        opens={"A": 100.0},
+    )
+    out = discussion_scoreboard_service.compute_brier_for_discussion(d)
+    assert out is not None
+    assert out["brier_score"] == pytest.approx(0.81, abs=1e-6)
+    assert out["calibrated_brier_score"] == pytest.approx(0.16, abs=1e-6)
+    # outcome_vector carries the calibrated value too — needed for
+    # the sweep aggregate's reliability split.
+    assert (
+        out["outcome_vector"][0]["calibrated_confidence"] == 0.4
+    )
+
+
+def test_brier_calibrated_null_when_no_recommendation_has_it():
+    """Cold-start strategy or live discussion: no calibration was
+    applied, so calibrated_brier stays NULL while raw works as
+    usual."""
+    d = _disc_for_brier(
+        recommendations=[{"symbol": "A", "confidence": 0.8}],
+        daily={"A": [110.0, 105.0, 102.0, 108.0, 109.0]},
+        opens={"A": 100.0},
+    )
+    out = discussion_scoreboard_service.compute_brier_for_discussion(d)
+    assert out is not None
+    assert out["brier_score"] == pytest.approx(0.04, abs=1e-6)
+    assert out["calibrated_brier_score"] is None
+
+
+def test_brier_calibrated_null_on_partial_coverage():
+    """Mixed coverage — one pick has calibrated_confidence, the other
+    doesn't. The function refuses to mix the two so the raw/
+    calibrated comparison stays meaningful. Raw brier still
+    computed normally."""
+    d = _disc_for_brier(
+        recommendations=[
+            {
+                "symbol": "A",
+                "confidence": 0.9,
+                "calibrated_confidence": 0.4,
+            },
+            # B has no calibrated_confidence
+            {"symbol": "B", "confidence": 0.4},
+        ],
+        daily={
+            "A": [101.0, 102.0, 100.5, 100.0, 99.5],
+            "B": [101.0, 102.0, 100.5, 100.0, 99.5],
+        },
+        opens={"A": 100.0, "B": 100.0},
+    )
+    out = discussion_scoreboard_service.compute_brier_for_discussion(d)
+    assert out is not None
+    # raw mean: (0.81 + 0.16) / 2 = 0.485
+    assert out["brier_score"] == pytest.approx(0.485, abs=1e-6)
+    # NULL — partial coverage refuses to mix
+    assert out["calibrated_brier_score"] is None
+
+
+def test_brier_calibrated_clamps_invalid_value():
+    """LLM occasionally emits broken calibrated_confidence —
+    string / out-of-bounds / null. Clamp at the brier compute
+    layer so the metric stays robust."""
+    d = _disc_for_brier(
+        recommendations=[
+            {
+                "symbol": "A",
+                "confidence": 0.8,
+                "calibrated_confidence": 1.5,   # clamps to 1.0
+            },
+        ],
+        # outcome 1 (peak > 5%): raw loss = 0.04, calibrated loss = 0
+        daily={"A": [110.0, 105.0, 102.0, 108.0, 109.0]},
+        opens={"A": 100.0},
+    )
+    out = discussion_scoreboard_service.compute_brier_for_discussion(d)
+    assert out is not None
+    assert out["calibrated_brier_score"] == pytest.approx(0.0, abs=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_persist_scoreboard_writes_calibrated_brier(
+    db_session: AsyncSession,
+):
+    """End-to-end: a discussion whose recommendations carry
+    calibrated_confidence gets calibrated_brier_score persisted
+    alongside the raw brier_score."""
+    user = await _make_user(db_session, "calbrier@example.com")
+    anchor = date(2026, 5, 5)
+    d = await _make_discussion(
+        db_session,
+        owner_id=user.id,
+        created_at=datetime(2026, 5, 5, 9, 0, tzinfo=UTC),
+        recommended=["2330"],
+        day1_open_prices={"2330": 100.0},
+        as_of_date=anchor - timedelta(days=1),
+    )
+    d.conclusion = {
+        **(d.conclusion or {}),
+        "recommendations": [{
+            "symbol": "2330",
+            "confidence": 0.9,
+            "calibrated_confidence": 0.4,
+        }],
+    }
+    await db_session.commit()
+    await db_session.refresh(d)
+    await _seed_bars(
+        db_session, "2330", start=anchor,
+        # peak < 5% so outcome=0 — raw loss 0.81, calibrated 0.16
+        closes=[101.0, 102.0, 100.5, 100.0, 99.5],
+        opens=[100.0, 100.0, 100.0, 100.0, 100.0],
+    )
+    fully = await discussion_scoreboard_service.persist_scoreboard(
+        db_session, d,
+    )
+    assert fully is True
+    refreshed = await db_session.get(Discussion, d.id)
+    assert refreshed.brier_score == pytest.approx(0.81, abs=1e-6)
+    assert refreshed.calibrated_brier_score == pytest.approx(
+        0.16, abs=1e-6,
+    )
+
+
 @pytest.mark.asyncio
 async def test_persist_scoreboard_no_brier_when_partial(
     db_session: AsyncSession,

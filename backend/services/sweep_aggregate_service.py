@@ -167,6 +167,8 @@ def _empty_payload(**extra: Any) -> dict[str, Any]:
         "avg_pnl_pct": [None] * WINDOW_DAYS,
         "brier_score": None,
         "brier_samples": 0,
+        "calibrated_brier_score": None,
+        "calibrated_brier_samples": 0,
         "reliability": [],
         "per_persona": [],
         "lessons": [],
@@ -232,6 +234,12 @@ def _aggregate_discussions(
     brier_sum_loss = 0.0
     brier_total_samples = 0
     reliability_pairs: list[tuple[float, int]] = []
+    # PR-C2 follow-up: parallel accumulator for calibrated_brier.
+    # Only contributes when a discussion has BOTH brier_score and
+    # calibrated_brier_score set; partial coverage would mix raw
+    # + calibrated entries and make the comparison meaningless.
+    calibrated_brier_sum_loss = 0.0
+    calibrated_brier_total_samples = 0
 
     # Per-persona aggregates. The roster is sweep-defined; we do
     # NOT auto-discover personas off the discussions because a
@@ -277,6 +285,19 @@ def _aggregate_discussions(
                 if outcome not in (0, 1):
                     continue
                 reliability_pairs.append((conf, outcome))
+
+        # PR-C2 follow-up: parallel calibrated-Brier roll-up. Only
+        # accumulates when this discussion's calibration coverage
+        # was complete (the per-discussion fitter set
+        # calibrated_brier_score = None when partial).
+        d_cal_brier = getattr(d, "calibrated_brier_score", None)
+        if (
+            d_cal_brier is not None
+            and isinstance(d_outcomes, list) and d_outcomes
+        ):
+            samples = len(d_outcomes)
+            calibrated_brier_sum_loss += d_cal_brier * samples
+            calibrated_brier_total_samples += samples
 
         # Persona attribution (in-roster only).
         roster_set = set(roster)
@@ -332,6 +353,14 @@ def _aggregate_discussions(
         avg_brier = None
         reliability = []
 
+    avg_calibrated_brier: float | None
+    if calibrated_brier_total_samples > 0:
+        avg_calibrated_brier = round(
+            calibrated_brier_sum_loss / calibrated_brier_total_samples, 6,
+        )
+    else:
+        avg_calibrated_brier = None
+
     return {
         "discussions_total": len(discussions),
         "verdict_counts": {
@@ -344,6 +373,12 @@ def _aggregate_discussions(
         "avg_pnl_pct": avg_pnl,
         "brier_score": avg_brier,
         "brier_samples": brier_total_samples,
+        # PR-C2 follow-up: comparison axis for "is calibration
+        # actually helping?". NULL when no discussion in the sweep
+        # had a complete calibration coverage. Lower than
+        # `brier_score` = the calibration curve is reducing error.
+        "calibrated_brier_score": avg_calibrated_brier,
+        "calibrated_brier_samples": calibrated_brier_total_samples,
         "reliability": reliability,
         "per_persona": per_persona,
         "lessons": [],   # filled by caller

@@ -446,3 +446,119 @@ async def test_signal_quality_rejects_lookback_above_cap(
         "/api/admin/signal-quality?lookback=10000", headers=_auth(admin_tok),
     )
     assert r.status_code == 400
+
+
+# ── PR-B2 follow-up: lesson promote endpoint ─────────────────────
+
+
+async def _seed_lesson_for_admin_test(
+    db: AsyncSession, owner_email: str,
+) -> int:
+    """Build a lesson row pointing at a freshly created discussion +
+    user. Returns the lesson id."""
+    import uuid
+    from datetime import date
+
+    from sqlalchemy import select
+
+    from models.discussion import Discussion
+    from models.discussion_lesson import DiscussionLesson
+
+    user = (await db.execute(
+        select(User).where(User.email == owner_email),
+    )).scalar_one()
+    disc = Discussion(
+        id=uuid.uuid4(), owner_id=user.id,
+        topic="t", rules="r", persona_ids=["a"],
+        market="TW", status="done", current_round=1,
+    )
+    db.add(disc)
+    await db.commit()
+    lesson = DiscussionLesson(
+        discussion_id=disc.id, owner_user_id=user.id,
+        market="TW", as_of_date=date(2026, 5, 5),
+        category="other",
+        lesson_text="關鍵教訓 - " + uuid.uuid4().hex[:8],
+        lesson_text_hash=uuid.uuid4().hex,
+        related_symbols=[], missed_winners=[],
+        tier="episodic",
+    )
+    db.add(lesson)
+    await db.commit()
+    await db.refresh(lesson)
+    return lesson.id
+
+
+@pytest.mark.asyncio
+async def test_admin_promote_lesson_requires_admin(
+    client: AsyncClient,
+):
+    """Viewer-role user gets 403 — structural promotion is admin-only
+    because the threshold of 'permanent advice' is qualitative
+    judgement we don't want viewers triggering."""
+    token = await _register_login(client, "viewer_promote@test.com")
+    r = await client.post(
+        "/api/admin/lessons/1/promote", headers=_auth(token),
+    )
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_admin_promote_lesson_to_structural(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    email = "admin_promote@test.com"
+    await _register_login(client, email)
+    admin_tok = await _promote_to_admin(db_session, email, client=client)
+
+    lesson_id = await _seed_lesson_for_admin_test(db_session, email)
+
+    r = await client.post(
+        f"/api/admin/lessons/{lesson_id}/promote",
+        headers=_auth(admin_tok),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["id"] == lesson_id
+    assert body["tier"] == "structural"
+    assert body["promoted_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_admin_promote_lesson_idempotent(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """Calling promote twice on the same lesson succeeds both times
+    and re-stamps `promoted_at`."""
+    email = "admin_promote_twice@test.com"
+    await _register_login(client, email)
+    admin_tok = await _promote_to_admin(db_session, email, client=client)
+
+    lesson_id = await _seed_lesson_for_admin_test(db_session, email)
+
+    r1 = await client.post(
+        f"/api/admin/lessons/{lesson_id}/promote",
+        headers=_auth(admin_tok),
+    )
+    assert r1.status_code == 200
+    r2 = await client.post(
+        f"/api/admin/lessons/{lesson_id}/promote",
+        headers=_auth(admin_tok),
+    )
+    assert r2.status_code == 200
+    assert r2.json()["tier"] == "structural"
+
+
+@pytest.mark.asyncio
+async def test_admin_promote_lesson_returns_404_for_unknown_id(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    email = "admin_promote_404@test.com"
+    await _register_login(client, email)
+    admin_tok = await _promote_to_admin(db_session, email, client=client)
+
+    r = await client.post(
+        "/api/admin/lessons/99999999/promote",
+        headers=_auth(admin_tok),
+    )
+    assert r.status_code == 404

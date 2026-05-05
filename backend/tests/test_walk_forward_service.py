@@ -635,6 +635,146 @@ async def test_execute_emits_failed_metric_on_orchestrator_exception(
     assert after == before + 1
 
 
+# ── Audit follow-up #2: parallel-run guard ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_has_active_walk_forward_false_when_no_sweeps(
+    db_session: AsyncSession, owner: User,
+):
+    tmpl = await _make_strategy(db_session, owner_id=owner.id)
+    assert await wf.has_active_walk_forward(
+        db_session, strategy_id=tmpl.id,
+    ) is False
+
+
+@pytest.mark.asyncio
+async def test_has_active_walk_forward_true_when_train_running(
+    db_session: AsyncSession, owner: User,
+):
+    tmpl = await _make_strategy(db_session, owner_id=owner.id)
+    db_session.add(BacktestSweep(
+        id=uuid.uuid4(), owner_id=owner.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["a"],
+        anchor_date=date(2026, 5, 1),
+        trading_days_count=5, rounds_per_discussion=1,
+        concurrency=1, auto_post_mortem=False,
+        strategy_id=tmpl.id,
+        fold_kind="train",
+        status="running",
+    ))
+    await db_session.commit()
+    assert await wf.has_active_walk_forward(
+        db_session, strategy_id=tmpl.id,
+    ) is True
+
+
+@pytest.mark.asyncio
+async def test_has_active_walk_forward_true_when_test_pending(
+    db_session: AsyncSession, owner: User,
+):
+    """Pending status (sweep created but worker hasn't picked it
+    up yet) is also "active" — a parallel orchestrator would
+    immediately see it as running and start racing."""
+    tmpl = await _make_strategy(db_session, owner_id=owner.id)
+    db_session.add(BacktestSweep(
+        id=uuid.uuid4(), owner_id=owner.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["a"],
+        anchor_date=date(2026, 5, 1),
+        trading_days_count=5, rounds_per_discussion=1,
+        concurrency=1, auto_post_mortem=False,
+        strategy_id=tmpl.id,
+        fold_kind="test",
+        status="pending",
+    ))
+    await db_session.commit()
+    assert await wf.has_active_walk_forward(
+        db_session, strategy_id=tmpl.id,
+    ) is True
+
+
+@pytest.mark.asyncio
+async def test_has_active_walk_forward_false_when_terminal(
+    db_session: AsyncSession, owner: User,
+):
+    """Completed / cancelled / failed walk-forward sweeps don't
+    block a new run — operator can re-trigger after a previous
+    run finishes regardless of outcome."""
+    tmpl = await _make_strategy(db_session, owner_id=owner.id)
+    for status in ("completed", "cancelled", "failed"):
+        db_session.add(BacktestSweep(
+            id=uuid.uuid4(), owner_id=owner.id,
+            topic="t", rules="r", market="TW",
+            persona_ids=["a"],
+            anchor_date=date(2026, 5, 1),
+            trading_days_count=5, rounds_per_discussion=1,
+            concurrency=1, auto_post_mortem=False,
+            strategy_id=tmpl.id,
+            fold_kind="train",
+            status=status,
+        ))
+    await db_session.commit()
+    assert await wf.has_active_walk_forward(
+        db_session, strategy_id=tmpl.id,
+    ) is False
+
+
+@pytest.mark.asyncio
+async def test_has_active_walk_forward_ignores_production_sweeps(
+    db_session: AsyncSession, owner: User,
+):
+    """Auto-schedule cron firing a `production` sweep at the same
+    time the operator wants a walk-forward must NOT block the
+    walk-forward — they run independently."""
+    tmpl = await _make_strategy(db_session, owner_id=owner.id)
+    db_session.add(BacktestSweep(
+        id=uuid.uuid4(), owner_id=owner.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["a"],
+        anchor_date=date(2026, 5, 1),
+        trading_days_count=5, rounds_per_discussion=1,
+        concurrency=1, auto_post_mortem=False,
+        strategy_id=tmpl.id,
+        fold_kind="production",
+        status="running",
+    ))
+    await db_session.commit()
+    assert await wf.has_active_walk_forward(
+        db_session, strategy_id=tmpl.id,
+    ) is False
+
+
+@pytest.mark.asyncio
+async def test_has_active_walk_forward_scoped_to_strategy(
+    db_session: AsyncSession, owner: User,
+):
+    """One strategy's active walk-forward doesn't block another
+    strategy's run — operators with multiple strategies should be
+    able to walk-forward all of them in parallel."""
+    tmpl_a = await _make_strategy(db_session, owner_id=owner.id)
+    tmpl_b = await _make_strategy(db_session, owner_id=owner.id)
+    db_session.add(BacktestSweep(
+        id=uuid.uuid4(), owner_id=owner.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["a"],
+        anchor_date=date(2026, 5, 1),
+        trading_days_count=5, rounds_per_discussion=1,
+        concurrency=1, auto_post_mortem=False,
+        strategy_id=tmpl_a.id,
+        fold_kind="train",
+        status="running",
+    ))
+    await db_session.commit()
+    assert await wf.has_active_walk_forward(
+        db_session, strategy_id=tmpl_a.id,
+    ) is True
+    assert await wf.has_active_walk_forward(
+        db_session, strategy_id=tmpl_b.id,
+    ) is False
+
+
 @pytest.mark.asyncio
 async def test_execute_records_per_fold_metric(
     db_session: AsyncSession, owner: User,

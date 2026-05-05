@@ -176,6 +176,40 @@ async def plan_walk_forward(
     )
 
 
+async def has_active_walk_forward(
+    db: AsyncSession,
+    *,
+    strategy_id: UUID,
+) -> bool:
+    """Audit follow-up #2: True iff this strategy already has a
+    walk-forward run in flight — i.e. at least one train- or test-
+    fold sweep is in pending or running status.
+
+    The API endpoint consults this before scheduling a new
+    orchestrator so two simultaneous /walk-forward POSTs don't
+    each spawn parallel runs and race on weight learning.
+
+    Production sweeps (`fold_kind='production'`) are intentionally
+    NOT counted — those run independently of walk-forward and
+    blocking on them would forbid the perfectly normal "auto-
+    schedule cron is running production sweeps while operator
+    triggers a walk-forward" workflow.
+    """
+    from services.backtest_sweep_service import (
+        STATUS_PENDING, STATUS_RUNNING,
+    )
+    stmt = (
+        select(BacktestSweep.id)
+        .where(
+            BacktestSweep.strategy_id == strategy_id,
+            BacktestSweep.fold_kind.in_(("train", "test")),
+            BacktestSweep.status.in_((STATUS_PENDING, STATUS_RUNNING)),
+        )
+        .limit(1)
+    )
+    return (await db.scalar(stmt)) is not None
+
+
 async def _resolve_trading_days_in_range(
     db: AsyncSession,
     *,
@@ -510,4 +544,5 @@ __all__ = [
     "plan_walk_forward",
     "execute_walk_forward",
     "execute_walk_forward_in_background",
+    "has_active_walk_forward",
 ]

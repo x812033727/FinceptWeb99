@@ -358,6 +358,121 @@ def _row_split(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _row_broker_master(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "broker_id": _to_str(row.get("broker_id")),
+        "name_zh": _to_str(row.get("name_zh")),
+        "branch_name": _to_str(row.get("branch_name")),
+        "address": _to_str(row.get("address")),
+        "phone": _to_str(row.get("phone")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_disposition(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "symbol": _to_str(row.get("symbol")),
+        "started_at": _to_date(row.get("started_at")),
+        "ended_at": _to_date(row.get("ended_at")),
+        "reason": _to_str(row.get("reason")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_holdings_aggregates(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "symbol": _to_str(row.get("symbol")),
+        "ts": _to_date(row.get("ts")),
+        "bracket": _to_str(row.get("bracket")),
+        "holders": _to_int(row.get("holders")),
+        "shares": _to_int(row.get("shares")),
+        "pct": _to_decimal(row.get("pct")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_margin_maintenance(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "market": row.get("market", "TWSE"),
+        "ts": _to_date(row.get("ts")),
+        "maintenance_pct": _to_decimal(row.get("maintenance_pct")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_cb_info(row: dict[str, Any]) -> dict[str, Any]:
+    cb_id = _to_str(row.get("cb_id"))
+    # FinMind doesn't ship the underlying stock ticker explicitly; the
+    # convention is the first 4 digits of `cb_id` (e.g. `24553` → `2455`)
+    # for the standard Taiwan CB numbering. Fall back to None for any
+    # cb_id that doesn't fit so we surface odd cases instead of guessing.
+    underlying = cb_id[:4] if cb_id and cb_id[:4].isdigit() else None
+    return {
+        "cb_id": cb_id,
+        "underlying_symbol": underlying,
+        "name_zh": _to_str(row.get("name_zh")),
+        "issue_date": _to_date(row.get("issue_date")),
+        "maturity_date": _to_date(row.get("maturity_date")),
+        "conversion_price": None,  # not in TaiwanStockConvertibleBondInfo response
+        "par_value": _to_decimal(row.get("par_value")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_industry_chain(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "symbol": _to_str(row.get("symbol")),
+        "industry": _to_str(row.get("industry")),
+        "sub_industry": _to_str(row.get("sub_industry")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_suspended(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "symbol": _to_str(row.get("symbol")),
+        "suspended_at": _to_date(row.get("suspended_at")),
+        "reason": _to_str(row.get("reason")),
+        "resumed_at": _to_date(row.get("resumed_at")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_stock_info_with_warrant(row: dict[str, Any]) -> dict[str, Any]:
+    # FinMind's `TaiwanStockInfoWithWarrant` shares the same column shape
+    # as `TaiwanStockInfo` but includes warrants (call/put leveraged
+    # certificates). `industry_category == '全部(不含大盤、指數)'` distinguishes
+    # warrants from equities since warrants don't have a real industry.
+    market_raw = (row.get("market") or "").lower()
+    market = "TWSE" if "twse" in market_raw or market_raw == "twse" else (
+        "OTC" if market_raw in ("otc", "tpex") else market_raw.upper() or "TWSE"
+    )
+    industry = _to_str(row.get("industry_category"))
+    is_warrant = bool(industry and "不含大盤" in industry)
+    return {
+        "market": market,
+        "symbol": _to_str(row.get("symbol")),
+        "name_zh": _to_str(row.get("name_zh")),
+        "industry_category": industry,
+        "listed_at": _to_date(row.get("listed_at")),
+        "is_warrant": is_warrant,
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _row_trading_calendar(row: dict[str, Any]) -> dict[str, Any]:
+    # FinMind's `TaiwanStockTradingDate` returns one row per trading day
+    # with no payload — the row's existence IS the signal that the date
+    # is a trading day. Non-trading days are absent from the response.
+    return {
+        "market": row.get("market", "TWSE"),
+        "ts": _to_date(row.get("ts")),
+        "is_trading_day": True,
+        "note": None,
+        "source": row.get("source", "finmind"),
+    }
+
+
 def _row_day_trade(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "market": row.get("market", "TWSE"),
@@ -1100,6 +1215,130 @@ MAPPINGS: dict[str, DatasetMapping] = {
         pk_columns=("sha256",),
         extra={"market": "TW", "source": "finmind"},
         row_transform=_row_news,
+    ),
+    "TaiwanSecuritiesTraderInfo": DatasetMapping(
+        dataset_code="TaiwanSecuritiesTraderInfo",
+        local_table="tw_broker_master",
+        column_map={
+            "securities_trader_id": "broker_id",
+            "securities_trader": "name_zh",
+            "address": "address",
+            "phone": "phone",
+        },
+        pk_columns=("broker_id",),
+        extra={"source": "finmind"},
+        row_transform=_row_broker_master,
+    ),
+    "TaiwanStockDispositionSecuritiesPeriod": DatasetMapping(
+        dataset_code="TaiwanStockDispositionSecuritiesPeriod",
+        local_table="tw_disposition",
+        column_map={
+            "stock_id": "symbol",
+            "period_start": "started_at",
+            "period_end": "ended_at",
+            "condition": "reason",
+        },
+        pk_columns=("symbol", "started_at"),
+        extra={"source": "finmind"},
+        row_transform=_row_disposition,
+    ),
+    "TaiwanStockHoldingSharesPer": DatasetMapping(
+        dataset_code="TaiwanStockHoldingSharesPer",
+        local_table="tw_holdings_aggregates",
+        column_map={
+            "date": "ts",
+            "stock_id": "symbol",
+            "HoldingSharesLevel": "bracket",
+            "people": "holders",
+            "unit": "shares",
+            "percent": "pct",
+        },
+        pk_columns=("symbol", "ts", "bracket"),
+        extra={"source": "finmind"},
+        row_transform=_row_holdings_aggregates,
+    ),
+    "TaiwanTotalExchangeMarginMaintenance": DatasetMapping(
+        dataset_code="TaiwanTotalExchangeMarginMaintenance",
+        local_table="tw_margin_maintenance",
+        column_map={
+            "date": "ts",
+            "TotalExchangeMarginMaintenance": "maintenance_pct",
+        },
+        pk_columns=("market", "ts"),
+        extra={"market": "TWSE", "source": "finmind"},
+        row_transform=_row_margin_maintenance,
+    ),
+    "TaiwanStockConvertibleBondInfo": DatasetMapping(
+        dataset_code="TaiwanStockConvertibleBondInfo",
+        local_table="tw_cb_info",
+        column_map={
+            "cb_id": "cb_id",
+            "cb_name": "name_zh",
+            "InitialDateOfConversion": "issue_date",
+            "DueDateOfConversion": "maturity_date",
+            "IssuanceAmount": "par_value",
+        },
+        pk_columns=("cb_id",),
+        extra={"source": "finmind"},
+        row_transform=_row_cb_info,
+    ),
+    "TaiwanStockIndustryChain": DatasetMapping(
+        dataset_code="TaiwanStockIndustryChain",
+        local_table="tw_industry_chain",
+        column_map={
+            "stock_id": "symbol",
+            "industry": "industry",
+            "sub_industry": "sub_industry",
+        },
+        # PK is (symbol, industry); when FinMind reports the same stock
+        # in multiple sub_industries within one industry the last row
+        # wins on UPSERT. That's a known precision loss but acceptable
+        # at this granularity — the schema treats one (stock, industry)
+        # pair as having one canonical sub-industry.
+        pk_columns=("symbol", "industry"),
+        extra={"source": "finmind"},
+        row_transform=_row_industry_chain,
+    ),
+    "TaiwanStockDayTradingSuspension": DatasetMapping(
+        dataset_code="TaiwanStockDayTradingSuspension",
+        local_table="tw_suspended",
+        column_map={
+            "stock_id": "symbol",
+            "date": "suspended_at",
+            "end_date": "resumed_at",
+            "reason": "reason",
+        },
+        pk_columns=("symbol", "suspended_at"),
+        extra={"source": "finmind"},
+        row_transform=_row_suspended,
+    ),
+    "TaiwanStockInfoWithWarrant": DatasetMapping(
+        dataset_code="TaiwanStockInfoWithWarrant",
+        local_table="tw_stock_info",
+        column_map={
+            "stock_id": "symbol",
+            "stock_name": "name_zh",
+            "industry_category": "industry_category",
+            "type": "market",
+            "date": "listed_at",
+        },
+        pk_columns=("market", "symbol"),
+        extra={"source": "finmind"},
+        # Shared destination with TaiwanStockInfo. Re-ingesting an
+        # equity row already seeded by TaiwanStockInfo overwrites
+        # is_warrant=False with the recomputed value (still False for
+        # equities, True for warrants); the row_transform decides.
+        row_transform=_row_stock_info_with_warrant,
+    ),
+    "TaiwanStockTradingDate": DatasetMapping(
+        dataset_code="TaiwanStockTradingDate",
+        local_table="tw_trading_calendar",
+        column_map={
+            "date": "ts",
+        },
+        pk_columns=("market", "ts"),
+        extra={"market": "TWSE", "source": "finmind"},
+        row_transform=_row_trading_calendar,
     ),
 }
 

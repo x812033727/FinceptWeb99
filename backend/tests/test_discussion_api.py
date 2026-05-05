@@ -632,3 +632,204 @@ async def admin_user(db_session: AsyncSession) -> User:
     await db_session.commit()
     await db_session.refresh(user)
     return user
+
+
+# ── PR-A1 follow-up: walk-forward HTTP endpoint ────────────────────
+
+
+async def _create_strategy_via_api(
+    client: AsyncClient, headers: dict, *,
+    name: str = "WF API test",
+) -> str:
+    r = await client.post(
+        "/api/discussion/strategies",
+        headers=headers,
+        json={
+            "name": name,
+            "description": "wf",
+            "topic": "topic", "rules": "rules",
+            "market": "TW",
+            "persona_ids": ["buffett", "lynch"],
+            "default_rounds": 1,
+            "default_concurrency": 1,
+            "default_auto_post_mortem": False,
+        },
+    )
+    assert r.status_code in (200, 201), r.text
+    return r.json()["id"]
+
+
+async def _seed_ohlcv_days(
+    db: AsyncSession, *, market: str = "TW",
+    start: str = "2025-09-01", n: int = 200,
+) -> list[str]:
+    """Seed `n` consecutive weekday-only OHLCV rows so
+    plan_walk_forward can resolve enough trading days. Returns the
+    list of ISO dates seeded."""
+    from datetime import date, timedelta
+
+    from models.ohlcv_daily import OhlcvDaily
+
+    cur = date.fromisoformat(start)
+    dates: list[str] = []
+    while len(dates) < n:
+        if cur.weekday() < 5:
+            dates.append(cur.isoformat())
+            db.add(OhlcvDaily(
+                market=market, symbol="2330", ts=cur,
+                open=100.0, high=101.0, low=99.0, close=100.0,
+                volume=1_000_000, source="test",
+            ))
+        cur = cur + timedelta(days=1)
+    await db.commit()
+    return dates
+
+
+@pytest.mark.asyncio
+async def test_walk_forward_returns_404_for_unknown_strategy(
+    client: AsyncClient,
+):
+    h = await _register(client, "wf_unknown@example.com")
+    r = await client.post(
+        f"/api/discussion/strategies/{uuid.uuid4()}/walk-forward",
+        headers=h,
+        json={
+            "anchor_date": "2026-05-05",
+            "n_folds": 1,
+        },
+    )
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_walk_forward_returns_400_for_bad_anchor(
+    client: AsyncClient,
+):
+    h = await _register(client, "wf_bad_anchor@example.com")
+    sid = await _create_strategy_via_api(client, h)
+    r = await client.post(
+        f"/api/discussion/strategies/{sid}/walk-forward",
+        headers=h,
+        json={
+            "anchor_date": "not-a-date",
+            "n_folds": 1,
+        },
+    )
+    assert r.status_code == 400
+    assert "anchor_date" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_walk_forward_returns_400_for_thin_archive(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """When ohlcv_daily can't reach the requested span, the
+    plan-resolver raises ValueError → 400."""
+    h = await _register(client, "wf_thin@example.com")
+    sid = await _create_strategy_via_api(client, h)
+    # Seed only 30 days — far less than the default 60+20 needed
+    # for one fold.
+    await _seed_ohlcv_days(db_session, n=30)
+    r = await client.post(
+        f"/api/discussion/strategies/{sid}/walk-forward",
+        headers=h,
+        json={
+            "anchor_date": "2026-05-05",
+            "n_folds": 1,
+        },
+    )
+    assert r.status_code == 400
+    assert "ohlcv_daily" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_walk_forward_kicks_off_and_returns_plan(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """Happy path — plan resolves, orchestrator detaches into the
+    background, response carries the fold layout. The actual
+    orchestrator is patched to a no-op so the test doesn't try
+    to run real LLM calls."""
+    h = await _register(client, "wf_kickoff@example.com")
+    sid = await _create_strategy_via_api(client, h)
+    seeded = await _seed_ohlcv_days(db_session, n=120)
+    anchor = seeded[-1]
+
+    with patch(
+        "services.walk_forward_service."
+        "execute_walk_forward_in_background",
+        return_value=AsyncMock(),
+    ) as kickoff:
+        r = await client.post(
+            f"/api/discussion/strategies/{sid}/walk-forward",
+            headers=h,
+            json={
+                "anchor_date": anchor,
+                "train_window_days": 20,
+                "test_window_days": 10,
+                "n_folds": 2,
+            },
+        )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["started"] is True
+    assert body["strategy_id"] == sid
+    assert body["market"] == "TW"
+    assert body["train_window_days"] == 20
+    assert body["test_window_days"] == 10
+    assert len(body["folds"]) == 2
+    # Fold layout: most-recent fold's test ends at anchor, each
+    # fold's train ends right before its test starts.
+    f0 = body["folds"][0]
+    assert len(f0["train_dates"]) == 20
+    assert len(f0["test_dates"]) == 10
+    assert max(f0["train_dates"]) < min(f0["test_dates"])
+    # Orchestrator was scheduled exactly once.
+    assert kickoff.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_walk_forward_owner_scoped_returns_404_for_others(
+    client: AsyncClient,
+):
+    """One user's strategy must be invisible to another's
+    walk-forward request — owner-scope is enforced ahead of the
+    plan resolver."""
+    a = await _register(client, "wf_owner_a@example.com")
+    b = await _register(client, "wf_owner_b@example.com")
+    sid = await _create_strategy_via_api(client, a)
+    r = await client.post(
+        f"/api/discussion/strategies/{sid}/walk-forward",
+        headers=b,
+        json={"anchor_date": "2026-05-05", "n_folds": 1},
+    )
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_walk_forward_validates_bounds(
+    client: AsyncClient,
+):
+    """Pydantic schema enforces the bounds — n_folds=99 / window=0
+    surfaces as 422 before ever reaching the service."""
+    h = await _register(client, "wf_bounds@example.com")
+    sid = await _create_strategy_via_api(client, h)
+    r = await client.post(
+        f"/api/discussion/strategies/{sid}/walk-forward",
+        headers=h,
+        json={
+            "anchor_date": "2026-05-05",
+            "n_folds": 99,
+        },
+    )
+    assert r.status_code == 422
+    r = await client.post(
+        f"/api/discussion/strategies/{sid}/walk-forward",
+        headers=h,
+        json={
+            "anchor_date": "2026-05-05",
+            "train_window_days": 0,
+        },
+    )
+    assert r.status_code == 422

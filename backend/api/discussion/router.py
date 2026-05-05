@@ -61,6 +61,9 @@ from api.discussion.schemas import (
     PostMortemWinnerOut,
     ScoreboardResponse,
     ScoreboardRow,
+    WalkForwardFoldOut,
+    WalkForwardPlanResponse,
+    WalkForwardRequest,
     TurnResponse,
     UpdateDiscussionRequest,
 )
@@ -1291,3 +1294,92 @@ async def delete_strategy(
         raise HTTPException(status_code=404, detail="Strategy not found")
     await tsvc.soft_delete_template(db, row)
     return None
+
+
+@router.post(
+    "/strategies/{template_id}/walk-forward",
+    response_model=WalkForwardPlanResponse,
+)
+async def kick_off_walk_forward(
+    template_id: uuid.UUID,
+    body: WalkForwardRequest,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """PR-A1 follow-up — operator-triggered walk-forward run.
+
+    Resolves the rolling (train, test) fold plan synchronously
+    (so 400 surfaces immediately if the archive can't reach the
+    requested span) and detaches the orchestrator into the event
+    loop. The HTTP request returns the plan + `started=True`; the
+    actual sweep rows appear via `GET /sweeps?strategy_id=...` as
+    the worker creates them.
+
+    Failure modes:
+      - 404 — strategy template doesn't exist or doesn't belong
+        to the caller
+      - 400 — anchor_date can't be parsed, or
+        `plan_walk_forward` rejects the requested span (archive
+        too thin, invalid combination)
+    """
+    from datetime import date as _date
+
+    from services import strategy_template_service as tsvc
+    from services import walk_forward_service as wf
+
+    owner_uuid = _coerce_owner_uuid(user)
+    tmpl = await tsvc.get_template(
+        db, template_id=template_id, owner_id=owner_uuid,
+    )
+    if tmpl is None:
+        raise HTTPException(
+            status_code=404, detail="Strategy not found",
+        )
+
+    try:
+        anchor = _date.fromisoformat(body.anchor_date)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"anchor_date must be ISO YYYY-MM-DD: {exc}",
+        )
+
+    try:
+        plan = await wf.plan_walk_forward(
+            db,
+            strategy_id=template_id,
+            market=tmpl.market,
+            anchor_date=anchor,
+            train_window_days=body.train_window_days,
+            test_window_days=body.test_window_days,
+            n_folds=body.n_folds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    wf.execute_walk_forward_in_background(
+        owner_id=owner_uuid,
+        strategy_id=template_id,
+        plan=plan,
+        rounds_per_discussion=body.rounds_per_discussion,
+        concurrency=body.concurrency,
+        auto_post_mortem=body.auto_post_mortem,
+    )
+
+    return WalkForwardPlanResponse(
+        strategy_id=plan.strategy_id,
+        market=plan.market,
+        train_window_days=plan.train_window_days,
+        test_window_days=plan.test_window_days,
+        folds=[
+            WalkForwardFoldOut(
+                fold_index=f.fold_index,
+                train_anchor=f.train_anchor.isoformat(),
+                train_dates=[d.isoformat() for d in f.train_dates],
+                test_anchor=f.test_anchor.isoformat(),
+                test_dates=[d.isoformat() for d in f.test_dates],
+            )
+            for f in plan.folds
+        ],
+        started=True,
+    )

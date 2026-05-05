@@ -670,11 +670,27 @@ async def test_proxy_patch_phase_a_to_b_switch(
 
 @pytest.mark.asyncio
 async def test_proxy_config_returns_resolved_settings(
-    client, db_session, finmind_db_override,
+    client, db_session, finmind_db_override, monkeypatch,
 ):
     """`/config` mirrors the startup log line — surfaces resolved
     FinMind env-var settings to the AdminPage UI without needing
     shell access. Independent of DB; uses settings only."""
+    # CI sets DATABASE_URL=sqlite for the main app's in-memory test
+    # engine (.github/workflows/ci.yml). With FINMIND_USE_MAIN_DB=True
+    # (the post-#313 default), `finmind_settings.effective_database_url`
+    # would resolve to that sqlite URL and the proxy would report
+    # mode='sqlite-test', which is a valid runtime mode but isn't
+    # what this test is pinning. Pretend DATABASE_URL is postgres for
+    # the duration of this test so the resolver exercises the Path A2
+    # branch (shared-main-db + schema=finmind).
+    from config import settings as main_settings
+
+    monkeypatch.setattr(
+        main_settings,
+        "DATABASE_URL",
+        "postgresql+asyncpg://fincept:test@localhost:5432/finceptweb",
+    )
+
     email = "admin_fm_config@test.com"
     await _register_login(client, email)
     token = await _promote_to_admin(db_session, email, client)
@@ -688,11 +704,10 @@ async def test_proxy_config_returns_resolved_settings(
         "use_main_db", "auto_init", "effective_database_url",
         "schema_", "mode",
     }
-    # Default since PR #313: FINMIND_USE_MAIN_DB=True. The main
-    # DATABASE_URL in this test env points at a postgres URL (set by
-    # the parent test conftest), so resolved mode is `shared-main-db`
-    # with `schema=finmind`. This pin documents that the default-
-    # default (no env vars touched) lands in Path A2.
+    # Default since PR #313: FINMIND_USE_MAIN_DB=True + postgres
+    # DATABASE_URL → resolved mode is `shared-main-db` with
+    # `schema=finmind`. Pins that the default-default (no env vars
+    # touched on the FinMind side) lands in Path A2.
     assert body["use_main_db"] is True
     assert body["mode"] == "shared-main-db"
     assert body["schema_"] == "finmind"

@@ -15,7 +15,38 @@
     "finmind": "FinMind API",
     "settings": "Settings",
     "admin": "Admin",
-    "sign_out": "Sign out"
+    "sign_out": "Sign out",
+    "group": {
+      "markets": "Markets",
+      "workspace": "Workspace",
+      "ai": "AI",
+      "data": "Data",
+      "system": "System"
+    }
+  },
+  "bottom_nav": {
+    "aria": "Primary",
+    "dashboard": "Home",
+    "markets": "Markets",
+    "portfolio": "Portfolio",
+    "ai": "AI",
+    "more": "More"
+  },
+  "palette": {
+    "title": "Command Menu",
+    "placeholder": "Search symbols, pages, actions…",
+    "empty": "No matches.",
+    "section": {
+      "symbols": "Symbols",
+      "pages": "Pages",
+      "actions": "Actions"
+    },
+    "action": {
+      "toggle_theme": "Toggle theme",
+      "toggle_language": "Toggle language",
+      "api_keys": "Manage API keys",
+      "sign_out": "Sign out"
+    }
   },
   "topbar": {
     "search_placeholder": "Search symbol… (AAPL, 2330)",
@@ -33,7 +64,10 @@
     "switch_to_light": "Switch to light mode",
     "language": "Language",
     "menu": "Open menu",
-    "close_menu": "Close menu"
+    "close_menu": "Close menu",
+    "more": "More options",
+    "preferences": "Preferences",
+    "status": "Status"
   },
   "common": {
     "loading": "Loading…",

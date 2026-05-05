@@ -176,6 +176,40 @@ async def plan_walk_forward(
     )
 
 
+async def has_active_walk_forward(
+    db: AsyncSession,
+    *,
+    strategy_id: UUID,
+) -> bool:
+    """Audit follow-up #2: True iff this strategy already has a
+    walk-forward run in flight — i.e. at least one train- or test-
+    fold sweep is in pending or running status.
+
+    The API endpoint consults this before scheduling a new
+    orchestrator so two simultaneous /walk-forward POSTs don't
+    each spawn parallel runs and race on weight learning.
+
+    Production sweeps (`fold_kind='production'`) are intentionally
+    NOT counted — those run independently of walk-forward and
+    blocking on them would forbid the perfectly normal "auto-
+    schedule cron is running production sweeps while operator
+    triggers a walk-forward" workflow.
+    """
+    from services.backtest_sweep_service import (
+        STATUS_PENDING, STATUS_RUNNING,
+    )
+    stmt = (
+        select(BacktestSweep.id)
+        .where(
+            BacktestSweep.strategy_id == strategy_id,
+            BacktestSweep.fold_kind.in_(("train", "test")),
+            BacktestSweep.status.in_((STATUS_PENDING, STATUS_RUNNING)),
+        )
+        .limit(1)
+    )
+    return (await db.scalar(stmt)) is not None
+
+
 async def _resolve_trading_days_in_range(
     db: AsyncSession,
     *,
@@ -236,30 +270,103 @@ async def execute_walk_forward(
         sweep_worker = run_sweep_worker
 
     results: list[FoldResult] = []
-    # Walk in chronological order (oldest fold first) so an operator
-    # watching the dashboard sees the earliest train/test pair finish
-    # first. Plan stores them anchor-newest-first; reverse here.
-    for fold in reversed(plan.folds):
-        result = FoldResult(fold_index=fold.fold_index)
-        try:
-            result = await _run_one_fold(
-                fold=fold,
-                owner_id=owner_id,
-                strategy_id=strategy_id,
-                market=plan.market,
-                rounds_per_discussion=rounds_per_discussion,
-                concurrency=concurrency,
-                auto_post_mortem=auto_post_mortem,
-                sweep_worker=sweep_worker,
-            )
-        except Exception as exc:
-            log.exception(
-                "walk_forward.fold_failed",
-                extra={"fold_index": fold.fold_index, "error": str(exc)},
-            )
-            result.error = str(exc)
-        results.append(result)
+    log.info(
+        "walk_forward.start",
+        extra={
+            "strategy_id": str(strategy_id),
+            "owner_id": str(owner_id),
+            "n_folds": len(plan.folds),
+            "market": plan.market,
+        },
+    )
+    # Wrap the loop in a try/except so an unhandled exception
+    # (e.g. AsyncSessionLocal can't connect, infrastructure
+    # failure, KeyboardInterrupt during shutdown) gets logged at
+    # WARNING level + emits the `failed` Prometheus counter
+    # increment. Without this, asyncio.create_task swallows the
+    # exception silently and the operator only learns by polling
+    # `/sweeps?strategy_id=...` and seeing nothing happened.
+    try:
+        # Walk in chronological order (oldest fold first) so an
+        # operator watching the dashboard sees the earliest
+        # train/test pair finish first. Plan stores them anchor-
+        # newest-first; reverse here.
+        for fold in reversed(plan.folds):
+            result = FoldResult(fold_index=fold.fold_index)
+            try:
+                result = await _run_one_fold(
+                    fold=fold,
+                    owner_id=owner_id,
+                    strategy_id=strategy_id,
+                    market=plan.market,
+                    rounds_per_discussion=rounds_per_discussion,
+                    concurrency=concurrency,
+                    auto_post_mortem=auto_post_mortem,
+                    sweep_worker=sweep_worker,
+                )
+            except Exception as exc:
+                log.exception(
+                    "walk_forward.fold_failed",
+                    extra={
+                        "strategy_id": str(strategy_id),
+                        "fold_index": fold.fold_index,
+                        "error": str(exc),
+                    },
+                )
+                result.error = str(exc)
+            _record_fold_metric(result)
+            results.append(result)
+    except Exception as exc:
+        log.exception(
+            "walk_forward.orchestrator_failed",
+            extra={
+                "strategy_id": str(strategy_id),
+                "owner_id": str(owner_id),
+                "completed_folds": len(results),
+                "error": str(exc),
+            },
+        )
+        _record_run_metric("failed")
+        raise
+
+    failed_count = sum(1 for r in results if r.error is not None)
+    if failed_count == 0:
+        run_status = "success"
+    elif failed_count == len(results):
+        run_status = "failed"
+    else:
+        run_status = "partial"
+    _record_run_metric(run_status)
+    log.info(
+        "walk_forward.complete",
+        extra={
+            "strategy_id": str(strategy_id),
+            "owner_id": str(owner_id),
+            "status": run_status,
+            "folds_total": len(results),
+            "folds_failed": failed_count,
+        },
+    )
     return results
+
+
+def _record_fold_metric(result: FoldResult) -> None:
+    try:
+        from middleware.metrics import WALK_FORWARD_FOLDS_TOTAL
+        outcome = "failed" if result.error is not None else "completed"
+        WALK_FORWARD_FOLDS_TOTAL.labels(outcome=outcome).inc()
+    except Exception:
+        # Best-effort — metric infrastructure failure must never
+        # disturb the orchestrator itself.
+        pass
+
+
+def _record_run_metric(status: str) -> None:
+    try:
+        from middleware.metrics import WALK_FORWARD_RUNS_TOTAL
+        WALK_FORWARD_RUNS_TOTAL.labels(status=status).inc()
+    except Exception:
+        pass
 
 
 async def _run_one_fold(
@@ -437,4 +544,5 @@ __all__ = [
     "plan_walk_forward",
     "execute_walk_forward",
     "execute_walk_forward_in_background",
+    "has_active_walk_forward",
 ]

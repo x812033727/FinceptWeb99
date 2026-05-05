@@ -1336,6 +1336,25 @@ async def kick_off_walk_forward(
             status_code=404, detail="Strategy not found",
         )
 
+    # Audit follow-up #2: refuse to spawn a second orchestrator
+    # while the first is still in flight. Two parallel runs would
+    # each create train+test sweeps for the same strategy, race
+    # on weight learning, and burn LLM quota proportionally.
+    # Operator hits this when they double-click the trigger
+    # button or a stale browser tab re-fires the request.
+    if await wf.has_active_walk_forward(
+        db, strategy_id=template_id,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "A walk-forward run is already in flight for this "
+                "strategy. Wait for it to complete or cancel its "
+                "fold sweeps via /sweeps/{id}/cancel before starting "
+                "another."
+            ),
+        )
+
     try:
         anchor = _date.fromisoformat(body.anchor_date)
     except ValueError as exc:

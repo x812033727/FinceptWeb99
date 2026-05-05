@@ -63,6 +63,26 @@ LESSONS_DEDUP_SKIPPED_TOTAL = Counter(
     ["market"],
 )
 
+# ── Walk-forward orchestrator (PR-A1 + post-merge audit) ──────────
+
+WALK_FORWARD_RUNS_TOTAL = Counter(
+    "walk_forward_runs_total",
+    "Walk-forward orchestrator runs by terminal status. "
+    "`success` = every fold's train+test pair finished without "
+    "raising. `partial` = at least one fold errored but others "
+    "completed. `failed` = top-level exception escaped past the "
+    "per-fold try/except (orchestrator infrastructure failure, "
+    "should be near zero in steady state).",
+    ["status"],
+)
+WALK_FORWARD_FOLDS_TOTAL = Counter(
+    "walk_forward_folds_total",
+    "Individual (train, test) folds executed. `outcome` is "
+    "`completed` (both halves ran without exception) or "
+    "`failed` (the per-fold try/except caught something).",
+    ["outcome"],
+)
+
 # ── Core Web Vitals (reported by the frontend) ────────────────────
 # LCP / INP / FCP / TTFB are time metrics in seconds; bucket
 # boundaries are tuned around Google's "Good / Needs improvement /

@@ -808,6 +808,104 @@ async def test_walk_forward_owner_scoped_returns_404_for_others(
 
 
 @pytest.mark.asyncio
+async def test_walk_forward_returns_409_when_already_active(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """Audit follow-up #2: a second walk-forward request for the
+    same strategy while the first is still in flight gets 409.
+    Without this, two parallel orchestrators would each create
+    train+test sweeps and race on weight learning."""
+    h = await _register(client, "wf_already_active@example.com")
+    sid = await _create_strategy_via_api(client, h)
+    seeded = await _seed_ohlcv_days(db_session, n=120)
+
+    # Seed a running train fold for this strategy — simulates an
+    # earlier walk-forward run that's still mid-flight.
+    from sqlalchemy import select
+    from models.backtest_sweep import BacktestSweep
+    from models.user import User as _User
+    user = (await db_session.execute(
+        select(_User).where(_User.email == "wf_already_active@example.com"),
+    )).scalar_one()
+    db_session.add(BacktestSweep(
+        id=uuid.uuid4(), owner_id=user.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["bull"],
+        anchor_date=__import__(
+            "datetime", fromlist=["date"],
+        ).date.fromisoformat(seeded[0]),
+        trading_days_count=5, rounds_per_discussion=1,
+        concurrency=1, auto_post_mortem=False,
+        strategy_id=uuid.UUID(sid),
+        fold_kind="train",
+        status="running",
+    ))
+    await db_session.commit()
+
+    r = await client.post(
+        f"/api/discussion/strategies/{sid}/walk-forward",
+        headers=h,
+        json={
+            "anchor_date": seeded[-1],
+            "n_folds": 1,
+        },
+    )
+    assert r.status_code == 409
+    assert "in flight" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_walk_forward_allows_new_run_after_previous_terminal(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """A completed previous run shouldn't block a new
+    walk-forward — operator can re-trigger as much as they want
+    once the prior run has terminated."""
+    h = await _register(client, "wf_after_done@example.com")
+    sid = await _create_strategy_via_api(client, h)
+    seeded = await _seed_ohlcv_days(db_session, n=120)
+
+    from sqlalchemy import select
+    from models.backtest_sweep import BacktestSweep
+    from models.user import User as _User
+    user = (await db_session.execute(
+        select(_User).where(_User.email == "wf_after_done@example.com"),
+    )).scalar_one()
+    # Previous run has completed — must not block.
+    db_session.add(BacktestSweep(
+        id=uuid.uuid4(), owner_id=user.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["bull"],
+        anchor_date=__import__(
+            "datetime", fromlist=["date"],
+        ).date.fromisoformat(seeded[0]),
+        trading_days_count=5, rounds_per_discussion=1,
+        concurrency=1, auto_post_mortem=False,
+        strategy_id=uuid.UUID(sid),
+        fold_kind="train",
+        status="completed",
+    ))
+    await db_session.commit()
+
+    with patch(
+        "services.walk_forward_service."
+        "execute_walk_forward_in_background",
+        return_value=AsyncMock(),
+    ):
+        r = await client.post(
+            f"/api/discussion/strategies/{sid}/walk-forward",
+            headers=h,
+            json={
+                "anchor_date": seeded[-1],
+                "train_window_days": 20,
+                "test_window_days": 10,
+                "n_folds": 1,
+            },
+        )
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
 async def test_walk_forward_validates_bounds(
     client: AsyncClient,
 ):

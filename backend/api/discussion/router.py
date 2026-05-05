@@ -40,6 +40,7 @@ from api.discussion.schemas import (
     StrategyTemplateCreate,
     StrategyTemplateResponse,
     StrategyTemplateUpdate,
+    SweepAggregateResponse,
     AutoRunConfigRequest,
     AutoRunConfigResponse,
     ConclusionResponse,
@@ -1179,6 +1180,59 @@ async def update_strategy(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return _template_to_response(updated)
+
+
+@router.get(
+    "/sweeps/{sweep_id}/aggregate",
+    response_model=SweepAggregateResponse,
+)
+async def aggregate_sweep_route(
+    sweep_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Folded KPIs for a single sweep — verdict counts, win-rate,
+    avg D1-D5 P&L, per-persona stats, recent post-mortem
+    lessons. Empty payload (zero counts, null win_rate) when no
+    spawned discussion has resolved yet."""
+    from services import backtest_sweep_service as svc
+    from services import sweep_aggregate_service as agg
+
+    sweep = await svc.get_sweep(
+        db, sweep_id=sweep_id, owner_id=_coerce_owner_uuid(user),
+    )
+    if sweep is None:
+        raise HTTPException(status_code=404, detail="Sweep not found")
+    payload = await agg.aggregate_sweep(db, sweep)
+    return SweepAggregateResponse(**payload)
+
+
+@router.get(
+    "/strategies/{template_id}/aggregate",
+    response_model=SweepAggregateResponse,
+)
+async def aggregate_strategy_route(
+    template_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Cross-sweep KPIs for every sweep that referenced this
+    template. Soft-deleted templates are still aggregatable so a
+    purged strategy's history stays inspectable."""
+    from services import strategy_template_service as tsvc
+    from services import sweep_aggregate_service as agg
+
+    row = await tsvc.get_template(
+        db, template_id=template_id,
+        owner_id=_coerce_owner_uuid(user),
+        include_deleted=True,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    payload = await agg.aggregate_strategy(
+        db, owner_id=_coerce_owner_uuid(user), strategy_id=template_id,
+    )
+    return SweepAggregateResponse(**payload)
 
 
 @router.delete(

@@ -291,6 +291,7 @@ async def create_discussion(
     persona_ids: list[str],
     market: str | None = None,
     as_of_date: date | None = None,
+    sweep_id: uuid.UUID | None = None,
 ) -> Discussion:
     topic = _validate_text(topic, field="topic", max_chars=_MAX_TOPIC_CHARS)
     rules = _validate_text(rules, field="rules", max_chars=_MAX_RULES_CHARS)
@@ -316,6 +317,7 @@ async def create_discussion(
         status=STATUS_DRAFT,
         current_round=0,
         as_of_date=as_of_date,
+        sweep_id=sweep_id,
     )
     db.add(row)
     await db.commit()

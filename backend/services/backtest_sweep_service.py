@@ -255,6 +255,7 @@ async def _process_one_date(
                     persona_ids=list(sweep.persona_ids or []),
                     market=sweep.market,
                     as_of_date=target_date,
+                    sweep_id=sweep.id,
                 )
                 # Run the configured number of rounds. Each round
                 # consumes the round generator to completion.

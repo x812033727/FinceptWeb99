@@ -279,6 +279,53 @@ class StrategyTemplateUpdate(BaseModel):
     default_auto_post_mortem: bool | None = None
 
 
+class SweepAggregatePersona(BaseModel):
+    persona_id: str
+    discussions_count: int
+    win_count: int
+    hit_rate: float | None
+    agree_turn_count: int
+    dissent_turn_count: int
+
+
+class SweepAggregateLesson(BaseModel):
+    category: str
+    lesson_text: str
+    as_of_date: str
+    related_symbols: list[str]
+    created_at: str | None
+
+
+class SweepAggregateVerdictCounts(BaseModel):
+    win: int
+    loss: int
+    unverifiable: int
+    pending: int
+
+
+class SweepAggregateResponse(BaseModel):
+    """Folded KPIs for one sweep or one strategy template (PR-B).
+
+    Same shape for both scopes; extra fields populated per scope:
+    - scope='sweep'    -> sweep_id + anchor_date + completed_count
+    - scope='strategy' -> sweep_count
+    """
+    scope: str
+    sweep_id: str | None = None
+    strategy_id: str | None = None
+    sweep_count: int | None = None
+    anchor_date: str | None = None
+    trading_days_count: int | None = None
+    completed_count: int | None = None
+    failed_count: int | None = None
+    discussions_total: int
+    verdict_counts: SweepAggregateVerdictCounts
+    win_rate: float | None
+    avg_pnl_pct: list[float | None]
+    per_persona: list[SweepAggregatePersona]
+    lessons: list[SweepAggregateLesson]
+
+
 class StrategyTemplateResponse(BaseModel):
     id: uuid.UUID
     name: str

@@ -58,6 +58,34 @@ async def get_universe_from_tw_stock_info(
     return list(rows)
 
 
+async def get_warrant_universe_from_tw_stock_info(
+    session: AsyncSession,
+) -> list[str]:
+    """Read the warrant-only universe from `tw_stock_info`. Used by
+    datasets in `dispatcher._WARRANT_UNIVERSE_DATASETS` that take a
+    warrant code as `data_id` rather than an equity stock_id.
+
+    Filters to `is_warrant=true` AND 6-character symbols — TWSE
+    warrants are universally 6 chars, while many `is_warrant=true`
+    rows from `TaiwanStockInfoWithWarrant` are 4–5 char ETFs that
+    FinMind happens to ship through the same feed but that the
+    warrant-specific endpoints reject.
+
+    Returns an empty list when the table is empty or the warrant
+    feed hasn't ingested yet — the caller decides whether to skip
+    warrant datasets or fall back to a hardcoded list."""
+    from sqlalchemy import func
+
+    stmt = (
+        select(TwStockInfo.symbol)
+        .where(TwStockInfo.is_warrant.is_(True))
+        .where(func.length(TwStockInfo.symbol) == 6)
+        .order_by(TwStockInfo.symbol)
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+    return list(rows)
+
+
 @dataclass
 class ChunkOutcome:
     chunk: DueChunk
@@ -68,13 +96,16 @@ async def run_due_now(
     session: AsyncSession,
     *,
     symbols: list[str] | None = None,
+    warrant_symbols: list[str] | None = None,
     now: datetime | None = None,
     client=None,
 ) -> list[ChunkOutcome]:
     """One sweep of the due-dataset graph.
 
-    Caller-supplied `symbols` is the per-symbol universe; market-wide
-    datasets ignore it. `now` defaults to UTC wall clock. `client`
+    Caller-supplied `symbols` is the equity per-symbol universe.
+    `warrant_symbols` is a separate universe used only by datasets
+    listed in `dispatcher._WARRANT_UNIVERSE_DATASETS`. Market-wide
+    datasets ignore both. `now` defaults to UTC wall clock. `client`
     overrides the ingest source (for tests) — production leaves it
     None and the runner picks per `dataset_sources.active_source`.
 
@@ -91,7 +122,9 @@ async def run_due_now(
         )
     ).scalars().all()
 
-    chunks = expand_due_datasets(list(rows), now, symbols=symbols)
+    chunks = expand_due_datasets(
+        list(rows), now, symbols=symbols, warrant_symbols=warrant_symbols,
+    )
     log.info(
         "scheduler: %d enabled datasets, %d due chunks", len(rows), len(chunks)
     )

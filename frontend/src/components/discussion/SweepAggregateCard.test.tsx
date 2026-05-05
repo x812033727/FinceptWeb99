@@ -9,7 +9,7 @@
  * `src/test/setup.ts`).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const mockFetchSweep = vi.fn();
@@ -170,6 +170,152 @@ describe("SweepAggregateCard — FoldBadge", () => {
       expect(screen.getByText(/Test fold/)).toBeInTheDocument(),
     );
     expect(screen.getByText("abcd1234")).toBeInTheDocument();
+  });
+});
+
+describe("SweepAggregateCard — WalkForwardCompareSection", () => {
+  it("hidden when sweep is production fold", async () => {
+    mockFetchSweep.mockResolvedValue({
+      ...BASE,
+      brier_score: 0.20,
+      fold_kind: "production",
+    });
+    renderCard({ sweepId: BASE.sweep_id! });
+    await waitFor(() =>
+      expect(screen.getByText("討論數")).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByText(/train vs test|train 折比較/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hidden when test fold has no parent_sweep_id", async () => {
+    mockFetchSweep.mockResolvedValue({
+      ...BASE,
+      brier_score: 0.20,
+      fold_kind: "test",
+      parent_sweep_id: null,
+    });
+    renderCard({ sweepId: BASE.sweep_id! });
+    await waitFor(() =>
+      expect(screen.getByText("討論數")).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByText(/train 折比較|train vs test/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("expands and renders side-by-side KPIs for paired train fold", async () => {
+    const TRAIN_ID = "aaaa1111-0000-0000-0000-000000000000";
+    const TEST_ID = "bbbb2222-0000-0000-0000-000000000000";
+
+    // First call (test fold) returns the test aggregate. Second
+    // call (train fold) returns the train aggregate. Both come
+    // through the same mocked `fetchSweepAggregate`.
+    mockFetchSweep.mockImplementation((id: unknown) => {
+      if (id === TEST_ID) {
+        return Promise.resolve({
+          ...BASE,
+          sweep_id: TEST_ID,
+          fold_kind: "test",
+          parent_sweep_id: TRAIN_ID,
+          brier_score: 0.30,
+          calibrated_brier_score: 0.28,
+          win_rate: 0.4,
+          avg_pnl_pct: [0.001, 0.002, 0.003, 0.004, 0.005],
+          verdict_counts: { win: 2, loss: 3, unverifiable: 0, pending: 0 },
+        });
+      }
+      if (id === TRAIN_ID) {
+        return Promise.resolve({
+          ...BASE,
+          sweep_id: TRAIN_ID,
+          fold_kind: "train",
+          parent_sweep_id: null,
+          // In-sample looks much better — typical overfitting
+          // shape for the test to assert on.
+          brier_score: 0.10,
+          calibrated_brier_score: 0.08,
+          win_rate: 0.85,
+          avg_pnl_pct: [0.01, 0.02, 0.03, 0.04, 0.05],
+          verdict_counts: { win: 17, loss: 3, unverifiable: 0, pending: 0 },
+        });
+      }
+      return Promise.reject(new Error(`unknown id ${String(id)}`));
+    });
+
+    renderCard({ sweepId: TEST_ID });
+    await waitFor(() =>
+      expect(screen.getByText(/train vs test/)).toBeInTheDocument(),
+    );
+
+    // Section starts collapsed.
+    expect(
+      screen.queryByText(/D5 平均報酬/),
+    ).not.toBeInTheDocument();
+
+    // Click to expand.
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /train vs test|train 折比較/,
+      }),
+    );
+
+    // Headers + at least one KPI row.
+    await waitFor(() =>
+      expect(
+        screen.getByText(/D5 平均報酬/),
+      ).toBeInTheDocument(),
+    );
+    // The compare grid has its own column header "🔬 Test (OOS)";
+    // the FoldBadge also shows "🔬 Test fold (OOS)". Match the
+    // grid header specifically.
+    expect(screen.getByText(/Train.*in-sample/)).toBeInTheDocument();
+    expect(screen.getByText("🔬 Test (OOS)")).toBeInTheDocument();
+    // Train brier 0.100 should appear; test brier 0.300 also
+    // appears multiple times (BrierRow tile + CompareGrid cell).
+    // We don't assert color directly — just on the values.
+    expect(screen.getByText("0.100")).toBeInTheDocument();
+    expect(screen.getAllByText("0.300").length).toBeGreaterThanOrEqual(1);
+    // Win-rate column: train 85% vs test 40%. The 40% appears in
+    // BrierRow's KpiRow tile (also 40%) so allow >= 1.
+    expect(screen.getByText("85%")).toBeInTheDocument();
+    expect(screen.getAllByText("40%").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("renders fallback when parent train fold has been deleted", async () => {
+    const TEST_ID = "cccc3333-0000-0000-0000-000000000000";
+    const MISSING_PARENT = "dddd4444-0000-0000-0000-000000000000";
+
+    mockFetchSweep.mockImplementation((id: unknown) => {
+      if (id === TEST_ID) {
+        return Promise.resolve({
+          ...BASE,
+          sweep_id: TEST_ID,
+          fold_kind: "test",
+          parent_sweep_id: MISSING_PARENT,
+          brier_score: 0.30,
+        });
+      }
+      return Promise.reject(new Error("Not Found"));
+    });
+
+    renderCard({ sweepId: TEST_ID });
+    await waitFor(() =>
+      expect(screen.getByText(/train vs test/)).toBeInTheDocument(),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /train vs test|train 折比較/,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Not Found|找不到對應/),
+      ).toBeInTheDocument(),
+    );
   });
 });
 

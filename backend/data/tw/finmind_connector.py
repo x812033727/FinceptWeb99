@@ -10,7 +10,11 @@ from typing import Any
 
 import httpx
 
-from cache.redis_cache import cache_incr, key_finmind_counter
+from cache.redis_cache import (
+    cache_incr,
+    key_finmind_counter,
+    key_finmind_quota_exhausted_counter,
+)
 from config import settings
 
 log = logging.getLogger(__name__)
@@ -91,6 +95,29 @@ async def _query(dataset: str, data_id: str, start_date: str, end_date: str | No
         #     when quota recovers, silently losing real data.
         # The contextvar `_strict_quota` (default False) toggles
         # behavior. `quota_strict()` is the recommended setter.
+        # Both paths bump a separate hourly counter + log WARNING so
+        # the admin status report can surface "quota exhausted N
+        # times in the last hour" — useful for noticing when parallel
+        # backfills are saturating the FinMind cap before operators
+        # see chunks piling up as failed in the ledger.
+        try:
+            await cache_incr(
+                key_finmind_quota_exhausted_counter(),
+                ttl_seconds=3600,
+            )
+        except Exception:
+            # Counter is best-effort — if Redis is down we still want
+            # the strict path to raise / quiet path to return [].
+            pass
+        log.warning(
+            "finmind.quota_exhausted",
+            extra={
+                "dataset": dataset,
+                "data_id": data_id or "_market",
+                "local_count": count,
+                "strict": _strict_quota.get(),
+            },
+        )
         if _strict_quota.get():
             raise FinMindQuotaExhausted(
                 f"FinMind hourly quota exhausted "

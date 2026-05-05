@@ -258,11 +258,15 @@ async def _collect_recent_errors(
 
 
 async def _collect_quota() -> dict[str, Any] | None:
-    """Read FinMind hourly quota counter from Redis, if available.
-    Returns None on any failure — Redis is optional infrastructure for
-    this report (nice-to-have, not load-bearing)."""
+    """Read FinMind hourly quota counter + quota-exhausted alert
+    counter from Redis, if available. Returns None on any failure —
+    Redis is optional infrastructure for this report (nice-to-have,
+    not load-bearing)."""
     try:
-        from cache.redis_cache import key_finmind_counter
+        from cache.redis_cache import (
+            key_finmind_counter,
+            key_finmind_quota_exhausted_counter,
+        )
         from config import settings as main_settings
 
         # Late import — only depended on when Redis is actually reachable.
@@ -270,11 +274,15 @@ async def _collect_quota() -> dict[str, Any] | None:
 
         client = aioredis.from_url(main_settings.REDIS_URL)
         try:
-            raw = await client.get(key_finmind_counter())
+            raw_used = await client.get(key_finmind_counter())
+            raw_exhausted = await client.get(
+                key_finmind_quota_exhausted_counter()
+            )
         finally:
             await client.aclose()
 
-        used = int(raw) if raw else 0
+        used = int(raw_used) if raw_used else 0
+        exhausted = int(raw_exhausted) if raw_exhausted else 0
         from finmind.config import finmind_settings
 
         limit = finmind_settings.FINMIND_HOURLY_REQUEST_LIMIT
@@ -283,6 +291,13 @@ async def _collect_quota() -> dict[str, Any] | None:
             "used": used,
             "limit": limit,
             "ratio": used / limit if limit else 0.0,
+            # Number of overrun events in the rolling hour window — bumped
+            # by `_query` whenever a call hits the cap (both in strict
+            # mode where it raises and quiet mode where it returns []).
+            # A non-zero value usually means parallel backfills are
+            # saturating the cap; consider serializing or lowering
+            # FINMIND_HOURLY_REQUEST_LIMIT to leave headroom.
+            "exhausted_1h": exhausted,
         }
     except Exception:
         return None
@@ -462,6 +477,17 @@ def render_human(report: StatusReport) -> str:
             f"FinMind quota:    {q['used']}/{q['limit']} this hour "
             f"({q['ratio'] * 100:.1f}%){warn}"
         )
+        # Surface the overrun-event count so saturated parallel backfills
+        # are obvious before chunks pile up as failed in the ledger.
+        # Zero in the steady state; non-zero is a hint to lower the
+        # local limit or serialize the workload.
+        ex = q.get("exhausted_1h", 0)
+        if ex:
+            lines.append(
+                f"  ⚠ quota overrun events: {ex} in the last hour "
+                f"(reduce parallel backfills or lower "
+                f"FINMIND_HOURLY_REQUEST_LIMIT)"
+            )
 
     # Disk
     if report.disk is None:

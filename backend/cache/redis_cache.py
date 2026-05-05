@@ -183,6 +183,14 @@ def key_revenue(symbol: str) -> str:
 def key_finmind_counter() -> str:
     return "finmind:daily_requests"
 
+def key_finmind_quota_exhausted_counter() -> str:
+    """Hourly counter for quota-overrun events. Bumped each time a
+    backfill/scheduler call enters `quota_strict()` and the local
+    counter has overshot `FINMIND_HOURLY_REQUEST_LIMIT`. Surfaced in
+    the admin status report so operators notice when their parallel
+    backfills are saturating the FinMind cap."""
+    return "finmind:quota_exhausted:hourly"
+
 def key_ai_counter(user_id: str) -> str:
     return f"ai:requests:{user_id}"
 

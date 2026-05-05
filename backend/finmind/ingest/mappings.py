@@ -730,6 +730,76 @@ def _batch_futures_dealer_volume(rows: list[dict[str, Any]]) -> list[dict[str, A
     ]
 
 
+def _batch_futures_oi_largetraders(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """OpenInterestLargeTraders ships one row per (futures_id, date,
+    contract_type). `contract_type` enumerates `'all'` (aggregate
+    across all contract months), `'week'` (weekly contract), and
+    individual contract codes like `'202401'` / `'202402'`. The local
+    PK `(contract, ts, rank)` has no contract_type axis, so we keep
+    only the `'all'` aggregate — the most useful single-signal view
+    for trader-concentration analytics.
+
+    From each `'all'` row we emit two local rows: rank='top5' and
+    rank='top10' (FinMind ships top5 / top10 cumulative buckets in
+    the same row; the `rank` column is varchar so the labels survive
+    round-trips). `*_specific_*` fields map to `*_oi_special` columns;
+    `*_trader_*` fields map to `*_oi`."""
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        if str(r.get("contract_type") or "") != "all":
+            continue
+        contract = _to_str(r.get("futures_id"))
+        ts = _to_date(r.get("date"))
+        for prefix in ("top5", "top10"):
+            out.append({
+                "contract": contract,
+                "ts": ts,
+                "rank": prefix,
+                "long_oi": _to_int(r.get(f"buy_{prefix}_trader_open_interest")),
+                "short_oi": _to_int(r.get(f"sell_{prefix}_trader_open_interest")),
+                "long_oi_special": _to_int(
+                    r.get(f"buy_{prefix}_specific_open_interest")
+                ),
+                "short_oi_special": _to_int(
+                    r.get(f"sell_{prefix}_specific_open_interest")
+                ),
+                "source": "finmind",
+            })
+    return out
+
+
+def _batch_option_oi_largetraders(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Same shape as the futures version, plus `put_call` axis from
+    FinMind ('call'/'put') folded into the local `call_put` column
+    (varchar(4)) as 'C'/'P'. Local PK is (contract, ts, call_put,
+    rank). Filter to `contract_type='all'` for the same reason —
+    individual contract months would multiply rows beyond what the
+    PK can express without losing data on the (call, week) axis."""
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        if str(r.get("contract_type") or "") != "all":
+            continue
+        contract = _to_str(r.get("option_id"))
+        ts = _to_date(r.get("date"))
+        cp_raw = str(r.get("put_call") or "").lower()
+        cp = "C" if cp_raw == "call" else "P" if cp_raw == "put" else cp_raw[:4]
+        for prefix in ("top5", "top10"):
+            out.append({
+                "contract": contract,
+                "ts": ts,
+                "call_put": cp,
+                "rank": prefix,
+                "long_oi": _to_int(r.get(f"buy_{prefix}_trader_open_interest")),
+                "short_oi": _to_int(r.get(f"sell_{prefix}_trader_open_interest")),
+                "source": "finmind",
+            })
+    return out
+
+
 # ── Single-day datasets (batch transforms) ───────────────────────
 #
 # FinMind's intraday-grain endpoints (KBar, PriceTick,
@@ -1935,6 +2005,20 @@ MAPPINGS: dict[str, DatasetMapping] = {
         column_map={},
         pk_columns=("ts", "dealer_id", "contract"),
         batch_transform=_batch_futures_dealer_volume,
+    ),
+    "TaiwanFuturesOpenInterestLargeTraders": DatasetMapping(
+        dataset_code="TaiwanFuturesOpenInterestLargeTraders",
+        local_table="tw_futures_oi_largetraders",
+        column_map={},
+        pk_columns=("contract", "ts", "rank"),
+        batch_transform=_batch_futures_oi_largetraders,
+    ),
+    "TaiwanOptionOpenInterestLargeTraders": DatasetMapping(
+        dataset_code="TaiwanOptionOpenInterestLargeTraders",
+        local_table="tw_option_oi_largetraders",
+        column_map={},
+        pk_columns=("contract", "ts", "call_put", "rank"),
+        batch_transform=_batch_option_oi_largetraders,
     ),
 }
 

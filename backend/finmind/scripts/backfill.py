@@ -115,6 +115,34 @@ async def _run_symbols(
         await _run_one(dataset_code, sym, start, end)
 
 
+async def _run_warrant(args, start: date, end: date) -> None:
+    """Mirror of `_run_symbols` but for warrant-indexed datasets. Picks
+    the warrant universe from either `--warrant-symbols-file` or
+    `--warrant-universe-from-tw-stock-info`. Used by datasets in
+    `dispatcher._WARRANT_UNIVERSE_DATASETS` so a fresh deploy can
+    backfill warrant trading reports without juggling a separate
+    pre-built symbols file."""
+    if args.warrant_symbols_file:
+        symbols = [
+            line.strip()
+            for line in args.warrant_symbols_file.read_text().splitlines()
+            if line.strip() and not line.startswith("#")
+        ]
+    else:
+        from finmind.scheduler.runner import (
+            get_warrant_universe_from_tw_stock_info,
+        )
+        async with FinmindAsyncSessionLocal() as session:
+            symbols = await get_warrant_universe_from_tw_stock_info(session)
+
+    print(
+        f"backfill: {args.dataset} × {len(symbols)} warrant codes "
+        f"{start}..{end}"
+    )
+    for sym in symbols:
+        await _run_one(args.dataset, sym, start, end)
+
+
 async def amain() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
     parser.add_argument("--dataset", help="Single dataset code")
@@ -123,6 +151,26 @@ async def amain() -> int:
         "--symbols-file",
         type=Path,
         help="File with one symbol per line (with --dataset)",
+    )
+    parser.add_argument(
+        "--warrant-symbols-file",
+        type=Path,
+        help=(
+            "File with one warrant code per line, used when --dataset is "
+            "in dispatcher._WARRANT_UNIVERSE_DATASETS (e.g. "
+            "TaiwanStockWarrantTradingDailyReport). Mutually exclusive "
+            "with --warrant-universe-from-tw-stock-info."
+        ),
+    )
+    parser.add_argument(
+        "--warrant-universe-from-tw-stock-info",
+        action="store_true",
+        help=(
+            "Auto-discover the warrant universe from `tw_stock_info` "
+            "(`is_warrant=true` rows, 6-char codes). Used in place of "
+            "--symbols-file when --dataset is a warrant-indexed dataset. "
+            "Mirrors the same flag in `run_due.py`."
+        ),
     )
     parser.add_argument(
         "--enabled",
@@ -143,6 +191,12 @@ async def amain() -> int:
     )
     args = parser.parse_args()
 
+    if args.warrant_universe_from_tw_stock_info and args.warrant_symbols_file:
+        parser.error(
+            "specify at most one of --warrant-universe-from-tw-stock-info "
+            "/ --warrant-symbols-file"
+        )
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-5s %(name)s | %(message)s",
@@ -156,15 +210,32 @@ async def amain() -> int:
         else end - timedelta(days=args.days)
     )
 
+    # Decide the per-symbol path. When --dataset is in
+    # _WARRANT_UNIVERSE_DATASETS and warrant flags are supplied, the
+    # warrant universe takes precedence over --symbols-file so a single
+    # invocation can target a warrant-indexed dataset cleanly.
+    from finmind.scheduler.dispatcher import _WARRANT_UNIVERSE_DATASETS
+    is_warrant_dataset = (
+        args.dataset is not None
+        and args.dataset in _WARRANT_UNIVERSE_DATASETS
+    )
+    has_warrant_flag = (
+        args.warrant_universe_from_tw_stock_info
+        or args.warrant_symbols_file is not None
+    )
+
     if args.enabled:
         await _run_enabled(start, end)
+    elif args.dataset and is_warrant_dataset and has_warrant_flag:
+        await _run_warrant(args, start, end)
     elif args.dataset and args.symbols_file:
         await _run_symbols(args.dataset, args.symbols_file, start, end)
     elif args.dataset:
         await _run_one(args.dataset, args.symbol, start, end)
     else:
         parser.error(
-            "specify one of: --enabled | --dataset [--symbol|--symbols-file]"
+            "specify one of: --enabled | --dataset [--symbol|--symbols-file"
+            "|--warrant-symbols-file|--warrant-universe-from-tw-stock-info]"
         )
 
     await finmind_engine.dispose()

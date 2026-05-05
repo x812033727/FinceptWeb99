@@ -42,6 +42,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import re
 import uuid
 from collections.abc import AsyncGenerator
@@ -3144,9 +3145,23 @@ async def _apply_calibration_to_conclusion(
             raw = float(rec.get("confidence", 0.5))
         except (TypeError, ValueError):
             raw = 0.5
-        rec["calibrated_confidence"] = round(
-            apply_calibration(raw, tmpl.calibration_curve), 4,
-        )
+        # Audit follow-up #3: reject NaN / ±inf at the boundary so
+        # downstream brier math and reliability buckets stay
+        # finite. `apply_calibration`'s `min/max` clamp would
+        # collapse NaN to a corner value (a NaN that snuck through
+        # to confidence=1.0 would be misleading rather than
+        # diagnostic), so neutralize to 0.5 instead — matches the
+        # "unparseable input" path above.
+        if not math.isfinite(raw):
+            raw = 0.5
+        calibrated = apply_calibration(raw, tmpl.calibration_curve)
+        if not math.isfinite(calibrated):
+            # Defensive: shouldn't happen given apply_calibration
+            # clamps to [0, 1], but if a corrupt curve somehow
+            # produced NaN, drop the calibrated field rather than
+            # write a misleading number.
+            continue
+        rec["calibrated_confidence"] = round(calibrated, 4)
 
 
 def _parse_recommendations(data: dict[str, Any]) -> list[dict[str, Any]]:

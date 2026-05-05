@@ -3427,6 +3427,81 @@ async def test_apply_calibration_noop_when_curve_empty(
 
 
 @pytest.mark.asyncio
+async def test_apply_calibration_neutralizes_nan_input(
+    db_session: AsyncSession, owner: User,
+):
+    """Audit follow-up #3: a synthesizer that somehow emitted NaN
+    or +inf as raw confidence (LLM returning the literal string
+    "NaN" / "Infinity") gets neutralized to 0.5 instead of
+    leaking through as a corner-clamped 1.0 — that latter would
+    pollute the brier comparison with a confidently-wrong
+    value."""
+    from datetime import date as _date
+
+    from models.backtest_sweep import BacktestSweep
+    from models.discussion_strategy_template import (
+        DiscussionStrategyTemplate,
+    )
+
+    tmpl = DiscussionStrategyTemplate(
+        id=uuid.uuid4(),
+        owner_id=owner.id,
+        name="t", topic="t", rules="r", market="TW",
+        persona_ids=["a"],
+        default_rounds=1, default_concurrency=1,
+        default_auto_post_mortem=False,
+        persona_weights={},
+        # well-calibrated curve at 0.5 → 0.5
+        calibration_curve=[
+            {"raw": 0.5, "calibrated": 0.5},
+            {"raw": 1.0, "calibrated": 0.7},
+        ],
+    )
+    db_session.add(tmpl)
+    await db_session.commit()
+
+    sweep = BacktestSweep(
+        id=uuid.uuid4(), owner_id=owner.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["a"],
+        anchor_date=_date(2026, 5, 1),
+        trading_days_count=5, rounds_per_discussion=1,
+        concurrency=1, auto_post_mortem=False,
+        strategy_id=tmpl.id,
+    )
+    db_session.add(sweep)
+    await db_session.commit()
+    await db_session.refresh(sweep)
+
+    discussion = Discussion(
+        id=uuid.uuid4(), owner_id=owner.id,
+        topic="t", rules="r", persona_ids=["a"],
+        market="TW", status="running", current_round=1,
+        sweep_id=sweep.id,
+    )
+    conclusion = {
+        "recommended_symbols": ["A", "B", "C"],
+        "recommendations": [
+            {"symbol": "A", "confidence": float("nan")},
+            {"symbol": "B", "confidence": float("inf")},
+            {"symbol": "C", "confidence": float("-inf")},
+        ],
+        "reasoning": "x", "risks": [],
+        "time_horizon": "short_term", "consensus_score": 0.5,
+    }
+
+    await discussion_service._apply_calibration_to_conclusion(
+        db_session, discussion, conclusion,
+    )
+
+    # All three pathological inputs collapse to the neutral 0.5
+    # → curve maps to 0.5 calibrated. None of them leak through
+    # as NaN / inf / corner-clamped 0.0 / 1.0.
+    for rec in conclusion["recommendations"]:
+        assert rec["calibrated_confidence"] == 0.5
+
+
+@pytest.mark.asyncio
 async def test_apply_calibration_skips_parse_error_conclusion(
     db_session: AsyncSession, owner: User,
 ):

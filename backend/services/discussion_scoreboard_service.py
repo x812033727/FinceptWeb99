@@ -44,6 +44,7 @@ no archive simply return days_resolved=0 until ingest catches up.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import date, timedelta
 from typing import Any
 
@@ -388,9 +389,18 @@ def compute_brier_for_discussion(
         raw_calibrated = entry.get("calibrated_confidence")
         if raw_calibrated is not None:
             try:
-                calibrated = max(0.0, min(1.0, float(raw_calibrated)))
+                calibrated_f = float(raw_calibrated)
             except (TypeError, ValueError):
-                calibrated = None
+                calibrated_f = float("nan")
+            # Audit follow-up #3: explicit finite-float check.
+            # Clamping NaN/inf via min/max would collapse a
+            # pathological value to a corner (1.0 / 0.0) and let
+            # it pollute the calibrated_brier sum with a
+            # misleadingly precise number. Treating it as missing
+            # instead trips the partial-coverage NULL guard so
+            # the comparison metric stays meaningful.
+            if math.isfinite(calibrated_f):
+                calibrated = max(0.0, min(1.0, calibrated_f))
 
         closes = daily.get(symbol) or []
         day1_open = opens.get(symbol)

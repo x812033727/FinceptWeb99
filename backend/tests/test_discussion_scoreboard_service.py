@@ -769,6 +769,32 @@ def test_brier_calibrated_null_on_partial_coverage():
     assert out["calibrated_brier_score"] is None
 
 
+def test_brier_calibrated_treats_nan_as_missing():
+    """Audit follow-up #3: a NaN or ±inf calibrated_confidence
+    must be treated as missing (so it trips the partial-coverage
+    NULL guard) rather than getting silently clamped to a corner
+    value — which would make the calibrated_brier metric look
+    suspiciously good / bad without the operator knowing the
+    upstream emitted garbage."""
+    d = _disc_for_brier(
+        recommendations=[
+            {
+                "symbol": "A",
+                "confidence": 0.8,
+                "calibrated_confidence": float("nan"),
+            },
+        ],
+        daily={"A": [110.0, 105.0, 102.0, 108.0, 109.0]},
+        opens={"A": 100.0},
+    )
+    out = discussion_scoreboard_service.compute_brier_for_discussion(d)
+    assert out is not None
+    # Raw brier still computed normally.
+    assert out["brier_score"] == pytest.approx(0.04, abs=1e-6)
+    # NaN treated as missing → partial coverage → calibrated NULL.
+    assert out["calibrated_brier_score"] is None
+
+
 def test_brier_calibrated_clamps_invalid_value():
     """LLM occasionally emits broken calibrated_confidence —
     string / out-of-bounds / null. Clamp at the brier compute

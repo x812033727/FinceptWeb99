@@ -703,6 +703,49 @@ def _batch_cb_daily(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _row_option_settlement(row: dict[str, Any]) -> dict[str, Any]:
+    """TaiwanOptionFinalSettlementPrice → tw_option_settlement.
+    FinMind ships per-(option, contract_month) settlement, no
+    strike/call_put — see migration 0016 for the PK relaxation."""
+    return {
+        "contract": _to_str(row.get("contract")),
+        "contract_month": _to_str(row.get("contract_month")) or "",
+        "settlement_date": _to_date(row.get("settlement_date")),
+        "final_settlement_price": _to_decimal(row.get("final_settlement_price")),
+        "source": row.get("source", "finmind"),
+    }
+
+
+def _batch_option_dealer_volume(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Mirror of `_batch_futures_dealer_volume` for options. FinMind
+    emits one row per (date, dealer, option, session); the local PK
+    `(ts, dealer_id, contract)` has no session axis (see migration
+    0016), so we sum the regular + after-hours volumes for each
+    (dealer, contract) into a single row. is_after_hour breakout is
+    lost — operators wanting it can re-fetch and split client-side."""
+    agg: dict[tuple[date | None, str, str], int] = {}
+    for r in rows:
+        key = (
+            _to_date(r.get("date")),
+            str(r.get("dealer_code") or ""),
+            str(r.get("option_id") or ""),
+        )
+        v = _to_int(r.get("volume")) or 0
+        agg[key] = agg.get(key, 0) + v
+    return [
+        {
+            "ts": ts,
+            "dealer_id": dealer or None,
+            "contract": contract or None,
+            "volume": vol,
+            "source": "finmind",
+        }
+        for (ts, dealer, contract), vol in agg.items()
+    ]
+
+
 def _batch_futures_dealer_volume(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Each FinMind row is one (date, dealer, contract, session). Local
     schema PK is (ts, dealer_id, contract) — no session axis — so we
@@ -2005,6 +2048,26 @@ MAPPINGS: dict[str, DatasetMapping] = {
         column_map={},
         pk_columns=("ts", "dealer_id", "contract"),
         batch_transform=_batch_futures_dealer_volume,
+    ),
+    "TaiwanOptionFinalSettlementPrice": DatasetMapping(
+        dataset_code="TaiwanOptionFinalSettlementPrice",
+        local_table="tw_option_settlement",
+        column_map={
+            "option_id": "contract",
+            "contract_month": "contract_month",
+            "date": "settlement_date",
+            "settlement_price": "final_settlement_price",
+        },
+        pk_columns=("contract", "contract_month"),
+        extra={"source": "finmind"},
+        row_transform=_row_option_settlement,
+    ),
+    "TaiwanOptionDealerTradingVolumeDaily": DatasetMapping(
+        dataset_code="TaiwanOptionDealerTradingVolumeDaily",
+        local_table="tw_option_dealer_volume",
+        column_map={},
+        pk_columns=("ts", "dealer_id", "contract"),
+        batch_transform=_batch_option_dealer_volume,
     ),
     "TaiwanFuturesOpenInterestLargeTraders": DatasetMapping(
         dataset_code="TaiwanFuturesOpenInterestLargeTraders",

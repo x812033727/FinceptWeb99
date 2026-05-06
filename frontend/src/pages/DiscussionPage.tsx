@@ -1,8 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  Folder,
+  MoreHorizontal,
+  Settings as SettingsIcon,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
 import { notifyRateLimited } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
+import { cn } from "@/lib/utils";
 import type {
   Discussion,
   DiscussionDetail,
@@ -11,6 +19,7 @@ import type {
 } from "@/types/discussion";
 import { AutoRunConfigCard } from "@/components/discussion/AutoRunConfigCard";
 import { BacktestSweepCard } from "@/components/discussion/BacktestSweepCard";
+import { DiscussionStatusBadge } from "@/components/discussion/DiscussionStatusBadge";
 import { StrategyTemplateCard } from "@/components/discussion/StrategyTemplateCard";
 import { ConclusionCard } from "@/components/discussion/ConclusionCard";
 import { PostMortemSkippedCard } from "@/components/discussion/PostMortemSkippedCard";
@@ -18,6 +27,23 @@ import { PostMortemGainersCard } from "@/components/discussion/PostMortemGainers
 import { RoundContextsCard } from "@/components/discussion/RoundContextsCard";
 import { RoundSection } from "@/components/discussion/RoundSection";
 import { ScoreboardCard } from "@/components/discussion/ScoreboardCard";
+import { ToolCallCard } from "@/components/ai/ToolCallCard";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   DEFAULT_PERSONAS,
   concludeSession,
@@ -292,6 +318,14 @@ export default function DiscussionPage() {
     });
   }
 
+  // Mobile drawer state for the redesign (PR-B). Sessions list and
+  // config panel are full-screen drawers below the lg breakpoint so
+  // the transcript owns the phone viewport. Inject panel pops as a
+  // dialog from the bottom action bar's "More" menu.
+  const [sessionsSheetOpen, setSessionsSheetOpen] = useState(false);
+  const [configSheetOpen, setConfigSheetOpen] = useState(false);
+  const [injectSheetOpen, setInjectSheetOpen] = useState(false);
+
   // Between-rounds user injection (PR #211). Drops a user_input
   // turn into the current round's transcript so the next round's
   // personas have to react to it.
@@ -540,16 +574,12 @@ export default function DiscussionPage() {
   const status = detail?.status ?? "draft";
   const isDraft = !selectedId || status === "draft";
 
-  // ── render ────────────────────────────────────────────────────
+  // ── render helpers — reusable JSX blocks shared between the
+  //    desktop inline layout and the mobile Sheet drawers ──────
 
-  return (
-    <div className="h-[calc(100vh-2.5rem)] bg-background flex flex-col lg:flex-row overflow-hidden">
-      {/* ── sidebar: session list + form ───────────────────────── */}
-      <aside
-        className={`lg:w-60 border-b lg:border-b-0 lg:border-r border-border flex-col p-3 lg:p-3 gap-3 shrink-0 overflow-y-auto max-h-[28vh] lg:max-h-none ${
-          collapse.sidebar ? "hidden" : "flex"
-        }`}
-      >
+  function renderSidebarContent() {
+    return (
+      <>
         <div>
           <h2 className="text-sm font-semibold text-foreground">{t("discussion.title")}</h2>
           <p className="text-xs text-muted-foreground mt-0.5">{t("discussion.subtitle")}</p>
@@ -562,9 +592,6 @@ export default function DiscussionPage() {
           personaName={personaName}
         />
 
-        {/* PR-A: strategy template manager. The sweep card below
-            reads from the same query so saving here makes a new
-            entry appear in the sweep form's picker immediately. */}
         <StrategyTemplateCard
           prefill={{
             topic,
@@ -574,9 +601,6 @@ export default function DiscussionPage() {
           }}
         />
 
-        {/* PR #274: multi-day backtest sweep panel. Reuses the
-            current form's topic/rules/personas as the template
-            applied to every spawned discussion in the sweep. */}
         <BacktestSweepCard
           topic={topic}
           rules={rules}
@@ -587,15 +611,14 @@ export default function DiscussionPage() {
         <button
           onClick={() => {
             setSelectedId(null);
-            // "+ New Discussion" pulls from localStorage so the user's
-            // last-saved topic / rules are pre-filled.
             setTopic(readDefaultTopic());
             setRules(readDefaultRules());
             setPersonaIds(DEFAULT_PERSONAS);
             setStreamingTurns([]);
             setStreamError(null);
+            setSessionsSheetOpen(false);
           }}
-          className="px-3 py-2 rounded-md border border-border text-xs hover:border-primary/40 hover:bg-accent/10 transition-colors text-left"
+          className="px-3 py-2 rounded-md border border-border text-xs hover:border-primary/40 hover:bg-accent/10 transition-colors text-left min-h-[36px]"
         >
           + {t("discussion.new")}
         </button>
@@ -607,24 +630,26 @@ export default function DiscussionPage() {
           {sessions.map((s) => (
             <button
               key={s.id}
-              onClick={() => setSelectedId(s.id)}
-              className={`w-full text-left px-2 py-2 rounded text-xs transition-colors ${
+              onClick={() => {
+                setSelectedId(s.id);
+                setSessionsSheetOpen(false);
+              }}
+              className={cn(
+                "w-full text-left px-2 py-2 rounded text-xs transition-colors min-h-[44px]",
                 selectedId === s.id
                   ? "bg-primary/15 text-primary"
                   : "hover:bg-accent/10 text-muted-foreground"
-              }`}
+              )}
             >
               {(() => {
                 const tt = formatDiscussionTitle(s);
                 if (tt.text !== undefined) {
-                  // No conclusion yet — fall back to the user-typed topic.
                   return (
                     <div className="line-clamp-2 font-bold text-foreground">
                       {tt.text}
                     </div>
                   );
                 }
-                // Conclusion present: date header + per-symbol lines.
                 return (
                   <div className="space-y-0.5">
                     <div className={`font-bold ${tt.verdictCls ?? ""}`}>
@@ -645,343 +670,475 @@ export default function DiscussionPage() {
                   </div>
                 );
               })()}
-              <div className="mt-0.5 flex items-center gap-2 text-[10px]">
-                {/* PR #277: backtest rows show their `as_of_date`
-                    (the historical day being analysed) rather than
-                    when the row happened to be created/updated.
-                    Live rows keep the existing updated_at/created_at
-                    behaviour. */}
-                <span>
+              <div className="mt-1 flex items-center gap-2 text-[10px] flex-wrap">
+                <DiscussionStatusBadge status={s.status} />
+                <span className="text-muted-foreground">
                   {s.as_of_date
                     ? `回測 ${s.as_of_date}`
                     : formatDateShort(s.updated_at || s.created_at)}
                 </span>
-                <span>·</span>
-                <span>R{s.current_round}</span>
-                <span>·</span>
-                <span>{s.persona_ids.length} 位專家</span>
-                <span>·</span>
-                <span>{t(`discussion.status.${s.status}`)}</span>
+                <span className="text-muted-foreground">·</span>
+                <span className="text-muted-foreground">R{s.current_round}</span>
+                <span className="text-muted-foreground">·</span>
+                <span className="text-muted-foreground">{s.persona_ids.length} 位專家</span>
               </div>
             </button>
           ))}
         </div>
 
-        <div className="mt-auto text-xs text-muted-foreground">
+        <div className="mt-auto text-xs text-muted-foreground pt-2">
           <a href="/dashboard" className="hover:text-foreground transition-colors">
             {t("ai.back_dashboard")}
           </a>
         </div>
-      </aside>
+      </>
+    );
+  }
 
-      {/* ── main area ──────────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col min-w-0 min-h-0">
-        {/* sidebar toggle — single chevron button at top-left of main
-            area. Click to hide / show the discussion list. State is
-            persisted so it survives reload. */}
-        <button
-          type="button"
-          onClick={() => toggleCollapse("sidebar")}
-          title={
-            collapse.sidebar
-              ? t("discussion.show_menu")
-              : t("discussion.hide_menu")
-          }
-          className="self-start mt-2 ml-2 px-1.5 py-0.5 text-[11px] text-muted-foreground border border-border rounded hover:border-primary/40 hover:text-foreground transition-colors"
-        >
-          {collapse.sidebar
-            ? `›  ${t("discussion.menu")}`
-            : `‹  ${t("discussion.menu")}`}
-        </button>
-        {/* configuration panel — capped height so the transcript below
-             always has room. Mobile cap is tighter because the sidebar
-             above still claims up to 28vh, and the actions / streaming
-             cards need to stay visible. */}
-        <div className="border-b border-border px-4 py-3 space-y-3 shrink-0 overflow-y-auto max-h-[40vh] lg:max-h-[60vh]">
-          <div>
-            <div className="flex items-center justify-between gap-2">
-              <button
-                type="button"
-                onClick={() => toggleCollapse("topic")}
-                className="flex items-center gap-1.5 text-xs font-medium text-foreground hover:text-primary transition-colors"
-                aria-expanded={!collapse.topic}
-              >
-                <span className="text-[9px] text-muted-foreground w-2.5 inline-block">
-                  {collapse.topic ? "▶" : "▼"}
-                </span>
-                {t("discussion.topic_label")}
-                {topicDirty && (
-                  <span className="ml-1 text-[10px] text-amber-400">
-                    {t("discussion.unsaved")}
-                  </span>
-                )}
-              </button>
-              {selectedId && isDraft && (
-                <button
-                  onClick={saveTopic}
-                  disabled={!topicDirty || updateMut.isPending || isStreaming}
-                  className="px-2 py-0.5 text-[10px] border border-border rounded hover:border-primary/40 transition-colors disabled:opacity-30"
-                >
-                  {updateMut.isPending ? t("common.saving") : t("common.save")}
-                </button>
-              )}
-            </div>
-            {collapse.topic ? (
-              topic && (
-                <p className="mt-1 ml-4 text-[11px] text-muted-foreground line-clamp-1">
-                  {topic}
-                </p>
-              )
-            ) : (
-              <textarea
-                value={topic}
-                onChange={(e) => setTopic(e.target.value)}
-                disabled={!isDraft || isStreaming}
-                rows={2}
-                maxLength={500}
-                className="w-full mt-1 resize-none bg-card border border-border rounded-md px-3 py-2 text-sm text-foreground focus:outline-none focus:border-primary/50 disabled:opacity-60"
-              />
-            )}
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between gap-2">
-              <button
-                type="button"
-                onClick={() => toggleCollapse("rules")}
-                className="flex items-center gap-1.5 text-xs font-medium text-foreground hover:text-primary transition-colors"
-                aria-expanded={!collapse.rules}
-              >
-                <span className="text-[9px] text-muted-foreground w-2.5 inline-block">
-                  {collapse.rules ? "▶" : "▼"}
-                </span>
-                {t("discussion.rules_label")}
-                {rulesDirty && (
-                  <span className="ml-1 text-[10px] text-amber-400">
-                    {t("discussion.unsaved")}
-                  </span>
-                )}
-              </button>
-              {selectedId && isDraft && (
-                <button
-                  onClick={saveRules}
-                  disabled={!rulesDirty || updateMut.isPending || isStreaming}
-                  className="px-2 py-0.5 text-[10px] border border-border rounded hover:border-primary/40 transition-colors disabled:opacity-30"
-                >
-                  {updateMut.isPending ? t("common.saving") : t("common.save")}
-                </button>
-              )}
-            </div>
-            {collapse.rules ? (
-              rules && (
-                <p className="mt-1 ml-4 text-[11px] text-muted-foreground line-clamp-1">
-                  {rules.split("\n")[0]}
-                </p>
-              )
-            ) : (
-              <textarea
-                value={rules}
-                onChange={(e) => setRules(e.target.value)}
-                disabled={!isDraft || isStreaming}
-                rows={5}
-                maxLength={2000}
-                className="w-full mt-1 resize-none bg-card border border-border rounded-md px-3 py-2 text-xs text-foreground font-mono focus:outline-none focus:border-primary/50 disabled:opacity-60"
-              />
-            )}
-          </div>
-
-          <div>
+  function renderConfigForm() {
+    return (
+      <>
+        <div>
+          <div className="flex items-center justify-between gap-2">
             <button
               type="button"
-              onClick={() => toggleCollapse("personas")}
+              onClick={() => toggleCollapse("topic")}
               className="flex items-center gap-1.5 text-xs font-medium text-foreground hover:text-primary transition-colors"
-              aria-expanded={!collapse.personas}
+              aria-expanded={!collapse.topic}
             >
               <span className="text-[9px] text-muted-foreground w-2.5 inline-block">
-                {collapse.personas ? "▶" : "▼"}
+                {collapse.topic ? "▶" : "▼"}
               </span>
-              {t("discussion.personas_label")} ({personaIds.length})
+              {t("discussion.topic_label")}
+              {topicDirty && (
+                <span className="ml-1 text-[10px] text-amber-400">
+                  {t("discussion.unsaved")}
+                </span>
+              )}
             </button>
-            {!collapse.personas && (
-              <div className="mt-1 flex flex-wrap gap-1.5">
-                {agents.map((a) => {
-                  const selected = personaIds.includes(a.id);
-                  return (
-                    <button
-                      key={a.id}
-                      onClick={() => togglePersona(a.id)}
-                      disabled={!isDraft || isStreaming}
-                      className={`px-2 py-1 rounded text-[11px] border transition-colors disabled:opacity-60 ${
-                        selected
-                          ? "border-primary bg-primary/15 text-primary"
-                          : "border-border bg-card text-muted-foreground hover:border-primary/40"
-                      }`}
-                    >
-                      {personaName(a.id)}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2 text-xs flex-wrap">
-            <span className="text-muted-foreground">{t("discussion.market_label")}</span>
-            <select
-              value={market}
-              onChange={(e) => setMarket(e.target.value as DiscussionMarket)}
-              disabled={!isDraft || isStreaming}
-              className="bg-card border border-border rounded px-2 py-1 text-foreground focus:outline-none focus:border-primary/50 disabled:opacity-60"
-            >
-              <option value="TW">TW</option>
-              <option value="US">US</option>
-              <option value="GLOBAL">GLOBAL</option>
-            </select>
-            <span className="text-muted-foreground ml-2">
-              {t("discussion.as_of_label")}
-            </span>
-            <input
-              type="date"
-              value={asOfDate}
-              onChange={(e) => setAsOfDate(e.target.value)}
-              disabled={!!selectedId || isStreaming}
-              max={new Date().toISOString().slice(0, 10)}
-              placeholder={t("discussion.as_of_placeholder")}
-              className="bg-card border border-border rounded px-2 py-1 text-foreground focus:outline-none focus:border-primary/50 disabled:opacity-60"
-            />
-            {asOfDate && (
-              <span className="px-1.5 py-0.5 rounded text-[10px] border border-amber-800/50 bg-amber-900/20 text-amber-300">
-                {t("discussion.backtest_badge")}
-              </span>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            {!selectedId ? (
+            {selectedId && isDraft && (
               <button
-                onClick={newDiscussion}
-                disabled={createMut.isPending}
-                className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+                onClick={saveTopic}
+                disabled={!topicDirty || updateMut.isPending || isStreaming}
+                className="px-2 py-0.5 text-[10px] border border-border rounded hover:border-primary/40 transition-colors disabled:opacity-30"
               >
-                {createMut.isPending ? t("common.saving") : t("discussion.create")}
+                {updateMut.isPending ? t("common.saving") : t("common.save")}
+              </button>
+            )}
+          </div>
+          {collapse.topic ? (
+            topic && (
+              <p className="mt-1 ml-4 text-[11px] text-muted-foreground line-clamp-1">
+                {topic}
+              </p>
+            )
+          ) : (
+            <textarea
+              value={topic}
+              onChange={(e) => setTopic(e.target.value)}
+              disabled={!isDraft || isStreaming}
+              rows={2}
+              maxLength={500}
+              className="w-full mt-1 resize-none bg-card border border-border rounded-md px-3 py-2 text-sm text-foreground focus:outline-none focus:border-primary/50 disabled:opacity-60"
+            />
+          )}
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => toggleCollapse("rules")}
+              className="flex items-center gap-1.5 text-xs font-medium text-foreground hover:text-primary transition-colors"
+              aria-expanded={!collapse.rules}
+            >
+              <span className="text-[9px] text-muted-foreground w-2.5 inline-block">
+                {collapse.rules ? "▶" : "▼"}
+              </span>
+              {t("discussion.rules_label")}
+              {rulesDirty && (
+                <span className="ml-1 text-[10px] text-amber-400">
+                  {t("discussion.unsaved")}
+                </span>
+              )}
+            </button>
+            {selectedId && isDraft && (
+              <button
+                onClick={saveRules}
+                disabled={!rulesDirty || updateMut.isPending || isStreaming}
+                className="px-2 py-0.5 text-[10px] border border-border rounded hover:border-primary/40 transition-colors disabled:opacity-30"
+              >
+                {updateMut.isPending ? t("common.saving") : t("common.save")}
+              </button>
+            )}
+          </div>
+          {collapse.rules ? (
+            rules && (
+              <p className="mt-1 ml-4 text-[11px] text-muted-foreground line-clamp-1">
+                {rules.split("\n")[0]}
+              </p>
+            )
+          ) : (
+            <textarea
+              value={rules}
+              onChange={(e) => setRules(e.target.value)}
+              disabled={!isDraft || isStreaming}
+              rows={5}
+              maxLength={2000}
+              className="w-full mt-1 resize-none bg-card border border-border rounded-md px-3 py-2 text-xs text-foreground font-mono focus:outline-none focus:border-primary/50 disabled:opacity-60"
+            />
+          )}
+        </div>
+
+        <div>
+          <button
+            type="button"
+            onClick={() => toggleCollapse("personas")}
+            className="flex items-center gap-1.5 text-xs font-medium text-foreground hover:text-primary transition-colors"
+            aria-expanded={!collapse.personas}
+          >
+            <span className="text-[9px] text-muted-foreground w-2.5 inline-block">
+              {collapse.personas ? "▶" : "▼"}
+            </span>
+            {t("discussion.personas_label")} ({personaIds.length})
+          </button>
+          {!collapse.personas && (
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {agents.map((a) => {
+                const selected = personaIds.includes(a.id);
+                return (
+                  <button
+                    key={a.id}
+                    onClick={() => togglePersona(a.id)}
+                    disabled={!isDraft || isStreaming}
+                    className={cn(
+                      "px-2 py-1 rounded text-[11px] border transition-colors disabled:opacity-60 min-h-[32px]",
+                      selected
+                        ? "border-primary bg-primary/15 text-primary"
+                        : "border-border bg-card text-muted-foreground hover:border-primary/40"
+                    )}
+                  >
+                    {personaName(a.id)}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2 text-xs flex-wrap">
+          <span className="text-muted-foreground">{t("discussion.market_label")}</span>
+          <select
+            value={market}
+            onChange={(e) => setMarket(e.target.value as DiscussionMarket)}
+            disabled={!isDraft || isStreaming}
+            className="bg-card border border-border rounded px-2 py-1 text-foreground focus:outline-none focus:border-primary/50 disabled:opacity-60 min-h-[32px]"
+          >
+            <option value="TW">TW</option>
+            <option value="US">US</option>
+            <option value="GLOBAL">GLOBAL</option>
+          </select>
+          <span className="text-muted-foreground ml-2">
+            {t("discussion.as_of_label")}
+          </span>
+          <input
+            type="date"
+            value={asOfDate}
+            onChange={(e) => setAsOfDate(e.target.value)}
+            disabled={!!selectedId || isStreaming}
+            max={new Date().toISOString().slice(0, 10)}
+            placeholder={t("discussion.as_of_placeholder")}
+            className="bg-card border border-border rounded px-2 py-1 text-foreground focus:outline-none focus:border-primary/50 disabled:opacity-60 min-h-[32px]"
+          />
+          {asOfDate && (
+            <span className="px-1.5 py-0.5 rounded text-[10px] border border-amber-800/50 bg-amber-900/20 text-amber-300">
+              {t("discussion.backtest_badge")}
+            </span>
+          )}
+        </div>
+      </>
+    );
+  }
+
+  function renderActions(opts: { compact?: boolean } = {}) {
+    const { compact = false } = opts;
+    const primarySize = compact
+      ? "px-3 py-1.5 text-xs"
+      : "px-4 py-2 text-sm font-medium";
+    return (
+      <div className="flex items-center gap-2 flex-wrap">
+        {!selectedId ? (
+          <button
+            onClick={newDiscussion}
+            disabled={createMut.isPending}
+            className={cn(
+              "rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 min-h-[36px]",
+              primarySize
+            )}
+          >
+            {createMut.isPending ? t("common.saving") : t("discussion.create")}
+          </button>
+        ) : (
+          <>
+            {isDraft && (
+              <button
+                onClick={saveEdits}
+                disabled={updateMut.isPending}
+                className="px-3 py-1.5 rounded-md border border-border text-xs hover:border-primary/40 transition-colors disabled:opacity-50 min-h-[36px]"
+              >
+                {updateMut.isPending ? t("common.saving") : t("discussion.save_edits")}
+              </button>
+            )}
+            {isStreaming ? (
+              <button
+                onClick={stopStreaming}
+                className="px-3 py-1.5 rounded-md bg-red-900/30 border border-red-800 text-red-400 text-xs hover:bg-red-900/50 transition-colors min-h-[36px]"
+              >
+                {t("ai.stop")}
               </button>
             ) : (
-              <>
-                {isDraft && (
-                  <button
-                    onClick={saveEdits}
-                    disabled={updateMut.isPending}
-                    className="px-3 py-1.5 rounded-md border border-border text-xs hover:border-primary/40 transition-colors disabled:opacity-50"
-                  >
-                    {updateMut.isPending ? t("common.saving") : t("discussion.save_edits")}
-                  </button>
+              <button
+                onClick={runRound}
+                className={cn(
+                  "rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors min-h-[36px]",
+                  primarySize
                 )}
-                {isStreaming ? (
-                  <button
-                    onClick={stopStreaming}
-                    className="px-3 py-1.5 rounded-md bg-red-900/30 border border-red-800 text-red-400 text-xs hover:bg-red-900/50 transition-colors"
+              >
+                {detail?.current_round
+                  ? t("discussion.next_round", { round: detail.current_round + 1 })
+                  : t("discussion.start_round")}
+              </button>
+            )}
+            <button
+              onClick={() => concludeMut.mutate()}
+              disabled={
+                isStreaming ||
+                concludeMut.isPending ||
+                (detail?.current_round ?? 0) === 0
+              }
+              className="px-3 py-1.5 rounded-md border border-amber-800/50 text-amber-300 text-xs hover:bg-amber-900/20 transition-colors disabled:opacity-50 min-h-[36px]"
+            >
+              {concludeMut.isPending ? t("common.computing") : t("discussion.conclude")}
+            </button>
+            {/* The "More" dropdown surfaces the lower-frequency
+                actions (post-mortem when applicable, inject mid-
+                round, delete) so they're always one tap away
+                instead of buried below the config form. */}
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                aria-label={t("discussion.more_actions")}
+                className="p-1.5 rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors min-h-[36px] min-w-[36px] inline-flex items-center justify-center"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>{t("discussion.more_actions")}</DropdownMenuLabel>
+                {selectedId && isDraft && (detail?.current_round ?? 0) >= 1 && (
+                  <DropdownMenuItem
+                    onSelect={() => setInjectSheetOpen(true)}
+                    disabled={isStreaming}
                   >
-                    {t("ai.stop")}
-                  </button>
-                ) : (
-                  <button
-                    onClick={runRound}
-                    className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
-                  >
-                    {detail?.current_round
-                      ? t("discussion.next_round", { round: detail.current_round + 1 })
-                      : t("discussion.start_round")}
-                  </button>
+                    <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                    {t("discussion.inject_send")}
+                  </DropdownMenuItem>
                 )}
-                <button
-                  onClick={() => concludeMut.mutate()}
-                  disabled={
-                    isStreaming ||
-                    concludeMut.isPending ||
-                    (detail?.current_round ?? 0) === 0
-                  }
-                  className="px-3 py-1.5 rounded-md border border-amber-800/50 text-amber-300 text-xs hover:bg-amber-900/20 transition-colors disabled:opacity-50"
-                >
-                  {concludeMut.isPending ? t("common.computing") : t("discussion.conclude")}
-                </button>
-                {/* Post-mortem self-critique button — backtest + has-
-                    conclusion only. Chains: inject critique prompt →
-                    run new round → re-conclude. Hidden in live mode
-                    since there's no ground truth to critique against. */}
                 {detail?.as_of_date && detail?.conclusion && (
-                  <button
-                    onClick={runPostMortemFlow}
+                  <DropdownMenuItem
+                    onSelect={runPostMortemFlow}
                     disabled={
                       isStreaming ||
                       postMortemMut.isPending ||
                       concludeMut.isPending
                     }
-                    title={t("discussion.post_mortem_hint")}
-                    className="px-3 py-1.5 rounded-md border border-purple-800/50 text-purple-300 text-xs hover:bg-purple-900/20 transition-colors disabled:opacity-50"
                   >
+                    <Sparkles className="h-3.5 w-3.5 text-purple-300" aria-hidden="true" />
                     {postMortemMut.isPending
                       ? t("discussion.post_mortem_running")
                       : t("discussion.post_mortem")}
-                  </button>
+                  </DropdownMenuItem>
                 )}
-                <button
-                  onClick={() => deleteMut.mutate(selectedId)}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={() => deleteMut.mutate(selectedId!)}
                   disabled={deleteMut.isPending || isStreaming}
-                  className="px-3 py-1.5 rounded-md border border-border text-xs text-muted-foreground hover:text-red-400 hover:border-red-800/50 transition-colors disabled:opacity-50"
+                  className="text-red-400 focus:text-red-300"
                 >
+                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                   {t("common.delete")}
-                </button>
-              </>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  function renderInjectForm() {
+    return (
+      <div className="border border-border rounded-md p-2 bg-card/40 space-y-1.5">
+        <label className="text-[11px] text-muted-foreground">
+          {t("discussion.inject_label")}
+        </label>
+        <textarea
+          value={injectDraft}
+          onChange={(e) => setInjectDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              const trimmed = injectDraft.trim();
+              if (trimmed && !injectMut.isPending) {
+                injectMut.mutate(trimmed);
+              }
+            }
+          }}
+          rows={2}
+          maxLength={2000}
+          placeholder={t("discussion.inject_placeholder")}
+          className="w-full resize-none bg-card border border-border rounded px-2 py-1 text-xs text-foreground focus:outline-none focus:border-primary/50"
+        />
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] text-muted-foreground">
+            {injectDraft.length}/2000
+            <span className="ml-2 opacity-60">
+              {t("discussion.inject_shortcut_hint")}
+            </span>
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              const trimmed = injectDraft.trim();
+              if (trimmed && !injectMut.isPending) {
+                injectMut.mutate(trimmed);
+                setInjectSheetOpen(false);
+              }
+            }}
+            disabled={!injectDraft.trim() || injectMut.isPending}
+            className="px-2.5 py-1 rounded text-[11px] border border-amber-800/50 text-amber-300 hover:bg-amber-900/20 transition-colors disabled:opacity-40 min-h-[32px]"
+          >
+            {injectMut.isPending ? t("common.saving") : t("discussion.inject_send")}
+          </button>
+        </div>
+        {injectMut.isError && (
+          <p className="text-[10px] text-red-400">
+            {(injectMut.error as Error)?.message ?? t("common.error")}
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  // Latest round number — used to default-expand the most recent
+  // RoundSection so newcomers see content instead of a wall of
+  // collapsed headers.
+  const latestRound = transcript.length
+    ? Math.max(...transcript.map((tn) => tn.round))
+    : 0;
+
+  // Computed "active session display title" for the mobile header.
+  const activeTitle = (() => {
+    if (!selectedId) return t("discussion.new");
+    if (!detail) return t("common.loading");
+    const tt = formatDiscussionTitle(detail as unknown as Discussion);
+    if (tt.text) return tt.text;
+    return tt.date ?? t("discussion.title");
+  })();
+
+  // ── render ────────────────────────────────────────────────────
+
+  return (
+    <div className="h-[calc(100vh-2.5rem)] bg-background flex overflow-hidden">
+      {/* Desktop sidebar — always visible at lg+. Mobile uses the
+          Sessions Sheet drawer instead so the transcript owns the
+          full viewport. */}
+      <aside className="hidden lg:flex lg:w-60 border-r border-border flex-col p-3 gap-3 shrink-0 overflow-y-auto">
+        {renderSidebarContent()}
+      </aside>
+
+      {/* Mobile sessions Sheet — left-side drawer triggered by the
+          📁 button in the mobile header. */}
+      <Sheet open={sessionsSheetOpen} onOpenChange={setSessionsSheetOpen}>
+        <SheetContent side="left" className="w-80 max-w-[90vw] overflow-y-auto p-3 flex flex-col gap-3">
+          <SheetHeader className="mb-1">
+            <SheetTitle>{t("discussion.sessions_drawer_title")}</SheetTitle>
+            <SheetDescription>{t("discussion.sessions_drawer_hint")}</SheetDescription>
+          </SheetHeader>
+          {renderSidebarContent()}
+        </SheetContent>
+      </Sheet>
+
+      {/* Mobile config Sheet — right-side drawer triggered by the
+          ⚙ button in the mobile header. Carries the same Topic /
+          Rules / Personas / Market form as the desktop inline panel
+          plus an inject form when applicable. Run / Conclude / etc.
+          live in the sticky bottom action bar so users can fire
+          them without opening the drawer. */}
+      <Sheet open={configSheetOpen} onOpenChange={setConfigSheetOpen}>
+        <SheetContent side="right" className="w-96 max-w-[95vw] overflow-y-auto p-4 space-y-3">
+          <SheetHeader>
+            <SheetTitle>{t("discussion.config_drawer_title")}</SheetTitle>
+            <SheetDescription>{t("discussion.config_drawer_hint")}</SheetDescription>
+          </SheetHeader>
+          {renderConfigForm()}
+        </SheetContent>
+      </Sheet>
+
+      {/* Mobile inject Sheet — small bottom drawer triggered from
+          the More menu so users can drop a between-rounds message
+          without scrolling the config drawer. */}
+      <Sheet open={injectSheetOpen} onOpenChange={setInjectSheetOpen}>
+        <SheetContent side="bottom" className="max-h-[60vh] overflow-y-auto p-4 space-y-3">
+          <SheetHeader>
+            <SheetTitle>{t("discussion.inject_label")}</SheetTitle>
+          </SheetHeader>
+          {renderInjectForm()}
+        </SheetContent>
+      </Sheet>
+
+      {/* Main column. */}
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
+        {/* Mobile header — only visible on <lg. Carries the sessions
+            trigger, current discussion title, settings trigger. */}
+        <header className="lg:hidden border-b border-border px-3 py-2 flex items-center gap-2 shrink-0">
+          <SheetTrigger asChild>
+            <button
+              type="button"
+              onClick={() => setSessionsSheetOpen(true)}
+              aria-label={t("discussion.sessions_drawer_title")}
+              className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent/10 min-h-[36px] min-w-[36px] inline-flex items-center justify-center"
+            >
+              <Folder className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </SheetTrigger>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-foreground truncate">{activeTitle}</p>
+            {detail && (
+              <p className="text-[10px] text-muted-foreground flex items-center gap-1.5">
+                <DiscussionStatusBadge status={detail.status} />
+                <span>R{detail.current_round}</span>
+                {detail.as_of_date && <span>· 回測 {detail.as_of_date}</span>}
+              </p>
             )}
           </div>
+          <SheetTrigger asChild>
+            <button
+              type="button"
+              onClick={() => setConfigSheetOpen(true)}
+              aria-label={t("discussion.config_drawer_title")}
+              className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent/10 min-h-[36px] min-w-[36px] inline-flex items-center justify-center"
+            >
+              <SettingsIcon className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </SheetTrigger>
+        </header>
+
+        {/* Desktop inline config + actions panel — hidden on <lg
+            because the Sheet drawers take over. */}
+        <div className="hidden lg:block border-b border-border px-4 py-3 space-y-3 shrink-0 overflow-y-auto max-h-[60vh]">
+          {renderConfigForm()}
+          {renderActions()}
           {selectedId && isDraft && (detail?.current_round ?? 0) >= 1 && !isStreaming && (
-            <div className="border border-border rounded-md p-2 bg-card/40 space-y-1.5">
-              <label className="text-[11px] text-muted-foreground">
-                {t("discussion.inject_label")}
-              </label>
-              <textarea
-                value={injectDraft}
-                onChange={(e) => setInjectDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  // Cmd+Enter (macOS) / Ctrl+Enter (Win/Linux) submits.
-                  // Bare Enter still inserts a newline so multi-line
-                  // injections aren't accidentally sent on the first
-                  // line break.
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                    e.preventDefault();
-                    const trimmed = injectDraft.trim();
-                    if (trimmed && !injectMut.isPending) {
-                      injectMut.mutate(trimmed);
-                    }
-                  }
-                }}
-                rows={2}
-                maxLength={2000}
-                placeholder={t("discussion.inject_placeholder")}
-                className="w-full resize-none bg-card border border-border rounded px-2 py-1 text-xs text-foreground focus:outline-none focus:border-primary/50"
-              />
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-muted-foreground">
-                  {injectDraft.length}/2000
-                  <span className="ml-2 opacity-60">
-                    {t("discussion.inject_shortcut_hint")}
-                  </span>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => injectMut.mutate(injectDraft.trim())}
-                  disabled={!injectDraft.trim() || injectMut.isPending}
-                  className="px-2.5 py-1 rounded text-[11px] border border-amber-800/50 text-amber-300 hover:bg-amber-900/20 transition-colors disabled:opacity-40"
-                >
-                  {injectMut.isPending ? t("common.saving") : t("discussion.inject_send")}
-                </button>
-              </div>
-              {injectMut.isError && (
-                <p className="text-[10px] text-red-400">
-                  {(injectMut.error as Error)?.message ?? t("common.error")}
-                </p>
-              )}
-            </div>
+            renderInjectForm()
           )}
           {streamError && (
             <div className="text-xs text-red-400 bg-red-950/30 border border-red-900/50 rounded px-3 py-2">
@@ -1045,6 +1202,7 @@ export default function DiscussionPage() {
                 round={rn}
                 turns={byRound.get(rn) ?? []}
                 personaName={personaName}
+                defaultExpanded={rn === latestRound}
               />
             ));
           })()}
@@ -1131,35 +1289,24 @@ export default function DiscussionPage() {
                   <span className="animate-pulse">{t("discussion.thinking")}</span>
                 </div>
                 {streamingToolEvents.length > 0 && (
-                  <div className="mb-2 space-y-0.5 font-mono text-[10px] text-muted-foreground">
-                    {streamingToolEvents.map((ev) => {
-                      const argsStr = ev.args !== undefined
-                        ? JSON.stringify(ev.args)
-                        : "";
-                      const sumStr = (ev.summary ?? "").replace(/\s+/g, " ").trim();
-                      const truncate = (s: string, max: number) =>
-                        s.length > max ? s.slice(0, max) + "…" : s;
-                      const icon = ev.is_error ? "⚠️" : ev.kind === "result" ? "✓" : "⏳";
-                      const tone = ev.is_error
-                        ? "text-amber-400"
-                        : ev.kind === "result"
-                        ? "text-emerald-400"
-                        : "text-muted-foreground";
-                      return (
-                        <div key={ev.id} className={`flex gap-1 ${tone}`}>
-                          <span className="shrink-0">{icon}</span>
-                          <span className="truncate">
-                            <span className="font-semibold">{ev.name}</span>
-                            {argsStr && (
-                              <span className="opacity-70"> {truncate(argsStr, 60)}</span>
-                            )}
-                            {sumStr && (
-                              <span className="opacity-90"> → {truncate(sumStr, 80)}</span>
-                            )}
-                          </span>
-                        </div>
-                      );
-                    })}
+                  <div className="mb-2 space-y-1">
+                    {streamingToolEvents.map((ev) => (
+                      <ToolCallCard
+                        key={ev.id}
+                        call={{
+                          id: ev.id,
+                          name: ev.name,
+                          args: ev.args ?? {},
+                          result: ev.summary,
+                          isError: Boolean(ev.is_error),
+                          status: ev.kind === "call"
+                            ? "running"
+                            : ev.is_error
+                              ? "error"
+                              : "done",
+                        }}
+                      />
+                    ))}
                   </div>
                 )}
                 <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
@@ -1212,6 +1359,24 @@ export default function DiscussionPage() {
             />
           )}
           <div ref={bottomRef} />
+        </div>
+
+        {/* Mobile-only sticky action bar — hosts the most-used CTAs
+            (Save / Run / Conclude / More) so users don't have to
+            open the config drawer for the common path. honours iOS
+            home-bar safe-area inset. The streamError above the bar
+            keeps any rate-limit / round failure visible without
+            opening the drawer. */}
+        <div
+          className="lg:hidden border-t border-border bg-card/95 backdrop-blur p-3 shrink-0"
+          style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 0.75rem)" }}
+        >
+          {streamError && (
+            <p className="text-[11px] text-red-400 bg-red-950/30 border border-red-900/50 rounded px-2 py-1 mb-2">
+              {streamError}
+            </p>
+          )}
+          {renderActions({ compact: true })}
         </div>
       </div>
     </div>

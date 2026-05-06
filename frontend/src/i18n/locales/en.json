@@ -464,7 +464,13 @@
     "use_tools_hint": "Route through Claude Agent with tools (DCF, VaR, SQL, web, Python)",
     "tools_on": "⚡ tools on",
     "tools_on_hint": "Tool-use mode active",
+    "tools_label": "Tools",
     "back_dashboard": "← Dashboard",
+    "switch": "Switch",
+    "pick_agent": "Pick agent",
+    "other_agents": "Other",
+    "quota_remaining_short": "{{remaining}} left",
+    "quota_remaining_hint": "Remaining AI requests today",
     "tool": {
       "calling": "calling…",
       "failed": "failed",

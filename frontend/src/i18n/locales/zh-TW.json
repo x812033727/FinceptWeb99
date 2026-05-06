@@ -464,7 +464,13 @@
     "use_tools_hint": "透過 Claude Agent 開啟工具能力（DCF / VaR / SQL / 網頁 / Python）",
     "tools_on": "⚡ 工具啟用中",
     "tools_on_hint": "已開啟工具呼叫模式",
+    "tools_label": "工具",
     "back_dashboard": "← 回儀表板",
+    "switch": "切換",
+    "pick_agent": "選擇顧問",
+    "other_agents": "其他",
+    "quota_remaining_short": "剩餘 {{remaining}} 次",
+    "quota_remaining_hint": "今日 AI 請求剩餘次數",
     "tool": {
       "calling": "呼叫中…",
       "failed": "失敗",

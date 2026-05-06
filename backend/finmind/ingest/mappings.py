@@ -1692,6 +1692,35 @@ MAPPINGS: dict[str, DatasetMapping] = {
         extra={"source": "finmind"},
         row_transform=_row_split,
     ),
+    "TaiwanStockCapitalReductionReferencePrice": DatasetMapping(
+        dataset_code="TaiwanStockCapitalReductionReferencePrice",
+        local_table="tw_capital_reduction",
+        column_map={
+            "date": "ex_date",
+            "stock_id": "symbol",
+            "ClosingPriceonTheLastTradingDay": "before_price",
+            "PostReductionReferencePrice": "after_price",
+        },
+        pk_columns=("symbol", "ex_date"),
+        extra={"source": "finmind"},
+        row_transform=lambda r: {
+            "symbol": _to_str(r.get("symbol")),
+            "ex_date": _to_date(r.get("ex_date")),
+            "before_price": _to_decimal(r.get("before_price")),
+            "after_price": _to_decimal(r.get("after_price")),
+            # FinMind doesn't ship a reduction_pct column directly;
+            # derive it from before/after prices when both present
+            # ((before - after) / before, capped to 4 decimal places).
+            "reduction_pct": (
+                (Decimal(str(r.get("before_price"))) - Decimal(str(r.get("after_price"))))
+                / Decimal(str(r.get("before_price")))
+                if (r.get("before_price") not in (None, "", 0, 0.0)
+                    and r.get("after_price") not in (None, ""))
+                else None
+            ),
+            "source": r.get("source", "finmind"),
+        },
+    ),
     # ── 當沖 ────────────────────────────────────────────────────
     "TaiwanStockDayTrading": DatasetMapping(
         dataset_code="TaiwanStockDayTrading",
@@ -1848,6 +1877,10 @@ MAPPINGS: dict[str, DatasetMapping] = {
         pk_columns=("sha256",),
         extra={"market": "TW", "source": "finmind"},
         row_transform=_row_news,
+        # FinMind returns 400 "size is too large, end_date parameter
+        # need be none" for any multi-day request. Force per-day fan-out
+        # so direct-CLI backfills don't need to chunk the range manually.
+        single_day=True,
     ),
     "TaiwanSecuritiesTraderInfo": DatasetMapping(
         dataset_code="TaiwanSecuritiesTraderInfo",
@@ -1914,6 +1947,23 @@ MAPPINGS: dict[str, DatasetMapping] = {
         pk_columns=("cb_id",),
         extra={"source": "finmind"},
         row_transform=_row_cb_info,
+    ),
+    "TaiwanStockConvertibleBondDailyOverview": DatasetMapping(
+        dataset_code="TaiwanStockConvertibleBondDailyOverview",
+        local_table="tw_cb_daily_overview",
+        column_map={
+            "cb_id": "cb_id",
+            "date": "ts",
+            "OutstandingAmount": "outstanding_amount",
+        },
+        pk_columns=("cb_id", "ts"),
+        extra={"source": "finmind"},
+        row_transform=lambda r: {
+            "cb_id": _to_str(r.get("cb_id")),
+            "ts": _to_date(r.get("ts")),
+            "outstanding_amount": _to_decimal(r.get("outstanding_amount")),
+            "source": r.get("source", "finmind"),
+        },
     ),
     "TaiwanStockIndustryChain": DatasetMapping(
         dataset_code="TaiwanStockIndustryChain",

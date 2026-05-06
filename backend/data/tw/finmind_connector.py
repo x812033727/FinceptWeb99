@@ -21,6 +21,21 @@ log = logging.getLogger(__name__)
 
 _BASE = "https://api.finmindtrade.com/api/v4/data"
 
+# Datasets that FinMind moved off the generic /api/v4/data dispatcher
+# to dataset-specific paths. Calling them via the generic endpoint
+# returns 422 with an enum-validation error (the dataset name simply
+# isn't in /api/v4/data's allowed list). The dedicated endpoints take
+# `data_id` + `date` (single-day) and a Bearer token in the header
+# instead of the token query-string used by /api/v4/data. As of 2026-05
+# only TradingDailyReport is here; FinMind quietly relocates one or
+# two per quarter, so when you see a 422 enum-error against
+# /api/v4/data, check the dataset's docs page for a dedicated endpoint
+# and add it here.
+_DEDICATED_ENDPOINTS: dict[str, str] = {
+    "TaiwanStockTradingDailyReport":
+        "https://api.finmindtrade.com/api/v4/taiwan_stock_trading_daily_report",
+}
+
 
 async def _resolve_hourly_limit() -> int:
     """Look up the runtime-tunable FinMind per-hour cap. The resolver
@@ -125,19 +140,31 @@ async def _query(dataset: str, data_id: str, start_date: str, end_date: str | No
             )
         return []
 
-    params: dict = {
-        "dataset": dataset,
-        "data_id": data_id,
-        "start_date": start_date,
-        "token": token,
-    }
-    if end_date:
-        params["end_date"] = end_date
+    if dataset in _DEDICATED_ENDPOINTS:
+        # Dedicated-endpoint datasets accept a single `date` (no
+        # start/end) and use Bearer-token auth — no `dataset` param,
+        # the URL identifies the data.
+        url = _DEDICATED_ENDPOINTS[dataset]
+        params = {"data_id": data_id, "date": start_date}
+        headers = {"Authorization": f"Bearer {token}"}
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            r = await c.get(url, params=params, headers=headers)
+            r.raise_for_status()
+            body = r.json()
+    else:
+        params = {
+            "dataset": dataset,
+            "data_id": data_id,
+            "start_date": start_date,
+            "token": token,
+        }
+        if end_date:
+            params["end_date"] = end_date
 
-    async with httpx.AsyncClient(timeout=15.0) as c:
-        r = await c.get(_BASE, params=params)
-        r.raise_for_status()
-        body = r.json()
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            r = await c.get(_BASE, params=params)
+            r.raise_for_status()
+            body = r.json()
 
     if body.get("status") != 200:
         body_msg = body.get("msg") or body.get("message") or ""

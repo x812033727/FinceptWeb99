@@ -19,39 +19,7 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
   build: {
-    rollupOptions: {
-      output: {
-        // Pull large vendor libs out of the main entry chunk so:
-        //   1. The 500 kB warning goes away.
-        //   2. App-code edits don't bust the long-lived vendor chunks
-        //      (better browser cache hit-rate across releases).
-        // Recharts + lightweight-charts already lazy-load with the
-        // pages that import them; we only split libs the entry pulls in.
-        manualChunks: {
-          "react-vendor": ["react", "react-dom", "react-router-dom"],
-          "tanstack-vendor": [
-            "@tanstack/react-query",
-            "@tanstack/react-table",
-            "@tanstack/react-virtual",
-          ],
-          "radix-vendor": [
-            "@radix-ui/react-dialog",
-            "@radix-ui/react-dropdown-menu",
-            "@radix-ui/react-popover",
-            "@radix-ui/react-select",
-            "@radix-ui/react-slot",
-            "@radix-ui/react-tabs",
-            "@radix-ui/react-visually-hidden",
-            "cmdk",
-          ],
-          "i18n-vendor": [
-            "i18next",
-            "i18next-browser-languagedetector",
-            "react-i18next",
-          ],
-        },
-      },
-    },
+    chunkSizeWarningLimit: 1500,
   },
   server: {
     port: 5173,

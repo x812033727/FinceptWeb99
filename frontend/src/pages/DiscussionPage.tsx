@@ -34,7 +34,6 @@ import {
   SheetDescription,
   SheetHeader,
   SheetTitle,
-  SheetTrigger,
 } from "@/components/ui/sheet";
 import {
   DropdownMenu,
@@ -1100,16 +1099,14 @@ export default function DiscussionPage() {
         {/* Mobile header — only visible on <lg. Carries the sessions
             trigger, current discussion title, settings trigger. */}
         <header className="lg:hidden border-b border-border px-3 py-2 flex items-center gap-2 shrink-0">
-          <SheetTrigger asChild>
-            <button
-              type="button"
-              onClick={() => setSessionsSheetOpen(true)}
-              aria-label={t("discussion.sessions_drawer_title")}
-              className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent/10 min-h-[36px] min-w-[36px] inline-flex items-center justify-center"
-            >
-              <Folder className="h-4 w-4" aria-hidden="true" />
-            </button>
-          </SheetTrigger>
+          <button
+            type="button"
+            onClick={() => setSessionsSheetOpen(true)}
+            aria-label={t("discussion.sessions_drawer_title")}
+            className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent/10 min-h-[36px] min-w-[36px] inline-flex items-center justify-center"
+          >
+            <Folder className="h-4 w-4" aria-hidden="true" />
+          </button>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-foreground truncate">{activeTitle}</p>
             {detail && (
@@ -1120,16 +1117,14 @@ export default function DiscussionPage() {
               </p>
             )}
           </div>
-          <SheetTrigger asChild>
-            <button
-              type="button"
-              onClick={() => setConfigSheetOpen(true)}
-              aria-label={t("discussion.config_drawer_title")}
-              className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent/10 min-h-[36px] min-w-[36px] inline-flex items-center justify-center"
-            >
-              <SettingsIcon className="h-4 w-4" aria-hidden="true" />
-            </button>
-          </SheetTrigger>
+          <button
+            type="button"
+            onClick={() => setConfigSheetOpen(true)}
+            aria-label={t("discussion.config_drawer_title")}
+            className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent/10 min-h-[36px] min-w-[36px] inline-flex items-center justify-center"
+          >
+            <SettingsIcon className="h-4 w-4" aria-hidden="true" />
+          </button>
         </header>
 
         {/* Desktop inline config + actions panel — hidden on <lg

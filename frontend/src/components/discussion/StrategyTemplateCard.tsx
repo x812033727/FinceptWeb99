@@ -15,6 +15,7 @@ import {
 import type { DiscussionMarket } from "@/types/discussion";
 import { CollapsibleHeader } from "@/components/Collapsible";
 import { useCollapsible } from "@/hooks/useCollapsible";
+import { BrierTrendChart } from "./BrierTrendChart";
 import { SweepAggregateCard } from "./SweepAggregateCard";
 
 /** Strategy templates (PR-A).
@@ -412,6 +413,7 @@ function StrategyRow({
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [showAggregate, setShowAggregate] = useState(false);
+  const [showBrierTrend, setShowBrierTrend] = useState(false);
   const learnMut = useMutation({
     mutationFn: () => learnStrategyWeights(strategy.id),
     onSuccess: () => {
@@ -493,6 +495,19 @@ function StrategyRow({
         </button>
         <button
           type="button"
+          onClick={() => setShowBrierTrend((v) => !v)}
+          className="text-emerald-300 hover:text-emerald-200"
+          title={t(
+            "strategy.brier_trend_button_tip",
+            "每個已完成 sweep 一個點;raw vs calibrated Brier 趨勢線",
+          )}
+        >
+          {showBrierTrend
+            ? t("strategy.brier_trend_hide", "▼ 收起 Brier 趨勢")
+            : t("strategy.brier_trend_show", "📉 Brier 趨勢")}
+        </button>
+        <button
+          type="button"
           onClick={() => learnMut.mutate()}
           disabled={learnMut.isPending}
           className="text-emerald-300 hover:text-emerald-200 disabled:opacity-50"
@@ -533,6 +548,9 @@ function StrategyRow({
       <WalkForwardSection strategy={strategy} />
       {showAggregate && (
         <SweepAggregateCard strategyId={strategy.id} />
+      )}
+      {showBrierTrend && (
+        <BrierTrendChart strategyId={strategy.id} />
       )}
     </li>
   );

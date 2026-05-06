@@ -467,6 +467,41 @@ export interface AggregateLesson {
   created_at: string | null;
 }
 
+export interface BrierHistoryPoint {
+  sweep_id: string;
+  /** ISO YYYY-MM-DD — the trading-day anchor of the sweep,
+   *  not when the sweep ran. Useful as the chart's X-axis label
+   *  because a single sweep covers N days but visually we want
+   *  one bar per fold + per anchor. */
+  anchor_date: string | null;
+  /** ISO timestamp — when the sweep finished. The trend chart
+   *  orders points by this so a backfilled sweep doesn't reorder
+   *  the line. */
+  completed_at: string | null;
+  fold_kind: "train" | "test" | "production" | null;
+  /** Sample-weighted mean Brier across the sweep's resolved
+   *  discussions. NULL on sweeps that pre-dated PR-C1's brier
+   *  computation. */
+  raw_brier: number | null;
+  /** Same but computed against `calibrated_confidence` —
+   *  comparing against `raw_brier` is the "is the curve
+   *  helping?" diagnostic. NULL when partial coverage. */
+  calibrated_brier: number | null;
+  samples: number;
+}
+
+export async function fetchStrategyBrierHistory(
+  templateId: string,
+  windowDays: number = 90,
+): Promise<BrierHistoryPoint[]> {
+  const r = await api.get<BrierHistoryPoint[]>(
+    `/discussion/strategies/${templateId}/brier-history`,
+    { params: { window_days: windowDays } },
+  );
+  return r.data;
+}
+
+
 export interface ReliabilityBucket {
   bucket_lower: number;
   bucket_upper: number;

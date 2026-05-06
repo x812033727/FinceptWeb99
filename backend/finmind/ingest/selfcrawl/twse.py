@@ -309,6 +309,253 @@ async def _fetch_total_return_index(
     return out
 
 
+async def _fetch_shareholding(
+    symbol: str | None, start: date, end: date
+) -> list[dict[str, Any]]:
+    """TaiwanStockShareholding — daily fan-out via TWSE MI_QFIIS.
+
+    TWSE returns all symbols for ONE date per request, so the wrapper
+    iterates days within [start, end] and optionally filters to the
+    requested symbol in-process. FinMind exposes the ratio as a
+    percent (`ForeignInvestmentRemainingRatio`) and the outstanding
+    foreign shares (`ForeignInvestmentRemainShares`) plus issued
+    shares (`NumberOfSharesIssued`) — the existing TaiwanStockShareholding
+    `column_map` projects each onto `tw_foreign_shareholding`.
+    """
+    from data.tw.twse_connector import get_foreign_shareholding
+
+    out: list[dict[str, Any]] = []
+    for d in _days(start, end):
+        try:
+            rows = await get_foreign_shareholding(d)
+        except Exception as exc:
+            log.warning("MI_QFIIS fetch failed for %s: %s", d, exc)
+            continue
+        for r in rows:
+            sym = r.get("symbol")
+            if not sym:
+                continue
+            if symbol and sym != symbol:
+                continue
+            out.append({
+                "date":                              d.isoformat(),
+                "stock_id":                          sym,
+                "ForeignInvestmentRemainingRatio":   r.get("foreign_pct"),
+                "ForeignInvestmentRemainShares":     r.get("foreign_shares"),
+                "NumberOfSharesIssued":              r.get("issued_shares"),
+            })
+    return out
+
+
+async def _fetch_total_institutional(
+    symbol: str | None, start: date, end: date
+) -> list[dict[str, Any]]:
+    """TaiwanStockTotalInstitutionalInvestors — daily fan-out via
+    TWSE BFI82U.
+
+    Market-wide totals (no symbol axis), but the runner expects 3
+    rows per date keyed by 單位名稱. The mapping's
+    `_pivot_total_institutional` batch_transform pivots them to one
+    row per date with foreign_net / sitc_net / dealer_net columns
+    by substring-matching the names against `_INST_NAME_TO_COL`.
+    """
+    del symbol  # market-wide endpoint
+    from data.tw.twse_connector import get_total_institutional
+
+    out: list[dict[str, Any]] = []
+    for d in _days(start, end):
+        try:
+            rows = await get_total_institutional(d)
+        except Exception as exc:
+            log.warning("BFI82U fetch failed for %s: %s", d, exc)
+            continue
+        for r in rows:
+            out.append({
+                "date":  d.isoformat(),
+                "name":  r.get("name", ""),
+                "buy":   r.get("buy"),
+                "sell":  r.get("sell"),
+            })
+    return out
+
+
+async def _fetch_total_margin(
+    symbol: str | None, start: date, end: date
+) -> list[dict[str, Any]]:
+    """TaiwanStockTotalMarginPurchaseShortSale — derived from per-symbol
+    `get_margin` rows by summing the whole exchange.
+
+    TWSE's MI_MARGN endpoint returns per-symbol balances (already
+    consumed by `_fetch_margin`); the dataset shape FinMind exposes
+    is the daily MARKET total. Rather than wire a second TWSE
+    endpoint we sum the existing per-symbol response — same source
+    of truth, one HTTP per day. MarginPurchaseSell / ShortSaleBuy
+    aren't exposed by MI_MARGN at all, so they land as None and the
+    `_row_total_margin` row_transform passes the NULL through to the
+    local row.
+    """
+    del symbol  # market-wide endpoint
+    from data.tw.twse_connector import get_margin
+
+    out: list[dict[str, Any]] = []
+    for d in _days(start, end):
+        try:
+            rows = await get_margin(d)
+        except Exception as exc:
+            log.warning("MI_MARGN sum-fetch failed for %s: %s", d, exc)
+            continue
+        if not rows:
+            continue
+        margin_buy = 0
+        margin_balance = 0
+        short_sell = 0
+        short_balance = 0
+        for r in rows:
+            margin_buy     += int(r.get("margin_purchase") or 0)
+            margin_balance += int(r.get("margin_balance") or 0)
+            short_sell     += int(r.get("short_sale") or 0)
+            short_balance  += int(r.get("short_balance") or 0)
+        out.append({
+            "date":                          d.isoformat(),
+            "MarginPurchaseBuy":             margin_buy,
+            "MarginPurchaseTodayBalance":    margin_balance,
+            "ShortSaleSell":                 short_sell,
+            "ShortSaleTodayBalance":         short_balance,
+            # MI_MARGN doesn't expose these — let the column_map drop them
+            # so the local NULL is preserved. (Columns kept for explicitness.)
+            "MarginPurchaseSell":            None,
+            "ShortSaleBuy":                  None,
+        })
+    return out
+
+
+async def _fetch_day_trading(
+    symbol: str | None, start: date, end: date
+) -> list[dict[str, Any]]:
+    """TaiwanStockDayTrading — daily fan-out via TWSE TWTB4U.
+
+    Day-trade volume is single-valued by definition (every buy is
+    paired with a same-day sell), so TWSE returns ONE volume per
+    stock; we fan it out into BuyAfterSale + SellAfterBuy so
+    FinMind's column_map projects identically. The amount split
+    (買進金額 vs 賣出金額) is genuinely two-sided in TWSE's response
+    because the prices differ across the trading day.
+    """
+    from data.tw.twse_connector import get_day_trading
+
+    out: list[dict[str, Any]] = []
+    for d in _days(start, end):
+        try:
+            rows = await get_day_trading(d)
+        except Exception as exc:
+            log.warning("TWTB4U fetch failed for %s: %s", d, exc)
+            continue
+        for r in rows:
+            sym = r.get("symbol")
+            if not sym:
+                continue
+            if symbol and sym != symbol:
+                continue
+            volume = r.get("volume")
+            out.append({
+                "date":                d.isoformat(),
+                "stock_id":            sym,
+                "BuyAfterSale":        volume,
+                "SellAfterBuy":        volume,
+                "BuyAfterSaleAmount":  r.get("buy_amount"),
+                "SellAfterBuyAmount":  r.get("sell_amount"),
+            })
+    return out
+
+
+async def _fetch_buyback(
+    symbol: str | None, start: date, end: date
+) -> list[dict[str, Any]]:
+    """TaiwanStockBuyBack — TWSE 庫藏股公告 via t187ap43_L.
+
+    One-shot endpoint: TWSE serves the entire window of recent
+    announcements (~12 months) in one call, so a multi-day chunk
+    only ever costs 1 HTTP. Filter happens in-process by
+    `announced_at` against the requested [start, end] window.
+
+    FinMind's TaiwanStockBuyBack column_map expects:
+        date / stock_id / BuyBackStartDate / BuyBackEndDate /
+        BuyBackPlanQuantity / BuyBackActualQuantity /
+        BuyBackAveragePrice
+    """
+    from data.tw.twse_connector import get_buyback_announcements
+
+    rows = await get_buyback_announcements()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        sym = r.get("symbol") or ""
+        if not sym:
+            continue
+        if symbol and sym != symbol:
+            continue
+        announced = r.get("announced_at")
+        if not announced:
+            continue
+        try:
+            d_obj = date.fromisoformat(announced)
+        except (ValueError, TypeError):
+            continue
+        if d_obj < start or d_obj > end:
+            continue
+        out.append({
+            "date":                  announced,
+            "stock_id":              sym,
+            "BuyBackStartDate":      r.get("started_at"),
+            "BuyBackEndDate":        r.get("ended_at"),
+            "BuyBackPlanQuantity":   r.get("plan_shares"),
+            "BuyBackActualQuantity": r.get("actual_shares"),
+            "BuyBackAveragePrice":   r.get("avg_price"),
+        })
+    return out
+
+
+async def _fetch_delisting(
+    symbol: str | None, start: date, end: date
+) -> list[dict[str, Any]]:
+    """TaiwanStockDelisting — TWSE 終止上市股票 via t187ap08_L.
+
+    One-shot snapshot — returns every delisting on file (~2010+).
+    Filter in-process by `delisted_at` against the requested window.
+
+    FinMind's TaiwanStockDelisting column_map expects:
+        stock_id / date / reason
+
+    The local PK is `(symbol,)` only — one row per delisted stock —
+    so re-running the same chunk is idempotent (UPSERT updates the
+    reason field without duplicating the row).
+    """
+    from data.tw.twse_connector import get_delisted_companies
+
+    rows = await get_delisted_companies()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        sym = r.get("symbol") or ""
+        if not sym:
+            continue
+        if symbol and sym != symbol:
+            continue
+        delisted = r.get("delisted_at")
+        if not delisted:
+            continue
+        try:
+            d_obj = date.fromisoformat(delisted)
+        except (ValueError, TypeError):
+            continue
+        if d_obj < start or d_obj > end:
+            continue
+        out.append({
+            "date":     delisted,
+            "stock_id": sym,
+            "reason":   r.get("reason") or "",
+        })
+    return out
+
+
 # ── Dispatch table ──────────────────────────────────────────────
 
 _DISPATCH = {
@@ -318,6 +565,14 @@ _DISPATCH = {
     "TaiwanStockInfo": _fetch_stock_info,
     "TaiwanStockPER": _fetch_per,
     "TaiwanStockTotalReturnIndex": _fetch_total_return_index,
+    # Phase 1A — chip-flow batch
+    "TaiwanStockShareholding": _fetch_shareholding,
+    "TaiwanStockTotalInstitutionalInvestors": _fetch_total_institutional,
+    "TaiwanStockTotalMarginPurchaseShortSale": _fetch_total_margin,
+    "TaiwanStockDayTrading": _fetch_day_trading,
+    # Phase 1B — corporate-action batch
+    "TaiwanStockBuyBack": _fetch_buyback,
+    "TaiwanStockDelisting": _fetch_delisting,
 }
 
 

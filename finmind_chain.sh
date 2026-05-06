@@ -63,7 +63,8 @@ for ds in \
     TaiwanStockBalanceSheet \
     TaiwanStockFinancialStatements \
     TaiwanStockCashFlowsStatement \
-    TaiwanStockDividend
+    TaiwanStockDividend \
+    TaiwanStockHoldingSharesPer
 do
     run_one "$ds"
 done

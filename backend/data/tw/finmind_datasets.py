@@ -177,6 +177,22 @@ OTHER: tuple[DatasetSpec, ...] = (
 )
 
 
+# ── Macro indicators (匯率 / 利率 / 公債 / 商品 / 情緒) ──────────────
+#
+# Cross-market macro datasets covered by FinMind's other tutor pages
+# (ExchangeRate / InterestRate / Materials / GovernmentBondsYield /
+# Others). Low-volume daily series; analytically valuable for ctx
+# blocks that key off macro regime, FX exposure, or risk-on/off.
+
+MACRO: tuple[DatasetSpec, ...] = (
+    DatasetSpec("TaiwanExchangeRate", "新台幣對外幣匯率", per_symbol=True),
+    DatasetSpec("InterestRate", "各國央行政策利率", per_symbol=True),
+    DatasetSpec("GovernmentBondsYield", "美國公債殖利率曲線", per_symbol=True),
+    DatasetSpec("CnnFearGreedIndex", "CNN 恐懼貪婪指數", per_symbol=False),
+    DatasetSpec("CrudeOilPrices", "原油價格 (Brent / WTI)", per_symbol=False),
+)
+
+
 REGISTRY: dict[str, tuple[DatasetSpec, ...]] = {
     "technical":        TECHNICAL,
     "chip":             CHIP,
@@ -185,6 +201,7 @@ REGISTRY: dict[str, tuple[DatasetSpec, ...]] = {
     "realtime":         REALTIME,
     "convertible_bond": CONVERTIBLE_BOND,
     "other":            OTHER,
+    "macro":            MACRO,
 }
 
 

@@ -175,6 +175,16 @@ OTHER: tuple[CatalogEntry, ...] = (
 )
 
 
+# ── Macro indicators ─────────────────────────────────────────────
+MACRO: tuple[CatalogEntry, ...] = (
+    CatalogEntry("TaiwanExchangeRate",     "tw_exchange_rate",     "finmind", None, "daily"),
+    CatalogEntry("InterestRate",           "macro_interest_rate",  "finmind", None, "daily"),
+    CatalogEntry("GovernmentBondsYield",   "us_bond_yield",        "finmind", None, "daily"),
+    CatalogEntry("CnnFearGreedIndex",      "us_fear_greed",        "finmind", None, "daily"),
+    CatalogEntry("CrudeOilPrices",         "commodity_price",      "finmind", None, "daily", single_day=True),
+)
+
+
 CATALOG: dict[str, tuple[CatalogEntry, ...]] = {
     "technical":        TECHNICAL,
     "chip":             CHIP,
@@ -183,6 +193,7 @@ CATALOG: dict[str, tuple[CatalogEntry, ...]] = {
     "realtime":         REALTIME,
     "convertible_bond": CONVERTIBLE_BOND,
     "other":            OTHER,
+    "macro":            MACRO,
 }
 
 

@@ -19,12 +19,14 @@ from data.tw import finmind_datasets as fd
 
 
 def test_registry_categories_match_finmind_doc_layout():
-    """The seven category buckets mirror the FinMind DataList page —
-    if a new category appears in the docs, surface it explicitly here
-    rather than dropping new datasets into 'other'."""
+    """The category buckets mirror the FinMind DataList page plus the
+    macro tutor pages (ExchangeRate / InterestRate / GovernmentBondsYield
+    / Materials / Others) — if a new category appears in the docs,
+    surface it explicitly here rather than dropping new datasets into
+    'other'."""
     assert set(fd.REGISTRY) == {
         "technical", "chip", "fundamental", "derivative",
-        "realtime", "convertible_bond", "other",
+        "realtime", "convertible_bond", "other", "macro",
     }
 
 

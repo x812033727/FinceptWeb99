@@ -25,9 +25,10 @@ import { ConclusionCard } from "@/components/discussion/ConclusionCard";
 import { PostMortemSkippedCard } from "@/components/discussion/PostMortemSkippedCard";
 import { PostMortemGainersCard } from "@/components/discussion/PostMortemGainersCard";
 import { RoundContextsCard } from "@/components/discussion/RoundContextsCard";
+import { RoundDivider } from "@/components/discussion/RoundDivider";
 import { RoundSection } from "@/components/discussion/RoundSection";
 import { ScoreboardCard } from "@/components/discussion/ScoreboardCard";
-import { ToolCallCard } from "@/components/ai/ToolCallCard";
+import { StreamingTurnCard } from "@/components/discussion/StreamingTurnCard";
 import {
   Sheet,
   SheetContent,
@@ -65,10 +66,10 @@ import {
   rememberPostMortemResult,
   rememberRules,
   rememberTopic,
-  renderInlineMarkdown,
   signedPct,
   updateSession,
   usePersonaName,
+  usePersonaShort,
 } from "@/components/discussion/_helpers";
 import type { PostMortemResponse } from "@/components/discussion/_helpers";
 import type { CollapseState } from "@/components/discussion/_helpers";
@@ -156,6 +157,7 @@ export default function DiscussionPage() {
   });
 
   const personaName = usePersonaName(agents);
+  const personaShort = usePersonaShort();
 
   // Reset all per-session streaming state when the user switches to a
   // different discussion. Keyed on `selectedId` (not `detail`) so the
@@ -1197,6 +1199,7 @@ export default function DiscussionPage() {
                 round={rn}
                 turns={byRound.get(rn) ?? []}
                 personaName={personaName}
+                personaInitial={personaShort}
                 defaultExpanded={rn === latestRound}
               />
             ));
@@ -1256,59 +1259,22 @@ export default function DiscussionPage() {
           {isStreaming && streamingPersona && (
             <>
               {/* When the streaming round hasn't appeared in the transcript
-                  yet (first persona of a fresh round), show the round
-                  header above the in-progress card so the user always
-                  knows which round is being generated. */}
+                  yet (first persona of a fresh round), surface a
+                  RoundDivider so the user always knows which round is
+                  being generated. */}
               {streamingRound !== null &&
                 (transcript.length === 0 ||
                   transcript[transcript.length - 1].round !== streamingRound) && (
-                  <div className="flex items-center gap-2 my-3">
-                    <span className="text-[11px] font-semibold text-primary tracking-wider">
-                      {t("discussion.round_label", { round: streamingRound })}
-                    </span>
-                    <span className="flex-1 h-px bg-border" />
-                  </div>
+                  <RoundDivider round={streamingRound} />
                 )}
-              <div className="bg-card border border-primary/40 rounded-lg p-3">
-                <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-                  <span className="font-bold text-red-500">
-                    {personaName(streamingPersona)}
-                  </span>
-                  {streamingRound !== null && (
-                    <>
-                      <span>·</span>
-                      <span>R{streamingRound}</span>
-                    </>
-                  )}
-                  <span>·</span>
-                  <span className="animate-pulse">{t("discussion.thinking")}</span>
-                </div>
-                {streamingToolEvents.length > 0 && (
-                  <div className="mb-2 space-y-1">
-                    {streamingToolEvents.map((ev) => (
-                      <ToolCallCard
-                        key={ev.id}
-                        call={{
-                          id: ev.id,
-                          name: ev.name,
-                          args: ev.args ?? {},
-                          result: ev.summary,
-                          isError: Boolean(ev.is_error),
-                          status: ev.kind === "call"
-                            ? "running"
-                            : ev.is_error
-                              ? "error"
-                              : "done",
-                        }}
-                      />
-                    ))}
-                  </div>
-                )}
-                <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
-                  {renderInlineMarkdown(streamBuffer)}
-                  <span className="inline-block w-1.5 h-3.5 bg-current ml-0.5 animate-pulse align-middle" />
-                </div>
-              </div>
+              <StreamingTurnCard
+                personaId={streamingPersona}
+                personaName={personaName(streamingPersona)}
+                personaInitial={personaShort(streamingPersona)}
+                round={streamingRound}
+                streamBuffer={streamBuffer}
+                toolEvents={streamingToolEvents}
+              />
             </>
           )}
 

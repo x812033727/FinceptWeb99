@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import type { Conclusion, DiscussionDetail, Turn } from "@/types/discussion";
 import { useCollapsible } from "@/hooks/useCollapsible";
-import { renderInlineMarkdown } from "./_helpers";
+import { ConclusionHero } from "./ConclusionHero";
 
 function buildMarkdownExport(
   detail: DiscussionDetail,
@@ -149,11 +149,15 @@ export function ConclusionCard({
   // PR #268 (RoundSection 「📋 事後檢討」 marker) so the two surfaces
   // share a colour language.
   const isPostMortem = variant === "post_mortem";
+  // PR-C: gradient background gives the conclusion section a "hero"
+  // visual weight distinct from the per-turn bubbles above it. Two
+  // semantic stops: dark tinted top → near-black bottom, with a
+  // matching tinted border.
   const baseClass = isPostMortem
-    ? "bg-purple-950/20 border border-purple-800/50 rounded-lg p-4 mt-4"
-    : "bg-amber-950/20 border border-amber-800/50 rounded-lg p-4 mt-4";
+    ? "bg-gradient-to-br from-purple-950/40 to-purple-950/10 border border-purple-800/50 rounded-lg p-4 mt-6 shadow-sm"
+    : "bg-gradient-to-br from-amber-950/40 to-amber-950/10 border border-amber-800/50 rounded-lg p-4 mt-6 shadow-sm";
   const cardClass = hasError
-    ? "bg-red-950/20 border border-red-800/60 rounded-lg p-4 mt-4"
+    ? "bg-red-950/20 border border-red-800/60 rounded-lg p-4 mt-6"
     : baseClass;
   const okTitleClass = isPostMortem
     ? "text-sm font-semibold text-purple-300"
@@ -215,58 +219,12 @@ export function ConclusionCard({
       {open && (hasError ? (
         <p className="text-xs text-red-300">{t("discussion.conclusion_parse_error")}</p>
       ) : (
-        <>
-          {conclusion.recommended_symbols.length > 0 && (
-            <div className="mb-2">
-              <span className="text-xs text-muted-foreground">
-                {t("discussion.recommended_symbols")}：
-              </span>
-              <div className="mt-1 flex flex-wrap gap-1.5">
-                {conclusion.recommended_symbols.map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => askPersonaAbout(s)}
-                    title={t("discussion.click_for_deep_dive")}
-                    className={
-                      isPostMortem
-                        ? "px-2 py-0.5 rounded bg-purple-900/30 text-purple-200 text-xs font-mono hover:bg-purple-900/60"
-                        : "px-2 py-0.5 rounded bg-amber-900/30 text-amber-200 text-xs font-mono hover:bg-amber-900/60"
-                    }
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          <p className="text-sm text-foreground mb-2 whitespace-pre-wrap">
-            {renderInlineMarkdown(conclusion.reasoning)}
-          </p>
-          {conclusion.risks.length > 0 && (
-            <div className="mb-2">
-              <span className="text-xs text-muted-foreground">
-                {t("discussion.risks")}：
-              </span>
-              <ul className="mt-1 list-disc list-inside text-xs text-foreground/80 space-y-0.5">
-                {conclusion.risks.map((r, idx) => (
-                  <li key={idx}>{r}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          <div className="text-xs text-muted-foreground">
-            {t("discussion.consensus")}：
-            <span className="font-mono ml-1">
-              {(conclusion.consensus_score * 100).toFixed(0)}%
-            </span>
-            <span className="ml-3">
-              {t("discussion.horizon")}：
-              <span className="ml-1">
-                {t(`discussion.horizon_${conclusion.time_horizon}`)}
-              </span>
-            </span>
-          </div>
-        </>
+        <ConclusionHero
+          detail={detail}
+          conclusion={conclusion}
+          variant={variant}
+          onSymbolClick={askPersonaAbout}
+        />
       ))}
     </div>
   );

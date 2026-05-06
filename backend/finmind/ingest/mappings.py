@@ -2331,6 +2331,106 @@ MAPPINGS: dict[str, DatasetMapping] = {
         extra={"market": "TWSE", "source": "finmind"},
         row_transform=_row_short_sale_balance,
     ),
+    # ── Macro indicators (PR adding 0021) ─────────────────────────
+    "TaiwanExchangeRate": DatasetMapping(
+        dataset_code="TaiwanExchangeRate",
+        local_table="tw_exchange_rate",
+        column_map={
+            "date": "ts",
+            "currency": "currency",
+            "cash_buy": "cash_buy",
+            "cash_sell": "cash_sell",
+            "spot_buy": "spot_buy",
+            "spot_sell": "spot_sell",
+        },
+        pk_columns=("currency", "ts"),
+        extra={"source": "finmind"},
+        row_transform=lambda r: {
+            "currency":  _to_str(r.get("currency")),
+            "ts":        _to_date(r.get("ts")),
+            "cash_buy":  _to_decimal(r.get("cash_buy")),
+            "cash_sell": _to_decimal(r.get("cash_sell")),
+            "spot_buy":  _to_decimal(r.get("spot_buy")),
+            "spot_sell": _to_decimal(r.get("spot_sell")),
+            "source":    r.get("source", "finmind"),
+        },
+    ),
+    "InterestRate": DatasetMapping(
+        dataset_code="InterestRate",
+        local_table="macro_interest_rate",
+        column_map={
+            "country":           "country",
+            "date":              "ts",
+            "full_country_name": "full_country_name",
+            "interest_rate":     "interest_rate",
+        },
+        pk_columns=("country", "ts"),
+        extra={"source": "finmind"},
+        row_transform=lambda r: {
+            "country":           _to_str(r.get("country")),
+            "ts":                _to_date(r.get("ts")),
+            "full_country_name": _to_str(r.get("full_country_name")),
+            "interest_rate":     _to_decimal(r.get("interest_rate")),
+            "source":            r.get("source", "finmind"),
+        },
+    ),
+    "GovernmentBondsYield": DatasetMapping(
+        dataset_code="GovernmentBondsYield",
+        local_table="us_bond_yield",
+        column_map={
+            "date":  "ts",
+            "name":  "tenor",
+            "value": "yield_pct",
+        },
+        pk_columns=("tenor", "ts"),
+        extra={"source": "finmind"},
+        row_transform=lambda r: {
+            "tenor":     _to_str(r.get("tenor")),
+            "ts":        _to_date(r.get("ts")),
+            "yield_pct": _to_decimal(r.get("yield_pct")),
+            "source":    r.get("source", "finmind"),
+        },
+    ),
+    "CnnFearGreedIndex": DatasetMapping(
+        dataset_code="CnnFearGreedIndex",
+        local_table="us_fear_greed",
+        column_map={
+            "date":               "ts",
+            "fear_greed":         "value",
+            "fear_greed_emotion": "emotion",
+        },
+        pk_columns=("ts",),
+        extra={"source": "finmind"},
+        row_transform=lambda r: {
+            "ts":      _to_date(r.get("ts")),
+            "value":   _to_int(r.get("value")),
+            "emotion": _to_str(r.get("emotion")),
+            "source":  r.get("source", "finmind"),
+        },
+    ),
+    "CrudeOilPrices": DatasetMapping(
+        dataset_code="CrudeOilPrices",
+        local_table="commodity_price",
+        column_map={
+            "date":  "ts",
+            "name":  "commodity",
+            "price": "price",
+        },
+        pk_columns=("commodity", "ts"),
+        extra={"source": "finmind"},
+        row_transform=lambda r: {
+            "commodity": _to_str(r.get("commodity")),
+            "ts":        _to_date(r.get("ts")),
+            "price":     _to_decimal(r.get("price")),
+            "source":    r.get("source", "finmind"),
+        },
+        # FinMind silently truncates multi-day requests on this dataset
+        # to the start_date alone (verified 2026-05-06: a 2020-01-01..
+        # 2024-12-31 range returned 0 rows; the same start with
+        # end_date omitted returned 2 rows for that one day). Force
+        # per-day fan-out so the runner gets every trading day.
+        single_day=True,
+    ),
 }
 
 

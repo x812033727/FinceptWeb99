@@ -556,6 +556,81 @@ async def _fetch_delisting(
     return out
 
 
+async def _fetch_trading_calendar(
+    symbol: str | None, start: date, end: date
+) -> list[dict[str, Any]]:
+    """TaiwanStockTradingDate — derive from FMTQIK rows.
+
+    FMTQIK already returns one row per trading day for the month
+    containing the queried date, so the existence of an FMTQIK row
+    IS the signal "this was a trading day" — no separate TWSE
+    holiday endpoint needed. We reuse `get_taiex_history` (already
+    wired by `_fetch_total_return_index`) and emit one row per
+    distinct trading date in [start, end]. The row_transform's
+    `is_trading_day=True` flag is set by the runner — the wrapper
+    just needs the `date` field to match FinMind's column_map.
+    """
+    del symbol  # market-wide endpoint, no symbol axis
+    from data.tw.twse_connector import get_taiex_history
+
+    seen: set[str] = set()
+    for month_start in _month_starts(start, end):
+        try:
+            rows = await get_taiex_history(month_start)
+        except Exception as exc:
+            log.warning("FMTQIK fetch failed for %s: %s", month_start, exc)
+            continue
+        for r in rows:
+            d = r.get("time")
+            if not d:
+                continue
+            try:
+                d_obj = date.fromisoformat(str(d))
+            except ValueError:
+                continue
+            if d_obj < start or d_obj > end:
+                continue
+            seen.add(d_obj.isoformat())
+    return [{"date": d_iso} for d_iso in sorted(seen)]
+
+
+async def _fetch_securities_lending(
+    symbol: str | None, start: date, end: date
+) -> list[dict[str, Any]]:
+    """TaiwanStockSecuritiesLending — daily fan-out via TWSE TWT93U.
+
+    Per-day market-wide endpoint (one HTTP per day, all symbols).
+    Hard-codes `transaction_type="借券賣出"` for every row — the
+    PK on tw_securities_lending requires a non-null transaction_type
+    and TWT93U only covers this one category. Multi-category
+    backfill stays on FinMind path until / unless additional TWSE
+    endpoints get wrapped.
+    """
+    from data.tw.twse_connector import get_securities_lending_daily
+
+    out: list[dict[str, Any]] = []
+    for d in _days(start, end):
+        try:
+            rows = await get_securities_lending_daily(d)
+        except Exception as exc:
+            log.warning("TWT93U fetch failed for %s: %s", d, exc)
+            continue
+        for r in rows:
+            sym = r.get("symbol")
+            if not sym:
+                continue
+            if symbol and sym != symbol:
+                continue
+            out.append({
+                "date":             d.isoformat(),
+                "stock_id":         sym,
+                "transaction_type": "借券賣出",
+                "volume":           r.get("volume"),
+                "fee_rate":         r.get("fee_rate"),
+            })
+    return out
+
+
 # ── Dispatch table ──────────────────────────────────────────────
 
 _DISPATCH = {
@@ -573,6 +648,9 @@ _DISPATCH = {
     # Phase 1B — corporate-action batch
     "TaiwanStockBuyBack": _fetch_buyback,
     "TaiwanStockDelisting": _fetch_delisting,
+    # Phase 1C — calendar + lending
+    "TaiwanStockTradingDate": _fetch_trading_calendar,
+    "TaiwanStockSecuritiesLending": _fetch_securities_lending,
 }
 
 

@@ -89,11 +89,9 @@ CHIP: tuple[CatalogEntry, ...] = (
     CatalogEntry("TaiwanStockMarginShortSaleSuspension",        "tw_short_sale_suspension",   "finmind", "twse", "daily"),
     CatalogEntry("TaiwanDailyShortSaleBalances",                "tw_short_sale_balance_daily","finmind", "twse", "daily"),
     CatalogEntry("TaiwanSecuritiesTraderInfo",                  "tw_broker_master",           "finmind", "twse", "monthly"),
-    CatalogEntry("TaiwanStockTradingDailyReport",               "tw_broker_daily_report",     "finmind", None,   "daily", single_day=True),
     CatalogEntry("TaiwanStockWarrantTradingDailyReport",        "tw_broker_daily_report",     "finmind", None,   "daily", single_day=True),
     CatalogEntry("TaiwanStockGovernmentBankBuySell",            "tw_govt_bank_flow",          "finmind", None,   "daily", single_day=True),
     CatalogEntry("TaiwanTotalExchangeMarginMaintenance",        "tw_margin_maintenance",      "finmind", "twse", "daily"),
-    CatalogEntry("TaiwanStockTradingDailyReportSecIdAgg",       "",                           "finmind", None,   "daily"),
     CatalogEntry("TaiwanStockBlockTradingDailyReport",          "tw_block_trade",             "finmind", "twse", "daily", single_day=True),
     CatalogEntry("TaiwanStockBlockTrade",                       "tw_block_trade",             "finmind", "twse", "daily"),
     CatalogEntry("TaiwanStockLoanCollateralBalance",            "tw_loan_collateral",         "finmind", "twse", "daily"),
@@ -125,7 +123,7 @@ DERIVATIVE: tuple[CatalogEntry, ...] = (
     CatalogEntry("TaiwanFuturesDaily",                                 "tw_futures_daily",                "finmind", "taifex", "daily"),
     CatalogEntry("TaiwanOptionDaily",                                  "tw_option_daily",                 "finmind", "taifex", "daily"),
     CatalogEntry("TaiwanFuturesTick",                                  "",                                "finmind", None,     "daily"),
-    CatalogEntry("TaiwanOptionTIck",                                   "",                                "finmind", None,     "daily"),
+    CatalogEntry("TaiwanOptionTick",                                   "",                                "finmind", None,     "daily"),
     CatalogEntry("TaiwanFuturesInstitutionalInvestors",                "tw_futures_inst_daily",           "finmind", "taifex", "daily"),
     CatalogEntry("TaiwanOptionInstitutionalInvestors",                 "tw_option_inst_daily",            "finmind", "taifex", "daily"),
     CatalogEntry("TaiwanFuturesInstitutionalInvestorsAfterHours",      "tw_futures_inst_daily",           "finmind", "taifex", "daily"),
@@ -162,10 +160,9 @@ CONVERTIBLE_BOND: tuple[CatalogEntry, ...] = (
 
 # ── Other ────────────────────────────────────────────────────────
 OTHER: tuple[CatalogEntry, ...] = (
-    CatalogEntry("TaiwanStockNews",         "tw_news_articles",       "finmind", None, "daily"),
+    CatalogEntry("TaiwanStockNews",         "tw_news_articles",       "finmind", None, "daily", single_day=True),
     CatalogEntry("TaiwanBusinessIndicator", "tw_business_indicator",  "finmind", None, "monthly"),
     CatalogEntry("TaiwanStockIndustryChain","tw_industry_chain", "finmind", None,   "monthly"),
-    CatalogEntry("TaiwanStockBuyBack",      "tw_buyback",             "finmind", "twse", "daily"),
 )
 
 

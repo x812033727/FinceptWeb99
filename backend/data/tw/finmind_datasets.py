@@ -82,11 +82,9 @@ CHIP: tuple[DatasetSpec, ...] = (
     DatasetSpec("TaiwanStockMarginShortSaleSuspension", "暫停融券賣出表(融券回補日)", per_symbol=False),
     DatasetSpec("TaiwanDailyShortSaleBalances", "信用額度總量管制餘額表", per_symbol=False),
     DatasetSpec("TaiwanSecuritiesTraderInfo", "證券商資訊表", per_symbol=False),
-    DatasetSpec("TaiwanStockTradingDailyReport", "台股分點資料表 (by 股票代碼 / 券商代碼)", per_symbol=True, sponsor_tier=True),
     DatasetSpec("TaiwanStockWarrantTradingDailyReport", "台股權證分點資料表 (by 股票代碼 / 券商代碼)", per_symbol=True, sponsor_tier=True),
     DatasetSpec("TaiwanStockGovernmentBankBuySell", "台股八大行庫買賣表", per_symbol=False, sponsor_tier=True),
     DatasetSpec("TaiwanTotalExchangeMarginMaintenance", "台灣大盤融資維持率", per_symbol=False),
-    DatasetSpec("TaiwanStockTradingDailyReportSecIdAgg", "當日卷商分點統計表", per_symbol=False, sponsor_tier=True),
     DatasetSpec("TaiwanStockBlockTradingDailyReport", "鉅額交易買賣日報表", per_symbol=False),
     DatasetSpec("TaiwanStockBlockTrade", "鉅額交易日成交資訊", per_symbol=False),
     DatasetSpec("TaiwanStockLoanCollateralBalance", "借貸款項擔保品餘額表", per_symbol=False),
@@ -120,7 +118,7 @@ DERIVATIVE: tuple[DatasetSpec, ...] = (
     DatasetSpec("TaiwanFuturesDaily", "期貨日成交資訊", per_symbol=True),
     DatasetSpec("TaiwanOptionDaily", "選擇權日成交資訊", per_symbol=True),
     DatasetSpec("TaiwanFuturesTick", "期貨交易明細表", per_symbol=True, sponsor_tier=True),
-    DatasetSpec("TaiwanOptionTIck", "選擇權交易明細表", per_symbol=True, sponsor_tier=True),
+    DatasetSpec("TaiwanOptionTick", "選擇權交易明細表", per_symbol=True, sponsor_tier=True),
     DatasetSpec("TaiwanFuturesInstitutionalInvestors", "期貨三大法人買賣", per_symbol=True),
     DatasetSpec("TaiwanOptionInstitutionalInvestors", "選擇權三大法人買賣", per_symbol=True),
     DatasetSpec("TaiwanFuturesInstitutionalInvestorsAfterHours", "期貨夜盤三大法人買賣", per_symbol=True),
@@ -161,10 +159,6 @@ OTHER: tuple[DatasetSpec, ...] = (
     DatasetSpec("TaiwanStockNews", "相關新聞", per_symbol=True, sponsor_tier=True),
     DatasetSpec("TaiwanBusinessIndicator", "台灣每月景氣對策信號表", per_symbol=False),
     DatasetSpec("TaiwanStockIndustryChain", "個體公司所屬產業鏈", per_symbol=True),
-    # `TaiwanStockBuyBack` doesn't appear in the public DataList page
-    # but is covered by `finmind_connector.get_buyback_market_wide`.
-    # Kept here so `find_dataset(...)` resolves the name.
-    DatasetSpec("TaiwanStockBuyBack", "庫藏股公告 (legacy endpoint)", per_symbol=False, sponsor_tier=True),
 )
 
 

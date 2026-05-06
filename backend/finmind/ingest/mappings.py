@@ -1046,6 +1046,34 @@ def _batch_block_trade(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _batch_block_trade_full(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """TaiwanStockBlockTrade payload → tw_block_trade. Each FinMind
+    row is one block-trade execution; multiple per (symbol, date) get
+    a sequential `seq` starting at 1 to satisfy the table's PK
+    `(market, symbol, ts, seq)`. Differs from `_batch_block_trade` (used
+    by TaiwanStockBlockTradingDailyReport): that endpoint splits each
+    trade into buy/sell broker-side rows, this one ships the trade
+    economics directly with `volume` and `trading_money`."""
+    out: list[dict[str, Any]] = []
+    counters: dict[tuple[str, str], int] = {}
+    for r in rows:
+        sym = str(r.get("stock_id") or "")
+        d = _to_date(r.get("date"))
+        key = (sym, str(d) if d else "")
+        counters[key] = counters.get(key, 0) + 1
+        out.append({
+            "market": "TWSE",
+            "symbol": sym or None,
+            "ts": d,
+            "seq": counters[key],
+            "price": _to_decimal(r.get("price")),
+            "volume": _to_int(r.get("volume")),
+            "amount": _to_decimal(r.get("trading_money")),
+            "source": "finmind",
+        })
+    return out
+
+
 def _batch_govt_bank_flow(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """GovernmentBankBuySell payload → tw_govt_bank_flow. Roll up the
     per-(stock, bank) rows into one (market, ts) total per day —
@@ -1986,6 +2014,19 @@ MAPPINGS: dict[str, DatasetMapping] = {
         column_map={},
         pk_columns=("market", "symbol", "ts", "seq"),
         batch_transform=_batch_block_trade,
+        single_day=True,
+    ),
+    "TaiwanStockBlockTrade": DatasetMapping(
+        dataset_code="TaiwanStockBlockTrade",
+        local_table="tw_block_trade",
+        column_map={},
+        pk_columns=("market", "symbol", "ts", "seq"),
+        batch_transform=_batch_block_trade_full,
+        # FinMind silently truncates a multi-day request to just the
+        # start_date when no `data_id` is supplied (verified 2026-05-06:
+        # 2025-12-01..2025-12-31 returned only 2025-12-01's 17 rows;
+        # data_id=2330 over the same range returned 156 rows across all
+        # 21 trading days). Force per-day fan-out so we get every day.
         single_day=True,
     ),
     "TaiwanStockGovernmentBankBuySell": DatasetMapping(

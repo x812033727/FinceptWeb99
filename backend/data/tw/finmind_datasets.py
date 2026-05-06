@@ -82,16 +82,18 @@ CHIP: tuple[DatasetSpec, ...] = (
     DatasetSpec("TaiwanStockMarginShortSaleSuspension", "暫停融券賣出表(融券回補日)", per_symbol=False),
     DatasetSpec("TaiwanDailyShortSaleBalances", "信用額度總量管制餘額表", per_symbol=False),
     DatasetSpec("TaiwanSecuritiesTraderInfo", "證券商資訊表", per_symbol=False),
-    # FinMind dropped this from `/api/v4/data` enum sometime before 2026-05;
-    # calls return 422. Kept in the registry because
-    # `data.tw.finmind_connector.get_broker_concentration_per_symbol` still
-    # references the name and the connector test enforces registration.
-    # NOT in `dataset_catalog` — won't be seeded into `dataset_sources`,
-    # so the chain / scheduler never tries it.
+    # FinMind dropped these three from `/api/v4/data` enum sometime before
+    # 2026-05; calls return 422. They stay registered (and in
+    # `dataset_catalog`) because the registry/catalog invariants enforce
+    # bidirectional consistency, and the connector still references the
+    # first two. Migration 0020 sets `dataset_sources.enabled=false` for
+    # all three so the chain / scheduler never claims them; the
+    # init_db UPSERT preserves `enabled`, so the disabled state persists.
     DatasetSpec("TaiwanStockTradingDailyReport", "台股分點資料表 (legacy; FinMind enum-removed)", per_symbol=True, sponsor_tier=True),
     DatasetSpec("TaiwanStockWarrantTradingDailyReport", "台股權證分點資料表 (by 股票代碼 / 券商代碼)", per_symbol=True, sponsor_tier=True),
     DatasetSpec("TaiwanStockGovernmentBankBuySell", "台股八大行庫買賣表", per_symbol=False, sponsor_tier=True),
     DatasetSpec("TaiwanTotalExchangeMarginMaintenance", "台灣大盤融資維持率", per_symbol=False),
+    DatasetSpec("TaiwanStockTradingDailyReportSecIdAgg", "當日卷商分點統計表 (legacy; FinMind enum-removed)", per_symbol=False, sponsor_tier=True),
     DatasetSpec("TaiwanStockBlockTradingDailyReport", "鉅額交易買賣日報表", per_symbol=False),
     DatasetSpec("TaiwanStockBlockTrade", "鉅額交易日成交資訊", per_symbol=False),
     DatasetSpec("TaiwanStockLoanCollateralBalance", "借貸款項擔保品餘額表", per_symbol=False),
@@ -167,11 +169,10 @@ OTHER: tuple[DatasetSpec, ...] = (
     DatasetSpec("TaiwanBusinessIndicator", "台灣每月景氣對策信號表", per_symbol=False),
     DatasetSpec("TaiwanStockIndustryChain", "個體公司所屬產業鏈", per_symbol=True),
     # FinMind dropped this from `/api/v4/data` enum sometime before 2026-05;
-    # calls return 422. Kept in the registry because
-    # `data.tw.finmind_connector.get_buyback_market_wide` still references
-    # the name and the connector test enforces registration. NOT in
-    # `dataset_catalog` — won't be seeded into `dataset_sources`, so the
-    # chain / scheduler never tries it.
+    # calls return 422. Migration 0020 disables the dataset_sources row
+    # so the chain / scheduler never claims it; the spec stays here
+    # because the connector still references the name and the registry/
+    # catalog invariants enforce bidirectional consistency.
     DatasetSpec("TaiwanStockBuyBack", "庫藏股公告 (legacy; FinMind enum-removed)", per_symbol=False, sponsor_tier=True),
 )
 

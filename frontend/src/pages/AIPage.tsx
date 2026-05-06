@@ -2,8 +2,30 @@ import { useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { MoreHorizontal, Users, Wrench, Trash2, Check } from "lucide-react";
 import api, { notifyRateLimited } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
+import { cn } from "@/lib/utils";
+import { MessageBubble } from "@/components/ai/MessageBubble";
+import { ChatComposer } from "@/components/ai/ChatComposer";
+import type { ChatMessage, ToolCallEvent } from "@/components/ai/types";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 // ── types ──────────────────────────────────────────────────────────
 
@@ -14,20 +36,8 @@ interface AgentInfo {
   default_provider: string;
 }
 
-interface ToolCallEvent {
-  id: string;
-  name: string;
-  args: unknown;
-  result?: string;
-  isError?: boolean;
-  status: "running" | "done" | "error";
-}
-
-interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-  streaming?: boolean;
-  toolCalls?: ToolCallEvent[];
+interface UserMe {
+  ai_requests_remaining: number | null;
 }
 
 // ── api helpers ────────────────────────────────────────────────────
@@ -37,7 +47,12 @@ async function fetchAgents(): Promise<AgentInfo[]> {
   return res.data;
 }
 
-// ── sub-components ─────────────────────────────────────────────────
+async function fetchMe(): Promise<UserMe> {
+  const res = await api.get<UserMe>("/auth/me");
+  return res.data;
+}
+
+// ── persona group config ───────────────────────────────────────────
 
 const providerColor: Record<string, string> = {
   openai: "text-green-400",
@@ -51,11 +66,11 @@ const providerColor: Record<string, string> = {
   openrouter: "text-rose-400",
 };
 
-// Grouping for the persona sidebar — keeps the 19 personas scannable.
-// Source-of-truth lives in i18n keys (personas.groups.<id>.title / .hint) so
-// the labels translate; only the membership map is structural.
-// Unknown agent IDs (e.g. server adds a new persona) fall through to a
-// catch-all "其他" group so nothing silently disappears.
+// Grouping for the persona picker — keeps the 19 personas scannable.
+// Source-of-truth lives in i18n keys (personas.groups.<id>.title / .hint)
+// so the labels translate; only the membership map is structural.
+// Unknown agent IDs fall through to a catch-all "其他" group so nothing
+// silently disappears.
 const PERSONA_GROUPS: { id: string; agentIds: string[] }[] = [
   { id: "functional", agentIds: ["market_analyst", "portfolio_advisor", "risk_manager", "macro_analyst", "earnings_analyst", "trading_coach", "claude_research"] },
   { id: "value",      agentIds: ["buffett", "graham", "munger"] },
@@ -75,9 +90,6 @@ function AgentCard({
   onClick: () => void;
 }) {
   const { t, i18n } = useTranslation();
-  // Localized name + description if i18n key exists; fall back to backend's
-  // agent.name / agent.description so a brand-new persona without a
-  // translation entry still shows up sensibly.
   const nameKey = `personas.agents.${agent.id}.name`;
   const descKey = `personas.agents.${agent.id}.description`;
   const localName = i18n.exists(nameKey) ? t(nameKey) : agent.name;
@@ -85,72 +97,100 @@ function AgentCard({
 
   return (
     <button
+      type="button"
       onClick={onClick}
-      className={`w-full text-left p-3 rounded-lg border transition-colors ${
+      className={cn(
+        "w-full text-left p-3 rounded-lg border transition-colors min-h-[44px]",
         selected
           ? "border-primary bg-primary/10"
           : "border-border bg-card hover:border-primary/40"
-      }`}
+      )}
+      aria-current={selected ? "true" : undefined}
     >
-      <div className="font-medium text-sm text-foreground">{localName}</div>
-      <div className="text-xs text-muted-foreground mt-0.5 leading-snug">{localDesc}</div>
-      <div className={`text-xs mt-1 ${providerColor[agent.default_provider] ?? "text-muted-foreground"}`}>
-        {agent.default_provider}
+      <div className="flex items-start gap-2">
+        <div className="flex-1 min-w-0">
+          <div className="font-medium text-sm text-foreground">{localName}</div>
+          <div className="text-xs text-muted-foreground mt-0.5 leading-snug">{localDesc}</div>
+          <div className={cn("text-xs mt-1", providerColor[agent.default_provider] ?? "text-muted-foreground")}>
+            {agent.default_provider}
+          </div>
+        </div>
+        {selected && <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" aria-hidden="true" />}
       </div>
     </button>
   );
 }
 
-function ToolCallCard({ call }: { call: ToolCallEvent }) {
+// Reusable list of grouped persona cards — rendered in the desktop
+// sidebar AND in the mobile Sheet drawer. Keeps the same i18n / orphan
+// catch-all behaviour; just changes wrapper.
+function PersonaList({
+  agents,
+  selectedAgent,
+  onPick,
+  isLoading,
+}: {
+  agents: AgentInfo[];
+  selectedAgent: string;
+  onPick: (id: string) => void;
+  isLoading: boolean;
+}) {
   const { t } = useTranslation();
-  const statusColor =
-    call.status === "running" ? "bg-amber-400 animate-pulse" :
-    call.status === "error" ? "bg-red-500" :
-    "bg-green-500";
-  const argsStr = JSON.stringify(call.args, null, 2);
+  if (isLoading) {
+    return <p className="text-xs text-muted-foreground animate-pulse">{t("ai.loading")}</p>;
+  }
   return (
-    <div className="border border-border/60 bg-muted/30 rounded-md p-2 text-xs my-1.5">
-      <div className="flex items-center gap-2">
-        <span className={`inline-block w-2 h-2 rounded-full ${statusColor}`} />
-        <span className="font-mono text-amber-300">{call.name}</span>
-        <span className="text-muted-foreground">
-          {call.status === "running" ? t("ai.tool.calling") :
-           call.status === "error" ? t("ai.tool.failed") : t("ai.tool.done")}
-        </span>
-      </div>
-      <details className="mt-1.5">
-        <summary className="cursor-pointer text-muted-foreground hover:text-foreground select-none">{t("ai.tool.args")}</summary>
-        <pre className="mt-1 bg-background/60 border border-border rounded p-2 overflow-auto max-h-40 text-foreground/80">{argsStr}</pre>
-      </details>
-      {call.result && (
-        <details className="mt-1">
-          <summary className={`cursor-pointer hover:text-foreground select-none ${call.isError ? "text-red-400" : "text-muted-foreground"}`}>
-            {t("ai.tool.result")}
-          </summary>
-          <pre className="mt-1 bg-background/60 border border-border rounded p-2 overflow-auto max-h-60 text-foreground/80 whitespace-pre-wrap">{call.result}</pre>
-        </details>
-      )}
-    </div>
-  );
-}
-
-function MessageBubble({ msg }: { msg: ChatMessage }) {
-  const isUser = msg.role === "user";
-  return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-      <div
-        className={`max-w-[90%] sm:max-w-[78%] rounded-lg px-4 py-2.5 text-sm whitespace-pre-wrap leading-relaxed ${
-          isUser
-            ? "bg-primary text-primary-foreground"
-            : "bg-card border border-border text-foreground"
-        }`}
-      >
-        {!isUser && msg.toolCalls?.map((tc) => <ToolCallCard key={tc.id} call={tc} />)}
-        {msg.content}
-        {msg.streaming && (
-          <span className="inline-block w-1.5 h-3.5 bg-current ml-0.5 animate-pulse align-middle" />
-        )}
-      </div>
+    <div className="space-y-4">
+      {PERSONA_GROUPS.map((group) => {
+        const groupAgents = group.agentIds
+          .map((id) => agents.find((a) => a.id === id))
+          .filter((a): a is AgentInfo => a !== undefined);
+        if (groupAgents.length === 0) return null;
+        return (
+          <div key={group.id} className="space-y-1.5">
+            <div className="px-1">
+              <div className="text-[11px] font-semibold text-foreground uppercase tracking-wide">
+                {t(`personas.groups.${group.id}.title`)}
+              </div>
+              <div className="text-[10px] text-muted-foreground leading-snug mt-0.5">
+                {t(`personas.groups.${group.id}.hint`)}
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              {groupAgents.map((a) => (
+                <AgentCard
+                  key={a.id}
+                  agent={a}
+                  selected={a.id === selectedAgent}
+                  onClick={() => onPick(a.id)}
+                />
+              ))}
+            </div>
+          </div>
+        );
+      })}
+      {(() => {
+        const grouped = new Set(PERSONA_GROUPS.flatMap((g) => g.agentIds));
+        const orphans = agents.filter((a) => !grouped.has(a.id));
+        if (orphans.length === 0) return null;
+        return (
+          <div className="space-y-1.5">
+            <div className="px-1 text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+              {t("ai.other_agents")}
+            </div>
+            <div className="space-y-1.5">
+              {orphans.map((a) => (
+                <AgentCard
+                  key={a.id}
+                  agent={a}
+                  selected={a.id === selectedAgent}
+                  onClick={() => onPick(a.id)}
+                />
+              ))}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -173,6 +213,15 @@ export default function AIPage() {
     queryFn: fetchAgents,
   });
 
+  // Quota gauge (today's remaining AI requests). Re-fetches after a
+  // successful send via TanStack Query's invalidation in onSuccess
+  // below, so the badge counts down in real time.
+  const { data: me, refetch: refetchMe } = useQuery({
+    queryKey: ["me"],
+    queryFn: fetchMe,
+    staleTime: 60_000,
+  });
+
   const [selectedAgent, setSelectedAgent] = useState<string>(navState?.agentId ?? "");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [context] = useState<Record<string, unknown>>(navState?.context ?? {});
@@ -180,6 +229,7 @@ export default function AIPage() {
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [useClaudeAgent, setUseClaudeAgent] = useState(false);
+  const [personaSheetOpen, setPersonaSheetOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const sentNavState = useRef(false);
@@ -208,6 +258,7 @@ export default function AIPage() {
     setSelectedAgent(id);
     setMessages([]);
     setError(null);
+    setPersonaSheetOpen(false);
   }
 
   async function sendMessage() {
@@ -327,6 +378,8 @@ export default function AIPage() {
           tc.status === "running" ? { ...tc, status: "error", result: tc.result ?? "cancelled" } : tc,
         ),
       }));
+      // Refresh quota counter once the stream settles.
+      void refetchMe();
     }
   }
 
@@ -341,148 +394,153 @@ export default function AIPage() {
   }
 
   const activeAgent = agents.find((a) => a.id === selectedAgent);
+  const activeAgentName = activeAgent
+    ? (i18n.exists(`personas.agents.${activeAgent.id}.name`)
+        ? t(`personas.agents.${activeAgent.id}.name`)
+        : activeAgent.name)
+    : t("ai.header_default");
+  const activeAgentDesc = activeAgent
+    ? (i18n.exists(`personas.agents.${activeAgent.id}.description`)
+        ? t(`personas.agents.${activeAgent.id}.description`)
+        : activeAgent.description)
+    : "";
   const effectiveIsClaudeAgent =
     activeAgent?.default_provider === "claude_agent" ||
     (useClaudeAgent && canUseClaudeAgent);
+  const claudeAgentToggleVisible =
+    canUseClaudeAgent && !!activeAgent && activeAgent.default_provider !== "claude_agent";
+  const remaining = me?.ai_requests_remaining ?? null;
 
   return (
     // h-[calc(100vh-2.5rem)] = viewport minus AppLayout's 40px (h-10) topbar.
     // h-full doesn't always resolve reliably through the AppLayout chain
     // (flex-1 main → ErrorBoundary → AIPage), so we pin the height explicitly.
-    // overflow-hidden on the outer flex row prevents any vertical growth from
-    // children (long agent list, long chat history) from spilling onto body.
-    <div className="h-[calc(100vh-2.5rem)] bg-background flex flex-col lg:flex-row overflow-hidden">
-      {/* ── sidebar: agent selector. On mobile this becomes a
-          top section with bounded height so the chat still
-          gets the bulk of the viewport. */}
-      <aside className="lg:w-64 border-b lg:border-b-0 lg:border-r border-border flex flex-col p-3 lg:p-4 gap-3 shrink-0 overflow-y-auto max-h-[40vh] lg:max-h-none">
+    <div className="h-[calc(100vh-2.5rem)] bg-background flex overflow-hidden">
+      {/* Desktop sidebar — always visible on lg+, hidden on mobile (Sheet
+          takes over). Keeps the agent list within thumb reach without
+          eating mobile screen real estate. */}
+      <aside className="hidden lg:flex lg:w-64 border-r border-border flex-col p-4 gap-3 shrink-0 overflow-y-auto">
         <div>
           <h2 className="text-sm font-semibold text-foreground">{t("ai.title")}</h2>
           <p className="text-xs text-muted-foreground mt-0.5">{t("ai.subtitle")}</p>
         </div>
-        {isLoading ? (
-          <p className="text-xs text-muted-foreground animate-pulse">{t("ai.loading")}</p>
-        ) : (
-          <div className="space-y-4">
-            {PERSONA_GROUPS.map((group) => {
-              // Match whichever of the group's agent IDs the backend actually
-              // returned (silently drop ones the server doesn't know about,
-              // so adding/removing personas server-side doesn't break the UI).
-              const groupAgents = group.agentIds
-                .map((id) => agents.find((a) => a.id === id))
-                .filter((a): a is AgentInfo => a !== undefined);
-              if (groupAgents.length === 0) return null;
-              return (
-                <div key={group.id} className="space-y-1.5">
-                  <div className="px-1">
-                    <div className="text-[11px] font-semibold text-foreground uppercase tracking-wide">
-                      {t(`personas.groups.${group.id}.title`)}
-                    </div>
-                    <div className="text-[10px] text-muted-foreground leading-snug mt-0.5">
-                      {t(`personas.groups.${group.id}.hint`)}
-                    </div>
-                  </div>
-                  <div className="space-y-1.5">
-                    {groupAgents.map((a) => (
-                      <AgentCard
-                        key={a.id}
-                        agent={a}
-                        selected={a.id === selectedAgent}
-                        onClick={() => switchAgent(a.id)}
-                      />
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-            {/* Catch-all for any persona not in PERSONA_GROUPS (defensive — if
-                someone adds a new persona server-side without updating the
-                grouping it still appears here so the UI never silently hides
-                an option). */}
-            {(() => {
-              const grouped = new Set(PERSONA_GROUPS.flatMap((g) => g.agentIds));
-              const orphans = agents.filter((a) => !grouped.has(a.id));
-              if (orphans.length === 0) return null;
-              return (
-                <div className="space-y-1.5">
-                  <div className="px-1 text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
-                    其他
-                  </div>
-                  <div className="space-y-1.5">
-                    {orphans.map((a) => (
-                      <AgentCard key={a.id} agent={a} selected={a.id === selectedAgent} onClick={() => switchAgent(a.id)} />
-                    ))}
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
-        )}
+        <PersonaList
+          agents={agents}
+          selectedAgent={selectedAgent}
+          onPick={switchAgent}
+          isLoading={isLoading}
+        />
         <div className="mt-auto text-xs text-muted-foreground">
           <a href="/dashboard" className="hover:text-foreground transition-colors">{t("ai.back_dashboard")}</a>
         </div>
       </aside>
 
-      {/* ── main chat area ──────────────────────────────────────── */}
+      {/* Main chat column. */}
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
-        {/* header */}
-        <header className="border-b border-border px-3 sm:px-6 py-3 flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <span className="font-medium text-foreground text-sm">
-              {activeAgent
-                ? (i18n.exists(`personas.agents.${activeAgent.id}.name`)
-                    ? t(`personas.agents.${activeAgent.id}.name`)
-                    : activeAgent.name)
-                : t("ai.header_default")}
+        <header className="border-b border-border px-3 sm:px-6 py-3 flex items-center gap-2 shrink-0">
+          {/* Mobile-only persona picker trigger. */}
+          <Sheet open={personaSheetOpen} onOpenChange={setPersonaSheetOpen}>
+            <SheetTrigger asChild>
+              <button
+                type="button"
+                className="lg:hidden inline-flex items-center gap-1.5 px-2 py-1 rounded border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-accent/10 min-h-[36px] shrink-0"
+                aria-label={t("ai.pick_agent")}
+              >
+                <Users className="h-4 w-4" aria-hidden="true" />
+                <span className="hidden xs:inline">{t("ai.switch")}</span>
+              </button>
+            </SheetTrigger>
+            <SheetContent side="left" className="w-80 max-w-[85vw] overflow-y-auto p-4">
+              <SheetHeader className="mb-3">
+                <SheetTitle>{t("ai.title")}</SheetTitle>
+                <SheetDescription>{t("ai.subtitle")}</SheetDescription>
+              </SheetHeader>
+              <PersonaList
+                agents={agents}
+                selectedAgent={selectedAgent}
+                onPick={switchAgent}
+                isLoading={isLoading}
+              />
+            </SheetContent>
+          </Sheet>
+
+          <div className="min-w-0 flex-1">
+            <span className="font-medium text-foreground text-sm truncate block">
+              {activeAgentName}
             </span>
-            {activeAgent && (
-              <span className="hidden sm:inline text-xs text-muted-foreground ml-2">
-                {i18n.exists(`personas.agents.${activeAgent.id}.description`)
-                  ? t(`personas.agents.${activeAgent.id}.description`)
-                  : activeAgent.description}
+            {activeAgentDesc && (
+              <span className="hidden sm:block text-xs text-muted-foreground truncate">
+                {activeAgentDesc}
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2 sm:gap-4 shrink-0">
-            {canUseClaudeAgent && activeAgent && activeAgent.default_provider !== "claude_agent" && (
-              <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none"
-                     title={t("ai.use_tools_hint")}>
-                <input
-                  type="checkbox"
-                  checked={useClaudeAgent}
-                  disabled={streaming}
-                  onChange={(e) => setUseClaudeAgent(e.target.checked)}
-                  className="accent-amber-400"
-                />
-                <span className="hidden sm:inline">{t("ai.use_tools")}</span>
-              </label>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Quota chip — shows today's remaining AI requests so users
+                stop burning their daily allowance unawares. Hidden when
+                the backend doesn't return a number (admins). */}
+            {remaining !== null && (
+              <span
+                className="text-[11px] tabular-nums px-1.5 py-0.5 rounded border border-border text-muted-foreground"
+                title={t("ai.quota_remaining_hint")}
+              >
+                {t("ai.quota_remaining_short", { remaining })}
+              </span>
             )}
             {effectiveIsClaudeAgent && (
-              <span className="text-xs text-amber-300" title={t("ai.tools_on_hint")}>
+              <span
+                className="hidden sm:inline-flex items-center gap-1 text-[11px] text-amber-300"
+                title={t("ai.tools_on_hint")}
+              >
+                <Wrench className="h-3 w-3" aria-hidden="true" />
                 {t("ai.tools_on")}
               </span>
             )}
-            <button
-              onClick={clearChat}
-              disabled={streaming}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40 whitespace-nowrap"
-            >
-              {t("ai.clear_chat")}
-            </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                aria-label={t("topbar.more")}
+                className="p-1.5 rounded hover:bg-accent/10 text-muted-foreground hover:text-foreground transition-colors min-h-[36px] min-w-[36px] flex items-center justify-center"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                {claudeAgentToggleVisible && (
+                  <>
+                    <DropdownMenuLabel>{t("ai.tools_label")}</DropdownMenuLabel>
+                    <DropdownMenuCheckboxItem
+                      checked={useClaudeAgent}
+                      onCheckedChange={(v) => setUseClaudeAgent(!!v)}
+                      disabled={streaming}
+                    >
+                      {t("ai.use_tools")}
+                    </DropdownMenuCheckboxItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                <DropdownMenuItem
+                  onSelect={(e) => {
+                    if (streaming) {
+                      e.preventDefault();
+                      return;
+                    }
+                    clearChat();
+                  }}
+                  disabled={streaming || messages.length === 0}
+                >
+                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  {t("ai.clear_chat")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </header>
 
-        {/* message list */}
         <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 space-y-4 min-h-0">
           {messages.length === 0 && (
             <div className="h-full flex items-center justify-center">
-              <p className="text-sm text-muted-foreground">
+              <p className="text-sm text-muted-foreground text-center">
                 {activeAgent
-                  ? t("ai.ask_placeholder", {
-                      agent: i18n.exists(`personas.agents.${activeAgent.id}.name`)
-                        ? t(`personas.agents.${activeAgent.id}.name`)
-                        : activeAgent.name,
-                    })
+                  ? t("ai.ask_placeholder", { agent: activeAgentName })
                   : t("ai.select_to_begin")}
               </p>
             </div>
@@ -498,44 +556,16 @@ export default function AIPage() {
           <div ref={bottomRef} />
         </div>
 
-        {/* input bar */}
-        <div className="border-t border-border px-3 sm:px-6 py-3 sm:py-4 shrink-0">
-          <div className="flex gap-2">
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  sendMessage();
-                }
-              }}
-              placeholder={t("ai.input_placeholder")}
-              rows={2}
-              disabled={streaming || !selectedAgent}
-              className="flex-1 resize-none bg-card border border-border rounded-md px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/50 disabled:opacity-50"
-            />
-            {streaming ? (
-              <button
-                onClick={stopGeneration}
-                className="px-4 py-2 rounded-md bg-red-900/30 border border-red-800 text-red-400 text-sm hover:bg-red-900/50 transition-colors self-end"
-              >
-                {t("ai.stop")}
-              </button>
-            ) : (
-              <button
-                onClick={sendMessage}
-                disabled={!input.trim() || !selectedAgent}
-                className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 self-end"
-              >
-                {t("ai.send")}
-              </button>
-            )}
-          </div>
-          <p className="text-xs text-muted-foreground mt-1.5">
-            {t("ai.disclaimer")}
-          </p>
-        </div>
+        <ChatComposer
+          value={input}
+          onChange={setInput}
+          onSend={sendMessage}
+          onStop={stopGeneration}
+          streaming={streaming}
+          disabled={!selectedAgent}
+          placeholder={t("ai.input_placeholder")}
+          disclaimerText={t("ai.disclaimer")}
+        />
       </div>
     </div>
   );

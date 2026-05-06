@@ -166,13 +166,24 @@ class Settings(BaseSettings):
     # hanging the whole round indefinitely.
     DISCUSSION_PERSONA_TIMEOUT_SECONDS: int = 60
 
-    # Post-mortem trigger: a backtest discussion is considered a "win" (and
-    # its post-mortem self-critique skipped) when ANY recommended symbol's
-    # peak D1-D{window} cumulative-return reaches at least this %. 3% is
-    # comfortably above intra-day noise on TW large-caps without selecting
-    # only momentum spikes; tune from 1.5 to 5 depending on the operator's
-    # appetite.
-    POST_MORTEM_WIN_THRESHOLD_PCT: float = 3.0
+    # Post-mortem verdict bands. Classifies the best peak D1-D{window}
+    # cumulative-return across recommended symbols into four buckets and
+    # routes the post-mortem to a band-specific prompt:
+    #
+    #   peak <  marginal           → miss          (full miss prompt)
+    #   marginal ≤ peak < win      → marginal_win  (skeptical "barely passed" prompt)
+    #   win      ≤ peak < strong   → win           (celebratory + survivor-bias guards)
+    #   peak ≥ strong              → strong_win    (regime-vs-stockpicking interrogation)
+    #
+    # Defaults 3/5/10 reflect TW large-cap noise: 3% peak in 5 sessions is
+    # achievable by random luck in a basket of N picks, 5% is meaningful
+    # and matches the Brier outcome_binary upper band, ≥10% in 5 sessions
+    # is almost always regime-driven (sector rotation, macro news) and
+    # demands explicit interrogation. Invariant `marginal < win < strong`
+    # is enforced at runtime upsert time.
+    POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT: float = 3.0
+    POST_MORTEM_WIN_THRESHOLD_PCT: float = 5.0
+    POST_MORTEM_STRONG_WIN_THRESHOLD_PCT: float = 10.0
     POST_MORTEM_WINDOW_DAYS: int = 5
 
     # Discussion learning loop. Each post-mortem (status=miss) extracts

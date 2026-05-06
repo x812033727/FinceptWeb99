@@ -174,6 +174,76 @@ async def test_upsert_unknown_key_raises(
         )
 
 
+# ── post-mortem threshold ordering invariant ──────────────────────
+
+
+@pytest.mark.asyncio
+async def test_upsert_post_mortem_marginal_above_win_rejected(
+    db_session: AsyncSession, admin_user: User,
+):
+    """Setting marginal=8 with the default win=5 must be rejected so the
+    post-mortem classifier never receives a degenerate band layout."""
+    with pytest.raises(ValueError, match="marginal"):
+        await svc.upsert(
+            db_session, "POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT", 8.0,
+            updated_by_id=admin_user.id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_upsert_post_mortem_win_above_strong_rejected(
+    db_session: AsyncSession, admin_user: User,
+):
+    """Setting win=15 with the default strong=10 must be rejected."""
+    with pytest.raises(ValueError, match="strong"):
+        await svc.upsert(
+            db_session, "POST_MORTEM_WIN_THRESHOLD_PCT", 15.0,
+            updated_by_id=admin_user.id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_upsert_post_mortem_strong_below_win_rejected(
+    db_session: AsyncSession, admin_user: User,
+):
+    """Setting strong=4 with the default win=5 must be rejected."""
+    with pytest.raises(ValueError, match="strong"):
+        await svc.upsert(
+            db_session, "POST_MORTEM_STRONG_WIN_THRESHOLD_PCT", 4.0,
+            updated_by_id=admin_user.id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_upsert_post_mortem_thresholds_accepts_valid_ordering(
+    db_session: AsyncSession, admin_user: User,
+):
+    """A valid bump (e.g. marginal=2, win=4, strong=8) must be accepted
+    when applied in an order that never breaks the invariant."""
+    # Bump strong first to make headroom, then win, then marginal.
+    await svc.upsert(
+        db_session, "POST_MORTEM_STRONG_WIN_THRESHOLD_PCT", 8.0,
+        updated_by_id=admin_user.id,
+    )
+    await svc.upsert(
+        db_session, "POST_MORTEM_WIN_THRESHOLD_PCT", 4.0,
+        updated_by_id=admin_user.id,
+    )
+    await svc.upsert(
+        db_session, "POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT", 2.0,
+        updated_by_id=admin_user.id,
+    )
+    assert await svc.get_float(
+        db_session, "POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT",
+    ) == 2.0
+    assert await svc.get_float(
+        db_session, "POST_MORTEM_WIN_THRESHOLD_PCT",
+    ) == 4.0
+    assert await svc.get_float(
+        db_session, "POST_MORTEM_STRONG_WIN_THRESHOLD_PCT",
+    ) == 8.0
+
+
 # ── delete / restore ──────────────────────────────────────────────
 
 

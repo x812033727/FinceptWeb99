@@ -359,15 +359,19 @@ def test_format_prompt_carries_both_sections_and_four_questions():
 def test_format_win_prompt_carries_survivor_bias_guards():
     """PR-B3 win prompt must include the explicit survivor-bias
     guards (questions 2 + 3) — without them the LLM tends to spin
-    a confident retrospective narrative that overfits the success."""
-    days, rec, _ = _sample_payload()
+    a confident retrospective narrative that overfits the success.
+    Three-tier update: prompt now also includes the per-day top-N
+    leaderboard (Section B) so even on a clear win the personas
+    can never miss the comparison against the actual movers."""
+    days, rec, daily = _sample_payload()
     text = svc.format_post_mortem_win_prompt(
         as_of=date(2026, 3, 23),
         trading_days=days,
         recommended_performance=rec,
+        daily_top_gainers=daily,
         recommended_symbols=["2330"],
         verdict=svc.OutcomeVerdict(
-            status="win", threshold_pct=3.0, window_days=5,
+            status="win", threshold_pct=5.0, window_days=5,
             winners=[svc.WinnerEntry("2330", 8.0, days[1])],
             best_pct=8.0, reason="ok",
         ),
@@ -375,13 +379,17 @@ def test_format_win_prompt_carries_survivor_bias_guards():
     # Header + window
     assert "事後檢討 — 命中經驗" in text
     assert "2026-03-23" in text
-    assert "通過" in text and "3" in text   # 通過 ${threshold}% 門檻
+    assert "通過" in text and "5" in text   # 通過 ${threshold}% 門檻
     # Survivor-bias guards
     assert "當時的不確定點" in text
     assert "沒有特別不確定的訊號" in text   # admit-luck escape hatch
     # Category steering
     assert "correct_signal_combo" in text
     assert "successful_thesis" in text
+    # Three-tier addition: leaderboard section + missing-signal question
+    assert "B. 每日漲幅榜首" in text
+    assert "6505" in text                   # gainer from the sample payload
+    assert "missing_signal_category" in text
 
 
 def test_format_prompt_handles_empty_recommendations():
@@ -681,3 +689,326 @@ def test_verdict_to_dict_round_trip():
     assert out["winners"][0]["symbol"] == "2330"
     assert out["winners"][0]["peak_day"] == "2026-03-25"
     assert out["best_pct"] == 5.0
+
+
+# ── Three-tier verdict classification ────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "peak_pct,expected_status,expected_threshold",
+    [
+        (2.5,  "miss",         3.0),    # below marginal
+        (3.5,  "marginal_win", 3.0),    # marginal band
+        (7.0,  "win",          5.0),    # win band
+        (12.0, "strong_win",  10.0),    # strong band
+    ],
+)
+def test_evaluate_outcome_three_tier_classification_picks_band_status(
+    peak_pct: float, expected_status: str, expected_threshold: float,
+):
+    """Three-tier mode classifies the best peak into one of four bands
+    and stamps `threshold_pct` with the bar that band was classified
+    against — so the prompt's 「通過/未達 X% 門檻」 copy always names
+    the right number."""
+    rec = [_perf("2330", [(_W_DAYS[0], peak_pct), (_W_DAYS[1], peak_pct - 1)])]
+    v = svc.evaluate_recommendation_outcome(
+        rec,
+        threshold_pct=5.0,
+        marginal_threshold_pct=3.0,
+        strong_threshold_pct=10.0,
+        window_days=5,
+        trading_days=_W_DAYS,
+    )
+    assert v.status == expected_status
+    assert v.threshold_pct == expected_threshold
+    assert v.best_pct == peak_pct
+
+
+def test_evaluate_outcome_legacy_single_threshold_unchanged_by_three_tier_kwargs():
+    """When `marginal_threshold_pct` / `strong_threshold_pct` are NOT
+    passed, behavior collapses to the legacy binary win/miss against
+    the single `threshold_pct` — preserving existing call sites and
+    the verifier's own classification semantics."""
+    rec = [_perf("2330", [(_W_DAYS[0], 4.0)])]
+    v = svc.evaluate_recommendation_outcome(
+        rec, threshold_pct=3.0, window_days=5, trading_days=_W_DAYS,
+    )
+    assert v.status == "win"   # 4% > 3% legacy bar
+    assert v.threshold_pct == 3.0
+
+
+def test_evaluate_outcome_three_tier_marginal_win_collects_qualified_winners():
+    """A marginal-win verdict still surfaces the symbols that
+    crossed the lower (marginal) bar — sorted by peak_pct desc — so
+    the prompt can name them. Symbols below the marginal bar are
+    excluded from `winners` even when their peak is positive."""
+    rec = [
+        _perf("2330", [(_W_DAYS[0], 1.5), (_W_DAYS[1], 1.0)]),    # below marginal
+        _perf("2454", [(_W_DAYS[0], 4.0), (_W_DAYS[1], 3.5)]),    # marginal
+        _perf("2603", [(_W_DAYS[0], 4.5), (_W_DAYS[1], 1.0)]),    # marginal
+    ]
+    v = svc.evaluate_recommendation_outcome(
+        rec,
+        threshold_pct=5.0,
+        marginal_threshold_pct=3.0,
+        strong_threshold_pct=10.0,
+        window_days=5,
+        trading_days=_W_DAYS,
+    )
+    assert v.status == "marginal_win"
+    assert [w.symbol for w in v.winners] == ["2603", "2454"]
+    assert v.best_pct == 4.5
+
+
+# ── New prompt builders: marginal_win + strong_win ───────────────
+
+
+def test_format_marginal_win_prompt_uses_skeptical_framing():
+    """Marginal-win prompt must (a) flag the call as 「勉強過線」,
+    (b) include the leaderboard, (c) steer the LLM AWAY from
+    `correct_signal_combo` toward `coin_flip` / `missed_signal`
+    categories — otherwise the learning loop pollutes the
+    命中經驗 ctx with noise-level outcomes."""
+    days, rec, daily = _sample_payload()
+    text = svc.format_post_mortem_marginal_win_prompt(
+        as_of=date(2026, 3, 23),
+        trading_days=days,
+        recommended_performance=rec,
+        daily_top_gainers=daily,
+        recommended_symbols=["2330"],
+        verdict=svc.OutcomeVerdict(
+            status="marginal_win", threshold_pct=3.0, window_days=5,
+            winners=[svc.WinnerEntry("2330", 3.5, days[1])],
+            best_pct=3.5, reason="ok",
+        ),
+    )
+    # Skeptical banner
+    assert "勉強過線" in text
+    assert "不要當成命中" in text
+    # Section B leaderboard present (rows from sample payload)
+    assert "B. 每日漲幅榜首" in text
+    assert "6505" in text
+    # Skeptical category steering (away from correct_signal_combo)
+    assert "coin_flip" in text
+    assert "missed_signal" in text or "missing_signal_category" in text
+    # Explicit guard: do NOT default to correct_signal_combo
+    assert "不要" in text and "correct_signal_combo" in text
+
+
+def test_format_strong_win_prompt_demands_regime_disambiguation():
+    """Strong-win prompt must force the regime-vs-stockpicking
+    interrogation — without it, +10% in 5 days gets credited to the
+    persona's pick when it was really sector / macro driven."""
+    days, rec, daily = _sample_payload()
+    text = svc.format_post_mortem_strong_win_prompt(
+        as_of=date(2026, 3, 23),
+        trading_days=days,
+        recommended_performance=rec,
+        daily_top_gainers=daily,
+        recommended_symbols=["2330"],
+        verdict=svc.OutcomeVerdict(
+            status="strong_win", threshold_pct=10.0, window_days=5,
+            winners=[svc.WinnerEntry("2330", 12.0, days[1])],
+            best_pct=12.0, reason="ok",
+        ),
+    )
+    # Strong banner
+    assert "強勢命中" in text or "強勢門檻" in text
+    # Section B leaderboard present
+    assert "B. 每日漲幅榜首" in text
+    # Regime-vs-stockpicking categories surfaced
+    assert "regime_context" in text
+    assert "regime_capture" in text or "regime_signal" in text
+    # Explicit "stock-picking vs regime-riding" framing
+    assert "regime-riding" in text or "regime" in text
+    assert "alpha" in text
+
+
+# ── _resolve_thresholds (4-tuple) ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_resolve_thresholds_returns_four_tuple_with_compiled_defaults(
+    db_session: AsyncSession,
+):
+    """No DB overrides → resolver returns the compiled defaults
+    (3.0, 5.0, 10.0, 5). Confirms the 4-tuple contract that
+    `build_post_mortem_message` depends on."""
+    marginal, win_bar, strong, window = await svc._resolve_thresholds(
+        db_session,
+    )
+    assert marginal == 3.0
+    assert win_bar == 5.0
+    assert strong == 10.0
+    assert window == 5
+    assert marginal < win_bar < strong   # ordering invariant
+
+
+@pytest.mark.asyncio
+async def test_resolve_thresholds_falls_back_when_db_values_violate_ordering(
+    db_session: AsyncSession,
+):
+    """If something writes degenerate values straight to the DB
+    (bypassing `upsert`'s validation), the resolver detects the
+    invariant violation and falls back to compiled defaults rather
+    than handing the classifier a degenerate band layout."""
+    import uuid as _uuid
+    from models.runtime_setting import RuntimeSetting
+    from models.user import User, UserRole
+
+    # Seed an admin user so the FK constraint is satisfied.
+    u = User(
+        id=_uuid.uuid4(),
+        email="resolver_test@example.com",
+        hashed_password="x",
+        role=UserRole.admin,
+    )
+    db_session.add(u)
+    # Write degenerate values: marginal > win.
+    db_session.add(RuntimeSetting(
+        key="POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT",
+        value=8.0, updated_by_id=u.id,
+    ))
+    db_session.add(RuntimeSetting(
+        key="POST_MORTEM_WIN_THRESHOLD_PCT",
+        value=5.0, updated_by_id=u.id,
+    ))
+    await db_session.commit()
+
+    marginal, win_bar, strong, _ = await svc._resolve_thresholds(
+        db_session,
+    )
+    # Falls back to compiled defaults.
+    assert marginal == 3.0
+    assert win_bar == 5.0
+    assert strong == 10.0
+
+
+# ── build_post_mortem_message dispatch — three-tier branches ─────
+
+
+@pytest.mark.asyncio
+async def test_build_post_mortem_message_returns_marginal_win_prompt(
+    db_session: AsyncSession,
+):
+    """Peak in [3%, 5%) → marginal_win branch. Prompt carries the
+    skeptical banner + leaderboard + coin_flip steering."""
+    from datetime import datetime as _dt
+    from uuid import uuid4
+
+    base = date(2026, 3, 23)
+    days = [date(2026, 3, 24), date(2026, 3, 25), date(2026, 3, 26),
+            date(2026, 3, 27), date(2026, 3, 30)]
+    db_session.add_all([
+        _bar("2330", base, 100.0),
+        _bar("2330", days[0], 102.0),
+        _bar("2330", days[1], 103.5),    # +3.5% — marginal band
+        _bar("2330", days[2], 102.0),
+        _bar("2330", days[3], 101.5),
+        _bar("2330", days[4], 100.5),
+    ])
+    await db_session.commit()
+
+    fake_disc = type("Disc", (), {})()
+    fake_disc.id = uuid4()
+    fake_disc.owner_id = uuid4()
+    fake_disc.market = "TW"
+    fake_disc.as_of_date = base
+    fake_disc.conclusion = {"recommended_symbols": ["2330"]}
+    fake_disc.created_at = _dt.now()
+
+    payload = await svc.build_post_mortem_message(db_session, fake_disc)
+    assert payload.verdict is not None
+    assert payload.verdict.status == "marginal_win"
+    assert payload.prompt_text
+    assert "勉強過線" in payload.prompt_text
+    assert "B. 每日漲幅榜首" in payload.prompt_text
+
+
+@pytest.mark.asyncio
+async def test_build_post_mortem_message_returns_strong_win_prompt(
+    db_session: AsyncSession,
+):
+    """Peak ≥ 10% → strong_win branch. Prompt carries the regime
+    interrogation + leaderboard."""
+    from datetime import datetime as _dt
+    from uuid import uuid4
+
+    base = date(2026, 3, 23)
+    days = [date(2026, 3, 24), date(2026, 3, 25), date(2026, 3, 26),
+            date(2026, 3, 27), date(2026, 3, 30)]
+    db_session.add_all([
+        _bar("2330", base, 100.0),
+        _bar("2330", days[0], 105.0),
+        _bar("2330", days[1], 113.0),    # +13% — strong band
+        _bar("2330", days[2], 110.0),
+        _bar("2330", days[3], 108.0),
+        _bar("2330", days[4], 106.0),
+    ])
+    await db_session.commit()
+
+    fake_disc = type("Disc", (), {})()
+    fake_disc.id = uuid4()
+    fake_disc.owner_id = uuid4()
+    fake_disc.market = "TW"
+    fake_disc.as_of_date = base
+    fake_disc.conclusion = {"recommended_symbols": ["2330"]}
+    fake_disc.created_at = _dt.now()
+
+    payload = await svc.build_post_mortem_message(db_session, fake_disc)
+    assert payload.verdict is not None
+    assert payload.verdict.status == "strong_win"
+    assert payload.prompt_text
+    assert "強勢" in payload.prompt_text
+    assert "B. 每日漲幅榜首" in payload.prompt_text
+    assert "regime" in payload.prompt_text
+
+
+@pytest.mark.asyncio
+async def test_build_post_mortem_message_win_branch_now_includes_leaderboard(
+    db_session: AsyncSession,
+):
+    """Regression guard: the win branch (peak ∈ [5%, 10%)) must now
+    include Section B leaderboard. Prior to this PR the win prompt
+    only showed Section A (recommended self-eval) which created a
+    blind spot for "I got 5%, perfect" complacency."""
+    from datetime import datetime as _dt
+    from uuid import uuid4
+
+    base = date(2026, 3, 23)
+    days = [date(2026, 3, 24), date(2026, 3, 25), date(2026, 3, 26),
+            date(2026, 3, 27), date(2026, 3, 30)]
+    # 2330 hits +7% (win band). Add a second symbol that runs +20% so
+    # the leaderboard has visible content the personas would have
+    # missed.
+    db_session.add_all([
+        _bar("2330", base, 100.0),
+        _bar("2330", days[0], 102.0),
+        _bar("2330", days[1], 107.0),
+        _bar("2330", days[2], 105.0),
+        _bar("2330", days[3], 104.0),
+        _bar("2330", days[4], 103.0),
+        _bar("2454", base, 200.0),
+        _bar("2454", days[0], 230.0),    # +15% single-day
+        _bar("2454", days[1], 240.0),
+        _bar("2454", days[2], 235.0),
+        _bar("2454", days[3], 232.0),
+        _bar("2454", days[4], 230.0),
+    ])
+    await db_session.commit()
+
+    fake_disc = type("Disc", (), {})()
+    fake_disc.id = uuid4()
+    fake_disc.owner_id = uuid4()
+    fake_disc.market = "TW"
+    fake_disc.as_of_date = base
+    fake_disc.conclusion = {"recommended_symbols": ["2330"]}
+    fake_disc.created_at = _dt.now()
+
+    payload = await svc.build_post_mortem_message(db_session, fake_disc)
+    assert payload.verdict is not None
+    assert payload.verdict.status == "win"
+    assert "B. 每日漲幅榜首" in payload.prompt_text
+    # Big mover (2454) appears in the leaderboard so the persona is
+    # forced to compare their +7% pick against +15% they missed.
+    assert "2454" in payload.prompt_text

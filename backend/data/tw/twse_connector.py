@@ -683,3 +683,58 @@ async def get_delisted_companies() -> list[dict[str, Any]]:
             ).strip(),
         })
     return out
+
+
+# ── 借券賣出 (TWT93U) ─────────────────────────────────────────────
+
+async def get_securities_lending_daily(
+    query_date: date | None = None,
+) -> list[dict[str, Any]]:
+    """All TWSE-listed stocks' 借券賣出 (security-borrow + sell) volume
+    + fee for one date via legacy `TWT93U` (借券賣出明細).
+
+    Output shape (per row):
+        symbol         : 證券代號
+        name_zh        : 證券名稱
+        volume         : 當日借券賣出成交數量
+        fee_rate       : 借券平均費率 (%)
+
+    TWT93U publishes a single transaction-type per row (借券賣出).
+    The FinMind dataset's PK includes `transaction_type` to allow
+    multiple lending categories per stock-date — for the TWSE path
+    the wrapper hard-codes the type (mirrors the existing pattern
+    used for delisting `reason` etc.). Operators wanting the full
+    breakdown across all lending categories should keep
+    `active_source='finmind'` for this dataset.
+    """
+    raw = await _get(
+        f"{_LEGACY_BASE}/exchangeReport/TWT93U",
+        params={
+            "response": "json",
+            "date": _twse_date(query_date),
+            "selectType": "Daily",
+        },
+    )
+    rows = _unwrap_legacy_table(raw)
+    if not rows and isinstance(raw, list):
+        rows = raw
+    result: list[dict[str, Any]] = []
+    for r in rows:
+        symbol = (r.get("證券代號") or "").strip()
+        if not symbol:
+            continue
+        result.append({
+            "symbol":   symbol,
+            "name_zh":  (r.get("證券名稱") or "").strip(),
+            "volume":   _tw_int(
+                r.get("借券賣出成交數量")
+                or r.get("當日借券賣出成交數量")
+                or r.get("成交數量")
+            ),
+            "fee_rate": _tw_num(
+                r.get("借券平均費率")
+                or r.get("借券費率")
+                or r.get("費率")
+            ),
+        })
+    return result

@@ -521,3 +521,84 @@ async def test_get_delisted_companies_handles_roc_compact_date():
     with patcher:
         rows = await twse.get_delisted_companies()
     assert rows[0]["delisted_at"] == "2023-08-22"
+
+
+# ── Securities lending (Phase 1C TWT93U) ─────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_securities_lending_daily_normalises_to_english_keys():
+    """TWT93U returns Chinese keys + comma-separated numeric strings.
+    Connector must translate to a stable English schema so the Phase
+    B selfcrawl wrapper doesn't have to reach into the TWSE column
+    naming."""
+    payload = [
+        {
+            "證券代號":         "2330",
+            "證券名稱":         "台積電",
+            "借券賣出成交數量": "1,234,567",
+            "借券平均費率":     "0.85",
+        },
+        {
+            "證券代號":         "2317",
+            "證券名稱":         "鴻海",
+            "借券賣出成交數量": "500,000",
+            "借券平均費率":     "1.20",
+        },
+    ]
+    patcher, _ = install_get(payload)
+    with patcher:
+        rows = await twse.get_securities_lending_daily(date(2024, 1, 2))
+
+    assert len(rows) == 2
+    by_id = {r["symbol"]: r for r in rows}
+    r = by_id["2330"]
+    assert r["name_zh"] == "台積電"
+    assert r["volume"] == 1_234_567
+    assert r["fee_rate"] == 0.85
+
+
+@pytest.mark.asyncio
+async def test_get_securities_lending_daily_drops_rows_missing_symbol():
+    """The PK on tw_securities_lending NOT-NULLs symbol; drop at the
+    connector layer keeps the chunk healthy."""
+    payload = [
+        {"證券代號": "2330", "借券賣出成交數量": "1", "借券平均費率": "0.5"},
+        {"證券代號": "",     "借券賣出成交數量": "1", "借券平均費率": "0.5"},
+        {"證券代號": None,   "借券賣出成交數量": "1", "借券平均費率": "0.5"},
+    ]
+    patcher, _ = install_get(payload)
+    with patcher:
+        rows = await twse.get_securities_lending_daily(date(2024, 1, 2))
+    assert len(rows) == 1
+    assert rows[0]["symbol"] == "2330"
+
+
+@pytest.mark.asyncio
+async def test_get_securities_lending_daily_unwraps_legacy_envelope():
+    """Legacy `www.twse.com.tw` endpoints sometimes return the
+    `{stat, fields, data}` envelope rather than a flat list — the
+    helper must accept both shapes via _unwrap_legacy_table."""
+    payload = {
+        "stat": "OK",
+        "fields": ["證券代號", "證券名稱", "借券賣出成交數量", "借券平均費率"],
+        "data": [
+            ["2330", "台積電", "1,234,567", "0.85"],
+        ],
+    }
+    patcher, _ = install_get(payload)
+    with patcher:
+        rows = await twse.get_securities_lending_daily(date(2024, 1, 2))
+    assert len(rows) == 1
+    assert rows[0]["symbol"] == "2330"
+    assert rows[0]["volume"] == 1_234_567
+
+
+@pytest.mark.asyncio
+async def test_get_securities_lending_daily_returns_empty_on_holiday():
+    """`stat != "OK"` (TWSE's response on a non-trading day) → []."""
+    payload = {"stat": "MS_DATA_NOT_FOUND", "fields": [], "data": []}
+    patcher, _ = install_get(payload)
+    with patcher:
+        rows = await twse.get_securities_lending_daily(date(2024, 1, 1))
+    assert rows == []

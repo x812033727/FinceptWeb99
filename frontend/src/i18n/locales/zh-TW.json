@@ -488,6 +488,14 @@
     "more_actions": "更多動作",
     "sessions_drawer_title": "討論列表",
     "sessions_drawer_hint": "切換討論、自動排程、策略模板",
+    "sessions_search_placeholder": "搜尋主題或代號…",
+    "sessions_filter_empty": "找不到符合的討論",
+    "sessions_filter": {
+      "all": "全部",
+      "draft": "草稿",
+      "running": "進行中",
+      "done": "已結論"
+    },
     "config_drawer_title": "討論設定",
     "config_drawer_hint": "主題、規則、專家、市場、回測日期",
     "topic_label": "討論主題",

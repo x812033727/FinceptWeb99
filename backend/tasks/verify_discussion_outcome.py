@@ -6,11 +6,22 @@ Picks up every discussion (manual + auto-run, PR #218) whose
 bars for the recommended symbols over the 5-trading-day window
 starting from the discussion's day-1, and computes win/loss:
 
-  win  = max(high) >= day1_open × 1.03 for ANY recommended symbol
+  win  = max(high) >= day1_open × (1 + threshold/100) for ANY recommended symbol
   loss = no symbol crossed the threshold and at least one symbol's
          5-day window resolved against `tw_market_service.get_history`
   unverifiable = synthesizer returned no symbols (set immediately;
                  nothing to grade)
+
+The threshold tracks `POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT` (the
+lower band of the post-mortem 4-bucket verdict, default 3%) — anything
+crossing the marginal bar is "not a clean miss" and shouldn't be
+graded as `loss` for the cross-session memory field. Note the
+verifier deliberately uses **intra-day high** while the post-mortem
+uses **peak close**: high ≥ close, so the verifier's bar is more
+permissive on purpose (it grades reachable highs, not realized
+closes). Aligning the threshold VALUE keeps the two grading
+mechanisms in the same numerical ballpark while preserving the
+metric distinction.
 
 Defer (verdict stays NULL, retry tomorrow) when none of the symbols
 have 5 bars yet — that's a holiday-in-window or a delisting issue;
@@ -51,7 +62,7 @@ JOB_ID = "verify_discussion_outcome"
 _LOCK_KEY = "lock:verify_discussion_outcome"
 _LOCK_TTL = 10 * 60
 
-_WIN_THRESHOLD = 0.03
+_DEFAULT_WIN_THRESHOLD = 0.03   # fallback when runtime config can't be read
 _WINDOW_TRADING_DAYS = 5
 # Stale-grace cap (PR #223): if `today - verify_after_date` exceeds
 # this and we still can't resolve a single bar for any recommended
@@ -110,9 +121,30 @@ async def run() -> None:
         await release_lock(_LOCK_KEY)
 
 
+async def _resolve_threshold(db) -> float:
+    """Read the per-pick win threshold (as a fraction, e.g. 0.03 = 3%)
+    from `POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT` runtime config so
+    the verifier and the post-mortem dispatcher stay aligned. Falls
+    back to the compiled default on any resolver hiccup so the cron
+    never blocks on Redis / runtime-config issues."""
+    try:
+        from services.runtime_config_service import get_float as _get_float
+        pct = await _get_float(
+            db, "POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT",
+        )
+        return pct / 100.0
+    except Exception as exc:
+        log.debug(
+            "verify_discussion_outcome.threshold_fallback",
+            extra={"error": str(exc)},
+        )
+        return _DEFAULT_WIN_THRESHOLD
+
+
 async def _do_run() -> int:
     async with AsyncSessionLocal() as db:
         today = datetime.now(UTC).date()
+        threshold = await _resolve_threshold(db)
         # `auto_run` filter dropped (PR #218): manual discussions
         # had `verify_after_date` set by `synthesize_conclusion` since
         # the same PR, so the same date-based gate now covers both
@@ -129,13 +161,17 @@ async def _do_run() -> int:
         )).all()
         log.info(
             "verify_discussion_outcome.pending",
-            extra={"count": len(pending), "today": today.isoformat()},
+            extra={
+                "count": len(pending),
+                "today": today.isoformat(),
+                "threshold": threshold,
+            },
         )
 
         verified = 0
         for d in pending:
             try:
-                wrote = await _verify_one(db, d)
+                wrote = await _verify_one(db, d, threshold=threshold)
                 if wrote:
                     verified += 1
             except Exception:
@@ -149,9 +185,15 @@ async def _do_run() -> int:
         return verified
 
 
-async def _verify_one(db, d: Discussion) -> bool:
+async def _verify_one(
+    db, d: Discussion, *, threshold: float = _DEFAULT_WIN_THRESHOLD,
+) -> bool:
     """Compute and persist the verdict for one row. Returns True if a
     verdict was written, False if we deferred (waiting for more bars).
+
+    `threshold` is the fractional gain bar (e.g. 0.03 = 3%) sourced from
+    `POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT` runtime config; default
+    fallback keeps the legacy 3% behavior on resolver failure.
 
     Uses the atomic-UPDATE + manual-mirror pattern (PR #114) to avoid
     SQLAlchemy's "Instance not persistent" error on PostgreSQL when
@@ -250,7 +292,7 @@ async def _verify_one(db, d: Discussion) -> bool:
         max_high = max(highs)
         gain = (max_high - day1_open) / day1_open
         resolved_any = True
-        if gain >= _WIN_THRESHOLD:
+        if gain >= threshold:
             win_symbol = sym
             win_gain = gain
             break
@@ -273,9 +315,9 @@ async def _verify_one(db, d: Discussion) -> bool:
     if resolved_any:
         reason = (
             f"best gain {best_gain * 100:.1f}% by {best_symbol} "
-            f"(under {_WIN_THRESHOLD * 100:.0f}% threshold)"
+            f"(under {threshold * 100:.0f}% threshold)"
             if best_symbol is not None
-            else f"no symbol crossed {_WIN_THRESHOLD * 100:.0f}% threshold"
+            else f"no symbol crossed {threshold * 100:.0f}% threshold"
         )
         await _set_verdict(
             db, d,

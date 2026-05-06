@@ -194,20 +194,48 @@ _REGISTRY: dict[str, RuntimeSettingSpec] = {
         min_value=512,
         max_value=131_072,
     ),
+    "POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT": RuntimeSettingSpec(
+        key="POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT",
+        type="float",
+        name="Post-mortem marginal-win threshold (%)",
+        description=(
+            "Lower band of the 4-bucket verdict. A peak D1-D{window} "
+            "below this is a clear miss; equal/above but under the "
+            "win threshold is 'marginal_win' and gets the skeptical "
+            "barely-passed prompt. Default 3% is roughly TW noise floor "
+            "in a 5-session window. Must be < win threshold."
+        ),
+        min_value=0.5,
+        max_value=20.0,
+    ),
     "POST_MORTEM_WIN_THRESHOLD_PCT": RuntimeSettingSpec(
         key="POST_MORTEM_WIN_THRESHOLD_PCT",
         type="float",
         name="Post-mortem win threshold (%)",
         description=(
-            "Backtest discussions whose recommended symbols hit at least "
-            "this peak cumulative-return % within the D1-D{window} "
-            "evaluation window are scored as 'win' and skip the "
-            "self-critique entirely (saving LLM quota). Lower the bar "
-            "to make personas defend marginal calls; raise it to only "
-            "celebrate strong signals."
+            "Mid band of the 4-bucket verdict. Peaks between this and "
+            "the strong threshold count as a clear 'win' and get the "
+            "celebratory + survivor-bias prompt. Default 5% matches "
+            "the Brier outcome_binary upper band. Must be > marginal "
+            "threshold and < strong threshold."
         ),
         min_value=0.5,
         max_value=20.0,
+    ),
+    "POST_MORTEM_STRONG_WIN_THRESHOLD_PCT": RuntimeSettingSpec(
+        key="POST_MORTEM_STRONG_WIN_THRESHOLD_PCT",
+        type="float",
+        name="Post-mortem strong-win threshold (%)",
+        description=(
+            "Upper band of the 4-bucket verdict. Peaks at or above "
+            "this trigger 'strong_win' — the regime-vs-stockpicking "
+            "interrogation prompt. Default 10% in a 5-session TW window "
+            "is almost always sector / macro driven, so the prompt "
+            "specifically asks personas to disambiguate skill from "
+            "regime. Must be > win threshold."
+        ),
+        min_value=0.5,
+        max_value=50.0,
     ),
     "POST_MORTEM_WINDOW_DAYS": RuntimeSettingSpec(
         key="POST_MORTEM_WINDOW_DAYS",
@@ -440,6 +468,38 @@ async def list_settings(db: AsyncSession) -> list[SettingInfo]:
     return out
 
 
+_POST_MORTEM_THRESHOLD_KEYS = (
+    "POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT",
+    "POST_MORTEM_WIN_THRESHOLD_PCT",
+    "POST_MORTEM_STRONG_WIN_THRESHOLD_PCT",
+)
+
+
+async def _validate_post_mortem_threshold_ordering(
+    db: AsyncSession, *, key: str, value: float,
+) -> None:
+    """Enforce `marginal < win < strong` across the three post-mortem
+    threshold keys. Reads the OTHER two effective values (cache → DB →
+    default) and rejects the upsert if the candidate would break the
+    invariant. Without this an admin could set marginal=6, win=5 and
+    silently corrupt the verdict classifier."""
+    if key not in _POST_MORTEM_THRESHOLD_KEYS:
+        return
+    others = {
+        k: float(await get(db, k))
+        for k in _POST_MORTEM_THRESHOLD_KEYS if k != key
+    }
+    pending = {**others, key: value}
+    marginal = pending["POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT"]
+    win = pending["POST_MORTEM_WIN_THRESHOLD_PCT"]
+    strong = pending["POST_MORTEM_STRONG_WIN_THRESHOLD_PCT"]
+    if not (marginal < win < strong):
+        raise ValueError(
+            f"post-mortem thresholds must satisfy "
+            f"marginal ({marginal}) < win ({win}) < strong ({strong})"
+        )
+
+
 async def upsert(
     db: AsyncSession,
     key: str,
@@ -449,6 +509,10 @@ async def upsert(
 ) -> SettingInfo:
     spec = get_spec(key)
     value = _coerce(spec, raw_value)   # raises ValueError on type / bounds
+
+    await _validate_post_mortem_threshold_ordering(
+        db, key=key, value=float(value) if spec.type == "float" else 0.0,
+    )
 
     row = await db.get(RuntimeSetting, key)
     if row is None:

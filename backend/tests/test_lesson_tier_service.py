@@ -318,6 +318,101 @@ async def test_record_outcome_skips_unknown_discussion(
     assert out["updated"] == 0
 
 
+@pytest.mark.asyncio
+async def test_record_outcome_logs_partial_when_lesson_deleted_mid_flight(
+    db_session: AsyncSession, owner: User, caplog,
+):
+    """Audit follow-up MA #3: when the round-context snapshot
+    references a lesson_id that's been deleted between context
+    capture and verdict resolution, the UPDATE silently does
+    nothing for that row. The function now emits a partial-bump
+    warning so operators can spot the gap from logs / Loki
+    rather than wondering why hit_count never grows."""
+    import logging as _logging
+
+    a = await _seed_lesson(db_session, owner_id=owner.id)
+    deleted_id = 99_999_999   # never existed → simulates deletion
+
+    d = Discussion(
+        id=uuid.uuid4(), owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["a"], market="TW",
+        status="done", current_round=1,
+        verdict="win",
+        as_of_date=date(2026, 5, 5),
+    )
+    db_session.add(d)
+    await db_session.commit()
+
+    snap = {
+        "recent_lessons": {
+            "market": [
+                {
+                    "id": a.id, "as_of_date": "2026-04-01",
+                    "category": "other", "lesson_text": "x",
+                    "related_symbols": [], "missed_winners": [],
+                },
+                {
+                    "id": deleted_id, "as_of_date": "2026-04-01",
+                    "category": "other", "lesson_text": "y",
+                    "related_symbols": [], "missed_winners": [],
+                },
+            ],
+            "per_symbol": {},
+        },
+    }
+    db_session.add(DiscussionRoundContext(
+        discussion_id=d.id, round=1,
+        context=snap,
+        captured_at=datetime.now(UTC),
+    ))
+    await db_session.commit()
+
+    caplog.set_level(_logging.WARNING, logger="services.lesson_tier_service")
+    out = await svc.record_lesson_outcome(
+        db_session, discussion_id=d.id,
+    )
+    # Two IDs in context but only one matches a real row → 1 bump.
+    assert sorted(out["lesson_ids"]) == sorted([a.id, deleted_id])
+    assert out["updated"] == 1
+
+    partial_records = [
+        r for r in caplog.records
+        if r.message == "lesson_tier.record_outcome_partial"
+    ]
+    assert len(partial_records) == 1
+    extra = partial_records[0].__dict__
+    assert extra.get("expected") == 2
+    assert extra.get("actual") == 1
+    assert extra.get("missing") == 1
+
+
+@pytest.mark.asyncio
+async def test_record_outcome_no_partial_log_when_all_rows_match(
+    db_session: AsyncSession, owner: User, caplog,
+):
+    """Happy path — every lesson_id in context still exists, so
+    rowcount == expected, no partial-bump warning."""
+    import logging as _logging
+
+    a = await _seed_lesson(db_session, owner_id=owner.id)
+    d = await _seed_discussion_with_lessons(
+        db_session, owner_id=owner.id,
+        verdict="win", market_lesson_ids=[a.id],
+    )
+
+    caplog.set_level(_logging.WARNING, logger="services.lesson_tier_service")
+    out = await svc.record_lesson_outcome(
+        db_session, discussion_id=d.id,
+    )
+    assert out["updated"] == 1
+    partial_records = [
+        r for r in caplog.records
+        if r.message == "lesson_tier.record_outcome_partial"
+    ]
+    assert partial_records == []
+
+
 # ── promote_eligible_lessons ─────────────────────────────────────
 
 

@@ -87,7 +87,15 @@ FinceptWeb/
 │   │   │                 #   0034 signal_audit_history (sparkline source) ·
 │   │   │                 #   0035 discussions.post_mortem_conclusion ·
 │   │   │                 #   0036 backtest_sweeps · 0037 sweep.auto_post_mortem ·
-│   │   │                 #   0038 tw_stock_futures_oi · 0039 tw_vix_daily
+│   │   │                 #   0038 tw_stock_futures_oi · 0039 tw_vix_daily ·
+│   │   │                 #   0040 discussion_lessons · 0041 strategy_templates ·
+│   │   │                 #   0042 discussion_sweep_id · 0043 strategy_auto_schedule ·
+│   │   │                 #   0044 lesson_regime_tier (PR-B0) ·
+│   │   │                 #   0045 sweep_fold_kind (PR-A0) ·
+│   │   │                 #   0046 discussion_calibration (PR-C1) ·
+│   │   │                 #   0047 sweep_weights_override (PR-A1) ·
+│   │   │                 #   0048 strategy_calibration (PR-C2) ·
+│   │   │                 #   0049 calibrated_brier (PR-C2 follow-up)
 │   │   ├── base.py       # DeclarativeBase with naming convention
 │   │   ├── seed.py       # Admin user seed on first boot
 │   │   └── session.py    # Async engine + get_db dependency
@@ -139,6 +147,23 @@ FinceptWeb/
 │   │   │                                #   roll-up across post-mortem turns (PR #262)
 │   │   ├── backtest_sweep_service.py    # Multi-day sweep runner: CRUD + worker
 │   │   │                                #   + cancel + concurrency (PRs #274 #275)
+│   │   │                                #   + fold_kind / weights_override gating
+│   │   │                                #   (PRs #341 #345 — A0/A1/A2)
+│   │   ├── walk_forward_service.py      # Rolling train/test fold orchestrator
+│   │   │                                #   (PRs #341 #345 — A1/A2). plan +
+│   │   │                                #   execute_in_background + frozen weights.
+│   │   │                                #   Phase 1.5 synchronous train-fold verdict
+│   │   │                                #   resolution (audit follow-up) so
+│   │   │                                #   weight learner sees real hit rates.
+│   │   ├── confidence_calibrator.py     # In-house PAV isotonic regression
+│   │   │                                #   (PRs #341 #345 — C2). Per-strategy
+│   │   │                                #   curve fitted from rolling
+│   │   │                                #   (raw_confidence, outcome) pool.
+│   │   │                                #   MIN_SAMPLES_FOR_FIT=30. Applied at
+│   │   │                                #   synthesis to write calibrated_confidence.
+│   │   ├── lesson_tier_service.py       # Episodic→semantic auto-promotion +
+│   │   │                                #   admin-only structural promote
+│   │   │                                #   (PRs #341 #343 — B2). Owner-scoped.
 │   │   ├── overseas_market_service.py   # SOX/NDX/SPX/DJI/VIX snapshot via yfinance
 │   │   │                                #   (PRs #269-#271)
 │   │   ├── broker_concentration_service.py # 主力分點 5d aggregate per
@@ -438,6 +463,97 @@ FinceptWeb/
   `POST /api/discussion/sweeps/{id}/start`,
   `POST /api/discussion/sweeps/{id}/cancel`,
   `DELETE /api/discussion/sweeps/{id}`.
+
+### Walk-forward OOS validation (PRs #341 #345 — A0 + A1 + A2)
+- **Why**: The legacy weight learner (PR-C, persona_weight_learner)
+  retrained on the same sweep it was evaluating — classic
+  in-sample overfitting. Walk-forward splits each strategy's
+  history into rolling train/test windows so weights learned on
+  the train slice are evaluated on a disjoint future slice, then
+  promoted to production only when the OOS check survives.
+- **Schema** (migrations `0044`-`0047`):
+  - `backtest_sweeps.fold_kind ∈ {train, test, production}`
+    (default `production`; existing sweeps untouched)
+  - `backtest_sweeps.parent_sweep_id` (test → train link)
+  - `backtest_sweeps.weights_override JSONB` — frozen persona
+    weights for the test fold, NEVER written back to the
+    template's `persona_weights` (that's the OOS-cleanness
+    invariant)
+- **Service**: `services/walk_forward_service.py`
+  - `plan_walk_forward(strategy, anchor, train_window=60d,
+    test_window=20d, n_folds=2)` — pure read; rejects with
+    `ValueError` when `ohlcv_daily` can't reach back
+    `(train+test) × n_folds × 2` calendar days from the anchor
+  - `execute_walk_forward_in_background(...)` — fire-and-forget
+    asyncio task. Per fold: spawn `train` sweep → await worker
+    → SYNCHRONOUSLY verify train fold's discussions (audit
+    follow-up: cron is too slow, would leave verdicts NULL and
+    weight learning would collapse to uniform) → fit weights
+    via `compute_weights_from_aggregate` → spawn `test` sweep
+    with `weights_override` + `parent_sweep_id` → await worker
+- **Phase 3 gate**: production sweeps with `weights_override`
+  set (auto-schedule via `latest_validated_weights(...)` from
+  PR-A2) skip the in-sample retrain so OOS-clean weights don't
+  get re-poisoned by their own results
+- **Concurrency guard**: `has_active_walk_forward(strategy_id)`
+  blocks parallel runs on the same strategy via 409
+- **Observability**: `WALK_FORWARD_RUNS_TOTAL{status}` and
+  `WALK_FORWARD_FOLDS_TOTAL{outcome}` Prometheus counters,
+  structured `walk_forward.start` / `walk_forward.complete`
+  logs bookending each run
+- API: `POST /api/discussion/strategies/{id}/walk-forward`
+  (validates inputs, returns the resolved fold plan + 200
+  immediately; orchestrator runs detached). UI: `WalkForward
+  Section` inside StrategyTemplateCard, side-by-side
+  in-sample-vs-OOS compare in SweepAggregateCard.
+
+### Confidence calibration (PRs #341 #345 — C0 + C1 + C2)
+- **Why**: LLM-emitted confidence is well-known to be poorly
+  calibrated (over-confident at the high end). Brier score on
+  raw confidence isn't actionable until we measure WHETHER
+  calibration is helping; without that side-by-side, every
+  improvement claim is anecdotal.
+- **C0 — emission**: `synthesize_conclusion`'s prompt asks for
+  `recommendations: [{symbol, confidence}]` per pick. Parser
+  back-fills 0.5 (neutral) when an old discussion lacks the
+  field — the structured shape is guaranteed downstream.
+- **C1 — Brier**: `discussion_scoreboard_service.compute_brier_
+  for_discussion` produces `discussions.brier_score` over raw
+  confidence and `discussions.outcome_vector` (per-symbol
+  `{symbol, confidence, outcome_binary, peak_pct,
+  calibrated_confidence?}`). NULL when partial coverage. Sweep
+  aggregate rolls up sample-weighted means + 10-bucket
+  reliability diagram.
+- **C2 — isotonic curve** (per strategy):
+  `services/confidence_calibrator.py` fits in-house PAV (Pool
+  Adjacent Violators, ~30 lines, no sklearn) over the rolling
+  pool of (raw_confidence, outcome_binary) pairs from every
+  resolved child discussion across the strategy's sweeps.
+  `MIN_SAMPLES_FOR_FIT = 30`; below threshold the curve stays
+  NULL and synthesis emits raw only. Triggered from sweep
+  worker Phase 3 alongside the weight learner. Curve persisted
+  on `discussion_strategy_templates.calibration_curve` (JSONB
+  list of `[{raw, calibrated}]` control points).
+- **C2 wire-through**: `synthesize_conclusion` applies the
+  curve to every recommendation's raw confidence and stores
+  `calibrated_confidence` alongside; raw is preserved for
+  future re-fits (key invariant — never feed calibrated values
+  back into the next fit, that would self-degenerate to
+  identity).
+- **Calibrated brier** (migration `0049`): `discussions.
+  calibrated_brier_score` parallel to raw brier. NULL when any
+  pick lacks `calibrated_confidence` (partial coverage); a
+  meaningful comparison requires complete coverage. Aggregate
+  rolls up alongside raw. **The diagnostic signal**: when
+  `calibrated_brier < raw_brier`, the curve is reducing error;
+  when `calibrated_brier > raw_brier`, the curve is mis-fitting
+  (often regime drift) — the SweepAggregateCard's BrierRow
+  inline-renders this as ✔/⚠.
+- API: emerges through the existing `GET /api/discussion/
+  sweeps/{id}/aggregate` and `GET /api/discussion/strategies/
+  {id}/aggregate` payloads (added fields `brier_score`,
+  `calibrated_brier_score`, `reliability`, `fold_kind`,
+  `parent_sweep_id`).
 
 ### Sponsor-tier ctx blocks (PRs #282-#285)
 

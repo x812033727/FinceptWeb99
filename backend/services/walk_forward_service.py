@@ -419,6 +419,19 @@ async def _run_one_fold(
 
     await sweep_worker(train_sweep.id)
 
+    # Phase 1.5 — synchronously resolve verdicts on the train fold's
+    # discussions BEFORE fitting weights. The architecture audit
+    # caught this: without the verdict cron having run, every
+    # train discussion's `verdict` is None → aggregate hit_rate
+    # collapses to 0/N for every persona → `compute_weights_from_
+    # aggregate` produces uniform weights → walk-forward becomes
+    # a no-op (test fold runs with no override). The verifier task
+    # is idempotent and safe to call synchronously in backtest
+    # mode (`as_of_date != None`) because all required OHLCV
+    # bars are already in the archive — the cron just hadn't
+    # gotten around to it yet.
+    await _verify_train_fold_discussions(train_sweep.id)
+
     # Phase 2: fit weights from the completed train sweep aggregate
     # WITHOUT writing them back to the template.
     weights = await _fit_frozen_weights(
@@ -449,6 +462,68 @@ async def _run_one_fold(
 
     await sweep_worker(test_sweep.id)
     return result
+
+
+async def _verify_train_fold_discussions(train_sweep_id: UUID) -> int:
+    """Walk every discussion in the train sweep and run the
+    verdict resolver synchronously so `_fit_frozen_weights`
+    can read meaningful hit rates from the aggregate.
+
+    Returns the count of discussions that received a verdict on
+    this pass (those that didn't either had no symbols / had
+    insufficient bars / or already had a verdict from a prior
+    cron tick).
+
+    The verifier (`tasks.verify_discussion_outcome._verify_one`)
+    is idempotent — it short-circuits when verdict is already
+    set — and reads OHLCV directly from the archive in backtest
+    mode, so calling N times against N already-completed
+    discussions has predictable upper-bound cost.
+
+    Failures are isolated per discussion: one bad row (e.g.
+    OHLCV gap that the cron's stale-grace path would normally
+    flush) doesn't block the rest. The fold itself stays
+    valid even if some verdicts couldn't resolve — the
+    aggregate just sees them as `pending` and PR-C's
+    eligibility gate filters them out.
+    """
+    from sqlalchemy import select as _select
+
+    from models.discussion import Discussion as _Discussion
+    from tasks.verify_discussion_outcome import _verify_one
+
+    resolved = 0
+    async with AsyncSessionLocal() as db:
+        rows = (await db.scalars(
+            _select(_Discussion).where(
+                _Discussion.sweep_id == train_sweep_id,
+            )
+        )).all()
+        for d in rows:
+            if d.verdict is not None:
+                continue   # already verified, skip
+            try:
+                ok = await _verify_one(db, d)
+                if ok:
+                    resolved += 1
+            except Exception as exc:
+                log.warning(
+                    "walk_forward.train_verify_failed",
+                    extra={
+                        "discussion_id": str(d.id),
+                        "train_sweep_id": str(train_sweep_id),
+                        "error": str(exc),
+                    },
+                )
+    log.info(
+        "walk_forward.train_verified",
+        extra={
+            "train_sweep_id": str(train_sweep_id),
+            "resolved": resolved,
+            "total": len(rows),
+        },
+    )
+    return resolved
 
 
 async def _fit_frozen_weights(

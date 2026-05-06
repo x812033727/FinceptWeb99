@@ -2,8 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ChevronDown,
+  ChevronRight,
   Folder,
   MoreHorizontal,
+  Search,
   Settings as SettingsIcon,
   Sparkles,
   Trash2,
@@ -11,6 +14,7 @@ import {
 import { notifyRateLimited } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 import { cn } from "@/lib/utils";
+import { useCollapsible as useCollapsibleHook } from "@/hooks/useCollapsible";
 import type {
   Discussion,
   DiscussionDetail,
@@ -327,6 +331,38 @@ export default function DiscussionPage() {
   const [configSheetOpen, setConfigSheetOpen] = useState(false);
   const [injectSheetOpen, setInjectSheetOpen] = useState(false);
 
+  // Desktop layout state (PR-D). Sticky action bar + collapsible
+  // config bar replace the old top-pinned `max-h-[60vh]` config
+  // panel that ate vertical space and pushed buttons off-screen.
+  // The config bar's open state persists per-user via localStorage
+  // so people who prefer "form first, transcript second" don't have
+  // to expand it on every visit.
+  const desktopConfig = useCollapsibleHook("discussion.desktop_config", true);
+
+  // Sessions sidebar filter state (PR-D). Search matches topic +
+  // recommended_symbols (case-insensitive); status pill narrows by
+  // draft / running / done.
+  const [sessionsQuery, setSessionsQuery] = useState("");
+  const [sessionsStatusFilter, setSessionsStatusFilter] =
+    useState<"all" | "draft" | "running" | "done">("all");
+
+  // Sessions list filter — search query matches against both the
+  // topic and any recommended_symbols on the conclusion (so someone
+  // who remembers the picks but not the topic can still find the
+  // discussion). Status filter narrows by draft / running / done.
+  const filteredSessions = (() => {
+    const q = sessionsQuery.trim().toLowerCase();
+    return sessions.filter((s) => {
+      if (sessionsStatusFilter !== "all" && s.status !== sessionsStatusFilter) {
+        return false;
+      }
+      if (!q) return true;
+      if (s.topic.toLowerCase().includes(q)) return true;
+      const recs = s.conclusion?.recommended_symbols ?? [];
+      return recs.some((sym) => sym.toLowerCase().includes(q));
+    });
+  })();
+
   // Between-rounds user injection (PR #211). Drops a user_input
   // turn into the current round's transcript so the next round's
   // personas have to react to it.
@@ -624,11 +660,54 @@ export default function DiscussionPage() {
           + {t("discussion.new")}
         </button>
 
+        {/* Sessions filter — search input matches topic +
+            recommended_symbols; status pills narrow by lifecycle.
+            Both controls operate on the same `filteredSessions`
+            derived value used by the list below, so they affect
+            the desktop sidebar AND the mobile Sessions Sheet
+            without duplicate plumbing. */}
+        {sessions.length > 0 && (
+          <div className="space-y-1.5">
+            <div className="relative">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" aria-hidden="true" />
+              <input
+                type="search"
+                value={sessionsQuery}
+                onChange={(e) => setSessionsQuery(e.target.value)}
+                placeholder={t("discussion.sessions_search_placeholder")}
+                aria-label={t("discussion.sessions_search_placeholder")}
+                className="w-full pl-7 pr-2 py-1.5 rounded-md bg-card border border-border text-xs text-foreground focus:outline-none focus:border-primary/50 min-h-[32px]"
+              />
+            </div>
+            <div className="flex gap-1 flex-wrap">
+              {(["all", "draft", "running", "done"] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setSessionsStatusFilter(s)}
+                  className={cn(
+                    "px-2 py-0.5 rounded-full text-[10px] border transition-colors min-h-[24px]",
+                    sessionsStatusFilter === s
+                      ? "border-primary bg-primary/15 text-primary"
+                      : "border-border text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {t(`discussion.sessions_filter.${s}`)}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="space-y-1">
-          {sessions.length === 0 && (
+          {sessions.length === 0 ? (
             <p className="text-xs text-muted-foreground">{t("discussion.empty")}</p>
-          )}
-          {sessions.map((s) => (
+          ) : filteredSessions.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              {t("discussion.sessions_filter_empty")}
+            </p>
+          ) : null}
+          {filteredSessions.map((s) => (
             <button
               key={s.id}
               onClick={() => {
@@ -1129,17 +1208,60 @@ export default function DiscussionPage() {
           </button>
         </header>
 
-        {/* Desktop inline config + actions panel — hidden on <lg
-            because the Sheet drawers take over. */}
-        <div className="hidden lg:block border-b border-border px-4 py-3 space-y-3 shrink-0 overflow-y-auto max-h-[60vh]">
-          {renderConfigForm()}
-          {renderActions()}
-          {selectedId && isDraft && (detail?.current_round ?? 0) >= 1 && !isStreaming && (
-            renderInjectForm()
-          )}
+        {/* Desktop sticky action bar (PR-D). Mirrors the mobile
+            bottom bar so Run / Conclude / "More" stay one click
+            away regardless of how far the user scrolls the
+            transcript or the config form below. streamError sits
+            above the bar so rate limits stay visible without
+            opening anything. */}
+        <div className="hidden lg:block sticky top-0 z-10 border-b border-border bg-card/95 backdrop-blur px-4 py-2 shrink-0">
           {streamError && (
-            <div className="text-xs text-red-400 bg-red-950/30 border border-red-900/50 rounded px-3 py-2">
+            <p className="text-xs text-red-400 bg-red-950/30 border border-red-900/50 rounded px-2 py-1 mb-2">
               {streamError}
+            </p>
+          )}
+          {renderActions()}
+        </div>
+
+        {/* Desktop collapsible config bar (PR-D). Replaces the old
+            top-pinned `max-h-[60vh]` panel that ate vertical space
+            even when the user was just reading the transcript.
+            Default-open the first time so newcomers see the form;
+            subsequent visits respect the user's last choice via
+            useCollapsible's localStorage memory. */}
+        <div className="hidden lg:block border-b border-border shrink-0">
+          <button
+            type="button"
+            onClick={desktopConfig.toggle}
+            aria-expanded={desktopConfig.open}
+            className="w-full flex items-center gap-2 px-4 py-2 text-left hover:bg-accent/5 transition-colors"
+          >
+            {desktopConfig.open ? (
+              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" aria-hidden="true" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" aria-hidden="true" />
+            )}
+            <SettingsIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" aria-hidden="true" />
+            <span className="text-xs font-medium text-foreground">
+              {t("discussion.config_drawer_title")}
+            </span>
+            {!desktopConfig.open && topic && (
+              <span className="text-xs text-muted-foreground truncate ml-2 flex-1 min-w-0">
+                · {topic}
+              </span>
+            )}
+            {(topicDirty || rulesDirty) && (
+              <span className="text-[10px] text-amber-400 ml-auto shrink-0">
+                {t("discussion.unsaved")}
+              </span>
+            )}
+          </button>
+          {desktopConfig.open && (
+            <div className="px-4 pb-3 space-y-3 max-h-[55vh] overflow-y-auto">
+              {renderConfigForm()}
+              {selectedId && isDraft && (detail?.current_round ?? 0) >= 1 && !isStreaming && (
+                renderInjectForm()
+              )}
             </div>
           )}
         </div>

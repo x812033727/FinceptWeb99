@@ -488,6 +488,14 @@
     "more_actions": "More actions",
     "sessions_drawer_title": "Discussions",
     "sessions_drawer_hint": "Pick a session, run automation, manage strategies",
+    "sessions_search_placeholder": "Search topic or symbol…",
+    "sessions_filter_empty": "No matching discussions.",
+    "sessions_filter": {
+      "all": "All",
+      "draft": "Draft",
+      "running": "Running",
+      "done": "Done"
+    },
     "config_drawer_title": "Settings",
     "config_drawer_hint": "Topic, rules, personas, market, backtest date",
     "topic_label": "Topic",

@@ -485,6 +485,154 @@ async def test_fit_frozen_weights_returns_empty_dict_for_missing_sweep(
     assert weights == {}
 
 
+# ── Audit follow-up: train fold verdict resolution ───────────────
+
+
+@pytest.mark.asyncio
+async def test_verify_train_fold_resolves_pending_verdicts(
+    db_session: AsyncSession, owner: User,
+):
+    """Architecture audit MA #2: when a train sweep finishes, its
+    discussions still have NULL verdict (the verifier cron hasn't
+    run). `_verify_train_fold_discussions` synchronously resolves
+    them so `_fit_frozen_weights` can read meaningful hit rates
+    from the aggregate."""
+    from datetime import date as _date, datetime as _datetime, UTC
+
+    from models.backtest_sweep import BacktestSweep
+    from models.discussion import Discussion as _Disc
+
+    sweep = BacktestSweep(
+        id=uuid.uuid4(), owner_id=owner.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["a"],
+        anchor_date=_date(2026, 1, 5),
+        trading_days_count=5, rounds_per_discussion=1,
+        concurrency=1, auto_post_mortem=False,
+        fold_kind="train",
+    )
+    # Two pending discussions and one already-verified — the
+    # already-verified one must be skipped (idempotency).
+    pending_a = _Disc(
+        id=uuid.uuid4(), owner_id=owner.id,
+        topic="t", rules="r", persona_ids=["a"],
+        market="TW", status="done", current_round=1,
+        sweep_id=sweep.id,
+        as_of_date=_date(2026, 1, 5),
+        conclusion={
+            "recommended_symbols": [],
+            "recommendations": [],
+            "reasoning": "x", "risks": [],
+            "time_horizon": "short_term", "consensus_score": 0.5,
+        },
+        verdict=None,
+        created_at=_datetime.now(UTC),
+        updated_at=_datetime.now(UTC),
+    )
+    already_verified = _Disc(
+        id=uuid.uuid4(), owner_id=owner.id,
+        topic="t", rules="r", persona_ids=["a"],
+        market="TW", status="done", current_round=1,
+        sweep_id=sweep.id,
+        as_of_date=_date(2026, 1, 5),
+        conclusion={
+            "recommended_symbols": [],
+            "recommendations": [],
+            "reasoning": "x", "risks": [],
+            "time_horizon": "short_term", "consensus_score": 0.5,
+        },
+        verdict="loss",   # already verified
+        verdict_reason="prior",
+        verified_at=_datetime.now(UTC),
+        created_at=_datetime.now(UTC),
+        updated_at=_datetime.now(UTC),
+    )
+    db_session.add_all([sweep, pending_a, already_verified])
+    await db_session.commit()
+
+    # Discussions with empty `recommended_symbols` resolve to
+    # `unverifiable`. Confirm the helper reaches them and skips
+    # the pre-verified one.
+    resolved = await wf._verify_train_fold_discussions(sweep.id)
+    assert resolved == 1   # only the pending one ran
+
+    await db_session.refresh(pending_a)
+    assert pending_a.verdict == "unverifiable"
+    # The pre-verified one stayed put.
+    await db_session.refresh(already_verified)
+    assert already_verified.verdict == "loss"
+
+
+@pytest.mark.asyncio
+async def test_verify_train_fold_isolates_per_discussion_failure(
+    db_session: AsyncSession, owner: User,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Per-discussion exception is logged but doesn't halt the loop
+    — the rest of the sweep's discussions still get verified."""
+    from datetime import date as _date, datetime as _datetime, UTC
+
+    from models.backtest_sweep import BacktestSweep
+    from models.discussion import Discussion as _Disc
+
+    sweep = BacktestSweep(
+        id=uuid.uuid4(), owner_id=owner.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["a"],
+        anchor_date=_date(2026, 1, 5),
+        trading_days_count=5, rounds_per_discussion=1,
+        concurrency=1, auto_post_mortem=False,
+        fold_kind="train",
+    )
+    db_session.add(sweep)
+    discs = [
+        _Disc(
+            id=uuid.uuid4(), owner_id=owner.id,
+            topic="t", rules="r", persona_ids=["a"],
+            market="TW", status="done", current_round=1,
+            sweep_id=sweep.id,
+            as_of_date=_date(2026, 1, 5),
+            conclusion={
+                "recommended_symbols": [],
+                "recommendations": [],
+                "reasoning": "x", "risks": [],
+                "time_horizon": "short_term",
+                "consensus_score": 0.5,
+            },
+            verdict=None,
+            created_at=_datetime.now(UTC),
+            updated_at=_datetime.now(UTC),
+        )
+        for _ in range(3)
+    ]
+    db_session.add_all(discs)
+    await db_session.commit()
+
+    # Patch _verify_one so the second call raises. The other two
+    # complete normally — total resolved should be 2.
+    call_count = {"n": 0}
+    real_verify = __import__(
+        "tasks.verify_discussion_outcome", fromlist=["_verify_one"],
+    )._verify_one
+
+    async def flaky_verify(db, d):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("simulated archive read error")
+        return await real_verify(db, d)
+
+    monkeypatch.setattr(
+        "tasks.verify_discussion_outcome._verify_one",
+        flaky_verify,
+    )
+
+    resolved = await wf._verify_train_fold_discussions(sweep.id)
+    assert resolved == 2   # 1st and 3rd succeeded, 2nd raised
+
+
+# ── Audit follow-up: end-to-end weight non-uniformity ────────────
+
+
 # ── Audit follow-up #1: orchestrator observability ───────────────
 
 

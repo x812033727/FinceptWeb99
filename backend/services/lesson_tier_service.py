@@ -160,7 +160,27 @@ async def record_lesson_outcome(
             .execution_options(synchronize_session=False)
         )
         await db.commit()
-        status_payload["updated"] = result.rowcount or 0
+        rowcount = result.rowcount or 0
+        status_payload["updated"] = rowcount
+        # Audit follow-up MA #3: when rowcount < expected, the
+        # round-context snapshot referenced lesson IDs that no
+        # longer exist (deleted between context capture and
+        # verdict resolution). Surface the gap so the operator
+        # can spot "tier promotion is starving for hits because
+        # half the bumps are missing the target row" — not just
+        # silently fail. The UPDATE itself succeeded; this is
+        # informational only.
+        expected = len(lesson_ids)
+        if rowcount < expected:
+            log.warning(
+                "lesson_tier.record_outcome_partial",
+                extra={
+                    "discussion_id": str(discussion_id),
+                    "expected": expected,
+                    "actual": rowcount,
+                    "missing": expected - rowcount,
+                },
+            )
     except Exception as exc:
         log.warning(
             "lesson_tier.record_outcome_failed",

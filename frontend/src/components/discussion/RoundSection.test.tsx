@@ -40,6 +40,9 @@ function makeTurn(overrides: Partial<Turn> = {}): Turn {
 
 describe("RoundSection", () => {
   it("renders the header with round + turn count regardless of collapse state", () => {
+    /* PR-C: the chevron-arrow header is gone; the divider chip now
+       carries the round label + turn count. The whole divider is a
+       button that toggles open/closed. */
     render(
       <RoundSection
         discussionId="d1"
@@ -48,19 +51,21 @@ describe("RoundSection", () => {
         personaName={personaName}
       />,
     );
-    // Default-collapsed: chevron is "▶".
+    // Default-collapsed: aria-expanded is false; the divider chip
+    // shows "Round 2 · N turns" (en) regardless of open state.
     const button = screen.getByRole("button");
     expect(button).toHaveAttribute("aria-expanded", "false");
-    expect(button.textContent).toContain("▶");
-    // Header shows the count regardless of open state.
-    expect(button.textContent).toMatch(/2/);
+    expect(button.textContent ?? "").toMatch(/Round 2/);
+    expect(button.textContent ?? "").toMatch(/2/);
   });
 
   it("auto-expands when the round contains a post-mortem user_input turn", () => {
     /* PR #268: post-mortem rounds are surfaced expanded by default
        so the operator immediately sees the injected critique +
        persona reflections, instead of staring at a collapsed
-       section with no visible change after the chain runs. */
+       section with no visible change after the chain runs.
+       PR-C: the post-mortem badge moved out of the button into a
+       sibling chip below the divider. */
     render(
       <RoundSection
         discussionId="d1"
@@ -78,9 +83,8 @@ describe("RoundSection", () => {
     );
     const button = screen.getByRole("button");
     expect(button).toHaveAttribute("aria-expanded", "true");
-    expect(button.textContent).toContain("▼");
-    // 「📋 事後檢討」 badge surfaces in the header.
-    expect(button.textContent).toContain("📋");
+    // Sibling badge (not in the button anymore) carries the marker.
+    expect(screen.getByText(/📋/)).toBeInTheDocument();
   });
 
   it("auto-expands and shows the directive badge for non-post-mortem user_input turns", () => {
@@ -105,10 +109,11 @@ describe("RoundSection", () => {
     );
     const button = screen.getByRole("button");
     expect(button).toHaveAttribute("aria-expanded", "true");
-    // Owner-directive badge (✎ from the locale file).
-    expect(button.textContent).toContain("✎");
+    // Owner-directive badge (✎ from the locale file) renders as a
+    // sibling chip beside the divider.
+    expect(screen.getByText(/✎/)).toBeInTheDocument();
     // Post-mortem-specific badge must NOT fire for generic directives.
-    expect(button.textContent).not.toContain("📋");
+    expect(screen.queryByText(/📋/)).not.toBeInTheDocument();
   });
 
   it("hides turn bodies when collapsed", () => {

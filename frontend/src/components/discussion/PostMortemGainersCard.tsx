@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { useCollapsible } from "@/hooks/useCollapsible";
 import type { PostMortemResponse } from "./_helpers";
 
 /**
@@ -44,6 +45,15 @@ export function PostMortemGainersCard({
   data: PostMortemResponse | null;
 }) {
   const { t } = useTranslation();
+  // PR-C: Section B (daily top-N gainers leaderboard) is now
+  // collapsed by default — Section A (recommended self-eval) is the
+  // headline view operators want to see, and the leaderboard adds
+  // visual weight that competes with the transcript above. The
+  // collapse-pref persists per-user via useCollapsible.
+  const sectionB = useCollapsible(
+    "discussion.postMortem.daily_winners",
+    false,
+  );
   if (!data) return null;
 
   // Derive the working shape from the new payload, falling back to
@@ -154,52 +164,73 @@ export function PostMortemGainersCard({
         )}
       </div>
 
-      {/* Section B — daily top-N gainers */}
+      {/* Section B — daily top-N gainers. Collapsed by default since
+          PR-C: Section A above answers the operator's primary
+          question ("did the picks land?") and the leaderboard is a
+          deeper-dive view that doesn't need to compete for vertical
+          space on every load. */}
       <div className="space-y-1.5">
-        <h5 className="text-[11px] font-semibold text-purple-200/90 uppercase tracking-wider">
-          {t("discussion.post_mortem_daily_winners_title")}
-        </h5>
-        {dailyBlocks.length === 0 ? (
-          <p className="text-[11px] text-muted-foreground">
-            {t("discussion.post_mortem_daily_winners_empty")}
-          </p>
-        ) : (
-          <div className="grid gap-3"
-            style={{
-              gridTemplateColumns: `repeat(${dailyBlocks.length}, minmax(0, 1fr))`,
-            }}
-          >
-            {dailyBlocks.map((block, i) => (
-              <div key={block.trading_day} className="space-y-1">
-                <div className="text-[10px] text-muted-foreground/80">
-                  D{i + 1}
-                  <span className="font-mono">{block.trading_day}</span>
+        <button
+          type="button"
+          onClick={sectionB.toggle}
+          aria-expanded={sectionB.open}
+          className="w-full flex items-center gap-1.5 text-left hover:opacity-80 transition-opacity"
+        >
+          <span className="text-[10px] text-muted-foreground w-2.5 inline-block">
+            {sectionB.open ? "▼" : "▶"}
+          </span>
+          <h5 className="text-[11px] font-semibold text-purple-200/90 uppercase tracking-wider">
+            {t("discussion.post_mortem_daily_winners_title")}
+          </h5>
+          {!sectionB.open && dailyBlocks.length > 0 && (
+            <span className="text-[10px] text-muted-foreground ml-1">
+              ({dailyBlocks.length})
+            </span>
+          )}
+        </button>
+        {sectionB.open && (
+          dailyBlocks.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground">
+              {t("discussion.post_mortem_daily_winners_empty")}
+            </p>
+          ) : (
+            <div className="grid gap-3"
+              style={{
+                gridTemplateColumns: `repeat(${dailyBlocks.length}, minmax(0, 1fr))`,
+              }}
+            >
+              {dailyBlocks.map((block, i) => (
+                <div key={block.trading_day} className="space-y-1">
+                  <div className="text-[10px] text-muted-foreground/80">
+                    D{i + 1}
+                    <span className="font-mono">{block.trading_day}</span>
+                  </div>
+                  {block.gainers.length === 0 ? (
+                    <p className="text-[10px] text-muted-foreground/60">
+                      （無資料）
+                    </p>
+                  ) : (
+                    <ol className="space-y-0.5">
+                      {block.gainers.map((g, j) => (
+                        <li
+                          key={g.symbol}
+                          className="grid grid-cols-[1.2rem_minmax(0,1fr)_auto] items-center gap-1 text-[11px]"
+                        >
+                          <span className="text-muted-foreground/60 tabular-nums">
+                            {j + 1}.
+                          </span>
+                          <span className="font-mono font-bold text-foreground truncate">
+                            {g.symbol}
+                          </span>
+                          <PerfCell pct={g.change_pct} />
+                        </li>
+                      ))}
+                    </ol>
+                  )}
                 </div>
-                {block.gainers.length === 0 ? (
-                  <p className="text-[10px] text-muted-foreground/60">
-                    （無資料）
-                  </p>
-                ) : (
-                  <ol className="space-y-0.5">
-                    {block.gainers.map((g, j) => (
-                      <li
-                        key={g.symbol}
-                        className="grid grid-cols-[1.2rem_minmax(0,1fr)_auto] items-center gap-1 text-[11px]"
-                      >
-                        <span className="text-muted-foreground/60 tabular-nums">
-                          {j + 1}.
-                        </span>
-                        <span className="font-mono font-bold text-foreground truncate">
-                          {g.symbol}
-                        </span>
-                        <PerfCell pct={g.change_pct} />
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )
         )}
       </div>
 

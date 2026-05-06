@@ -596,7 +596,13 @@ async def test_proxy_lists_catalog_for_admin(
     )
     assert r.status_code == 200
     body = r.json()
-    assert len(body) == 80
+    # 77 = full catalog after the 2026-05 cleanup (#362) — three datasets
+    # (TaiwanStockBuyBack, TaiwanStockTradingDailyReport,
+    # TaiwanStockTradingDailyReportSecIdAgg) were dropped from
+    # `dataset_catalog` because FinMind removed them from the v4 enum.
+    # Two of those are kept in the `data.tw.finmind_datasets` registry to
+    # satisfy connector references but never reach `dataset_sources`.
+    assert len(body) == 77
     by_code = {row["dataset_code"]: row for row in body}
     assert "TaiwanStockPrice" in by_code
     assert by_code["TaiwanStockPrice"]["per_symbol"] is True
@@ -809,7 +815,7 @@ async def test_proxy_status_returns_collect_status_shape(
         "active_ingestion", "backfill", "recent_errors", "generated_at",
     ):
         assert k in body
-    assert body["catalog"]["seeded"] == 80
+    assert body["catalog"]["seeded"] == 77
 
 
 @pytest.mark.asyncio

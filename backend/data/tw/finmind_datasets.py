@@ -82,6 +82,13 @@ CHIP: tuple[DatasetSpec, ...] = (
     DatasetSpec("TaiwanStockMarginShortSaleSuspension", "暫停融券賣出表(融券回補日)", per_symbol=False),
     DatasetSpec("TaiwanDailyShortSaleBalances", "信用額度總量管制餘額表", per_symbol=False),
     DatasetSpec("TaiwanSecuritiesTraderInfo", "證券商資訊表", per_symbol=False),
+    # FinMind dropped this from `/api/v4/data` enum sometime before 2026-05;
+    # calls return 422. Kept in the registry because
+    # `data.tw.finmind_connector.get_broker_concentration_per_symbol` still
+    # references the name and the connector test enforces registration.
+    # NOT in `dataset_catalog` — won't be seeded into `dataset_sources`,
+    # so the chain / scheduler never tries it.
+    DatasetSpec("TaiwanStockTradingDailyReport", "台股分點資料表 (legacy; FinMind enum-removed)", per_symbol=True, sponsor_tier=True),
     DatasetSpec("TaiwanStockWarrantTradingDailyReport", "台股權證分點資料表 (by 股票代碼 / 券商代碼)", per_symbol=True, sponsor_tier=True),
     DatasetSpec("TaiwanStockGovernmentBankBuySell", "台股八大行庫買賣表", per_symbol=False, sponsor_tier=True),
     DatasetSpec("TaiwanTotalExchangeMarginMaintenance", "台灣大盤融資維持率", per_symbol=False),
@@ -159,6 +166,13 @@ OTHER: tuple[DatasetSpec, ...] = (
     DatasetSpec("TaiwanStockNews", "相關新聞", per_symbol=True, sponsor_tier=True),
     DatasetSpec("TaiwanBusinessIndicator", "台灣每月景氣對策信號表", per_symbol=False),
     DatasetSpec("TaiwanStockIndustryChain", "個體公司所屬產業鏈", per_symbol=True),
+    # FinMind dropped this from `/api/v4/data` enum sometime before 2026-05;
+    # calls return 422. Kept in the registry because
+    # `data.tw.finmind_connector.get_buyback_market_wide` still references
+    # the name and the connector test enforces registration. NOT in
+    # `dataset_catalog` — won't be seeded into `dataset_sources`, so the
+    # chain / scheduler never tries it.
+    DatasetSpec("TaiwanStockBuyBack", "庫藏股公告 (legacy; FinMind enum-removed)", per_symbol=False, sponsor_tier=True),
 )
 
 

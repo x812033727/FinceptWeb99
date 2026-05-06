@@ -8,6 +8,13 @@ export interface RoundSectionProps {
   round: number;
   turns: Turn[];
   personaName: (id: string) => string;
+  /**
+   * Override the default-folded behaviour for rounds the page wants
+   * surfaced immediately (e.g. the latest round in the transcript).
+   * Still respected by `useCollapsible`'s localStorage memory — the
+   * user can manually collapse and that decision sticks.
+   */
+  defaultExpanded?: boolean;
 }
 
 /**
@@ -21,16 +28,17 @@ export interface RoundSectionProps {
  *   - Auto-expanded for rounds that contain a `_user/user_input`
  *     turn (e.g. the post-mortem self-critique injection from
  *     PR #249), AND a 「📋 事後檢討」 / 「✎ 插話」 badge in the
- *     header. Without this the post-mortem flow looked silently
- *     broken — the chain succeeded but the new turns were buried
- *     in collapsed sections with no visual cue. (PR #268)
+ *     header.
+ *   - Auto-expanded when the parent passes `defaultExpanded` (used
+ *     for the latest round so newcomers see something instead of a
+ *     wall of folded headers — PR-B redesign).
  *
  * State persists to localStorage keyed by (discussionId, round),
  * so a reload preserves whatever the user manually expanded /
  * collapsed.
  */
 export function RoundSection({
-  discussionId, round, turns, personaName,
+  discussionId, round, turns, personaName, defaultExpanded,
 }: RoundSectionProps) {
   const { t } = useTranslation();
   // Detect post-mortem injection in this round so the header can
@@ -43,7 +51,7 @@ export function RoundSection({
   const hasUserInjection = turns.some((tn) => tn.stance === "user_input");
   const { open, toggle } = useCollapsible(
     `discussion.${discussionId}.round.${round}`,
-    Boolean(hasUserInjection),
+    Boolean(hasUserInjection || defaultExpanded),
   );
   return (
     <div className="my-3 first:mt-0">

@@ -44,11 +44,17 @@ def test_twse_covers_phase_a_to_b_ready_datasets():
     assert "TaiwanStockTotalReturnIndex" in twse
 
 
-def test_mops_covers_monthly_revenue_only_for_now():
-    """MOPS connector currently only handles monthly revenue; the
-    quarterly-statement scrapers are deferred per CLAUDE.md."""
+def test_mops_covers_monthly_revenue_and_quarterly_statements():
+    """MOPS connector covers monthly revenue + the 3 quarterly
+    statements (Phase 2A). Pin the exact set so dropping any of these
+    handlers shows up red."""
     mops = supported_datasets("mops")
-    assert mops == {"TaiwanStockMonthRevenue"}
+    assert mops == {
+        "TaiwanStockMonthRevenue",
+        "TaiwanStockFinancialStatements",
+        "TaiwanStockBalanceSheet",
+        "TaiwanStockCashFlowsStatement",
+    }
 
 
 def test_stub_sources_return_empty_set():

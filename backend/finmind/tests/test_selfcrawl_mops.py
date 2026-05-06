@@ -109,12 +109,14 @@ async def test_fetch_requires_symbol():
 
 @pytest.mark.asyncio
 async def test_fetch_unknown_dataset_raises_with_clear_message():
+    """Pick a MOPS dataset that's still unwired (TaiwanStockDividend
+    isn't in `_DISPATCH` — it'd need a separate MOPS endpoint)."""
     client = MopsClient()
     with pytest.raises(NotImplementedError) as exc:
         await client.fetch(
-            "TaiwanStockFinancialStatements", "2330",
+            "TaiwanStockDividend", "2330",
             date(2024, 1, 1), date(2024, 3, 31),
         )
     msg = str(exc.value)
-    assert "TaiwanStockFinancialStatements" in msg
+    assert "TaiwanStockDividend" in msg
     assert "MopsClient" in msg

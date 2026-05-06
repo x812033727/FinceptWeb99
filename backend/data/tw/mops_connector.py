@@ -54,6 +54,88 @@ def _to_float(v: Any) -> float | None:
         return None
 
 
+_DEFAULT_TIMEOUT = 12.0
+_HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+    # The MOPS backend doesn't validate Origin/Referer but keeping
+    # them in line with what the SPA sends helps if they tighten up.
+    "Origin": "https://mops.twse.com.tw",
+    "Referer": "https://mops.twse.com.tw/",
+    "User-Agent": "FinceptWeb/1.0 (+https://github.com/x812033727/FinceptWeb)",
+}
+
+
+async def _mops_post(
+    endpoint: str, payload: dict[str, Any], *,
+    timeout: float = _DEFAULT_TIMEOUT,
+) -> dict[str, Any] | None:
+    """POST `payload` to `<MOPS API base>/<endpoint>` and return the
+    parsed JSON `result` block, or None on any of:
+
+      - HTTP error (transport / 4xx / 5xx)
+      - body that isn't valid JSON
+      - upstream `code` indicating "no data" / failure (typically 406
+        for newly-listed companies that don't have a publication yet)
+
+    Centralises the headers + error-handling so each new statement
+    fetcher is just a thin wrapper. Per-symbol failures must NEVER
+    raise upwards — the cron iterates 1700+ symbols and one bad row
+    must not poison the whole batch.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            r = await c.post(
+                f"{_MOPS_API_BASE}/{endpoint}",
+                json=payload, headers=_HEADERS,
+            )
+        if r.status_code != 200:
+            log.warning("mops.http_error",
+                        extra={"endpoint": endpoint, "status": r.status_code,
+                               "payload": payload})
+            return None
+        body = r.json()
+    except httpx.HTTPError as exc:
+        log.warning("mops.transport_error",
+                    extra={"endpoint": endpoint, "error": str(exc)})
+        return None
+    except ValueError:
+        log.warning("mops.json_decode_failed",
+                    extra={"endpoint": endpoint, "payload": payload})
+        return None
+
+    if not isinstance(body, dict):
+        return None
+    code = body.get("code")
+    if code != 200 and code != "200":
+        # 406 = "查無相符資料" for newly-listed / delisted symbols. Not
+        # an error — just no data — so log at info, return None for
+        # the wrapper to translate into an empty list.
+        if code not in (406, "406"):
+            log.info("mops.upstream_code",
+                     extra={"endpoint": endpoint, "code": code,
+                            "message": body.get("message")})
+        return None
+
+    result = body.get("result")
+    if not isinstance(result, dict | list):
+        return None
+    return result if isinstance(result, dict) else {"data": result}
+
+
+def _extract_rows(result: Any) -> list[dict[str, Any]]:
+    """MOPS wraps row arrays differently across endpoints: sometimes
+    `result.data`, sometimes `result.rows`, sometimes a flat list at
+    `result` itself. Tolerate every observed shape."""
+    if isinstance(result, list):
+        return [r for r in result if isinstance(r, dict)]
+    if isinstance(result, dict):
+        rows = result.get("data") or result.get("rows") or result.get("list") or []
+        if isinstance(rows, list):
+            return [r for r in rows if isinstance(r, dict)]
+    return []
+
+
 def _normalize_row(symbol: str, raw: dict[str, Any]) -> dict[str, Any] | None:
     """Convert a single MOPS API result row to the canonical
     `{symbol, date, revenue, revenue_yoy, revenue_mom}` shape used by
@@ -120,7 +202,7 @@ def _normalize_row(symbol: str, raw: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def get_monthly_revenue_recent(
-    symbol: str, *, timeout: float = 12.0,
+    symbol: str, *, timeout: float = _DEFAULT_TIMEOUT,
 ) -> list[dict[str, Any]]:
     """Pull the most recent monthly-revenue history for a single
     listed company from the MOPS new-SPA backend.
@@ -130,81 +212,239 @@ async def get_monthly_revenue_recent(
     calling once per (symbol, year, month) tuple.
 
     Returns a list of `{symbol, date, revenue, revenue_yoy,
-    revenue_mom}` rows. Empty list on:
-      - HTTP error (connection / 4xx / 5xx)
-      - MOPS `code` != 200 (e.g. 406 "查無相符資料" for newly-listed
-        / delisted symbols)
-      - Unparseable response body
-
-    Raises only on truly catastrophic errors (e.g. the caller passed
-    a non-string). Per-symbol failures must not abort the cron's
-    batch over 1700+ symbols.
+    revenue_mom}` rows. Empty list on every transport / upstream
+    failure mode (handled by the shared `_mops_post` helper).
     """
-    payload = {
-        "companyId": str(symbol).strip(),
-        "dataType": "1",      # 1 = IFRS unified format
-        "month": "",          # empty = server picks recent range
-        "year": "",
-        "subsidiaryCompanyId": "",
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        # The MOPS backend doesn't validate Origin/Referer but keeping
-        # them in line with what the SPA sends helps if they tighten up.
-        "Origin": "https://mops.twse.com.tw",
-        "Referer": "https://mops.twse.com.tw/",
-        "User-Agent": "FinceptWeb/1.0 (+https://github.com/x812033727/FinceptWeb)",
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as c:
-            r = await c.post(
-                f"{_MOPS_API_BASE}/t05st10_ifrs",
-                json=payload, headers=headers,
-            )
-        if r.status_code != 200:
-            log.warning("mops.revenue.http_error",
-                        extra={"symbol": symbol, "status": r.status_code})
-            return []
-        body = r.json()
-    except httpx.HTTPError as exc:
-        log.warning("mops.revenue.transport_error",
-                    extra={"symbol": symbol, "error": str(exc)})
+    result = await _mops_post(
+        "t05st10_ifrs",
+        {
+            "companyId": str(symbol).strip(),
+            "dataType": "1",      # 1 = IFRS unified format
+            "month": "",          # empty = server picks recent range
+            "year": "",
+            "subsidiaryCompanyId": "",
+        },
+        timeout=timeout,
+    )
+    if result is None:
         return []
-    except ValueError:
-        # JSON decode failure — MOPS sometimes returns the SPA HTML
-        # under load.
-        log.warning("mops.revenue.json_decode_failed",
-                    extra={"symbol": symbol})
-        return []
-
-    if not isinstance(body, dict):
-        return []
-    code = body.get("code")
-    if code != 200 and code != "200":
-        # 406 = "查無相符資料" is normal for newly-listed companies
-        # without a publication yet; not an error.
-        if code not in (406, "406"):
-            log.info("mops.revenue.upstream_code",
-                     extra={"symbol": symbol, "code": code,
-                            "message": body.get("message")})
-        return []
-
-    result = body.get("result") or {}
-    # MOPS can wrap the row list in `result.data` or `result.rows`
-    # depending on the report variant; tolerate both + a flat list.
-    rows: list[Any] = []
-    if isinstance(result, list):
-        rows = result
-    elif isinstance(result, dict):
-        rows = result.get("data") or result.get("rows") or []
-
+    rows = _extract_rows(result)
     out: list[dict[str, Any]] = []
     for raw in rows:
-        if not isinstance(raw, dict):
-            continue
         normalized = _normalize_row(symbol, raw)
         if normalized is not None:
             out.append(normalized)
     return out
+
+
+# ── Quarterly statements (Phase 2A) ────────────────────────────────
+#
+# The new MOPS SPA backend serves each statement type via a separate
+# JSON POST endpoint:
+#   t164sb04_ifrs — 綜合損益表 (income statement)
+#   t164sb03_ifrs — 資產負債表 (balance sheet)
+#   t164sb05_ifrs — 現金流量表 (cash flow statement)
+#
+# Each takes `(companyId, year, season)` where `season ∈ {1, 2, 3, 4}`
+# (Q1=1 ... Q4=4). Year is published-year (CE), so 2026 Q1 = the
+# statement filed in Mar-May 2026 covering the Jan-Mar 2026 quarter.
+#
+# Output of every fetcher is a flat list of FinMind-shaped rows:
+#   {stock_id, date, type, value}
+# where `type` is the canonical English line-item name (Revenue,
+# OperatingIncome, ...) that the runner's `_pivot_*` batch_transform
+# expects. The pivot groups by (stock_id, date) and projects to the
+# typed columns + raw JSONB blob — see mappings.py:_pivot_statement.
+
+# Chinese row-label → English canonical type. Only the headline
+# line-items are mapped (the rest land in `raw` JSONB anyway via
+# the pivot's per-line catch-all). MOPS sometimes interleaves
+# Traditional and Simplified variants — list both where they occur.
+_INCOME_LABEL_MAP: dict[str, str] = {
+    "營業收入合計":      "OperatingRevenue",
+    "營業收入":          "OperatingRevenue",
+    "營業毛利":          "GrossProfit",
+    "營業利益":          "OperatingIncome",
+    "營業利益(損失)":    "OperatingIncome",
+    "本期淨利":          "NetIncome",
+    "本期淨利(淨損)":    "NetIncome",
+    "母公司業主(淨利/損)": "NetIncomeAttributableToParent",
+    "歸屬於母公司業主":  "NetIncomeAttributableToParent",
+    "基本每股盈餘":      "BasicEPS",
+    "基本每股盈餘(元)":  "BasicEPS",
+}
+
+_BALANCE_LABEL_MAP: dict[str, str] = {
+    "資產總額":           "TotalAssets",
+    "資產總計":           "TotalAssets",
+    "負債總額":           "TotalLiabilities",
+    "負債總計":           "TotalLiabilities",
+    "權益總額":           "TotalEquity",
+    "權益總計":           "TotalEquity",
+    "歸屬於母公司業主之權益": "Equity",
+    "現金及約當現金":     "CashAndCashEquivalents",
+}
+
+_CASHFLOW_LABEL_MAP: dict[str, str] = {
+    "營業活動之淨現金流入(流出)": "CashFlowsFromOperatingActivities",
+    "投資活動之淨現金流入(流出)": "CashFlowsFromInvestingActivities",
+    "籌資活動之淨現金流入(流出)": "CashFlowsFromFinancingActivities",
+    "營業活動之現金流量":         "CashFlowsFromOperatingActivities",
+    "投資活動之現金流量":         "CashFlowsFromInvestingActivities",
+    "籌資活動之現金流量":         "CashFlowsFromFinancingActivities",
+}
+
+
+def _quarter_to_iso_period_end(year: int, quarter: int) -> str | None:
+    """`(2024, 1)` → `'2024-03-31'` (statement cutoff date). Returns
+    None for invalid (year, quarter) tuples — caller drops the row."""
+    if not 1 <= quarter <= 4:
+        return None
+    if year < 1900:  # treat <1900 as ROC; +1911
+        year += 1911
+    month = quarter * 3
+    day = 31 if month in (3, 12) else 30
+    return f"{year:04d}-{month:02d}-{day:02d}"
+
+
+def _label_lookup(raw_row: dict[str, Any]) -> tuple[str, Any] | None:
+    """Pull the (label, value) tuple from one MOPS statement row.
+
+    MOPS rotates between several field-name conventions across
+    endpoint revisions. Handle the documented ones — return None when
+    a row is structurally unparseable so the caller can drop it."""
+    label = (
+        raw_row.get("itemName")
+        or raw_row.get("name")
+        or raw_row.get("title")
+        or raw_row.get("項目")
+        or raw_row.get("會計項目")
+    )
+    if not label:
+        return None
+    label = str(label).strip()
+    if not label:
+        return None
+    # Per-period value field varies across endpoints. Common keys:
+    #   `value` / `currentValue` / `amount` / `本期金額`
+    value = (
+        raw_row.get("value")
+        if "value" in raw_row else None
+    )
+    if value is None:
+        for k in ("currentValue", "amount", "本期金額", "金額", "currentPeriodAmount"):
+            if k in raw_row and raw_row[k] not in (None, ""):
+                value = raw_row[k]
+                break
+    return label, value
+
+
+def _flatten_statement_rows(
+    symbol: str, year: int, quarter: int,
+    rows: list[dict[str, Any]], label_map: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Convert a MOPS statement's row list to the FinMind shape the
+    runner's `_pivot_statement` expects:
+        {stock_id, date, type, value}
+
+    Each row in MOPS is one line-item (e.g. `營業收入合計`); we map
+    its Chinese label to a canonical English `type` and emit one
+    output row. Rows whose label isn't in `label_map` are STILL
+    emitted under the original Chinese label — the pivot stores
+    them in `raw` JSONB so ad-hoc queries can still reach them
+    even when they aren't promoted to typed columns.
+    """
+    period_end = _quarter_to_iso_period_end(year, quarter)
+    if period_end is None:
+        return []
+    out: list[dict[str, Any]] = []
+    for raw in rows:
+        pair = _label_lookup(raw)
+        if pair is None:
+            continue
+        label, value = pair
+        canonical = label_map.get(label, label)
+        out.append({
+            "stock_id": symbol,
+            "date":     period_end,
+            "type":     canonical,
+            "value":    _to_float(value),
+        })
+    return out
+
+
+async def get_income_statement(
+    symbol: str, year: int, quarter: int, *,
+    timeout: float = _DEFAULT_TIMEOUT,
+) -> list[dict[str, Any]]:
+    """綜合損益表 for one (symbol, year, quarter) tuple via MOPS API
+    `t164sb04_ifrs`. Returns rows in FinMind shape so the runner's
+    `_pivot_income_statement` projects unchanged.
+
+    Empty list on any upstream failure / "no data" response — see
+    `_mops_post` for the centralised error handling. Does NOT raise.
+    """
+    result = await _mops_post(
+        "t164sb04_ifrs",
+        {
+            "companyId": str(symbol).strip(),
+            "dataType":  "1",
+            "year":      str(year),
+            "season":    str(quarter),
+            "subsidiaryCompanyId": "",
+        },
+        timeout=timeout,
+    )
+    if result is None:
+        return []
+    return _flatten_statement_rows(
+        symbol, year, quarter, _extract_rows(result), _INCOME_LABEL_MAP,
+    )
+
+
+async def get_balance_sheet(
+    symbol: str, year: int, quarter: int, *,
+    timeout: float = _DEFAULT_TIMEOUT,
+) -> list[dict[str, Any]]:
+    """資產負債表 via MOPS API `t164sb03_ifrs`. Same shape contract
+    as `get_income_statement`."""
+    result = await _mops_post(
+        "t164sb03_ifrs",
+        {
+            "companyId": str(symbol).strip(),
+            "dataType":  "1",
+            "year":      str(year),
+            "season":    str(quarter),
+            "subsidiaryCompanyId": "",
+        },
+        timeout=timeout,
+    )
+    if result is None:
+        return []
+    return _flatten_statement_rows(
+        symbol, year, quarter, _extract_rows(result), _BALANCE_LABEL_MAP,
+    )
+
+
+async def get_cash_flow_statement(
+    symbol: str, year: int, quarter: int, *,
+    timeout: float = _DEFAULT_TIMEOUT,
+) -> list[dict[str, Any]]:
+    """現金流量表 via MOPS API `t164sb05_ifrs`. Same shape contract
+    as `get_income_statement`."""
+    result = await _mops_post(
+        "t164sb05_ifrs",
+        {
+            "companyId": str(symbol).strip(),
+            "dataType":  "1",
+            "year":      str(year),
+            "season":    str(quarter),
+            "subsidiaryCompanyId": "",
+        },
+        timeout=timeout,
+    )
+    if result is None:
+        return []
+    return _flatten_statement_rows(
+        symbol, year, quarter, _extract_rows(result), _CASHFLOW_LABEL_MAP,
+    )

@@ -224,3 +224,167 @@ def test_normalize_row_handles_alternate_revenue_field_names():
     assert out["revenue"] == 5_000
     assert out["revenue_yoy"] == 10.0
     assert out["revenue_mom"] == -2.0
+
+
+# ── Quarterly statements (Phase 2A) ───────────────────────────────
+
+
+def test_quarter_to_iso_period_end_picks_correct_month_day():
+    assert mops._quarter_to_iso_period_end(2024, 1) == "2024-03-31"
+    assert mops._quarter_to_iso_period_end(2024, 2) == "2024-06-30"
+    assert mops._quarter_to_iso_period_end(2024, 3) == "2024-09-30"
+    assert mops._quarter_to_iso_period_end(2024, 4) == "2024-12-31"
+
+
+def test_quarter_to_iso_period_end_handles_roc_year():
+    """Year < 1900 → treat as ROC, +1911."""
+    assert mops._quarter_to_iso_period_end(113, 1) == "2024-03-31"
+
+
+def test_quarter_to_iso_period_end_returns_none_for_invalid_quarter():
+    assert mops._quarter_to_iso_period_end(2024, 0) is None
+    assert mops._quarter_to_iso_period_end(2024, 5) is None
+
+
+def test_label_lookup_finds_value_under_alternate_key_names():
+    """MOPS rotates between `value` / `currentValue` / `amount` /
+    `本期金額` for the per-period numeric. Helper must read all of them."""
+    assert mops._label_lookup({"itemName": "營業收入合計", "value": 1234}) == ("營業收入合計", 1234)
+    assert mops._label_lookup({"name": "營業利益", "currentValue": "5000"}) == ("營業利益", "5000")
+    assert mops._label_lookup({"項目": "本期淨利", "本期金額": "200"}) == ("本期淨利", "200")
+    # No label → None.
+    assert mops._label_lookup({"value": 1}) is None
+
+
+@pytest.mark.asyncio
+async def test_get_income_statement_translates_chinese_labels():
+    """t164sb04_ifrs returns Chinese row labels — connector promotes
+    the headline ones to canonical English types so the runner's
+    `_pivot_income_statement` can map to typed columns. Other labels
+    pass through untranslated for the pivot's `raw` JSONB blob."""
+    payload = {
+        "code": 200,
+        "result": {"data": [
+            {"itemName": "營業收入合計", "value": "100,000"},
+            {"itemName": "營業毛利",     "value": "30,000"},
+            {"itemName": "營業利益",     "value": "20,000"},
+            {"itemName": "本期淨利",     "value": "15,000"},
+            {"itemName": "基本每股盈餘(元)", "value": "5.50"},
+            # Non-headline label — passes through with original Chinese.
+            {"itemName": "其他綜合損益",   "value": "100"},
+        ]},
+    }
+    patcher, _ = _mock_post(payload)
+    with patcher:
+        rows = await mops.get_income_statement("2330", 2024, 1)
+
+    by_type = {r["type"]: r for r in rows}
+    assert by_type["OperatingRevenue"]["value"] == 100_000
+    assert by_type["OperatingRevenue"]["date"] == "2024-03-31"
+    assert by_type["OperatingRevenue"]["stock_id"] == "2330"
+    assert by_type["GrossProfit"]["value"] == 30_000
+    assert by_type["OperatingIncome"]["value"] == 20_000
+    assert by_type["NetIncome"]["value"] == 15_000
+    assert by_type["BasicEPS"]["value"] == 5.50
+    # Non-headline label preserved as-is for the pivot's raw blob.
+    assert "其他綜合損益" in by_type
+
+
+@pytest.mark.asyncio
+async def test_get_balance_sheet_promotes_headline_labels():
+    payload = {
+        "code": 200,
+        "result": {"data": [
+            {"itemName": "資產總額",       "value": "1,000,000"},
+            {"itemName": "負債總額",       "value": "400,000"},
+            {"itemName": "權益總額",       "value": "600,000"},
+            {"itemName": "現金及約當現金", "value": "150,000"},
+        ]},
+    }
+    patcher, _ = _mock_post(payload)
+    with patcher:
+        rows = await mops.get_balance_sheet("2330", 2024, 2)
+
+    by_type = {r["type"]: r for r in rows}
+    assert by_type["TotalAssets"]["value"] == 1_000_000
+    assert by_type["TotalAssets"]["date"] == "2024-06-30"
+    assert by_type["TotalLiabilities"]["value"] == 400_000
+    assert by_type["TotalEquity"]["value"] == 600_000
+    assert by_type["CashAndCashEquivalents"]["value"] == 150_000
+
+
+@pytest.mark.asyncio
+async def test_get_cash_flow_statement_promotes_headline_labels():
+    payload = {
+        "code": 200,
+        "result": {"data": [
+            {"itemName": "營業活動之淨現金流入(流出)", "value": "50,000"},
+            {"itemName": "投資活動之淨現金流入(流出)", "value": "-20,000"},
+            {"itemName": "籌資活動之淨現金流入(流出)", "value": "-15,000"},
+        ]},
+    }
+    patcher, _ = _mock_post(payload)
+    with patcher:
+        rows = await mops.get_cash_flow_statement("2330", 2024, 3)
+
+    by_type = {r["type"]: r for r in rows}
+    assert by_type["CashFlowsFromOperatingActivities"]["value"] == 50_000
+    assert by_type["CashFlowsFromInvestingActivities"]["value"] == -20_000
+    assert by_type["CashFlowsFromFinancingActivities"]["value"] == -15_000
+    assert by_type["CashFlowsFromOperatingActivities"]["date"] == "2024-09-30"
+
+
+@pytest.mark.asyncio
+async def test_quarterly_statement_returns_empty_on_406():
+    """Calling a quarter that hasn't been published yet (e.g. asking
+    for 2026Q4 in May 2026) returns code=406 — not an error, just
+    empty. The wrapper must NOT raise so a multi-quarter backfill
+    keeps progressing."""
+    patcher, _ = _mock_post({"code": 406, "message": "查無相符資料"})
+    with patcher:
+        rows = await mops.get_income_statement("2330", 2026, 4)
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_quarterly_statement_returns_empty_on_transport_error():
+    patcher, _ = _mock_post(raise_exc=httpx.ConnectTimeout("timeout"))
+    with patcher:
+        rows = await mops.get_balance_sheet("2330", 2024, 1)
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_quarterly_statement_drops_rows_without_label():
+    """A row missing both `itemName` and any alternate label key must
+    be silently dropped — emitting it would land as `type=""` which
+    the pivot would happily pivot into a useless row."""
+    payload = {
+        "code": 200,
+        "result": {"data": [
+            {"itemName": "營業收入合計", "value": "100"},
+            {"value": "999"},  # no label at all → drop
+            {"itemName": "", "value": "888"},  # empty label → drop
+            {"itemName": "本期淨利", "value": "10"},
+        ]},
+    }
+    patcher, _ = _mock_post(payload)
+    with patcher:
+        rows = await mops.get_income_statement("2330", 2024, 1)
+    assert {r["type"] for r in rows} == {"OperatingRevenue", "NetIncome"}
+
+
+def test_extract_rows_handles_every_observed_envelope_shape():
+    """`_mops_post` returns either a flat-list `result` or a dict
+    wrapping the rows under `data` / `rows` / `list`. Walk through
+    every documented shape."""
+    assert mops._extract_rows([{"a": 1}, {"b": 2}]) == [{"a": 1}, {"b": 2}]
+    assert mops._extract_rows({"data": [{"a": 1}]}) == [{"a": 1}]
+    assert mops._extract_rows({"rows": [{"a": 1}]}) == [{"a": 1}]
+    assert mops._extract_rows({"list": [{"a": 1}]}) == [{"a": 1}]
+    # Junk shapes → empty.
+    assert mops._extract_rows(None) == []
+    assert mops._extract_rows("oops") == []
+    assert mops._extract_rows({}) == []
+    # Non-dict items inside lists must be filtered.
+    assert mops._extract_rows({"data": [{"a": 1}, "junk", 42]}) == [{"a": 1}]

@@ -905,6 +905,129 @@ async def test_walk_forward_allows_new_run_after_previous_terminal(
     assert r.status_code == 200, r.text
 
 
+# ── audit Workflow Win #1: brier-history endpoint ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_brier_history_returns_404_for_unknown_strategy(
+    client: AsyncClient,
+):
+    h = await _register(client, "brier_history_404@example.com")
+    r = await client.get(
+        f"/api/discussion/strategies/{uuid.uuid4()}/brier-history",
+        headers=h,
+    )
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_brier_history_returns_400_for_bad_window(
+    client: AsyncClient,
+):
+    h = await _register(client, "brier_history_window@example.com")
+    sid = await _create_strategy_via_api(client, h)
+    r = await client.get(
+        f"/api/discussion/strategies/{sid}/brier-history?window_days=3",
+        headers=h,
+    )
+    assert r.status_code == 400
+    assert "window_days" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_brier_history_returns_empty_list_when_no_resolved_sweeps(
+    client: AsyncClient,
+):
+    """Cold-start strategy returns []; the frontend renders a
+    "data still warming up" placeholder rather than erroring."""
+    h = await _register(client, "brier_history_empty@example.com")
+    sid = await _create_strategy_via_api(client, h)
+    r = await client.get(
+        f"/api/discussion/strategies/{sid}/brier-history",
+        headers=h,
+    )
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+@pytest.mark.asyncio
+async def test_brier_history_returns_points_for_resolved_sweeps(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """Happy path — completed sweeps with brier_score on at
+    least one discussion show up as ordered datapoints."""
+    from datetime import UTC as _UTC, date as _date, datetime as _dt, timedelta as _td
+
+    from sqlalchemy import select
+    from models.backtest_sweep import BacktestSweep
+    from models.discussion import Discussion as _Disc
+    from models.user import User as _User
+
+    h = await _register(client, "brier_history_points@example.com")
+    sid = await _create_strategy_via_api(client, h)
+
+    user = (await db_session.execute(
+        select(_User).where(_User.email == "brier_history_points@example.com"),
+    )).scalar_one()
+
+    sweep = BacktestSweep(
+        id=uuid.uuid4(), owner_id=user.id,
+        topic="t", rules="r", market="TW",
+        persona_ids=["bull"],
+        anchor_date=_date(2026, 4, 1),
+        trading_days_count=5, rounds_per_discussion=1,
+        concurrency=1, auto_post_mortem=False,
+        strategy_id=uuid.UUID(sid),
+        status="completed",
+        completed_at=_dt.now(_UTC) - _td(days=2),
+    )
+    db_session.add(sweep)
+    await db_session.commit()
+    await db_session.refresh(sweep)
+
+    disc = _Disc(
+        id=uuid.uuid4(), owner_id=user.id,
+        topic="t", rules="r", persona_ids=["bull"],
+        market="TW", status="done", current_round=1,
+        sweep_id=sweep.id,
+        as_of_date=_date(2026, 4, 1),
+        verdict="win",
+        brier_score=0.15,
+        calibrated_brier_score=0.10,
+        outcome_vector=[
+            {"symbol": "X", "confidence": 0.8, "outcome_binary": 1},
+        ],
+    )
+    db_session.add(disc)
+    await db_session.commit()
+
+    r = await client.get(
+        f"/api/discussion/strategies/{sid}/brier-history",
+        headers=h,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) == 1
+    assert body[0]["sweep_id"] == str(sweep.id)
+    assert body[0]["raw_brier"] == pytest.approx(0.15, abs=1e-6)
+    assert body[0]["calibrated_brier"] == pytest.approx(0.10, abs=1e-6)
+    assert body[0]["samples"] == 1
+
+
+@pytest.mark.asyncio
+async def test_brier_history_owner_scoped_returns_404_for_others(
+    client: AsyncClient,
+):
+    a = await _register(client, "brier_history_owner_a@example.com")
+    b = await _register(client, "brier_history_owner_b@example.com")
+    sid = await _create_strategy_via_api(client, a)
+    r = await client.get(
+        f"/api/discussion/strategies/{sid}/brier-history",
+        headers=b,
+    )
+    assert r.status_code == 404
+
+
 @pytest.mark.asyncio
 async def test_walk_forward_validates_bounds(
     client: AsyncClient,

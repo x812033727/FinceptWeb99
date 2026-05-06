@@ -61,6 +61,7 @@ from api.discussion.schemas import (
     PostMortemWinnerOut,
     ScoreboardResponse,
     ScoreboardRow,
+    StrategyBrierHistoryPoint,
     WalkForwardFoldOut,
     WalkForwardPlanResponse,
     WalkForwardRequest,
@@ -1272,6 +1273,50 @@ async def learn_strategy_weights(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return PersonaWeightLearnResponse(**result)
+
+
+@router.get(
+    "/strategies/{template_id}/brier-history",
+    response_model=list[StrategyBrierHistoryPoint],
+)
+async def strategy_brier_history(
+    template_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    window_days: int = 90,
+):
+    """Per-sweep Brier time-series for one strategy template,
+    used by the frontend's BrierTrendChart to show whether the
+    learning loop is actually reducing prediction error over
+    time. Default window 90 days; clamp to [7, 730] so a
+    rogue caller can't trigger a full-table scan.
+
+    Owner-scoped + soft-delete-tolerant (matches /aggregate's
+    permissions). Returns `[]` when no completed sweep with a
+    resolved discussion exists in the window — frontend renders
+    a "data still warming up" placeholder."""
+    if window_days < 7 or window_days > 730:
+        raise HTTPException(
+            status_code=400,
+            detail=f"window_days must be in [7, 730], got {window_days}",
+        )
+    from services import strategy_template_service as tsvc
+    from services import sweep_aggregate_service as agg
+
+    row = await tsvc.get_template(
+        db, template_id=template_id,
+        owner_id=_coerce_owner_uuid(user),
+        include_deleted=True,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    points = await agg.fetch_strategy_brier_history(
+        db,
+        owner_id=_coerce_owner_uuid(user),
+        strategy_id=template_id,
+        window_days=window_days,
+    )
+    return [StrategyBrierHistoryPoint(**p) for p in points]
 
 
 @router.delete(

@@ -408,6 +408,21 @@ class BacktestSweepResponse(BaseModel):
     cancelled_at: datetime | None
 
 
+class StrategyBrierHistoryPoint(BaseModel):
+    """One point in a strategy's per-sweep Brier time-series.
+    Each sweep that has at least one resolved discussion
+    contributes one point. NULLs surface for sweeps where the
+    metric isn't applicable (e.g. pre-PR-C0 raw_brier or
+    cold-start calibrated_brier with partial coverage)."""
+    sweep_id: uuid.UUID
+    anchor_date: str | None
+    completed_at: datetime | None
+    fold_kind: str | None
+    raw_brier: float | None
+    calibrated_brier: float | None
+    samples: int
+
+
 class WalkForwardRequest(BaseModel):
     """PR-A1 follow-up — kick off a walk-forward run for a strategy.
 

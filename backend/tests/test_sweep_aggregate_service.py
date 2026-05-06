@@ -587,6 +587,216 @@ async def test_aggregate_calibrated_brier_skips_uncalibrated_discussions(
     assert payload["calibrated_brier_samples"] == 1
 
 
+# ── fetch_strategy_brier_history (audit Workflow Win #1) ────────────
+
+
+@pytest.mark.asyncio
+async def test_brier_history_empty_when_no_sweeps(
+    db_session: AsyncSession, owner: User,
+):
+    out = await svc.fetch_strategy_brier_history(
+        db_session,
+        owner_id=owner.id,
+        strategy_id=uuid.uuid4(),
+        window_days=30,
+    )
+    assert out == []
+
+
+@pytest.mark.asyncio
+async def test_brier_history_returns_one_point_per_sweep(
+    db_session: AsyncSession, owner: User,
+):
+    """Two completed sweeps with resolved discussions = two
+    points, ordered by completion time ascending."""
+    from datetime import UTC as _UTC, datetime as _dt, timedelta as _td
+
+    from models.discussion_strategy_template import (
+        DiscussionStrategyTemplate,
+    )
+    tmpl = DiscussionStrategyTemplate(
+        id=uuid.uuid4(),
+        owner_id=owner.id,
+        name="trend test",
+        topic="t", rules="r", market="TW",
+        persona_ids=["a"],
+        default_rounds=1,
+        default_concurrency=1,
+        default_auto_post_mortem=False,
+    )
+    db_session.add(tmpl)
+    await db_session.commit()
+
+    older = _make_sweep(owner.id, completed=["2026-04-01"])
+    older.strategy_id = tmpl.id
+    older.status = "completed"
+    older.completed_at = _dt.now(_UTC) - _td(days=20)
+    newer = _make_sweep(owner.id, completed=["2026-05-01"])
+    newer.strategy_id = tmpl.id
+    newer.status = "completed"
+    newer.completed_at = _dt.now(_UTC) - _td(days=2)
+    db_session.add_all([older, newer])
+    await db_session.commit()
+    await db_session.refresh(older)
+    await db_session.refresh(newer)
+
+    older_disc = _make_disc(
+        owner_id=owner.id, sweep_id=older.id, verdict="loss",
+    )
+    older_disc.brier_score = 0.30
+    older_disc.calibrated_brier_score = 0.28
+    older_disc.outcome_vector = [
+        {"symbol": "X", "confidence": 0.7, "outcome_binary": 0},
+    ]
+    newer_disc = _make_disc(
+        owner_id=owner.id, sweep_id=newer.id, verdict="win",
+    )
+    newer_disc.brier_score = 0.10
+    newer_disc.calibrated_brier_score = 0.08
+    newer_disc.outcome_vector = [
+        {"symbol": "Y", "confidence": 0.7, "outcome_binary": 1},
+    ]
+    db_session.add_all([older_disc, newer_disc])
+    await db_session.commit()
+
+    points = await svc.fetch_strategy_brier_history(
+        db_session,
+        owner_id=owner.id,
+        strategy_id=tmpl.id,
+        window_days=90,
+    )
+    assert len(points) == 2
+    # Ordered ascending — older sweep first
+    assert points[0]["raw_brier"] == pytest.approx(0.30, abs=1e-6)
+    assert points[1]["raw_brier"] == pytest.approx(0.10, abs=1e-6)
+    assert points[0]["calibrated_brier"] == pytest.approx(0.28, abs=1e-6)
+    assert points[1]["calibrated_brier"] == pytest.approx(0.08, abs=1e-6)
+    # Sweep IDs preserved as strings
+    assert points[0]["sweep_id"] == str(older.id)
+    assert points[1]["sweep_id"] == str(newer.id)
+
+
+@pytest.mark.asyncio
+async def test_brier_history_excludes_pending_sweeps(
+    db_session: AsyncSession, owner: User,
+):
+    """Sweeps that are still running shouldn't appear — would
+    show as flat lines with no datapoint and confuse the chart."""
+    from datetime import UTC as _UTC, datetime as _dt, timedelta as _td
+
+    from models.discussion_strategy_template import (
+        DiscussionStrategyTemplate,
+    )
+    tmpl = DiscussionStrategyTemplate(
+        id=uuid.uuid4(),
+        owner_id=owner.id, name="t",
+        topic="t", rules="r", market="TW",
+        persona_ids=["a"],
+        default_rounds=1, default_concurrency=1,
+        default_auto_post_mortem=False,
+    )
+    db_session.add(tmpl)
+    await db_session.commit()
+
+    running = _make_sweep(owner.id)
+    running.strategy_id = tmpl.id
+    running.status = "running"   # still in-flight
+    running.completed_at = None
+    completed = _make_sweep(owner.id, completed=["2026-05-01"])
+    completed.strategy_id = tmpl.id
+    completed.status = "completed"
+    completed.completed_at = _dt.now(_UTC) - _td(days=1)
+    db_session.add_all([running, completed])
+    await db_session.commit()
+    await db_session.refresh(running)
+    await db_session.refresh(completed)
+
+    completed_disc = _make_disc(
+        owner_id=owner.id, sweep_id=completed.id, verdict="win",
+    )
+    completed_disc.brier_score = 0.12
+    completed_disc.outcome_vector = [
+        {"symbol": "X", "confidence": 0.7, "outcome_binary": 1},
+    ]
+    db_session.add(completed_disc)
+    await db_session.commit()
+
+    points = await svc.fetch_strategy_brier_history(
+        db_session,
+        owner_id=owner.id, strategy_id=tmpl.id, window_days=90,
+    )
+    assert len(points) == 1
+    assert points[0]["sweep_id"] == str(completed.id)
+
+
+@pytest.mark.asyncio
+async def test_brier_history_respects_window_cutoff(
+    db_session: AsyncSession, owner: User,
+):
+    """Sweeps that completed >window_days ago must NOT appear.
+    Operator's trend chart cares about recent direction, not
+    ancient history."""
+    from datetime import UTC as _UTC, datetime as _dt, timedelta as _td
+
+    from models.discussion_strategy_template import (
+        DiscussionStrategyTemplate,
+    )
+    tmpl = DiscussionStrategyTemplate(
+        id=uuid.uuid4(),
+        owner_id=owner.id, name="t",
+        topic="t", rules="r", market="TW",
+        persona_ids=["a"],
+        default_rounds=1, default_concurrency=1,
+        default_auto_post_mortem=False,
+    )
+    db_session.add(tmpl)
+    await db_session.commit()
+
+    ancient = _make_sweep(owner.id, completed=["2024-01-01"])
+    ancient.strategy_id = tmpl.id
+    ancient.status = "completed"
+    ancient.completed_at = _dt.now(_UTC) - _td(days=400)
+    recent = _make_sweep(owner.id, completed=["2026-05-01"])
+    recent.strategy_id = tmpl.id
+    recent.status = "completed"
+    recent.completed_at = _dt.now(_UTC) - _td(days=2)
+    db_session.add_all([ancient, recent])
+    await db_session.commit()
+    await db_session.refresh(ancient)
+    await db_session.refresh(recent)
+    ancient_disc = _make_disc(
+        owner_id=owner.id, sweep_id=ancient.id, verdict="loss",
+    )
+    ancient_disc.brier_score = 0.40
+    ancient_disc.outcome_vector = [
+        {"symbol": "X", "confidence": 0.7, "outcome_binary": 0},
+    ]
+    recent_disc = _make_disc(
+        owner_id=owner.id, sweep_id=recent.id, verdict="win",
+    )
+    recent_disc.brier_score = 0.10
+    recent_disc.outcome_vector = [
+        {"symbol": "Y", "confidence": 0.7, "outcome_binary": 1},
+    ]
+    db_session.add_all([ancient_disc, recent_disc])
+    await db_session.commit()
+
+    # 30-day window — only the recent sweep qualifies
+    points = await svc.fetch_strategy_brier_history(
+        db_session,
+        owner_id=owner.id, strategy_id=tmpl.id, window_days=30,
+    )
+    assert len(points) == 1
+    assert points[0]["sweep_id"] == str(recent.id)
+
+    # 730-day window — both qualify
+    points = await svc.fetch_strategy_brier_history(
+        db_session,
+        owner_id=owner.id, strategy_id=tmpl.id, window_days=730,
+    )
+    assert len(points) == 2
+
+
 @pytest.mark.asyncio
 async def test_aggregate_calibrated_brier_null_when_none(
     db_session: AsyncSession, owner: User,

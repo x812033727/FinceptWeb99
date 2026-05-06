@@ -23,7 +23,7 @@ render a "still warming up" placeholder without branching.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from datetime import date as _date
+from datetime import UTC, date as _date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -482,7 +482,101 @@ async def _recent_lessons(
     ]
 
 
+async def fetch_strategy_brier_history(
+    db: AsyncSession,
+    *,
+    owner_id: UUID,
+    strategy_id: UUID,
+    window_days: int = 90,
+) -> list[dict[str, Any]]:
+    """Per-sweep Brier time-series for one strategy template.
+
+    Aggregates `discussions.brier_score` and
+    `discussions.calibrated_brier_score` per completed sweep,
+    ordered by completion time ascending. Filtered to sweeps
+    completed within the last `window_days` days so the
+    frontend's trend chart doesn't drag in two-year-old early-
+    days noise.
+
+    Trend interpretation:
+      - **raw_brier descending over time** = the strategy is
+        getting better predictions on its own (probably from
+        accumulated lessons + persona weight learning)
+      - **calibrated_brier consistently below raw_brier** =
+        the isotonic curve is reducing error (PR-C2 doing its
+        job)
+      - **calibrated_brier flat or rising** = curve is fitted
+        on a different regime than the recent sweeps; consider
+        a manual refit via POST /strategies/{id}/learn (which
+        also re-triggers calibration fit) or wait for the
+        rolling pool to refresh
+
+    Returns: list of `{sweep_id, anchor_date, completed_at,
+    fold_kind, raw_brier, calibrated_brier, samples}`. Sweeps
+    that have no resolved discussions (brier_score IS NULL)
+    are excluded — they'd be NULL points the chart can't
+    plot anyway.
+
+    Strategy-level scope (not sweep-level) — the consumer
+    is the per-strategy trend card, which doesn't care about
+    individual sweep details beyond the time + Brier values.
+    """
+    cutoff = datetime.now(UTC) - timedelta(days=window_days)
+    stmt = (
+        select(
+            BacktestSweep.id,
+            BacktestSweep.anchor_date,
+            BacktestSweep.completed_at,
+            BacktestSweep.fold_kind,
+            func.avg(Discussion.brier_score).label("raw_brier"),
+            func.avg(Discussion.calibrated_brier_score)
+            .label("calibrated_brier"),
+            func.count(Discussion.brier_score).label("samples"),
+        )
+        .join(Discussion, Discussion.sweep_id == BacktestSweep.id)
+        .where(
+            BacktestSweep.strategy_id == strategy_id,
+            BacktestSweep.owner_id == owner_id,
+            BacktestSweep.status == "completed",
+            BacktestSweep.completed_at.is_not(None),
+            BacktestSweep.completed_at >= cutoff,
+            Discussion.brier_score.is_not(None),
+        )
+        .group_by(
+            BacktestSweep.id,
+            BacktestSweep.anchor_date,
+            BacktestSweep.completed_at,
+            BacktestSweep.fold_kind,
+        )
+        .order_by(BacktestSweep.completed_at.asc())
+    )
+    rows = (await db.execute(stmt)).all()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        out.append({
+            "sweep_id": str(r.id),
+            "anchor_date": (
+                r.anchor_date.isoformat() if r.anchor_date else None
+            ),
+            "completed_at": (
+                r.completed_at.isoformat() if r.completed_at else None
+            ),
+            "fold_kind": r.fold_kind,
+            "raw_brier": (
+                round(float(r.raw_brier), 6)
+                if r.raw_brier is not None else None
+            ),
+            "calibrated_brier": (
+                round(float(r.calibrated_brier), 6)
+                if r.calibrated_brier is not None else None
+            ),
+            "samples": int(r.samples or 0),
+        })
+    return out
+
+
 __all__ = [
     "WINDOW_DAYS", "LESSONS_LIMIT",
     "aggregate_sweep", "aggregate_strategy",
+    "fetch_strategy_brier_history",
 ]

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -128,7 +128,7 @@ async def test_process_creates_and_starts_sweep(
         with patch(
             "services.strategy_auto_sweep_service.sweep_svc."
             "start_sweep_in_background",
-            new=AsyncMock(),
+            new=MagicMock(),
         ) as start_mock:
             launched = await svc.process_due_strategies()
 
@@ -175,7 +175,7 @@ async def test_process_skips_when_active_sweep_exists(
         with patch(
             "services.strategy_auto_sweep_service.sweep_svc."
             "start_sweep_in_background",
-            new=AsyncMock(),
+            new=MagicMock(),
         ) as start_mock:
             launched = await svc.process_due_strategies()
 
@@ -237,7 +237,7 @@ async def test_process_uses_validated_weights_when_available(
         with patch(
             "services.strategy_auto_sweep_service.sweep_svc."
             "start_sweep_in_background",
-            new=AsyncMock(),
+            new=MagicMock(),
         ):
             launched = await svc.process_due_strategies()
 
@@ -267,7 +267,7 @@ async def test_process_falls_back_to_no_override_when_no_validation(
         with patch(
             "services.strategy_auto_sweep_service.sweep_svc."
             "start_sweep_in_background",
-            new=AsyncMock(),
+            new=MagicMock(),
         ):
             launched = await svc.process_due_strategies()
 

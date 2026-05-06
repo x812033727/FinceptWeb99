@@ -58,6 +58,7 @@ for ds in \
     TaiwanStockPER \
     TaiwanStockMarketValue \
     TaiwanStockSecuritiesLending \
+    TaiwanDailyShortSaleBalances \
     TaiwanStockMonthRevenue \
     TaiwanStockBalanceSheet \
     TaiwanStockFinancialStatements \

@@ -1351,6 +1351,28 @@ def _pivot_total_institutional(rows: list[dict[str, Any]]) -> list[dict[str, Any
     return list(grouped.values())
 
 
+def _row_short_sale_balance(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "market": row.get("market", "TWSE"),
+        "symbol": _to_str(row.get("symbol")),
+        "ts": _to_date(row.get("ts")),
+        "margin_prev_balance":     _to_int(row.get("margin_prev_balance")),
+        "margin_short_sales":      _to_int(row.get("margin_short_sales")),
+        "margin_short_covering":   _to_int(row.get("margin_short_covering")),
+        "margin_stock_redemption": _to_int(row.get("margin_stock_redemption")),
+        "margin_balance":          _to_int(row.get("margin_balance")),
+        "margin_quota":            _to_int(row.get("margin_quota")),
+        "sbl_prev_balance":        _to_int(row.get("sbl_prev_balance")),
+        "sbl_short_sales":         _to_int(row.get("sbl_short_sales")),
+        "sbl_short_covering":      _to_int(row.get("sbl_short_covering")),
+        "sbl_returns":             _to_int(row.get("sbl_returns")),
+        "sbl_adjustments":         _to_int(row.get("sbl_adjustments")),
+        "sbl_balance":             _to_int(row.get("sbl_balance")),
+        "sbl_quota":               _to_int(row.get("sbl_quota")),
+        "source": row.get("source", "finmind"),
+    }
+
+
 MAPPINGS: dict[str, DatasetMapping] = {
     "TaiwanStockPrice": DatasetMapping(
         dataset_code="TaiwanStockPrice",
@@ -2193,6 +2215,30 @@ MAPPINGS: dict[str, DatasetMapping] = {
         column_map={},
         pk_columns=("contract", "ts", "call_put", "rank"),
         batch_transform=_batch_option_oi_largetraders,
+    ),
+    "TaiwanDailyShortSaleBalances": DatasetMapping(
+        dataset_code="TaiwanDailyShortSaleBalances",
+        local_table="tw_short_sale_balance_daily",
+        column_map={
+            "date": "ts",
+            "stock_id": "symbol",
+            "MarginShortSalesPreviousDayBalance":  "margin_prev_balance",
+            "MarginShortSalesShortSales":          "margin_short_sales",
+            "MarginShortSalesShortCovering":       "margin_short_covering",
+            "MarginShortSalesStockRedemption":     "margin_stock_redemption",
+            "MarginShortSalesCurrentDayBalance":   "margin_balance",
+            "MarginShortSalesQuota":               "margin_quota",
+            "SBLShortSalesPreviousDayBalance":     "sbl_prev_balance",
+            "SBLShortSalesShortSales":             "sbl_short_sales",
+            "SBLShortSalesShortCovering":          "sbl_short_covering",
+            "SBLShortSalesReturns":                "sbl_returns",
+            "SBLShortSalesAdjustments":            "sbl_adjustments",
+            "SBLShortSalesCurrentDayBalance":      "sbl_balance",
+            "SBLShortSalesQuota":                  "sbl_quota",
+        },
+        pk_columns=("market", "symbol", "ts"),
+        extra={"market": "TWSE", "source": "finmind"},
+        row_transform=_row_short_sale_balance,
     ),
 }
 

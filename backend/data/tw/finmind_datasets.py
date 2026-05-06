@@ -80,7 +80,7 @@ CHIP: tuple[DatasetSpec, ...] = (
     DatasetSpec("TaiwanStockHoldingSharesPer", "股權持股分級表", per_symbol=True, sponsor_tier=True),
     DatasetSpec("TaiwanStockSecuritiesLending", "借券成交明細", per_symbol=True),
     DatasetSpec("TaiwanStockMarginShortSaleSuspension", "暫停融券賣出表(融券回補日)", per_symbol=False),
-    DatasetSpec("TaiwanDailyShortSaleBalances", "信用額度總量管制餘額表", per_symbol=False),
+    DatasetSpec("TaiwanDailyShortSaleBalances", "信用額度總量管制餘額表", per_symbol=True),
     DatasetSpec("TaiwanSecuritiesTraderInfo", "證券商資訊表", per_symbol=False),
     DatasetSpec("TaiwanStockTradingDailyReport", "台股分點資料表 (by 股票代碼 / 券商代碼)", per_symbol=True, sponsor_tier=True),
     DatasetSpec("TaiwanStockWarrantTradingDailyReport", "台股權證分點資料表 (by 股票代碼 / 券商代碼)", per_symbol=True, sponsor_tier=True),

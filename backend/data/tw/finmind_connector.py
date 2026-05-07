@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from cache.redis_cache import (
+    cache_decr,
     cache_incr,
     key_finmind_counter,
     key_finmind_quota_exhausted_counter,
@@ -100,6 +101,21 @@ async def _query(dataset: str, data_id: str, start_date: str, end_date: str | No
     # available budget.
     count = await cache_incr(key_finmind_counter(), ttl_seconds=3600)
     if count > await _resolve_hourly_limit():
+        # Refund the bump we just did. Without this, every quota-blocked
+        # retry pushes the counter higher (observed: 389k against a 6k
+        # limit after a few minutes of scheduler thrashing), which means
+        # the counter never decays back below the limit before the 1h
+        # TTL elapses. The `expire`-on-first-incr semantics in
+        # `cache_incr` mean later bumps don't extend the TTL, but they
+        # do raise the value the next hour's first call has to overcome
+        # — except `cache_incr` calls `expire` only when count == 1, so
+        # a stale value above the limit at 3601s gets a fresh TTL when
+        # the first post-expiry call lands. Net effect without this
+        # refund: locked out indefinitely once retry storm starts.
+        try:
+            await cache_decr(key_finmind_counter())
+        except Exception:
+            pass
         # Two callers, two semantics:
         #   - Live serving (get_news, screener cache fillers, …) wants
         #     `[]` so the call falls back to TWSE / cached values

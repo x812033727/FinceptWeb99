@@ -336,8 +336,110 @@ def make_financial_tools() -> list[SdkMcpTool]:
                            market, symbol, exc)
             return _text({"error": str(exc)})
 
+    @tool(
+        "get_institutional_history",
+        "TW only — daily 法人買賣超 (foreign / SITC / dealer buy + sell volumes) "
+        "for a symbol. Backed by the daily TWSE ingest archive — a 90-day "
+        "query is one indexed scan. Default days=30, max=90.",
+        {"symbol": str, "days": int},
+    )
+    async def get_institutional_history(args: dict[str, Any]) -> dict:
+        symbol = args["symbol"].upper()
+        days = max(1, min(int(args.get("days", 30)), 90))
+        try:
+            from services.tw_market_service import get_institutional
+            rows = await get_institutional(symbol, days=days)
+            return _text({
+                "symbol": symbol, "days": days,
+                "count": len(rows), "rows": rows,
+            })
+        except Exception as exc:
+            logger.warning(
+                "get_institutional_history tool failed: %s %s", symbol, exc,
+            )
+            return _text({"error": str(exc)})
+
+    @tool(
+        "get_margin_history",
+        "TW only — daily 融資融券 (margin purchase / balance + short sale / "
+        "balance). Same DB-archive read tier as get_institutional_history.",
+        {"symbol": str, "days": int},
+    )
+    async def get_margin_history(args: dict[str, Any]) -> dict:
+        symbol = args["symbol"].upper()
+        days = max(1, min(int(args.get("days", 30)), 90))
+        try:
+            from services.tw_market_service import get_margin
+            rows = await get_margin(symbol, days=days)
+            return _text({
+                "symbol": symbol, "days": days,
+                "count": len(rows), "rows": rows,
+            })
+        except Exception as exc:
+            logger.warning("get_margin_history tool failed: %s %s", symbol, exc)
+            return _text({"error": str(exc)})
+
+    @tool(
+        "get_top_brokers",
+        "TW only — 主力分點: top buyers + top sellers by N-day net buy volume "
+        "per broker for one symbol. Useful for accumulation / distribution "
+        "spotting. Live FinMind + 24h cache.",
+        {"symbol": str, "days": int, "top_n": int},
+    )
+    async def get_top_brokers(args: dict[str, Any]) -> dict:
+        symbol = args["symbol"].upper()
+        days = max(1, min(int(args.get("days", 5)), 30))
+        top_n = max(1, min(int(args.get("top_n", 3)), 10))
+        try:
+            from services.broker_concentration_service import (
+                get_top_brokers_for_symbol,
+            )
+            payload = await get_top_brokers_for_symbol(
+                symbol, days=days, top_n=top_n,
+            )
+            if payload is None:
+                return _text({
+                    "symbol": symbol, "days": days,
+                    "top_buyers": [], "top_sellers": [],
+                    "note": "no broker data in window",
+                })
+            return _text(payload)
+        except Exception as exc:
+            logger.warning("get_top_brokers tool failed: %s %s", symbol, exc)
+            return _text({"error": str(exc)})
+
+    @tool(
+        "get_taifex_positioning",
+        "TW only — index-futures three-investor (foreign / SITC / dealer) "
+        "net open-interest snapshot + 5-day change for the contract. "
+        "Returns trend = bullish | bearish | neutral. Foreign-net OI leads "
+        "spot moves 1-2 trading days historically. Default contract: TX "
+        "(TAIEX); other: MTX, TE, TF.",
+        {"contract": str},
+    )
+    async def get_taifex_positioning(args: dict[str, Any]) -> dict:
+        contract = str(args.get("contract", "TX")).upper()
+        try:
+            from services.derivatives_service import (
+                get_taifex_positioning as _svc,
+            )
+            payload = await _svc(contract=contract)
+            if payload is None:
+                return _text({
+                    "contract": contract,
+                    "note": "no positioning data",
+                })
+            return _text(payload)
+        except Exception as exc:
+            logger.warning(
+                "get_taifex_positioning tool failed: %s %s", contract, exc,
+            )
+            return _text({"error": str(exc)})
+
     return [
         get_quote, run_dcf, run_var, run_backtest,
         get_options_chain, get_symbol_news, get_symbol_sentiment,
         get_peers, get_financials,
+        get_institutional_history, get_margin_history,
+        get_top_brokers, get_taifex_positioning,
     ]

@@ -74,11 +74,21 @@ def _login(client: httpx.Client, email: str, password: str) -> str:
 
 def _create_discussion(
     client: httpx.Client, headers: dict, topic: str, rules: str, personas: list[str],
+    *,
+    as_of_date: str | None = None,
 ) -> dict:
+    payload: dict = {"topic": topic, "rules": rules, "persona_ids": personas}
+    # PR-3: backtest-mode smoke. Setting as_of_date pins the ctx
+    # waterfall to the historical date so the smoke run exercises
+    # the same code path the sweep worker does — catches regressions
+    # in `gather_market_context`'s as_of clamp + the verifier's
+    # window math.
+    if as_of_date:
+        payload["as_of_date"] = as_of_date
     r = client.post(
         "/api/discussion/sessions",
         headers=headers,
-        json={"topic": topic, "rules": rules, "persona_ids": personas},
+        json=payload,
     )
     if r.status_code != 201:
         raise SmokeError(f"create failed: {r.status_code} {r.text[:200]}")
@@ -215,6 +225,18 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--keep", action="store_true",
                         help="don't delete the discussion at the end")
+    # PR-3: backtest-mode smoke. Pins the ctx waterfall to a
+    # historical date and asserts that the conclusion picks up
+    # `quality_signals` (PR-1) + (when the strategy has a
+    # calibration curve) `calibrated_confidence`.
+    parser.add_argument(
+        "--mode", choices=["live", "backtest"], default="live",
+        help="live = today; backtest = pin ctx to --anchor-date",
+    )
+    parser.add_argument(
+        "--anchor-date", default=None,
+        help="YYYY-MM-DD; required when --mode=backtest",
+    )
     args = parser.parse_args()
 
     if not args.email or not args.password:
@@ -226,9 +248,15 @@ def main() -> int:
     if len(personas) < 2:
         print("ERROR: need at least 2 personas", file=sys.stderr)
         return 2
+    if args.mode == "backtest" and not args.anchor_date:
+        print("ERROR: --mode=backtest requires --anchor-date YYYY-MM-DD",
+              file=sys.stderr)
+        return 2
 
     print(f"→ smoke-testing {args.backend_url}")
     print(f"  personas: {personas}")
+    print(f"  mode: {args.mode}"
+          + (f" (anchor={args.anchor_date})" if args.mode == "backtest" else ""))
 
     timeout = httpx.Timeout(args.timeout, connect=10.0)
     discussion_id: str | None = None
@@ -241,7 +269,10 @@ def main() -> int:
             print("OK")
 
             print("[2/5] create discussion…", end=" ", flush=True)
-            row = _create_discussion(client, headers, args.topic, args.rules, personas)
+            row = _create_discussion(
+                client, headers, args.topic, args.rules, personas,
+                as_of_date=args.anchor_date if args.mode == "backtest" else None,
+            )
             discussion_id = row["id"]
             print(f"OK (id={discussion_id[:8]}…)")
 
@@ -257,6 +288,35 @@ def main() -> int:
             conclusion = _conclude(client, headers, discussion_id)
             recommended = conclusion.get("recommended_symbols") or []
             print(f"OK (recommended={recommended}, consensus={conclusion.get('consensus_score')})")
+
+            # PR-1: every fresh conclusion should carry quality_signals
+            # (or a `_skipped` marker on parse error). Missing the
+            # block entirely means the synth post-parse hook
+            # regressed silently.
+            qsig = conclusion.get("quality_signals")
+            if qsig is None and not conclusion.get("_parse_error"):
+                raise SmokeError(
+                    "conclusion missing `quality_signals` block — "
+                    "PR-1 hook may have regressed"
+                )
+            if qsig and not qsig.get("_skipped"):
+                halls = qsig.get("hallucination_warnings", [])
+                ocf = qsig.get("confidence_stats", {}).get("over_confident")
+                contradiction = qsig.get("consensus_contradiction")
+                print(f"    quality_signals: hallucinations={len(halls)}, "
+                      f"over_confident={ocf}, contradiction={contradiction}")
+
+            # PR-3: if any recommendation already carries
+            # `calibrated_confidence`, the strategy has a deployed
+            # calibration curve — surface it for visibility.
+            recs = conclusion.get("recommendations") or []
+            calibrated = [
+                r for r in recs
+                if isinstance(r, dict) and r.get("calibrated_confidence") is not None
+            ]
+            if calibrated:
+                print(f"    calibration: {len(calibrated)}/{len(recs)} "
+                      f"recommendation(s) carry calibrated_confidence")
 
             if not args.keep:
                 _delete(client, headers, discussion_id)

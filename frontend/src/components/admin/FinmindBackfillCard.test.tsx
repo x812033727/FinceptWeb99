@@ -1,0 +1,218 @@
+/**
+ * Tests for FinmindBackfillCard.
+ *
+ * Three behaviors that warrant locking down:
+ *   1. The card renders the 12 default datasets the backend reports
+ *      and pre-checks all of them.
+ *   2. Start / stop / reset buttons fire the right axios calls.
+ *   3. host_chain_likely_active=true blocks the start button +
+ *      surfaces the yellow banner so we don't double-burn quota.
+ */
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import api from "@/lib/api";
+
+import FinmindBackfillCard from "./FinmindBackfillCard";
+
+vi.mock("@/lib/api", () => ({
+  default: { get: vi.fn(), post: vi.fn() },
+  errorDetail: (err: unknown) =>
+    err instanceof Error ? err.message : String(err),
+}));
+
+const mockedApi = api as unknown as {
+  get: ReturnType<typeof vi.fn>;
+  post: ReturnType<typeof vi.fn>;
+};
+
+const IDLE_STATE = {
+  status: "idle",
+  queue: [],
+  current_dataset: null,
+  current_symbol: null,
+  chunks_done: 0,
+  chunks_total: 0,
+  chunks_failed: 0,
+  started_at: null,
+  last_chunk_at: null,
+  stop_requested: false,
+  recent_errors: [],
+  quota_used: 1234,
+  quota_limit: 6000,
+  host_chain_likely_active: false,
+  default_datasets: [
+    "TaiwanStockMarginPurchaseShortSale",
+    "TaiwanStockPriceAdj",
+    "TaiwanStockPER",
+    "TaiwanStockMarketValue",
+    "TaiwanStockSecuritiesLending",
+    "TaiwanDailyShortSaleBalances",
+    "TaiwanStockMonthRevenue",
+    "TaiwanStockBalanceSheet",
+    "TaiwanStockFinancialStatements",
+    "TaiwanStockCashFlowsStatement",
+    "TaiwanStockDividend",
+    "TaiwanStockHoldingSharesPer",
+  ],
+};
+
+function renderCard() {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={qc}>
+      <FinmindBackfillCard />
+    </QueryClientProvider>,
+  );
+}
+
+beforeEach(() => {
+  // Force the collapsible open so we don't need to click first.
+  localStorage.setItem("admin-finmind-backfill", "1");
+});
+
+afterEach(() => {
+  vi.clearAllMocks();
+  localStorage.clear();
+});
+
+describe("FinmindBackfillCard — render", () => {
+  it("renders the title before any query resolves", () => {
+    mockedApi.get.mockReturnValue(new Promise(() => {}));
+    renderCard();
+    expect(screen.getByText(/FinMind 全量回填監控/)).toBeInTheDocument();
+  });
+
+  it("renders the 12 default datasets and pre-checks all", async () => {
+    mockedApi.get.mockResolvedValue({ data: IDLE_STATE });
+    renderCard();
+
+    for (const code of IDLE_STATE.default_datasets) {
+      expect(await screen.findByText(code)).toBeInTheDocument();
+    }
+    // 12/12 selected
+    await waitFor(() => {
+      expect(screen.getByText("12 / 12 已勾選")).toBeInTheDocument();
+    });
+  });
+
+  it("renders the quota gauge with formatted numbers", async () => {
+    mockedApi.get.mockResolvedValue({ data: IDLE_STATE });
+    renderCard();
+    expect(
+      await screen.findByText(/1,234 \/ 6,000/),
+    ).toBeInTheDocument();
+  });
+
+  it("shows 閒置中 banner when status=idle", async () => {
+    mockedApi.get.mockResolvedValue({ data: IDLE_STATE });
+    renderCard();
+    expect(await screen.findByText("閒置中")).toBeInTheDocument();
+  });
+
+  it("shows 正在抓取 + progress when status=running", async () => {
+    mockedApi.get.mockResolvedValue({
+      data: {
+        ...IDLE_STATE,
+        status: "running",
+        current_dataset: "TaiwanStockPriceAdj",
+        current_symbol: "2330",
+        chunks_done: 42,
+        chunks_total: 100,
+      },
+    });
+    renderCard();
+    expect(await screen.findByText("正在抓取")).toBeInTheDocument();
+    expect(
+      screen.getByText("TaiwanStockPriceAdj · 2330"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/42\/100 \(42%\)/)).toBeInTheDocument();
+  });
+});
+
+describe("FinmindBackfillCard — host chain detection", () => {
+  it("shows the yellow banner and disables Start when host_chain_likely_active", async () => {
+    mockedApi.get.mockResolvedValue({
+      data: { ...IDLE_STATE, host_chain_likely_active: true },
+    });
+    renderCard();
+    expect(
+      await screen.findByText(/外部 backfill 正在進行中/),
+    ).toBeInTheDocument();
+    const start = await screen.findByRole("button", { name: /開始回填/ });
+    expect(start).toBeDisabled();
+  });
+});
+
+describe("FinmindBackfillCard — actions", () => {
+  it("Start fires POST /chain/start with the selected datasets and days", async () => {
+    mockedApi.get.mockResolvedValue({ data: IDLE_STATE });
+    mockedApi.post.mockResolvedValue({
+      data: { ...IDLE_STATE, status: "running" },
+    });
+    renderCard();
+
+    const start = await screen.findByRole("button", { name: /開始回填/ });
+    await waitFor(() => expect(start).not.toBeDisabled());
+    fireEvent.click(start);
+
+    await waitFor(() => {
+      expect(mockedApi.post).toHaveBeenCalledWith(
+        "/admin/finmind/chain/start",
+        expect.objectContaining({
+          datasets: expect.arrayContaining([
+            "TaiwanStockPriceAdj",
+            "TaiwanStockMonthRevenue",
+          ]),
+          days: 3650,
+          reset_stuck_first: true,
+        }),
+      );
+    });
+  });
+
+  it("Stop is disabled while idle, enabled while running, fires POST /chain/stop", async () => {
+    mockedApi.get.mockResolvedValue({
+      data: { ...IDLE_STATE, status: "running" },
+    });
+    mockedApi.post.mockResolvedValue({
+      data: { ...IDLE_STATE, status: "stopping" },
+    });
+    renderCard();
+
+    const stop = await screen.findByRole("button", {
+      name: /停止 \(跑完目前 chunk\)/,
+    });
+    await waitFor(() => expect(stop).not.toBeDisabled());
+    fireEvent.click(stop);
+
+    await waitFor(() => {
+      expect(mockedApi.post).toHaveBeenCalledWith(
+        "/admin/finmind/chain/stop",
+      );
+    });
+  });
+
+  it("Reset stuck fires POST /chain/reset-stuck and shows the count", async () => {
+    mockedApi.get.mockResolvedValue({ data: IDLE_STATE });
+    mockedApi.post.mockResolvedValue({ data: { reset: 3 } });
+    renderCard();
+
+    const reset = await screen.findByRole("button", {
+      name: /清理卡住的 chunk/,
+    });
+    fireEvent.click(reset);
+
+    await waitFor(() => {
+      expect(mockedApi.post).toHaveBeenCalledWith(
+        "/admin/finmind/chain/reset-stuck",
+      );
+    });
+    expect(
+      await screen.findByText(/已清理 3 條 stuck running chunk/),
+    ).toBeInTheDocument();
+  });
+});

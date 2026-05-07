@@ -75,6 +75,15 @@ router.include_router(
     _finmind_proxy_router, prefix="/finmind", tags=["AdminFinMind"],
 )
 
+# FinMind 全量回填 chain control + monitor — backed by an in-process
+# asyncio task in services/finmind_chain_service.py. Replaces the
+# host-level finmind_chain.sh (which stays as a redeploy fallback).
+from api.admin.finmind_chain import router as _finmind_chain_router  # noqa: E402
+
+router.include_router(
+    _finmind_chain_router, prefix="/finmind", tags=["AdminFinMindChain"],
+)
+
 VALID_ROLES = {r.value for r in UserRole}
 RETRYABLE_INGEST_JOBS = {
     "ingest_news_tw": "Taiwan news ingest",

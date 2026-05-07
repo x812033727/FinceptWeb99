@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import FinmindAdminCard from "@/components/admin/FinmindAdminCard";
+import FinmindBackfillCard from "@/components/admin/FinmindBackfillCard";
 import FinmindKeysCard from "@/components/admin/FinmindKeysCard";
 import FinmindUsageCard from "@/components/admin/FinmindUsageCard";
 import { IngestHealthCard } from "@/components/admin/IngestHealthCard";
@@ -128,6 +129,7 @@ function AdminContent() {
 
         <TabsContent value="data" className="space-y-4 mt-4">
           <MarketKeysCard />
+          <FinmindBackfillCard />
           <FinmindAdminCard />
           <FinmindKeysCard />
         </TabsContent>

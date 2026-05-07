@@ -887,6 +887,10 @@
       "quant": {
         "title": "量化大師",
         "hint": "因子分析、統計訊號、純數據視角"
+      },
+      "short_term": {
+        "title": "短線交易大師",
+        "hint": "盤口解讀、突破動能、波段型態、嚴格停損"
       }
     },
     "agents": {
@@ -908,7 +912,11 @@
       "dalio":             { "name": "達里歐 Ray Dalio", "short": "達", "description": "全天候、債務循環、四種經濟環境" },
       "soros":             { "name": "索羅斯 George Soros", "short": "索", "description": "反身性、宏觀對沖、不對稱押注" },
       "simons":            { "name": "西蒙斯 Jim Simons", "short": "西", "description": "純量化：統計訊號、因子分解、out-of-sample 測試" },
-      "asness":            { "name": "艾斯尼斯 Cliff Asness", "short": "艾", "description": "因子組合：Value + Momentum + Quality + 風險平價" }
+      "asness":            { "name": "艾斯尼斯 Cliff Asness", "short": "艾", "description": "因子組合：Value + Momentum + Quality + 風險平價" },
+      "livermore":         { "name": "李佛摩 Jesse Livermore", "short": "李", "description": "盤口解讀、最小阻力線突破、贏家加碼、輸家速砍" },
+      "ptj":               { "name": "瓊斯 Paul Tudor Jones", "short": "瓊", "description": "防禦優先；5:1 風報比起跳；永不向下攤平" },
+      "minervini":         { "name": "米奈爾維尼 Mark Minervini", "short": "米", "description": "SEPA + VCP 動能；Trend Template；-7% 鐵律停損" },
+      "raschke":           { "name": "拉許克 Linda Raschke", "short": "拉", "description": "短線型態：80/20、Holy Grail、Turtle Soup；結構優先" }
     }
   },
   "usage": {

@@ -45,7 +45,7 @@ FinceptWeb/
 │   │   ├── global_market/ # International news (Fed / FOMC / global macro, market='GLOBAL')
 │   │   ├── portfolio/    # Holdings, transactions, P&L, optimizer, performance snapshots
 │   │   ├── analytics/    # DCF, VaR, backtest
-│   │   ├── ai_agents/    # SSE streaming chat (19 personas, 8 LLM providers)
+│   │   ├── ai_agents/    # SSE streaming chat (23 personas, 8 LLM providers)
 │   │   ├── watchlist/    # Multi-watchlist CRUD with live quote enrichment
 │   │   ├── alerts/       # Price alert CRUD + check-and-fire
 │   │   ├── discussion/   # Multi-persona round-table discussions (SSE rounds + synthesizer)
@@ -343,12 +343,17 @@ FinceptWeb/
   `ProcessPoolExecutor(max_workers=2)` with 30s timeout
 
 ### AI agents
-- **19 personas** across two groups:
+- **23 personas** across two groups:
   - 7 CFA-style functional: market_analyst, portfolio_advisor, risk_manager,
     macro_analyst, earnings_analyst, trading_coach, claude_research
-  - 12 legendary investors: buffett, graham, munger (value); lynch, fisher,
-    smith (quality-growth); marks, klarman (contrarian); dalio, soros (macro);
-    simons, asness (quant)
+  - 16 legendary investors / traders: buffett, graham, munger (value); lynch,
+    fisher, smith (quality-growth); marks, klarman (contrarian); dalio, soros
+    (macro); simons, asness (quant); livermore, ptj, minervini, raschke
+    (short-term trading — tape reading, breakout momentum, swing patterns,
+    hard stops). The short-term group fills the day-to-week gap that the
+    long-horizon roster can't speak to; they share `_SHORT_TERM_PROFILE`
+    (= `_QUANT_PROFILE | per_symbol_news_sentiment`) so personas see news
+    context for tape reading without dragging in the value-investing blocks.
 - LLM router supports **8 providers**: OpenAI / Anthropic / Gemini / Ollama /
   MiniMax / Groq / DeepSeek / OpenRouter (the last 4 share an
   `_openai_compat_tool_loop` helper) + Claude Agent (tool-use via SDK)

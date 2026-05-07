@@ -534,6 +534,59 @@ export interface LessonLibraryResponse {
   offset: number;
 }
 
+/** PR-5c: regime overlay band on the timeline chart. */
+export interface RegimeBand {
+  start: string;
+  end: string;
+  regime: "bull" | "bear" | "high_vol" | "low_vol";
+}
+
+export interface RegimeBandsResponse {
+  market: string;
+  days: number;
+  start: string;
+  end: string;
+  bands: RegimeBand[];
+}
+
+/** PR-5c: cross-strategy comparison response. */
+export interface StrategyCompareSummary {
+  brier_avg: number | null;
+  brier_latest: number | null;
+  hit_rate_avg: number | null;
+  hit_rate_latest: number | null;
+  sample_total: number;
+}
+
+export interface StrategyCompareEntry {
+  strategy_id: string;
+  name: string;
+  market: string;
+  maturity_tier: string | null;
+  metrics: Array<{
+    date: string;
+    brier_30d: number | null;
+    calibrated_brier_30d: number | null;
+    hit_rate_30d: number | null;
+    sample_count: number;
+  }>;
+  summary: StrategyCompareSummary;
+}
+
+export interface StrategyCompareResponse {
+  days: number;
+  strategies: StrategyCompareEntry[];
+}
+
+/** PR-5c: per-conclusion baseline delta. */
+export interface ConclusionBaselineDelta {
+  brier_baseline: number | null;
+  consensus_baseline: number | null;
+  consensus_score: number;
+  consensus_pct_change: number | null;
+  verify_pending: boolean;
+}
+
 export interface CreateStrategyInput {
   name: string;
   description?: string | null;

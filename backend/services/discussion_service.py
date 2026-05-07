@@ -3365,6 +3365,141 @@ def compute_conclusion_diff(
     }
 
 
+async def _attach_baseline_delta(
+    db: AsyncSession,
+    discussion: Discussion,
+    conclusion: dict[str, Any],
+) -> None:
+    """PR-5c: annotate the conclusion with a `vs_baseline` block
+    that lets the UI render "this conclusion's confidence is N%
+    higher/lower than the strategy's 30-day baseline" without a
+    second round-trip.
+
+    Mutates `conclusion` in place. Skipped when:
+      - the discussion has no sweep parent (live mode)
+      - the parent sweep has no strategy_id
+      - the strategy has no health snapshot yet (cold start)
+      - the conclusion is a parse-error placeholder
+
+    `vs_baseline` shape:
+        {
+          "brier_baseline": 0.18,        # latest snapshot's brier_30d
+          "consensus_baseline": 0.62,    # avg consensus_score over the last
+                                          # N concluded discussions
+          "consensus_score": 0.75,       # this conclusion's value
+          "consensus_pct_change": 21.0,  # (this - baseline) / baseline * 100
+          "verify_pending": true,        # brier comparison is filled by the
+                                          # verifier 5d after as_of; until
+                                          # then the badge says "待 5 日後驗證"
+        }
+
+    Best-effort throughout: any failure logs but doesn't reverse
+    the conclusion write — it's a UI hint, not a contract.
+    """
+    if conclusion.get("_parse_error"):
+        return
+    sweep_id = getattr(discussion, "sweep_id", None)
+    if sweep_id is None:
+        return
+    try:
+        from models.backtest_sweep import BacktestSweep
+        from models.discussion_strategy_template import (
+            DiscussionStrategyTemplate,
+        )
+        from services import strategy_health_service
+        sweep_row = await db.scalar(
+            select(BacktestSweep).where(BacktestSweep.id == sweep_id)
+        )
+        if sweep_row is None or sweep_row.strategy_id is None:
+            return
+        tmpl = await db.scalar(
+            select(DiscussionStrategyTemplate).where(
+                DiscussionStrategyTemplate.id == sweep_row.strategy_id,
+            )
+        )
+        if tmpl is None:
+            return
+
+        recent_snapshots = await strategy_health_service.list_recent_snapshots(
+            db, strategy_id=sweep_row.strategy_id, days=30,
+        )
+        baseline_brier: float | None = None
+        for snap in recent_snapshots:
+            if snap.brier_30d is not None:
+                baseline_brier = float(snap.brier_30d)
+                break
+
+        # Avg consensus over the last 20 concluded discussions of
+        # this strategy (excluding the current one). Cheap aggregate.
+        from models.discussion import Discussion as _Discussion
+        sweep_ids = list((await db.scalars(
+            select(BacktestSweep.id).where(
+                BacktestSweep.strategy_id == sweep_row.strategy_id,
+            )
+        )).all())
+        consensus_baseline: float | None = None
+        if sweep_ids:
+            recent_concs = list((await db.scalars(
+                select(_Discussion.conclusion)
+                .where(
+                    _Discussion.sweep_id.in_(sweep_ids),
+                    _Discussion.id != discussion.id,
+                    _Discussion.conclusion.is_not(None),
+                )
+                .order_by(_Discussion.created_at.desc())
+                .limit(20)
+            )).all())
+            scores: list[float] = []
+            for c in recent_concs:
+                if isinstance(c, dict):
+                    try:
+                        v = float(c.get("consensus_score", 0.0))
+                        if 0.0 <= v <= 1.0:
+                            scores.append(v)
+                    except (TypeError, ValueError):
+                        continue
+            if scores:
+                consensus_baseline = sum(scores) / len(scores)
+
+        try:
+            this_consensus = float(conclusion.get("consensus_score", 0.0))
+        except (TypeError, ValueError):
+            this_consensus = 0.0
+        consensus_pct_change: float | None = None
+        if consensus_baseline is not None and consensus_baseline > 0:
+            consensus_pct_change = (
+                (this_consensus - consensus_baseline)
+                / consensus_baseline * 100.0
+            )
+
+        conclusion["vs_baseline"] = {
+            "brier_baseline": (
+                round(baseline_brier, 4) if baseline_brier is not None else None
+            ),
+            "consensus_baseline": (
+                round(consensus_baseline, 4)
+                if consensus_baseline is not None else None
+            ),
+            "consensus_score": round(this_consensus, 4),
+            "consensus_pct_change": (
+                round(consensus_pct_change, 2)
+                if consensus_pct_change is not None else None
+            ),
+            # Brier comparison waits for the verifier (5d post as_of).
+            # The frontend reads this flag to show "待驗證" instead
+            # of an empty cell.
+            "verify_pending": True,
+        }
+    except Exception as exc:
+        log.warning(
+            "discussion.baseline_delta.failed",
+            extra={
+                "discussion_id": str(discussion.id),
+                "error": str(exc),
+            },
+        )
+
+
 async def _compute_quality_signals(
     db: AsyncSession,
     discussion: Discussion,
@@ -3700,6 +3835,13 @@ async def synthesize_conclusion(
     # touches when a curve exists — bare strategies + cold-start
     # behave identically to today.
     await _apply_calibration_to_conclusion(db, discussion, conclusion)
+    # PR-5c: when the discussion is sweep-spawned, attach a
+    # `vs_baseline` block summarising how this conclusion compares
+    # to the strategy's recent rolling baseline. Best-effort —
+    # missing health snapshot / no sweep parent / no strategy =
+    # silently skip (the field stays absent, frontend doesn't
+    # render the badge).
+    await _attach_baseline_delta(db, discussion, conclusion)
     # PR #272: route the write based on whether the transcript already
     # carries a post-mortem self-critique. With post-mortem present,
     # land the synthesizer's output in `post_mortem_conclusion` so

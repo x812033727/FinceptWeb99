@@ -21,6 +21,7 @@ import {
   ComposedChart,
   Dot,
   Line,
+  ReferenceArea,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -29,7 +30,23 @@ import {
 } from "recharts";
 import api from "@/lib/api";
 import { useCollapsible } from "@/hooks/useCollapsible";
-import type { StrategyTimeline, TimelineEvent } from "./_helpers";
+import type {
+  RegimeBand,
+  RegimeBandsResponse,
+  StrategyTimeline,
+  TimelineEvent,
+} from "./_helpers";
+
+
+/** Regime → semi-transparent background tint. Stacked when overlap. */
+function regimeColor(regime: RegimeBand["regime"]): string {
+  switch (regime) {
+    case "bull":     return "rgba(16, 185, 129, 0.08)";   // emerald
+    case "bear":     return "rgba(239, 68, 68, 0.10)";    // red
+    case "high_vol": return "rgba(245, 158, 11, 0.10)";   // amber
+    case "low_vol":  return "rgba(59, 130, 246, 0.06)";   // blue
+  }
+}
 
 
 /** Map an event kind+trigger to the marker colour. Stable so the
@@ -69,9 +86,14 @@ function FlaggedDot(props: any) {
 export function StrategyTimelineCard({
   strategyId,
   windowDays = 90,
+  market,
 }: {
   strategyId: string;
   windowDays?: number;
+  /** PR-5c: when supplied, fetch regime bands for this market and
+   * paint them as background tints behind the chart. Currently
+   * only TW returns data; other markets get an empty band list. */
+  market?: string;
 }) {
   const { t } = useTranslation();
   // Default closed — the timeline is heavier than the sparkline
@@ -81,6 +103,7 @@ export function StrategyTimelineCard({
     `strategy.${strategyId}.timeline`, false,
   );
   const [selectedEvent, setSelectedEvent] = useState<TimelineEvent | null>(null);
+  const [regimesOn, setRegimesOn] = useState(true);
 
   const { data, isLoading } = useQuery({
     queryKey: ["strategy-timeline", strategyId, windowDays],
@@ -92,6 +115,20 @@ export function StrategyTimelineCard({
       return data;
     },
     staleTime: 60_000,
+  });
+
+  // PR-5c: fetch regime bands when a market is supplied. Lazy
+  // alongside the timeline; both gated by `open`.
+  const { data: regimeData } = useQuery({
+    queryKey: ["regime-bands", market, windowDays],
+    enabled: open && !!market,
+    queryFn: async () => {
+      const { data } = await api.get<RegimeBandsResponse>(
+        `/discussion/regime-bands?market=${market}&days=${windowDays}`,
+      );
+      return data;
+    },
+    staleTime: 5 * 60_000,
   });
 
   const series = useMemo(() => {
@@ -142,6 +179,21 @@ export function StrategyTimelineCard({
               <ResponsiveContainer width="100%" height={180}>
                 <ComposedChart data={series} margin={{ top: 4, right: 8, bottom: 16, left: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  {/* PR-5c: regime bands paint as background
+                      ReferenceAreas BEFORE the lines so they
+                      appear underneath. Toggleable via the
+                      `regimesOn` checkbox below the chart. */}
+                  {regimesOn && (regimeData?.bands ?? []).map((b, i) => (
+                    <ReferenceArea
+                      key={`rb-${i}`}
+                      x1={b.start.slice(0, 10)}
+                      x2={b.end.slice(0, 10)}
+                      yAxisId="brier"
+                      fill={regimeColor(b.regime)}
+                      stroke="none"
+                      ifOverflow="extendDomain"
+                    />
+                  ))}
                   <XAxis
                     dataKey="date"
                     tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
@@ -203,6 +255,18 @@ export function StrategyTimelineCard({
                   ))}
                 </ComposedChart>
               </ResponsiveContainer>
+
+              {market && (regimeData?.bands ?? []).length > 0 && (
+                <label className="flex items-center gap-1 text-[10px] text-muted-foreground mt-1">
+                  <input
+                    type="checkbox"
+                    checked={regimesOn}
+                    onChange={(e) => setRegimesOn(e.target.checked)}
+                    className="accent-emerald-500"
+                  />
+                  {t("discussion.timeline.regime_overlay")}
+                </label>
+              )}
 
               <EventLegend events={events} onSelect={setSelectedEvent} />
               {selectedEvent && (

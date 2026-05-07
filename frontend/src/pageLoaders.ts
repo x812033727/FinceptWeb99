@@ -24,6 +24,7 @@ export const pageLoaders = {
   ai: () => import("@/pages/AIPage"),
   discussion: () => import("@/pages/DiscussionPage"),
   lessonLibrary: () => import("@/pages/LessonLibraryPage"),
+  strategyCompare: () => import("@/pages/StrategyComparisonPage"),
   alerts: () => import("@/pages/AlertsPage"),
   settings: () => import("@/pages/SettingsPage"),
   admin: () => import("@/pages/AdminPage"),

@@ -1473,6 +1473,100 @@ async def patch_persona_status(
     return result
 
 
+# ── PR-5c: regime overlay + strategy comparison ──────────────────
+
+
+@router.get("/regime-bands")
+async def get_regime_bands(
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    market: str = "TW",
+    days: int = 90,
+):
+    """PR-5c: market regime bands for the timeline overlay.
+
+    Currently implemented for TW only (uses `_TAIEX` from
+    `ohlcv_daily` + `tw_vix_daily`); US returns [] until SPX +
+    ^VIX get persisted.
+
+    Returns `[{start, end, regime}, ...]` where regimes can
+    overlap (a bull-run day with high vol shows up in BOTH the
+    bull AND high_vol band lists).
+    """
+    from datetime import datetime, timedelta, UTC
+    from services import regime_classifier
+    days = max(min(int(days), 365), 1)
+    end = datetime.now(UTC).date()
+    start = end - timedelta(days=days)
+    bands = await regime_classifier.classify_regimes(
+        db, market=market, start=start, end=end,
+    )
+    return {
+        "market": market,
+        "days": days,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "bands": bands,
+    }
+
+
+@router.post("/strategies/compare")
+async def post_strategies_compare(
+    body: dict,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """PR-5c: cross-strategy comparison for the StrategyComparisonPage.
+    Body: `{"strategy_ids": [...], "days": 90}`.
+
+    Up to 4 strategies; excess are truncated. Owner-scoped — IDs
+    not owned by the caller are silently dropped (the response
+    array might be shorter than the request).
+    """
+    from services import strategy_comparison_service
+    raw_ids = body.get("strategy_ids") or []
+    days = int(body.get("days", 90))
+    parsed_ids: list[uuid.UUID] = []
+    for raw in raw_ids:
+        try:
+            parsed_ids.append(uuid.UUID(str(raw)))
+        except (TypeError, ValueError):
+            continue
+    payload = await strategy_comparison_service.compare_strategies(
+        db,
+        owner_id=_coerce_owner_uuid(user),
+        strategy_ids=parsed_ids,
+        days=days,
+    )
+    return payload
+
+
+@router.get(
+    "/strategies/{template_id}/versions/{v1_id}/compare/{v2_id}",
+)
+async def compare_strategy_versions(
+    template_id: uuid.UUID,
+    v1_id: uuid.UUID,
+    v2_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """PR-5c: diff two version rows of the same strategy.
+    Both must share the same artifact_kind."""
+    from services import strategy_comparison_service
+    try:
+        payload = await strategy_comparison_service.compare_versions(
+            db,
+            owner_id=_coerce_owner_uuid(user),
+            strategy_id=template_id,
+            v1_id=v1_id,
+            v2_id=v2_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return payload
+
+
 # ── PR-5b: persona leaderboard + lesson library ──────────────────
 
 

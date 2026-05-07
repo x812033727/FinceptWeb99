@@ -57,7 +57,16 @@ async def _add_sweep_with_briers(
     """Create a sweep + N discussions, with the discussions
     chronologically spaced through the rolling window. Each
     discussion gets the next brier value (and optional calibrated /
-    verdict) so the snapshot computation has data to crunch."""
+    verdict) so the snapshot computation has data to crunch.
+
+    Discussions are anchored so the LATEST one lands at `now() -
+    1h` and earlier ones fan backward. Without this anchor, a
+    fixture starting at `now()` and stepping forward by `i` hours
+    would push tail rows past the snapshot's `window_end`
+    (tomorrow 00:00 UTC) whenever the test happened to run late
+    in the UTC day — a time-of-day-flaky failure where rows beyond
+    `(24 - now_hour)` silently dropped out of the count.
+    """
     sweep = BacktestSweep(
         id=uuid4(), owner_id=owner_id, strategy_id=strategy_id,
         market="TW", topic="x", rules="",
@@ -69,7 +78,11 @@ async def _add_sweep_with_briers(
     db.add(sweep)
     await db.flush()
 
-    base = datetime.now(UTC) - timedelta(days=days_old_start)
+    base = (
+        datetime.now(UTC)
+        - timedelta(days=days_old_start)
+        - timedelta(hours=len(briers))
+    )
     for i, b in enumerate(briers):
         d = Discussion(
             id=uuid4(), owner_id=owner_id, sweep_id=sweep.id,

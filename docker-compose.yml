@@ -107,6 +107,13 @@ services:
       FINMIND_USE_MAIN_DB:    ${FINMIND_USE_MAIN_DB:-true}
       FINMIND_AUTO_INIT:      ${FINMIND_AUTO_INIT:-true}
       FINMIND_DATABASE_URL:   ${FINMIND_DATABASE_URL:-postgresql+asyncpg://finmind:finmind_dev_password@postgres_finmind:5432/finmind_clone}
+    volumes:
+      # Bidirectional channel for the admin one-click redeploy button.
+      # Backend touches /host-trigger/deploy-trigger to fire the host's
+      # finceptweb-deploy.path systemd unit; backend reads the status
+      # JSON the deploy script writes alongside it. Mount path is
+      # /opt/finceptweb/var on the host (must exist with uid 1001).
+      - ./var:/host-trigger
     depends_on:
       postgres:
         condition: service_healthy

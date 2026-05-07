@@ -18,11 +18,14 @@ from services import persona_override_service as personas
 from services import runtime_config_service as runtime_config
 from services import system_task_config_service as system_tasks
 from services.ingest import repository as ingest_repo
+from services.deploy_service import read_deploy_status, trigger_deploy
 from services.version_service import force_refresh_status, trigger_update
 
 from .schemas import (
     ActiveUpdate,
     AdminUserItem,
+    DeployStatusOut,
+    DeployTriggerOut,
     IngestHealthOut,
     IngestRetryResult,
     LessonPromoteOut,
@@ -154,6 +157,29 @@ async def update_active(user_id: uuid.UUID, body: ActiveUpdate, _: Admin, db: DB
 async def trigger_system_update(_: Admin) -> UpdateResult:
     result = await trigger_update()
     return UpdateResult(**result)
+
+
+@router.post("/deploy", response_model=DeployTriggerOut)
+async def trigger_full_deploy(user: Admin) -> DeployTriggerOut:
+    """Touch the host trigger file; the host's finceptweb-deploy.path
+    systemd unit picks up the mtime change and runs the deploy script
+    asynchronously. Returns immediately with a `trigger_id` the
+    frontend uses to track this specific run via /deploy/status.
+    """
+    result = await trigger_deploy(actor_id=user["id"])
+    return DeployTriggerOut(**result)
+
+
+@router.get("/deploy/status", response_model=DeployStatusOut)
+async def get_deploy_status(_: Admin) -> DeployStatusOut:
+    """Return the current deploy phase + metadata.
+
+    Polled every 2s by the frontend RedeployCard. Tolerates the host
+    file being absent (returns `{phase: "idle"}`) and unparseable
+    (returns `{phase: "unknown"}`) so the polling query never errors.
+    """
+    raw = await read_deploy_status()
+    return DeployStatusOut(**raw)
 
 
 @router.post("/version/check", response_model=VersionStatus)

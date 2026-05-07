@@ -25,6 +25,22 @@ router = APIRouter()
 Admin = Annotated[User, Depends(require_admin)]
 
 
+class PerDatasetProgress(BaseModel):
+    """One row of the per-dataset breakdown surfaced on the AdminPage
+    card. `row_count` is an estimate (pg_class.reltuples) — accurate
+    enough for a progress meter without scanning multi-million-row
+    finmind tables on every 3 s poll."""
+
+    dataset: str
+    local_table: str | None
+    chunks_done: int
+    chunks_failed: int
+    chunks_pending: int
+    chunks_running: int
+    chunks_total: int
+    row_count: int | None
+
+
 class ChainStatePayload(BaseModel):
     """Mirrors `services.finmind_chain_service.ChainState` plus the
     augmented quota / external-activity / overall-progress fields
@@ -49,6 +65,7 @@ class ChainStatePayload(BaseModel):
     default_datasets: list[str]
     total_chunks_done: int
     total_chunks_total: int
+    per_dataset_progress: list[PerDatasetProgress]
 
 
 class StartRequest(BaseModel):

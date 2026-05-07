@@ -5,6 +5,7 @@ import { useCollapsible } from "@/hooks/useCollapsible";
 import {
   useFinmindChain,
   type FinmindChainState,
+  type PerDatasetProgress,
 } from "@/hooks/useFinmindChain";
 import { errorDetail } from "@/lib/api";
 
@@ -58,6 +59,87 @@ function StatusBanner({ state }: { state: FinmindChainState | undefined }) {
           最後一批: {new Date(state.last_chunk_at).toLocaleString()}
         </div>
       )}
+    </div>
+  );
+}
+
+function PerDatasetTable({
+  rows,
+  currentDataset,
+}: {
+  rows: PerDatasetProgress[];
+  currentDataset: string | null;
+}) {
+  if (rows.length === 0) return null;
+  return (
+    <div>
+      <div className="mb-1 flex justify-between text-sm">
+        <span className="font-semibold">每個 dataset 進度</span>
+        <span className="text-xs text-muted-foreground">
+          row 數為估計值 (pg_class.reltuples)
+        </span>
+      </div>
+      <div className="overflow-x-auto rounded border border-border">
+        <table className="w-full text-xs">
+          <thead className="bg-muted/40 text-muted-foreground">
+            <tr>
+              <th className="px-2 py-1 text-left font-medium">Dataset</th>
+              <th className="px-2 py-1 text-right font-medium">Chunks</th>
+              <th className="px-2 py-1 text-right font-medium">%</th>
+              <th className="px-2 py-1 text-right font-medium">失敗</th>
+              <th className="px-2 py-1 text-right font-medium">資料表 row 數</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const pct = formatPct(r.chunks_done, r.chunks_total);
+              const isCurrent = r.dataset === currentDataset;
+              const fullyDone =
+                r.chunks_total > 0 && r.chunks_done >= r.chunks_total;
+              return (
+                <tr
+                  key={r.dataset}
+                  className={`border-t border-border ${
+                    isCurrent ? "bg-primary/10" : ""
+                  }`}
+                >
+                  <td className="px-2 py-1 font-mono">
+                    {r.dataset}
+                    {r.local_table && (
+                      <span className="ml-1 text-muted-foreground">
+                        → {r.local_table}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-2 py-1 text-right font-mono">
+                    {r.chunks_done.toLocaleString()}/
+                    {r.chunks_total.toLocaleString()}
+                  </td>
+                  <td
+                    className={`px-2 py-1 text-right font-mono ${
+                      fullyDone ? "text-green-600 dark:text-green-400" : ""
+                    }`}
+                  >
+                    {pct}
+                  </td>
+                  <td
+                    className={`px-2 py-1 text-right font-mono ${
+                      r.chunks_failed > 0 ? "text-destructive" : "text-muted-foreground"
+                    }`}
+                  >
+                    {r.chunks_failed.toLocaleString()}
+                  </td>
+                  <td className="px-2 py-1 text-right font-mono">
+                    {r.row_count == null
+                      ? "—"
+                      : `≈ ${r.row_count.toLocaleString()}`}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -161,7 +243,7 @@ export default function FinmindBackfillCard() {
         title="FinMind 全量回填監控"
         subtitle={
           s
-            ? `${s.status === "running" ? "正在抓取" : s.status === "stopping" ? "正在停止" : "閒置中"} · ${s.chunks_done}/${s.chunks_total} chunks`
+            ? `${s.status === "running" ? "正在抓取" : s.status === "stopping" ? "正在停止" : "閒置中"} · ${s.total_chunks_done.toLocaleString()}/${s.total_chunks_total.toLocaleString()} chunks (${formatPct(s.total_chunks_done, s.total_chunks_total)})`
             : "click to expand"
         }
         open={open}
@@ -216,6 +298,13 @@ export default function FinmindBackfillCard() {
                 )}
               </div>
             </div>
+          )}
+
+          {s && s.per_dataset_progress && s.per_dataset_progress.length > 0 && (
+            <PerDatasetTable
+              rows={s.per_dataset_progress}
+              currentDataset={s.current_dataset}
+            />
           )}
 
           {s && s.chunks_total > 0 && (

@@ -60,6 +60,7 @@ const IDLE_STATE = {
     "TaiwanStockDividend",
     "TaiwanStockHoldingSharesPer",
   ],
+  per_dataset_progress: [],
 };
 
 function renderCard() {

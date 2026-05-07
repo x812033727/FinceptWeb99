@@ -490,6 +490,13 @@
     "sessions_drawer_hint": "切換討論、自動排程、策略模板",
     "sessions_search_placeholder": "搜尋主題或代號…",
     "sessions_filter_empty": "找不到符合的討論",
+    "toolbar": {
+      "aria_label": "討論工具列",
+      "new": "新討論",
+      "auto_run": "自動討論",
+      "strategy": "策略模板",
+      "sweep": "多日回測"
+    },
     "sessions_filter": {
       "all": "全部",
       "draft": "草稿",

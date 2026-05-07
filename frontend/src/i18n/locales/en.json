@@ -490,6 +490,13 @@
     "sessions_drawer_hint": "Pick a session, run automation, manage strategies",
     "sessions_search_placeholder": "Search topic or symbol…",
     "sessions_filter_empty": "No matching discussions.",
+    "toolbar": {
+      "aria_label": "Discussion toolbar",
+      "new": "New",
+      "auto_run": "Auto-run",
+      "strategy": "Strategy",
+      "sweep": "Sweep"
+    },
     "sessions_filter": {
       "all": "All",
       "draft": "Draft",

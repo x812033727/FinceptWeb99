@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ChevronDown,
   ChevronRight,
@@ -24,6 +25,7 @@ import type {
 import { AutoRunConfigCard } from "@/components/discussion/AutoRunConfigCard";
 import { BacktestSweepCard } from "@/components/discussion/BacktestSweepCard";
 import { DiscussionStatusBadge } from "@/components/discussion/DiscussionStatusBadge";
+import { DiscussionToolbar } from "@/components/discussion/DiscussionToolbar";
 import { StrategyTemplateCard } from "@/components/discussion/StrategyTemplateCard";
 import { ConclusionCard } from "@/components/discussion/ConclusionCard";
 import { PostMortemSkippedCard } from "@/components/discussion/PostMortemSkippedCard";
@@ -153,6 +155,11 @@ export default function DiscussionPage() {
   >([]);
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  // Virtualization parent for the desktop sessions rail. Keeps the
+  // DOM small (~30 rows) regardless of how many discussions the user
+  // has accumulated; without this, a 200-row archive renders 200
+  // backtest scoreboard cells on every render.
+  const sessionsScrollRef = useRef<HTMLDivElement>(null);
 
   const { data: detail } = useQuery<DiscussionDetail>({
     queryKey: ["discussion-session", selectedId],
@@ -168,7 +175,6 @@ export default function DiscussionPage() {
   // optimistic cache mutations during a round don't nuke the streaming
   // overlay mid-stream.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setStreamingTurns([]);
     setStreamBuffer("");
     setStreamingPersona(null);
@@ -614,7 +620,25 @@ export default function DiscussionPage() {
   // ── render helpers — reusable JSX blocks shared between the
   //    desktop inline layout and the mobile Sheet drawers ──────
 
-  function renderSidebarContent() {
+  // Reset to a fresh draft. Used by the desktop toolbar's
+  // 「+ 新討論」 button AND the mobile sidebar drawer's same
+  // button — `useCallback` so `<DiscussionToolbar>` doesn't
+  // remount its popovers when unrelated state changes.
+  const handleNewDiscussion = useCallback(() => {
+    setSelectedId(null);
+    setTopic(readDefaultTopic());
+    setRules(readDefaultRules());
+    setPersonaIds(DEFAULT_PERSONAS);
+    setStreamingTurns([]);
+    setStreamError(null);
+    setSessionsSheetOpen(false);
+  }, []);
+
+  // Mobile sidebar drawer — keeps the original layout (header + 3
+  // tool cards + new-discussion button + sessions filter + list).
+  // Desktop uses `renderSessionsRail()` only and surfaces tools via
+  // the new horizontal toolbar above the transcript.
+  function renderSidebarTools() {
     return (
       <>
         <div>
@@ -646,126 +670,208 @@ export default function DiscussionPage() {
         />
 
         <button
-          onClick={() => {
-            setSelectedId(null);
-            setTopic(readDefaultTopic());
-            setRules(readDefaultRules());
-            setPersonaIds(DEFAULT_PERSONAS);
-            setStreamingTurns([]);
-            setStreamError(null);
-            setSessionsSheetOpen(false);
-          }}
+          onClick={handleNewDiscussion}
           className="px-3 py-2 rounded-md border border-border text-xs hover:border-primary/40 hover:bg-accent/10 transition-colors text-left min-h-[36px]"
         >
           + {t("discussion.new")}
         </button>
+      </>
+    );
+  }
 
-        {/* Sessions filter — search input matches topic +
-            recommended_symbols; status pills narrow by lifecycle.
-            Both controls operate on the same `filteredSessions`
-            derived value used by the list below, so they affect
-            the desktop sidebar AND the mobile Sessions Sheet
-            without duplicate plumbing. */}
-        {sessions.length > 0 && (
-          <div className="space-y-1.5">
-            <div className="relative">
-              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" aria-hidden="true" />
-              <input
-                type="search"
-                value={sessionsQuery}
-                onChange={(e) => setSessionsQuery(e.target.value)}
-                placeholder={t("discussion.sessions_search_placeholder")}
-                aria-label={t("discussion.sessions_search_placeholder")}
-                className="w-full pl-7 pr-2 py-1.5 rounded-md bg-card border border-border text-xs text-foreground focus:outline-none focus:border-primary/50 min-h-[32px]"
-              />
-            </div>
-            <div className="flex gap-1 flex-wrap">
-              {(["all", "draft", "running", "done"] as const).map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => setSessionsStatusFilter(s)}
-                  className={cn(
-                    "px-2 py-0.5 rounded-full text-[10px] border transition-colors min-h-[24px]",
-                    sessionsStatusFilter === s
-                      ? "border-primary bg-primary/15 text-primary"
-                      : "border-border text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  {t(`discussion.sessions_filter.${s}`)}
-                </button>
+  function renderSessionsFilter() {
+    if (sessions.length === 0) return null;
+    return (
+      <div className="space-y-1.5">
+        <div className="relative">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" aria-hidden="true" />
+          <input
+            type="search"
+            value={sessionsQuery}
+            onChange={(e) => setSessionsQuery(e.target.value)}
+            placeholder={t("discussion.sessions_search_placeholder")}
+            aria-label={t("discussion.sessions_search_placeholder")}
+            className="w-full pl-7 pr-2 py-1.5 rounded-md bg-card border border-border text-xs text-foreground focus:outline-none focus:border-primary/50 min-h-[32px]"
+          />
+        </div>
+        <div className="flex gap-1 flex-wrap">
+          {(["all", "draft", "running", "done"] as const).map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => setSessionsStatusFilter(s)}
+              className={cn(
+                "px-2 py-0.5 rounded-full text-[10px] border transition-colors min-h-[24px]",
+                sessionsStatusFilter === s
+                  ? "border-primary bg-primary/15 text-primary"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {t(`discussion.sessions_filter.${s}`)}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Body of one row in the sessions list. Extracted so the desktop
+  // virtualized list and the mobile non-virtualized list share the
+  // same markup — drift between the two would surface as "looks
+  // different on phone vs laptop" complaints.
+  function renderSessionRowBody(s: Discussion) {
+    return (
+      <>
+        {(() => {
+          const tt = formatDiscussionTitle(s);
+          if (tt.text !== undefined) {
+            return (
+              <div className="line-clamp-2 font-bold text-foreground">
+                {tt.text}
+              </div>
+            );
+          }
+          return (
+            <div className="space-y-0.5">
+              <div className={`font-bold ${tt.verdictCls ?? ""}`}>
+                {tt.date}
+                {tt.verdictMark ? ` ${tt.verdictMark}` : ""}
+              </div>
+              {tt.lines?.map((ln) => (
+                <div key={ln.symbol} className={`font-mono ${ln.cls}`}>
+                  {ln.symbol}:{" "}
+                  {ln.changePcts.map((p, i) => (
+                    <span key={i}>
+                      {p !== null ? signedPct(p) : "—"}
+                      {i < ln.changePcts.length - 1 ? "/" : ""}
+                    </span>
+                  ))}
+                </div>
               ))}
             </div>
-          </div>
-        )}
+          );
+        })()}
+        <div className="mt-1 flex items-center gap-2 text-[10px] flex-wrap">
+          <DiscussionStatusBadge status={s.status} />
+          <span className="text-muted-foreground">
+            {s.as_of_date
+              ? `回測 ${s.as_of_date}`
+              : formatDateShort(s.updated_at || s.created_at)}
+          </span>
+          <span className="text-muted-foreground">·</span>
+          <span className="text-muted-foreground">R{s.current_round}</span>
+          <span className="text-muted-foreground">·</span>
+          <span className="text-muted-foreground">{s.persona_ids.length} 位專家</span>
+        </div>
+      </>
+    );
+  }
 
-        <div className="space-y-1">
-          {sessions.length === 0 ? (
-            <p className="text-xs text-muted-foreground">{t("discussion.empty")}</p>
-          ) : filteredSessions.length === 0 ? (
-            <p className="text-xs text-muted-foreground">
-              {t("discussion.sessions_filter_empty")}
-            </p>
-          ) : null}
-          {filteredSessions.map((s) => (
+  // Desktop virtualizer. `estimateSize` returns a taller estimate
+  // for backtest sessions (whose row contains a date + N symbol
+  // scoreboards) so the parent total height isn't off by 50%
+  // when most rows are backtest. Virtualizer reconciles actual
+  // measured heights post-mount via `measureElement`.
+  const sessionsVirtualizer = useVirtualizer({
+    count: filteredSessions.length,
+    getScrollElement: () => sessionsScrollRef.current,
+    estimateSize: (i) => {
+      const s = filteredSessions[i];
+      if (!s) return 56;
+      const tt = formatDiscussionTitle(s);
+      if (tt.text !== undefined) return 56;
+      return 56 + (tt.lines?.length ?? 0) * 18;
+    },
+    overscan: 8,
+  });
+
+  function renderSessionsListVirtualized() {
+    if (sessions.length === 0) {
+      return (
+        <p className="text-xs text-muted-foreground">{t("discussion.empty")}</p>
+      );
+    }
+    if (filteredSessions.length === 0) {
+      return (
+        <p className="text-xs text-muted-foreground">
+          {t("discussion.sessions_filter_empty")}
+        </p>
+      );
+    }
+    return (
+      <div
+        style={{
+          height: sessionsVirtualizer.getTotalSize(),
+          position: "relative",
+          width: "100%",
+        }}
+      >
+        {sessionsVirtualizer.getVirtualItems().map((vi) => {
+          const s = filteredSessions[vi.index];
+          if (!s) return null;
+          return (
             <button
               key={s.id}
-              onClick={() => {
-                setSelectedId(s.id);
-                setSessionsSheetOpen(false);
-              }}
+              data-index={vi.index}
+              ref={sessionsVirtualizer.measureElement}
+              onClick={() => setSelectedId(s.id)}
               className={cn(
-                "w-full text-left px-2 py-2 rounded text-xs transition-colors min-h-[44px]",
+                "absolute left-0 right-0 text-left px-2 py-2 rounded text-xs transition-colors",
                 selectedId === s.id
                   ? "bg-primary/15 text-primary"
                   : "hover:bg-accent/10 text-muted-foreground"
               )}
+              style={{
+                transform: `translateY(${vi.start}px)`,
+              }}
             >
-              {(() => {
-                const tt = formatDiscussionTitle(s);
-                if (tt.text !== undefined) {
-                  return (
-                    <div className="line-clamp-2 font-bold text-foreground">
-                      {tt.text}
-                    </div>
-                  );
-                }
-                return (
-                  <div className="space-y-0.5">
-                    <div className={`font-bold ${tt.verdictCls ?? ""}`}>
-                      {tt.date}
-                      {tt.verdictMark ? ` ${tt.verdictMark}` : ""}
-                    </div>
-                    {tt.lines?.map((ln) => (
-                      <div key={ln.symbol} className={`font-mono ${ln.cls}`}>
-                        {ln.symbol}:{" "}
-                        {ln.changePcts.map((p, i) => (
-                          <span key={i}>
-                            {p !== null ? signedPct(p) : "—"}
-                            {i < ln.changePcts.length - 1 ? "/" : ""}
-                          </span>
-                        ))}
-                      </div>
-                    ))}
-                  </div>
-                );
-              })()}
-              <div className="mt-1 flex items-center gap-2 text-[10px] flex-wrap">
-                <DiscussionStatusBadge status={s.status} />
-                <span className="text-muted-foreground">
-                  {s.as_of_date
-                    ? `回測 ${s.as_of_date}`
-                    : formatDateShort(s.updated_at || s.created_at)}
-                </span>
-                <span className="text-muted-foreground">·</span>
-                <span className="text-muted-foreground">R{s.current_round}</span>
-                <span className="text-muted-foreground">·</span>
-                <span className="text-muted-foreground">{s.persona_ids.length} 位專家</span>
-              </div>
+              {renderSessionRowBody(s)}
             </button>
-          ))}
-        </div>
+          );
+        })}
+      </div>
+    );
+  }
 
+  function renderSessionsListNonVirtualized() {
+    return (
+      <div className="space-y-1">
+        {sessions.length === 0 ? (
+          <p className="text-xs text-muted-foreground">{t("discussion.empty")}</p>
+        ) : filteredSessions.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            {t("discussion.sessions_filter_empty")}
+          </p>
+        ) : null}
+        {filteredSessions.map((s) => (
+          <button
+            key={s.id}
+            onClick={() => {
+              setSelectedId(s.id);
+              setSessionsSheetOpen(false);
+            }}
+            className={cn(
+              "w-full text-left px-2 py-2 rounded text-xs transition-colors min-h-[44px]",
+              selectedId === s.id
+                ? "bg-primary/15 text-primary"
+                : "hover:bg-accent/10 text-muted-foreground"
+            )}
+          >
+            {renderSessionRowBody(s)}
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  // Mobile drawer body: tools + filter + list as one scroll. Desktop
+  // splits these into the toolbar (tools) and sidebar (filter + list).
+  function renderSidebarContent() {
+    return (
+      <>
+        {renderSidebarTools()}
+        {renderSessionsFilter()}
+        {renderSessionsListNonVirtualized()}
         <div className="mt-auto text-xs text-muted-foreground pt-2">
           <a href="/dashboard" className="hover:text-foreground transition-colors">
             {t("ai.back_dashboard")}
@@ -1128,11 +1234,27 @@ export default function DiscussionPage() {
 
   return (
     <div className="h-[calc(100vh-2.5rem)] bg-background flex overflow-hidden">
-      {/* Desktop sidebar — always visible at lg+. Mobile uses the
-          Sessions Sheet drawer instead so the transcript owns the
-          full viewport. */}
-      <aside className="hidden lg:flex lg:w-60 border-r border-border flex-col p-3 gap-3 shrink-0 overflow-y-auto">
-        {renderSidebarContent()}
+      {/* Desktop sidebar — always visible at lg+. PR-E redesign:
+          tools (AutoRun / Strategy / Sweep / + 新討論) moved to
+          the horizontal toolbar at the top of the main column.
+          The rail now holds ONLY sessions navigation: filter chips
+          on top + virtualized list below. Mobile keeps the merged
+          tools-plus-sessions drawer via the Sheet path. */}
+      <aside className="hidden lg:flex lg:w-60 border-r border-border flex-col shrink-0">
+        <div className="p-3 shrink-0 border-b border-border">
+          {renderSessionsFilter()}
+        </div>
+        <div
+          ref={sessionsScrollRef}
+          className="flex-1 overflow-y-auto p-2"
+        >
+          {renderSessionsListVirtualized()}
+        </div>
+        <div className="border-t border-border px-3 py-2 text-xs text-muted-foreground shrink-0">
+          <a href="/dashboard" className="hover:text-foreground transition-colors">
+            {t("ai.back_dashboard")}
+          </a>
+        </div>
       </aside>
 
       {/* Mobile sessions Sheet — left-side drawer triggered by the
@@ -1222,6 +1344,21 @@ export default function DiscussionPage() {
           )}
           {renderActions()}
         </div>
+
+        {/* Desktop tool toolbar (PR-E) — horizontal row of
+            「+ 新討論」 + 自動討論 / 策略模板 / 多日回測 popovers.
+            Replaces the four cards that previously stacked in the
+            240px sidebar. Only visible at lg+; mobile uses the
+            Sessions Sheet which keeps the cards inline. */}
+        <DiscussionToolbar
+          agents={agents}
+          personaName={personaName}
+          onNewDiscussion={handleNewDiscussion}
+          topic={topic}
+          rules={rules}
+          market={market}
+          personaIds={personaIds}
+        />
 
         {/* Desktop collapsible config bar (PR-D). Replaces the old
             top-pinned `max-h-[60vh]` panel that ate vertical space

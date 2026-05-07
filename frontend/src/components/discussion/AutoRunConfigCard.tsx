@@ -12,11 +12,16 @@ export function AutoRunConfigCard({
   collapsed,
   onToggleCollapse,
   personaName,
+  hideHeader,
 }: {
   agents: AgentInfo[];
   collapsed: boolean;
   onToggleCollapse: () => void;
   personaName: (id: string) => string;
+  /** When true, omit the inline header row (the popover trigger
+   * already labels itself). The body still respects `collapsed`
+   * so callers using the popover should pass `collapsed={false}`. */
+  hideHeader?: boolean;
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -94,22 +99,24 @@ export function AutoRunConfigCard({
 
   return (
     <div className="border border-border rounded-md p-2 bg-card/40">
-      <button
-        type="button"
-        onClick={onToggleCollapse}
-        className="flex items-center gap-1.5 w-full text-left text-xs font-medium text-foreground hover:text-primary transition-colors"
-        aria-expanded={!collapsed}
-      >
-        <span className="text-[9px] text-muted-foreground w-2.5 inline-block">
-          {collapsed ? "▶" : "▼"}
-        </span>
-        {t("discussion.auto_run_title")}
-        {cfg?.enabled && (
-          <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-green-900/30 text-green-300 border border-green-800/50">
-            ON
+      {hideHeader ? null : (
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          className="flex items-center gap-1.5 w-full text-left text-xs font-medium text-foreground hover:text-primary transition-colors"
+          aria-expanded={!collapsed}
+        >
+          <span className="text-[9px] text-muted-foreground w-2.5 inline-block">
+            {collapsed ? "▶" : "▼"}
           </span>
-        )}
-      </button>
+          {t("discussion.auto_run_title")}
+          {cfg?.enabled && (
+            <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-green-900/30 text-green-300 border border-green-800/50">
+              ON
+            </span>
+          )}
+        </button>
+      )}
 
       {!collapsed && (
         <div className="mt-2 space-y-2">

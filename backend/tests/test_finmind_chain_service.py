@@ -392,9 +392,14 @@ async def test_chain_continues_when_chunk_fails(
 
 
 @pytest.mark.asyncio
-async def test_get_state_recovers_from_corrupted_json(fake_redis):
+async def test_get_state_recovers_from_corrupted_json(
+    fake_redis, stub_helpers,
+):
     """A malformed redis blob shouldn't poison subsequent reads — the
-    service should fall back to a fresh idle state."""
+    service should fall back to a fresh idle state. `stub_helpers` is
+    needed alongside `fake_redis` because get_state() calls
+    `_host_chain_likely_active` which executes Postgres-specific
+    `interval` SQL that SQLite (the CI test DB) can't parse."""
     from services.finmind_chain_service import STATE_KEY, get_state
 
     fake_redis[STATE_KEY] = "{not-valid-json"

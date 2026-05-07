@@ -89,6 +89,7 @@
     "macro": "總體經濟",
     "ai": "AI 顧問",
     "discussion": "專家討論",
+    "lesson_library": "教訓圖書館",
     "finmind": "FinMind API",
     "settings": "設定",
     "admin": "管理後台",
@@ -532,6 +533,37 @@
     },
     "disclaimer": "AI 回應僅供參考，並非投資建議。"
   },
+  "lesson_library": {
+    "title": "教訓圖書館",
+    "total": "共 {{count}} 則",
+    "tab": {
+      "active": "活躍",
+      "archived": "已封存"
+    },
+    "filter": {
+      "tier": "Tier",
+      "market": "市場",
+      "sort": "排序",
+      "search": "搜尋",
+      "search_placeholder": "lesson_text 或 category…",
+      "all": "全部"
+    },
+    "sort": {
+      "hit_rate": "命中率",
+      "usage": "使用次數",
+      "recent": "最近使用",
+      "created": "建立時間"
+    },
+    "col": {
+      "lesson": "Lesson",
+      "usage": "命中/使用",
+      "rate": "近 10 命中率",
+      "last_used": "最近使用"
+    },
+    "empty": "找不到符合的教訓",
+    "prev": "上一頁",
+    "next": "下一頁"
+  },
   "discussion": {
     "title": "專家圓桌",
     "subtitle": "多位 AI 專家輪流發言、互相辯論",
@@ -711,6 +743,18 @@
         "sweep_completed": "Sweep 完成",
         "maturity_change": "成熟度變化",
         "persona_status_change": "Persona 狀態變化"
+      }
+    },
+    "leaderboard": {
+      "title": "近 {{days}} 天 Persona 排行榜",
+      "empty": "尚無 persona 參與紀錄",
+      "col": {
+        "persona": "Persona",
+        "win_rate": "命中率",
+        "participation": "參與數",
+        "weight": "平均權重",
+        "trend": "趨勢",
+        "status": "狀態"
       }
     },
     "export_markdown": "匯出 Markdown",

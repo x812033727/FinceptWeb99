@@ -89,6 +89,7 @@
     "macro": "Macro",
     "ai": "AI Agents",
     "discussion": "Discussion",
+    "lesson_library": "Lesson Library",
     "finmind": "FinMind API",
     "settings": "Settings",
     "admin": "Admin",
@@ -532,6 +533,37 @@
     },
     "disclaimer": "AI responses are for informational purposes only and not financial advice."
   },
+  "lesson_library": {
+    "title": "Lesson Library",
+    "total": "{{count}} total",
+    "tab": {
+      "active": "Active",
+      "archived": "Archived"
+    },
+    "filter": {
+      "tier": "Tier",
+      "market": "Market",
+      "sort": "Sort",
+      "search": "Search",
+      "search_placeholder": "lesson_text or category…",
+      "all": "All"
+    },
+    "sort": {
+      "hit_rate": "Hit rate",
+      "usage": "Usage",
+      "recent": "Recently used",
+      "created": "Created"
+    },
+    "col": {
+      "lesson": "Lesson",
+      "usage": "hits/usage",
+      "rate": "Recent 10 rate",
+      "last_used": "Last used"
+    },
+    "empty": "No lessons match the filter",
+    "prev": "Prev",
+    "next": "Next"
+  },
   "discussion": {
     "title": "Expert Round-table",
     "subtitle": "Multiple AI experts take turns and debate each other",
@@ -711,6 +743,18 @@
         "sweep_completed": "Sweep completed",
         "maturity_change": "Maturity change",
         "persona_status_change": "Persona status change"
+      }
+    },
+    "leaderboard": {
+      "title": "Persona leaderboard, last {{days}} days",
+      "empty": "No persona participation recorded yet",
+      "col": {
+        "persona": "Persona",
+        "win_rate": "Hit rate",
+        "participation": "Participation",
+        "weight": "Avg weight",
+        "trend": "Trend",
+        "status": "Status"
       }
     },
     "export_markdown": "Export Markdown",

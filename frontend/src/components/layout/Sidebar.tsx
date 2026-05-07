@@ -5,6 +5,7 @@ import {
   Activity,
   Bell,
   Bitcoin,
+  BookOpen,
   Bot,
   Briefcase,
   ChevronDown,
@@ -70,6 +71,7 @@ const NAV_GROUPS: NavGroupDef[] = [
     items: [
       { to: "/ai", labelKey: "nav.ai", Icon: Bot },
       { to: "/discussion", labelKey: "nav.discussion", Icon: MessagesSquare },
+      { to: "/discussion/lessons", labelKey: "nav.lesson_library", Icon: BookOpen },
     ],
   },
   {

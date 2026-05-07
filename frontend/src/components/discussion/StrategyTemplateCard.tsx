@@ -19,6 +19,7 @@ import { AutoPromoteSettings } from "./AutoPromoteSettings";
 import { BrierTrendChart } from "./BrierTrendChart";
 import { HealthMetricsSparkline } from "./HealthMetricsSparkline";
 import { MaturityBadge } from "./MaturityBadge";
+import { PersonaLeaderboardCard } from "./PersonaLeaderboardCard";
 import { PersonaStatusGrid } from "./PersonaStatusGrid";
 import { StrategyTimelineCard } from "./StrategyTimelineCard";
 import { SweepAggregateCard } from "./SweepAggregateCard";
@@ -580,6 +581,7 @@ function StrategyRow({
       <PersonaStatusGrid strategy={strategy} />
       <HealthMetricsSparkline strategyId={strategy.id} />
       <StrategyTimelineCard strategyId={strategy.id} />
+      <PersonaLeaderboardCard strategyId={strategy.id} />
       <VersionHistorySection strategyId={strategy.id} />
       {showAggregate && (
         <SweepAggregateCard strategyId={strategy.id} />

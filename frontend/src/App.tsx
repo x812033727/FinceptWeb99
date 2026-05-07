@@ -26,6 +26,7 @@ const MacroPage = lazy(pageLoaders.macro);
 const WatchlistPage = lazy(pageLoaders.watchlist);
 const AIPage = lazy(pageLoaders.ai);
 const DiscussionPage = lazy(pageLoaders.discussion);
+const LessonLibraryPage = lazy(pageLoaders.lessonLibrary);
 const AlertsPage = lazy(pageLoaders.alerts);
 const SettingsPage = lazy(pageLoaders.settings);
 const AdminPage = lazy(pageLoaders.admin);
@@ -101,6 +102,7 @@ export default function App() {
             <Route path="/alerts" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><AlertsPage /></Suspense></ErrorBoundary>} />
             <Route path="/ai" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><AIPage /></Suspense></ErrorBoundary>} />
             <Route path="/discussion" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><DiscussionPage /></Suspense></ErrorBoundary>} />
+            <Route path="/discussion/lessons" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><LessonLibraryPage /></Suspense></ErrorBoundary>} />
             <Route path="/settings" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><SettingsPage /></Suspense></ErrorBoundary>} />
             <Route path="/finmind" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><FinmindPage /></Suspense></ErrorBoundary>} />
             <Route path="/admin" element={<RequireRole role="admin"><ErrorBoundary><Suspense fallback={<PageSkeleton />}><AdminPage /></Suspense></ErrorBoundary></RequireRole>} />

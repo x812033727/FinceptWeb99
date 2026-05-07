@@ -126,12 +126,16 @@ describe("Sidebar drawer state", () => {
 });
 
 describe("Sidebar grouped nav", () => {
-  it("renders the 14 base nav items (admin link hidden for non-admins)", () => {
+  it("renders the 15 base nav items (admin link hidden for non-admins)", () => {
     const { container } = renderSidebar(true);
     const links = container.querySelectorAll("a[data-to]");
-    expect(links).toHaveLength(14);
+    // 14 prior + Lesson Library at /discussion/lessons (PR-5b).
+    expect(links).toHaveLength(15);
     expect(container.querySelector('a[data-to="/admin"]')).toBeNull();
     expect(container.querySelector('a[data-to="/finmind"]')).not.toBeNull();
+    expect(
+      container.querySelector('a[data-to="/discussion/lessons"]'),
+    ).not.toBeNull();
   });
 
   it("renders the admin link only for admin users", () => {

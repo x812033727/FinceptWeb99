@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import type { Conclusion, DiscussionDetail, Turn } from "@/types/discussion";
 import { useCollapsible } from "@/hooks/useCollapsible";
 import { ConclusionHero } from "./ConclusionHero";
+import { QualitySignalsRow } from "./QualitySignalsRow";
 
 function buildMarkdownExport(
   detail: DiscussionDetail,
@@ -219,12 +220,15 @@ export function ConclusionCard({
       {open && (hasError ? (
         <p className="text-xs text-red-300">{t("discussion.conclusion_parse_error")}</p>
       ) : (
-        <ConclusionHero
-          detail={detail}
-          conclusion={conclusion}
-          variant={variant}
-          onSymbolClick={askPersonaAbout}
-        />
+        <>
+          <QualitySignalsRow signals={conclusion.quality_signals} />
+          <ConclusionHero
+            detail={detail}
+            conclusion={conclusion}
+            variant={variant}
+            onSymbolClick={askPersonaAbout}
+          />
+        </>
       ))}
     </div>
   );

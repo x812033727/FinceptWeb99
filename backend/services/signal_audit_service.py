@@ -520,6 +520,37 @@ async def audit_discussion(
     return audit
 
 
+async def audit_discussion_for_synthesis(
+    db: AsyncSession,
+    discussion_id: uuid.UUID,
+) -> list[dict[str, Any]]:
+    """PR-1: Concise hallucination report for inlining into a
+    synthesized conclusion's `quality_signals` block.
+
+    Wraps `audit_discussion` and flattens to just the hallucinated
+    `(round, persona_id, signal)` triples — what we need to warn the
+    operator that a recommendation might be built on fabricated
+    values. Returns `[]` when the discussion has no persisted round
+    contexts (legacy auto-runs predating the PR #209 snapshot column
+    won't have them) so callers can treat empty as "no warnings"
+    rather than "audit unavailable".
+    """
+    audit = await audit_discussion(db, discussion_id)
+    if audit is None:
+        return []
+    warnings: list[dict[str, Any]] = []
+    for round_audit in audit.rounds:
+        for turn in round_audit.turns:
+            for signal_key, fired in turn.hallucinated.items():
+                if fired:
+                    warnings.append({
+                        "round": round_audit.round,
+                        "persona_id": turn.persona_id,
+                        "signal": signal_key,
+                    })
+    return warnings
+
+
 # ── Bulk roll-up across recent discussions ────────────────────────
 
 

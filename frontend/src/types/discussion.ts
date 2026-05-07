@@ -44,6 +44,51 @@ export interface Recommendation {
   calibrated_confidence?: number;
 }
 
+/** PR-1: Synthesizer post-parse quality signals — surfaces stance /
+ * confidence / contradiction / hallucination warnings on conclusions
+ * that look structurally ok but smell wrong (built on hallucinated
+ * data, contradicting actual stance distribution, all picks too
+ * confident). The UI renders badge chips per signal so the operator
+ * sees the warning before reading the recommendations. */
+export interface QualitySignals {
+  /** Stance counts in the latest round, excluding user-input
+   * directives. Bucket `other` catches stance values the backend
+   * doesn't recognize (forward compat for new stance types). */
+  stance_distribution?: {
+    agree: number;
+    dissent: number;
+    supplement: number;
+    other: number;
+  };
+  /** Confidence summary over recommendations. `n=0` when no picks. */
+  confidence_stats?: {
+    n: number;
+    mean?: number;
+    median?: number;
+    max?: number;
+    min?: number;
+    /** True when mean > 0.75 OR every pick ≥ 0.8 — the synthesizer
+     * prompt forbids this distribution but the parser doesn't enforce
+     * it; this signal is the post-parse check. */
+    over_confident?: boolean;
+  };
+  /** True when latest round had more dissent than agree but the
+   * synthesizer still emitted recommendations. */
+  consensus_contradiction?: boolean;
+  /** Triples (round, persona_id, signal) where a persona quoted a
+   * numeric value for a signal NOT in the round's prompt context.
+   * Empty array = clean transcript. */
+  hallucination_warnings?: Array<{
+    round: number;
+    persona_id: string;
+    signal: string;
+  }>;
+  /** Set when computation was skipped (e.g. parse error placeholder
+   * couldn't be analyzed). Distinguishes "parse broke" from "parsed
+   * cleanly with no warnings". */
+  _skipped?: string;
+}
+
 export interface Conclusion {
   recommended_symbols: string[];
   /** Per-pick confidence breakdown (PR-C0). Optional for forward-
@@ -55,6 +100,10 @@ export interface Conclusion {
   risks: string[];
   time_horizon: TimeHorizon;
   consensus_score: number;
+  /** PR-1: post-parse quality signals (stance / confidence / contradiction
+   * / hallucination). Optional for forward-compat with conclusions
+   * synthesized before PR-1 landed. */
+  quality_signals?: QualitySignals;
   /** Set by the backend when the synthesizer's JSON couldn't be parsed
    * even via the lenient salvage path — the UI shows a degraded
    * "解析失敗" badge instead of pretending the conclusion is real. */

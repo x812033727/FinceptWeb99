@@ -568,6 +568,16 @@
     "conclusion_title": "Conclusion (initial synthesis)",
     "post_mortem_conclusion_title": "📋 Post-mortem Revised Conclusion",
     "conclusion_parse_error": "Conclusion parse failed, please re-synthesize",
+    "quality": {
+      "skipped": "Quality check skipped (parse error)",
+      "passed": "Quality check passed",
+      "passed_tooltip": "Stance, confidence, and citations all clean",
+      "hallucination_count": "{{count}} hallucinated value(s)",
+      "contradiction": "Consensus contradiction",
+      "contradiction_tooltip": "Latest round had more dissent than agree, yet picks were emitted",
+      "over_confident": "Over-confident",
+      "over_confident_tooltip": "Mean confidence {{mean}} above the reasonable cap"
+    },
     "export_markdown": "Export Markdown",
     "ask_followup": "Deep Dive",
     "click_for_deep_dive": "Click to ask an expert about this symbol",

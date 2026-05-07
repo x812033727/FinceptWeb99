@@ -518,6 +518,70 @@ async def test_audit_discussion_walks_full_path(
     assert cov["taifex_positioning"]["persona_count"] == 2
 
 
+# ── audit_discussion_for_synthesis (PR-1) ─────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_audit_for_synthesis_empty_when_no_contexts(
+    db_session: AsyncSession, owner: User,
+):
+    """Legacy auto-runs without snapshotted contexts return [] so
+    the synthesizer caller can treat empty as 'no warnings' rather
+    than 'audit unavailable'."""
+    disc_id = uuid4()
+    db_session.add(Discussion(
+        id=disc_id, owner_id=owner.id, topic="t", rules="",
+        market="TW", persona_ids=["market_analyst"],
+        status="concluded", current_round=0,
+    ))
+    await db_session.commit()
+
+    out = await svc.audit_discussion_for_synthesis(db_session, disc_id)
+    assert out == []
+
+
+@pytest.mark.asyncio
+async def test_audit_for_synthesis_surfaces_hallucinated_triples(
+    db_session: AsyncSession, owner: User,
+):
+    """A persona quoting `個股期 +1500 口` for a numeric value when
+    the ctx had NO single_stock_futures_oi block should fire a
+    hallucination warning with (round, persona_id, signal)."""
+    disc_id = uuid4()
+    db_session.add(Discussion(
+        id=disc_id, owner_id=owner.id, topic="2330", rules="",
+        market="TW", persona_ids=["market_analyst", "soros"],
+        status="concluded", current_round=1,
+    ))
+    db_session.add(DiscussionRoundContext(
+        discussion_id=disc_id, round=1,
+        # ctx intentionally lacks single_stock_futures_oi
+        context={"taifex_positioning": {"trend": "neutral"}},
+        captured_at=datetime.now(UTC),
+    ))
+    db_session.add_all([
+        DiscussionTurn(
+            discussion_id=disc_id, round=1, turn_index=0,
+            persona_id="market_analyst", stance="agree",
+            content="總體看法持平。",
+        ),
+        DiscussionTurn(
+            discussion_id=disc_id, round=1, turn_index=1,
+            persona_id="soros", stance="dissent",
+            content="個股期 2330 多單 +1500 口，籌碼集中。",
+        ),
+    ])
+    await db_session.commit()
+
+    out = await svc.audit_discussion_for_synthesis(db_session, disc_id)
+    assert any(
+        w["persona_id"] == "soros"
+        and w["signal"] == "single_stock_futures_oi"
+        and w["round"] == 1
+        for w in out
+    ), f"expected hallucination triple in {out}"
+
+
 # ── audit_recent_discussions (bulk) ───────────────────────────────
 
 

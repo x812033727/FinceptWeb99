@@ -3198,6 +3198,114 @@ def _parse_recommendations(data: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+async def _compute_quality_signals(
+    db: AsyncSession,
+    discussion: Discussion,
+    conclusion: dict[str, Any],
+    turns: list[DiscussionTurn],
+) -> None:
+    """PR-1: attach a `quality_signals` block to the conclusion JSON.
+
+    The synthesizer prompt asks the LLM not to give every pick
+    confidence ≥ 0.8, but `_safe_conclusion` only clamps to [0,1]
+    without checking the distribution. This helper surfaces four
+    signals so the UI can warn the operator about outputs that
+    look structurally ok but smell wrong:
+
+      - `stance_distribution`: agree / dissent / supplement count
+        in the latest round (excludes user_input directives).
+        Lets the UI flag the case where a "buy" recommendation was
+        synthesized over a majority-dissent transcript.
+      - `confidence_stats`: n / mean / median / max / min over
+        recommendations, with `over_confident=True` when mean > 0.75
+        OR every pick ≥ 0.8 — promotes the prompt-level guidance to
+        a post-parse signal.
+      - `consensus_contradiction`: bool, dissent > agree AND
+        recommendations non-empty.
+      - `hallucination_warnings`: from
+        `signal_audit_service.audit_discussion_for_synthesis` —
+        triples of (round, persona_id, signal) where a persona
+        cited a numeric value for a signal NOT in the round's
+        prompt context. Best-effort: audit failure logs but doesn't
+        block synthesis.
+
+    Mutates `conclusion` in place. Skipped (writes a `_skipped`
+    marker) on parse-error placeholders so the UI can distinguish
+    "couldn't parse the LLM output" from "parsed but no warnings".
+    """
+    if conclusion.get("_parse_error"):
+        conclusion["quality_signals"] = {"_skipped": "parse_error"}
+        return
+
+    persona_turns = [t for t in turns if t.persona_id != USER_PERSONA_ID]
+    latest_round = max((t.round for t in persona_turns), default=0)
+    latest_turns = [t for t in persona_turns if t.round == latest_round]
+
+    stance_dist = {"agree": 0, "dissent": 0, "supplement": 0, "other": 0}
+    for t in latest_turns:
+        bucket = t.stance if t.stance in stance_dist else "other"
+        stance_dist[bucket] += 1
+
+    confidences: list[float] = []
+    for rec in conclusion.get("recommendations") or []:
+        if not isinstance(rec, dict):
+            continue
+        try:
+            v = float(rec.get("confidence", 0.5))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(v):
+            continue
+        confidences.append(max(0.0, min(1.0, v)))
+
+    confidence_stats: dict[str, Any] = {"n": len(confidences)}
+    if confidences:
+        n = len(confidences)
+        sorted_c = sorted(confidences)
+        mean_c = sum(sorted_c) / n
+        median_c = (
+            sorted_c[n // 2]
+            if n % 2 == 1
+            else (sorted_c[n // 2 - 1] + sorted_c[n // 2]) / 2
+        )
+        confidence_stats.update({
+            "mean": round(mean_c, 4),
+            "median": round(median_c, 4),
+            "max": round(sorted_c[-1], 4),
+            "min": round(sorted_c[0], 4),
+            "over_confident": (
+                mean_c > 0.75 or all(c >= 0.8 for c in sorted_c)
+            ),
+        })
+
+    consensus_contradiction = (
+        stance_dist["dissent"] > stance_dist["agree"]
+        and bool(conclusion.get("recommendations"))
+    )
+
+    warnings: list[dict[str, Any]] = []
+    try:
+        from services.signal_audit_service import (
+            audit_discussion_for_synthesis,
+        )
+        warnings = await audit_discussion_for_synthesis(db, discussion.id)
+    except Exception as exc:
+        log.warning(
+            "discussion.quality_signals.audit_failed",
+            extra={
+                "discussion_id": str(discussion.id),
+                "error": str(exc),
+            },
+        )
+
+    conclusion["quality_signals"] = {
+        "stance_distribution": stance_dist,
+        "confidence_stats": confidence_stats,
+        "consensus_contradiction": consensus_contradiction,
+        "hallucination_warnings": warnings,
+    }
+
+
 async def synthesize_conclusion(
     db: AsyncSession,
     discussion: Discussion,
@@ -3407,6 +3515,14 @@ async def synthesize_conclusion(
         )
 
     conclusion = _safe_conclusion(assembled)
+    # PR-1: attach stance / confidence / contradiction / hallucination
+    # quality signals to the conclusion JSON so the UI can warn the
+    # operator about outputs that look structurally ok (parses, has
+    # picks) but smell wrong (built on hallucinated data, contradicts
+    # the actual stance distribution, all picks ≥ 0.8). Computed
+    # before calibration so downstream consumers see signals on the
+    # raw confidence the LLM emitted.
+    await _compute_quality_signals(db, discussion, conclusion, turns)
     # PR-C2 follow-up: if this discussion is part of a strategy that
     # has accumulated enough samples for calibration, map every
     # raw confidence through the isotonic curve and store both

@@ -134,6 +134,12 @@ class Settings(BaseSettings):
 
     # Rate limits
     FINMIND_HOURLY_REQUEST_LIMIT: int = 550  # conservative under registered free-tier 600/hr
+    # Sub-budget reserved for the backfill chain. Chain's pre-flight gate
+    # uses this; the connector's hard cap stays FINMIND_HOURLY_REQUEST_LIMIT.
+    # Setting this below the global cap reserves headroom for live serving
+    # / interactive paths (e.g. discussions) so a saturating backfill
+    # doesn't lock them out.
+    FINMIND_CHAIN_HOURLY_BUDGET: int = 550
     AI_REQUESTS_ANALYST_DAILY: int = 20
     AI_REQUESTS_VIEWER_DAILY: int = 5
 

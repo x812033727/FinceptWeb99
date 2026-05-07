@@ -94,6 +94,7 @@ async def stub_helpers(monkeypatch):
         "host_chain_active": False,
         "quota_used": 0,
         "quota_limit": 6000,
+        "quota_limit_global": 6000,
         "stuck_reset_count": 0,
         "dataset_progress": {},
     }
@@ -109,6 +110,9 @@ async def stub_helpers(monkeypatch):
 
     async def _fake_quota_limit():
         return fakes["quota_limit"]
+
+    async def _fake_quota_limit_global():
+        return fakes["quota_limit_global"]
 
     async def _fake_reset_stuck():
         return fakes["stuck_reset_count"]
@@ -136,6 +140,10 @@ async def stub_helpers(monkeypatch):
     )
     monkeypatch.setattr(
         "services.finmind_chain_service._quota_limit", _fake_quota_limit
+    )
+    monkeypatch.setattr(
+        "services.finmind_chain_service._quota_limit_global",
+        _fake_quota_limit_global,
     )
     monkeypatch.setattr(
         "services.finmind_chain_service.reset_stuck", _fake_reset_stuck

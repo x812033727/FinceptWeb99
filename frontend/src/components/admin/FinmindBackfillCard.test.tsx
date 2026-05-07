@@ -44,7 +44,8 @@ const IDLE_STATE = {
   total_chunks_done: 0,
   total_chunks_total: 0,
   quota_used: 1234,
-  quota_limit: 6000,
+  quota_limit: 5500,
+  quota_limit_global: 6000,
   external_activity_detected: false,
   default_datasets: [
     "TaiwanStockMarginPurchaseShortSale",

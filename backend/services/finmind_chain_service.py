@@ -177,10 +177,36 @@ async def _quota_used() -> int | None:
         return None
 
 
-async def _quota_limit() -> int:
+async def _quota_limit_global() -> int:
+    """Connector hard cap (`FINMIND_HOURLY_REQUEST_LIMIT`). Surfaced as
+    its own helper so tests can monkeypatch it the same way as
+    `_quota_limit` instead of reaching into `finmind_connector`."""
     from data.tw.finmind_connector import _resolve_hourly_limit
 
     return await _resolve_hourly_limit()
+
+
+async def _quota_limit() -> int:
+    """Chain pre-flight gate budget. Defaults to the global
+    FINMIND_HOURLY_REQUEST_LIMIT, but operators can set
+    FINMIND_CHAIN_HOURLY_BUDGET below it to reserve headroom for
+    live / interactive paths (discussions etc.) — the chain stops
+    at the sub-budget while the connector's hard cap stays at the
+    global limit, so non-chain callers can still consume the gap.
+    Falls back to the global limit if the sub-budget read fails so
+    a runtime_config outage doesn't reopen the chain to the full cap."""
+    global_limit = await _quota_limit_global()
+    try:
+        from db.session import AsyncSessionLocal
+        from services.runtime_config_service import get_int as _get_int
+        async with AsyncSessionLocal() as db:
+            chain_budget = await _get_int(db, "FINMIND_CHAIN_HOURLY_BUDGET")
+    except Exception:
+        return global_limit
+    # Never let chain budget exceed the connector's hard cap — that
+    # would have the chain pushing past the limit only to be 4xx-ed
+    # one call later.
+    return min(chain_budget, global_limit)
 
 
 async def _wait_for_quota(stop_check: callable) -> None:
@@ -433,6 +459,7 @@ async def get_state() -> dict:
     state = await _heal_if_orphaned(state)
     used = await _quota_used()
     limit = await _quota_limit()
+    global_limit = await _quota_limit_global()
     state.stop_requested = await _stop_requested()
     # Overall progress across ALL datasets in this chain run. When the
     # chain is idle and selected_datasets is empty, both totals are 0
@@ -449,6 +476,7 @@ async def get_state() -> dict:
         **state.__dict__,
         "quota_used": used,
         "quota_limit": limit,
+        "quota_limit_global": global_limit,
         "external_activity_detected": await _host_chain_likely_active(),
         "default_datasets": list(DEFAULT_DATASETS),
         "total_chunks_done": total_done,

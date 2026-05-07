@@ -1471,6 +1471,109 @@ async def test_run_round_accumulates_usage_across_tool_loop_iterations(
 
 
 @pytest.mark.asyncio
+async def test_run_round_tracks_tool_call_count_and_breakdown(
+    db_session: AsyncSession, owner: User,
+):
+    """Persona that fires `get_quote` twice + `run_dcf` once must record
+    `tool_call_count=3` and `tool_call_breakdown={"get_quote": 2,
+    "run_dcf": 1}`. Without the breakdown the admin UsageCard's "why
+    is this discussion slow" diagnostic has no signal beyond raw
+    token totals.
+    """
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+
+    async def _stream(*_a, **_kw):
+        yield {"type": "tool_call", "id": "c1", "name": "get_quote",
+               "args": {"symbol": "2330"}}
+        yield {"type": "tool_call", "id": "c2", "name": "get_quote",
+               "args": {"symbol": "2454"}}
+        yield {"type": "tool_call", "id": "c3", "name": "run_dcf",
+               "args": {"symbol": "2330"}}
+        yield {"type": "delta",
+               "text": '{"stance": "supplement", "content": "OK"}'}
+        yield {"type": "usage", "prompt_tokens": 100, "completion_tokens": 50}
+
+    record_calls: list[dict] = []
+
+    async def _capture(_db, **kwargs):
+        record_calls.append(kwargs)
+
+    with patch(
+        "services.discussion_service.stream_chat",
+        side_effect=_stream,
+    ), patch(
+        "services.discussion_service.gather_market_context",
+        new=AsyncMock(return_value={"market": "TW"}),
+    ), patch(
+        "services.llm_usage_service.record_usage",
+        new=_capture,
+    ):
+        async for _ev in discussion_service.run_round(
+            db_session, row, user_id=str(owner.id),
+        ):
+            pass
+
+    # buffett + lynch each fire the same fake stream — both rows
+    # should carry identical tool_call counts.
+    assert len(record_calls) == 2
+    for kw in record_calls:
+        assert kw["tool_call_count"] == 3
+        assert kw["tool_call_breakdown"] == {"get_quote": 2, "run_dcf": 1}
+
+
+@pytest.mark.asyncio
+async def test_run_round_tool_call_breakdown_none_when_no_tools(
+    db_session: AsyncSession, owner: User,
+):
+    """A persona turn with zero tool calls writes `tool_call_count=0`
+    and `tool_call_breakdown=None`. The NULL-vs-{} distinction lets
+    the admin tell apart "this row predates tool tracking" from
+    "this row had tools available but didn't use any" — important
+    for tracking gradual rollout."""
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+
+    async def _stream(*_a, **_kw):
+        yield {"type": "delta",
+               "text": '{"stance": "supplement", "content": "OK"}'}
+        yield {"type": "usage", "prompt_tokens": 100, "completion_tokens": 50}
+
+    record_calls: list[dict] = []
+
+    async def _capture(_db, **kwargs):
+        record_calls.append(kwargs)
+
+    with patch(
+        "services.discussion_service.stream_chat",
+        side_effect=_stream,
+    ), patch(
+        "services.discussion_service.gather_market_context",
+        new=AsyncMock(return_value={"market": "TW"}),
+    ), patch(
+        "services.llm_usage_service.record_usage",
+        new=_capture,
+    ):
+        async for _ev in discussion_service.run_round(
+            db_session, row, user_id=str(owner.id),
+        ):
+            pass
+
+    assert len(record_calls) == 2
+    for kw in record_calls:
+        assert kw["tool_call_count"] == 0
+        assert kw["tool_call_breakdown"] is None
+
+
+@pytest.mark.asyncio
 async def test_run_round_increments_round_number_on_subsequent_calls(
     db_session: AsyncSession, owner: User,
 ):

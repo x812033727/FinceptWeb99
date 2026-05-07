@@ -2433,8 +2433,14 @@ def _filter_context_for_persona(
 # toolset` ship.
 _PERSONA_TOOL_USAGE_HINT = (
     "\n\n## 工具可用\n"
-    "你本回合可以呼叫下列工具取得即時數據（傳回值已在工具結果中）："
-    "`get_quote` / `run_dcf` / `run_var` / `run_backtest` / `query_user_data`。"
+    "你本回合可以呼叫下列工具取得即時 / 歷史數據："
+    "`get_quote`（單檔即時報價）、"
+    "`get_options_chain`（美股選擇權鏈，含 strike / IV / OI；TW 不支援）、"
+    "`get_symbol_news`（指定標的最近新聞，可指定 limit ≤ 20）、"
+    "`get_symbol_sentiment`（指定標的歷史情緒分數聚合，"
+    "可調 max_age_hours ≤ 720）、"
+    "`run_dcf` / `run_var` / `run_backtest`（分析運算）、"
+    "`query_user_data`（使用者自身資料，限本人）。\n"
     "**禁止虛構數據** — 若需要某個數字而 `## 市場現況` 與 `focus_briefs` 找不到，"
     "請呼叫對應工具，再把結果寫進 content。每次工具呼叫會自動計入流程，"
     "你只需專注在分析。"
@@ -2750,6 +2756,8 @@ async def run_round(
 
             assembled = ""
             usage_seen: dict[str, int] | None = None
+            tool_call_total = 0
+            tool_call_breakdown: dict[str, int] = {}
             # Wrap the persona's turn in asyncio.timeout so a single stuck
             # provider can't hang the whole round indefinitely. On timeout
             # we emit an error event, persist a placeholder turn, and
@@ -2788,10 +2796,16 @@ async def run_round(
                                 })
                         elif etype == "tool_call":
                             # Forward through so the SSE consumer can
-                            # show "buffett 正在執行 run_dcf" inline.
-                            # Tool-call rounds inside the LLM loop are
-                            # already capped by the provider's
-                            # `max_turns`; we don't keep a counter here.
+                            # show "buffett 正在執行 run_dcf" inline, AND
+                            # record the per-tool count for billing/debug
+                            # observability — without this the round shows
+                            # token cost but no signal for "why was this
+                            # turn slow / which tool got called repeatedly".
+                            tool_name = event.get("name") or "_unknown"
+                            tool_call_total += 1
+                            tool_call_breakdown[tool_name] = (
+                                tool_call_breakdown.get(tool_name, 0) + 1
+                            )
                             yield TurnEvent("tool_call", {
                                 "round": round_number,
                                 "turn_index": idx,
@@ -2887,7 +2901,9 @@ async def run_round(
             # persona_id (not "_system:..." like sentiment/synthesizer)
             # so the admin UsageCard breakdown can attribute cost per
             # persona/round. Skipped if the provider didn't emit a
-            # usage event (some openai-compat backends don't).
+            # usage event (some openai-compat backends don't). Tool
+            # counts are written even when zero so a row's NULL-vs-{}
+            # distinction means "no breakdown captured" not "no calls".
             if usage_seen is not None:
                 from services.llm_usage_service import record_usage
                 await record_usage(
@@ -2898,6 +2914,8 @@ async def run_round(
                     persona_id=persona_id,
                     prompt_tokens=usage_seen["prompt_tokens"],
                     completion_tokens=usage_seen["completion_tokens"],
+                    tool_call_count=tool_call_total,
+                    tool_call_breakdown=dict(tool_call_breakdown) or None,
                 )
 
             yield TurnEvent("turn_end", {

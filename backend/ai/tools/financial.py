@@ -240,7 +240,104 @@ def make_financial_tools() -> list[SdkMcpTool]:
                                market, symbol, exc)
                 return _text({"error": str(exc)})
 
+    @tool(
+        "get_peers",
+        "Industry peers for a TW symbol — up to 10 same-industry peers with "
+        "latest quote + PE/PB/dividend yield. US is not yet supported (no "
+        "curated industry mapping); fall back to get_financials per-symbol.",
+        {"symbol": str, "market": str, "limit": int},
+    )
+    async def get_peers(args: dict[str, Any]) -> dict:
+        symbol = args["symbol"].upper()
+        market = args["market"].upper()
+        limit = max(1, min(int(args.get("limit", 5)), 10))
+        if market != "TW":
+            return _text({
+                "error": "Industry peers currently supported for TW only.",
+            })
+        from services.tw_market_service import (
+            get_company_name, get_industry, get_industry_peers, get_quote,
+        )
+        try:
+            peer_syms = get_industry_peers(symbol)[:limit]
+        except Exception as exc:
+            logger.warning("get_peers tool lookup failed: %s %s", symbol, exc)
+            return _text({"error": str(exc)})
+        if not peer_syms:
+            return _text({
+                "symbol": symbol,
+                "industry": get_industry(symbol),
+                "peers": [],
+            })
+        rows = []
+        for sym in peer_syms:
+            try:
+                q = await get_quote(sym)
+            except Exception as exc:
+                logger.warning("get_peers tool quote failed: %s %s", sym, exc)
+                q = {}
+            rows.append({
+                "symbol": sym,
+                "name_zh": q.get("name_zh") or get_company_name(sym),
+                "price": q.get("price"),
+                "change_pct": q.get("change_pct"),
+                "pe_ratio": q.get("pe_ratio"),
+                "pb_ratio": q.get("pb_ratio"),
+                "dividend_yield": q.get("dividend_yield"),
+            })
+        return _text({
+            "symbol": symbol,
+            "industry": get_industry(symbol),
+            "count": len(rows),
+            "peers": rows,
+        })
+
+    @tool(
+        "get_financials",
+        "Income / balance / cash-flow statements for a symbol. US: annual "
+        "rows per statement (top 5 periods). TW: flat FinMind rows ({date, "
+        "type, value}) capped at the most recent 60 rows.",
+        {"symbol": str, "market": str},
+    )
+    async def get_financials(args: dict[str, Any]) -> dict:
+        symbol = args["symbol"].upper()
+        market = args["market"].upper()
+        try:
+            if market == "US":
+                from services.us_market_service import get_financials as _svc
+                data = await _svc(symbol)
+                if isinstance(data, dict):
+                    out: dict[str, Any] = {
+                        "symbol": symbol, "market": market,
+                        "source": data.get("source"),
+                    }
+                    for k in ("income_statement", "balance_sheet", "cash_flow"):
+                        rows = data.get(k)
+                        if isinstance(rows, list):
+                            out[k] = rows[:5]
+                    if "data" in data and "income_statement" not in out:
+                        out["data"] = data["data"]
+                    return _text(out)
+                return _text({"symbol": symbol, "market": market, "raw": data})
+            elif market == "TW":
+                from services.tw_market_service import get_financials as _svc
+                rows = await _svc(symbol)
+                if not isinstance(rows, list):
+                    rows = []
+                return _text({
+                    "symbol": symbol, "market": market,
+                    "count": len(rows),
+                    "rows": rows[-60:],
+                })
+            else:
+                return _text({"error": f"Unsupported market: {market}"})
+        except Exception as exc:
+            logger.warning("get_financials tool failed: %s %s %s",
+                           market, symbol, exc)
+            return _text({"error": str(exc)})
+
     return [
         get_quote, run_dcf, run_var, run_backtest,
         get_options_chain, get_symbol_news, get_symbol_sentiment,
+        get_peers, get_financials,
     ]

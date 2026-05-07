@@ -263,6 +263,110 @@ def build_openai_compat_toolset(
                 )
                 return _dump({"error": str(exc)})
 
+    async def get_peers(args: dict[str, Any]) -> str:
+        # TW-only: industry peers come from `_industry_map` populated by
+        # the daily symbol cron. US has no curated industry mapping in
+        # this codebase (yfinance.info is too slow per-symbol), so the
+        # tool returns an explicit error rather than a stale fallback —
+        # personas can fall back to `get_financials` + per-symbol
+        # comparison when the peer table isn't available.
+        symbol = str(args.get("symbol", "")).upper()
+        market = str(args.get("market", "")).upper()
+        limit = max(1, min(int(args.get("limit", 5)), 10))
+        if market != "TW":
+            return _dump({
+                "error": "Industry peers currently supported for TW only. "
+                         "For US, fetch get_financials per symbol and compare manually.",
+            })
+        from services.tw_market_service import (
+            get_company_name, get_industry, get_industry_peers, get_quote,
+        )
+        try:
+            peer_syms = get_industry_peers(symbol)[:limit]
+        except Exception as exc:
+            logger.warning("openai_compat.get_peers lookup failed %s: %s", symbol, exc)
+            return _dump({"error": str(exc)})
+        if not peer_syms:
+            return _dump({
+                "symbol": symbol,
+                "industry": get_industry(symbol),
+                "peers": [],
+            })
+        rows: list[dict[str, Any]] = []
+        for sym in peer_syms:
+            try:
+                q = await get_quote(sym)
+            except Exception as exc:
+                logger.warning(
+                    "openai_compat.get_peers quote failed %s: %s", sym, exc,
+                )
+                q = {}
+            rows.append({
+                "symbol": sym,
+                "name_zh": q.get("name_zh") or get_company_name(sym),
+                "price": q.get("price"),
+                "change_pct": q.get("change_pct"),
+                "pe_ratio": q.get("pe_ratio"),
+                "pb_ratio": q.get("pb_ratio"),
+                "dividend_yield": q.get("dividend_yield"),
+            })
+        return _dump({
+            "symbol": symbol,
+            "industry": get_industry(symbol),
+            "count": len(rows),
+            "peers": rows,
+        })
+
+    async def get_financials(args: dict[str, Any]) -> str:
+        # Cap each statement at the most recent 5 periods so the LLM gets
+        # an annual / quarterly trend window without dumping the entire
+        # multi-year archive into its context. TW returns a flat row list
+        # ({date, type, value}); we keep the latest 60 rows so a 5-quarter
+        # × ~12-metric pivot has full coverage.
+        symbol = str(args.get("symbol", "")).upper()
+        market = str(args.get("market", "")).upper()
+        try:
+            if market == "US":
+                from services.us_market_service import get_financials as _svc
+                data = await _svc(symbol)
+                # Dict with income_statement / balance_sheet / cash_flow.
+                # Polygon's `data` payload skips this shape (it has its own
+                # nested form); keep the raw output but cap each list.
+                if isinstance(data, dict):
+                    out: dict[str, Any] = {
+                        "symbol": symbol,
+                        "market": market,
+                        "source": data.get("source"),
+                    }
+                    for k in ("income_statement", "balance_sheet", "cash_flow"):
+                        rows = data.get(k)
+                        if isinstance(rows, list):
+                            out[k] = rows[:5]
+                    if "data" in data and "income_statement" not in out:
+                        # Polygon nested shape
+                        out["data"] = data["data"]
+                    return _dump(out)
+                return _dump({"symbol": symbol, "market": market, "raw": data})
+            elif market == "TW":
+                from services.tw_market_service import get_financials as _svc
+                rows = await _svc(symbol)
+                if not isinstance(rows, list):
+                    rows = []
+                return _dump({
+                    "symbol": symbol,
+                    "market": market,
+                    "count": len(rows),
+                    "rows": rows[-60:],
+                })
+            else:
+                return _dump({"error": f"Unsupported market: {market}"})
+        except Exception as exc:
+            logger.warning(
+                "openai_compat.get_financials failed %s %s: %s",
+                market, symbol, exc,
+            )
+            return _dump({"error": str(exc)})
+
     schemas: list[dict] = [
         {
             "type": "function",
@@ -444,6 +548,51 @@ def build_openai_compat_toolset(
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_peers",
+                "description": (
+                    "Industry peers for a symbol (TW only). Returns up to 10 peers "
+                    "in the same 產業別 with their latest quote + PE/PB/dividend "
+                    "yield. Useful for value-investing comparison ('is 2330's "
+                    "PE > or < same-industry median?'). US is not yet supported "
+                    "(no curated industry mapping); fall back to get_financials "
+                    "per-symbol for US comparison."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol": {"type": "string"},
+                        "market": {"type": "string", "enum": ["US", "TW"]},
+                        "limit": {"type": "integer", "default": 5, "maximum": 10},
+                    },
+                    "required": ["symbol", "market"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_financials",
+                "description": (
+                    "Three financial statements (income / balance / cash flow) "
+                    "for a symbol. US returns per-statement annual rows (capped "
+                    "at the most recent 5 periods). TW returns a flat FinMind row "
+                    "list (date / type / value) capped at the most recent 60 rows "
+                    "(~5 quarters × ~12 metrics). Use for ROE / margin / "
+                    "leverage / FCF analysis."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol": {"type": "string"},
+                        "market": {"type": "string", "enum": ["US", "TW"]},
+                    },
+                    "required": ["symbol", "market"],
+                },
+            },
+        },
     ]
 
     dispatch: dict[str, ToolHandler] = {
@@ -455,5 +604,7 @@ def build_openai_compat_toolset(
         "get_options_chain": get_options_chain,
         "get_symbol_news": get_symbol_news,
         "get_symbol_sentiment": get_symbol_sentiment,
+        "get_peers": get_peers,
+        "get_financials": get_financials,
     }
     return schemas, dispatch

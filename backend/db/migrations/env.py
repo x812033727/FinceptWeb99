@@ -22,6 +22,7 @@ import models.discussion_auto_run_config  # noqa: F401
 import models.tw_chip_metrics  # noqa: F401
 import models.tw_revenue_monthly  # noqa: F401
 import models.discussion_round_context  # noqa: F401
+import models.strategy_version  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)

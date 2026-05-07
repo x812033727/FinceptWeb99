@@ -99,6 +99,28 @@ async def learn_weights_for_strategy(
 
     weights = compute_weights_from_aggregate(eligible)
     await tsvc.set_persona_weights(db, tmpl, weights=weights)
+    # PR-4a: append the new weights to the version history so the
+    # operator can roll back to a previous fit if this one
+    # underperforms. Best-effort — failure logs but doesn't undo
+    # the live-column write (reverting it would mean abandoning a
+    # legitimate learner result over an audit-trail gap).
+    try:
+        from services import strategy_version_service
+        await strategy_version_service.record_version(
+            db,
+            strategy_id=strategy_id,
+            artifact_kind="weights",
+            payload=weights,
+            sample_count=sum(samples.values()) or None,
+        )
+    except Exception as exc:
+        log.warning(
+            "persona_weight_learner.version_record_failed",
+            extra={
+                "strategy_id": str(strategy_id),
+                "error": str(exc),
+            },
+        )
     return {
         "updated": True,
         "reason": None,

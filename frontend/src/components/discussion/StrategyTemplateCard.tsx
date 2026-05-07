@@ -16,7 +16,9 @@ import type { DiscussionMarket } from "@/types/discussion";
 import { CollapsibleHeader } from "@/components/Collapsible";
 import { useCollapsible } from "@/hooks/useCollapsible";
 import { BrierTrendChart } from "./BrierTrendChart";
+import { MaturityBadge } from "./MaturityBadge";
 import { SweepAggregateCard } from "./SweepAggregateCard";
+import { VersionHistorySection } from "./VersionHistorySection";
 
 /** Strategy templates (PR-A).
  *
@@ -466,6 +468,16 @@ function StrategyRow({
                 ⏱ auto
               </span>
             ) : null}
+            {/* PR-4a: lifecycle tier badge — coloured by where the
+                strategy sits in cold_start → learning → mature →
+                drifting / stale. The tooltip carries the inputs
+                (sweep count, sample count, brier ratio) so the
+                operator sees WHY without clicking. */}
+            {strategy.maturity_tier ? (
+              <span className="ml-2 inline-block">
+                <MaturityBadge tier={strategy.maturity_tier} />
+              </span>
+            ) : null}
           </p>
           {strategy.description ? (
             <p className="text-[11px] text-muted-foreground truncate">
@@ -560,6 +572,7 @@ function StrategyRow({
         </p>
       ) : null}
       <WalkForwardSection strategy={strategy} />
+      <VersionHistorySection strategyId={strategy.id} />
       {showAggregate && (
         <SweepAggregateCard strategyId={strategy.id} />
       )}

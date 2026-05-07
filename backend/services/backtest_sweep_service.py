@@ -655,6 +655,30 @@ async def run_sweep_worker(sweep_id: UUID) -> None:
                     },
                 )
 
+        # PR-4a: refresh the strategy's maturity tier now that the
+        # sweep has changed the inputs (sweep count, recent brier).
+        # Runs on every fold_kind so a walk-forward train fold also
+        # updates the parent's tier — the operator wants to see
+        # "drifting" the moment the recent window degrades, even
+        # if that signal came from an OOS fold rather than a
+        # production sweep. Best-effort — failure logs but doesn't
+        # touch the sweep completion timestamp.
+        if not cancelled_mid_flight and sweep.strategy_id is not None:
+            try:
+                from services import strategy_maturity_service
+                await strategy_maturity_service.update_maturity_tier(
+                    db, strategy_id=sweep.strategy_id,
+                )
+            except Exception as exc:
+                log.warning(
+                    "backtest_sweep.maturity_update_failed",
+                    extra={
+                        "sweep_id": str(sweep_id),
+                        "strategy_id": str(sweep.strategy_id),
+                        "error": str(exc),
+                    },
+                )
+
 
 def start_sweep_in_background(sweep_id: UUID) -> asyncio.Task:
     """Public entry point for the API layer. Detaches the worker

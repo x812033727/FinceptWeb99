@@ -61,6 +61,7 @@ class ChainStatePayload(BaseModel):
     universe_size: int
     quota_used: int | None
     quota_limit: int
+    quota_limit_global: int
     external_activity_detected: bool
     default_datasets: list[str]
     total_chunks_done: int

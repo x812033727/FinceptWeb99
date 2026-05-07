@@ -29,6 +29,7 @@ export interface FinmindChainState {
   universe_size: number;
   quota_used: number | null;
   quota_limit: number;
+  quota_limit_global: number;
   external_activity_detected: boolean;
   default_datasets: string[];
   total_chunks_done: number;

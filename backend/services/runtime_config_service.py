@@ -133,6 +133,21 @@ _REGISTRY: dict[str, RuntimeSettingSpec] = {
         min_value=0,
         max_value=10_000,
     ),
+    "FINMIND_CHAIN_HOURLY_BUDGET": RuntimeSettingSpec(
+        key="FINMIND_CHAIN_HOURLY_BUDGET",
+        type="int",
+        name="FinMind backfill-chain hourly budget",
+        description=(
+            "Sub-budget for the backfill chain's pre-flight gate. The "
+            "global hard cap stays FINMIND_HOURLY_REQUEST_LIMIT; setting "
+            "this lower reserves the gap for live / interactive paths "
+            "(discussions, screener, news fetch) so a saturating chain "
+            "doesn't lock them out. Set equal to "
+            "FINMIND_HOURLY_REQUEST_LIMIT to disable the reservation."
+        ),
+        min_value=0,
+        max_value=10_000,
+    ),
     "SENTIMENT_CRON_MAX_AGE_DAYS": RuntimeSettingSpec(
         key="SENTIMENT_CRON_MAX_AGE_DAYS",
         type="int",

@@ -76,7 +76,8 @@ def stub_chain(monkeypatch):
         "selected_datasets": [],
         "universe_size": 0,
         "quota_used": 0,
-        "quota_limit": 6000,
+        "quota_limit": 5500,
+        "quota_limit_global": 6000,
         "external_activity_detected": False,
         "default_datasets": list(chain.DEFAULT_DATASETS),
         "total_chunks_done": 0,
@@ -155,7 +156,8 @@ async def test_get_chain_returns_idle_state(client, db_session, stub_chain):
     body = r.json()
     assert body["status"] == "idle"
     assert "TaiwanStockPriceAdj" in body["default_datasets"]
-    assert body["quota_limit"] == 6000
+    assert body["quota_limit"] == 5500
+    assert body["quota_limit_global"] == 6000
 
 
 @pytest.mark.asyncio

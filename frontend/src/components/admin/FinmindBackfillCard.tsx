@@ -159,9 +159,11 @@ function ProgressBar({ done, total }: { done: number; total: number }) {
 function QuotaGauge({
   used,
   limit,
+  globalLimit,
 }: {
   used: number | null;
   limit: number;
+  globalLimit: number;
 }) {
   const u = used ?? 0;
   const pct = limit > 0 ? Math.min(100, (u / limit) * 100) : 0;
@@ -171,10 +173,21 @@ function QuotaGauge({
       : pct >= 70
         ? "bg-amber-500"
         : "bg-primary";
+  // Reservation = 全域 cap 跟 chain 預算之間的差額,留給討論 / screener
+  // / news 等非 chain 路徑用。當兩者相等時不顯示(沒分離)。
+  const reserved = Math.max(0, globalLimit - limit);
+  const reservedPct =
+    globalLimit > 0 ? (reserved / globalLimit) * 100 : 0;
+  const chainPct =
+    globalLimit > 0 ? Math.min(100, (limit / globalLimit) * 100) : 0;
+  const usedOfGlobalPct =
+    globalLimit > 0 ? Math.min(100, (u / globalLimit) * 100) : 0;
   return (
     <div>
       <div className="mb-1 flex justify-between text-xs">
-        <span className="text-muted-foreground">FinMind 每小時 quota</span>
+        <span className="text-muted-foreground">
+          FinMind 每小時 quota(chain 預算)
+        </span>
         <span className="font-mono">
           {u.toLocaleString()} / {limit.toLocaleString()} ({formatPct(u, limit)})
         </span>
@@ -185,6 +198,36 @@ function QuotaGauge({
           style={{ width: `${pct}%` }}
         />
       </div>
+      {reserved > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 flex justify-between text-xs">
+            <span className="text-muted-foreground">
+              全域 cap(含預留 {reserved.toLocaleString()}/hr 給討論等)
+            </span>
+            <span className="font-mono">
+              {u.toLocaleString()} / {globalLimit.toLocaleString()} ({formatPct(u, globalLimit)})
+            </span>
+          </div>
+          <div className="relative h-2 w-full overflow-hidden rounded bg-muted">
+            {/* chain budget fill (matches the same color as the gauge above) */}
+            <div
+              className={`absolute inset-y-0 left-0 transition-all ${color}`}
+              style={{ width: `${usedOfGlobalPct}%` }}
+            />
+            {/* visual marker at the chain-budget boundary */}
+            <div
+              className="absolute inset-y-0 w-px bg-foreground/40"
+              style={{ left: `${chainPct}%` }}
+              title={`chain 預算邊界 (${limit.toLocaleString()}/hr)`}
+            />
+            {/* reservation band, dim hatch */}
+            <div
+              className="absolute inset-y-0 right-0 bg-foreground/10"
+              style={{ width: `${reservedPct}%` }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -260,8 +303,8 @@ export default function FinmindBackfillCard() {
               <div className="mt-1 text-muted-foreground">
                 10 分鐘內偵測到外部來源(host 腳本或 backend 內 APScheduler
                 的 daily refresh)正在 claim chunk。本次 chain 仍可啟動 ──
-                pre-flight quota gate 會在 6000/hr 飽和時自動 sleep,不會
-                硬撞。但兩邊一起跑會共用 quota,進度條會比預期慢。若 UI
+                pre-flight quota gate 會在 chain 預算飽和時自動 sleep,
+                不會硬撞。但兩邊一起跑會共用 quota,進度條會比預期慢。若 UI
                 曾意外中斷讓 lock 殘留,下一次 start 會自動 reset stuck →
                 重啟。
               </div>
@@ -327,7 +370,11 @@ export default function FinmindBackfillCard() {
           )}
 
           {s && (
-            <QuotaGauge used={s.quota_used} limit={s.quota_limit} />
+            <QuotaGauge
+              used={s.quota_used}
+              limit={s.quota_limit}
+              globalLimit={s.quota_limit_global}
+            />
           )}
 
           {/* Dataset checklist ───────────────────────────────── */}

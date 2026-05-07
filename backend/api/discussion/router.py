@@ -214,7 +214,53 @@ async def create_session(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return _to_response(row)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Anything unexpected (DB schema drift, FK resolution, IntegrityError,
+        # response-model coercion failure) used to bubble up as a bare
+        # `Internal Server Error` with no detail — leaving the user's red
+        # banner uninformative and the operator with only a stack trace
+        # buried in container logs. Log the full traceback for diagnosis,
+        # and surface the exception class + message so the user can quote
+        # something useful when reporting the failure.
+        log.exception(
+            "discussion.create.unexpected_failure",
+            extra={
+                "user_id": user.get("id") if isinstance(user, dict) else None,
+                "market": body.market,
+                "persona_count": len(body.persona_ids),
+                "as_of_date": body.as_of_date,
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create discussion: {type(exc).__name__}: {exc}",
+        )
+    try:
+        return _to_response(row)
+    except Exception as exc:
+        # Response-model coercion can fail if a recently-added column was
+        # left out of the local DB schema (a missing migration leaves
+        # `db.refresh` returning a row without the attribute). The row is
+        # already persisted; the user's click DID succeed. Log the
+        # specifics so the operator can apply the missing migration; the
+        # 500 still surfaces because we can't honour the response_model
+        # contract.
+        log.exception(
+            "discussion.create.response_serialization_failed",
+            extra={
+                "discussion_id": str(getattr(row, "id", None)),
+                "user_id": user.get("id") if isinstance(user, dict) else None,
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Discussion was created but the response could not be "
+                f"serialized: {type(exc).__name__}: {exc}"
+            ),
+        )
 
 
 @router.get("/sessions/{discussion_id}", response_model=DiscussionDetailResponse)

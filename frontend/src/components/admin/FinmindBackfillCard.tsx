@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { CollapsibleHeader } from "@/components/Collapsible";
 import { useCollapsible } from "@/hooks/useCollapsible";
@@ -112,18 +112,18 @@ export default function FinmindBackfillCard() {
   const { stateQuery, start, stop, resetStuck } = useFinmindChain(open);
   const s = stateQuery.data;
 
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // `userSelection === null` means "user hasn't customised yet, fall
+  // back to the backend's DEFAULT_DATASETS list". Computing `selected`
+  // during render (rather than syncing via useEffect → setState)
+  // avoids the cascading-render anti-pattern flagged by
+  // react-hooks/set-state-in-effect, and keeps the checklist honest
+  // if the backend ever changes the default list.
+  const [userSelection, setUserSelection] = useState<Set<string> | null>(
+    null,
+  );
+  const selected =
+    userSelection ?? new Set<string>(s?.default_datasets ?? []);
   const [days, setDays] = useState<number>(3650);
-
-  // Sync the checklist defaults with whatever the backend reports
-  // as DEFAULT_DATASETS the first time the state loads. This keeps
-  // the frontend honest if we ever add / remove a dataset from the
-  // backend list — no stale hard-coded list to maintain here.
-  useEffect(() => {
-    if (s?.default_datasets && selected.size === 0) {
-      setSelected(new Set(s.default_datasets));
-    }
-  }, [s?.default_datasets, selected.size]);
 
   const isRunning = s?.status === "running";
   const isStopping = s?.status === "stopping";
@@ -138,8 +138,9 @@ export default function FinmindBackfillCard() {
   const stopDisabled = !isRunning || stop.isPending;
 
   function toggleDataset(code: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
+    setUserSelection((prev) => {
+      const base = prev ?? new Set<string>(s?.default_datasets ?? []);
+      const next = new Set(base);
       if (next.has(code)) next.delete(code);
       else next.add(code);
       return next;

@@ -1279,6 +1279,105 @@ async def reject_calibration_route(
     return result
 
 
+# ── PR-4a: version history + maturity tier ────────────────────────
+
+
+@router.get("/strategies/{template_id}/versions")
+async def list_strategy_versions(
+    template_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    artifact_kind: str | None = None,
+    limit: int = 20,
+):
+    """PR-4a: newest-first version history for the operator's
+    rollback drawer. `artifact_kind` filters to weights or curve;
+    omit to interleave both chronologically."""
+    from services import strategy_template_service as tsvc
+    from services import strategy_version_service as vsvc
+    row = await tsvc.get_template(
+        db, template_id=template_id,
+        owner_id=_coerce_owner_uuid(user),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    try:
+        versions = await vsvc.list_versions(
+            db,
+            strategy_id=template_id,
+            artifact_kind=artifact_kind,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return [vsvc.version_to_dict(v) for v in versions]
+
+
+@router.post(
+    "/strategies/{template_id}/versions/{version_id}/rollback",
+)
+async def rollback_strategy_version(
+    template_id: uuid.UUID,
+    version_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """PR-4a: promote a historical version back to live + audit
+    the rollback as a NEW version row (so the rollback itself
+    appears in the history). Owner-scoped."""
+    from services import strategy_version_service as vsvc
+    try:
+        result = await vsvc.rollback_to_version(
+            db,
+            owner_id=_coerce_owner_uuid(user),
+            strategy_id=template_id,
+            version_id=version_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return result
+
+
+@router.get("/strategies/{template_id}/maturity")
+async def get_strategy_maturity(
+    template_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """PR-4a: lifecycle tier + the signals that drove the
+    classification. Persisted on the template; this endpoint
+    returns the latest persisted value, fresh-computing only when
+    the cached value is missing (cold-start row).
+    """
+    from services import strategy_maturity_service as msvc
+    from services import strategy_template_service as tsvc
+    row = await tsvc.get_template(
+        db, template_id=template_id,
+        owner_id=_coerce_owner_uuid(user),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    if row.maturity_computed_at is None:
+        # Cold-start path — compute on first read so the UI never
+        # gets a stale 'cold_start' for a row that's actually past it.
+        tier, signals = await msvc.update_maturity_tier(
+            db, strategy_id=template_id,
+        )
+    else:
+        tier, signals = await msvc.compute_maturity_tier(
+            db, strategy_id=template_id,
+        )
+    return {
+        "strategy_id": str(template_id),
+        "tier": tier,
+        "signals": signals,
+        "computed_at": (
+            row.maturity_computed_at.isoformat()
+            if row.maturity_computed_at else None
+        ),
+    }
+
+
 @router.get(
     "/sweeps/{sweep_id}/aggregate",
     response_model=SweepAggregateResponse,

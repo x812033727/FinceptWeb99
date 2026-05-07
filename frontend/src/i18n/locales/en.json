@@ -631,6 +631,42 @@
       "consensus_delta": "Consensus Δ",
       "horizon_changed": "⚠ Horizon changed"
     },
+    "maturity": {
+      "label": {
+        "cold_start": "Cold start",
+        "learning": "Learning",
+        "mature": "Mature",
+        "drifting": "Drifting",
+        "stale": "Stale"
+      },
+      "tooltip": {
+        "sweeps": "Sweeps",
+        "samples": "Samples",
+        "brier": "Brier (recent vs baseline)",
+        "ratio": "Ratio"
+      }
+    },
+    "versions": {
+      "title": "Version history",
+      "empty": "No fits recorded yet",
+      "rollback": "Roll back",
+      "kind": {
+        "all": "All",
+        "weights": "Weights",
+        "calibration_curve": "Curve"
+      },
+      "col": {
+        "kind": "Kind",
+        "fit_at": "Fit at",
+        "samples": "Samples",
+        "status": "Status"
+      },
+      "status": {
+        "active": "Active",
+        "superseded": "Superseded",
+        "rolled_back": "Rolled back"
+      }
+    },
     "export_markdown": "Export Markdown",
     "ask_followup": "Deep Dive",
     "click_for_deep_dive": "Click to ask an expert about this symbol",

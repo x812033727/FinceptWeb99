@@ -352,9 +352,52 @@ export interface StrategyTemplate {
   auto_schedule_anchor_offset_days: number;
   auto_schedule_trading_days_count: number;
   auto_schedule_last_run_at: string | null;
+  /** PR-4a: lifecycle tier — 'cold_start' | 'learning' | 'mature'
+   * | 'drifting' | 'stale'. Defaults to 'cold_start' on a fresh
+   * row; the sweep Phase 3 hook updates it after each completed
+   * sweep. The UI surfaces this as a colored badge so the operator
+   * sees "is this strategy still trustworthy" at a glance.
+   * Optional for forward-compat with rows from before PR-4a. */
+  maturity_tier?: MaturityTier;
+  maturity_computed_at?: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+}
+
+/** PR-4a: five-tier strategy lifecycle classifier. */
+export type MaturityTier =
+  | "cold_start"
+  | "learning"
+  | "mature"
+  | "drifting"
+  | "stale";
+
+/** PR-4a: signal payload returned by `GET /strategies/{id}/maturity`
+ * — the inputs the rule engine used to land on the tier. Lets the
+ * UI render "why this tier" tooltip without a second round-trip. */
+export interface MaturitySignals {
+  production_sweep_count?: number;
+  latest_sweep_completed_at?: string | null;
+  calibration_sample_count?: number | null;
+  has_calibration_curve?: boolean;
+  recent_brier?: number | null;
+  baseline_brier?: number | null;
+  brier_ratio?: number | null;
+}
+
+/** PR-4a: strategy version history row. */
+export interface StrategyVersionRow {
+  id: string;
+  strategy_id: string;
+  version_number: number;
+  artifact_kind: "weights" | "calibration_curve";
+  payload: unknown;
+  sample_count: number | null;
+  source_sweep_id: string | null;
+  fit_at: string | null;
+  status: "active" | "superseded" | "rolled_back";
+  notes: string | null;
 }
 
 export interface CreateStrategyInput {

@@ -98,6 +98,26 @@ class DiscussionStrategyTemplate(Base):
         DateTime(timezone=True), nullable=True,
     )
 
+    # PR-4a: maturity tier — "where is this strategy in its
+    # learning lifecycle". Computed by `strategy_maturity_service`
+    # from sample count, sweep count, and recent-vs-baseline brier
+    # signals. Five buckets:
+    #   cold_start: zero production sweeps yet
+    #   learning  : sweeps started but <30 calibration samples or <3 sweeps
+    #   mature    : ≥30 samples + ≥3 sweeps + brier within ±15% of baseline
+    #   drifting  : recent 30-sample brier ≥20% above historical baseline
+    #   stale     : no production sweep in the last 30 days
+    # The UI surfaces this as a colored badge on every strategy
+    # card so the operator sees the lifecycle status at a glance
+    # without drilling into raw metrics.
+    maturity_tier: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="cold_start",
+        server_default="cold_start",
+    )
+    maturity_computed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+
     # PR-D: auto-schedule fields. Disabled by default — explicit
     # opt-in so a fresh template doesn't fire LLM cost on its own.
     auto_schedule_enabled: Mapped[bool] = mapped_column(

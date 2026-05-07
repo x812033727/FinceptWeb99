@@ -631,6 +631,42 @@
       "consensus_delta": "共識度變化",
       "horizon_changed": "⚠ 時間框架變動"
     },
+    "maturity": {
+      "label": {
+        "cold_start": "冷啟動",
+        "learning": "學習中",
+        "mature": "成熟",
+        "drifting": "漂移中",
+        "stale": "閒置"
+      },
+      "tooltip": {
+        "sweeps": "Sweeps",
+        "samples": "Samples",
+        "brier": "Brier (recent vs baseline)",
+        "ratio": "Ratio"
+      }
+    },
+    "versions": {
+      "title": "版本歷史",
+      "empty": "尚無版本紀錄",
+      "rollback": "回滾",
+      "kind": {
+        "all": "全部",
+        "weights": "Weights",
+        "calibration_curve": "校正曲線"
+      },
+      "col": {
+        "kind": "種類",
+        "fit_at": "Fit 時間",
+        "samples": "樣本",
+        "status": "狀態"
+      },
+      "status": {
+        "active": "Active",
+        "superseded": "Superseded",
+        "rolled_back": "Rolled back"
+      }
+    },
     "export_markdown": "匯出 Markdown",
     "ask_followup": "深入分析",
     "click_for_deep_dive": "點擊向專家深入提問",

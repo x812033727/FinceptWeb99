@@ -503,6 +503,27 @@ async def fit_isotonic_for_strategy(
         tmpl.calibration_pending_at = None
         await db.commit()
         await db.refresh(tmpl)
+        # PR-4a: capture this fit in the version history. Failure
+        # logged but doesn't reverse the live deploy — the curve
+        # is already serving predictions and rolling that back over
+        # an audit-trail gap would do more harm than good.
+        try:
+            from services import strategy_version_service
+            await strategy_version_service.record_version(
+                db,
+                strategy_id=strategy_id,
+                artifact_kind="calibration_curve",
+                payload=serialized,
+                sample_count=len(pairs),
+            )
+        except Exception as exc:
+            log.warning(
+                "confidence_calibrator.version_record_failed",
+                extra={
+                    "strategy_id": str(strategy_id),
+                    "error": str(exc),
+                },
+            )
         return {
             "status": "deployed",
             "updated": True,
@@ -569,6 +590,7 @@ async def approve_pending_calibration(
 
     pending = list(tmpl.calibration_pending_curve)
     queued_reason = tmpl.calibration_pending_reason
+    sample_count_at_promote = tmpl.calibration_sample_count
     tmpl.calibration_curve = pending
     tmpl.calibration_updated_at = datetime.now(UTC)
     tmpl.calibration_pending_curve = None
@@ -576,6 +598,30 @@ async def approve_pending_calibration(
     tmpl.calibration_pending_at = None
     await db.commit()
     await db.refresh(tmpl)
+    # PR-4a: an approve also deploys, so it joins the version
+    # history. Reason carries the gate's original failure summary
+    # so the audit shows "why this needed manual review."
+    try:
+        from services import strategy_version_service
+        await strategy_version_service.record_version(
+            db,
+            strategy_id=strategy_id,
+            artifact_kind="calibration_curve",
+            payload=pending,
+            sample_count=sample_count_at_promote,
+            notes=(
+                f"approved from pending; original reason: {queued_reason}"
+                if queued_reason else "approved from pending"
+            ),
+        )
+    except Exception as exc:
+        log.warning(
+            "confidence_calibrator.approve_version_record_failed",
+            extra={
+                "strategy_id": str(strategy_id),
+                "error": str(exc),
+            },
+        )
     return {
         "promoted": True,
         "curve": pending,

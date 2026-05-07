@@ -507,6 +507,11 @@
     "switch": "切換",
     "pick_agent": "選擇顧問",
     "other_agents": "其他",
+    "persona_search_placeholder": "搜尋顧問…",
+    "persona_search_empty": "找不到符合的顧問",
+    "persona_group_count": "{{count}} 位",
+    "tools_toggle_aria": "切換工具呼叫模式",
+    "tools_off": "工具關閉",
     "quota_remaining_short": "剩餘 {{remaining}} 次",
     "quota_remaining_hint": "今日 AI 請求剩餘次數",
     "tool": {

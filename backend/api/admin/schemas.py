@@ -37,6 +37,32 @@ class UpdateResult(BaseModel):
     message: str
 
 
+# ── One-click redeploy ───────────────────────────────────────────
+
+class DeployTriggerOut(BaseModel):
+    status: str          # "started" | "failed"
+    trigger_id: str      # uuid; lets the frontend ignore stale runs
+    message: str
+
+
+class DeployStatusOut(BaseModel):
+    """Mirrors deploy-status.json written by /usr/local/bin/finceptweb-deploy.sh.
+
+    All fields except `phase` are optional so we can return a minimal
+    `{phase: "idle"}` document before the first deploy ever runs.
+    """
+    phase: str           # idle | starting | pulling | pausing | reset_stale | building | restarting | nginx | verifying | completed | failed | unknown
+    started_at: str | None = None
+    finished_at: str | None = None
+    before_sha: str | None = None
+    after_sha: str | None = None
+    branch: str | None = None
+    actor: str | None = None
+    trigger_id: str | None = None
+    error: str | None = None
+    log_tail: list[str] | None = None
+
+
 # ── LLM provider keys ─────────────────────────────────────────────
 
 class LLMKeyInfo(BaseModel):

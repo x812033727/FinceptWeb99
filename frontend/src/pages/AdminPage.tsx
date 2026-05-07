@@ -28,6 +28,7 @@ import { SignalAuditCard } from "@/components/admin/SignalAuditCard";
 import { SignalQualityCard } from "@/components/admin/SignalQualityCard";
 import { SystemTasksCard } from "@/components/admin/SystemTasksCard";
 import { SystemUpdateCard } from "@/components/admin/SystemUpdateCard";
+import { RedeployCard } from "@/components/admin/RedeployCard";
 import { UsageCard } from "@/components/admin/UsageCard";
 
 interface AdminUser {
@@ -113,6 +114,7 @@ function AdminContent() {
         </div>
 
         <TabsContent value="ops" className="space-y-4 mt-4">
+          <RedeployCard />
           <SystemUpdateCard />
           <IngestHealthCard />
           <RuntimeTunablesCard />

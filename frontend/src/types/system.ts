@@ -12,3 +12,36 @@ export interface UpdateResult {
   status: UpdateStatus;
   message: string;
 }
+
+export type DeployPhase =
+  | "idle"
+  | "starting"
+  | "pulling"
+  | "pausing"
+  | "reset_stale"
+  | "building"
+  | "restarting"
+  | "nginx"
+  | "verifying"
+  | "completed"
+  | "failed"
+  | "unknown";
+
+export interface DeployTriggerResult {
+  status: "started" | "failed";
+  trigger_id: string;
+  message: string;
+}
+
+export interface DeployStatus {
+  phase: DeployPhase;
+  started_at?: string | null;
+  finished_at?: string | null;
+  before_sha?: string | null;
+  after_sha?: string | null;
+  branch?: string | null;
+  actor?: string | null;
+  trigger_id?: string | null;
+  error?: string | null;
+  log_tail?: string[] | null;
+}

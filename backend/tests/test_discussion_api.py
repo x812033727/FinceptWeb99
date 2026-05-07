@@ -90,6 +90,41 @@ async def test_create_discussion_rejects_too_few_personas(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_create_discussion_surfaces_unexpected_failure_detail(
+    client: AsyncClient,
+):
+    """Pre-PR: any exception other than ValueError surfaced as a bare
+    `Internal Server Error` 500 with no diagnostic content. Now the
+    handler catches the broad case, logs it, and returns the actual
+    exception class + message in the `detail` field so the user's
+    error banner is informative.
+
+    Simulate the failure by patching the service layer to raise a
+    RuntimeError mid-create (mimics a DB error / schema drift / FK
+    resolution failure).
+    """
+    h = await _register(client, "disc_unexp@example.com")
+    with patch(
+        "services.discussion_service.create_discussion",
+        new=AsyncMock(side_effect=RuntimeError("simulated DB failure")),
+    ):
+        r = await client.post(
+            "/api/discussion/sessions",
+            headers=h,
+            json={
+                "topic": "Test topic",
+                "rules": "Test rules",
+                "persona_ids": ["buffett", "lynch"],
+            },
+        )
+    assert r.status_code == 500
+    body = r.json()
+    detail = body.get("detail", "")
+    assert "RuntimeError" in detail
+    assert "simulated DB failure" in detail
+
+
+@pytest.mark.asyncio
 async def test_get_discussion_owner_scoped_returns_404_for_others(
     client: AsyncClient,
 ):

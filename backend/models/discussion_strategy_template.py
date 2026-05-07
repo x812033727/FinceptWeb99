@@ -13,7 +13,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
-    JSON, UUID as SqlUUID, Boolean, DateTime, ForeignKey,
+    JSON, UUID as SqlUUID, Boolean, DateTime, Float, ForeignKey,
     Index, Integer, String, Text, func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -116,6 +116,30 @@ class DiscussionStrategyTemplate(Base):
     )
     maturity_computed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True,
+    )
+
+    # PR-4b: walk-forward auto-promote knobs. When enabled, the
+    # walk-forward orchestrator's Phase 4 (after the test fold
+    # completes) automatically writes the OOS-validated weights
+    # to the live `persona_weights` column when the test fold
+    # passes both KPI thresholds — closing the loop on the
+    # "walk-forward result sits there waiting for human action"
+    # gap. Disabled by default so existing strategies preserve
+    # their manual workflow.
+    auto_promote_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false",
+    )
+    # Test fold's brier must be at least this much LOWER than the
+    # baseline (live-curve) brier to qualify. 0.0 means "any
+    # improvement" (default — operators flip auto_promote on first,
+    # tighten the threshold once they trust the system).
+    auto_promote_min_oos_brier_improvement: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, server_default="0.0",
+    )
+    # Test fold's hit rate must be at least this to qualify.
+    # 0.5 default = "better than coin flip"; tighten per strategy.
+    auto_promote_min_oos_hit_rate: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.5, server_default="0.5",
     )
 
     # PR-D: auto-schedule fields. Disabled by default — explicit

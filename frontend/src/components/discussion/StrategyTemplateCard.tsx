@@ -15,7 +15,9 @@ import {
 import type { DiscussionMarket } from "@/types/discussion";
 import { CollapsibleHeader } from "@/components/Collapsible";
 import { useCollapsible } from "@/hooks/useCollapsible";
+import { AutoPromoteSettings } from "./AutoPromoteSettings";
 import { BrierTrendChart } from "./BrierTrendChart";
+import { HealthMetricsSparkline } from "./HealthMetricsSparkline";
 import { MaturityBadge } from "./MaturityBadge";
 import { SweepAggregateCard } from "./SweepAggregateCard";
 import { VersionHistorySection } from "./VersionHistorySection";
@@ -572,6 +574,8 @@ function StrategyRow({
         </p>
       ) : null}
       <WalkForwardSection strategy={strategy} />
+      <AutoPromoteSettings strategy={strategy} />
+      <HealthMetricsSparkline strategyId={strategy.id} />
       <VersionHistorySection strategyId={strategy.id} />
       {showAggregate && (
         <SweepAggregateCard strategyId={strategy.id} />

@@ -377,6 +377,13 @@ class StrategyTemplateResponse(BaseModel):
     auto_schedule_anchor_offset_days: int
     auto_schedule_trading_days_count: int
     auto_schedule_last_run_at: datetime | None
+    # PR-4a: lifecycle tier
+    maturity_tier: str = "cold_start"
+    maturity_computed_at: datetime | None = None
+    # PR-4b: walk-forward auto-promote knobs
+    auto_promote_enabled: bool = False
+    auto_promote_min_oos_brier_improvement: float = 0.0
+    auto_promote_min_oos_hit_rate: float = 0.5
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None

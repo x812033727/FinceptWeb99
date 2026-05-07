@@ -503,3 +503,21 @@ def setup_jobs() -> None:
         max_instances=1,
         coalesce=True,
     )
+
+    # ── PR-4b: strategy health monitor (daily snapshot) ──────────
+    # 02:00 UTC = 10:00 Asia/Taipei. Walks every active strategy
+    # template and writes a `(strategy_id, snapshot_date)` row
+    # into `strategy_health_metrics` with rolling-30 brier / hit
+    # rate / lesson hit rate plus a `status_flags` array surfacing
+    # any drift / collapse / low-sample signals. Non-empty flags
+    # fire an admin notification through `notification_service`.
+    # Multi-pod safe via Redis SET-NX lock inside the job.
+    from tasks.monitor_strategy_health import health_monitor_job
+    scheduler.add_job(
+        health_monitor_job,
+        trigger=CronTrigger(hour=2, minute=0, timezone="UTC"),
+        id="monitor_strategy_health",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )

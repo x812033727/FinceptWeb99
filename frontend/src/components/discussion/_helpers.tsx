@@ -360,9 +360,33 @@ export interface StrategyTemplate {
    * Optional for forward-compat with rows from before PR-4a. */
   maturity_tier?: MaturityTier;
   maturity_computed_at?: string | null;
+  /** PR-4b: walk-forward auto-promote knobs. Disabled by default
+   * (operators opt in per strategy). When enabled, the
+   * walk-forward orchestrator's Phase 4 auto-deploys the test
+   * fold's OOS-validated weights to the live `persona_weights`
+   * column when both KPI thresholds pass. */
+  auto_promote_enabled?: boolean;
+  auto_promote_min_oos_brier_improvement?: number;
+  auto_promote_min_oos_hit_rate?: number;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+}
+
+/** PR-4b: one row per (strategy_id, snapshot_date) from the daily
+ * health monitor cron. NULL fields = window had no resolved
+ * discussions on that day (cold-start / quiet weekend). */
+export interface StrategyHealthSnapshot {
+  strategy_id: string;
+  snapshot_date: string;
+  brier_30d: number | null;
+  calibrated_brier_30d: number | null;
+  hit_rate_30d: number | null;
+  sample_count_30d: number;
+  lesson_hit_rate_30d: number | null;
+  maturity_tier_at_snapshot: string | null;
+  status_flags: string[];
+  computed_at: string | null;
 }
 
 /** PR-4a: five-tier strategy lifecycle classifier. */

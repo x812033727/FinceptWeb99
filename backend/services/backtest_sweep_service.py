@@ -377,15 +377,36 @@ async def _run_post_mortem_pass(
     payload = await build_post_mortem_message(db, discussion)
     if not payload.trading_days:
         return
-    # Win-skip: recommendation already cleared the threshold so no
-    # critique round is fired (saves N personas × LLM cost per
-    # winning date during a multi-day sweep).
+    # Win-skip-with-lesson: recommendation already cleared the
+    # threshold so the full critique round is skipped (saves N
+    # personas × LLM cost per winning date). PR-2 closes the
+    # learning-loop gap by replacing the bare `return` with a
+    # single-LLM-call lesson extraction — production wins now
+    # contribute `correct_signal_combo` / `successful_thesis`
+    # lessons alongside the miss-side lessons that were already
+    # being recorded. Cost: 1 extra LLM call per win (vs the
+    # previous 0); still 90%+ cheaper than the full critique round.
     if payload.verdict is not None and payload.verdict.status == "win":
         try:
             from middleware.metrics import POST_MORTEM_SKIPPED_TOTAL
             POST_MORTEM_SKIPPED_TOTAL.labels(market=discussion.market).inc()
         except Exception:
             pass
+        if payload.prompt_text:
+            try:
+                await discussion_service.extract_winning_thesis_lessons(
+                    db, discussion,
+                    win_prompt_text=payload.prompt_text,
+                    user_id=str(owner_id),
+                )
+            except Exception as exc:
+                log.warning(
+                    "backtest_sweep.win_lesson_extraction_failed",
+                    extra={
+                        "discussion_id": str(discussion.id),
+                        "error": str(exc),
+                    },
+                )
         return
     if not payload.prompt_text:
         return

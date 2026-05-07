@@ -64,6 +64,12 @@ class DiscussionResponse(BaseModel):
     # older clients ignore the field; new clients render a second
     # card alongside the original when populated.
     post_mortem_conclusion: dict[str, Any] | None = None
+    # PR-2: structured delta between `conclusion` and
+    # `post_mortem_conclusion`, computed at synthesis time. Lets the
+    # UI render a "what changed" card without recomputing on every
+    # read. NULL when the discussion never went through post-mortem,
+    # either side parse-errored, or the row is from before PR-2.
+    post_mortem_diff: dict[str, Any] | None = None
     # Self-grading fields (migration 0018). All optional / default-None
     # so legacy clients ignore them; frontend uses them to render the
     # dynamic title (YYYYMMDD(syms)勝/敗) instead of the user-typed topic.

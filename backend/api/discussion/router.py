@@ -158,6 +158,7 @@ def _to_response(d: Discussion) -> DiscussionResponse:
         current_round=d.current_round,
         conclusion=d.conclusion,
         post_mortem_conclusion=d.post_mortem_conclusion,
+        post_mortem_diff=d.post_mortem_diff,
         verdict=d.verdict,
         verdict_reason=d.verdict_reason,
         verified_at=d.verified_at,
@@ -1194,6 +1195,88 @@ async def update_strategy(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return _template_to_response(updated)
+
+
+# ── PR-3: calibration deployment gate ─────────────────────────────
+
+
+@router.get("/strategies/{template_id}/calibration/pending")
+async def get_pending_calibration(
+    template_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """PR-3: surface the queued (not-yet-deployed) calibration curve
+    for an admin review card. Returns the live curve alongside so
+    the UI can render a side-by-side diff.
+
+    `pending_curve` is null when no review is queued (the typical
+    case). The frontend uses this to gate "Approve" / "Reject"
+    button visibility.
+    """
+    from services import strategy_template_service as tsvc
+    row = await tsvc.get_template(
+        db, template_id=template_id,
+        owner_id=_coerce_owner_uuid(user),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    return {
+        "strategy_id": str(row.id),
+        "live_curve": row.calibration_curve or [],
+        "live_updated_at": (
+            row.calibration_updated_at.isoformat()
+            if row.calibration_updated_at else None
+        ),
+        "live_sample_count": row.calibration_sample_count,
+        "pending_curve": row.calibration_pending_curve,
+        "pending_reason": row.calibration_pending_reason,
+        "pending_at": (
+            row.calibration_pending_at.isoformat()
+            if row.calibration_pending_at else None
+        ),
+    }
+
+
+@router.post("/strategies/{template_id}/calibration/approve")
+async def approve_calibration_route(
+    template_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """PR-3: promote a queued calibration curve to the live one.
+    Owner-scoped; idempotent (no pending → returns `{promoted: false}`
+    without touching state)."""
+    from services import confidence_calibrator
+    try:
+        result = await confidence_calibrator.approve_pending_calibration(
+            db,
+            owner_id=_coerce_owner_uuid(user),
+            strategy_id=template_id,
+        )
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    return result
+
+
+@router.post("/strategies/{template_id}/calibration/reject")
+async def reject_calibration_route(
+    template_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """PR-3: discard the queued curve, keep serving the live one.
+    Idempotent on no-pending."""
+    from services import confidence_calibrator
+    try:
+        result = await confidence_calibrator.reject_pending_calibration(
+            db,
+            owner_id=_coerce_owner_uuid(user),
+            strategy_id=template_id,
+        )
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    return result
 
 
 @router.get(

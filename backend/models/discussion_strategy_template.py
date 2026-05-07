@@ -80,6 +80,23 @@ class DiscussionStrategyTemplate(Base):
     calibration_sample_count: Mapped[int | None] = mapped_column(
         Integer, nullable=True,
     )
+    # PR-3: deployment gate for freshly-fitted calibration curves.
+    # When a new fit fails any safety check (endpoint inversion,
+    # huge per-point delta vs the live curve, recent brier
+    # degradation), it lands here instead of overwriting
+    # `calibration_curve`. Admin reviews + approves via API to
+    # promote it. NULL whenever no review is queued. The live
+    # curve keeps serving predictions until either a fresh fit
+    # deploys cleanly or the pending one is approved.
+    calibration_pending_curve: Mapped[list[dict] | None] = mapped_column(
+        JSON, nullable=True,
+    )
+    calibration_pending_reason: Mapped[str | None] = mapped_column(
+        Text, nullable=True,
+    )
+    calibration_pending_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
 
     # PR-D: auto-schedule fields. Disabled by default — explicit
     # opt-in so a fresh template doesn't fire LLM cost on its own.

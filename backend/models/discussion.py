@@ -91,6 +91,20 @@ class Discussion(Base):
     post_mortem_conclusion: Mapped[dict[str, Any] | None] = mapped_column(
         JSON, nullable=True,
     )
+    # PR-2: structured delta between `conclusion` and
+    # `post_mortem_conclusion`. Populated by `synthesize_conclusion`
+    # at the moment it writes the post-mortem conclusion so the UI
+    # can render an automatic "what changed" card without recomputing
+    # on every read. Shape:
+    #   {symbols_added, symbols_removed, confidence_changes,
+    #    consensus_score_delta, time_horizon_changed, reasoning_overlap}
+    # NULL when (a) discussion never went through post-mortem,
+    # (b) original conclusion was a parse-error placeholder, or
+    # (c) discussion is from before this PR landed (no automatic
+    # backfill — recompute on demand from the persisted pair).
+    post_mortem_diff: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True,
+    )
     # Self-grading columns (added in migration 0018). `auto_run` flags
     # rows produced by the daily scheduler so the verifier task doesn't
     # touch user-created manual discussions. `verdict` stays NULL until

@@ -606,6 +606,26 @@
     "conclusion_title": "結論摘要（初次彙整）",
     "post_mortem_conclusion_title": "📋 事後檢討後修正結論",
     "conclusion_parse_error": "結論格式解析失敗，請重新彙整",
+    "quality": {
+      "skipped": "品質檢查跳過（解析錯誤）",
+      "passed": "品質檢查通過",
+      "passed_tooltip": "立場分佈、信心分佈、引用真實性皆無異常",
+      "hallucination_count": "{{count}} 項數值幻覺",
+      "contradiction": "共識矛盾",
+      "contradiction_tooltip": "最後一輪反對人數 > 同意人數，但仍輸出推薦標的",
+      "over_confident": "過度自信",
+      "over_confident_tooltip": "推薦標的平均信心 {{mean}}，超過合理上限"
+    },
+    "diff": {
+      "title": "事後檢討修正了什麼",
+      "no_structural_change": "推薦標的、信心、共識、時間框架皆無變化（僅措辭更新）",
+      "added": "新增",
+      "removed": "移除",
+      "confidence_shifts": "信心調整",
+      "reasoning_overlap": "推理重疊度",
+      "consensus_delta": "共識度變化",
+      "horizon_changed": "⚠ 時間框架變動"
+    },
     "export_markdown": "匯出 Markdown",
     "ask_followup": "深入分析",
     "click_for_deep_dive": "點擊向專家深入提問",

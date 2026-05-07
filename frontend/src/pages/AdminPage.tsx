@@ -23,6 +23,7 @@ import { MarketKeysCard } from "@/components/admin/MarketKeysCard";
 import { PersonasCard } from "@/components/admin/PersonasCard";
 import { RuntimeTunablesCard } from "@/components/admin/RuntimeTunablesCard";
 import { DiscussionLessonsCard } from "@/components/admin/DiscussionLessonsCard";
+import { CalibrationReviewCard } from "@/components/admin/CalibrationReviewCard";
 import { PostMortemGapsCard } from "@/components/admin/PostMortemGapsCard";
 import { SignalAuditCard } from "@/components/admin/SignalAuditCard";
 import { SignalQualityCard } from "@/components/admin/SignalQualityCard";
@@ -133,6 +134,7 @@ function AdminContent() {
         </TabsContent>
 
         <TabsContent value="quality" className="space-y-4 mt-4">
+          <CalibrationReviewCard />
           <SignalAuditCard />
           <SignalQualityCard />
           <PostMortemGapsCard />

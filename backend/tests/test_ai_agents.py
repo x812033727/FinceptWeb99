@@ -1,8 +1,8 @@
 """Inventory + sanity tests for the agent persona catalogue.
 
-The 19 personas (7 functional + 12 legendary investors) are pure data —
-these tests guard against accidental drops, broken provider/model
-defaults, and empty system prompts.
+The 23 personas (7 functional + 16 legendary investors / traders) are
+pure data — these tests guard against accidental drops, broken
+provider/model defaults, and empty system prompts.
 """
 from __future__ import annotations
 
@@ -29,12 +29,13 @@ _MASTER_IDS = {
     "marks", "klarman",                       # contrarian
     "dalio", "soros",                         # macro
     "simons", "asness",                       # quant
+    "livermore", "ptj", "minervini", "raschke",  # short-term traders
 }
 
 
-def test_total_agent_count_is_19():
+def test_total_agent_count_is_23():
     listed = list_agents()
-    assert len(listed) == 19, f"expected 19 agents, got {len(listed)}: {[a['id'] for a in listed]}"
+    assert len(listed) == 23, f"expected 23 agents, got {len(listed)}: {[a['id'] for a in listed]}"
 
 
 def test_all_expected_agent_ids_present():
@@ -95,6 +96,10 @@ def test_master_persona_prompts_mention_their_signature_concepts():
         "soros": ["reflexiv"],
         "simons": ["statistical", "factor"],
         "asness": ["factor", "momentum"],
+        "livermore": ["tape", "pivotal", "pyramid"],
+        "ptj": ["defense", "reward", "stop"],
+        "minervini": ["sepa", "vcp", "trend template"],
+        "raschke": ["80/20", "holy grail", "turtle soup"],
     }
     for pid, keywords in spec_keywords.items():
         prompt = get_agent(pid).system_prompt.lower()

@@ -67,7 +67,7 @@ const providerColor: Record<string, string> = {
   openrouter: "text-rose-400",
 };
 
-// Grouping for the persona picker — keeps the 19 personas scannable.
+// Grouping for the persona picker — keeps the 23 personas scannable.
 // Source-of-truth lives in i18n keys (personas.groups.<id>.title / .hint)
 // so the labels translate; only the membership map is structural.
 // Unknown agent IDs fall through to a catch-all "其他" group so nothing
@@ -79,6 +79,7 @@ const PERSONA_GROUPS: { id: string; agentIds: string[] }[] = [
   { id: "contrarian", agentIds: ["marks", "klarman"] },
   { id: "macro",      agentIds: ["dalio", "soros"] },
   { id: "quant",      agentIds: ["simons", "asness"] },
+  { id: "short_term", agentIds: ["livermore", "ptj", "minervini", "raschke"] },
 ];
 
 function AgentCard({

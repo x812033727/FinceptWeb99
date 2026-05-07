@@ -2345,6 +2345,15 @@ _PORTFOLIO_PROFILE = frozenset({
     "upcoming_events_calendar",  # PR #284: position sizing around earnings
 })
 
+# Short-term traders (Livermore / PTJ / Minervini / Raschke) share the
+# quant block set but ALSO need per_symbol_news_sentiment — tape reading
+# is incomplete without knowing what news is driving the print. Pure
+# quants (Simons / Asness) intentionally exclude news; short-term
+# discretionary traders rely on it for entry timing.
+_SHORT_TERM_PROFILE = _QUANT_PROFILE | frozenset({
+    "per_symbol_news_sentiment",
+})
+
 _PERSONA_CONTEXT_PROFILES: dict[str, frozenset[str]] = {
     # CFA-style functional
     "market_analyst":    _QUANT_PROFILE,
@@ -2376,6 +2385,14 @@ _PERSONA_CONTEXT_PROFILES: dict[str, frozenset[str]] = {
     # Quant
     "simons":   _QUANT_PROFILE,
     "asness":   _QUANT_PROFILE,
+
+    # Short-term traders. PTJ also reads international_sentiment (his
+    # macro overlay drives the regime call). Minervini watches buybacks
+    # as a leading-stock confirmation signal.
+    "livermore":  _SHORT_TERM_PROFILE,
+    "ptj":        _SHORT_TERM_PROFILE | {"international_sentiment"},
+    "minervini":  _SHORT_TERM_PROFILE | {"active_buybacks"},
+    "raschke":    _SHORT_TERM_PROFILE,
 }
 
 

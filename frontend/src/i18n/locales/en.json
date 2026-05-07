@@ -887,6 +887,10 @@
       "quant": {
         "title": "Quants",
         "hint": "Factor analysis, statistical signals, data-only lens"
+      },
+      "short_term": {
+        "title": "Short-term traders",
+        "hint": "Tape reading, breakout momentum, swing patterns, hard stops"
       }
     },
     "agents": {
@@ -908,7 +912,11 @@
       "dalio":             { "name": "Ray Dalio", "short": "DA", "description": "All-weather, debt cycles, four economic environments" },
       "soros":             { "name": "George Soros", "short": "SO", "description": "Reflexivity, macro hedges, asymmetric bets" },
       "simons":            { "name": "Jim Simons", "short": "SI", "description": "Pure quant: statistical signals, factors, out-of-sample" },
-      "asness":            { "name": "Cliff Asness", "short": "AS", "description": "Factor portfolios: value + momentum + quality + risk parity" }
+      "asness":            { "name": "Cliff Asness", "short": "AS", "description": "Factor portfolios: value + momentum + quality + risk parity" },
+      "livermore":         { "name": "Jesse Livermore", "short": "JL", "description": "Tape reading, pivotal-point breakouts, pyramid winners, cut losers fast" },
+      "ptj":               { "name": "Paul Tudor Jones", "short": "PT", "description": "Defense first; 5:1 reward/risk minimum; never average a loser" },
+      "minervini":         { "name": "Mark Minervini", "short": "MV", "description": "SEPA + VCP momentum; Trend Template; -7% hard stop" },
+      "raschke":           { "name": "Linda Raschke", "short": "LR", "description": "Short-term patterns: 80/20, Holy Grail, Turtle Soup; structure first" }
     }
   },
   "usage": {

@@ -26,6 +26,7 @@ describe("getPersonaIdentity", () => {
       "claude_research", "buffett", "graham", "munger",
       "lynch", "fisher", "smith", "marks", "klarman",
       "dalio", "soros", "simons", "asness",
+      "livermore", "ptj", "minervini", "raschke",
     ];
     for (const id of ids) {
       const { hue } = getPersonaIdentity(id, id);

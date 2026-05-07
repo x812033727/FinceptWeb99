@@ -483,6 +483,57 @@ export interface StrategyTimeline {
   events: TimelineEvent[];
 }
 
+/** PR-5b: leaderboard row from `GET /personas/leaderboard`. */
+export interface PersonaLeaderboardRow {
+  persona_id: string;
+  participation_count: number;
+  win_attribution_count: number;
+  win_attribution_rate: number | null;
+  /** Only populated when the leaderboard is scoped by strategy_id. */
+  average_weight: number | null;
+  weight_trend_30d: number | null;
+  frozen_in_strategies: number;
+  shadow_in_strategies: number;
+}
+
+export interface PersonaLeaderboardResponse {
+  owner_id: string;
+  strategy_id: string | null;
+  market: string | null;
+  days: number;
+  items: PersonaLeaderboardRow[];
+}
+
+/** PR-5b: lesson library row. Mirrors the backend `lesson_to_dict`
+ * extended for PR-5b. */
+export interface LessonLibraryRow {
+  id: number;
+  discussion_id: string;
+  market: string;
+  as_of_date: string;
+  category: string;
+  lesson_text: string;
+  related_symbols: string[];
+  missed_winners: string[];
+  tier: "episodic" | "semantic" | "structural" | null;
+  regime: string | null;
+  usage_count: number;
+  hit_count: number;
+  recent_hit_rate_10: number | null;
+  last_used_at: string | null;
+  promoted_at: string | null;
+  demoted_at: string | null;
+  archived_at: string | null;
+  created_at: string | null;
+}
+
+export interface LessonLibraryResponse {
+  items: LessonLibraryRow[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface CreateStrategyInput {
   name: string;
   description?: string | null;

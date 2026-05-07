@@ -1473,6 +1473,73 @@ async def patch_persona_status(
     return result
 
 
+# ── PR-5b: persona leaderboard + lesson library ──────────────────
+
+
+@router.get("/personas/leaderboard")
+async def get_persona_leaderboard(
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    strategy_id: uuid.UUID | None = None,
+    market: str | None = None,
+    days: int = 90,
+):
+    """PR-5b: per-persona performance roll-up for the leaderboard
+    UI. Owner-scoped. When `strategy_id` is supplied, the response
+    rows include `average_weight` + `weight_trend_30d` (only
+    meaningful per strategy); without it those fields are NULL.
+
+    Sorted by win-attribution rate desc → participation count
+    desc, so consistent contributors surface first.
+    """
+    from services import persona_performance_service as svc
+    rows = await svc.compute_persona_performance(
+        db,
+        owner_id=_coerce_owner_uuid(user),
+        strategy_id=strategy_id,
+        market=market,
+        days=days,
+    )
+    return {
+        "owner_id": str(_coerce_owner_uuid(user)),
+        "strategy_id": str(strategy_id) if strategy_id else None,
+        "market": market,
+        "days": days,
+        "items": rows,
+    }
+
+
+@router.get("/lessons/library")
+async def get_lesson_library(
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    market: str | None = None,
+    tier: str | None = None,
+    archived: bool = False,
+    sort: str = "hit_rate",
+    search: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """PR-5b: filterable lesson browser for the LessonLibraryPage.
+    Owner-scoped. Returns paginated results so the UI can drive
+    next/prev without re-fetching the full set.
+
+    `sort` ∈ {hit_rate, usage, recent, created}. Default
+    `hit_rate` puts the highest-recent-rate lessons first
+    (NULLs sorted last so newly-created unused rows don't pollute
+    the top).
+    """
+    from services import discussion_lesson_service as svc
+    payload = await svc.list_lessons_with_metrics(
+        db,
+        owner_user_id=_coerce_owner_uuid(user),
+        market=market, tier=tier, archived=archived,
+        sort=sort, search=search, limit=limit, offset=offset,
+    )
+    return payload
+
+
 @router.get("/lessons/archived")
 async def list_archived_lessons(
     user: CurrentUser,

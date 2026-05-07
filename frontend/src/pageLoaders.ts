@@ -23,6 +23,7 @@ export const pageLoaders = {
   watchlist: () => import("@/pages/WatchlistPage"),
   ai: () => import("@/pages/AIPage"),
   discussion: () => import("@/pages/DiscussionPage"),
+  lessonLibrary: () => import("@/pages/LessonLibraryPage"),
   alerts: () => import("@/pages/AlertsPage"),
   settings: () => import("@/pages/SettingsPage"),
   admin: () => import("@/pages/AdminPage"),

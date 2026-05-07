@@ -540,6 +540,100 @@ async def list_recent_lessons(
     return list((await db.scalars(stmt)).all())
 
 
+# PR-5b: lesson library — flexible filterable browser. The
+# DiscussionLessonsCard uses `list_recent_lessons` which returns
+# raw rows newest-first; the library page wants filter+sort, so we
+# expose a richer surface here.
+
+_LIBRARY_SORTS = {
+    "hit_rate": DiscussionLesson.recent_hit_rate_10,
+    "usage": DiscussionLesson.usage_count,
+    "recent": DiscussionLesson.last_used_at,
+    "created": DiscussionLesson.created_at,
+}
+
+
+async def list_lessons_with_metrics(
+    db: AsyncSession,
+    *,
+    owner_user_id: uuid.UUID,
+    market: str | None = None,
+    tier: str | None = None,
+    archived: bool = False,
+    sort: str = "hit_rate",
+    search: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """PR-5b: paginated lesson browser for the LessonLibraryPage.
+
+    Filters:
+      - `tier` (episodic / semantic / structural) — default None =
+        all non-archived tiers
+      - `archived` — when True, only archived rows (sister of the
+        existing AdminPage LessonArchiveCard). When False, only
+        non-archived (the typical case).
+      - `market` — TW / US / GLOBAL; when None all markets
+
+    Sorting via `sort`:
+      - 'hit_rate' (default) — by recent_hit_rate_10 desc, NULLs
+        last (so promoted+used lessons surface first)
+      - 'usage' — by usage_count desc
+      - 'recent' — by last_used_at desc
+      - 'created' — by created_at desc
+
+    `search` does a case-insensitive `lesson_text` substring match
+    plus a category equality match (so the operator can search by
+    category name without remembering the exact enum value).
+
+    Returns `{items: [...], total: int, limit, offset}` so the UI
+    can render page navigation.
+    """
+    conditions = [DiscussionLesson.owner_user_id == owner_user_id]
+    if archived:
+        conditions.append(DiscussionLesson.archived_at.is_not(None))
+    else:
+        conditions.append(DiscussionLesson.archived_at.is_(None))
+    if market:
+        conditions.append(DiscussionLesson.market == market)
+    if tier:
+        conditions.append(DiscussionLesson.tier == tier)
+    if search:
+        like = f"%{search}%"
+        conditions.append(
+            (DiscussionLesson.lesson_text.ilike(like))
+            | (DiscussionLesson.category.ilike(like))
+        )
+
+    # Total for pagination — same WHERE as the data query
+    from sqlalchemy import func as _sql_func, select as _sql_select
+    total_q = (
+        _sql_select(_sql_func.count(DiscussionLesson.id))
+        .where(and_(*conditions))
+    )
+    total = int((await db.execute(total_q)).scalar_one() or 0)
+
+    sort_col = _LIBRARY_SORTS.get(sort, DiscussionLesson.recent_hit_rate_10)
+    # NULLs-last on the rate / last_used columns so the operator
+    # sees actual data first; the standard NULLS LAST clause isn't
+    # in plain SQLAlchemy but `.is_(None)` ordered last works on
+    # both PG and SQLite.
+    stmt = (
+        select(DiscussionLesson)
+        .where(and_(*conditions))
+        .order_by(sort_col.is_(None), sort_col.desc())
+        .limit(min(max(int(limit), 1), 200))
+        .offset(max(int(offset), 0))
+    )
+    rows = list((await db.scalars(stmt)).all())
+    return {
+        "items": [lesson_to_dict(r) for r in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
 async def delete_lesson(
     db: AsyncSession,
     *,
@@ -566,16 +660,39 @@ async def delete_lesson(
 
 
 def lesson_to_dict(row: DiscussionLesson) -> dict[str, Any]:
-    """Admin/list serialisation. Includes the row id so the UI can
-    issue deletes."""
+    """Admin/list serialisation. Includes the row id + tier metadata
+    + usage telemetry + archive state so the LessonLibraryPage
+    (PR-5b) and AdminPage cards can render without a second
+    round-trip."""
     return {
-        "id":              row.id,
-        "discussion_id":   str(row.discussion_id),
-        "market":          row.market,
-        "as_of_date":      row.as_of_date.isoformat(),
-        "category":        row.category,
-        "lesson_text":     row.lesson_text,
-        "related_symbols": list(row.related_symbols or []),
-        "missed_winners":  list(row.missed_winners or []),
-        "created_at":      row.created_at.isoformat() if row.created_at else None,
+        "id":                  row.id,
+        "discussion_id":       str(row.discussion_id),
+        "market":              row.market,
+        "as_of_date":          row.as_of_date.isoformat(),
+        "category":            row.category,
+        "lesson_text":         row.lesson_text,
+        "related_symbols":     list(row.related_symbols or []),
+        "missed_winners":      list(row.missed_winners or []),
+        "tier":                getattr(row, "tier", None),
+        "regime":              getattr(row, "regime", None),
+        "usage_count":         int(getattr(row, "usage_count", 0) or 0),
+        "hit_count":           int(getattr(row, "hit_count", 0) or 0),
+        "recent_hit_rate_10":  getattr(row, "recent_hit_rate_10", None),
+        "last_used_at": (
+            row.last_used_at.isoformat()
+            if getattr(row, "last_used_at", None) else None
+        ),
+        "promoted_at": (
+            row.promoted_at.isoformat()
+            if getattr(row, "promoted_at", None) else None
+        ),
+        "demoted_at": (
+            row.demoted_at.isoformat()
+            if getattr(row, "demoted_at", None) else None
+        ),
+        "archived_at": (
+            row.archived_at.isoformat()
+            if getattr(row, "archived_at", None) else None
+        ),
+        "created_at":          row.created_at.isoformat() if row.created_at else None,
     }

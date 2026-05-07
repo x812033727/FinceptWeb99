@@ -176,6 +176,93 @@ def build_openai_compat_toolset(
                 logger.warning("openai_compat.query_user_data failed: %s", exc)
                 return _dump({"error": str(exc)})
 
+    async def get_options_chain(args: dict[str, Any]) -> str:
+        # The underlying yfinance / Polygon chain can run to thousands of
+        # rows across all expiries. Without expiration the tool focuses on
+        # the nearest one and caps at the 30 most-liquid contracts (volume
+        # + open_interest) so the LLM gets a strike grid it can reason
+        # about instead of dumping its context window.
+        from services.us_market_service import get_options
+        symbol = str(args.get("symbol", "")).upper()
+        expiration = args.get("expiration")
+        try:
+            chain = await get_options(symbol, expiration)
+            if not chain:
+                return _dump({"symbol": symbol, "count": 0, "contracts": []})
+            if not expiration:
+                expiries = sorted({
+                    c.get("expiration_date") for c in chain if c.get("expiration_date")
+                })
+                if expiries:
+                    expiration = expiries[0]
+                    chain = [c for c in chain if c.get("expiration_date") == expiration]
+            chain.sort(
+                key=lambda c: (c.get("volume", 0) or 0) + (c.get("open_interest", 0) or 0),
+                reverse=True,
+            )
+            chain = chain[:30]
+            return _dump({
+                "symbol": symbol,
+                "expiration": expiration,
+                "count": len(chain),
+                "contracts": chain,
+            })
+        except Exception as exc:
+            logger.warning("openai_compat.get_options_chain failed %s: %s", symbol, exc)
+            return _dump({"error": str(exc)})
+
+    async def get_symbol_news(args: dict[str, Any]) -> str:
+        symbol = str(args.get("symbol", "")).upper()
+        market = str(args.get("market", "")).upper()
+        limit = max(1, min(int(args.get("limit", 10)), 20))
+        try:
+            if market == "US":
+                from services.us_market_service import get_news as _svc
+            elif market == "TW":
+                from services.tw_market_service import get_news as _svc
+            else:
+                return _dump({"error": f"Unsupported market: {market}"})
+            items = await _svc(symbol, limit=limit)
+            return _dump({
+                "symbol": symbol,
+                "market": market,
+                "count": len(items),
+                "items": items,
+            })
+        except Exception as exc:
+            logger.warning(
+                "openai_compat.get_symbol_news failed %s %s: %s", market, symbol, exc,
+            )
+            return _dump({"error": str(exc)})
+
+    async def get_symbol_sentiment(args: dict[str, Any]) -> str:
+        from services.news_sentiment_service import read_symbol_sentiment
+        symbol = str(args.get("symbol", "")).upper()
+        market = str(args.get("market", "")).upper()
+        max_age = max(1, min(int(args.get("max_age_hours", 168)), 720))
+        if market not in ("US", "TW", "GLOBAL"):
+            return _dump({"error": f"Unsupported market: {market}"})
+        async with AsyncSessionLocal() as session:
+            try:
+                agg = await read_symbol_sentiment(
+                    session, market=market, symbol=symbol, max_age_hours=max_age,
+                )
+                if agg is None:
+                    return _dump({
+                        "symbol": symbol,
+                        "market": market,
+                        "max_age_hours": max_age,
+                        "considered": 0,
+                        "headlines": [],
+                    })
+                return _dump(agg)
+            except Exception as exc:
+                logger.warning(
+                    "openai_compat.get_symbol_sentiment failed %s %s: %s",
+                    market, symbol, exc,
+                )
+                return _dump({"error": str(exc)})
+
     schemas: list[dict] = [
         {
             "type": "function",
@@ -288,6 +375,75 @@ def build_openai_compat_toolset(
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_options_chain",
+                "description": (
+                    "US options chain for a ticker — top 30 most-liquid contracts "
+                    "(by volume + open_interest) on the nearest expiration by "
+                    "default. Pass `expiration` (YYYY-MM-DD) to target a specific "
+                    "date. Each row includes strike, bid/ask, last_price, "
+                    "implied_volatility, open_interest, volume."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol": {"type": "string", "description": "US ticker, e.g. NVDA"},
+                        "expiration": {
+                            "type": "string",
+                            "description": "Optional YYYY-MM-DD. Omit for nearest expiry.",
+                        },
+                    },
+                    "required": ["symbol"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_symbol_news",
+                "description": (
+                    "Recent news headlines for a specific symbol. Backed by the "
+                    "Google News RSS pipeline (US: en-US; TW: zh-TW) plus the "
+                    "FinMind ingest archive on TW. Returns up to 20 items."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol": {"type": "string"},
+                        "market": {"type": "string", "enum": ["US", "TW"]},
+                        "limit": {"type": "integer", "default": 10, "maximum": 20},
+                    },
+                    "required": ["symbol", "market"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_symbol_sentiment",
+                "description": (
+                    "Aggregate sentiment-scored news for one symbol over a recent "
+                    "window. Returns avg_score in [-1, +1], bullish/bearish/neutral "
+                    "counts, and the most recent headlines with their scores. "
+                    "Returns count=0 + empty headlines when no scored articles "
+                    "exist (e.g. fresh ticker, narrow query)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol": {"type": "string"},
+                        "market": {"type": "string", "enum": ["US", "TW", "GLOBAL"]},
+                        "max_age_hours": {
+                            "type": "integer", "default": 168, "maximum": 720,
+                            "description": "Look-back window in hours. Default 168 (7 days).",
+                        },
+                    },
+                    "required": ["symbol", "market"],
+                },
+            },
+        },
     ]
 
     dispatch: dict[str, ToolHandler] = {
@@ -296,5 +452,8 @@ def build_openai_compat_toolset(
         "run_var": run_var,
         "run_backtest": run_backtest,
         "query_user_data": query_user_data,
+        "get_options_chain": get_options_chain,
+        "get_symbol_news": get_symbol_news,
+        "get_symbol_sentiment": get_symbol_sentiment,
     }
     return schemas, dispatch

@@ -4,9 +4,9 @@ in services/llm_usage_service.py.
 """
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, Numeric, String
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, Numeric, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -31,6 +31,8 @@ class LLMUsageEvent(Base):
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     cost_usd: Mapped[float] = mapped_column(Numeric(10, 6), default=0, nullable=False)
+    tool_call_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tool_call_breakdown: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True,
     )

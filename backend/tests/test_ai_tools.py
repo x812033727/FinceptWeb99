@@ -222,3 +222,175 @@ async def test_python_exec_timeout():
     assert "error" in data or data.get("error") is None and data.get("stdout") == ""
     # Accept either a timeout message or a CPU limit exit; just assert we got SOMETHING back
     assert data != {"result": None, "error": None, "stdout": ""}
+
+
+# ── financial.get_options_chain ─────────────────────────────────────
+
+def _make_contract(strike: float, expiration: str, ctype: str = "call",
+                   volume: int = 0, oi: int = 0) -> dict:
+    return {
+        "ticker": f"NVDA{expiration.replace('-', '')}{ctype[0].upper()}{int(strike)}",
+        "underlying_ticker": "NVDA",
+        "contract_type": ctype,
+        "expiration_date": expiration,
+        "strike_price": strike,
+        "last_price": 1.0,
+        "volume": volume,
+        "open_interest": oi,
+        "implied_volatility": 0.4,
+        "in_the_money": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_options_chain_picks_nearest_expiry():
+    tools = {t.name: t for t in make_financial_tools()}
+    chain = [
+        _make_contract(100, "2026-06-20", volume=10, oi=5),
+        _make_contract(100, "2026-09-19", volume=999, oi=999),  # later, ignored
+    ]
+    with patch("services.us_market_service.get_options",
+               new_callable=AsyncMock) as mock:
+        mock.return_value = chain
+        result = await _handler(tools["get_options_chain"])({"symbol": "NVDA"})
+
+    data = _text(result)
+    assert data["expiration"] == "2026-06-20"
+    assert data["count"] == 1
+    assert data["contracts"][0]["expiration_date"] == "2026-06-20"
+
+
+@pytest.mark.asyncio
+async def test_get_options_chain_caps_at_30_by_liquidity():
+    tools = {t.name: t for t in make_financial_tools()}
+    chain = [
+        _make_contract(strike=k, expiration="2026-06-20",
+                       volume=k, oi=k)
+        for k in range(1, 51)
+    ]
+    with patch("services.us_market_service.get_options",
+               new_callable=AsyncMock) as mock:
+        mock.return_value = chain
+        result = await _handler(tools["get_options_chain"])({
+            "symbol": "NVDA", "expiration": "2026-06-20",
+        })
+
+    data = _text(result)
+    assert data["count"] == 30
+    # Top liquidity rows survive — strike=50 (highest volume+oi) should be present
+    assert any(c["strike_price"] == 50 for c in data["contracts"])
+    # Lowest-liquidity strike=1 must be filtered out
+    assert all(c["strike_price"] != 1 for c in data["contracts"])
+
+
+@pytest.mark.asyncio
+async def test_get_options_chain_empty_returns_safe_payload():
+    tools = {t.name: t for t in make_financial_tools()}
+    with patch("services.us_market_service.get_options",
+               new_callable=AsyncMock) as mock:
+        mock.return_value = []
+        result = await _handler(tools["get_options_chain"])({"symbol": "DELISTED"})
+    data = _text(result)
+    assert data == {"symbol": "DELISTED", "count": 0, "contracts": []}
+
+
+# ── financial.get_symbol_news ───────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_get_symbol_news_routes_us():
+    tools = {t.name: t for t in make_financial_tools()}
+    with patch("services.us_market_service.get_news",
+               new_callable=AsyncMock) as mock:
+        mock.return_value = [{"title": "AAPL beats earnings", "link": "https://x"}]
+        result = await _handler(tools["get_symbol_news"])({
+            "symbol": "aapl", "market": "US", "limit": 5,
+        })
+    mock.assert_awaited_once_with("AAPL", limit=5)
+    data = _text(result)
+    assert data["market"] == "US"
+    assert data["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_symbol_news_routes_tw():
+    tools = {t.name: t for t in make_financial_tools()}
+    with patch("services.tw_market_service.get_news",
+               new_callable=AsyncMock) as mock:
+        mock.return_value = [{"title": "台積電法說", "link": "https://y"}]
+        result = await _handler(tools["get_symbol_news"])({
+            "symbol": "2330", "market": "tw",
+        })
+    mock.assert_awaited_once_with("2330", limit=10)
+    assert _text(result)["market"] == "TW"
+
+
+@pytest.mark.asyncio
+async def test_get_symbol_news_caps_limit_at_20():
+    tools = {t.name: t for t in make_financial_tools()}
+    with patch("services.us_market_service.get_news",
+               new_callable=AsyncMock) as mock:
+        mock.return_value = []
+        await _handler(tools["get_symbol_news"])({
+            "symbol": "AAPL", "market": "US", "limit": 999,
+        })
+    # The handler must clip the upstream call to 20.
+    mock.assert_awaited_once_with("AAPL", limit=20)
+
+
+@pytest.mark.asyncio
+async def test_get_symbol_news_rejects_unknown_market():
+    tools = {t.name: t for t in make_financial_tools()}
+    result = await _handler(tools["get_symbol_news"])({
+        "symbol": "X", "market": "JP",
+    })
+    assert "error" in _text(result)
+
+
+# ── financial.get_symbol_sentiment ──────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_get_symbol_sentiment_returns_aggregate():
+    # AsyncSessionLocal is auto-patched to the test sessionmaker by conftest's
+    # `_override_async_session_local` fixture, so the lazy import inside the
+    # handler resolves to the in-memory SQLite engine without explicit setup.
+    tools = {t.name: t for t in make_financial_tools()}
+    with patch(
+        "services.news_sentiment_service.read_symbol_sentiment",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = {
+            "symbol": "2330", "considered": 12, "count": 12,
+            "avg_score": 0.42, "bullish": 8, "bearish": 1, "neutral": 3,
+            "headlines": [],
+        }
+        result = await _handler(tools["get_symbol_sentiment"])({
+            "symbol": "2330", "market": "TW",
+        })
+    data = _text(result)
+    assert data["avg_score"] == 0.42
+    assert data["bullish"] == 8
+
+
+@pytest.mark.asyncio
+async def test_get_symbol_sentiment_no_data_returns_zero():
+    tools = {t.name: t for t in make_financial_tools()}
+    with patch(
+        "services.news_sentiment_service.read_symbol_sentiment",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = None
+        result = await _handler(tools["get_symbol_sentiment"])({
+            "symbol": "OBSCURE", "market": "US",
+        })
+    data = _text(result)
+    assert data["considered"] == 0
+    assert data["headlines"] == []
+
+
+@pytest.mark.asyncio
+async def test_get_symbol_sentiment_rejects_unknown_market():
+    tools = {t.name: t for t in make_financial_tools()}
+    result = await _handler(tools["get_symbol_sentiment"])({
+        "symbol": "X", "market": "JP",
+    })
+    assert "error" in _text(result)

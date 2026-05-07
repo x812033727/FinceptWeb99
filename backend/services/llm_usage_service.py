@@ -88,9 +88,16 @@ async def record_usage(
     persona_id: str | None,
     prompt_tokens: int,
     completion_tokens: int,
+    tool_call_count: int = 0,
+    tool_call_breakdown: dict[str, int] | None = None,
 ) -> None:
     """Insert one usage row. Failures are logged, never raised — usage
-    accounting must not fail a successful chat response."""
+    accounting must not fail a successful chat response.
+
+    `tool_call_count` / `tool_call_breakdown` are optional — pre-tool-loop
+    callers (Anthropic / Gemini direct chat, news_sentiment scorer) pass
+    nothing and the row records 0 / NULL, matching pre-PR behaviour.
+    """
     try:
         cost = estimate_cost_usd(provider, model, prompt_tokens, completion_tokens)
         uid = uuid.UUID(user_id) if user_id else None
@@ -102,6 +109,8 @@ async def record_usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             cost_usd=Decimal(f"{cost:.6f}"),
+            tool_call_count=tool_call_count,
+            tool_call_breakdown=dict(tool_call_breakdown) if tool_call_breakdown else None,
         )
         db.add(evt)
         await db.commit()

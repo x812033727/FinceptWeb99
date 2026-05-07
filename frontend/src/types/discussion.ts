@@ -124,6 +124,16 @@ export interface Conclusion {
    * / hallucination). Optional for forward-compat with conclusions
    * synthesized before PR-1 landed. */
   quality_signals?: QualitySignals;
+  /** PR-5c: per-conclusion baseline delta. NULL on live discussions
+   * without a sweep parent or on cold-start strategies (no health
+   * snapshot yet). */
+  vs_baseline?: {
+    brier_baseline: number | null;
+    consensus_baseline: number | null;
+    consensus_score: number;
+    consensus_pct_change: number | null;
+    verify_pending: boolean;
+  };
   /** Set by the backend when the synthesizer's JSON couldn't be parsed
    * even via the lenient salvage path — the UI shows a degraded
    * "解析失敗" badge instead of pretending the conclusion is real. */

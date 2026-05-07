@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import type { Conclusion, DiscussionDetail, Turn } from "@/types/discussion";
 import { useCollapsible } from "@/hooks/useCollapsible";
+import { BaselineDeltaBadge } from "./BaselineDeltaBadge";
 import { ConclusionHero } from "./ConclusionHero";
 import { QualitySignalsRow } from "./QualitySignalsRow";
 
@@ -222,6 +223,7 @@ export function ConclusionCard({
       ) : (
         <>
           <QualitySignalsRow signals={conclusion.quality_signals} />
+          <BaselineDeltaBadge conclusion={conclusion} />
           <ConclusionHero
             detail={detail}
             conclusion={conclusion}

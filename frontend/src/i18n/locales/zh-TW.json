@@ -90,6 +90,7 @@
     "ai": "AI 顧問",
     "discussion": "專家討論",
     "lesson_library": "教訓圖書館",
+    "strategy_compare": "策略比較",
     "finmind": "FinMind API",
     "settings": "設定",
     "admin": "管理後台",
@@ -533,6 +534,22 @@
     },
     "disclaimer": "AI 回應僅供參考，並非投資建議。"
   },
+  "strategy_compare": {
+    "title": "策略比較",
+    "pick": "已選 {{count}} / 4",
+    "days": "區間",
+    "run": "比較",
+    "brier_chart": "Brier 趨勢",
+    "empty_pick_hint": "從上方挑 1-4 個策略,選擇區間後按「比較」",
+    "col": {
+      "name": "策略",
+      "tier": "Tier",
+      "brier_avg": "Brier 平均",
+      "brier_latest": "Brier 最新",
+      "hit_rate_latest": "命中率",
+      "samples": "樣本數"
+    }
+  },
   "lesson_library": {
     "title": "教訓圖書館",
     "total": "共 {{count}} 則",
@@ -743,7 +760,15 @@
         "sweep_completed": "Sweep 完成",
         "maturity_change": "成熟度變化",
         "persona_status_change": "Persona 狀態變化"
-      }
+      },
+      "regime_overlay": "顯示市場 regime 背景(牛/熊/高低波動)"
+    },
+    "baseline": {
+      "consensus_label": "本場 vs 90 天平均共識",
+      "consensus_tooltip": "本場 {{current}} vs 基準 {{baseline}}",
+      "brier_label": "Brier 比較",
+      "brier_pending": "Brier 待 5 日後驗證",
+      "brier_tooltip": "策略 30 天 baseline brier:{{baseline}}"
     },
     "leaderboard": {
       "title": "近 {{days}} 天 Persona 排行榜",

@@ -90,6 +90,7 @@
     "ai": "AI Agents",
     "discussion": "Discussion",
     "lesson_library": "Lesson Library",
+    "strategy_compare": "Strategy Compare",
     "finmind": "FinMind API",
     "settings": "Settings",
     "admin": "Admin",
@@ -533,6 +534,22 @@
     },
     "disclaimer": "AI responses are for informational purposes only and not financial advice."
   },
+  "strategy_compare": {
+    "title": "Strategy Compare",
+    "pick": "Selected {{count}} / 4",
+    "days": "Window",
+    "run": "Compare",
+    "brier_chart": "Brier trend",
+    "empty_pick_hint": "Pick 1-4 strategies above, choose window, hit Compare",
+    "col": {
+      "name": "Strategy",
+      "tier": "Tier",
+      "brier_avg": "Brier avg",
+      "brier_latest": "Brier latest",
+      "hit_rate_latest": "Hit rate",
+      "samples": "Samples"
+    }
+  },
   "lesson_library": {
     "title": "Lesson Library",
     "total": "{{count}} total",
@@ -743,7 +760,15 @@
         "sweep_completed": "Sweep completed",
         "maturity_change": "Maturity change",
         "persona_status_change": "Persona status change"
-      }
+      },
+      "regime_overlay": "Show market regime overlay (bull / bear / high-vol / low-vol)"
+    },
+    "baseline": {
+      "consensus_label": "Consensus vs 90d avg",
+      "consensus_tooltip": "This conclusion {{current}} vs baseline {{baseline}}",
+      "brier_label": "Brier vs baseline",
+      "brier_pending": "Brier pending verifier (5d after as_of)",
+      "brier_tooltip": "Strategy 30d baseline brier: {{baseline}}"
     },
     "leaderboard": {
       "title": "Persona leaderboard, last {{days}} days",

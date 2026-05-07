@@ -72,6 +72,7 @@ const NAV_GROUPS: NavGroupDef[] = [
       { to: "/ai", labelKey: "nav.ai", Icon: Bot },
       { to: "/discussion", labelKey: "nav.discussion", Icon: MessagesSquare },
       { to: "/discussion/lessons", labelKey: "nav.lesson_library", Icon: BookOpen },
+      { to: "/discussion/compare", labelKey: "nav.strategy_compare", Icon: Activity },
     ],
   },
   {

@@ -580,7 +580,10 @@ function StrategyRow({
       <AutoPromoteSettings strategy={strategy} />
       <PersonaStatusGrid strategy={strategy} />
       <HealthMetricsSparkline strategyId={strategy.id} />
-      <StrategyTimelineCard strategyId={strategy.id} />
+      <StrategyTimelineCard
+        strategyId={strategy.id}
+        market={strategy.market}
+      />
       <PersonaLeaderboardCard strategyId={strategy.id} />
       <VersionHistorySection strategyId={strategy.id} />
       {showAggregate && (

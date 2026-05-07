@@ -415,6 +415,80 @@ async def test_get_state_recovers_from_corrupted_json(
 
 
 @pytest.mark.asyncio
+async def test_get_state_heals_orphaned_running_state(
+    fake_redis, stub_helpers,
+):
+    """Backend restart kills the in-process `_run_chain` task without
+    running its finally block, leaving redis state stuck on
+    running/stopping. With no lock held, get_state() should self-heal
+    to idle so the UI doesn't show 正在停止… forever."""
+    from services.finmind_chain_service import (
+        LOCK_KEY,
+        STATE_KEY,
+        STOP_KEY,
+        ChainState,
+        get_state,
+    )
+
+    orphan = ChainState(
+        status="stopping",
+        queue=["TaiwanStockPriceAdj"],
+        current_dataset="TaiwanStockMarginPurchaseShortSale",
+        current_symbol="03098B",
+        chunks_done=12604,
+        chunks_total=126465,
+        stop_requested=True,
+        started_at="2026-05-07T07:26:02+00:00",
+        last_chunk_at="2026-05-07T07:43:52+00:00",
+    )
+    fake_redis[STATE_KEY] = orphan.to_json()
+    fake_redis[STOP_KEY] = "1"
+    assert LOCK_KEY not in fake_redis  # lock TTL has expired
+
+    state = await get_state()
+
+    assert state["status"] == "idle"
+    assert state["current_dataset"] is None
+    assert state["current_symbol"] is None
+    assert state["queue"] == []
+    assert state["stop_requested"] is False
+    # STOP_KEY removed so a future start_chain doesn't inherit it.
+    assert STOP_KEY not in fake_redis
+    # Healed state was persisted, not just returned.
+    persisted = ChainState.from_json(fake_redis[STATE_KEY])
+    assert persisted.status == "idle"
+
+
+@pytest.mark.asyncio
+async def test_get_state_does_not_heal_when_lock_held(
+    fake_redis, stub_helpers,
+):
+    """A live worker holds the lock — must not be reset to idle just
+    because get_state() is called mid-run."""
+    from services.finmind_chain_service import (
+        LOCK_KEY,
+        STATE_KEY,
+        ChainState,
+        get_state,
+    )
+
+    live = ChainState(
+        status="running",
+        queue=["TaiwanStockPriceAdj"],
+        current_dataset="TaiwanStockPriceAdj",
+        current_symbol="2330",
+        chunks_done=5,
+    )
+    fake_redis[STATE_KEY] = live.to_json()
+    fake_redis[LOCK_KEY] = "worker-A:123"
+
+    state = await get_state()
+
+    assert state["status"] == "running"
+    assert state["current_dataset"] == "TaiwanStockPriceAdj"
+
+
+@pytest.mark.asyncio
 async def test_state_serialises_via_to_json_round_trip():
     """Sanity check: the dataclass round-trips through JSON without
     losing fields (defends against accidental Field rename in service)."""

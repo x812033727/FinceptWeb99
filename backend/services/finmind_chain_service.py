@@ -399,11 +399,38 @@ async def _per_dataset_progress(
 # ── Public API ─────────────────────────────────────────────────
 
 
+async def _heal_if_orphaned(state: ChainState) -> ChainState:
+    """If state claims active but no worker holds the lock, the owner
+    process died (container restart, OOM, host reboot) without running
+    `_run_chain`'s finally block. Reset to idle so the UI doesn't hang
+    on `stopping` forever. Lock TTL is 60 s and the worker refreshes
+    every 20 s, so a missing lock means the worker is genuinely gone,
+    not transiently stalled."""
+    if state.status not in ("running", "stopping"):
+        return state
+    r = await get_redis()
+    if await r.get(LOCK_KEY) is not None:
+        return state
+    log.warning(
+        "chain: orphaned state detected (status=%s, no lock); resetting to idle",
+        state.status,
+    )
+    state.status = "idle"
+    state.current_dataset = None
+    state.current_symbol = None
+    state.queue = []
+    state.stop_requested = False
+    await _write_state(state)
+    await cache_delete(STOP_KEY)
+    return state
+
+
 async def get_state() -> dict:
     """Read state + augment with live quota gauge, host-chain
     inference, and overall progress. Returns a JSON-serialisable dict
     so the FastAPI handler can return it directly."""
     state = await _read_state()
+    state = await _heal_if_orphaned(state)
     used = await _quota_used()
     limit = await _quota_limit()
     state.stop_requested = await _stop_requested()

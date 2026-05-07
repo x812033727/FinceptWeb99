@@ -116,6 +116,11 @@ async def stub_helpers(monkeypatch):
     async def _fake_count_done(ds: str):
         return fakes["dataset_progress"].get(ds, (0, 0))
 
+    async def _fake_count_done_many(datasets):
+        return sum(
+            fakes["dataset_progress"].get(d, (0, 0))[0] for d in datasets
+        )
+
     monkeypatch.setattr(
         "services.finmind_chain_service._load_universe", _fake_universe
     )
@@ -135,6 +140,10 @@ async def stub_helpers(monkeypatch):
     monkeypatch.setattr(
         "services.finmind_chain_service._count_done_for_dataset",
         _fake_count_done,
+    )
+    monkeypatch.setattr(
+        "services.finmind_chain_service._count_done_for_datasets",
+        _fake_count_done_many,
     )
     yield fakes
 
@@ -192,7 +201,10 @@ async def test_get_state_initial_is_idle(fake_redis, stub_helpers):
     assert state["status"] == "idle"
     assert state["queue"] == []
     assert state["chunks_done"] == 0
-    assert state["host_chain_likely_active"] is False
+    assert state["external_activity_detected"] is False
+    # Idle chain: no selected datasets yet → totals are 0
+    assert state["total_chunks_done"] == 0
+    assert state["total_chunks_total"] == 0
     assert state["quota_limit"] == 6000
     assert "TaiwanStockPriceAdj" in state["default_datasets"]
 

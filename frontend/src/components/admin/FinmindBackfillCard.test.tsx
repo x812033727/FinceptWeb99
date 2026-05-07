@@ -39,9 +39,13 @@ const IDLE_STATE = {
   last_chunk_at: null,
   stop_requested: false,
   recent_errors: [],
+  selected_datasets: [],
+  universe_size: 0,
+  total_chunks_done: 0,
+  total_chunks_total: 0,
   quota_used: 1234,
   quota_limit: 6000,
-  host_chain_likely_active: false,
+  external_activity_detected: false,
   default_datasets: [
     "TaiwanStockMarginPurchaseShortSale",
     "TaiwanStockPriceAdj",
@@ -133,17 +137,49 @@ describe("FinmindBackfillCard — render", () => {
   });
 });
 
-describe("FinmindBackfillCard — host chain detection", () => {
-  it("shows the yellow banner and disables Start when host_chain_likely_active", async () => {
+describe("FinmindBackfillCard — external activity detection", () => {
+  it("shows the advisory banner but keeps Start enabled when external_activity_detected", async () => {
+    // External activity (APScheduler / host script) is informational
+    // only — the chain's pre-flight quota gate handles saturation, so
+    // we don't hard-block the user. Only a real duplicate UI start is
+    // refused (via redis lock → 409 from the API).
     mockedApi.get.mockResolvedValue({
-      data: { ...IDLE_STATE, host_chain_likely_active: true },
+      data: { ...IDLE_STATE, external_activity_detected: true },
     });
     renderCard();
     expect(
-      await screen.findByText(/外部 backfill 正在進行中/),
+      await screen.findByText(/其他 backfill 任務在使用 FinMind quota/),
     ).toBeInTheDocument();
     const start = await screen.findByRole("button", { name: /開始回填/ });
-    expect(start).toBeDisabled();
+    await waitFor(() => expect(start).not.toBeDisabled());
+  });
+});
+
+describe("FinmindBackfillCard — overall progress", () => {
+  it("renders 整體進度 with absolute count + percentage when chain has run", async () => {
+    mockedApi.get.mockResolvedValue({
+      data: {
+        ...IDLE_STATE,
+        status: "running",
+        selected_datasets: [
+          "TaiwanStockPriceAdj", "TaiwanStockMonthRevenue",
+        ],
+        universe_size: 2535,
+        total_chunks_done: 1234,
+        total_chunks_total: 5070,  // 2535 × 2
+        current_dataset: "TaiwanStockPriceAdj",
+        chunks_done: 1234,
+        chunks_total: 2535,
+      },
+    });
+    renderCard();
+    expect(await screen.findByText("整體進度")).toBeInTheDocument();
+    expect(
+      screen.getByText(/1,234 \/ 5,070 \(24%\)/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/2 個 dataset × 2,535 symbols/),
+    ).toBeInTheDocument();
   });
 });
 

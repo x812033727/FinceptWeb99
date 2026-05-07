@@ -27,7 +27,8 @@ Admin = Annotated[User, Depends(require_admin)]
 
 class ChainStatePayload(BaseModel):
     """Mirrors `services.finmind_chain_service.ChainState` plus the
-    augmented quota / host-detection fields from `get_state()`."""
+    augmented quota / external-activity / overall-progress fields
+    that `get_state()` computes on read."""
 
     status: str
     queue: list[str]
@@ -40,10 +41,14 @@ class ChainStatePayload(BaseModel):
     last_chunk_at: str | None
     stop_requested: bool
     recent_errors: list[str]
+    selected_datasets: list[str]
+    universe_size: int
     quota_used: int | None
     quota_limit: int
-    host_chain_likely_active: bool
+    external_activity_detected: bool
     default_datasets: list[str]
+    total_chunks_done: int
+    total_chunks_total: int
 
 
 class StartRequest(BaseModel):

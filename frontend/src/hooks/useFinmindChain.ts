@@ -14,10 +14,14 @@ export interface FinmindChainState {
   last_chunk_at: string | null;
   stop_requested: boolean;
   recent_errors: string[];
+  selected_datasets: string[];
+  universe_size: number;
   quota_used: number | null;
   quota_limit: number;
-  host_chain_likely_active: boolean;
+  external_activity_detected: boolean;
   default_datasets: string[];
+  total_chunks_done: number;
+  total_chunks_total: number;
 }
 
 export interface StartChainBody {

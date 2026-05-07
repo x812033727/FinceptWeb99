@@ -94,6 +94,13 @@ class ChainState:
     last_chunk_at: str | None = None
     stop_requested: bool = False
     recent_errors: list[str] = field(default_factory=list)
+    # Overall progress (across ALL datasets in this chain run, not just
+    # the currently-running one). selected_datasets is the chain's
+    # universe at start time; universe_size is the symbol count for
+    # per-symbol fan-out. total_chunks_total = universe_size *
+    # len(selected_datasets) when known.
+    selected_datasets: list[str] = field(default_factory=list)
+    universe_size: int = 0
 
     def to_json(self) -> str:
         return json.dumps(self.__dict__)
@@ -268,23 +275,52 @@ async def _count_done_for_dataset(dataset_code: str) -> tuple[int, int]:
         return (int(row[0] or 0), int(row[1] or 0))
 
 
+async def _count_done_for_datasets(datasets: list[str]) -> int:
+    """Sum of `done` chunks across the given datasets. Powers the
+    overall progress bar — answers `已完成 X / 預期 Y` for the whole
+    chain, not just the current dataset."""
+    if not datasets:
+        return 0
+    from finmind.db.session import FinmindAsyncSessionLocal
+
+    async with FinmindAsyncSessionLocal() as session:
+        result = await session.execute(text(
+            """
+            SELECT count(*)
+              FROM finmind.backfill_progress
+             WHERE status='done' AND dataset_code = ANY(:ds)
+            """
+        ), {"ds": list(datasets)})
+        return int(result.scalar() or 0)
+
+
 # ── Public API ─────────────────────────────────────────────────
 
 
 async def get_state() -> dict:
-    """Read state + augment with live quota gauge and host-chain
-    inference. Returns a JSON-serialisable dict so the FastAPI handler
-    can return it directly."""
+    """Read state + augment with live quota gauge, host-chain
+    inference, and overall progress. Returns a JSON-serialisable dict
+    so the FastAPI handler can return it directly."""
     state = await _read_state()
     used = await _quota_used()
     limit = await _quota_limit()
     state.stop_requested = await _stop_requested()
+    # Overall progress across ALL datasets in this chain run. When the
+    # chain is idle and selected_datasets is empty, both totals are 0
+    # — the frontend renders "—" instead of "0/0" in that case.
+    total_done = (
+        await _count_done_for_datasets(state.selected_datasets)
+        if state.selected_datasets else 0
+    )
+    total_total = state.universe_size * len(state.selected_datasets)
     return {
         **state.__dict__,
         "quota_used": used,
         "quota_limit": limit,
-        "host_chain_likely_active": await _host_chain_likely_active(),
+        "external_activity_detected": await _host_chain_likely_active(),
         "default_datasets": list(DEFAULT_DATASETS),
+        "total_chunks_done": total_done,
+        "total_chunks_total": total_total,
     }
 
 
@@ -325,6 +361,8 @@ async def start_chain(
         last_chunk_at=None,
         stop_requested=False,
         recent_errors=[],
+        selected_datasets=list(datasets),
+        universe_size=0,    # filled in by _run_chain after _load_universe
     )
     await _write_state(state)
 
@@ -382,6 +420,12 @@ async def _run_chain(datasets: list[str], days: int) -> None:
             state.status = "idle"
             await _write_state(state)
             return
+
+        # Persist universe_size so get_state() can compute the overall
+        # progress denominator (universe_size × len(selected_datasets)).
+        state = await _read_state()
+        state.universe_size = len(universe)
+        await _write_state(state)
 
         for ds in datasets:
             if await _stop_requested():

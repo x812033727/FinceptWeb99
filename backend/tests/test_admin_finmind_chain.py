@@ -73,10 +73,14 @@ def stub_chain(monkeypatch):
         "last_chunk_at": None,
         "stop_requested": False,
         "recent_errors": [],
+        "selected_datasets": [],
+        "universe_size": 0,
         "quota_used": 0,
         "quota_limit": 6000,
-        "host_chain_likely_active": False,
+        "external_activity_detected": False,
         "default_datasets": list(chain.DEFAULT_DATASETS),
+        "total_chunks_done": 0,
+        "total_chunks_total": 0,
     }
     calls = {"start": [], "stop": 0, "reset_stuck": 0}
     raise_on_start: list[Exception] = []

@@ -127,9 +127,14 @@ export default function FinmindBackfillCard() {
 
   const isRunning = s?.status === "running";
   const isStopping = s?.status === "stopping";
-  const blockedByHost = !!s?.host_chain_likely_active;
+  // External activity (host script or in-container APScheduler daily
+  // refresh) is informational — we still let the user click Start, the
+  // chain's pre-flight quota gate handles saturation gracefully. Only
+  // a real duplicate UI start is hard-blocked (via the redis lock,
+  // which surfaces as a 409 on the start request).
+  const externalActivity = !!s?.external_activity_detected;
   const startDisabled =
-    isRunning || isStopping || blockedByHost || selected.size === 0 || start.isPending;
+    isRunning || isStopping || selected.size === 0 || start.isPending;
   const stopDisabled = !isRunning || stop.isPending;
 
   function toggleDataset(code: string) {
@@ -164,24 +169,53 @@ export default function FinmindBackfillCard() {
 
       {open && (
         <div className="mt-4 space-y-4">
-          {blockedByHost && (
+          {externalActivity && (
             <div className="rounded border border-amber-400 bg-amber-50 p-3 text-xs dark:bg-amber-950">
               <div className="font-semibold">
-                偵測到外部 backfill 正在進行中
+                目前有其他 backfill 任務在使用 FinMind quota
               </div>
               <div className="mt-1 text-muted-foreground">
-                10 分鐘內有其他來源(host 上的 finmind_chain.sh /
-                finmind_chain_all.sh、或 backend 內 APScheduler 的 daily
-                refresh)正在 claim chunk,但本次 UI 沒持有 chain lock。等
-                目前在跑的 chunk 結束(通常 1-2 分鐘),或先按下方「清理
-                卡住的 chunk」把 stale 的 running 重設成 pending,再重試。
-                兩條 chain 同時跑會雙重消耗 FinMind 6000/hr quota 觸發 402
-                Payment Required。
+                10 分鐘內偵測到外部來源(host 腳本或 backend 內 APScheduler
+                的 daily refresh)正在 claim chunk。本次 chain 仍可啟動 ──
+                pre-flight quota gate 會在 6000/hr 飽和時自動 sleep,不會
+                硬撞。但兩邊一起跑會共用 quota,進度條會比預期慢。若 UI
+                曾意外中斷讓 lock 殘留,下一次 start 會自動 reset stuck →
+                重啟。
               </div>
             </div>
           )}
 
           <StatusBanner state={s} />
+
+          {/* Overall progress — sum across every dataset in this
+              chain run, not just the currently-running one. Always
+              renders when selected_datasets is non-empty (i.e. a
+              chain has been started), so the user can review final
+              totals after the run ends too. */}
+          {s && s.selected_datasets.length > 0 && (
+            <div>
+              <div className="mb-1 flex justify-between text-sm">
+                <span className="font-semibold">
+                  整體進度
+                </span>
+                <span className="font-mono">
+                  {s.total_chunks_done.toLocaleString()} /{" "}
+                  {s.total_chunks_total.toLocaleString()} (
+                  {formatPct(s.total_chunks_done, s.total_chunks_total)})
+                </span>
+              </div>
+              <ProgressBar
+                done={s.total_chunks_done}
+                total={s.total_chunks_total}
+              />
+              <div className="mt-1 text-xs text-muted-foreground">
+                {s.selected_datasets.length} 個 dataset × {s.universe_size.toLocaleString()} symbols
+                {s.queue.length > 0 && (
+                  <> · 佇列剩 {s.queue.length} 個 dataset</>
+                )}
+              </div>
+            </div>
+          )}
 
           {s && s.chunks_total > 0 && (
             <div>

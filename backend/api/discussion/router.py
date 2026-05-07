@@ -907,6 +907,8 @@ def _template_to_response(t) -> StrategyTemplateResponse:
         auto_promote_min_oos_hit_rate=float(
             getattr(t, "auto_promote_min_oos_hit_rate", 0.5) or 0.5,
         ),
+        persona_status=dict(getattr(t, "persona_status", None) or {}),
+        persona_status_updated_at=getattr(t, "persona_status_updated_at", None),
         created_at=t.created_at,
         updated_at=t.updated_at,
         deleted_at=t.deleted_at,
@@ -1385,6 +1387,113 @@ async def get_strategy_maturity(
             if row.maturity_computed_at else None
         ),
     }
+
+
+# ── PR-4c: persona status + lesson archive ────────────────────────
+
+
+@router.patch(
+    "/strategies/{template_id}/personas/{persona_id}/status",
+)
+async def patch_persona_status(
+    template_id: uuid.UUID,
+    persona_id: str,
+    body: dict,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """PR-4c: manually flip a persona's status (active/frozen/
+    shadow) for a strategy. Owner-scoped. The body shape is
+    `{"status": "active"|"frozen"|"shadow"}`.
+
+    Operators use this to:
+      - thaw a persona that the auto-freeze gate caught wrongly
+      - manually freeze a persona before the gate gets there
+      - flip a persona to shadow mode for A/B-style testing
+        without removing it from the roster entirely
+    """
+    raw_status = str(body.get("status", "")).strip()
+    from services import persona_status_service
+    if raw_status not in persona_status_service.VALID_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"status must be one of "
+                f"{persona_status_service.VALID_STATUSES}"
+            ),
+        )
+    try:
+        result = await persona_status_service.set_persona_status(
+            db,
+            owner_id=_coerce_owner_uuid(user),
+            strategy_id=template_id,
+            persona_id=persona_id,
+            status=raw_status,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return result
+
+
+@router.get("/lessons/archived")
+async def list_archived_lessons(
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    market: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """PR-4c: admin surface for the soft-deleted lessons.
+    Owner-scoped — operators only see their own learning archive's
+    discards. Newest-archived first."""
+    from sqlalchemy import select
+    from models.discussion_lesson import DiscussionLesson
+    from services.discussion_lesson_service import lesson_to_dict
+    stmt = (
+        select(DiscussionLesson)
+        .where(
+            DiscussionLesson.owner_user_id == _coerce_owner_uuid(user),
+            DiscussionLesson.archived_at.is_not(None),
+        )
+        .order_by(DiscussionLesson.archived_at.desc())
+        .limit(min(max(int(limit), 1), 200))
+        .offset(max(int(offset), 0))
+    )
+    if market:
+        stmt = stmt.where(DiscussionLesson.market == market)
+    rows = list((await db.scalars(stmt)).all())
+    return {
+        "items": [lesson_to_dict(r) for r in rows],
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.post(
+    "/lessons/{lesson_id}/unarchive",
+)
+async def unarchive_lesson(
+    lesson_id: int,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """PR-4c: restore a previously soft-deleted lesson. Idempotent
+    on already-active rows."""
+    from sqlalchemy import select
+    from models.discussion_lesson import DiscussionLesson
+    row = await db.scalar(
+        select(DiscussionLesson).where(
+            DiscussionLesson.id == lesson_id,
+            DiscussionLesson.owner_user_id == _coerce_owner_uuid(user),
+        )
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+    if row.archived_at is None:
+        return {"unarchived": False, "lesson_id": lesson_id}
+    row.archived_at = None
+    await db.commit()
+    return {"unarchived": True, "lesson_id": lesson_id}
 
 
 # ── PR-4b: health metrics + auto-promote settings ────────────────

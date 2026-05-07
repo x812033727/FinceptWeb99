@@ -461,6 +461,10 @@ async def fetch_relevant_lessons(
     conditions = [
         DiscussionLesson.owner_user_id == owner_user_id,
         DiscussionLesson.market == market,
+        # PR-4c: archived lessons are soft-deleted from the fetch
+        # ranking. The row is preserved (audit / unarchive surface)
+        # but doesn't pollute persona prompts.
+        DiscussionLesson.archived_at.is_(None),
     ]
     if discussion_as_of is not None:
         conditions.append(DiscussionLesson.as_of_date <= discussion_as_of)

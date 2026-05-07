@@ -2629,9 +2629,52 @@ async def run_round(
         except Exception:
             persona_timeout = settings.DISCUSSION_PERSONA_TIMEOUT_SECONDS
 
+        # PR-4c: filter frozen personas out of the roster. When a
+        # discussion is spawned by a sweep, look up the parent
+        # strategy's `persona_status` and drop any persona that's
+        # been frozen (auto-frozen by the underperformer detector
+        # or manually via the admin endpoint). Live discussions
+        # without a sweep parent stay unfiltered. Frozen personas
+        # remain on `discussion.persona_ids` for audit trail — we
+        # only remove them from THIS round's runtime roster.
+        runtime_persona_ids = list(discussion.persona_ids)
+        if discussion.sweep_id is not None:
+            try:
+                from models.backtest_sweep import BacktestSweep
+                from models.discussion_strategy_template import (
+                    DiscussionStrategyTemplate,
+                )
+                from services.persona_status_service import (
+                    filter_roster_by_status,
+                )
+                sweep_row = await db.scalar(
+                    select(BacktestSweep).where(
+                        BacktestSweep.id == discussion.sweep_id,
+                    )
+                )
+                if sweep_row is not None and sweep_row.strategy_id is not None:
+                    tmpl = await db.scalar(
+                        select(DiscussionStrategyTemplate).where(
+                            DiscussionStrategyTemplate.id == sweep_row.strategy_id,
+                        )
+                    )
+                    if tmpl is not None:
+                        runtime_persona_ids = filter_roster_by_status(
+                            persona_ids=runtime_persona_ids,
+                            persona_status=tmpl.persona_status,
+                        )
+            except Exception as exc:
+                log.warning(
+                    "discussion.persona_status_filter_failed",
+                    extra={
+                        "discussion_id": str(discussion.id),
+                        "error": str(exc),
+                    },
+                )
+
         # Batch-load persona overrides up front so the per-persona loop
         # doesn't make N round-trips to the persona_overrides table.
-        specs_by_id = await _resolve_persona_specs(db, list(discussion.persona_ids))
+        specs_by_id = await _resolve_persona_specs(db, runtime_persona_ids)
         # System-task-level LLM override: when the auto-run scheduler
         # passes (provider, model), every persona in this round is
         # rebuilt to point at that one LLM. Lets admins set a single
@@ -2652,7 +2695,11 @@ async def run_round(
                 for pid, spec in specs_by_id.items()
             }
 
-        for idx, persona_id in enumerate(discussion.persona_ids):
+        # PR-4c: iterate the FILTERED roster (frozen personas
+        # already dropped above) so the round runner doesn't waste
+        # a turn slot on someone who's been benched. Existing
+        # `specs_by_id` keys match this filtered list 1:1.
+        for idx, persona_id in enumerate(runtime_persona_ids):
             spec = specs_by_id.get(persona_id)
             if spec is None:
                 # persona_id no longer recognised by ai.agents (shouldn't

@@ -53,6 +53,15 @@
       "log_tail_hide": "Hide log",
       "reload_toast": "Redeploy complete — reloading in 2 seconds",
       "reload_now": "Reload now"
+    },
+    "lesson_archive": {
+      "title": "Lesson archive",
+      "count": "{{count}} archived",
+      "market_filter": "Market",
+      "market_all": "All",
+      "empty": "No archived lessons",
+      "usage_label": "hits/usage",
+      "unarchive": "Restore"
     }
   },
   "settings": {
@@ -681,6 +690,14 @@
       "hide_advanced": "Hide",
       "min_brier_improvement": "Min Brier improvement",
       "min_hit_rate": "Min hit rate"
+    },
+    "persona_status": {
+      "title": "Frozen / shadow personas",
+      "thaw": "Thaw",
+      "tooltip": {
+        "frozen": "Frozen: excluded from this round's roster. Operators can thaw manually.",
+        "shadow": "Shadow: runs but excluded from synthesizer (B5 testing)"
+      }
     },
     "export_markdown": "Export Markdown",
     "ask_followup": "Deep Dive",

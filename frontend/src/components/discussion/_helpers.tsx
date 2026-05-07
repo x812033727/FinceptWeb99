@@ -368,6 +368,13 @@ export interface StrategyTemplate {
   auto_promote_enabled?: boolean;
   auto_promote_min_oos_brier_improvement?: number;
   auto_promote_min_oos_hit_rate?: number;
+  /** PR-4c: per-persona status map. Personas absent from the map
+   * default to 'active'. Keys are persona IDs; values are one of
+   * 'active' / 'frozen' / 'shadow'. Frozen personas are dropped
+   * from the round roster; shadow personas run but their output
+   * is excluded from the synthesizer (B5 placeholder). */
+  persona_status?: Record<string, "active" | "frozen" | "shadow">;
+  persona_status_updated_at?: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;

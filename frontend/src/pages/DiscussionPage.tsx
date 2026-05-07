@@ -28,6 +28,7 @@ import { DiscussionStatusBadge } from "@/components/discussion/DiscussionStatusB
 import { DiscussionToolbar } from "@/components/discussion/DiscussionToolbar";
 import { StrategyTemplateCard } from "@/components/discussion/StrategyTemplateCard";
 import { ConclusionCard } from "@/components/discussion/ConclusionCard";
+import { ConclusionDiffCard } from "@/components/discussion/ConclusionDiffCard";
 import { PostMortemSkippedCard } from "@/components/discussion/PostMortemSkippedCard";
 import { PostMortemGainersCard } from "@/components/discussion/PostMortemGainersCard";
 import { RoundContextsCard } from "@/components/discussion/RoundContextsCard";
@@ -1540,6 +1541,12 @@ export default function DiscussionPage() {
           {detail?.conclusion && (
             <ConclusionCard detail={detail} personaName={personaName} />
           )}
+          {/* PR-2: structured diff between original and revised
+              conclusions — sits between the two cards so the
+              operator sees "what changed" without comparing by eye.
+              Hides itself when `post_mortem_diff` is null (no
+              post-mortem, parse-errored side, or pre-PR-2 row). */}
+          <ConclusionDiffCard diff={detail?.post_mortem_diff} />
           {/* PR #272: post-mortem self-critique conclusion lands in
               its own purple card alongside the original. Backend
               writes here only when `has_post_mortem` is detected

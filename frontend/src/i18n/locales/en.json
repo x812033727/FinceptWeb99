@@ -578,6 +578,16 @@
       "over_confident": "Over-confident",
       "over_confident_tooltip": "Mean confidence {{mean}} above the reasonable cap"
     },
+    "diff": {
+      "title": "What the post-mortem changed",
+      "no_structural_change": "Picks, confidence, consensus, and horizon all unchanged (wording only)",
+      "added": "Added",
+      "removed": "Removed",
+      "confidence_shifts": "Confidence shifts",
+      "reasoning_overlap": "Reasoning overlap",
+      "consensus_delta": "Consensus Δ",
+      "horizon_changed": "⚠ Horizon changed"
+    },
     "export_markdown": "Export Markdown",
     "ask_followup": "Deep Dive",
     "click_for_deep_dive": "Click to ask an expert about this symbol",

@@ -89,6 +89,26 @@ export interface QualitySignals {
   _skipped?: string;
 }
 
+/** PR-2: structured delta between an original conclusion and the
+ * post-mortem revised one. Computed and persisted at synthesis
+ * time so the UI doesn't need to recompute on every render. */
+export interface PostMortemDiff {
+  /** Symbols in post but not in orig. */
+  symbols_added: string[];
+  /** Symbols in orig but not in post. */
+  symbols_removed: string[];
+  /** Per-symbol confidence shift, only included when |delta| >= 0.05
+   * (suppress rounding-noise non-changes). */
+  confidence_changes: Record<string, { orig: number; post: number; delta: number }>;
+  /** post.consensus_score - orig.consensus_score, rounded. */
+  consensus_score_delta: number;
+  /** True when the time_horizon string changed. */
+  time_horizon_changed: boolean;
+  /** Jaccard index 0-1 over whitespace-tokenised reasoning text.
+   * 1.0 = identical reasoning, 0.0 = entirely different. */
+  reasoning_overlap: number;
+}
+
 export interface Conclusion {
   recommended_symbols: string[];
   /** Per-pick confidence breakdown (PR-C0). Optional for forward-
@@ -131,6 +151,13 @@ export interface Discussion {
    * it. NULL for any discussion that hasn't been through a
    * post-mortem cycle. */
   post_mortem_conclusion?: Conclusion | null;
+  /** PR-2: structured delta between `conclusion` and
+   * `post_mortem_conclusion`. Populated by the synthesizer at the
+   * moment the post-mortem conclusion is written so the UI can
+   * render "what changed" without recomputing on every read.
+   * NULL when (a) no post-mortem ran, (b) either side was a parse
+   * error, or (c) discussion is from before PR-2. */
+  post_mortem_diff?: PostMortemDiff | null;
   verdict?: Verdict | null;
   verdict_reason?: string | null;
   verified_at?: string | null;

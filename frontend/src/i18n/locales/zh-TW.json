@@ -578,6 +578,16 @@
       "over_confident": "過度自信",
       "over_confident_tooltip": "推薦標的平均信心 {{mean}}，超過合理上限"
     },
+    "diff": {
+      "title": "事後檢討修正了什麼",
+      "no_structural_change": "推薦標的、信心、共識、時間框架皆無變化（僅措辭更新）",
+      "added": "新增",
+      "removed": "移除",
+      "confidence_shifts": "信心調整",
+      "reasoning_overlap": "推理重疊度",
+      "consensus_delta": "共識度變化",
+      "horizon_changed": "⚠ 時間框架變動"
+    },
     "export_markdown": "匯出 Markdown",
     "ask_followup": "深入分析",
     "click_for_deep_dive": "點擊向專家深入提問",

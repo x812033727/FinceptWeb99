@@ -3198,6 +3198,109 @@ def _parse_recommendations(data: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def compute_conclusion_diff(
+    orig: dict[str, Any] | None,
+    post: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """PR-2: structured delta between an original conclusion and a
+    post-mortem revised one. Returns None when either side is missing
+    or unparseable so the caller can decide whether to skip writing
+    the column.
+
+    Shape returned (only non-trivial fields included):
+      - symbols_added: symbols in post but not orig
+      - symbols_removed: symbols in orig but not post
+      - confidence_changes: per-symbol {orig, post, delta} for
+        symbols present on BOTH sides where confidence shifted
+        (>= 0.05 absolute, suppress noise)
+      - consensus_score_delta: post - orig
+      - time_horizon_changed: bool
+      - reasoning_overlap: Jaccard index over whitespace-tokenised
+        reasoning text (rough but cheap proxy for "how much did the
+        narrative change")
+
+    Defensive on bad input: parse_error placeholders, empty dicts,
+    None — all return None so the column stays NULL rather than
+    writing a misleading half-diff.
+    """
+    if not isinstance(orig, dict) or not isinstance(post, dict):
+        return None
+    if orig.get("_parse_error") or post.get("_parse_error"):
+        return None
+
+    def _recs(c: dict[str, Any]) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for r in c.get("recommendations") or []:
+            if not isinstance(r, dict):
+                continue
+            symbol = str(r.get("symbol", "")).strip()
+            if not symbol:
+                continue
+            try:
+                out[symbol] = float(r.get("confidence", 0.5))
+            except (TypeError, ValueError):
+                out[symbol] = 0.5
+        return out
+
+    orig_recs = _recs(orig)
+    post_recs = _recs(post)
+    orig_set, post_set = set(orig_recs), set(post_recs)
+    symbols_added = sorted(post_set - orig_set)
+    symbols_removed = sorted(orig_set - post_set)
+    confidence_changes: dict[str, dict[str, float]] = {}
+    for sym in sorted(orig_set & post_set):
+        o, p = orig_recs[sym], post_recs[sym]
+        if abs(p - o) >= 0.05:
+            confidence_changes[sym] = {
+                "orig": round(o, 3),
+                "post": round(p, 3),
+                "delta": round(p - o, 3),
+            }
+
+    try:
+        orig_consensus = float(orig.get("consensus_score", 0.0))
+    except (TypeError, ValueError):
+        orig_consensus = 0.0
+    try:
+        post_consensus = float(post.get("consensus_score", 0.0))
+    except (TypeError, ValueError):
+        post_consensus = 0.0
+
+    horizon_changed = (
+        str(orig.get("time_horizon", "")).strip()
+        != str(post.get("time_horizon", "")).strip()
+    )
+
+    def _tokens(text: str) -> set[str]:
+        # Cheap jaccard proxy. Hyphen-and-digit-aware split so
+        # symbol codes (2330) and percentages (-5%) survive as
+        # single tokens; lowercase for English; min token length
+        # 2 to drop noise like single Chinese punctuation.
+        return {
+            tok for tok in re.split(r"[\s,。、；;:.!?「」（）()/]+", text.lower())
+            if len(tok) >= 2
+        }
+
+    orig_tokens = _tokens(str(orig.get("reasoning", "")))
+    post_tokens = _tokens(str(post.get("reasoning", "")))
+    if orig_tokens or post_tokens:
+        union = len(orig_tokens | post_tokens)
+        overlap = (
+            round(len(orig_tokens & post_tokens) / union, 3) if union else 1.0
+        )
+    else:
+        overlap = 1.0
+
+    return {
+        "symbols_added": symbols_added,
+        "symbols_removed": symbols_removed,
+        "confidence_changes": confidence_changes,
+        "consensus_score_delta": round(post_consensus - orig_consensus, 3),
+        "time_horizon_changed": horizon_changed,
+        "reasoning_overlap": overlap,
+    }
+
+
 async def _compute_quality_signals(
     db: AsyncSession,
     discussion: Discussion,
@@ -3541,6 +3644,14 @@ async def synthesize_conclusion(
     # behaviour (overwrite `conclusion`) is unchanged.
     if has_post_mortem:
         discussion.post_mortem_conclusion = conclusion
+        # PR-2: pre-compute the structured diff between original and
+        # revised conclusion so the UI can render "what changed"
+        # without recomputing on every read. None when either side
+        # is unparseable — we'd rather leave the column NULL than
+        # write a misleading partial diff.
+        diff = compute_conclusion_diff(discussion.conclusion, conclusion)
+        if diff is not None:
+            discussion.post_mortem_diff = diff
     else:
         discussion.conclusion = conclusion
     discussion.status = STATUS_DONE
@@ -3626,3 +3737,138 @@ def _extract_lessons_payload(raw: str) -> Any:
     if not isinstance(data, dict):
         return None
     return data.get("lessons")
+
+
+async def extract_winning_thesis_lessons(
+    db: AsyncSession,
+    discussion: Discussion,
+    *,
+    win_prompt_text: str,
+    user_id: str | None = None,
+) -> int:
+    """PR-2: extract structured `lessons` from a backtest discussion
+    that hit its win threshold WITHOUT running a full critique
+    round. Single LLM call given the win-band prompt
+    (`format_post_mortem_win_prompt`'s output, which already carries
+    the D1-D5 numbers + verdict + missed-winners table).
+
+    Closes the production-win gap: the post-mortem flow used to
+    `return` early on wins to save N personas × LLM cost per winning
+    date, leaving the learning loop one-sided (only miss-mode
+    lessons accumulated). One additional LLM call per win is the
+    minimum cost to record what worked.
+
+    Returns the number of lesson rows written (0..5). Best-effort
+    on every error path: LLM failure / parse failure / persist
+    failure all log + return 0; the sweep keeps going.
+
+    Skipped silently when:
+      - `discussion.as_of_date` is None (live discussion — lessons
+        are only meaningful for backtest replay)
+      - `discussion.conclusion` is missing or marked `_parse_error`
+      - the win prompt text is empty (no D1-D5 data resolved yet)
+    """
+    if discussion.as_of_date is None:
+        return 0
+    if not discussion.conclusion or discussion.conclusion.get("_parse_error"):
+        return 0
+    if not win_prompt_text:
+        return 0
+
+    if provider_model_resolver is None:   # for type-checker
+        pass
+    from services.system_task_config_service import resolve as _resolve_task
+    provider, model = await _resolve_task(db, "discussion_synthesizer")
+
+    # The win-band prompt asks the personas to reflect; here we
+    # collapse N reflection round + re-synth into a single LLM call
+    # whose only job is to emit the lessons array. The system prompt
+    # is intentionally narrow so the model doesn't try to also
+    # rewrite the conclusion or invent confidence numbers.
+    sys_prompt = (
+        "你是回測命中經驗的歸檔員。閱讀「事後檢討 — 命中經驗」反思題目，"
+        "把這次命中的可重用教訓整理成結構化 JSON。"
+        "**所有輸出必須使用繁體中文（台灣用語）**。"
+    )
+    user_prompt = win_prompt_text + (
+        "\n\n## 任務\n"
+        "**直接輸出合法 JSON**（不要 markdown fence、不要解釋、不要註解）：\n"
+        '{ "lessons": [\n'
+        '  {"category": "correct_signal_combo", "lesson_text": "...≤80字...",\n'
+        '   "related_symbols": ["..."], "missed_winners": ["..."]}\n'
+        "] }\n\n"
+        "欄位規則：\n"
+        "- 最多 5 條，重要先放\n"
+        "- category 五選一：correct_signal_combo | successful_thesis | "
+        "missing_signal_category | regime_match | other\n"
+        "- lesson_text ≤ 80 字、繁體中文、要點名具體訊號 / 產業 / 股票，"
+        "避免「下次要更小心」這類空話\n"
+        "- 沒有真正可重用的教訓（純 luck）→ 回 `\"lessons\": []`，不要硬擠"
+    )
+
+    assembled = ""
+    try:
+        async for event in stream_chat(
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            provider=provider,
+            model=model,
+            max_tokens=2048,
+            temperature=0.2,
+            db=db,
+            user_id=user_id,
+        ):
+            etype = event.get("type")
+            if etype == "delta":
+                assembled += event.get("text", "")
+            elif etype == "error":
+                log.warning(
+                    "discussion.win_lesson.llm_error",
+                    extra={
+                        "discussion_id": str(discussion.id),
+                        "message": event.get("message"),
+                    },
+                )
+                break
+    except Exception:
+        log.exception(
+            "discussion.win_lesson.stream_failed",
+            extra={"discussion_id": str(discussion.id)},
+        )
+        return 0
+
+    raw_obj = _extract_lessons_payload(assembled)
+    if not raw_obj:
+        return 0
+
+    try:
+        from services.discussion_lesson_service import (
+            extract_and_persist_lessons,
+        )
+        written = await extract_and_persist_lessons(
+            db,
+            discussion_id=discussion.id,
+            owner_user_id=discussion.owner_id,
+            market=discussion.market,
+            as_of_date=discussion.as_of_date,
+            lessons_payload=raw_obj,
+            ctx=None,
+            verdict="win",
+        )
+        return len(written)
+    except Exception:
+        log.exception(
+            "discussion.win_lesson.persist_failed",
+            extra={"discussion_id": str(discussion.id)},
+        )
+        return 0
+
+
+# Type-checker hush: keep `extract_winning_thesis_lessons`'s `provider`
+# resolution lazy-imported inside the function to avoid circular imports
+# between discussion_service ↔ system_task_config_service. The sentinel
+# below makes mypy / pyright realise the early-return path has been
+# considered without spreading the lint suppression.
+provider_model_resolver = None

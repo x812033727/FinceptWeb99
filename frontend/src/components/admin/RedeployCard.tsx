@@ -52,19 +52,28 @@ export function RedeployCard() {
     if (!data?.trigger_id || data.trigger_id !== lastTriggerIdRef.current) return;
     if (!data.after_sha || data.after_sha === data.before_sha) return;
     reloadFiredRef.current = true;
-    setReloadCountdown(2);
-    const interval = setInterval(() => {
-      setReloadCountdown((n) => {
-        if (n === null) return null;
-        if (n <= 1) {
-          clearInterval(interval);
-          window.location.reload();
-          return 0;
-        }
-        return n - 1;
-      });
-    }, 1000);
-    return () => clearInterval(interval);
+
+    // Drive every setReloadCountdown call through a timer callback so
+    // ESLint's react-hooks/set-state-in-effect rule passes — direct
+    // setState in an effect body causes cascading renders. The
+    // setTimeout(0) initial tick is what makes "2" appear immediately
+    // without violating the rule; the setInterval handles 1 → reload.
+    let n = 2;
+    const tick = () => {
+      if (n <= 0) {
+        clearInterval(interval);
+        window.location.reload();
+        return;
+      }
+      setReloadCountdown(n);
+      n -= 1;
+    };
+    const initial = setTimeout(tick, 0);
+    const interval = setInterval(tick, 1000);
+    return () => {
+      clearTimeout(initial);
+      clearInterval(interval);
+    };
   }, [phase, data?.trigger_id, data?.before_sha, data?.after_sha]);
 
   function handleClick() {

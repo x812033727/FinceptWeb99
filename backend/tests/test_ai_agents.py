@@ -112,3 +112,35 @@ def test_internal_dict_matches_list_agents():
     listed_ids = {a["id"] for a in list_agents()}
     dict_ids = set(agents_module._AGENTS.keys())
     assert listed_ids == dict_ids
+
+
+@pytest.mark.parametrize("aid", sorted(_FUNCTIONAL_IDS | _MASTER_IDS))
+def test_persona_carries_decision_discipline(aid):
+    """Every persona must inherit the four-element decision-discipline contract.
+
+    The contract is what makes round-table conclusions comparable and
+    backtestable — a persona that drops the verdict / disconfirmer / size
+    & horizon shape would silently weaken the synthesis layer downstream.
+    """
+    prompt = get_agent(aid).system_prompt
+    for marker in (
+        "Decision discipline",
+        "VERDICT",
+        "THESIS",
+        "DISCONFIRMERS",
+        "SIZE & HORIZON",
+    ):
+        assert marker in prompt, f"{aid} prompt is missing discipline marker {marker!r}"
+
+
+def test_cfa_personas_are_substantive():
+    """The 7 functional personas were historically much thinner than the
+    named-investor roster. Guard against regression by requiring each to
+    cite at least three concrete principles (bullet markers) so a future
+    edit can't quietly revert to a generic one-liner."""
+    for aid in _FUNCTIONAL_IDS:
+        prompt = get_agent(aid).system_prompt
+        assert prompt.count("•") >= 3, (
+            f"{aid} prompt has only {prompt.count('•')} principle bullets "
+            "— expected at least 3"
+        )

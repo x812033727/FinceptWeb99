@@ -61,15 +61,27 @@ const DEFAULT_FORM: StrategyFormState = {
 
 export function StrategyTemplateCard({
   prefill,
+  forceOpen,
+  hideHeader,
 }: {
   /** Optional pre-fill from the parent BacktestSweepCard's
    * current form so the operator can save what they're already
    * looking at without retyping. */
   prefill?: Partial<StrategyFormState>;
+  /** When true, ignore the persisted collapse state and always
+   * render the body. Used by the desktop toolbar popover where
+   * the chrome IS the open/close affordance. */
+  forceOpen?: boolean;
+  /** When true, omit the CollapsibleHeader (the popover trigger
+   * already labels itself). */
+  hideHeader?: boolean;
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { open, toggle } = useCollapsible("discussion.strategy_panel", false);
+  const { open: persistedOpen, toggle } = useCollapsible(
+    "discussion.strategy_panel", false,
+  );
+  const open = forceOpen ?? persistedOpen;
   const [form, setForm] = useState<StrategyFormState>(() => ({
     ...DEFAULT_FORM,
     ...(prefill ?? {}),
@@ -129,15 +141,17 @@ export function StrategyTemplateCard({
 
   return (
     <div className="bg-card border border-border rounded-lg p-3 space-y-3">
-      <CollapsibleHeader
-        open={open}
-        toggle={toggle}
-        title={t("strategy.title", "策略模板")}
-        subtitle={t(
-          "strategy.subtitle",
-          "封裝題目+規則+專家組合，回測掃描時一鍵套用",
-        )}
-      />
+      {hideHeader ? null : (
+        <CollapsibleHeader
+          open={open}
+          toggle={toggle}
+          title={t("strategy.title", "策略模板")}
+          subtitle={t(
+            "strategy.subtitle",
+            "封裝題目+規則+專家組合，回測掃描時一鍵套用",
+          )}
+        />
+      )}
 
       {open && (
         <>

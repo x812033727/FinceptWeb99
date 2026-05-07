@@ -378,15 +378,27 @@ export function BacktestSweepCard({
   rules,
   market,
   personaIds,
+  forceOpen,
+  hideHeader,
 }: {
   topic: string;
   rules: string;
   market: DiscussionMarket;
   personaIds: string[];
+  /** When true, ignore the persisted collapse state and always
+   * render the body. Used by the desktop toolbar popover where
+   * the chrome IS the open/close affordance. */
+  forceOpen?: boolean;
+  /** When true, omit the CollapsibleHeader (the popover trigger
+   * already labels itself). */
+  hideHeader?: boolean;
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { open, toggle } = useCollapsible("discussion.sweep_panel", false);
+  const { open: persistedOpen, toggle } = useCollapsible(
+    "discussion.sweep_panel", false,
+  );
+  const open = forceOpen ?? persistedOpen;
 
   const strategiesQuery = useQuery({
     queryKey: ["strategy-templates"],
@@ -438,12 +450,14 @@ export function BacktestSweepCard({
 
   return (
     <div className="bg-card border border-border rounded-lg p-3 space-y-3">
-      <CollapsibleHeader
-        open={open}
-        toggle={toggle}
-        title={t("sweep.title")}
-        subtitle={t("sweep.subtitle")}
-      />
+      {hideHeader ? null : (
+        <CollapsibleHeader
+          open={open}
+          toggle={toggle}
+          title={t("sweep.title")}
+          subtitle={t("sweep.subtitle")}
+        />
+      )}
 
       {open && (
         <>

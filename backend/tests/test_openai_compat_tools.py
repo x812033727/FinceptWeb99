@@ -36,6 +36,7 @@ def test_toolset_exposes_new_tools_in_dispatch():
     expected = {
         "get_quote", "run_dcf", "run_var", "run_backtest", "query_user_data",
         "get_options_chain", "get_symbol_news", "get_symbol_sentiment",
+        "get_peers", "get_financials",
     }
     assert expected <= schema_names
     assert expected <= set(dispatch.keys())
@@ -219,6 +220,148 @@ async def test_symbol_sentiment_max_age_clamped():
 async def test_symbol_sentiment_rejects_unknown_market():
     _, dispatch = build_openai_compat_toolset(_user_id())
     result = _payload(await dispatch["get_symbol_sentiment"]({
+        "symbol": "X", "market": "JP",
+    }))
+    assert "error" in result
+
+
+# ── get_peers handler ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_peers_us_not_supported_yet():
+    """US peers explicitly unsupported (no curated industry mapping).
+    Tool must return an explicit error, not a stale fallback list."""
+    _, dispatch = build_openai_compat_toolset(_user_id())
+    result = _payload(await dispatch["get_peers"]({
+        "symbol": "AAPL", "market": "US",
+    }))
+    assert "error" in result
+    assert "TW only" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_peers_tw_returns_quote_enriched_rows():
+    _, dispatch = build_openai_compat_toolset(_user_id())
+    with patch(
+        "services.tw_market_service.get_industry_peers",
+        return_value=["2454", "2330"],
+    ), patch(
+        "services.tw_market_service.get_industry",
+        return_value="半導體業",
+    ), patch(
+        "services.tw_market_service.get_company_name",
+        side_effect=lambda s: {"2454": "聯發科", "2330": "台積電"}.get(s),
+    ), patch(
+        "services.tw_market_service.get_quote",
+        new_callable=AsyncMock,
+    ) as q_mock:
+        q_mock.side_effect = [
+            {"name_zh": "聯發科", "price": 1200.0, "change_pct": 1.5,
+             "pe_ratio": 18.0, "pb_ratio": 4.0, "dividend_yield": 3.0},
+            {"name_zh": "台積電", "price": 1100.0, "change_pct": 2.0,
+             "pe_ratio": 25.0, "pb_ratio": 6.0, "dividend_yield": 1.8},
+        ]
+        result = _payload(await dispatch["get_peers"]({
+            "symbol": "2308", "market": "TW", "limit": 5,
+        }))
+
+    assert result["industry"] == "半導體業"
+    assert result["count"] == 2
+    syms = {p["symbol"] for p in result["peers"]}
+    assert syms == {"2454", "2330"}
+
+
+@pytest.mark.asyncio
+async def test_peers_tw_caps_limit_at_10():
+    _, dispatch = build_openai_compat_toolset(_user_id())
+    big_peer_list = [f"23{i:02d}" for i in range(50)]
+    with patch(
+        "services.tw_market_service.get_industry_peers",
+        return_value=big_peer_list,
+    ), patch(
+        "services.tw_market_service.get_industry", return_value="x",
+    ), patch(
+        "services.tw_market_service.get_company_name", return_value=None,
+    ), patch(
+        "services.tw_market_service.get_quote",
+        new_callable=AsyncMock,
+    ) as q_mock:
+        q_mock.return_value = {}
+        result = _payload(await dispatch["get_peers"]({
+            "symbol": "2308", "market": "TW", "limit": 999,
+        }))
+    # 999 must be clipped to 10 (the schema-level max).
+    assert result["count"] == 10
+
+
+@pytest.mark.asyncio
+async def test_peers_tw_no_industry_returns_empty():
+    """A symbol whose 產業別 hasn't loaded yields an empty peer list
+    instead of crashing — the daily symbol-map cron may not have run
+    on a fresh deploy."""
+    _, dispatch = build_openai_compat_toolset(_user_id())
+    with patch(
+        "services.tw_market_service.get_industry_peers", return_value=[],
+    ), patch(
+        "services.tw_market_service.get_industry", return_value=None,
+    ):
+        result = _payload(await dispatch["get_peers"]({
+            "symbol": "9999", "market": "TW",
+        }))
+    assert result["peers"] == []
+    assert result["industry"] is None
+
+
+# ── get_financials handler ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_financials_us_caps_5_periods_per_statement():
+    _, dispatch = build_openai_compat_toolset(_user_id())
+    big = [{"period": f"FY{2026 - i}", "revenue": 100 + i} for i in range(15)]
+    with patch(
+        "services.us_market_service.get_financials",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = {
+            "source": "yfinance",
+            "income_statement": big,
+            "balance_sheet": big,
+            "cash_flow": big,
+        }
+        result = _payload(await dispatch["get_financials"]({
+            "symbol": "AAPL", "market": "US",
+        }))
+    assert result["source"] == "yfinance"
+    assert len(result["income_statement"]) == 5
+    assert len(result["balance_sheet"]) == 5
+    assert len(result["cash_flow"]) == 5
+
+
+@pytest.mark.asyncio
+async def test_financials_tw_caps_60_rows():
+    _, dispatch = build_openai_compat_toolset(_user_id())
+    big = [{"date": f"2026-{i:02d}-01", "type": "Revenue", "value": i}
+           for i in range(1, 200)]
+    with patch(
+        "services.tw_market_service.get_financials",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = big
+        result = _payload(await dispatch["get_financials"]({
+            "symbol": "2330", "market": "TW",
+        }))
+    # Most recent 60 rows preserved (tail slice).
+    assert len(result["rows"]) == 60
+    assert result["rows"][-1]["value"] == 199
+    assert result["count"] == 199
+
+
+@pytest.mark.asyncio
+async def test_financials_rejects_unknown_market():
+    _, dispatch = build_openai_compat_toolset(_user_id())
+    result = _payload(await dispatch["get_financials"]({
         "symbol": "X", "market": "JP",
     }))
     assert "error" in result

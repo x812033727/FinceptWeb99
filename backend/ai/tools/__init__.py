@@ -36,6 +36,8 @@ def tool_names() -> list[str]:
         "mcp__fincept__get_options_chain",
         "mcp__fincept__get_symbol_news",
         "mcp__fincept__get_symbol_sentiment",
+        "mcp__fincept__get_peers",
+        "mcp__fincept__get_financials",
         "mcp__fincept__web_fetch",
         "mcp__fincept__python_exec",
     ]

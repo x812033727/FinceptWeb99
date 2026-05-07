@@ -394,3 +394,113 @@ async def test_get_symbol_sentiment_rejects_unknown_market():
         "symbol": "X", "market": "JP",
     })
     assert "error" in _text(result)
+
+
+# ── financial.get_peers ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_peers_us_returns_error():
+    tools = {t.name: t for t in make_financial_tools()}
+    result = await _handler(tools["get_peers"])({
+        "symbol": "AAPL", "market": "US",
+    })
+    assert "error" in _text(result)
+
+
+@pytest.mark.asyncio
+async def test_get_peers_tw_returns_quote_enriched_rows():
+    tools = {t.name: t for t in make_financial_tools()}
+    with patch(
+        "services.tw_market_service.get_industry_peers",
+        return_value=["2454", "2330"],
+    ), patch(
+        "services.tw_market_service.get_industry",
+        return_value="半導體業",
+    ), patch(
+        "services.tw_market_service.get_company_name",
+        side_effect=lambda s: {"2454": "聯發科", "2330": "台積電"}.get(s),
+    ), patch(
+        "services.tw_market_service.get_quote",
+        new_callable=AsyncMock,
+    ) as q_mock:
+        q_mock.side_effect = [
+            {"name_zh": "聯發科", "price": 1200.0, "change_pct": 1.5,
+             "pe_ratio": 18.0, "pb_ratio": 4.0, "dividend_yield": 3.0},
+            {"name_zh": "台積電", "price": 1100.0, "change_pct": 2.0,
+             "pe_ratio": 25.0, "pb_ratio": 6.0, "dividend_yield": 1.8},
+        ]
+        result = await _handler(tools["get_peers"])({
+            "symbol": "2308", "market": "TW", "limit": 5,
+        })
+
+    data = _text(result)
+    assert data["industry"] == "半導體業"
+    assert data["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_get_peers_tw_no_industry_returns_empty():
+    tools = {t.name: t for t in make_financial_tools()}
+    with patch(
+        "services.tw_market_service.get_industry_peers", return_value=[],
+    ), patch(
+        "services.tw_market_service.get_industry", return_value=None,
+    ):
+        result = await _handler(tools["get_peers"])({
+            "symbol": "9999", "market": "TW",
+        })
+    data = _text(result)
+    assert data["peers"] == []
+
+
+# ── financial.get_financials ────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_financials_us_caps_5_periods():
+    tools = {t.name: t for t in make_financial_tools()}
+    big = [{"period": f"FY{2026 - i}", "revenue": 100 + i} for i in range(12)]
+    with patch(
+        "services.us_market_service.get_financials",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = {
+            "source": "yfinance",
+            "income_statement": big,
+            "balance_sheet": big,
+            "cash_flow": big,
+        }
+        result = await _handler(tools["get_financials"])({
+            "symbol": "AAPL", "market": "US",
+        })
+    data = _text(result)
+    assert data["source"] == "yfinance"
+    assert len(data["income_statement"]) == 5
+
+
+@pytest.mark.asyncio
+async def test_get_financials_tw_caps_60_rows():
+    tools = {t.name: t for t in make_financial_tools()}
+    big = [{"date": f"2026-{i:02d}-01", "type": "Revenue", "value": i}
+           for i in range(1, 200)]
+    with patch(
+        "services.tw_market_service.get_financials",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = big
+        result = await _handler(tools["get_financials"])({
+            "symbol": "2330", "market": "TW",
+        })
+    data = _text(result)
+    assert len(data["rows"]) == 60
+    assert data["rows"][-1]["value"] == 199
+
+
+@pytest.mark.asyncio
+async def test_get_financials_rejects_unknown_market():
+    tools = {t.name: t for t in make_financial_tools()}
+    result = await _handler(tools["get_financials"])({
+        "symbol": "X", "market": "JP",
+    })
+    assert "error" in _text(result)

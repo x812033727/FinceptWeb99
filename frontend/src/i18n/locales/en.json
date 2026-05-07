@@ -507,6 +507,11 @@
     "switch": "Switch",
     "pick_agent": "Pick agent",
     "other_agents": "Other",
+    "persona_search_placeholder": "Search advisor…",
+    "persona_search_empty": "No matching advisor",
+    "persona_group_count": "{{count}}",
+    "tools_toggle_aria": "Toggle tool-calling mode",
+    "tools_off": "Tools off",
     "quota_remaining_short": "{{remaining}} left",
     "quota_remaining_hint": "Remaining AI requests today",
     "tool": {

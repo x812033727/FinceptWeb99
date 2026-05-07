@@ -1,8 +1,9 @@
-import { useState, useRef, useEffect } from "react";
+import { useMemo, useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { MoreHorizontal, Users, Wrench, Trash2, Check } from "lucide-react";
+import { ChevronDown, ChevronRight, MoreHorizontal, Search, Users, Wrench, Trash2, Check } from "lucide-react";
+import { useCollapsible } from "@/hooks/useCollapsible";
 import api, { notifyRateLimited } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 import { cn } from "@/lib/utils";
@@ -121,9 +122,87 @@ function AgentCard({
   );
 }
 
+// One persona group rendered with a clickable header that expands /
+// collapses the group's AgentCards. Per-group collapse state persists
+// to localStorage via `useCollapsible`, so a user who only ever uses
+// quants can collapse value/growth/macro and stop scrolling past
+// them on every visit. When `query` is non-empty the group ignores
+// its persisted collapse state and stays open so search results are
+// always visible.
+function PersonaGroupBlock({
+  groupId,
+  agents,
+  selectedAgent,
+  onPick,
+  forceOpen,
+}: {
+  groupId: string;
+  agents: AgentInfo[];
+  selectedAgent: string;
+  onPick: (id: string) => void;
+  forceOpen: boolean;
+}) {
+  const { t } = useTranslation();
+  // Default-open the group containing the active agent so newcomers
+  // see the picker isn't empty on first load. Other groups default to
+  // collapsed so the sidebar starts compact.
+  const groupHasSelection = agents.some((a) => a.id === selectedAgent);
+  const { open: persistedOpen, toggle } = useCollapsible(
+    `ai.persona_group.${groupId}`,
+    groupHasSelection,
+  );
+  const open = forceOpen || persistedOpen;
+  return (
+    <div className="space-y-1.5">
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        className="w-full flex items-start gap-1.5 px-1 text-left hover:text-primary transition-colors"
+      >
+        <span className="mt-0.5 text-muted-foreground shrink-0">
+          {open ? (
+            <ChevronDown className="h-3 w-3" aria-hidden="true" />
+          ) : (
+            <ChevronRight className="h-3 w-3" aria-hidden="true" />
+          )}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="text-[11px] font-semibold text-foreground uppercase tracking-wide flex items-center gap-1.5">
+            <span className="truncate">{t(`personas.groups.${groupId}.title`)}</span>
+            <span className="text-[10px] text-muted-foreground font-normal normal-case">
+              ({agents.length})
+            </span>
+          </div>
+          {open && (
+            <div className="text-[10px] text-muted-foreground leading-snug mt-0.5">
+              {t(`personas.groups.${groupId}.hint`)}
+            </div>
+          )}
+        </div>
+      </button>
+      {open && (
+        <div className="space-y-1.5">
+          {agents.map((a) => (
+            <AgentCard
+              key={a.id}
+              agent={a}
+              selected={a.id === selectedAgent}
+              onClick={() => onPick(a.id)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Reusable list of grouped persona cards — rendered in the desktop
-// sidebar AND in the mobile Sheet drawer. Keeps the same i18n / orphan
-// catch-all behaviour; just changes wrapper.
+// sidebar AND in the mobile Sheet drawer. Adds (a) a search box that
+// filters by agent name + description (i18n-aware), and (b) per-group
+// collapse state via `useCollapsible`, so the previously-cramped
+// 19-row scroll becomes a scannable accordion. Search hits ignore
+// the group collapse so results always render.
 function PersonaList({
   agents,
   selectedAgent,
@@ -135,45 +214,73 @@ function PersonaList({
   onPick: (id: string) => void;
   isLoading: boolean;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const [query, setQuery] = useState("");
+  const filteredAgents = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return agents;
+    return agents.filter((a) => {
+      const nameKey = `personas.agents.${a.id}.name`;
+      const descKey = `personas.agents.${a.id}.description`;
+      const localName = i18n.exists(nameKey) ? t(nameKey) : a.name;
+      const localDesc = i18n.exists(descKey) ? t(descKey) : a.description;
+      const haystack = `${a.id} ${localName} ${localDesc}`.toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [agents, query, t, i18n]);
+
   if (isLoading) {
     return <p className="text-xs text-muted-foreground animate-pulse">{t("ai.loading")}</p>;
   }
+
+  const grouped = new Set(PERSONA_GROUPS.flatMap((g) => g.agentIds));
+  const orphans = filteredAgents.filter((a) => !grouped.has(a.id));
+  const totalRendered =
+    PERSONA_GROUPS.reduce(
+      (n, g) => n + filteredAgents.filter((a) => g.agentIds.includes(a.id)).length,
+      0,
+    ) + orphans.length;
+  const hasQuery = query.trim().length > 0;
+
   return (
-    <div className="space-y-4">
-      {PERSONA_GROUPS.map((group) => {
-        const groupAgents = group.agentIds
-          .map((id) => agents.find((a) => a.id === id))
-          .filter((a): a is AgentInfo => a !== undefined);
-        if (groupAgents.length === 0) return null;
-        return (
-          <div key={group.id} className="space-y-1.5">
-            <div className="px-1">
-              <div className="text-[11px] font-semibold text-foreground uppercase tracking-wide">
-                {t(`personas.groups.${group.id}.title`)}
-              </div>
-              <div className="text-[10px] text-muted-foreground leading-snug mt-0.5">
-                {t(`personas.groups.${group.id}.hint`)}
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              {groupAgents.map((a) => (
-                <AgentCard
-                  key={a.id}
-                  agent={a}
-                  selected={a.id === selectedAgent}
-                  onClick={() => onPick(a.id)}
-                />
-              ))}
-            </div>
-          </div>
-        );
-      })}
-      {(() => {
-        const grouped = new Set(PERSONA_GROUPS.flatMap((g) => g.agentIds));
-        const orphans = agents.filter((a) => !grouped.has(a.id));
-        if (orphans.length === 0) return null;
-        return (
+    <div className="space-y-3">
+      <div className="relative">
+        <Search
+          className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none"
+          aria-hidden="true"
+        />
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={t("ai.persona_search_placeholder")}
+          aria-label={t("ai.persona_search_placeholder")}
+          className="w-full pl-7 pr-2 py-1.5 rounded-md bg-card border border-border text-xs text-foreground focus:outline-none focus:border-primary/50 min-h-[32px]"
+        />
+      </div>
+      {hasQuery && totalRendered === 0 && (
+        <p className="text-xs text-muted-foreground px-1">
+          {t("ai.persona_search_empty")}
+        </p>
+      )}
+      <div className="space-y-3">
+        {PERSONA_GROUPS.map((group) => {
+          const groupAgents = group.agentIds
+            .map((id) => filteredAgents.find((a) => a.id === id))
+            .filter((a): a is AgentInfo => a !== undefined);
+          if (groupAgents.length === 0) return null;
+          return (
+            <PersonaGroupBlock
+              key={group.id}
+              groupId={group.id}
+              agents={groupAgents}
+              selectedAgent={selectedAgent}
+              onPick={onPick}
+              forceOpen={hasQuery}
+            />
+          );
+        })}
+        {orphans.length > 0 && (
           <div className="space-y-1.5">
             <div className="px-1 text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
               {t("ai.other_agents")}
@@ -189,8 +296,8 @@ function PersonaList({
               ))}
             </div>
           </div>
-        );
-      })()}
+        )}
+      </div>
     </div>
   );
 }
@@ -487,7 +594,35 @@ export default function AIPage() {
                 {t("ai.quota_remaining_short", { remaining })}
               </span>
             )}
-            {effectiveIsClaudeAgent && (
+            {/* Tools toggle — surfaced inline (was buried in the
+                MoreHorizontal dropdown). Analyst+ only, and only when
+                the active agent isn't already a hard-wired Claude
+                Agent (in which case tools are always on). The chip
+                changes color based on state so the user can see at a
+                glance whether tools are enabled. */}
+            {claudeAgentToggleVisible && (
+              <button
+                type="button"
+                onClick={() => setUseClaudeAgent((v) => !v)}
+                disabled={streaming}
+                aria-pressed={useClaudeAgent}
+                aria-label={t("ai.tools_toggle_aria")}
+                title={useClaudeAgent ? t("ai.tools_on_hint") : t("ai.use_tools_hint")}
+                className={cn(
+                  "hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] transition-colors min-h-[28px] disabled:opacity-50",
+                  useClaudeAgent
+                    ? "border-amber-700/60 bg-amber-900/30 text-amber-300 hover:bg-amber-900/50"
+                    : "border-border text-muted-foreground hover:text-foreground hover:border-primary/40"
+                )}
+              >
+                <Wrench className="h-3 w-3" aria-hidden="true" />
+                {useClaudeAgent ? t("ai.tools_on") : t("ai.tools_off")}
+              </button>
+            )}
+            {/* Locked-on indicator — shown when the agent's
+                default_provider IS claude_agent so the user can't
+                turn it off. Distinct from the toggle above. */}
+            {effectiveIsClaudeAgent && !claudeAgentToggleVisible && (
               <span
                 className="hidden sm:inline-flex items-center gap-1 text-[11px] text-amber-300"
                 title={t("ai.tools_on_hint")}
@@ -504,17 +639,24 @@ export default function AIPage() {
                 <MoreHorizontal className="h-4 w-4" />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
+                {/* Mobile-only fallback for the tools toggle (the
+                    inline chip is hidden on <sm). Keep the same
+                    state machine so desktop and mobile stay in
+                    sync regardless of which control was used. */}
                 {claudeAgentToggleVisible && (
                   <>
-                    <DropdownMenuLabel>{t("ai.tools_label")}</DropdownMenuLabel>
+                    <DropdownMenuLabel className="sm:hidden">
+                      {t("ai.tools_label")}
+                    </DropdownMenuLabel>
                     <DropdownMenuCheckboxItem
+                      className="sm:hidden"
                       checked={useClaudeAgent}
                       onCheckedChange={(v) => setUseClaudeAgent(!!v)}
                       disabled={streaming}
                     >
                       {t("ai.use_tools")}
                     </DropdownMenuCheckboxItem>
-                    <DropdownMenuSeparator />
+                    <DropdownMenuSeparator className="sm:hidden" />
                   </>
                 )}
                 <DropdownMenuItem

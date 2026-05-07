@@ -699,6 +699,20 @@
         "shadow": "Shadow: runs but excluded from synthesizer (B5 testing)"
       }
     },
+    "timeline": {
+      "title": "Timeline, last {{days}} days",
+      "events_short": "events",
+      "empty": "No events or metrics yet (snapshot runs 02:00 UTC daily)",
+      "brier": "Brier",
+      "calibrated_brier": "Calibrated Brier",
+      "hit_rate": "Hit rate",
+      "event": {
+        "version_change": "Version change",
+        "sweep_completed": "Sweep completed",
+        "maturity_change": "Maturity change",
+        "persona_status_change": "Persona status change"
+      }
+    },
     "export_markdown": "Export Markdown",
     "ask_followup": "Deep Dive",
     "click_for_deep_dive": "Click to ask an expert about this symbol",

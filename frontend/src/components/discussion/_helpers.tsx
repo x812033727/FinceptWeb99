@@ -431,6 +431,58 @@ export interface StrategyVersionRow {
   notes: string | null;
 }
 
+/** PR-5a: assembled lifecycle timeline payload from
+ * `GET /strategies/{id}/timeline`. */
+export interface TimelineMetricPoint {
+  date: string;
+  brier_30d: number | null;
+  calibrated_brier_30d: number | null;
+  hit_rate_30d: number | null;
+  sample_count: number;
+  lesson_hit_rate_30d: number | null;
+  maturity_tier: string | null;
+  status_flags: string[];
+}
+
+export type TimelineEventKind =
+  | "version_change"
+  | "sweep_completed"
+  | "maturity_change"
+  | "persona_status_change";
+
+export interface TimelineEvent {
+  date: string;
+  kind: TimelineEventKind;
+  /** version_change only */
+  artifact?: "weights" | "calibration_curve";
+  version_number?: number;
+  status?: string;
+  sample_count?: number | null;
+  source_sweep_id?: string | null;
+  trigger?: string;
+  notes?: string | null;
+  /** sweep_completed only */
+  sweep_id?: string;
+  fold_kind?: string;
+  anchor_date?: string | null;
+  discussions_completed?: number;
+  discussions_failed?: number;
+  rounds_per_discussion?: number;
+  /** maturity_change only */
+  from?: string;
+  to?: string;
+  /** persona_status_change only */
+  non_active_personas?: string[];
+  non_active_count?: number;
+}
+
+export interface StrategyTimeline {
+  strategy_id: string;
+  days: number;
+  metrics: TimelineMetricPoint[];
+  events: TimelineEvent[];
+}
+
 export interface CreateStrategyInput {
   name: string;
   description?: string | null;

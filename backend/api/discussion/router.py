@@ -1389,6 +1389,44 @@ async def get_strategy_maturity(
     }
 
 
+@router.get("/strategies/{template_id}/timeline")
+async def get_strategy_timeline(
+    template_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    days: int = 90,
+):
+    """PR-5a: assembled lifecycle timeline (metrics + events) for
+    the strategy. Owner-scoped.
+
+    Returns one chronological payload combining:
+      - rolling-30 brier / hit-rate / sample series from
+        strategy_health_metrics
+      - version-change events from strategy_versions (each fit's
+        trigger inferred from notes: auto_promote / rollback /
+        sweep_phase3 / etc.)
+      - sweep-completed events from backtest_sweeps
+      - maturity-tier transitions inferred from consecutive
+        snapshot rows
+      - persona-status updates from the strategy's
+        persona_status_updated_at stamp
+
+    `days` clamps every source to the trailing window. Empty
+    arrays everywhere on cold-start strategies.
+    """
+    from services import strategy_template_service as tsvc
+    from services import strategy_timeline_service as tlsvc
+    row = await tsvc.get_template(
+        db, template_id=template_id,
+        owner_id=_coerce_owner_uuid(user),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    return await tlsvc.compose_timeline(
+        db, strategy_id=template_id, days=days,
+    )
+
+
 # ── PR-4c: persona status + lesson archive ────────────────────────
 
 

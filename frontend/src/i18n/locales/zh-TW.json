@@ -699,6 +699,20 @@
         "shadow": "影子模式:照常執行但不影響 conclusion(B5 測試)"
       }
     },
+    "timeline": {
+      "title": "近 {{days}} 天時間軸",
+      "events_short": "事件",
+      "empty": "暫無事件或指標(每日 02:00 UTC 排程後出現)",
+      "brier": "Brier",
+      "calibrated_brier": "校正後 Brier",
+      "hit_rate": "命中率",
+      "event": {
+        "version_change": "版本變更",
+        "sweep_completed": "Sweep 完成",
+        "maturity_change": "成熟度變化",
+        "persona_status_change": "Persona 狀態變化"
+      }
+    },
     "export_markdown": "匯出 Markdown",
     "ask_followup": "深入分析",
     "click_for_deep_dive": "點擊向專家深入提問",

@@ -898,6 +898,15 @@ def _template_to_response(t) -> StrategyTemplateResponse:
         auto_schedule_anchor_offset_days=t.auto_schedule_anchor_offset_days,
         auto_schedule_trading_days_count=t.auto_schedule_trading_days_count,
         auto_schedule_last_run_at=t.auto_schedule_last_run_at,
+        maturity_tier=getattr(t, "maturity_tier", "cold_start") or "cold_start",
+        maturity_computed_at=getattr(t, "maturity_computed_at", None),
+        auto_promote_enabled=bool(getattr(t, "auto_promote_enabled", False)),
+        auto_promote_min_oos_brier_improvement=float(
+            getattr(t, "auto_promote_min_oos_brier_improvement", 0.0) or 0.0,
+        ),
+        auto_promote_min_oos_hit_rate=float(
+            getattr(t, "auto_promote_min_oos_hit_rate", 0.5) or 0.5,
+        ),
         created_at=t.created_at,
         updated_at=t.updated_at,
         deleted_at=t.deleted_at,
@@ -1375,6 +1384,95 @@ async def get_strategy_maturity(
             row.maturity_computed_at.isoformat()
             if row.maturity_computed_at else None
         ),
+    }
+
+
+# ── PR-4b: health metrics + auto-promote settings ────────────────
+
+
+@router.get("/strategies/{template_id}/health")
+async def get_strategy_health(
+    template_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    days: int = 30,
+):
+    """PR-4b: rolling health metric history for the UI sparkline.
+    Returns newest-first; the cron writes one row per UTC day, so
+    `days=30` is ~30 rows. Owner-scoped."""
+    from services import strategy_health_service as hsvc
+    from services import strategy_template_service as tsvc
+    row = await tsvc.get_template(
+        db, template_id=template_id,
+        owner_id=_coerce_owner_uuid(user),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    snapshots = await hsvc.list_recent_snapshots(
+        db, strategy_id=template_id, days=max(int(days), 1),
+    )
+    return {
+        "strategy_id": str(template_id),
+        "days": days,
+        "snapshots": [hsvc.snapshot_to_dict(s) for s in snapshots],
+    }
+
+
+@router.patch("/strategies/{template_id}/auto-promote")
+async def patch_auto_promote_settings(
+    template_id: uuid.UUID,
+    body: dict,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """PR-4b: opt-in / tighten the walk-forward auto-promote
+    thresholds for a strategy. Owner-scoped; validates the input
+    ranges so a bad value doesn't poison the gate."""
+    from services import strategy_template_service as tsvc
+    row = await tsvc.get_template(
+        db, template_id=template_id,
+        owner_id=_coerce_owner_uuid(user),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+
+    if "enabled" in body:
+        row.auto_promote_enabled = bool(body["enabled"])
+    if "min_brier_improvement" in body:
+        try:
+            v = float(body["min_brier_improvement"])
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail="min_brier_improvement must be a number",
+            )
+        if v < 0.0 or v > 1.0:
+            raise HTTPException(
+                status_code=400,
+                detail="min_brier_improvement must be in [0, 1]",
+            )
+        row.auto_promote_min_oos_brier_improvement = v
+    if "min_hit_rate" in body:
+        try:
+            v = float(body["min_hit_rate"])
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail="min_hit_rate must be a number",
+            )
+        if v < 0.0 or v > 1.0:
+            raise HTTPException(
+                status_code=400,
+                detail="min_hit_rate must be in [0, 1]",
+            )
+        row.auto_promote_min_oos_hit_rate = v
+    await db.commit()
+    await db.refresh(row)
+    return {
+        "strategy_id": str(template_id),
+        "auto_promote_enabled": row.auto_promote_enabled,
+        "min_brier_improvement": row.auto_promote_min_oos_brier_improvement,
+        "min_hit_rate": row.auto_promote_min_oos_hit_rate,
     }
 
 

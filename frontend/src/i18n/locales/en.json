@@ -667,6 +667,21 @@
         "rolled_back": "Rolled back"
       }
     },
+    "health": {
+      "title": "Health, last {{days}} days",
+      "empty": "No data yet (snapshot runs 02:00 UTC daily)",
+      "brier": "Brier",
+      "hit_rate": "Hit rate",
+      "flagged": "Flagged"
+    },
+    "auto_promote": {
+      "title": "Walk-forward auto-promote",
+      "subtitle": "Auto-deploy weights when test fold KPIs pass; off by default",
+      "show_advanced": "Advanced",
+      "hide_advanced": "Hide",
+      "min_brier_improvement": "Min Brier improvement",
+      "min_hit_rate": "Min hit rate"
+    },
     "export_markdown": "Export Markdown",
     "ask_followup": "Deep Dive",
     "click_for_deep_dive": "Click to ask an expert about this symbol",

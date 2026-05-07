@@ -66,6 +66,8 @@ import models.portfolio  # noqa: E402,F401
 import models.quote_snapshot  # noqa: E402,F401
 import models.runtime_setting  # noqa: E402,F401
 import models.signal_audit_history  # noqa: E402,F401
+import models.strategy_health_metric  # noqa: E402,F401
+import models.strategy_version  # noqa: E402,F401
 import models.system_task_config  # noqa: E402,F401
 import models.tw_chip_metrics  # noqa: E402,F401
 import models.tw_govt_bank_flow  # noqa: E402,F401

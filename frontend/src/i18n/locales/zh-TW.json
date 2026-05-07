@@ -667,6 +667,21 @@
         "rolled_back": "Rolled back"
       }
     },
+    "health": {
+      "title": "近 {{days}} 天健康度",
+      "empty": "暫無資料（每日 02:00 UTC 統計）",
+      "brier": "Brier",
+      "hit_rate": "命中率",
+      "flagged": "有警示"
+    },
+    "auto_promote": {
+      "title": "Walk-forward 自動上線",
+      "subtitle": "Test fold KPI 通過時自動把權重寫進 production；預設關閉",
+      "show_advanced": "進階",
+      "hide_advanced": "收合",
+      "min_brier_improvement": "最低 Brier 改善",
+      "min_hit_rate": "最低命中率"
+    },
     "export_markdown": "匯出 Markdown",
     "ask_followup": "深入分析",
     "click_for_deep_dive": "點擊向專家深入提問",

@@ -86,6 +86,13 @@ class FoldResult:
     train_sweep_id: UUID | None = None
     test_sweep_id: UUID | None = None
     error: str | None = None
+    # PR-4b: was the test fold's weights_override auto-promoted to
+    # the strategy's live persona_weights? Populated by Phase 4.
+    # `None` means promotion wasn't attempted (auto_promote_enabled
+    # is False or evaluation failed); `False` means evaluated and
+    # rejected; `True` means deployed.
+    promoted: bool | None = None
+    promotion_reason: str | None = None
 
 
 async def plan_walk_forward(
@@ -461,7 +468,255 @@ async def _run_one_fold(
         result.test_sweep_id = test_sweep.id
 
     await sweep_worker(test_sweep.id)
+
+    # Phase 4 — PR-4b auto-promote. When the strategy has
+    # `auto_promote_enabled=True` and the test fold's KPIs pass
+    # both thresholds, write the OOS-validated weights straight to
+    # the live `persona_weights` (and append a `record_version`
+    # entry via the existing PR-4a hook). This closes the
+    # "walk-forward result sits there waiting for human action"
+    # loop without compromising the OOS-cleanness invariant —
+    # it's the train→test→deploy progression, not a retrain on
+    # the test results.
+    try:
+        promotion = await evaluate_walk_forward_for_promotion(
+            owner_id=owner_id,
+            strategy_id=strategy_id,
+            train_sweep_id=train_sweep.id,
+            test_sweep_id=test_sweep.id,
+            weights=weights or {},
+        )
+        result.promoted = bool(promotion.get("promoted"))
+        result.promotion_reason = promotion.get("reason")
+    except Exception as exc:
+        log.warning(
+            "walk_forward.auto_promote_failed",
+            extra={
+                "test_sweep_id": str(test_sweep.id),
+                "strategy_id": str(strategy_id),
+                "error": str(exc),
+            },
+        )
     return result
+
+
+async def evaluate_walk_forward_for_promotion(
+    *,
+    owner_id: UUID,
+    strategy_id: UUID,
+    train_sweep_id: UUID,
+    test_sweep_id: UUID,
+    weights: dict[str, float],
+) -> dict[str, Any]:
+    """PR-4b: decide whether the test fold's frozen weights should
+    be promoted to the strategy's live `persona_weights`.
+
+    Returns:
+      {
+        "promoted": bool,
+        "reason": str,                # why / why not
+        "test_brier": float | None,
+        "test_win_rate": float | None,
+        "baseline_brier": float | None,  # the strategy's pre-promote curve, for context
+      }
+
+    Skipped (returns `promoted=False`) when:
+      - `auto_promote_enabled=False` on the strategy template
+      - test fold KPIs are insufficient (verdict resolution failed)
+      - test brier improvement < `auto_promote_min_oos_brier_improvement`
+      - test win rate < `auto_promote_min_oos_hit_rate`
+      - the supplied `weights` map is empty (defensive — shouldn't
+        happen in normal flow but the bare `return` keeps us safe)
+
+    On promotion:
+      - writes `weights` to the template's live `persona_weights`
+      - calls `strategy_version_service.record_version` with the
+        notes describing the OOS provenance + the train sweep id
+    """
+    from services import strategy_version_service
+    from services import sweep_aggregate_service as agg
+    from services import strategy_template_service as tsvc
+    from sqlalchemy import select as _sa_select
+
+    # Resolve verdicts on the TEST fold so the aggregate sees real
+    # win/loss counts. Mirrors Phase 1.5's pattern but on the test
+    # sweep — without this the test fold's `win_rate` collapses to
+    # 0/N which would block legitimate promotions.
+    await _verify_test_fold_discussions(test_sweep_id)
+
+    async with AsyncSessionLocal() as db:
+        tmpl = await db.scalar(
+            _sa_select(DiscussionStrategyTemplate).where(
+                DiscussionStrategyTemplate.id == strategy_id,
+                DiscussionStrategyTemplate.owner_id == owner_id,
+            )
+        )
+        if tmpl is None:
+            return {
+                "promoted": False,
+                "reason": "strategy_not_found",
+                "test_brier": None,
+                "test_win_rate": None,
+                "baseline_brier": None,
+            }
+        if not tmpl.auto_promote_enabled:
+            return {
+                "promoted": False,
+                "reason": "auto_promote_disabled",
+                "test_brier": None,
+                "test_win_rate": None,
+                "baseline_brier": None,
+            }
+        if not weights:
+            return {
+                "promoted": False,
+                "reason": "empty_weights",
+                "test_brier": None,
+                "test_win_rate": None,
+                "baseline_brier": None,
+            }
+
+        from models.backtest_sweep import BacktestSweep
+        test_sweep = await db.scalar(
+            _sa_select(BacktestSweep).where(
+                BacktestSweep.id == test_sweep_id,
+            )
+        )
+        if test_sweep is None:
+            return {
+                "promoted": False, "reason": "test_sweep_missing",
+                "test_brier": None, "test_win_rate": None,
+                "baseline_brier": None,
+            }
+
+        test_payload = await agg.aggregate_sweep(db, test_sweep)
+        test_brier = test_payload.get("brier_score")
+        test_win_rate = test_payload.get("win_rate")
+        # Baseline = the strategy's pre-promote brier (the live
+        # curve's mean brier over the recent window). Use the test
+        # fold's own pre-fit baseline by reading from the strategy's
+        # current health snapshot if present, otherwise None.
+        baseline_brier = None
+        try:
+            from services import strategy_health_service as hsvc
+            recent = await hsvc.list_recent_snapshots(
+                db, strategy_id=strategy_id, days=30,
+            )
+            for r in recent:
+                if r.brier_30d is not None:
+                    baseline_brier = float(r.brier_30d)
+                    break
+        except Exception:
+            pass
+
+        if test_brier is None or test_win_rate is None:
+            return {
+                "promoted": False,
+                "reason": "test_fold_kpi_unresolved",
+                "test_brier": test_brier,
+                "test_win_rate": test_win_rate,
+                "baseline_brier": baseline_brier,
+            }
+        if test_win_rate < tmpl.auto_promote_min_oos_hit_rate:
+            return {
+                "promoted": False,
+                "reason": (
+                    f"test_win_rate {test_win_rate:.3f} < threshold "
+                    f"{tmpl.auto_promote_min_oos_hit_rate:.3f}"
+                ),
+                "test_brier": test_brier,
+                "test_win_rate": test_win_rate,
+                "baseline_brier": baseline_brier,
+            }
+        # Brier improvement: lower is better. Require baseline -
+        # test ≥ threshold. When no baseline is available (cold
+        # strategy), interpret threshold=0 as "any non-degraded
+        # brier qualifies"; otherwise we'd lock out the first
+        # auto-promote forever waiting for a baseline.
+        if baseline_brier is not None:
+            improvement = baseline_brier - test_brier
+            if improvement < tmpl.auto_promote_min_oos_brier_improvement:
+                return {
+                    "promoted": False,
+                    "reason": (
+                        f"brier improvement {improvement:.3f} < threshold "
+                        f"{tmpl.auto_promote_min_oos_brier_improvement:.3f}"
+                    ),
+                    "test_brier": test_brier,
+                    "test_win_rate": test_win_rate,
+                    "baseline_brier": baseline_brier,
+                }
+
+        # All gates passed — promote. Live-column write goes
+        # through `set_persona_weights` to share the existing
+        # commit + invalidate flow, then we record the version.
+        await tsvc.set_persona_weights(db, tmpl, weights=weights)
+        try:
+            await strategy_version_service.record_version(
+                db,
+                strategy_id=strategy_id,
+                artifact_kind="weights",
+                payload=weights,
+                source_sweep_id=test_sweep_id,
+                notes=(
+                    f"auto-promoted from walk-forward test fold "
+                    f"(train={train_sweep_id}, test={test_sweep_id}); "
+                    f"brier={test_brier:.3f}, win_rate={test_win_rate:.3f}"
+                ),
+            )
+        except Exception as exc:
+            log.warning(
+                "walk_forward.auto_promote.version_record_failed",
+                extra={
+                    "strategy_id": str(strategy_id),
+                    "test_sweep_id": str(test_sweep_id),
+                    "error": str(exc),
+                },
+            )
+        return {
+            "promoted": True,
+            "reason": "kpis_passed",
+            "test_brier": test_brier,
+            "test_win_rate": test_win_rate,
+            "baseline_brier": baseline_brier,
+        }
+
+
+async def _verify_test_fold_discussions(test_sweep_id: UUID) -> int:
+    """Mirror of `_verify_train_fold_discussions` for the test fold.
+    Same idempotent + best-effort contract — without it the test
+    fold's aggregate `win_rate` is 0/N (every discussion's verdict
+    still pending) and the auto-promote gate trivially fails
+    'test_fold_kpi_unresolved'."""
+    from sqlalchemy import select as _select
+
+    from models.discussion import Discussion as _Discussion
+    from tasks.verify_discussion_outcome import _verify_one
+
+    resolved = 0
+    async with AsyncSessionLocal() as db:
+        rows = (await db.scalars(
+            _select(_Discussion).where(
+                _Discussion.sweep_id == test_sweep_id,
+            )
+        )).all()
+        for d in rows:
+            if d.verdict is not None:
+                continue
+            try:
+                ok = await _verify_one(db, d)
+                if ok:
+                    resolved += 1
+            except Exception as exc:
+                log.warning(
+                    "walk_forward.test_verify_failed",
+                    extra={
+                        "discussion_id": str(d.id),
+                        "test_sweep_id": str(test_sweep_id),
+                        "error": str(exc),
+                    },
+                )
+    return resolved
 
 
 async def _verify_train_fold_discussions(train_sweep_id: UUID) -> int:

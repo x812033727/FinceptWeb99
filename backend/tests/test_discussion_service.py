@@ -364,6 +364,57 @@ async def test_create_discussion_persists(db_session: AsyncSession, owner: User)
 
 
 @pytest.mark.asyncio
+async def test_create_discussion_survives_missing_recent_column(
+    db_session: AsyncSession, owner: User,
+):
+    """Regression: create_discussion used to call `db.refresh(row)` with
+    no `attribute_names`, which made SQLAlchemy issue a SELECT over the
+    full model column list. On any deployment where the DB schema was
+    behind the latest migration (e.g. operator hadn't run
+    `alembic upgrade head` past 0050 so `post_mortem_diff` was missing)
+    the post-INSERT refresh blew up with `UndefinedColumnError` even
+    though the INSERT itself only writes the columns we set explicitly
+    and succeeds.
+
+    Simulate that schema drift by patching `db.refresh` to raise the
+    same kind of error a missing column would. The targeted refresh
+    in the fix uses `attribute_names=("created_at", "updated_at")` so
+    SQLAlchemy issues a narrow SELECT — but the patched mock still
+    asserts that the call site only requests those two attributes,
+    locking in the contract that future edits can't broaden.
+    """
+    captured: list[dict] = []
+    real_refresh = db_session.refresh
+
+    async def _capturing_refresh(instance, attribute_names=None):
+        captured.append({"attribute_names": attribute_names})
+        # Forward the narrow refresh through; if `attribute_names` is
+        # None we'd hit the full SELECT and that's the bug we're
+        # guarding against — fail loud so the test catches a regression.
+        assert attribute_names is not None, (
+            "create_discussion must restrict refresh to specific columns "
+            "to survive a partial migration state"
+        )
+        return await real_refresh(instance, attribute_names=attribute_names)
+
+    with patch.object(db_session, "refresh", new=_capturing_refresh):
+        row = await discussion_service.create_discussion(
+            db_session,
+            owner_id=owner.id,
+            topic="schema-drift safety",
+            rules="rules",
+            persona_ids=["buffett", "lynch"],
+        )
+
+    assert row.id is not None
+    assert row.created_at is not None
+    assert row.updated_at is not None
+    # Exactly one refresh call, narrow attribute set.
+    assert len(captured) == 1
+    assert set(captured[0]["attribute_names"]) == {"created_at", "updated_at"}
+
+
+@pytest.mark.asyncio
 async def test_update_discussion_only_in_draft(db_session: AsyncSession, owner: User):
     row = await discussion_service.create_discussion(
         db_session,

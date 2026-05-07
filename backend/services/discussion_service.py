@@ -322,7 +322,21 @@ async def create_discussion(
     )
     db.add(row)
     await db.commit()
-    await db.refresh(row)
+    # Refresh only the server-default columns we need for the response.
+    # A bare `db.refresh(row)` issues SELECT over the full model column
+    # list — that breaks the create flow on any deployment whose DB
+    # schema lags the model (e.g. an operator who hasn't yet run
+    # `alembic upgrade head` past migration 0050 doesn't have
+    # `post_mortem_diff`, and the SELECT errors with
+    # `UndefinedColumnError` even though the INSERT itself only writes
+    # the columns we set explicitly and succeeds).
+    #
+    # `created_at` / `updated_at` are the only attributes whose values
+    # come from the server (`server_default=func.now()`); everything
+    # else is set by the Python constructor or stays NULL on insert.
+    # Restricting refresh to those two columns lets the row's response
+    # serialize cleanly regardless of post-2026 migration state.
+    await db.refresh(row, attribute_names=("created_at", "updated_at"))
     return row
 
 

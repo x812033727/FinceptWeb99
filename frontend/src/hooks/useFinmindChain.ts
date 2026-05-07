@@ -2,6 +2,17 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import api from "@/lib/api";
 
+export interface PerDatasetProgress {
+  dataset: string;
+  local_table: string | null;
+  chunks_done: number;
+  chunks_failed: number;
+  chunks_pending: number;
+  chunks_running: number;
+  chunks_total: number;
+  row_count: number | null;
+}
+
 export interface FinmindChainState {
   status: "idle" | "running" | "stopping";
   queue: string[];
@@ -22,6 +33,7 @@ export interface FinmindChainState {
   default_datasets: string[];
   total_chunks_done: number;
   total_chunks_total: number;
+  per_dataset_progress: PerDatasetProgress[];
 }
 
 export interface StartChainBody {

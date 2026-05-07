@@ -81,6 +81,7 @@ def stub_chain(monkeypatch):
         "default_datasets": list(chain.DEFAULT_DATASETS),
         "total_chunks_done": 0,
         "total_chunks_total": 0,
+        "per_dataset_progress": [],
     }
     calls = {"start": [], "stop": 0, "reset_stuck": 0}
     raise_on_start: list[Exception] = []

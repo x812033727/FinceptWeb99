@@ -294,6 +294,108 @@ async def _count_done_for_datasets(datasets: list[str]) -> int:
         return int(result.scalar() or 0)
 
 
+async def _per_dataset_progress(
+    datasets: list[str], universe_size: int,
+) -> list[dict]:
+    """Per-dataset rollup for the AdminPage card: chunks done/failed/
+    pending/running and an *estimated* row count for the destination
+    table.
+
+    Two subtleties baked into the numbers:
+
+    - `chunks_total` is the sum of all backfill_progress rows for that
+      dataset, NOT `universe_size`. Single-day datasets emit one chunk
+      per (symbol, date) so the row count outpaces the symbol count;
+      using `universe_size` would put `chunks_done > chunks_total`
+      and give a misleading >100% bar.
+    - Most finmind tables are TimescaleDB hypertables, where the
+      parent's `pg_class.reltuples` is always -1 (data lives in
+      chunks). `approximate_row_count()` walks the chunks and works
+      for both hypertables and plain tables, so we use it
+      uniformly. Estimate-grade — accurate enough for the progress
+      meter and cheap enough to call on every 3 s poll."""
+    if not datasets:
+        return []
+    from finmind.dataset_catalog import all_entries
+    from finmind.db.session import FinmindAsyncSessionLocal
+
+    table_map = {
+        entry.dataset_code: entry.local_table
+        for _, entry in all_entries()
+    }
+
+    async with FinmindAsyncSessionLocal() as session:
+        chunks_rows = await session.execute(text(
+            """
+            SELECT dataset_code,
+                   count(*) FILTER (WHERE status='done')    AS done,
+                   count(*) FILTER (WHERE status='failed')  AS failed,
+                   count(*) FILTER (WHERE status='pending') AS pending,
+                   count(*) FILTER (WHERE status='running') AS running,
+                   count(*)                                 AS total
+              FROM finmind.backfill_progress
+             WHERE dataset_code = ANY(:ds)
+             GROUP BY dataset_code
+            """
+        ), {"ds": list(datasets)})
+        chunks_by_ds = {
+            row[0]: {
+                "done":    int(row[1] or 0),
+                "failed":  int(row[2] or 0),
+                "pending": int(row[3] or 0),
+                "running": int(row[4] or 0),
+                "total":   int(row[5] or 0),
+            }
+            for row in chunks_rows
+        }
+
+        local_tables = sorted({
+            table_map.get(ds, "") for ds in datasets
+        } - {""})
+        row_counts: dict[str, int] = {}
+        # Table names come from the static dataset_catalog, not user
+        # input — safe to interpolate. (asyncpg can't bind a regclass
+        # parameter so we have to format the SQL ourselves.) Belt-and-
+        # suspenders: only allow [a-z0-9_] to forbid stray quoting.
+        import re
+        for tbl in local_tables:
+            if not re.fullmatch(r"[a-z0-9_]+", tbl):
+                continue
+            try:
+                result = await session.execute(text(
+                    f"SELECT approximate_row_count('finmind.{tbl}'::regclass)"
+                ))
+                count = result.scalar()
+                if count is not None:
+                    row_counts[tbl] = max(0, int(count))
+            except Exception:
+                # Table doesn't exist yet (Phase 1 migration not landed)
+                # or regclass cast failed — skip; UI shows "—".
+                pass
+
+    out = []
+    for ds in datasets:
+        local_table = table_map.get(ds, "") or None
+        c = chunks_by_ds.get(ds, {
+            "done": 0, "failed": 0, "pending": 0, "running": 0, "total": 0,
+        })
+        # Fall back to universe_size for datasets that have no
+        # backfill_progress rows yet (chain hasn't started picking
+        # them up) — the user still wants a sensible denominator.
+        chunks_total = c["total"] or universe_size
+        out.append({
+            "dataset": ds,
+            "local_table": local_table,
+            "chunks_done":    c["done"],
+            "chunks_failed":  c["failed"],
+            "chunks_pending": c["pending"],
+            "chunks_running": c["running"],
+            "chunks_total":   chunks_total,
+            "row_count":      row_counts.get(local_table) if local_table else None,
+        })
+    return out
+
+
 # ── Public API ─────────────────────────────────────────────────
 
 
@@ -313,6 +415,9 @@ async def get_state() -> dict:
         if state.selected_datasets else 0
     )
     total_total = state.universe_size * len(state.selected_datasets)
+    per_dataset = await _per_dataset_progress(
+        state.selected_datasets, state.universe_size,
+    )
     return {
         **state.__dict__,
         "quota_used": used,
@@ -321,6 +426,7 @@ async def get_state() -> dict:
         "default_datasets": list(DEFAULT_DATASETS),
         "total_chunks_done": total_done,
         "total_chunks_total": total_total,
+        "per_dataset_progress": per_dataset,
     }
 
 

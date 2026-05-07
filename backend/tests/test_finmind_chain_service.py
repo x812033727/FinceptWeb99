@@ -121,6 +121,9 @@ async def stub_helpers(monkeypatch):
             fakes["dataset_progress"].get(d, (0, 0))[0] for d in datasets
         )
 
+    async def _fake_per_dataset_progress(datasets, universe_size):
+        return []
+
     monkeypatch.setattr(
         "services.finmind_chain_service._load_universe", _fake_universe
     )
@@ -144,6 +147,10 @@ async def stub_helpers(monkeypatch):
     monkeypatch.setattr(
         "services.finmind_chain_service._count_done_for_datasets",
         _fake_count_done_many,
+    )
+    monkeypatch.setattr(
+        "services.finmind_chain_service._per_dataset_progress",
+        _fake_per_dataset_progress,
     )
     yield fakes
 

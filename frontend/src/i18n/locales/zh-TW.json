@@ -53,6 +53,15 @@
       "log_tail_hide": "隱藏 log",
       "reload_toast": "重佈署完成，2 秒後自動重新載入",
       "reload_now": "立即重新載入"
+    },
+    "lesson_archive": {
+      "title": "教訓封存(Archived Lessons)",
+      "count": "{{count}} 則已封存",
+      "market_filter": "市場",
+      "market_all": "全部",
+      "empty": "目前沒有被封存的教訓",
+      "usage_label": "命中/使用",
+      "unarchive": "還原"
     }
   },
   "settings": {
@@ -681,6 +690,14 @@
       "hide_advanced": "收合",
       "min_brier_improvement": "最低 Brier 改善",
       "min_hit_rate": "最低命中率"
+    },
+    "persona_status": {
+      "title": "已凍結 / 影子模式 Persona",
+      "thaw": "解凍",
+      "tooltip": {
+        "frozen": "已凍結:本輪不會被叫到。可手動解凍。",
+        "shadow": "影子模式:照常執行但不影響 conclusion(B5 測試)"
+      }
     },
     "export_markdown": "匯出 Markdown",
     "ask_followup": "深入分析",

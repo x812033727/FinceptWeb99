@@ -142,6 +142,24 @@ class DiscussionStrategyTemplate(Base):
         Float, nullable=False, default=0.5, server_default="0.5",
     )
 
+    # PR-4c: per-strategy persona status map.
+    #   {persona_id: 'active' | 'frozen' | 'shadow'}
+    # Personas not present default to 'active'. Frozen ones are
+    # excluded from the round roster; shadow ones run but their
+    # output isn't fed to the synthesizer (placeholder for the
+    # PR-B5 shadow-testing flow).
+    # Auto-freeze is computed in `persona_status_service` after
+    # weight learning — a persona whose weight has been ≤ the
+    # freeze threshold across the last N production sweeps gets
+    # flipped to 'frozen' here. Operators manually unfreeze via
+    # the API endpoint.
+    persona_status: Mapped[dict[str, str]] = mapped_column(
+        JSON, nullable=False, default=dict, server_default="{}",
+    )
+    persona_status_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+
     # PR-D: auto-schedule fields. Disabled by default — explicit
     # opt-in so a fresh template doesn't fire LLM cost on its own.
     auto_schedule_enabled: Mapped[bool] = mapped_column(

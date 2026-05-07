@@ -655,6 +655,63 @@ async def run_sweep_worker(sweep_id: UUID) -> None:
                     },
                 )
 
+        # PR-4c: lesson demotion + archive runs alongside promote.
+        # Order matters: refresh recent_hit_rate_10 first → demote
+        # semantic→episodic when rate drops → archive lessons that
+        # haven't been used + don't hit. Each step is best-effort.
+        # The market scope mirrors `promote_eligible_lessons` so a
+        # TW sweep doesn't churn US lessons.
+        if not cancelled_mid_flight:
+            try:
+                from services.lesson_tier_service import (
+                    archive_stale_lessons,
+                    demote_stale_lessons,
+                    update_recent_hit_rates,
+                )
+                await update_recent_hit_rates(db, market=sweep.market)
+                await demote_stale_lessons(db, market=sweep.market)
+                await archive_stale_lessons(db, market=sweep.market)
+            except Exception as exc:
+                log.warning(
+                    "backtest_sweep.lesson_demotion_failed",
+                    extra={
+                        "sweep_id": str(sweep_id),
+                        "error": str(exc),
+                    },
+                )
+
+        # PR-4c: auto-freeze underperforming personas based on the
+        # last N production weight versions. Only fires after
+        # `learn_weights_for_strategy` has run (in the
+        # `should_learn_weights` block above) — that's what writes
+        # the version row the auto-freeze inspector reads. Test /
+        # train fold sweeps don't write to versions, so this gate
+        # naturally skips for those (history will be too short).
+        if not cancelled_mid_flight and sweep.strategy_id is not None:
+            try:
+                from services import persona_status_service
+                frozen = await persona_status_service.auto_freeze_underperformers(
+                    db, strategy_id=sweep.strategy_id,
+                )
+                if frozen:
+                    log.info(
+                        "backtest_sweep.auto_frozen",
+                        extra={
+                            "sweep_id": str(sweep_id),
+                            "strategy_id": str(sweep.strategy_id),
+                            "personas": frozen,
+                        },
+                    )
+            except Exception as exc:
+                log.warning(
+                    "backtest_sweep.auto_freeze_failed",
+                    extra={
+                        "sweep_id": str(sweep_id),
+                        "strategy_id": str(sweep.strategy_id),
+                        "error": str(exc),
+                    },
+                )
+
         # PR-4a: refresh the strategy's maturity tier now that the
         # sweep has changed the inputs (sweep count, recent brier).
         # Runs on every fold_kind so a walk-forward train fold also

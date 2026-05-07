@@ -21,6 +21,7 @@ from sqlalchemy import (
     JSON,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -108,6 +109,27 @@ class DiscussionLesson(Base):
     )
     promoted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True,
+    )
+    # PR-4c: lesson demotion + archive surface.
+    #   `archived_at` — soft-deleted lessons (60+ days unused with
+    #     low recent hit-rate). Excluded from `fetch_relevant_
+    #     lessons` reads; preserved for audit + manual unarchive.
+    #   `demoted_at` — when a `semantic` lesson dropped back to
+    #     `episodic` because its rolling hit-rate fell below the
+    #     demotion threshold. NULL on lessons that have never been
+    #     demoted (the typical case).
+    #   `recent_hit_rate_10` — moving hit-rate over the most recent
+    #     10 usages. Computed by the daily cron + read by the
+    #     demotion gate. NULL until the lesson has at least 10
+    #     usages OR the cron hasn't run yet.
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    demoted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    recent_hit_rate_10: Mapped[float | None] = mapped_column(
+        Float, nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

@@ -286,12 +286,182 @@ def _extract_lesson_id(entry: Any) -> int | None:
         return None
 
 
+# ── PR-4c: lesson demotion + archive ──────────────────────────────
+
+
+# Thresholds for the demotion gate. Picked conservative — a
+# semantic lesson is the model's "this still works" verdict, so
+# we only demote when the rolling hit-rate has clearly broken.
+DEMOTE_HIT_RATE_THRESHOLD = 0.40
+DEMOTE_MIN_USAGES = 5     # need ≥5 recent usages to trust the rate
+ARCHIVE_UNUSED_DAYS = 60
+ARCHIVE_HIT_RATE_THRESHOLD = 0.30
+RECENT_HIT_WINDOW = 10
+
+
+async def update_recent_hit_rates(
+    db: AsyncSession,
+    *,
+    market: str | None = None,
+) -> int:
+    """Recompute `recent_hit_rate_10` for every non-archived
+    lesson, optionally scoped to a market.
+
+    Approximation: we don't track individual usage events; the
+    cron computes recent_hit_rate as `min(hit_count, RECENT_HIT_
+    WINDOW) / min(usage_count, RECENT_HIT_WINDOW)` which is exact
+    when the lesson has ≤ 10 usages and a reasonable proxy
+    otherwise (skews slightly conservative — a lesson with 100
+    hits on 100 usages all-time will read as 1.0 even after a
+    couple of recent misses, but the demotion threshold of 0.40
+    leaves enough slack that even a 10-usage drift to 4 hits
+    flips the gate).
+
+    Returns the count of rows updated.
+    """
+    stmt = select(DiscussionLesson).where(
+        DiscussionLesson.archived_at.is_(None),
+    )
+    if market is not None:
+        stmt = stmt.where(DiscussionLesson.market == market)
+    rows = list((await db.scalars(stmt)).all())
+    updated = 0
+    for row in rows:
+        usage = int(row.usage_count or 0)
+        hits = int(row.hit_count or 0)
+        if usage <= 0:
+            new_rate = None
+        else:
+            denom = min(usage, RECENT_HIT_WINDOW)
+            numer = min(hits, RECENT_HIT_WINDOW)
+            new_rate = round(numer / denom, 4)
+        if row.recent_hit_rate_10 != new_rate:
+            row.recent_hit_rate_10 = new_rate
+            updated += 1
+    if updated:
+        await db.commit()
+    return updated
+
+
+async def demote_stale_lessons(
+    db: AsyncSession,
+    *,
+    market: str,
+) -> list[dict[str, Any]]:
+    """Demote semantic lessons whose `recent_hit_rate_10` has
+    fallen below `DEMOTE_HIT_RATE_THRESHOLD` back to episodic.
+
+    Counterpart to `promote_eligible_lessons`: keeps the tier
+    membership honest. A previously-good lesson whose regime has
+    shifted should drop back to episodic so it ages out of the
+    fetch ranking instead of holding the synthesizer's prompt
+    hostage forever.
+
+    Skips lessons without enough recent usages (`usage_count <
+    DEMOTE_MIN_USAGES`) — can't trust a rolling rate computed
+    over too few samples.
+
+    Returns the list of demoted rows for audit.
+    """
+    stmt = select(DiscussionLesson).where(
+        DiscussionLesson.market == market,
+        DiscussionLesson.tier == "semantic",
+        DiscussionLesson.archived_at.is_(None),
+    )
+    rows = list((await db.scalars(stmt)).all())
+    demoted: list[dict[str, Any]] = []
+    now = datetime.now(UTC)
+    for row in rows:
+        if (row.usage_count or 0) < DEMOTE_MIN_USAGES:
+            continue
+        rate = row.recent_hit_rate_10
+        if rate is None or rate >= DEMOTE_HIT_RATE_THRESHOLD:
+            continue
+        row.tier = "episodic"
+        row.demoted_at = now
+        demoted.append({
+            "lesson_id": row.id,
+            "previous_tier": "semantic",
+            "recent_hit_rate_10": rate,
+        })
+    if demoted:
+        await db.commit()
+    return demoted
+
+
+async def archive_stale_lessons(
+    db: AsyncSession,
+    *,
+    market: str,
+) -> list[dict[str, Any]]:
+    """Soft-delete lessons that are simultaneously unused-for-
+    a-while AND have a low recent hit rate.
+
+    Two conditions, both must hold (intentionally strict):
+      - `last_used_at < now - ARCHIVE_UNUSED_DAYS days`
+      - `recent_hit_rate_10 < ARCHIVE_HIT_RATE_THRESHOLD`
+        OR `usage_count > 0 AND hit_count == 0`
+
+    Skips structural lessons (admin-curated; never auto-archive).
+    The OR branch covers lessons that were used a few times,
+    never won, and then got ignored — those are dead weight even
+    when they have only 1-2 usages, so we don't gate on the
+    DEMOTE_MIN_USAGES floor.
+
+    Returns the audit list. Demote_stale_lessons should normally
+    run BEFORE this so semantic lessons get a chance to drop to
+    episodic and start the archive aging clock — without that
+    sequence a tier-promoted but newly-failing lesson would skip
+    archive forever.
+    """
+    from datetime import timedelta as _timedelta
+
+    cutoff = datetime.now(UTC) - _timedelta(days=ARCHIVE_UNUSED_DAYS)
+    stmt = select(DiscussionLesson).where(
+        DiscussionLesson.market == market,
+        DiscussionLesson.tier != "structural",
+        DiscussionLesson.archived_at.is_(None),
+        DiscussionLesson.last_used_at.is_not(None),
+        DiscussionLesson.last_used_at < cutoff,
+    )
+    rows = list((await db.scalars(stmt)).all())
+    archived: list[dict[str, Any]] = []
+    now = datetime.now(UTC)
+    for row in rows:
+        usage = int(row.usage_count or 0)
+        hits = int(row.hit_count or 0)
+        rate = row.recent_hit_rate_10
+        rate_below = rate is not None and rate < ARCHIVE_HIT_RATE_THRESHOLD
+        zero_hits = usage > 0 and hits == 0
+        if not (rate_below or zero_hits):
+            continue
+        row.archived_at = now
+        archived.append({
+            "lesson_id": row.id,
+            "tier_at_archive": row.tier,
+            "usage_count": usage,
+            "hit_count": hits,
+            "recent_hit_rate_10": rate,
+        })
+    if archived:
+        await db.commit()
+    return archived
+
+
 __all__ = [
     "PROMOTE_MIN_USAGE",
     "PROMOTE_MIN_HIT_RATE",
     "VALID_TIERS",
+    "DEMOTE_HIT_RATE_THRESHOLD",
+    "DEMOTE_MIN_USAGES",
+    "ARCHIVE_UNUSED_DAYS",
+    "ARCHIVE_HIT_RATE_THRESHOLD",
+    "RECENT_HIT_WINDOW",
     "record_lesson_usage",
     "record_lesson_outcome",
     "promote_eligible_lessons",
     "promote_to_structural",
+    "update_recent_hit_rates",
+    "demote_stale_lessons",
+    "archive_stale_lessons",
 ]

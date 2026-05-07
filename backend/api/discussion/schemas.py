@@ -384,6 +384,11 @@ class StrategyTemplateResponse(BaseModel):
     auto_promote_enabled: bool = False
     auto_promote_min_oos_brier_improvement: float = 0.0
     auto_promote_min_oos_hit_rate: float = 0.5
+    # PR-4c: per-strategy persona status map. Personas not present
+    # default to 'active'. Keys are persona IDs; values one of
+    # 'active' / 'frozen' / 'shadow'.
+    persona_status: dict[str, str] = {}
+    persona_status_updated_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None

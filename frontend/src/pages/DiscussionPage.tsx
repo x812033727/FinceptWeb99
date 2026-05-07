@@ -12,7 +12,7 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
-import { notifyRateLimited } from "@/lib/api";
+import { errorDetail, notifyRateLimited } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 import { cn } from "@/lib/utils";
 import { useCollapsible as useCollapsibleHook } from "@/hooks/useCollapsible";
@@ -223,6 +223,12 @@ export default function DiscussionPage() {
       rememberTopic(row.topic);
       rememberRules(row.rules);
     },
+    // Without this, a backend failure (validation 400, 422, server 500,
+    // network) leaves the user staring at a button that re-enables but
+    // produces no visible feedback — perfectly indistinguishable from
+    // "the click was ignored". Surface the detail through the same
+    // streamError banner that round-failures use.
+    onError: (err) => setStreamError(errorDetail(err)),
   });
 
   const updateMut = useMutation({
@@ -240,6 +246,7 @@ export default function DiscussionPage() {
       rememberTopic(row.topic);
       rememberRules(row.rules);
     },
+    onError: (err) => setStreamError(errorDetail(err)),
   });
 
   const deleteMut = useMutation({
@@ -248,6 +255,7 @@ export default function DiscussionPage() {
       queryClient.invalidateQueries({ queryKey: ["discussion-sessions"] });
       setSelectedId(null);
     },
+    onError: (err) => setStreamError(errorDetail(err)),
   });
 
   const concludeMut = useMutation({
@@ -263,6 +271,7 @@ export default function DiscussionPage() {
       // moment the conclusion lands, but the user can't see it.
       queryClient.invalidateQueries({ queryKey: ["discussion-scoreboard", selectedId] });
     },
+    onError: (err) => setStreamError(errorDetail(err)),
   });
 
   // Post-mortem self-critique flow (backtest mode only). Injects the

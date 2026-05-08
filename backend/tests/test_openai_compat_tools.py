@@ -387,7 +387,7 @@ async def test_institutional_history_passes_days_to_service():
         result = _payload(await dispatch["get_institutional_history"]({
             "symbol": "2330", "days": 60,
         }))
-    mock.assert_awaited_once_with("2330", days=60)
+    mock.assert_awaited_once_with("2330", days=60, as_of=None)
     assert result["count"] == 10
     assert result["days"] == 60
 
@@ -405,7 +405,7 @@ async def test_institutional_history_caps_days_at_90():
         await dispatch["get_institutional_history"]({
             "symbol": "2330", "days": 999,
         })
-    mock.assert_awaited_once_with("2330", days=90)
+    mock.assert_awaited_once_with("2330", days=90, as_of=None)
 
 
 # ── get_margin_history handler ──────────────────────────────────────
@@ -426,7 +426,7 @@ async def test_margin_history_passes_through_rows():
         result = _payload(await dispatch["get_margin_history"]({
             "symbol": "2330",
         }))
-    mock.assert_awaited_once_with("2330", days=30)
+    mock.assert_awaited_once_with("2330", days=30, as_of=None)
     assert result["rows"] == fake_rows
 
 
@@ -452,7 +452,7 @@ async def test_top_brokers_returns_payload_when_data_exists():
         result = _payload(await dispatch["get_top_brokers"]({
             "symbol": "2330", "days": 5, "top_n": 3,
         }))
-    mock.assert_awaited_once_with("2330", days=5, top_n=3)
+    mock.assert_awaited_once_with("2330", as_of=None, days=5, top_n=3)
     assert result["top_buyers"][0]["broker"] == "凱基台北"
 
 
@@ -481,7 +481,7 @@ async def test_top_brokers_caps_top_n_at_10():
     ) as mock:
         mock.return_value = None
         await dispatch["get_top_brokers"]({"symbol": "2330", "top_n": 99})
-    mock.assert_awaited_once_with("2330", days=5, top_n=10)
+    mock.assert_awaited_once_with("2330", as_of=None, days=5, top_n=10)
 
 
 # ── get_taifex_positioning handler ──────────────────────────────────
@@ -503,7 +503,7 @@ async def test_taifex_positioning_default_contract_tx():
     ) as mock:
         mock.return_value = fake
         result = _payload(await dispatch["get_taifex_positioning"]({}))
-    mock.assert_awaited_once_with(contract="TX")
+    mock.assert_awaited_once_with(contract="TX", as_of=None)
     assert result["trend"] == "bullish"
 
 
@@ -520,3 +520,119 @@ async def test_taifex_positioning_no_data_returns_structured_note():
         }))
     assert result["contract"] == "MTX"
     assert "note" in result
+
+
+# ── backtest mode (as_of_date closure) ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_backtest_as_of_passes_to_institutional_history():
+    """When build_openai_compat_toolset is built with as_of_date, the
+    chip-flow tools forward it to the underlying service — without this
+    plumbing, a backtest discussion's tool calls would silently fetch
+    live data, defeating the historical replay."""
+    from datetime import date
+    anchor = date(2026, 4, 15)
+    _, dispatch = build_openai_compat_toolset(_user_id(), as_of_date=anchor)
+    with patch(
+        "services.tw_market_service.get_institutional",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = []
+        result = _payload(await dispatch["get_institutional_history"]({
+            "symbol": "2330", "days": 30,
+        }))
+    mock.assert_awaited_once_with("2330", days=30, as_of=anchor)
+    assert result["as_of"] == "2026-04-15"
+
+
+@pytest.mark.asyncio
+async def test_backtest_as_of_passes_to_margin_history():
+    from datetime import date
+    anchor = date(2026, 4, 15)
+    _, dispatch = build_openai_compat_toolset(_user_id(), as_of_date=anchor)
+    with patch(
+        "services.tw_market_service.get_margin",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = []
+        await dispatch["get_margin_history"]({"symbol": "2330"})
+    mock.assert_awaited_once_with("2330", days=30, as_of=anchor)
+
+
+@pytest.mark.asyncio
+async def test_backtest_as_of_passes_to_top_brokers():
+    from datetime import date
+    anchor = date(2026, 4, 15)
+    _, dispatch = build_openai_compat_toolset(_user_id(), as_of_date=anchor)
+    with patch(
+        "services.broker_concentration_service.get_top_brokers_for_symbol",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = None
+        await dispatch["get_top_brokers"]({"symbol": "2330"})
+    mock.assert_awaited_once_with("2330", as_of=anchor, days=5, top_n=3)
+
+
+@pytest.mark.asyncio
+async def test_backtest_as_of_passes_to_taifex_positioning():
+    from datetime import date
+    anchor = date(2026, 4, 15)
+    _, dispatch = build_openai_compat_toolset(_user_id(), as_of_date=anchor)
+    with patch(
+        "services.derivatives_service.get_taifex_positioning",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = None
+        await dispatch["get_taifex_positioning"]({})
+    mock.assert_awaited_once_with(contract="TX", as_of=anchor)
+
+
+@pytest.mark.asyncio
+async def test_live_mode_omits_as_of():
+    """When as_of_date is None (live mode), services receive as_of=None
+    so they fall through their normal Redis → DB → live waterfall."""
+    _, dispatch = build_openai_compat_toolset(_user_id())  # no as_of_date
+    with patch(
+        "services.tw_market_service.get_institutional",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = []
+        await dispatch["get_institutional_history"]({"symbol": "2330"})
+    mock.assert_awaited_once_with("2330", days=30, as_of=None)
+
+
+@pytest.mark.asyncio
+async def test_backtest_as_of_passes_to_get_quote():
+    """get_quote already supports `as_of` (PR #226). Wire the closure
+    through so a backtest persona's quote lookups see the historical
+    close instead of today's tape — would otherwise be the most
+    obviously broken case (price drift between historical and today
+    is usually hundreds of percent for multi-year backtests)."""
+    from datetime import date
+    anchor = date(2026, 4, 15)
+    _, dispatch = build_openai_compat_toolset(_user_id(), as_of_date=anchor)
+    with patch(
+        "services.tw_market_service.get_quote",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = {"symbol": "2330", "price": 850.0}
+        await dispatch["get_quote"]({"symbol": "2330", "market": "TW"})
+    mock.assert_awaited_once_with("2330", as_of=anchor)
+
+
+@pytest.mark.asyncio
+async def test_live_mode_get_quote_does_not_pass_as_of():
+    """Live mode must NOT pass `as_of=None` through to get_quote — the
+    service's signature accepts as_of as a kwarg and `as_of=None` is
+    semantically the same as omitting it, but keeping the live call
+    site signature unchanged avoids surprising any caller-aware
+    cache key composition downstream."""
+    _, dispatch = build_openai_compat_toolset(_user_id())
+    with patch(
+        "services.us_market_service.get_quote",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = {"symbol": "AAPL", "price": 180.0}
+        await dispatch["get_quote"]({"symbol": "AAPL", "market": "US"})
+    mock.assert_awaited_once_with("AAPL")  # no as_of kwarg passed

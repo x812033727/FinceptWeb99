@@ -100,6 +100,95 @@ async def test_get_revenue_empty_not_cached():
     assert result == []
 
 
+# ── backtest mode (as_of) ────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_institutional_as_of_skips_cache_and_live_tiers():
+    """Backtest mode bypasses Redis (per-as_of cache key would explode)
+    and skips live FinMind / TWSE fallbacks (would return today's data,
+    leaking future information into the historical replay). Returns
+    whatever the DB archive holds — possibly []."""
+    from datetime import date
+    from unittest.mock import MagicMock
+
+    finmind_mock = AsyncMock(return_value=[{"foreign_buy": 9999}])
+    twse_mock = AsyncMock(return_value=[{"foreign_buy": 9999}])
+    cache_get_mock = AsyncMock(return_value='[{"cached":"row"}]')
+    db_rows = [{"date": "2026-04-15", "foreign_buy": 1000}]
+
+    # Patch the lazy import inside the function: services.ingest.repository.read_institutional_range
+    with patch.object(svc, "cache_get", cache_get_mock), \
+         patch.object(svc, "cache_set", AsyncMock()) as cache_set_mock, \
+         patch.object(svc.finmind, "get_institutional", finmind_mock), \
+         patch.object(svc.twse, "get_institutional", twse_mock), \
+         patch("services.ingest.repository.read_institutional_range",
+               new=AsyncMock(return_value=db_rows)), \
+         patch("db.session.AsyncSessionLocal", MagicMock()):
+        result = await svc.get_institutional(
+            "2330", days=30, as_of=date(2026, 4, 15),
+        )
+
+    # Cache GET / SET both skipped in backtest mode.
+    cache_get_mock.assert_not_awaited()
+    cache_set_mock.assert_not_awaited()
+    # Live tiers must NOT have been called — would have returned 9999.
+    finmind_mock.assert_not_awaited()
+    twse_mock.assert_not_awaited()
+    assert result == db_rows
+
+
+@pytest.mark.asyncio
+async def test_get_institutional_as_of_returns_empty_on_db_miss():
+    """Backtest mode + DB has no rows in the historical window → []
+    (NOT a live fallback). Caller already treats blank as 'no signal'."""
+    from datetime import date
+    from unittest.mock import MagicMock
+
+    finmind_mock = AsyncMock(return_value=[{"foreign_buy": 9999}])
+    twse_mock = AsyncMock(return_value=[{"foreign_buy": 9999}])
+
+    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc.finmind, "get_institutional", finmind_mock), \
+         patch.object(svc.twse, "get_institutional", twse_mock), \
+         patch("services.ingest.repository.read_institutional_range",
+               new=AsyncMock(return_value=[])), \
+         patch("db.session.AsyncSessionLocal", MagicMock()):
+        result = await svc.get_institutional(
+            "2330", days=30, as_of=date(2020, 1, 1),
+        )
+
+    assert result == []
+    finmind_mock.assert_not_awaited()  # critical: no future-leak
+    twse_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_margin_as_of_skips_cache_and_live_tiers():
+    from datetime import date
+    from unittest.mock import MagicMock
+
+    finmind_mock = AsyncMock(return_value=[{"margin_purchase_balance": 9999}])
+    cache_get_mock = AsyncMock(return_value='[{"cached":"row"}]')
+    db_rows = [{"date": "2026-04-15", "margin_purchase_balance": 1000}]
+
+    with patch.object(svc, "cache_get", cache_get_mock), \
+         patch.object(svc, "cache_set", AsyncMock()) as cache_set_mock, \
+         patch.object(svc.finmind, "get_margin", finmind_mock), \
+         patch("services.ingest.repository.read_margin_range",
+               new=AsyncMock(return_value=db_rows)), \
+         patch("db.session.AsyncSessionLocal", MagicMock()):
+        result = await svc.get_margin(
+            "2330", days=30, as_of=date(2026, 4, 15),
+        )
+
+    cache_get_mock.assert_not_awaited()
+    cache_set_mock.assert_not_awaited()
+    finmind_mock.assert_not_awaited()
+    assert result == db_rows
+
+
 # ── get_fundamentals ──────────────────────────────────────────────
 
 @pytest.mark.asyncio

@@ -3965,7 +3965,7 @@ def test_build_persona_tool_kwargs_openai_compat_returns_kwargs(monkeypatch):
     import sys
     import types
 
-    def fake_build(_user_id):
+    def fake_build(_user_id, *, as_of_date=None):
         return ([{"type": "function", "name": "get_quote"}], {"get_quote": object()})
 
     fake_mod = types.ModuleType("ai.tools.openai_compat")
@@ -3984,6 +3984,35 @@ def test_build_persona_tool_kwargs_openai_compat_returns_kwargs(monkeypatch):
     # claude_agent keys must be absent — different code path.
     assert "mcp_server" not in out
     assert "allowed_tools" not in out
+
+
+def test_build_persona_tool_kwargs_forwards_as_of_to_openai_compat(monkeypatch):
+    """Backtest mode: discussion's `as_of_date` must reach the toolset
+    builder so chip-flow tools anchor at the historical date instead
+    of `today`. Without this plumbing the persona's tool calls would
+    silently fetch live data and contaminate the backtest."""
+    import sys
+    import types
+    from datetime import date
+
+    captured: dict = {}
+
+    def fake_build(user_id, *, as_of_date=None):
+        captured["as_of_date"] = as_of_date
+        return ([{"type": "function", "name": "get_quote"}],
+                {"get_quote": object()})
+
+    fake_mod = types.ModuleType("ai.tools.openai_compat")
+    fake_mod.build_openai_compat_toolset = fake_build
+    monkeypatch.setitem(sys.modules, "ai.tools.openai_compat", fake_mod)
+
+    discussion_service._build_persona_tool_kwargs(
+        provider="groq",
+        user_role="analyst",
+        user_id="u1",
+        as_of_date=date(2026, 4, 15),
+    )
+    assert captured["as_of_date"] == date(2026, 4, 15)
 
 
 # ── _assemble_user_context ────────────────────────────────────────

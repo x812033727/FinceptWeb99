@@ -996,7 +996,11 @@
     "requests": "請求次數",
     "prompt_tokens": "Prompt tokens",
     "completion_tokens": "Completion tokens",
+    "tool_calls": "工具呼叫",
+    "tool_calls_short": "tools",
     "by_provider": "依 Provider 拆分",
+    "top_tools": "工具熱門排行",
+    "top_tools_empty": "此區間沒有工具呼叫 — persona 只用了靜態 round context。",
     "empty": "此區間尚無用量"
   },
   "signal_quality": {

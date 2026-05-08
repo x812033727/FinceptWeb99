@@ -996,7 +996,11 @@
     "requests": "Requests",
     "prompt_tokens": "Prompt tokens",
     "completion_tokens": "Completion tokens",
+    "tool_calls": "Tool calls",
+    "tool_calls_short": "tools",
     "by_provider": "By Provider",
+    "top_tools": "Top Tools",
+    "top_tools_empty": "No tool invocations in this range — personas relied on the static round context only.",
     "empty": "No usage yet in this range"
   },
   "signal_quality": {

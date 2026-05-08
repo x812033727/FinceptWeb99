@@ -275,7 +275,9 @@ async def seed_for_owner(db, owner_id: UUID) -> tuple[int, int]:
     skipped = 0
     for strat in TRADING_STRATEGIES:
         if strat.name in existing:
-            log.info("seed_strategies.skip_existing", extra={"name": strat.name})
+            # `name` collides with LogRecord.name (the logger name) so we
+            # use `strategy` for the structured field instead.
+            log.info("seed_strategies.skip_existing", extra={"strategy": strat.name})
             skipped += 1
             continue
         await svc.create_template(
@@ -291,7 +293,7 @@ async def seed_for_owner(db, owner_id: UUID) -> tuple[int, int]:
             default_concurrency=strat.default_concurrency,
         )
         created += 1
-        log.info("seed_strategies.created", extra={"name": strat.name})
+        log.info("seed_strategies.created", extra={"strategy": strat.name})
     return created, skipped
 
 

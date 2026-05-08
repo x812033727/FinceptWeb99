@@ -82,6 +82,26 @@ LAST_PHASE=starting    ; write_status starting
 LAST_PHASE=pulling     ; write_status pulling
 cd "$REPO" && git pull --ff-only origin "$BRANCH" 2>&1 | tee -a "$LOG"
 
+# Self-heal drift between the systemd-invoked copy at
+# /usr/local/bin/finceptweb-deploy.sh and the in-repo source of truth.
+# Without this, edits to scripts/finceptweb-deploy.sh only land in
+# /usr/local/bin/ when someone remembers to run `sudo install` — and
+# "forgot to install" silently downgrades the next deploy. Concrete
+# regression we hit on 2026-05-08: the in-repo script had been updated
+# to `build backend frontend migrate`, but the installed copy still
+# said `build backend frontend`, so the migrate image stayed cached,
+# alembic ran against stale revisions, and DB sat at 0054 while
+# backend code expected 0055 → UndefinedColumn on /discussion.
+INSTALL_PATH=/usr/local/bin/finceptweb-deploy.sh
+REPO_SCRIPT=$REPO/scripts/finceptweb-deploy.sh
+if [[ "${FINCEPTWEB_DEPLOY_REEXECED:-}" != "1" ]] \
+   && ! cmp -s "$REPO_SCRIPT" "$INSTALL_PATH"; then
+  echo "deploy script drift detected; installing $REPO_SCRIPT and re-executing" | tee -a "$LOG"
+  install -m 0755 "$REPO_SCRIPT" "$INSTALL_PATH"
+  export FINCEPTWEB_DEPLOY_REEXECED=1
+  exec "$INSTALL_PATH" "$@"
+fi
+
 LAST_PHASE=pausing     ; write_status pausing
 docker-compose stop backend 2>&1 | tee -a "$LOG"
 

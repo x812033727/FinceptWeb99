@@ -2182,17 +2182,20 @@ def _build_persona_tool_kwargs(
     a single persona turn.
 
     Mirrors the eligibility rules at `/api/ai/chat`:
-      - `claude_agent` provider: when the SDK is importable + the
-        owner has analyst / admin role, build the MCP toolset and
-        cap turns at `CLAUDE_AGENT_MAX_TURNS`.
-      - OpenAI-compat providers: when the owner has analyst / admin
-        role, build the OpenAI-compat toolset; viewers fall back to
-        plain chat (the `query_user_data` tool reads the caller's
-        own data, so handing it to a viewer would let an account
-        with low quota silently exfiltrate via tool calls).
-      - Any other provider, or any role/SDK gate failing: returns
-        an empty dict so the caller falls through to today's plain
+      - `claude_agent` provider: when the SDK is importable, build
+        the MCP toolset and cap turns at `CLAUDE_AGENT_MAX_TURNS`.
+      - OpenAI-compat providers: build the OpenAI-compat toolset.
+      - Any other provider, or any SDK gate failing: returns an
+        empty dict so the caller falls through to today's plain
         streaming.
+
+    Role-based tool filtering:
+      - viewer: gets all 13 public market-data tools BUT NOT
+        `query_user_data`. The free tier still benefits from
+        get_quote / get_symbol_news / get_options_chain / etc.
+        without exposing portfolio rows to the LLM provider.
+      - analyst / admin: gets the full 14-tool surface including
+        `query_user_data`.
 
     `as_of_date` (backtest mode): forwarded into both toolset
     builders so the 4 TW chip-flow tools anchor at the historical
@@ -2209,8 +2212,7 @@ def _build_persona_tool_kwargs(
     if not user_id:
         return {}
     role = (user_role or "").lower()
-    if role not in ("analyst", "admin"):
-        return {}
+    include_user_data = role in ("analyst", "admin")
 
     prov = (provider or "").lower()
     if prov == "claude_agent":
@@ -2219,8 +2221,12 @@ def _build_persona_tool_kwargs(
         try:
             from ai.tools import build_toolset, tool_names
             return {
-                "mcp_server":    build_toolset(user_id, as_of_date=as_of_date),
-                "allowed_tools": tool_names(),
+                "mcp_server":    build_toolset(
+                    user_id,
+                    as_of_date=as_of_date,
+                    include_user_data=include_user_data,
+                ),
+                "allowed_tools": tool_names(include_user_data=include_user_data),
                 "max_turns":     settings.CLAUDE_AGENT_MAX_TURNS,
             }
         except Exception as exc:
@@ -2234,7 +2240,9 @@ def _build_persona_tool_kwargs(
         try:
             from ai.tools.openai_compat import build_openai_compat_toolset
             schemas, dispatch = build_openai_compat_toolset(
-                user_id, as_of_date=as_of_date,
+                user_id,
+                as_of_date=as_of_date,
+                include_user_data=include_user_data,
             )
         except Exception as exc:
             log.warning(

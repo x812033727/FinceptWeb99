@@ -20,6 +20,7 @@ def build_toolset(
     user_id: str,
     *,
     as_of_date: date | None = None,
+    include_user_data: bool = True,
 ) -> McpSdkServerConfig:
     """Compose per-user toolset. All user-scoped tools close over user_id.
 
@@ -28,19 +29,30 @@ def build_toolset(
     of `today` for backtest discussions. The LLM doesn't see `as_of`
     in any tool's parameters — backtest correctness is enforced at the
     closure layer.
+
+    `include_user_data` (default True): when False, omits the SQL
+    toolset (`query_user_data`) so viewer-tier callers can use public
+    market data tools without surfacing portfolio / watchlist / alert
+    rows to the LLM provider.
     """
-    tools = [
+    tools: list = [
         *make_financial_tools(as_of_date=as_of_date),
-        *make_sql_tools(user_id),
         *make_web_tools(),
         *make_python_tools(),
     ]
+    if include_user_data:
+        tools = [*make_sql_tools(user_id), *tools]
     return create_sdk_mcp_server("fincept", "1.0.0", tools=tools)
 
 
-def tool_names() -> list[str]:
-    """Return the fully-qualified allowed_tools list for ClaudeAgentOptions."""
-    return [
+def tool_names(*, include_user_data: bool = True) -> list[str]:
+    """Return the fully-qualified allowed_tools list for ClaudeAgentOptions.
+
+    `include_user_data=False` drops `query_user_data` so the SDK refuses
+    to invoke it even if the model fabricates the call — matches the
+    `build_toolset(include_user_data=False)` viewer mode.
+    """
+    names = [
         "mcp__fincept__get_quote",
         "mcp__fincept__run_dcf",
         "mcp__fincept__run_var",
@@ -58,3 +70,6 @@ def tool_names() -> list[str]:
         "mcp__fincept__web_fetch",
         "mcp__fincept__python_exec",
     ]
+    if not include_user_data:
+        names = [n for n in names if n != "mcp__fincept__query_user_data"]
+    return names

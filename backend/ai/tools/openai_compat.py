@@ -73,6 +73,7 @@ def build_openai_compat_toolset(
     user_id: str,
     *,
     as_of_date: date | None = None,
+    include_user_data: bool = True,
 ) -> tuple[list[dict], dict[str, ToolHandler]]:
     """Compose per-user OpenAI-compat tool schemas + dispatch table.
 
@@ -86,6 +87,12 @@ def build_openai_compat_toolset(
     parameters — it can't override / forget to set it. Backtest correctness
     is enforced at the closure layer so a persona can't accidentally leak
     future data into a historical replay.
+
+    `include_user_data` (default True): when False, omits `query_user_data`
+    from both schemas + dispatch. Set False for viewer-tier callers so the
+    free-tier persona has access to public market data tools but cannot
+    surface the user's portfolio / watchlist / alerts to the LLM provider.
+    All other tools are public market data and stay available regardless.
     """
     uid = uuid.UUID(user_id)
 
@@ -821,4 +828,12 @@ def build_openai_compat_toolset(
         "get_top_brokers": get_top_brokers,
         "get_taifex_positioning": get_taifex_positioning,
     }
+    if not include_user_data:
+        # Drop both the schema entry AND the dispatch handler so an LLM
+        # that fabricates the call gets "unknown tool" rather than
+        # silent execution.
+        schemas = [
+            s for s in schemas if s["function"]["name"] != "query_user_data"
+        ]
+        dispatch.pop("query_user_data", None)
     return schemas, dispatch

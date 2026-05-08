@@ -1188,6 +1188,35 @@ The upsert overwrites in place via `(market, symbol, ts)` PK, so:
   - `source="finmind_backfill"` distinguishes backfilled rows from
     daily-cron rows when investigating coverage.
 
+## Seeding trader strategy templates
+
+`scripts/seed_trading_strategies.py` creates 6 well-known trader
+strategy templates under a target user (default: `settings.ADMIN_EMAIL`).
+Each maps to existing personas in `ai/agents.py` and goes through
+`strategy_template_service.create_template` so bounds are validated at
+insert.
+
+```bash
+cd backend
+# default — seeds under settings.ADMIN_EMAIL
+python -m scripts.seed_trading_strategies
+
+# seed under a different existing user
+python -m scripts.seed_trading_strategies --email user@example.com
+```
+
+Strategies covered: 動量突破 (Minervini + Livermore, TW), 宏觀趨勢追蹤
+(PTJ + Dalio, GLOBAL), 均值回歸拉回 (Raschke, TW), 價值投資護城河
+(Buffett + Graham + Munger, US), 量化多因子 (Simons + Asness, US),
+反向危機投資 (Klarman + Marks + Soros, GLOBAL).
+
+Idempotency: skips presets whose `name` already exists for the owner
+(active templates only — soft-deleted ones don't block recreation).
+Re-running after a manual delete recreates the missing template; an
+untouched re-run is a no-op. Templates remain owner-scoped, so seeding
+under one user doesn't surface them in another user's sidebar — to
+share a strategy across users, run the script per email.
+
 ## Deployment
 
 **Docker Compose** (single server):

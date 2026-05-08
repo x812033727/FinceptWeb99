@@ -425,6 +425,57 @@ def make_financial_tools(
             return _text({"error": str(exc)})
 
     @tool(
+        "compare_quotes",
+        "Fetch quotes for up to 10 symbols in parallel — returns one row per "
+        "ticker side-by-side. Use this instead of N sequential get_quote "
+        "calls when comparing names; saves max_turns budget. Per-symbol "
+        "failures isolated into an `errors` list.",
+        {"symbols": list, "market": str},
+    )
+    async def compare_quotes(args: dict[str, Any]) -> dict:
+        import asyncio
+        raw_syms = args.get("symbols") or []
+        if not isinstance(raw_syms, list):
+            return _text({"error": "symbols must be a list"})
+        symbols = [str(s).upper() for s in raw_syms if s][:10]
+        market = str(args.get("market", "")).upper()
+        if not symbols:
+            return _text({"error": "symbols list is empty"})
+        if market == "US":
+            from services.us_market_service import get_quote as _svc
+        elif market == "TW":
+            from services.tw_market_service import get_quote as _svc
+        else:
+            return _text({"error": f"Unsupported market: {market}"})
+        kwargs: dict[str, Any] = {}
+        if as_of_date is not None:
+            kwargs["as_of"] = as_of_date
+
+        async def _one(sym: str) -> tuple[str, dict | None, str | None]:
+            try:
+                return sym, await _svc(sym, **kwargs), None
+            except Exception as exc:
+                return sym, None, str(exc)
+
+        results = await asyncio.gather(*(_one(s) for s in symbols))
+        quotes: list[dict] = []
+        errors: list[dict] = []
+        for sym, q, err in results:
+            if err is not None:
+                errors.append({"symbol": sym, "error": err})
+            elif not q:
+                errors.append({"symbol": sym, "error": "no data"})
+            else:
+                quotes.append(q)
+        return _text({
+            "market": market,
+            "as_of": as_of_date.isoformat() if as_of_date else None,
+            "count": len(quotes),
+            "quotes": quotes,
+            "errors": errors,
+        })
+
+    @tool(
         "get_taifex_positioning",
         "TW only — index-futures three-investor (foreign / SITC / dealer) "
         "net open-interest snapshot + 5-day change for the contract. "
@@ -454,7 +505,7 @@ def make_financial_tools(
             return _text({"error": str(exc)})
 
     return [
-        get_quote, run_dcf, run_var, run_backtest,
+        get_quote, compare_quotes, run_dcf, run_var, run_backtest,
         get_options_chain, get_symbol_news, get_symbol_sentiment,
         get_peers, get_financials,
         get_institutional_history, get_margin_history,

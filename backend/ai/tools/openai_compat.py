@@ -118,6 +118,56 @@ def build_openai_compat_toolset(
             logger.warning("openai_compat.get_quote failed %s %s: %s", market, symbol, exc)
             return _dump({"error": str(exc)})
 
+    async def compare_quotes(args: dict[str, Any]) -> str:
+        # Multi-symbol parallel fetch — saves max_turns iterations vs.
+        # the LLM calling get_quote N times sequentially (each
+        # round-trip costs one LLM call, so 5 quotes = 5 of the 6
+        # max_turns budget). Hard-cap at 10 symbols so a runaway model
+        # can't fan out across the entire S&P 500. Per-symbol failures
+        # are isolated into the `errors` list rather than failing the
+        # whole call — partial data is more useful than no data.
+        import asyncio
+        raw_syms = args.get("symbols") or []
+        if not isinstance(raw_syms, list):
+            return _dump({"error": "symbols must be a list"})
+        symbols = [str(s).upper() for s in raw_syms if s][:10]
+        market = str(args.get("market", "")).upper()
+        if not symbols:
+            return _dump({"error": "symbols list is empty"})
+        if market == "US":
+            from services.us_market_service import get_quote as _svc
+        elif market == "TW":
+            from services.tw_market_service import get_quote as _svc
+        else:
+            return _dump({"error": f"Unsupported market: {market}"})
+        kwargs: dict[str, Any] = {}
+        if as_of_date is not None:
+            kwargs["as_of"] = as_of_date
+
+        async def _one(sym: str) -> tuple[str, dict | None, str | None]:
+            try:
+                return sym, await _svc(sym, **kwargs), None
+            except Exception as exc:
+                return sym, None, str(exc)
+
+        results = await asyncio.gather(*(_one(s) for s in symbols))
+        quotes: list[dict] = []
+        errors: list[dict] = []
+        for sym, q, err in results:
+            if err is not None:
+                errors.append({"symbol": sym, "error": err})
+            elif not q:
+                errors.append({"symbol": sym, "error": "no data"})
+            else:
+                quotes.append(q)
+        return _dump({
+            "market": market,
+            "as_of": as_of_date.isoformat() if as_of_date else None,
+            "count": len(quotes),
+            "quotes": quotes,
+            "errors": errors,
+        })
+
     async def run_dcf(args: dict[str, Any]) -> str:
         from services.analytics_service import run_dcf_analysis
         try:
@@ -788,6 +838,32 @@ def build_openai_compat_toolset(
         {
             "type": "function",
             "function": {
+                "name": "compare_quotes",
+                "description": (
+                    "Fetch quotes for up to 10 symbols in parallel and return "
+                    "them side-by-side. Use this instead of N sequential "
+                    "get_quote calls when comparing multiple names — saves "
+                    "max_turns iterations and runs in one LLM round-trip. "
+                    "Per-symbol failures isolated into an `errors` list so "
+                    "partial data still flows through."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbols": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Up to 10 tickers; extras silently dropped.",
+                        },
+                        "market": {"type": "string", "enum": ["US", "TW"]},
+                    },
+                    "required": ["symbols", "market"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "get_taifex_positioning",
                 "description": (
                     "TW only — index-futures three-investor (foreign / SITC / "
@@ -827,6 +903,7 @@ def build_openai_compat_toolset(
         "get_margin_history": get_margin_history,
         "get_top_brokers": get_top_brokers,
         "get_taifex_positioning": get_taifex_positioning,
+        "compare_quotes": compare_quotes,
     }
     if not include_user_data:
         # Drop both the schema entry AND the dispatch handler so an LLM

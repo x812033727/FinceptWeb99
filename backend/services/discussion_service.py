@@ -2456,6 +2456,7 @@ _PERSONA_TOOL_USAGE_HINT = (
     "\n\n## 工具可用\n"
     "你本回合可以呼叫下列工具取得即時 / 歷史數據：\n"
     "- `get_quote`（單檔即時報價）\n"
+    "- `compare_quotes`（多檔並排報價，最多 10 檔；省 max_turns 預算）\n"
     "- `get_options_chain`（美股選擇權鏈，含 strike / IV / OI；TW 不支援）\n"
     "- `get_symbol_news`（指定標的最近新聞，可指定 limit ≤ 20）\n"
     "- `get_symbol_sentiment`（指定標的歷史情緒分數聚合，"

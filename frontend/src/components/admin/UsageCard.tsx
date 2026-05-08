@@ -12,12 +12,18 @@ interface UsageBucket {
   prompt_tokens: number;
   completion_tokens: number;
   cost_usd: number;
+  tool_call_count: number;
 }
 
 interface UsageDay {
   date: string;
   cost_usd: number;
   requests: number;
+}
+
+interface ToolCallStat {
+  name: string;
+  count: number;
 }
 
 interface UsageSummary {
@@ -29,6 +35,8 @@ interface UsageSummary {
   total_cost_usd: number;
   by_provider: UsageBucket[];
   by_day: UsageDay[];
+  total_tool_calls: number;
+  top_tools: ToolCallStat[];
 }
 
 const PROVIDER_COLOR: Record<string, string> = {
@@ -101,11 +109,12 @@ export function UsageCard({ scope }: { scope: "admin" | "me" }) {
         <p className="text-xs text-muted-foreground py-3">{t("usage.empty")}</p>
       ) : (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
             <Stat label={t("usage.cost")} value={`$${data.total_cost_usd.toFixed(4)}`} />
             <Stat label={t("usage.requests")} value={data.total_requests.toLocaleString()} />
             <Stat label={t("usage.prompt_tokens")} value={data.total_prompt_tokens.toLocaleString()} />
             <Stat label={t("usage.completion_tokens")} value={data.total_completion_tokens.toLocaleString()} />
+            <Stat label={t("usage.tool_calls")} value={(data.total_tool_calls ?? 0).toLocaleString()} />
           </div>
 
           <div className="space-y-1">
@@ -117,6 +126,7 @@ export function UsageCard({ scope }: { scope: "admin" | "me" }) {
                   <th className="text-left py-1 font-medium">{t("personas.model")}</th>
                   <th className="text-right py-1 font-medium">{t("usage.requests")}</th>
                   <th className="text-right py-1 font-medium">tokens</th>
+                  <th className="text-right py-1 font-medium">{t("usage.tool_calls_short")}</th>
                   <th className="text-right py-1 font-medium">{t("usage.cost")}</th>
                 </tr>
               </thead>
@@ -129,12 +139,32 @@ export function UsageCard({ scope }: { scope: "admin" | "me" }) {
                     <td className="py-1 text-right text-muted-foreground">
                       {(b.prompt_tokens + b.completion_tokens).toLocaleString()}
                     </td>
+                    <td className="py-1 text-right text-muted-foreground tabular-nums">
+                      {(b.tool_call_count ?? 0).toLocaleString()}
+                    </td>
                     <td className="py-1 text-right font-medium">${b.cost_usd.toFixed(4)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+
+          {(data.total_tool_calls ?? 0) > 0 && (
+            <div className="space-y-1">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">{t("usage.top_tools")}</p>
+              <div className="flex flex-wrap gap-1.5">
+                {(data.top_tools ?? []).map((tool) => (
+                  <span
+                    key={tool.name}
+                    className="inline-flex items-center gap-1.5 px-2 py-0.5 text-xs rounded bg-secondary/40 border border-border/40"
+                  >
+                    <span className="font-mono text-foreground">{tool.name}</span>
+                    <span className="text-muted-foreground tabular-nums">×{tool.count.toLocaleString()}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </>
       )}
       </>

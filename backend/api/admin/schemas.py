@@ -187,12 +187,18 @@ class UsageBucketOut(BaseModel):
     prompt_tokens: int
     completion_tokens: int
     cost_usd: float
+    tool_call_count: int = 0
 
 
 class UsageDayPoint(BaseModel):
     date: str
     cost_usd: float
     requests: int
+
+
+class ToolCallStatOut(BaseModel):
+    name: str
+    count: int
 
 
 class UsageSummaryOut(BaseModel):
@@ -204,6 +210,8 @@ class UsageSummaryOut(BaseModel):
     total_cost_usd: float
     by_provider: list[UsageBucketOut]
     by_day: list[UsageDayPoint]
+    total_tool_calls: int = 0
+    top_tools: list[ToolCallStatOut] = []
 
 
 # ── Scheduled ingest health ──────────────────────────────────────

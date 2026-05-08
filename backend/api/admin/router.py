@@ -56,6 +56,7 @@ from .schemas import (
     SystemTaskOverrideIn,
     SystemTaskTestResult,
     UpdateResult,
+    ToolCallStatOut,
     UsageBucketOut,
     UsageDayPoint,
     UsageSummaryOut,
@@ -409,6 +410,11 @@ def _summary_to_schema(s: usage.UsageSummary) -> UsageSummaryOut:
         total_cost_usd=s.total_cost_usd,
         by_provider=[UsageBucketOut(**b.__dict__) for b in s.by_provider],
         by_day=[UsageDayPoint(**d) for d in s.by_day],
+        total_tool_calls=s.total_tool_calls,
+        top_tools=[
+            ToolCallStatOut(name=t["name"], count=t["count"])
+            for t in s.top_tools
+        ],
     )
 
 

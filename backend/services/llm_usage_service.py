@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
@@ -131,6 +131,7 @@ class UsageBucket:
     prompt_tokens: int
     completion_tokens: int
     cost_usd: float
+    tool_call_count: int = 0
 
 
 @dataclass
@@ -143,6 +144,12 @@ class UsageSummary:
     total_cost_usd: float
     by_provider: list[UsageBucket]    # one bucket per provider
     by_day: list[dict[str, Any]]      # [{date: 'YYYY-MM-DD', cost_usd: float, requests: int}]
+    total_tool_calls: int = 0
+    top_tools: list[dict[str, Any]] = field(default_factory=list)
+    # ↑ [{name: str, count: int}] sorted desc by count, capped at 10.
+    # Aggregated from tool_call_breakdown JSON across the window so the
+    # admin can see which tools dominate persona behaviour without
+    # parsing per-row JSON in the UI.
 
 
 async def usage_summary(
@@ -164,6 +171,7 @@ async def usage_summary(
         func.coalesce(func.sum(LLMUsageEvent.prompt_tokens), 0),
         func.coalesce(func.sum(LLMUsageEvent.completion_tokens), 0),
         func.coalesce(func.sum(LLMUsageEvent.cost_usd), 0),
+        func.coalesce(func.sum(LLMUsageEvent.tool_call_count), 0),
     ).where(LLMUsageEvent.created_at >= cutoff)
     if user_id is not None:
         totals_q = totals_q.where(LLMUsageEvent.user_id == user_id)
@@ -177,6 +185,7 @@ async def usage_summary(
         func.coalesce(func.sum(LLMUsageEvent.prompt_tokens), 0),
         func.coalesce(func.sum(LLMUsageEvent.completion_tokens), 0),
         func.coalesce(func.sum(LLMUsageEvent.cost_usd), 0),
+        func.coalesce(func.sum(LLMUsageEvent.tool_call_count), 0),
     ).where(LLMUsageEvent.created_at >= cutoff).group_by(
         LLMUsageEvent.provider, LLMUsageEvent.model,
     ).order_by(func.sum(LLMUsageEvent.cost_usd).desc())
@@ -189,8 +198,39 @@ async def usage_summary(
             provider=row[0], model=row[1], requests=row[2],
             prompt_tokens=int(row[3]), completion_tokens=int(row[4]),
             cost_usd=float(row[5]),
+            tool_call_count=int(row[6]),
         )
         for row in bp_rows
+    ]
+
+    # Top tools — aggregated from `tool_call_breakdown` JSON across
+    # every event in the window where the breakdown was captured. We
+    # do the merge in Python because portable JSON aggregation across
+    # SQLite (test) + Postgres (prod) requires per-dialect functions
+    # we'd rather avoid; only events with tool_call_count > 0 are
+    # loaded so a vanilla provider's millions of tool-less rows don't
+    # land in memory.
+    tt_q = select(LLMUsageEvent.tool_call_breakdown).where(
+        LLMUsageEvent.created_at >= cutoff,
+        LLMUsageEvent.tool_call_count > 0,
+        LLMUsageEvent.tool_call_breakdown.is_not(None),
+    )
+    if user_id is not None:
+        tt_q = tt_q.where(LLMUsageEvent.user_id == user_id)
+    tool_totals: dict[str, int] = {}
+    for (breakdown,) in (await db.execute(tt_q)).all():
+        if not isinstance(breakdown, dict):
+            continue
+        for name, n in breakdown.items():
+            try:
+                tool_totals[str(name)] = tool_totals.get(str(name), 0) + int(n)
+            except (TypeError, ValueError):
+                continue
+    top_tools = [
+        {"name": name, "count": count}
+        for name, count in sorted(
+            tool_totals.items(), key=lambda kv: kv[1], reverse=True,
+        )[:10]
     ]
 
     # By day — for the chart line
@@ -220,4 +260,6 @@ async def usage_summary(
         total_cost_usd=float(totals_row[3]),
         by_provider=by_provider,
         by_day=by_day,
+        total_tool_calls=int(totals_row[4]),
+        top_tools=top_tools,
     )

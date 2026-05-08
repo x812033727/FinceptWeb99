@@ -394,6 +394,40 @@ async def test_financials_rejects_unknown_market():
     assert "error" in result
 
 
+@pytest.mark.asyncio
+async def test_financials_tw_backtest_as_of_passes_to_service():
+    """In backtest mode the closure as_of_date flows through to the
+    TW financials service so a historical replay sees only filings
+    dated <= the anchor (no future-leak via "latest filing")."""
+    from datetime import date
+    anchor = date(2026, 4, 15)
+    _, dispatch = build_openai_compat_toolset(_user_id(), as_of_date=anchor)
+    with patch(
+        "services.tw_market_service.get_financials",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = []
+        result = _payload(await dispatch["get_financials"]({
+            "symbol": "2330", "market": "TW",
+        }))
+    mock.assert_awaited_once_with("2330", as_of=anchor)
+    assert result["as_of"] == "2026-04-15"
+
+
+@pytest.mark.asyncio
+async def test_financials_tw_live_mode_does_not_pass_as_of():
+    """Live mode keeps the existing call signature (no as_of kwarg)
+    so the cache hit path stays identical to pre-PR behavior."""
+    _, dispatch = build_openai_compat_toolset(_user_id())  # no as_of_date
+    with patch(
+        "services.tw_market_service.get_financials",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = []
+        await dispatch["get_financials"]({"symbol": "2330", "market": "TW"})
+    mock.assert_awaited_once_with("2330")  # bare positional call
+
+
 # ── get_institutional_history handler ───────────────────────────────
 
 

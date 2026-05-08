@@ -1054,14 +1054,30 @@ async def get_fundamentals(symbol: str) -> dict[str, Any]:
     return base
 
 
-async def get_financials(symbol: str) -> list[dict[str, Any]]:
-    key = f"tw:financials:{symbol}"
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
-    result = await finmind.get_financials(symbol)
-    await cache_set(key, json.dumps(result), TTL_FUNDAMENTALS)
-    return result
+async def get_financials(
+    symbol: str, *, as_of: date | None = None,
+) -> list[dict[str, Any]]:
+    """TW financial-statement rows from FinMind (`{date, type, value}`).
+
+    `as_of` (backtest mode): bypass Redis (per-as_of cache keys would
+    explode), fetch the full series, then return only rows with
+    `date <= as_of`. Filing dates in FinMind use the period-end date
+    (e.g. "2024-09-30" for Q3 2024 filings), so `as_of=2024-10-15`
+    correctly includes Q3 2024 (filed mid-October) and excludes Q4.
+    """
+    if as_of is None:
+        key = f"tw:financials:{symbol}"
+        cached = await cache_get(key)
+        if cached:
+            return json.loads(cached)
+        result = await finmind.get_financials(symbol)
+        await cache_set(key, json.dumps(result), TTL_FUNDAMENTALS)
+        return result
+
+    # Backtest mode — direct FinMind call, filter by row date.
+    rows = await finmind.get_financials(symbol)
+    cutoff = as_of.isoformat()
+    return [r for r in rows if str(r.get("date", "")) <= cutoff]
 
 
 # ── Financial health (財務體質) ───────────────────────────────────

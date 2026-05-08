@@ -54,6 +54,7 @@ def tool_names(*, include_user_data: bool = True) -> list[str]:
     """
     names = [
         "mcp__fincept__get_quote",
+        "mcp__fincept__compare_quotes",
         "mcp__fincept__run_dcf",
         "mcp__fincept__run_var",
         "mcp__fincept__run_backtest",

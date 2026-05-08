@@ -34,7 +34,8 @@ def test_toolset_exposes_new_tools_in_dispatch():
     schemas, dispatch = build_openai_compat_toolset(_user_id())
     schema_names = {s["function"]["name"] for s in schemas}
     expected = {
-        "get_quote", "run_dcf", "run_var", "run_backtest", "query_user_data",
+        "get_quote", "compare_quotes",
+        "run_dcf", "run_var", "run_backtest", "query_user_data",
         "get_options_chain", "get_symbol_news", "get_symbol_sentiment",
         "get_peers", "get_financials",
         "get_institutional_history", "get_margin_history",
@@ -54,7 +55,8 @@ def test_toolset_drops_query_user_data_when_include_user_data_false():
     )
     schema_names = {s["function"]["name"] for s in schemas}
     public_tools = {
-        "get_quote", "run_dcf", "run_var", "run_backtest",
+        "get_quote", "compare_quotes",
+        "run_dcf", "run_var", "run_backtest",
         "get_options_chain", "get_symbol_news", "get_symbol_sentiment",
         "get_peers", "get_financials",
         "get_institutional_history", "get_margin_history",
@@ -642,6 +644,140 @@ async def test_backtest_as_of_passes_to_get_quote():
         mock.return_value = {"symbol": "2330", "price": 850.0}
         await dispatch["get_quote"]({"symbol": "2330", "market": "TW"})
     mock.assert_awaited_once_with("2330", as_of=anchor)
+
+
+# ── compare_quotes handler ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_compare_quotes_runs_in_parallel_and_aggregates():
+    _, dispatch = build_openai_compat_toolset(_user_id())
+    quotes_by_sym = {
+        "2330": {"symbol": "2330", "price": 850.0, "change_pct": 1.2},
+        "2454": {"symbol": "2454", "price": 1200.0, "change_pct": -0.5},
+        "2317": {"symbol": "2317", "price": 110.0, "change_pct": 0.3},
+    }
+
+    async def fake_quote(sym):
+        return quotes_by_sym[sym]
+
+    with patch(
+        "services.tw_market_service.get_quote",
+        new=AsyncMock(side_effect=fake_quote),
+    ):
+        result = _payload(await dispatch["compare_quotes"]({
+            "symbols": ["2330", "2454", "2317"], "market": "TW",
+        }))
+    assert result["count"] == 3
+    syms = {q["symbol"] for q in result["quotes"]}
+    assert syms == {"2330", "2454", "2317"}
+    assert result["errors"] == []
+
+
+@pytest.mark.asyncio
+async def test_compare_quotes_isolates_per_symbol_failures():
+    """One symbol failing must NOT take down the whole call — the
+    surviving symbols still flow through. Failed symbols land in
+    `errors` so the LLM can decide whether to retry or report the gap."""
+    _, dispatch = build_openai_compat_toolset(_user_id())
+
+    async def fake_quote(sym):
+        if sym == "BAD":
+            raise RuntimeError("upstream timeout")
+        return {"symbol": sym, "price": 100.0}
+
+    with patch(
+        "services.us_market_service.get_quote",
+        new=AsyncMock(side_effect=fake_quote),
+    ):
+        result = _payload(await dispatch["compare_quotes"]({
+            "symbols": ["AAPL", "BAD", "MSFT"], "market": "US",
+        }))
+    assert result["count"] == 2
+    err_syms = {e["symbol"] for e in result["errors"]}
+    assert err_syms == {"BAD"}
+
+
+@pytest.mark.asyncio
+async def test_compare_quotes_treats_empty_quote_as_error():
+    """Service returning {} (e.g. delisted ticker, blank backtest
+    archive) must NOT slip through as a `quotes` entry — gets routed
+    to errors so the LLM doesn't cite a phantom row."""
+    _, dispatch = build_openai_compat_toolset(_user_id())
+    with patch(
+        "services.us_market_service.get_quote",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = {}
+        result = _payload(await dispatch["compare_quotes"]({
+            "symbols": ["DEAD"], "market": "US",
+        }))
+    assert result["count"] == 0
+    assert result["errors"][0]["symbol"] == "DEAD"
+
+
+@pytest.mark.asyncio
+async def test_compare_quotes_caps_at_10_symbols():
+    """A runaway model passing 50 symbols should silently get the top
+    10 — protects upstream rate limits + memory."""
+    _, dispatch = build_openai_compat_toolset(_user_id())
+    captured: list[str] = []
+
+    async def fake_quote(sym):
+        captured.append(sym)
+        return {"symbol": sym, "price": 1.0}
+
+    with patch(
+        "services.us_market_service.get_quote",
+        new=AsyncMock(side_effect=fake_quote),
+    ):
+        await dispatch["compare_quotes"]({
+            "symbols": [f"SYM{i}" for i in range(50)], "market": "US",
+        })
+    assert len(captured) == 10
+
+
+@pytest.mark.asyncio
+async def test_compare_quotes_rejects_unknown_market():
+    _, dispatch = build_openai_compat_toolset(_user_id())
+    result = _payload(await dispatch["compare_quotes"]({
+        "symbols": ["X"], "market": "JP",
+    }))
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_compare_quotes_rejects_empty_symbols():
+    _, dispatch = build_openai_compat_toolset(_user_id())
+    result = _payload(await dispatch["compare_quotes"]({
+        "symbols": [], "market": "US",
+    }))
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_compare_quotes_backtest_as_of_propagates():
+    """In backtest mode the as_of_date closure flows through to every
+    parallel get_quote call — without this, a backtest's multi-symbol
+    comparison would silently mix historical + live prices."""
+    from datetime import date
+    anchor = date(2026, 4, 15)
+    _, dispatch = build_openai_compat_toolset(_user_id(), as_of_date=anchor)
+    captured_kwargs: list[dict] = []
+
+    async def fake_quote(sym, **kwargs):
+        captured_kwargs.append(kwargs)
+        return {"symbol": sym, "price": 100.0}
+
+    with patch(
+        "services.tw_market_service.get_quote",
+        new=AsyncMock(side_effect=fake_quote),
+    ):
+        result = _payload(await dispatch["compare_quotes"]({
+            "symbols": ["2330", "2454"], "market": "TW",
+        }))
+    assert all(kw.get("as_of") == anchor for kw in captured_kwargs)
+    assert result["as_of"] == "2026-04-15"
 
 
 @pytest.mark.asyncio

@@ -1,80 +1,11 @@
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
-import type { Conclusion, DiscussionDetail, Turn } from "@/types/discussion";
+import type { Conclusion, DiscussionDetail } from "@/types/discussion";
 import { useCollapsible } from "@/hooks/useCollapsible";
 import { BaselineDeltaBadge } from "./BaselineDeltaBadge";
 import { ConclusionHero } from "./ConclusionHero";
 import { QualitySignalsRow } from "./QualitySignalsRow";
-
-function buildMarkdownExport(
-  detail: DiscussionDetail,
-  personaName: (id: string) => string,
-): string {
-  const lines: string[] = [];
-  lines.push(`# ${detail.topic}`);
-  lines.push("");
-  lines.push("## 共同規則");
-  lines.push("");
-  lines.push("```");
-  lines.push(detail.rules);
-  lines.push("```");
-  lines.push("");
-  lines.push("## 出席專家");
-  lines.push("");
-  for (const pid of detail.persona_ids) {
-    lines.push(`- ${personaName(pid)} (${pid})`);
-  }
-  lines.push("");
-
-  // Group turns by round so the markdown reads chronologically.
-  const turnsByRound = new Map<number, Turn[]>();
-  for (const tn of detail.turns) {
-    if (!turnsByRound.has(tn.round)) turnsByRound.set(tn.round, []);
-    turnsByRound.get(tn.round)!.push(tn);
-  }
-  const sortedRounds = [...turnsByRound.keys()].sort((a, b) => a - b);
-  for (const r of sortedRounds) {
-    lines.push(`## 第 ${r} 輪`);
-    lines.push("");
-    const roundTurns = (turnsByRound.get(r) ?? []).slice().sort(
-      (a, b) => a.turn_index - b.turn_index,
-    );
-    for (const tn of roundTurns) {
-      const stanceLabel =
-        tn.stance === "agree" ? "✓ 同意" :
-        tn.stance === "dissent" ? "✗ 異議" : "↳ 補充";
-      lines.push(`### ${personaName(tn.persona_id)} — ${stanceLabel}`);
-      lines.push("");
-      lines.push(tn.content.trim() || "_（同意，無補充）_");
-      lines.push("");
-    }
-  }
-
-  if (detail.conclusion) {
-    const c = detail.conclusion;
-    lines.push("## 結論");
-    lines.push("");
-    if (c.recommended_symbols.length) {
-      lines.push(`- 推薦標的：${c.recommended_symbols.join(", ")}`);
-    }
-    lines.push(`- 共識度：${(c.consensus_score * 100).toFixed(0)}%`);
-    lines.push(`- 時間框架：${c.time_horizon}`);
-    lines.push("");
-    lines.push("### 理由");
-    lines.push("");
-    lines.push(c.reasoning);
-    if (c.risks.length) {
-      lines.push("");
-      lines.push("### 風險");
-      lines.push("");
-      for (const risk of c.risks) {
-        lines.push(`- ${risk}`);
-      }
-    }
-  }
-  lines.push("");
-  return lines.join("\n");
-}
+import { downloadDiscussionMarkdown } from "./_helpers";
 
 /**
  * Reusable conclusion card. Defaults to rendering `detail.conclusion`
@@ -100,22 +31,8 @@ export function ConclusionCard({
   const navigate = useNavigate();
   const conclusion = overrideConclusion ?? detail.conclusion!;
 
-  // Triggers a browser download of the rendered markdown. Filename uses
-  // the topic (sanitised) + ISO date so users can recognise exports
-  // among many.
   function exportMarkdown() {
-    const md = buildMarkdownExport(detail, personaName);
-    const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const safeTopic = detail.topic.slice(0, 40).replace(/[\\/:*?"<>|]/g, "_");
-    const date = new Date().toISOString().slice(0, 10);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `discussion-${date}-${safeTopic}.md`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    downloadDiscussionMarkdown(detail, personaName);
   }
 
   // Hands off the conclusion to the AIPage for deeper one-on-one analysis.

@@ -5,6 +5,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ChevronDown,
   ChevronRight,
+  Download,
   Folder,
   MoreHorizontal,
   Search,
@@ -56,6 +57,7 @@ import {
   concludeSession,
   createSession,
   deleteSession,
+  downloadDiscussionMarkdown,
   injectUserMessage,
   runPostMortem,
   runPostMortemFlowSteps,
@@ -1151,6 +1153,14 @@ export default function DiscussionPage() {
                     {postMortemMut.isPending
                       ? t("discussion.post_mortem_running")
                       : t("discussion.post_mortem")}
+                  </DropdownMenuItem>
+                )}
+                {detail && (
+                  <DropdownMenuItem
+                    onSelect={() => downloadDiscussionMarkdown(detail, personaName)}
+                  >
+                    <Download className="h-3.5 w-3.5" aria-hidden="true" />
+                    {t("discussion.export_markdown")}
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />

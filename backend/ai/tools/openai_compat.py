@@ -424,12 +424,16 @@ def build_openai_compat_toolset(
                 return _dump({"symbol": symbol, "market": market, "raw": data})
             elif market == "TW":
                 from services.tw_market_service import get_financials as _svc
-                rows = await _svc(symbol)
+                tw_kwargs: dict[str, Any] = {}
+                if as_of_date is not None:
+                    tw_kwargs["as_of"] = as_of_date
+                rows = await _svc(symbol, **tw_kwargs)
                 if not isinstance(rows, list):
                     rows = []
                 return _dump({
                     "symbol": symbol,
                     "market": market,
+                    "as_of": as_of_date.isoformat() if as_of_date else None,
                     "count": len(rows),
                     "rows": rows[-60:],
                 })

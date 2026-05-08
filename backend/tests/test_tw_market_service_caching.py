@@ -189,6 +189,52 @@ async def test_get_margin_as_of_skips_cache_and_live_tiers():
     assert result == db_rows
 
 
+@pytest.mark.asyncio
+async def test_get_financials_as_of_filters_by_period_end_date():
+    """Backtest mode filters FinMind rows by `date <= as_of` so a
+    2024-Q4 anchor never sees Q1-2025 filings (which would be
+    future-leak — the model would cite earnings that hadn't been
+    reported yet at the historical anchor)."""
+    from datetime import date
+
+    rows = [
+        {"date": "2024-09-30", "type": "EPS", "value": 12.3},   # Q3 2024 — keep
+        {"date": "2024-12-31", "type": "EPS", "value": 13.5},   # Q4 2024 — keep
+        {"date": "2025-03-31", "type": "EPS", "value": 14.0},   # Q1 2025 — drop
+        {"date": "2025-06-30", "type": "EPS", "value": 15.2},   # Q2 2025 — drop
+    ]
+    cache_get_mock = AsyncMock(return_value='[{"cached":"row"}]')
+    finmind_mock = AsyncMock(return_value=rows)
+
+    with patch.object(svc, "cache_get", cache_get_mock), \
+         patch.object(svc, "cache_set", AsyncMock()) as cache_set_mock, \
+         patch.object(svc.finmind, "get_financials", finmind_mock):
+        result = await svc.get_financials("2330", as_of=date(2025, 1, 31))
+
+    cache_get_mock.assert_not_awaited()  # backtest bypasses Redis
+    cache_set_mock.assert_not_awaited()  # ditto for write
+    finmind_mock.assert_awaited_once()    # service still hits FinMind
+    dates = [r["date"] for r in result]
+    assert dates == ["2024-09-30", "2024-12-31"]
+
+
+@pytest.mark.asyncio
+async def test_get_financials_live_mode_uses_redis_cache():
+    """Sanity: live mode (no as_of) keeps the existing cache-first
+    path so we don't regress hot-path latency."""
+    cache_get_mock = AsyncMock(return_value='[{"cached":"row"}]')
+
+    with patch.object(svc, "cache_get", cache_get_mock), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc.finmind, "get_financials",
+                      AsyncMock(return_value=[])) as finmind_mock:
+        result = await svc.get_financials("2330")
+
+    cache_get_mock.assert_awaited_once()
+    finmind_mock.assert_not_awaited()  # cache hit short-circuits
+    assert result == [{"cached": "row"}]
+
+
 # ── get_fundamentals ──────────────────────────────────────────────
 
 @pytest.mark.asyncio

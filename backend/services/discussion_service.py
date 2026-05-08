@@ -2172,7 +2172,11 @@ _OPENAI_COMPAT_TOOL_PROVIDERS = ("minimax", "groq", "deepseek", "openrouter")
 
 
 def _build_persona_tool_kwargs(
-    *, provider: str, user_role: str | None, user_id: str | None,
+    *,
+    provider: str,
+    user_role: str | None,
+    user_id: str | None,
+    as_of_date: date | None = None,
 ) -> dict[str, Any]:
     """Return the tool-related kwargs to forward to `stream_chat` for
     a single persona turn.
@@ -2189,6 +2193,13 @@ def _build_persona_tool_kwargs(
       - Any other provider, or any role/SDK gate failing: returns
         an empty dict so the caller falls through to today's plain
         streaming.
+
+    `as_of_date` (backtest mode): forwarded into both toolset
+    builders so the 4 TW chip-flow tools anchor at the historical
+    discussion date instead of `today`. Without this plumbing a
+    backtest discussion's tool calls would silently fetch live
+    chip-flow data — a future-information leak that defeats the
+    point of replaying historical anchors.
 
     Errors building the toolset (SDK import failure, key fetcher
     blowing up) are swallowed + logged so a single tool-config
@@ -2208,7 +2219,7 @@ def _build_persona_tool_kwargs(
         try:
             from ai.tools import build_toolset, tool_names
             return {
-                "mcp_server":    build_toolset(user_id),
+                "mcp_server":    build_toolset(user_id, as_of_date=as_of_date),
                 "allowed_tools": tool_names(),
                 "max_turns":     settings.CLAUDE_AGENT_MAX_TURNS,
             }
@@ -2222,7 +2233,9 @@ def _build_persona_tool_kwargs(
     if prov in _OPENAI_COMPAT_TOOL_PROVIDERS:
         try:
             from ai.tools.openai_compat import build_openai_compat_toolset
-            schemas, dispatch = build_openai_compat_toolset(user_id)
+            schemas, dispatch = build_openai_compat_toolset(
+                user_id, as_of_date=as_of_date,
+            )
         except Exception as exc:
             log.warning(
                 "discussion.tools.openai_compat.build_failed",
@@ -2468,6 +2481,7 @@ async def _ask_persona(
     prior_turns: list[DiscussionTurn],
     user_id: str | None,
     user_role: str | None = None,
+    as_of_date: date | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Yield raw stream events from one persona's turn. Caller assembles
     the deltas + parses the final JSON.
@@ -2483,11 +2497,15 @@ async def _ask_persona(
     `persona_id` is the canonical agent ID (e.g. `buffett`,
     `macro_analyst`) — used to look up the per-persona context profile
     so the LLM only sees the blocks its archetype actually uses.
+
+    `as_of_date` (backtest mode): forwarded to the toolset builder so
+    TW chip-flow tools anchor at the historical date instead of today.
     """
     tool_kwargs = _build_persona_tool_kwargs(
         provider=spec.default_provider,
         user_role=user_role,
         user_id=user_id,
+        as_of_date=as_of_date,
     )
     # Filter context down to blocks this persona actually uses — saves
     # tokens and stops weak models from mixing irrelevant blocks (e.g.
@@ -2791,6 +2809,7 @@ async def run_round(
                         prior_turns=prior_turns,
                         user_id=user_id,
                         user_role=user_role,
+                        as_of_date=discussion.as_of_date,
                     ):
                         etype = event.get("type")
                         if etype == "delta":

@@ -6,6 +6,7 @@ returning so a 252-bar history doesn't blow up the model's context.
 """
 import json
 import logging
+from datetime import date
 from typing import Any
 
 from claude_agent_sdk import SdkMcpTool, tool
@@ -31,8 +32,17 @@ def _compact_bars(bars: list[dict], limit: int = 10) -> dict:
     }
 
 
-def make_financial_tools() -> list[SdkMcpTool]:
-    """Build the financial tool list. No user scoping needed (market data is public)."""
+def make_financial_tools(
+    *, as_of_date: date | None = None,
+) -> list[SdkMcpTool]:
+    """Build the financial tool list. No user scoping needed (market data is public).
+
+    `as_of_date` (backtest mode): closure-injected into the 4 TW
+    chip-flow tools so a backtest discussion's tool calls anchor at
+    the historical date instead of `today`. The LLM doesn't see
+    `as_of` as a tool param — backtest correctness can't be defeated
+    by the persona forgetting to pass it.
+    """
 
     @tool(
         "get_quote",
@@ -50,7 +60,10 @@ def make_financial_tools() -> list[SdkMcpTool]:
                 from services.tw_market_service import get_quote as _svc
             else:
                 return _text({"error": f"Unsupported market: {market}"})
-            q = await _svc(symbol)
+            kwargs: dict[str, Any] = {}
+            if as_of_date is not None:
+                kwargs["as_of"] = as_of_date
+            q = await _svc(symbol, **kwargs)
             return _text(q)
         except Exception as exc:
             logger.warning("get_quote tool failed: %s %s: %s", market, symbol, exc)
@@ -348,9 +361,10 @@ def make_financial_tools() -> list[SdkMcpTool]:
         days = max(1, min(int(args.get("days", 30)), 90))
         try:
             from services.tw_market_service import get_institutional
-            rows = await get_institutional(symbol, days=days)
+            rows = await get_institutional(symbol, days=days, as_of=as_of_date)
             return _text({
                 "symbol": symbol, "days": days,
+                "as_of": as_of_date.isoformat() if as_of_date else None,
                 "count": len(rows), "rows": rows,
             })
         except Exception as exc:
@@ -370,9 +384,10 @@ def make_financial_tools() -> list[SdkMcpTool]:
         days = max(1, min(int(args.get("days", 30)), 90))
         try:
             from services.tw_market_service import get_margin
-            rows = await get_margin(symbol, days=days)
+            rows = await get_margin(symbol, days=days, as_of=as_of_date)
             return _text({
                 "symbol": symbol, "days": days,
+                "as_of": as_of_date.isoformat() if as_of_date else None,
                 "count": len(rows), "rows": rows,
             })
         except Exception as exc:
@@ -395,11 +410,12 @@ def make_financial_tools() -> list[SdkMcpTool]:
                 get_top_brokers_for_symbol,
             )
             payload = await get_top_brokers_for_symbol(
-                symbol, days=days, top_n=top_n,
+                symbol, as_of=as_of_date, days=days, top_n=top_n,
             )
             if payload is None:
                 return _text({
                     "symbol": symbol, "days": days,
+                    "as_of": as_of_date.isoformat() if as_of_date else None,
                     "top_buyers": [], "top_sellers": [],
                     "note": "no broker data in window",
                 })
@@ -423,10 +439,11 @@ def make_financial_tools() -> list[SdkMcpTool]:
             from services.derivatives_service import (
                 get_taifex_positioning as _svc,
             )
-            payload = await _svc(contract=contract)
+            payload = await _svc(contract=contract, as_of=as_of_date)
             if payload is None:
                 return _text({
                     "contract": contract,
+                    "as_of": as_of_date.isoformat() if as_of_date else None,
                     "note": "no positioning data",
                 })
             return _text(payload)

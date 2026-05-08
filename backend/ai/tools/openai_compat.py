@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from datetime import date
 from typing import Any, Awaitable, Callable
 
 from sqlalchemy import select
@@ -70,15 +71,29 @@ def _row_to_dict(row: Any, cols: list[str]) -> dict[str, Any]:
 
 def build_openai_compat_toolset(
     user_id: str,
+    *,
+    as_of_date: date | None = None,
 ) -> tuple[list[dict], dict[str, ToolHandler]]:
     """Compose per-user OpenAI-compat tool schemas + dispatch table.
 
     `user_id` is closed over so query_user_data can never see another user's
     rows even if the model fabricates a user_id field in its arguments.
+
+    `as_of_date` (backtest mode): when set, every TW chip-flow tool
+    (`get_institutional_history`, `get_margin_history`, `get_top_brokers`,
+    `get_taifex_positioning`) silently anchors its window at this date
+    instead of `today`. The LLM does NOT see `as_of` in any tool's
+    parameters — it can't override / forget to set it. Backtest correctness
+    is enforced at the closure layer so a persona can't accidentally leak
+    future data into a historical replay.
     """
     uid = uuid.UUID(user_id)
 
     async def get_quote(args: dict[str, Any]) -> str:
+        # Backtest mode: as_of_date plumbed into the underlying service
+        # so a historical replay sees the close on the anchor date, not
+        # today's live tape. Both US + TW services support `as_of`
+        # (PR #226).
         symbol = str(args.get("symbol", "")).upper()
         market = str(args.get("market", "")).upper()
         try:
@@ -88,7 +103,10 @@ def build_openai_compat_toolset(
                 from services.tw_market_service import get_quote as _svc
             else:
                 return _dump({"error": f"Unsupported market: {market}"})
-            return _dump(await _svc(symbol))
+            kwargs: dict[str, Any] = {}
+            if as_of_date is not None:
+                kwargs["as_of"] = as_of_date
+            return _dump(await _svc(symbol, **kwargs))
         except Exception as exc:
             logger.warning("openai_compat.get_quote failed %s %s: %s", market, symbol, exc)
             return _dump({"error": str(exc)})
@@ -371,14 +389,17 @@ def build_openai_compat_toolset(
         # 法人買賣超 daily series. TW only — the underlying service is
         # backed by the daily TWSE ingest archive (`tw_institutional_daily`)
         # so a 90-day query is one indexed range scan, no per-day fan-out.
+        # Backtest mode (as_of_date in closure): anchor at as_of, skip
+        # live FinMind/TWSE fallbacks (would leak future data).
         symbol = str(args.get("symbol", "")).upper()
         days = max(1, min(int(args.get("days", 30)), 90))
         try:
             from services.tw_market_service import get_institutional
-            rows = await get_institutional(symbol, days=days)
+            rows = await get_institutional(symbol, days=days, as_of=as_of_date)
             return _dump({
                 "symbol": symbol,
                 "days": days,
+                "as_of": as_of_date.isoformat() if as_of_date else None,
                 "count": len(rows),
                 "rows": rows,
             })
@@ -391,15 +412,16 @@ def build_openai_compat_toolset(
 
     async def get_margin_history(args: dict[str, Any]) -> str:
         # 融資融券 daily series. Same TW-only DB-archive read tier as
-        # get_institutional_history.
+        # get_institutional_history. Backtest as_of plumbed via closure.
         symbol = str(args.get("symbol", "")).upper()
         days = max(1, min(int(args.get("days", 30)), 90))
         try:
             from services.tw_market_service import get_margin
-            rows = await get_margin(symbol, days=days)
+            rows = await get_margin(symbol, days=days, as_of=as_of_date)
             return _dump({
                 "symbol": symbol,
                 "days": days,
+                "as_of": as_of_date.isoformat() if as_of_date else None,
                 "count": len(rows),
                 "rows": rows,
             })
@@ -414,6 +436,8 @@ def build_openai_compat_toolset(
         # 主力分點: top buyers + top sellers (5-day net buy by broker)
         # for one TW symbol. Capped at top_n=10 to keep response size
         # bounded; default top_n=3 matches the discussion ctx block.
+        # Backtest as_of plumbed via closure (the underlying service
+        # already supports it — we just wire the closure value through).
         symbol = str(args.get("symbol", "")).upper()
         days = max(1, min(int(args.get("days", 5)), 30))
         top_n = max(1, min(int(args.get("top_n", 3)), 10))
@@ -422,12 +446,13 @@ def build_openai_compat_toolset(
                 get_top_brokers_for_symbol,
             )
             payload = await get_top_brokers_for_symbol(
-                symbol, days=days, top_n=top_n,
+                symbol, as_of=as_of_date, days=days, top_n=top_n,
             )
             if payload is None:
                 return _dump({
                     "symbol": symbol,
                     "days": days,
+                    "as_of": as_of_date.isoformat() if as_of_date else None,
                     "top_buyers": [],
                     "top_sellers": [],
                     "note": "no broker data in window (FinMind quota / paywall / "
@@ -442,17 +467,17 @@ def build_openai_compat_toolset(
 
     async def get_taifex_positioning(args: dict[str, Any]) -> str:
         # Index-futures three-investor net OI snapshot + 5-day delta.
-        # Default contract TX (大盤). Returns None when FinMind quota
-        # is exhausted; we surface that as a structured note instead
-        # of an error so the LLM treats it as "data unavailable" rather
-        # than retrying.
+        # Default contract TX (大盤). Backtest as_of plumbed via closure.
+        # Service already supports `as_of` (PR #283 follow-up); we just
+        # forward it.
         contract = str(args.get("contract", "TX")).upper()
         try:
             from services.derivatives_service import get_taifex_positioning as _svc
-            payload = await _svc(contract=contract)
+            payload = await _svc(contract=contract, as_of=as_of_date)
             if payload is None:
                 return _dump({
                     "contract": contract,
+                    "as_of": as_of_date.isoformat() if as_of_date else None,
                     "note": "no positioning data (FinMind quota / paywall / "
                             "empty window)",
                 })

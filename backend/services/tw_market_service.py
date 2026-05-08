@@ -770,7 +770,9 @@ async def get_history(symbol: str, months: int = 12) -> list[dict[str, Any]]:
 
 # ── Institutional investors ───────────────────────────────────────
 
-async def get_institutional(symbol: str, days: int = 30) -> list[dict[str, Any]]:
+async def get_institutional(
+    symbol: str, days: int = 30, *, as_of: date | None = None,
+) -> list[dict[str, Any]]:
     """
     法人買賣超 read tier:
         Redis cache  →  DB (tw_institutional_daily, populated by
@@ -780,31 +782,50 @@ async def get_institutional(symbol: str, days: int = 30) -> list[dict[str, Any]]
     DB tier serves the typical 30-day query in one indexed range scan
     so the per-stock detail page and the discussion subsystem don't
     burn FinMind quota for every read.
+
+    `as_of` (backtest mode): when set, anchor the window at `as_of`
+    instead of today, bypass Redis (per-as_of cache key would explode),
+    and skip the live FinMind / TWSE fallbacks (those would return
+    today's data, polluting a backtest with future information).
+    Returns whatever the DB archive holds, or [] when the historical
+    range is empty.
     """
     from services.ingest.repository import read_institutional_range
 
-    key = key_institutional(symbol)
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    if as_of is None:
+        key = key_institutional(symbol)
+        cached = await cache_get(key)
+        if cached:
+            return json.loads(cached)
 
-    today = date.today()
-    start = today - timedelta(days=days)
+    end = as_of or date.today()
+    start = end - timedelta(days=days)
 
     # ── Tier 2: Postgres archive ────────────────────────────────
     try:
         from db.session import AsyncSessionLocal
         async with AsyncSessionLocal() as db:
             db_rows = await read_institutional_range(
-                db, "TW", symbol, start, today,
+                db, "TW", symbol, start, end,
             )
         if db_rows:
-            await cache_set(key, json.dumps(db_rows), TTL_INSTITUTIONAL)
+            if as_of is None:
+                await cache_set(
+                    key_institutional(symbol),
+                    json.dumps(db_rows),
+                    TTL_INSTITUTIONAL,
+                )
             return db_rows
     except Exception:
         # Fall through to live waterfall — never let DB outage hide
         # data that the upstream can still produce.
         pass
+
+    if as_of is not None:
+        # Backtest mode: live tiers would leak future data — return
+        # whatever the archive had (possibly empty) and let the
+        # caller treat it as "no signal in window".
+        return []
 
     result: list[dict] = []
 
@@ -824,35 +845,50 @@ async def get_institutional(symbol: str, days: int = 30) -> list[dict[str, Any]]
             pass
 
     if result:
-        await cache_set(key, json.dumps(result), TTL_INSTITUTIONAL)
+        await cache_set(
+            key_institutional(symbol), json.dumps(result), TTL_INSTITUTIONAL,
+        )
     return result
 
 
 # ── Margin balance ────────────────────────────────────────────────
 
-async def get_margin(symbol: str, days: int = 30) -> list[dict[str, Any]]:
+async def get_margin(
+    symbol: str, days: int = 30, *, as_of: date | None = None,
+) -> list[dict[str, Any]]:
     """融資融券 read tier — same shape as `get_institutional`:
     Redis → Postgres `tw_margin_daily` → FinMind → TWSE today-only.
+
+    `as_of` (backtest mode): same semantics as `get_institutional` —
+    anchor at `as_of`, bypass cache, skip live fallbacks (would leak
+    future data), return DB-archive rows or [] on empty range.
     """
     from services.ingest.repository import read_margin_range
 
-    key = key_margin(symbol)
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    if as_of is None:
+        key = key_margin(symbol)
+        cached = await cache_get(key)
+        if cached:
+            return json.loads(cached)
 
-    today = date.today()
-    start = today - timedelta(days=days)
+    end = as_of or date.today()
+    start = end - timedelta(days=days)
 
     try:
         from db.session import AsyncSessionLocal
         async with AsyncSessionLocal() as db:
-            db_rows = await read_margin_range(db, "TW", symbol, start, today)
+            db_rows = await read_margin_range(db, "TW", symbol, start, end)
         if db_rows:
-            await cache_set(key, json.dumps(db_rows), TTL_MARGIN)
+            if as_of is None:
+                await cache_set(
+                    key_margin(symbol), json.dumps(db_rows), TTL_MARGIN,
+                )
             return db_rows
     except Exception:
         pass
+
+    if as_of is not None:
+        return []
 
     result: list[dict] = []
     try:
@@ -868,7 +904,7 @@ async def get_margin(symbol: str, days: int = 30) -> list[dict[str, Any]]:
             pass
 
     if result:
-        await cache_set(key, json.dumps(result), TTL_MARGIN)
+        await cache_set(key_margin(symbol), json.dumps(result), TTL_MARGIN)
     return result
 
 

@@ -521,7 +521,7 @@ async def test_get_institutional_history_passes_days():
         result = await _handler(tools["get_institutional_history"])({
             "symbol": "2330", "days": 60,
         })
-    mock.assert_awaited_once_with("2330", days=60)
+    mock.assert_awaited_once_with("2330", days=60, as_of=None)
     data = _text(result)
     assert data["count"] == 1
     assert data["days"] == 60
@@ -538,7 +538,7 @@ async def test_get_institutional_history_caps_days_at_90():
         await _handler(tools["get_institutional_history"])({
             "symbol": "2330", "days": 999,
         })
-    mock.assert_awaited_once_with("2330", days=90)
+    mock.assert_awaited_once_with("2330", days=90, as_of=None)
 
 
 # ── financial.get_margin_history ────────────────────────────────────
@@ -554,7 +554,7 @@ async def test_get_margin_history_passes_through_rows():
     ) as mock:
         mock.return_value = fake_rows
         result = await _handler(tools["get_margin_history"])({"symbol": "2330"})
-    mock.assert_awaited_once_with("2330", days=30)
+    mock.assert_awaited_once_with("2330", days=30, as_of=None)
     assert _text(result)["rows"] == fake_rows
 
 
@@ -579,7 +579,7 @@ async def test_get_top_brokers_returns_payload():
         result = await _handler(tools["get_top_brokers"])({
             "symbol": "2330", "days": 5, "top_n": 3,
         })
-    mock.assert_awaited_once_with("2330", days=5, top_n=3)
+    mock.assert_awaited_once_with("2330", as_of=None, days=5, top_n=3)
     assert _text(result)["top_buyers"][0]["broker"] == "凱基"
 
 
@@ -611,7 +611,7 @@ async def test_get_taifex_positioning_default_contract():
     ) as mock:
         mock.return_value = fake
         result = await _handler(tools["get_taifex_positioning"])({})
-    mock.assert_awaited_once_with(contract="TX")
+    mock.assert_awaited_once_with(contract="TX", as_of=None)
     assert _text(result)["trend"] == "bearish"
 
 

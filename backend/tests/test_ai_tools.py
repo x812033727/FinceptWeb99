@@ -504,3 +504,128 @@ async def test_get_financials_rejects_unknown_market():
         "symbol": "X", "market": "JP",
     })
     assert "error" in _text(result)
+
+
+# ── financial.get_institutional_history ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_institutional_history_passes_days():
+    tools = {t.name: t for t in make_financial_tools()}
+    fake_rows = [{"date": "2026-04-30", "foreign_buy": 1000}]
+    with patch(
+        "services.tw_market_service.get_institutional",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = fake_rows
+        result = await _handler(tools["get_institutional_history"])({
+            "symbol": "2330", "days": 60,
+        })
+    mock.assert_awaited_once_with("2330", days=60)
+    data = _text(result)
+    assert data["count"] == 1
+    assert data["days"] == 60
+
+
+@pytest.mark.asyncio
+async def test_get_institutional_history_caps_days_at_90():
+    tools = {t.name: t for t in make_financial_tools()}
+    with patch(
+        "services.tw_market_service.get_institutional",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = []
+        await _handler(tools["get_institutional_history"])({
+            "symbol": "2330", "days": 999,
+        })
+    mock.assert_awaited_once_with("2330", days=90)
+
+
+# ── financial.get_margin_history ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_margin_history_passes_through_rows():
+    tools = {t.name: t for t in make_financial_tools()}
+    fake_rows = [{"date": "2026-04-30", "margin_purchase_balance": 50000}]
+    with patch(
+        "services.tw_market_service.get_margin",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = fake_rows
+        result = await _handler(tools["get_margin_history"])({"symbol": "2330"})
+    mock.assert_awaited_once_with("2330", days=30)
+    assert _text(result)["rows"] == fake_rows
+
+
+# ── financial.get_top_brokers ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_top_brokers_returns_payload():
+    tools = {t.name: t for t in make_financial_tools()}
+    fake = {
+        "symbol": "2330", "as_of": "2026-04-30",
+        "from_ts": "2026-04-23", "session_count": 5,
+        "top_buyers": [{"broker": "凱基", "broker_id": "9200",
+                        "net_buy_shares": 12345}],
+        "top_sellers": [],
+    }
+    with patch(
+        "services.broker_concentration_service.get_top_brokers_for_symbol",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = fake
+        result = await _handler(tools["get_top_brokers"])({
+            "symbol": "2330", "days": 5, "top_n": 3,
+        })
+    mock.assert_awaited_once_with("2330", days=5, top_n=3)
+    assert _text(result)["top_buyers"][0]["broker"] == "凱基"
+
+
+@pytest.mark.asyncio
+async def test_get_top_brokers_no_data_returns_note():
+    tools = {t.name: t for t in make_financial_tools()}
+    with patch(
+        "services.broker_concentration_service.get_top_brokers_for_symbol",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = None
+        result = await _handler(tools["get_top_brokers"])({"symbol": "9999"})
+    data = _text(result)
+    assert data["top_buyers"] == []
+    assert "note" in data
+
+
+# ── financial.get_taifex_positioning ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_taifex_positioning_default_contract():
+    tools = {t.name: t for t in make_financial_tools()}
+    fake = {"contract": "TX", "trend": "bearish",
+            "fini": {"net_oi": -10000, "change_5d": -5000}}
+    with patch(
+        "services.derivatives_service.get_taifex_positioning",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = fake
+        result = await _handler(tools["get_taifex_positioning"])({})
+    mock.assert_awaited_once_with(contract="TX")
+    assert _text(result)["trend"] == "bearish"
+
+
+@pytest.mark.asyncio
+async def test_get_taifex_positioning_no_data_returns_note():
+    tools = {t.name: t for t in make_financial_tools()}
+    with patch(
+        "services.derivatives_service.get_taifex_positioning",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = None
+        result = await _handler(tools["get_taifex_positioning"])({
+            "contract": "MTX",
+        })
+    data = _text(result)
+    assert data["contract"] == "MTX"
+    assert "note" in data

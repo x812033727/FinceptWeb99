@@ -37,6 +37,8 @@ def test_toolset_exposes_new_tools_in_dispatch():
         "get_quote", "run_dcf", "run_var", "run_backtest", "query_user_data",
         "get_options_chain", "get_symbol_news", "get_symbol_sentiment",
         "get_peers", "get_financials",
+        "get_institutional_history", "get_margin_history",
+        "get_top_brokers", "get_taifex_positioning",
     }
     assert expected <= schema_names
     assert expected <= set(dispatch.keys())
@@ -365,3 +367,156 @@ async def test_financials_rejects_unknown_market():
         "symbol": "X", "market": "JP",
     }))
     assert "error" in result
+
+
+# ── get_institutional_history handler ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_institutional_history_passes_days_to_service():
+    _, dispatch = build_openai_compat_toolset(_user_id())
+    fake_rows = [
+        {"date": f"2026-04-{i:02d}", "foreign_buy": 1000 * i}
+        for i in range(1, 11)
+    ]
+    with patch(
+        "services.tw_market_service.get_institutional",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = fake_rows
+        result = _payload(await dispatch["get_institutional_history"]({
+            "symbol": "2330", "days": 60,
+        }))
+    mock.assert_awaited_once_with("2330", days=60)
+    assert result["count"] == 10
+    assert result["days"] == 60
+
+
+@pytest.mark.asyncio
+async def test_institutional_history_caps_days_at_90():
+    """A persona that requests days=999 must not blow up the upstream
+    range scan — clamp at 90."""
+    _, dispatch = build_openai_compat_toolset(_user_id())
+    with patch(
+        "services.tw_market_service.get_institutional",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = []
+        await dispatch["get_institutional_history"]({
+            "symbol": "2330", "days": 999,
+        })
+    mock.assert_awaited_once_with("2330", days=90)
+
+
+# ── get_margin_history handler ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_margin_history_passes_through_rows():
+    _, dispatch = build_openai_compat_toolset(_user_id())
+    fake_rows = [
+        {"date": "2026-04-30", "margin_purchase_balance": 50000,
+         "short_sale_balance": 12000},
+    ]
+    with patch(
+        "services.tw_market_service.get_margin",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = fake_rows
+        result = _payload(await dispatch["get_margin_history"]({
+            "symbol": "2330",
+        }))
+    mock.assert_awaited_once_with("2330", days=30)
+    assert result["rows"] == fake_rows
+
+
+# ── get_top_brokers handler ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_top_brokers_returns_payload_when_data_exists():
+    _, dispatch = build_openai_compat_toolset(_user_id())
+    fake = {
+        "symbol": "2330", "as_of": "2026-04-30",
+        "from_ts": "2026-04-23", "session_count": 5,
+        "top_buyers": [{"broker": "凱基台北", "broker_id": "9200",
+                        "net_buy_shares": 12345}],
+        "top_sellers": [{"broker": "美林", "broker_id": "1470",
+                         "net_buy_shares": -8000}],
+    }
+    with patch(
+        "services.broker_concentration_service.get_top_brokers_for_symbol",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = fake
+        result = _payload(await dispatch["get_top_brokers"]({
+            "symbol": "2330", "days": 5, "top_n": 3,
+        }))
+    mock.assert_awaited_once_with("2330", days=5, top_n=3)
+    assert result["top_buyers"][0]["broker"] == "凱基台北"
+
+
+@pytest.mark.asyncio
+async def test_top_brokers_no_data_returns_structured_note():
+    """`get_top_brokers_for_symbol` returns None for thinly-traded
+    symbols / FinMind quota exhaustion. The tool surfaces that as a
+    structured note instead of an error so the LLM doesn't retry."""
+    _, dispatch = build_openai_compat_toolset(_user_id())
+    with patch(
+        "services.broker_concentration_service.get_top_brokers_for_symbol",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = None
+        result = _payload(await dispatch["get_top_brokers"]({"symbol": "9999"}))
+    assert result["top_buyers"] == []
+    assert "note" in result
+
+
+@pytest.mark.asyncio
+async def test_top_brokers_caps_top_n_at_10():
+    _, dispatch = build_openai_compat_toolset(_user_id())
+    with patch(
+        "services.broker_concentration_service.get_top_brokers_for_symbol",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = None
+        await dispatch["get_top_brokers"]({"symbol": "2330", "top_n": 99})
+    mock.assert_awaited_once_with("2330", days=5, top_n=10)
+
+
+# ── get_taifex_positioning handler ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_taifex_positioning_default_contract_tx():
+    _, dispatch = build_openai_compat_toolset(_user_id())
+    fake = {
+        "contract": "TX", "as_of": "2026-04-30", "session_count": 5,
+        "fini": {"net_oi": 50000, "change_5d": 10000},
+        "sitc": {"net_oi": 2000, "change_5d": -500},
+        "dealer": {"net_oi": -3000, "change_5d": 1000},
+        "trend": "bullish",
+    }
+    with patch(
+        "services.derivatives_service.get_taifex_positioning",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = fake
+        result = _payload(await dispatch["get_taifex_positioning"]({}))
+    mock.assert_awaited_once_with(contract="TX")
+    assert result["trend"] == "bullish"
+
+
+@pytest.mark.asyncio
+async def test_taifex_positioning_no_data_returns_structured_note():
+    _, dispatch = build_openai_compat_toolset(_user_id())
+    with patch(
+        "services.derivatives_service.get_taifex_positioning",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = None
+        result = _payload(await dispatch["get_taifex_positioning"]({
+            "contract": "MTX",
+        }))
+    assert result["contract"] == "MTX"
+    assert "note" in result

@@ -367,6 +367,103 @@ def build_openai_compat_toolset(
             )
             return _dump({"error": str(exc)})
 
+    async def get_institutional_history(args: dict[str, Any]) -> str:
+        # 法人買賣超 daily series. TW only — the underlying service is
+        # backed by the daily TWSE ingest archive (`tw_institutional_daily`)
+        # so a 90-day query is one indexed range scan, no per-day fan-out.
+        symbol = str(args.get("symbol", "")).upper()
+        days = max(1, min(int(args.get("days", 30)), 90))
+        try:
+            from services.tw_market_service import get_institutional
+            rows = await get_institutional(symbol, days=days)
+            return _dump({
+                "symbol": symbol,
+                "days": days,
+                "count": len(rows),
+                "rows": rows,
+            })
+        except Exception as exc:
+            logger.warning(
+                "openai_compat.get_institutional_history failed %s: %s",
+                symbol, exc,
+            )
+            return _dump({"error": str(exc)})
+
+    async def get_margin_history(args: dict[str, Any]) -> str:
+        # 融資融券 daily series. Same TW-only DB-archive read tier as
+        # get_institutional_history.
+        symbol = str(args.get("symbol", "")).upper()
+        days = max(1, min(int(args.get("days", 30)), 90))
+        try:
+            from services.tw_market_service import get_margin
+            rows = await get_margin(symbol, days=days)
+            return _dump({
+                "symbol": symbol,
+                "days": days,
+                "count": len(rows),
+                "rows": rows,
+            })
+        except Exception as exc:
+            logger.warning(
+                "openai_compat.get_margin_history failed %s: %s",
+                symbol, exc,
+            )
+            return _dump({"error": str(exc)})
+
+    async def get_top_brokers(args: dict[str, Any]) -> str:
+        # 主力分點: top buyers + top sellers (5-day net buy by broker)
+        # for one TW symbol. Capped at top_n=10 to keep response size
+        # bounded; default top_n=3 matches the discussion ctx block.
+        symbol = str(args.get("symbol", "")).upper()
+        days = max(1, min(int(args.get("days", 5)), 30))
+        top_n = max(1, min(int(args.get("top_n", 3)), 10))
+        try:
+            from services.broker_concentration_service import (
+                get_top_brokers_for_symbol,
+            )
+            payload = await get_top_brokers_for_symbol(
+                symbol, days=days, top_n=top_n,
+            )
+            if payload is None:
+                return _dump({
+                    "symbol": symbol,
+                    "days": days,
+                    "top_buyers": [],
+                    "top_sellers": [],
+                    "note": "no broker data in window (FinMind quota / paywall / "
+                            "thinly-traded symbol)",
+                })
+            return _dump(payload)
+        except Exception as exc:
+            logger.warning(
+                "openai_compat.get_top_brokers failed %s: %s", symbol, exc,
+            )
+            return _dump({"error": str(exc)})
+
+    async def get_taifex_positioning(args: dict[str, Any]) -> str:
+        # Index-futures three-investor net OI snapshot + 5-day delta.
+        # Default contract TX (大盤). Returns None when FinMind quota
+        # is exhausted; we surface that as a structured note instead
+        # of an error so the LLM treats it as "data unavailable" rather
+        # than retrying.
+        contract = str(args.get("contract", "TX")).upper()
+        try:
+            from services.derivatives_service import get_taifex_positioning as _svc
+            payload = await _svc(contract=contract)
+            if payload is None:
+                return _dump({
+                    "contract": contract,
+                    "note": "no positioning data (FinMind quota / paywall / "
+                            "empty window)",
+                })
+            return _dump(payload)
+        except Exception as exc:
+            logger.warning(
+                "openai_compat.get_taifex_positioning failed %s: %s",
+                contract, exc,
+            )
+            return _dump({"error": str(exc)})
+
     schemas: list[dict] = [
         {
             "type": "function",
@@ -593,6 +690,94 @@ def build_openai_compat_toolset(
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_institutional_history",
+                "description": (
+                    "TW only — daily 法人買賣超 (foreign / SITC / dealer "
+                    "buy + sell volumes) for a symbol over the requested "
+                    "lookback window. Backed by the daily TWSE ingest "
+                    "archive — a 90-day query is one indexed scan, no "
+                    "FinMind quota burn."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol": {"type": "string", "description": "TW ticker, e.g. 2330"},
+                        "days": {"type": "integer", "default": 30, "maximum": 90},
+                    },
+                    "required": ["symbol"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_margin_history",
+                "description": (
+                    "TW only — daily 融資融券 (margin purchase / balance + "
+                    "short sale / balance) for a symbol. Same DB-archive "
+                    "read tier as get_institutional_history."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol": {"type": "string", "description": "TW ticker"},
+                        "days": {"type": "integer", "default": 30, "maximum": 90},
+                    },
+                    "required": ["symbol"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_top_brokers",
+                "description": (
+                    "TW only — 主力分點: top buyers + top sellers ranked by "
+                    "N-day net buy volume per broker for one symbol. Useful "
+                    "for spotting accumulation / distribution by specific "
+                    "broker desks. Live FinMind, 24h Redis cache."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol": {"type": "string", "description": "TW ticker"},
+                        "days": {"type": "integer", "default": 5, "maximum": 30,
+                                 "description": "Net-buy aggregation window in trading days."},
+                        "top_n": {"type": "integer", "default": 3, "maximum": 10,
+                                  "description": "Rows on each side (top buyers + top sellers)."},
+                    },
+                    "required": ["symbol"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_taifex_positioning",
+                "description": (
+                    "TW only — index-futures three-investor (foreign / SITC / "
+                    "dealer) net open-interest snapshot + 5-day change for the "
+                    "specified contract. Default contract is TX (TAIEX). "
+                    "Returns trend = bullish | bearish | neutral. Foreign-net OI "
+                    "leads spot moves by 1-2 trading days historically."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "contract": {
+                            "type": "string", "default": "TX",
+                            "description": "TAIFEX contract code (TX / MTX / TE / TF). "
+                                           "TX = TAIEX, MTX = mini TAIEX, TE = electronics, "
+                                           "TF = financials.",
+                        },
+                    },
+                    "required": [],
+                },
+            },
+        },
     ]
 
     dispatch: dict[str, ToolHandler] = {
@@ -606,5 +791,9 @@ def build_openai_compat_toolset(
         "get_symbol_sentiment": get_symbol_sentiment,
         "get_peers": get_peers,
         "get_financials": get_financials,
+        "get_institutional_history": get_institutional_history,
+        "get_margin_history": get_margin_history,
+        "get_top_brokers": get_top_brokers,
+        "get_taifex_positioning": get_taifex_positioning,
     }
     return schemas, dispatch

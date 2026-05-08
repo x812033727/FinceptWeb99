@@ -3863,16 +3863,76 @@ async def test_assemble_focus_briefs_returns_empty_when_no_symbols():
 # ── _build_persona_tool_kwargs ────────────────────────────────────
 
 
-def test_build_persona_tool_kwargs_off_for_viewer_role():
-    """Viewers must not get tools. The MCP toolset's `query_user_data`
-    reads the caller's portfolio — handing it to a low-quota viewer
-    would let them silently exfiltrate via tool-call deltas."""
+def test_build_persona_tool_kwargs_viewer_gets_tools_without_user_data(monkeypatch):
+    """Viewers (free tier) gain access to all 13 public market-data
+    tools but NOT `query_user_data` — the SQL toolset would surface
+    portfolio / watchlist / alert rows to the LLM provider, which we
+    don't want for unverified accounts.
+
+    Stub the openai_compat builder so the test doesn't need
+    claude_agent_sdk installed."""
+    import sys
+    import types
+
+    captured: dict = {}
+
+    def fake_build(user_id, *, as_of_date=None, include_user_data=True):
+        captured["include_user_data"] = include_user_data
+        # Mimic the real builder's filter so the test sees the same
+        # surface area the persona would.
+        schemas = [
+            {"type": "function", "function": {"name": "get_quote"}},
+            {"type": "function", "function": {"name": "query_user_data"}},
+        ]
+        dispatch = {"get_quote": object(), "query_user_data": object()}
+        if not include_user_data:
+            schemas = [
+                s for s in schemas if s["function"]["name"] != "query_user_data"
+            ]
+            dispatch.pop("query_user_data", None)
+        return (schemas, dispatch)
+
+    fake_mod = types.ModuleType("ai.tools.openai_compat")
+    fake_mod.build_openai_compat_toolset = fake_build
+    monkeypatch.setitem(sys.modules, "ai.tools.openai_compat", fake_mod)
+
     out = discussion_service._build_persona_tool_kwargs(
-        provider="claude_agent",
+        provider="groq",
         user_role="viewer",
         user_id="abc",
     )
-    assert out == {}
+    assert captured["include_user_data"] is False
+    assert "openai_tool_dispatch" in out
+    assert "query_user_data" not in out["openai_tool_dispatch"]
+    assert "get_quote" in out["openai_tool_dispatch"]
+
+
+def test_build_persona_tool_kwargs_analyst_gets_user_data(monkeypatch):
+    """Analyst / admin retain access to query_user_data so personas
+    can read the caller's holdings + watchlist when relevant."""
+    import sys
+    import types
+
+    captured: dict = {}
+
+    def fake_build(user_id, *, as_of_date=None, include_user_data=True):
+        captured["include_user_data"] = include_user_data
+        return (
+            [{"type": "function", "function": {"name": "query_user_data"}}],
+            {"query_user_data": object()},
+        )
+
+    fake_mod = types.ModuleType("ai.tools.openai_compat")
+    fake_mod.build_openai_compat_toolset = fake_build
+    monkeypatch.setitem(sys.modules, "ai.tools.openai_compat", fake_mod)
+
+    out = discussion_service._build_persona_tool_kwargs(
+        provider="groq",
+        user_role="analyst",
+        user_id="abc",
+    )
+    assert captured["include_user_data"] is True
+    assert "query_user_data" in out["openai_tool_dispatch"]
 
 
 def test_build_persona_tool_kwargs_off_when_user_id_missing():
@@ -3965,7 +4025,7 @@ def test_build_persona_tool_kwargs_openai_compat_returns_kwargs(monkeypatch):
     import sys
     import types
 
-    def fake_build(_user_id, *, as_of_date=None):
+    def fake_build(_user_id, *, as_of_date=None, include_user_data=True):
         return ([{"type": "function", "name": "get_quote"}], {"get_quote": object()})
 
     fake_mod = types.ModuleType("ai.tools.openai_compat")
@@ -3997,7 +4057,7 @@ def test_build_persona_tool_kwargs_forwards_as_of_to_openai_compat(monkeypatch):
 
     captured: dict = {}
 
-    def fake_build(user_id, *, as_of_date=None):
+    def fake_build(user_id, *, as_of_date=None, include_user_data=True):
         captured["as_of_date"] = as_of_date
         return ([{"type": "function", "name": "get_quote"}],
                 {"get_quote": object()})

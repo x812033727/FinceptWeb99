@@ -44,6 +44,29 @@ def test_toolset_exposes_new_tools_in_dispatch():
     assert expected <= set(dispatch.keys())
 
 
+def test_toolset_drops_query_user_data_when_include_user_data_false():
+    """Viewer mode (include_user_data=False): all 13 public market-data
+    tools remain available but the SQL toolset's `query_user_data` is
+    omitted from BOTH schemas + dispatch. An LLM that fabricates the
+    call would hit "unknown tool" rather than silent execution."""
+    schemas, dispatch = build_openai_compat_toolset(
+        _user_id(), include_user_data=False,
+    )
+    schema_names = {s["function"]["name"] for s in schemas}
+    public_tools = {
+        "get_quote", "run_dcf", "run_var", "run_backtest",
+        "get_options_chain", "get_symbol_news", "get_symbol_sentiment",
+        "get_peers", "get_financials",
+        "get_institutional_history", "get_margin_history",
+        "get_top_brokers", "get_taifex_positioning",
+    }
+    assert public_tools <= schema_names
+    assert "query_user_data" not in schema_names
+    assert "query_user_data" not in dispatch
+    # Public tools survive.
+    assert public_tools <= set(dispatch.keys())
+
+
 def test_options_chain_schema_requires_only_symbol():
     """`expiration` is optional — absence should produce a valid call
     that defaults to the nearest expiry, so the schema must NOT mark

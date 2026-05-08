@@ -10,8 +10,10 @@
  * (e.g. dropping the trailing-zero strip) is caught.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Conclusion } from "@/types/discussion";
+import type { Conclusion, DiscussionDetail, Turn } from "@/types/discussion";
 import {
+  buildDiscussionExportFilename,
+  buildDiscussionMarkdown,
   formatCompactNumber,
   formatDiscussionTitle,
   latestNonNull,
@@ -807,5 +809,153 @@ describe("runPostMortemFlowSteps", () => {
     // Drain the deferred fn — conclude runs.
     captured!();
     expect(runConclude).toHaveBeenCalledOnce();
+  });
+});
+
+// ── buildDiscussionExportFilename ────────────────────────────────
+
+describe("buildDiscussionExportFilename", () => {
+  it("uses YYYYMMDD_R{rounds}_{personas}.md format with as_of_date", () => {
+    const out = buildDiscussionExportFilename({
+      as_of_date: "2026-05-08",
+      created_at: "2026-05-09T03:00:00Z",
+      current_round: 5,
+      persona_ids: ["a", "b", "c", "d", "e", "f", "g", "h"],
+    });
+    expect(out).toBe("20260508_R5_8.md");
+  });
+
+  it("falls back to created_at (Asia/Taipei) when as_of_date is null", () => {
+    // 2026-05-08 03:00 UTC = 2026-05-08 11:00 Taipei (UTC+8) → 20260508
+    const out = buildDiscussionExportFilename({
+      as_of_date: null,
+      created_at: "2026-05-08T03:00:00Z",
+      current_round: 3,
+      persona_ids: ["a", "b"],
+    });
+    expect(out).toBe("20260508_R3_2.md");
+  });
+
+  it("rolls Taipei date forward across UTC midnight", () => {
+    // 2026-05-07 17:00 UTC = 2026-05-08 01:00 Taipei → 20260508
+    const out = buildDiscussionExportFilename({
+      as_of_date: null,
+      created_at: "2026-05-07T17:00:00Z",
+      current_round: 1,
+      persona_ids: ["x"],
+    });
+    expect(out).toBe("20260508_R1_1.md");
+  });
+
+  it("falls back to max(turn.round) when current_round is 0 but turns exist", () => {
+    const turns: Turn[] = [
+      { id: 1, round: 1, turn_index: 0, persona_id: "a", stance: "agree", content: "", created_at: "" },
+      { id: 2, round: 2, turn_index: 0, persona_id: "a", stance: "agree", content: "", created_at: "" },
+    ];
+    const out = buildDiscussionExportFilename({
+      as_of_date: "2026-05-08",
+      created_at: "2026-05-08T00:00:00Z",
+      current_round: 0,
+      persona_ids: ["a"],
+      turns,
+    });
+    expect(out).toBe("20260508_R2_1.md");
+  });
+
+  it("emits R0 when no rounds and no turns yet", () => {
+    const out = buildDiscussionExportFilename({
+      as_of_date: "2026-05-08",
+      created_at: "2026-05-08T00:00:00Z",
+      current_round: 0,
+      persona_ids: ["a", "b", "c"],
+    });
+    expect(out).toBe("20260508_R0_3.md");
+  });
+});
+
+// ── buildDiscussionMarkdown ──────────────────────────────────────
+
+describe("buildDiscussionMarkdown", () => {
+  const personaName = (id: string) => `Persona ${id}`;
+  const detail: DiscussionDetail = {
+    id: "d1",
+    topic: "本週台股短線",
+    rules: "規則 1\n規則 2",
+    persona_ids: ["a", "b"],
+    market: "TW",
+    status: "done",
+    current_round: 1,
+    conclusion: {
+      recommended_symbols: ["2330"],
+      reasoning: "理由",
+      risks: ["風險 1"],
+      time_horizon: "short_term",
+      consensus_score: 0.75,
+    },
+    created_at: "2026-05-08T00:00:00Z",
+    updated_at: "2026-05-08T00:00:00Z",
+    turns: [
+      { id: 1, round: 1, turn_index: 0, persona_id: "a", stance: "agree", content: "同意。", created_at: "2026-05-08T00:01:00Z" },
+      { id: 2, round: 1, turn_index: 1, persona_id: "b", stance: "dissent", content: "我反對。", created_at: "2026-05-08T00:02:00Z" },
+      { id: 3, round: 1, turn_index: 2, persona_id: "a", stance: "user_input", content: "請聚焦半導體。", created_at: "2026-05-08T00:03:00Z" },
+    ],
+  };
+
+  it("includes topic, rules, personas, every turn, and conclusion", () => {
+    const md = buildDiscussionMarkdown(detail, personaName);
+    expect(md).toContain("# 本週台股短線");
+    expect(md).toContain("## 共同規則");
+    expect(md).toContain("規則 1\n規則 2");
+    expect(md).toContain("- Persona a (a)");
+    expect(md).toContain("- Persona b (b)");
+    expect(md).toContain("## 第 1 輪");
+    expect(md).toContain("✓ 同意");
+    expect(md).toContain("✗ 異議");
+    expect(md).toContain("✎ 插話");
+    expect(md).toContain("我反對。");
+    expect(md).toContain("請聚焦半導體。");
+    expect(md).toContain("## 結論");
+    expect(md).toContain("- 推薦標的：2330");
+    expect(md).toContain("- 共識度：75%");
+    expect(md).toContain("### 風險");
+    expect(md).toContain("- 風險 1");
+  });
+
+  it("renders turns ordered by (round, turn_index)", () => {
+    // Shuffled input — buildDiscussionMarkdown must re-sort.
+    const shuffled: DiscussionDetail = {
+      ...detail,
+      current_round: 2,
+      turns: [
+        { id: 4, round: 2, turn_index: 0, persona_id: "a", stance: "supplement", content: "R2 first", created_at: "" },
+        { id: 1, round: 1, turn_index: 1, persona_id: "b", stance: "agree", content: "R1 second", created_at: "" },
+        { id: 2, round: 1, turn_index: 0, persona_id: "a", stance: "agree", content: "R1 first", created_at: "" },
+      ],
+    };
+    const md = buildDiscussionMarkdown(shuffled, personaName);
+    const idxR1First = md.indexOf("R1 first");
+    const idxR1Second = md.indexOf("R1 second");
+    const idxR2First = md.indexOf("R2 first");
+    expect(idxR1First).toBeGreaterThan(-1);
+    expect(idxR1Second).toBeGreaterThan(idxR1First);
+    expect(idxR2First).toBeGreaterThan(idxR1Second);
+  });
+
+  it("renders an empty-content agree turn as the placeholder line", () => {
+    const empty: DiscussionDetail = {
+      ...detail,
+      conclusion: null,
+      turns: [
+        { id: 1, round: 1, turn_index: 0, persona_id: "a", stance: "agree", content: "", created_at: "" },
+      ],
+    };
+    const md = buildDiscussionMarkdown(empty, personaName);
+    expect(md).toContain("_（同意，無補充）_");
+  });
+
+  it("omits the conclusion section when there is no conclusion", () => {
+    const noConc: DiscussionDetail = { ...detail, conclusion: null };
+    const md = buildDiscussionMarkdown(noConc, personaName);
+    expect(md).not.toContain("## 結論");
   });
 });

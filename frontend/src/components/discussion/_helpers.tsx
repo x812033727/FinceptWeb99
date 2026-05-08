@@ -1422,3 +1422,139 @@ export function summarizeContext(ctx: Record<string, unknown>): RoundCtxSummary 
 
   return out;
 }
+
+// ── markdown export ───────────────────────────────────────────────
+
+/**
+ * Renders a Discussion + its turns as a single Markdown document
+ * (topic / rules / persona roster / per-round transcript / conclusion).
+ * Pure function — no side effects, callable from any component or
+ * test. Previously lived inline inside ConclusionCard; lifted here so
+ * the DiscussionPage action bar can offer the same export without
+ * duplicating logic.
+ */
+export function buildDiscussionMarkdown(
+  detail: DiscussionDetail,
+  personaName: (id: string) => string,
+): string {
+  const lines: string[] = [];
+  lines.push(`# ${detail.topic}`);
+  lines.push("");
+  lines.push("## 共同規則");
+  lines.push("");
+  lines.push("```");
+  lines.push(detail.rules);
+  lines.push("```");
+  lines.push("");
+  lines.push("## 出席專家");
+  lines.push("");
+  for (const pid of detail.persona_ids) {
+    lines.push(`- ${personaName(pid)} (${pid})`);
+  }
+  lines.push("");
+
+  const turnsByRound = new Map<number, Turn[]>();
+  for (const tn of detail.turns) {
+    if (!turnsByRound.has(tn.round)) turnsByRound.set(tn.round, []);
+    turnsByRound.get(tn.round)!.push(tn);
+  }
+  const sortedRounds = [...turnsByRound.keys()].sort((a, b) => a - b);
+  for (const r of sortedRounds) {
+    lines.push(`## 第 ${r} 輪`);
+    lines.push("");
+    const roundTurns = (turnsByRound.get(r) ?? []).slice().sort(
+      (a, b) => a.turn_index - b.turn_index,
+    );
+    for (const tn of roundTurns) {
+      const stanceLabel =
+        tn.stance === "agree" ? "✓ 同意" :
+        tn.stance === "dissent" ? "✗ 異議" :
+        tn.stance === "user_input" ? "✎ 插話" : "↳ 補充";
+      lines.push(`### ${personaName(tn.persona_id)} — ${stanceLabel}`);
+      lines.push("");
+      lines.push(tn.content.trim() || "_（同意，無補充）_");
+      lines.push("");
+    }
+  }
+
+  if (detail.conclusion) {
+    const c = detail.conclusion;
+    lines.push("## 結論");
+    lines.push("");
+    if (c.recommended_symbols.length) {
+      lines.push(`- 推薦標的：${c.recommended_symbols.join(", ")}`);
+    }
+    lines.push(`- 共識度：${(c.consensus_score * 100).toFixed(0)}%`);
+    lines.push(`- 時間框架：${c.time_horizon}`);
+    lines.push("");
+    lines.push("### 理由");
+    lines.push("");
+    lines.push(c.reasoning);
+    if (c.risks.length) {
+      lines.push("");
+      lines.push("### 風險");
+      lines.push("");
+      for (const risk of c.risks) {
+        lines.push(`- ${risk}`);
+      }
+    }
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
+/**
+ * Builds the export filename in the format
+ * `{YYYYMMDD}_R{rounds}_{personas}.md` — e.g. `20260508_R5_8.md`.
+ *
+ * Date source priority:
+ *   1. `as_of_date` (backtest mode — the historical day being analysed)
+ *   2. `created_at` formatted in Asia/Taipei (live discussions)
+ *
+ * Round count: `current_round`. Falls back to `max(turn.round)` when
+ * `current_round` is 0 but turns exist (defensive — shouldn't happen
+ * in practice but keeps the filename meaningful).
+ */
+export function buildDiscussionExportFilename(detail: {
+  as_of_date?: string | null;
+  created_at: string;
+  current_round: number;
+  persona_ids: string[];
+  turns?: Turn[];
+}): string {
+  const dateSource = detail.as_of_date
+    ? `${detail.as_of_date}T00:00:00Z`
+    : detail.created_at;
+  const date = formatTaipeiDateCompact(dateSource);
+  const rounds =
+    detail.current_round > 0
+      ? detail.current_round
+      : detail.turns && detail.turns.length > 0
+        ? Math.max(...detail.turns.map((tn) => tn.round))
+        : 0;
+  const personas = detail.persona_ids.length;
+  return `${date}_R${rounds}_${personas}.md`;
+}
+
+/**
+ * Triggers a browser download of the discussion rendered as Markdown.
+ * Filename uses {@link buildDiscussionExportFilename}; body uses
+ * {@link buildDiscussionMarkdown}. No-op when running outside a DOM
+ * (guards `document` for SSR / test environments).
+ */
+export function downloadDiscussionMarkdown(
+  detail: DiscussionDetail,
+  personaName: (id: string) => string,
+): void {
+  if (typeof document === "undefined") return;
+  const md = buildDiscussionMarkdown(detail, personaName);
+  const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = buildDiscussionExportFilename(detail);
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}

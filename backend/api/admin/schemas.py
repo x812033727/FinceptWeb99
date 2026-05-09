@@ -223,6 +223,16 @@ class IngestHealthOut(BaseModel):
     ok: bool
     row_count: int
     error: str | None = None
+    # Set when the upstream returned HTTP 200 with body.status != 200
+    # (e.g. FinMind paywall, tier-unavailable). The frontend renders
+    # this as a distinct purple badge so operators can tell paywall
+    # rejection apart from a real error.
+    silent_deny: str | None = None
+    # ISO-8601 of the latest `ts` actually written by this run. Older
+    # than 2 calendar days vs `last_run_at` triggers an amber "stale
+    # data" pill. Tasks that aren't time-series (verify, score, prune)
+    # leave this null.
+    latest_data_ts: str | None = None
 
 
 class IngestRetryResult(BaseModel):

@@ -61,6 +61,39 @@ async def test_ingest_health_returns_recorded_jobs(
 
 
 @pytest.mark.asyncio
+async def test_ingest_health_round_trips_silent_deny_and_freshness(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """The new optional fields must survive serialization → HTTP → JSON."""
+    email = "ingest_admin_extra@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client=client)
+
+    canned = [
+        IngestHealth(
+            job_id="ingest_revenue_tw",
+            last_run_at="2026-04-28T09:00:00+00:00",
+            ok=False,
+            row_count=0,
+            error="silent_paywall: Your level is register, not sponsor",
+            silent_deny="Your level is register, not sponsor",
+            latest_data_ts="2026-03-31",
+        ),
+    ]
+    with patch(
+        "services.ingest.repository.list_health",
+        AsyncMock(return_value=canned),
+    ):
+        r = await client.get("/api/admin/ingest/health", headers=_auth(token))
+
+    assert r.status_code == 200
+    body = r.json()[0]
+    assert body["silent_deny"] == "Your level is register, not sponsor"
+    assert body["latest_data_ts"] == "2026-03-31"
+    assert body["error"].startswith("silent_paywall")
+
+
+@pytest.mark.asyncio
 async def test_ingest_health_returns_empty_when_no_jobs(
     client: AsyncClient, db_session: AsyncSession,
 ):

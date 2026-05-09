@@ -23,6 +23,21 @@ def patch_session(db_session: AsyncSession):
         yield
 
 
+@pytest.fixture
+def no_backoff():
+    """Short-circuit Redis-backed backoff helpers so tests reach `_do_run`."""
+    with patch(
+        "tasks.ingest_fundamentals_tw.backoff_remaining_seconds",
+        AsyncMock(return_value=0),
+    ), patch(
+        "tasks.ingest_fundamentals_tw.clear_failures", AsyncMock(),
+    ), patch(
+        "tasks.ingest_fundamentals_tw.record_failure",
+        AsyncMock(return_value=1),
+    ):
+        yield
+
+
 @pytest.mark.asyncio
 async def test_lock_held_skips_work(patch_session):
     from tasks import ingest_fundamentals_tw
@@ -37,7 +52,7 @@ async def test_lock_held_skips_work(patch_session):
 
 
 @pytest.mark.asyncio
-async def test_twse_failure_records_unhealthy(patch_session):
+async def test_twse_failure_records_unhealthy_with_backoff(patch_session, no_backoff):
     from tasks import ingest_fundamentals_tw
 
     with patch("tasks.ingest_fundamentals_tw.acquire_lock", AsyncMock(return_value=True)), \
@@ -49,11 +64,13 @@ async def test_twse_failure_records_unhealthy(patch_session):
 
     kwargs = health.await_args.kwargs
     assert kwargs["ok"] is False
-    assert "twse_unavailable" in kwargs["error"]
+    assert "auto-backoff armed" in kwargs["error"]
 
 
 @pytest.mark.asyncio
-async def test_empty_result_records_unhealthy(patch_session):
+async def test_empty_result_records_ok_with_zero_rows(patch_session, no_backoff):
+    """An empty BWIBBU_ALL is a benign "no data published yet" — record
+    ok=True row_count=0 instead of treating it as a failure."""
     from tasks import ingest_fundamentals_tw
 
     with patch("tasks.ingest_fundamentals_tw.acquire_lock", AsyncMock(return_value=True)), \
@@ -64,12 +81,14 @@ async def test_empty_result_records_unhealthy(patch_session):
         await ingest_fundamentals_tw.run()
 
     kwargs = health.await_args.kwargs
-    assert kwargs["ok"] is False
-    assert kwargs["error"] == "empty_result"
+    assert kwargs["ok"] is True
+    assert kwargs["row_count"] == 0
 
 
 @pytest.mark.asyncio
-async def test_success_writes_one_row_per_symbol(patch_session, db_session: AsyncSession):
+async def test_success_writes_one_row_per_symbol(
+    patch_session, no_backoff, db_session: AsyncSession,
+):
     from tasks import ingest_fundamentals_tw
 
     canned = {
@@ -95,10 +114,13 @@ async def test_success_writes_one_row_per_symbol(patch_session, db_session: Asyn
     kwargs = health.await_args.kwargs
     assert kwargs["ok"] is True
     assert kwargs["row_count"] == 2
+    assert kwargs["latest_data_ts"] == date.today()
 
 
 @pytest.mark.asyncio
-async def test_rerun_same_day_overwrites(patch_session, db_session: AsyncSession):
+async def test_rerun_same_day_overwrites(
+    patch_session, no_backoff, db_session: AsyncSession,
+):
     """Idempotent ingest — running twice must not produce two rows per symbol."""
     from tasks import ingest_fundamentals_tw
 
@@ -128,3 +150,33 @@ async def test_rerun_same_day_overwrites(patch_session, db_session: AsyncSession
     )).all()
     assert len(rows) == 1
     assert float(rows[0].pe_ratio) == 16.0
+
+
+@pytest.mark.asyncio
+async def test_backoff_active_skips_run(patch_session):
+    """An armed backoff window short-circuits before any TWSE call."""
+    from tasks import ingest_fundamentals_tw
+
+    with patch("tasks.ingest_fundamentals_tw.acquire_lock", AsyncMock(return_value=True)), \
+         patch("tasks.ingest_fundamentals_tw.release_lock", AsyncMock()), \
+         patch(
+             "tasks.ingest_fundamentals_tw.backoff_remaining_seconds",
+             AsyncMock(return_value=3600),
+         ), \
+         patch(
+             "tasks.ingest_fundamentals_tw.get_failure_count",
+             AsyncMock(return_value=2),
+         ), \
+         patch(
+             "tasks.ingest_fundamentals_tw.get_health", AsyncMock(return_value=None),
+         ), \
+         patch("tasks.ingest_fundamentals_tw.twse.get_all_valuation_ratios",
+               AsyncMock()) as twse_mock, \
+         patch("tasks.ingest_fundamentals_tw.record_health", AsyncMock()) as health:
+        await ingest_fundamentals_tw.run()
+
+    twse_mock.assert_not_awaited()
+    kwargs = health.await_args.kwargs
+    assert kwargs["ok"] is False
+    assert "skipped" in kwargs["error"]
+    assert "backoff after 2 failures" in kwargs["error"]

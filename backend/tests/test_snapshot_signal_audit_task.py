@@ -34,6 +34,23 @@ def patch_session(db_session: AsyncSession):
         yield
 
 
+@pytest.fixture
+def no_backoff():
+    """Short-circuit Redis-backed backoff helpers so tests reach the
+    actual snapshot loop. Mock Redis returns truthy values for ttl
+    which would otherwise divert to the backoff-skip branch."""
+    with patch(
+        "tasks.snapshot_signal_audit.backoff_remaining_seconds",
+        AsyncMock(return_value=0),
+    ), patch(
+        "tasks.snapshot_signal_audit.clear_failures", AsyncMock(),
+    ), patch(
+        "tasks.snapshot_signal_audit.record_failure",
+        AsyncMock(return_value=1),
+    ):
+        yield
+
+
 @pytest.mark.asyncio
 async def test_lock_held_skips_work(patch_session):
     """Two pods racing the same cron tick — one wins the lock, the
@@ -56,7 +73,7 @@ async def test_lock_held_skips_work(patch_session):
 
 @pytest.mark.asyncio
 async def test_success_iterates_all_scopes_and_records_health(
-    patch_session, db_session: AsyncSession,
+    patch_session, no_backoff, db_session: AsyncSession,
 ):
     """Happy path: lock acquired, snapshot called once per scope
     (NULL + TW + US + GLOBAL = 4 calls), per-scope row_counts roll
@@ -96,7 +113,7 @@ async def test_success_iterates_all_scopes_and_records_health(
 
 @pytest.mark.asyncio
 async def test_one_scope_failure_does_not_block_others(
-    patch_session,
+    patch_session, no_backoff,
 ):
     """If snapshotting the TW scope raises, the cron must still try
     US + GLOBAL afterwards. Aggregate row_count reflects only the
@@ -126,7 +143,7 @@ async def test_one_scope_failure_does_not_block_others(
 
 @pytest.mark.asyncio
 async def test_release_lock_runs_even_when_body_raises(
-    patch_session,
+    patch_session, no_backoff,
 ):
     """A panic in `record_health` (or anywhere in the try block)
     must not leak the Redis lock — that would wedge the next cron

@@ -40,6 +40,26 @@ def patch_session(db_session: AsyncSession):
         yield
 
 
+@pytest.fixture
+def no_backoff():
+    """Short-circuit Redis-backed backoff helpers so tests reach `_do_run`.
+
+    Mock Redis returns truthy values for `r.ttl(...)` etc., which would
+    otherwise make `backoff_remaining_seconds` return >0 and divert
+    the run to the skip-backoff branch.
+    """
+    with patch(
+        "tasks.ingest_ohlcv_tw.backoff_remaining_seconds",
+        AsyncMock(return_value=0),
+    ), patch(
+        "tasks.ingest_ohlcv_tw.clear_failures", AsyncMock(),
+    ), patch(
+        "tasks.ingest_ohlcv_tw.record_failure",
+        AsyncMock(return_value=1),
+    ):
+        yield
+
+
 @pytest.mark.asyncio
 async def test_lock_held_skips_work(patch_session):
     from tasks import ingest_ohlcv_tw
@@ -54,7 +74,10 @@ async def test_lock_held_skips_work(patch_session):
 
 
 @pytest.mark.asyncio
-async def test_no_symbols_records_failed_health(patch_session):
+async def test_no_symbols_records_ok_with_zero_rows(patch_session, no_backoff):
+    """When the universe map cron hasn't run yet, the task records
+    ok=True row_count=0 and clears any prior backoff — this is a
+    benign "nothing to do", not an outage."""
     from tasks import ingest_ohlcv_tw
 
     with patch("tasks.ingest_ohlcv_tw.acquire_lock", AsyncMock(return_value=True)), \
@@ -65,12 +88,15 @@ async def test_no_symbols_records_failed_health(patch_session):
 
     health.assert_awaited_once()
     kwargs = health.await_args.kwargs
-    assert kwargs["ok"] is False
-    assert kwargs["error"] == "no_symbols"
+    assert kwargs["ok"] is True
+    assert kwargs["row_count"] == 0
+    assert kwargs.get("latest_data_ts") is None
 
 
 @pytest.mark.asyncio
-async def test_twse_success_writes_bars(patch_session, db_session: AsyncSession):
+async def test_twse_success_writes_bars(
+    patch_session, no_backoff, db_session: AsyncSession,
+):
     from tasks import ingest_ohlcv_tw
 
     with patch("tasks.ingest_ohlcv_tw.acquire_lock", AsyncMock(return_value=True)), \
@@ -94,10 +120,13 @@ async def test_twse_success_writes_bars(patch_session, db_session: AsyncSession)
     kwargs = health.await_args.kwargs
     assert kwargs["ok"] is True
     assert kwargs["row_count"] == 2
+    assert kwargs["latest_data_ts"] == date(2026, 4, 2)
 
 
 @pytest.mark.asyncio
-async def test_twse_fail_falls_back_to_finmind(patch_session, db_session: AsyncSession):
+async def test_twse_fail_falls_back_to_finmind(
+    patch_session, no_backoff, db_session: AsyncSession,
+):
     from tasks import ingest_ohlcv_tw
 
     with patch("tasks.ingest_ohlcv_tw.acquire_lock", AsyncMock(return_value=True)), \
@@ -118,7 +147,9 @@ async def test_twse_fail_falls_back_to_finmind(patch_session, db_session: AsyncS
 
 
 @pytest.mark.asyncio
-async def test_per_symbol_failure_does_not_abort_run(patch_session, db_session: AsyncSession):
+async def test_per_symbol_failure_does_not_abort_run(
+    patch_session, no_backoff, db_session: AsyncSession,
+):
     """One bad symbol must not stop ingest of the next."""
     from tasks import ingest_ohlcv_tw
 
@@ -146,3 +177,65 @@ async def test_per_symbol_failure_does_not_abort_run(patch_session, db_session: 
     kwargs = health.await_args.kwargs
     assert kwargs["ok"] is True
     assert kwargs["row_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_all_symbols_failing_arms_backoff(patch_session):
+    """When every symbol's both upstreams fail, treat it as an outage
+    rather than a fake-success row_count=0. Failure counter is bumped
+    and the health row signals auto-backoff."""
+    from tasks import ingest_ohlcv_tw
+
+    record_failure_mock = AsyncMock(return_value=1)
+    with patch("tasks.ingest_ohlcv_tw.acquire_lock", AsyncMock(return_value=True)), \
+         patch("tasks.ingest_ohlcv_tw.release_lock", AsyncMock()), \
+         patch(
+             "tasks.ingest_ohlcv_tw.backoff_remaining_seconds",
+             AsyncMock(return_value=0),
+         ), \
+         patch("tasks.ingest_ohlcv_tw.clear_failures", AsyncMock()), \
+         patch("tasks.ingest_ohlcv_tw.record_failure", record_failure_mock), \
+         patch.object(ingest_ohlcv_tw, "_load_symbols",
+                      AsyncMock(return_value=["A", "B"])), \
+         patch("tasks.ingest_ohlcv_tw.twse.get_daily_ohlcv",
+               AsyncMock(side_effect=RuntimeError("twse down"))), \
+         patch("tasks.ingest_ohlcv_tw.finmind.get_daily_ohlcv",
+               AsyncMock(side_effect=RuntimeError("finmind down"))), \
+         patch("tasks.ingest_ohlcv_tw.record_health", AsyncMock()) as health:
+        await ingest_ohlcv_tw.run()
+
+    record_failure_mock.assert_awaited_once()
+    kwargs = health.await_args.kwargs
+    assert kwargs["ok"] is False
+    assert "auto-backoff armed" in kwargs["error"]
+
+
+@pytest.mark.asyncio
+async def test_backoff_active_skips_run(patch_session):
+    """An armed backoff window short-circuits before any TWSE call."""
+    from tasks import ingest_ohlcv_tw
+
+    with patch("tasks.ingest_ohlcv_tw.acquire_lock", AsyncMock(return_value=True)), \
+         patch("tasks.ingest_ohlcv_tw.release_lock", AsyncMock()), \
+         patch(
+             "tasks.ingest_ohlcv_tw.backoff_remaining_seconds",
+             AsyncMock(return_value=3600),
+         ), \
+         patch(
+             "tasks.ingest_ohlcv_tw.get_failure_count",
+             AsyncMock(return_value=2),
+         ), \
+         patch(
+             "tasks.ingest_ohlcv_tw.get_health", AsyncMock(return_value=None),
+         ), \
+         patch.object(ingest_ohlcv_tw, "_load_symbols", AsyncMock()) as load, \
+         patch("tasks.ingest_ohlcv_tw.twse.get_daily_ohlcv", AsyncMock()) as twse_mock, \
+         patch("tasks.ingest_ohlcv_tw.record_health", AsyncMock()) as health:
+        await ingest_ohlcv_tw.run()
+
+    load.assert_not_awaited()
+    twse_mock.assert_not_awaited()
+    kwargs = health.await_args.kwargs
+    assert kwargs["ok"] is False
+    assert "skipped" in kwargs["error"]
+    assert "backoff after 2 failures" in kwargs["error"]

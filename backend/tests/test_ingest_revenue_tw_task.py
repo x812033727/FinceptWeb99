@@ -442,6 +442,69 @@ async def test_paywall_response_is_marked_skipped_not_failure(patch_session):
 
 
 @pytest.mark.asyncio
+async def test_silent_deny_records_skipped_with_silent_deny_field(patch_session):
+    """FinMind sometimes returns HTTP 200 with body.status != 200
+    (silent paywall / tier-unavailable). The connector swallows it
+    into `[]` so live-serving paths fall back gracefully — but the
+    ingest task must surface this as ok=False so the admin badge
+    shows the rejection instead of a fake-green ok=True row_count=0.
+
+    Tests the full silent-deny pipeline:
+      - `consume_last_silent_deny()` is read after the FinMind call
+      - `raise_if_silent_denied` translates it into FinMindSilentDeny
+      - the task's `except FinMindSilentDeny` branch records ok=False
+        with `silent_deny=...` + `source="finmind"` so Prometheus
+        counters and the admin UI can distinguish silent paywall from
+        a real outage."""
+    from tasks import ingest_revenue_tw
+
+    body_msg = "Your level is register, not sponsor."
+
+    async def _silent_deny_call(*_a, **_k):
+        # Mirrors what `_query` does on a silent-deny response: sets
+        # the contextvar then returns []. The task layer's
+        # `raise_if_silent_denied` reads the contextvar and raises.
+        from data.tw.finmind_connector import _last_silent_deny
+        _last_silent_deny.set(body_msg)
+        return []
+
+    record_health_mock = AsyncMock()
+    record_failure_mock = AsyncMock()
+    clear_failures_mock = AsyncMock()
+    with patch(
+        "tasks.ingest_revenue_tw.acquire_lock",
+        AsyncMock(return_value=True),
+    ), patch(
+        "tasks.ingest_revenue_tw.release_lock", AsyncMock(),
+    ), patch(
+        "tasks.ingest_revenue_tw.backoff_remaining_seconds",
+        AsyncMock(return_value=0),
+    ), patch(
+        "tasks.ingest_revenue_tw.record_failure", record_failure_mock,
+    ), patch(
+        "tasks.ingest_revenue_tw.clear_failures", clear_failures_mock,
+    ), patch(
+        "tasks.ingest_revenue_tw.record_health", record_health_mock,
+    ), patch(
+        "tasks.ingest_revenue_tw.finmind.get_monthly_revenue_market_wide",
+        AsyncMock(side_effect=_silent_deny_call),
+    ):
+        await ingest_revenue_tw.run()
+
+    # Permanent state — don't arm backoff, don't bump failure counter.
+    record_failure_mock.assert_not_called()
+    clear_failures_mock.assert_awaited_once()
+    record_health_mock.assert_awaited_once()
+    kwargs = record_health_mock.await_args.kwargs
+    assert kwargs["ok"] is False
+    assert kwargs["row_count"] == 0
+    assert kwargs["silent_deny"] == body_msg
+    assert kwargs["source"] == "finmind"
+    assert "silent_paywall" in kwargs["error"]
+    assert body_msg in kwargs["error"]
+
+
+@pytest.mark.asyncio
 async def test_genuine_outage_still_arms_backoff(patch_session):
     """Sanity check: a 503 / generic transient failure still uses the
     record_failure + auto-backoff path. Only the paywall message

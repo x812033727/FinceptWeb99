@@ -23,11 +23,10 @@ import logging
 from datetime import UTC, date, datetime
 from typing import Any
 
-from cache.redis_cache import cache_get, cache_set
+from cache.cache_ttls import TTL_FUNDAMENTALS
+from cache.redis_cache import cache_get, cache_set_unless_empty
 
 log = logging.getLogger(__name__)
-
-_CACHE_TTL_SECONDS = 24 * 3600
 # Yahoo expects TW listings as `<symbol>.TW` — TWSE (上市). 上櫃
 # uses `.TWO`. We default to .TW; callers needing 上櫃 can pass a
 # pre-suffixed ticker.
@@ -133,10 +132,9 @@ async def get_upcoming_event(
     if not (earnings_visible or ex_div_visible):
         # Cache the empty result so we don't keep re-fetching for a
         # symbol Yahoo simply doesn't carry events for.
-        try:
-            await cache_set(cache_key, json.dumps("_no_event"), _CACHE_TTL_SECONDS)
-        except Exception:
-            pass
+        await cache_set_unless_empty(
+            cache_key, json.dumps("_no_event"), TTL_FUNDAMENTALS,
+        )
         return None
 
     # Pick the soonest event as `next_event` so personas can grep one
@@ -162,10 +160,9 @@ async def get_upcoming_event(
         "next_event":          next_event,
         "next_event_in_days":  next_event_in_days,
     }
-    try:
-        await cache_set(cache_key, json.dumps(result), _CACHE_TTL_SECONDS)
-    except Exception:
-        pass
+    await cache_set_unless_empty(
+        cache_key, json.dumps(result), TTL_FUNDAMENTALS,
+    )
     return result
 
 

@@ -10,6 +10,8 @@ import { cn } from "@/lib/utils";
 import { MessageBubble } from "@/components/ai/MessageBubble";
 import { ChatComposer } from "@/components/ai/ChatComposer";
 import type { ChatMessage, ToolCallEvent } from "@/components/ai/types";
+import { fetchAgents } from "@/components/discussion/_api";
+import type { AgentInfo } from "@/types/discussion";
 import {
   Sheet,
   SheetContent,
@@ -30,23 +32,11 @@ import {
 
 // ── types ──────────────────────────────────────────────────────────
 
-interface AgentInfo {
-  id: string;
-  name: string;
-  description: string;
-  default_provider: string;
-}
-
 interface UserMe {
   ai_requests_remaining: number | null;
 }
 
 // ── api helpers ────────────────────────────────────────────────────
-
-async function fetchAgents(): Promise<AgentInfo[]> {
-  const res = await api.get<AgentInfo[]>("/ai/agents");
-  return res.data;
-}
 
 async function fetchMe(): Promise<UserMe> {
   const res = await api.get<UserMe>("/auth/me");

@@ -33,7 +33,7 @@ import logging
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from cache.redis_cache import cache_get, cache_set
+from cache.redis_cache import cache_get, cache_set_unless_empty
 
 log = logging.getLogger(__name__)
 
@@ -117,12 +117,11 @@ async def get_top_brokers_for_symbol(
         )
         return None
     if not rows:
-        # Cache the empty result so we don't keep re-fetching for
-        # symbols FinMind has no broker breakdown on.
-        try:
-            await cache_set(cache_key, json.dumps("_no_data"), _CACHE_TTL_SECONDS)
-        except Exception:
-            pass
+        # Permanent-empty: cache a sentinel so symbols FinMind has no
+        # broker breakdown for don't keep re-fetching.
+        await cache_set_unless_empty(
+            cache_key, json.dumps("_no_data"), _CACHE_TTL_SECONDS,
+        )
         return None
 
     # Aggregate per (broker, broker_id) over the window.
@@ -158,10 +157,9 @@ async def get_top_brokers_for_symbol(
         by_broker[key] = cell
 
     if not by_broker:
-        try:
-            await cache_set(cache_key, json.dumps("_no_data"), _CACHE_TTL_SECONDS)
-        except Exception:
-            pass
+        await cache_set_unless_empty(
+            cache_key, json.dumps("_no_data"), _CACHE_TTL_SECONDS,
+        )
         return None
 
     aggregated = list(by_broker.values())
@@ -182,10 +180,9 @@ async def get_top_brokers_for_symbol(
         "top_buyers":     top_buyers,
         "top_sellers":    top_sellers,
     }
-    try:
-        await cache_set(cache_key, json.dumps(result, ensure_ascii=False), _CACHE_TTL_SECONDS)
-    except Exception:
-        pass
+    await cache_set_unless_empty(
+        cache_key, json.dumps(result, ensure_ascii=False), _CACHE_TTL_SECONDS,
+    )
     return result
 
 

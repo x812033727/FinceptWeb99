@@ -28,6 +28,34 @@ async def cache_set(key: str, value: str, ttl_seconds: int) -> None:
     await r.set(key, value, ex=ttl_seconds)
 
 
+async def cache_set_unless_empty(
+    key: str, payload: str | None, ttl_seconds: int,
+) -> None:
+    """Cache `payload` under `key`, skipping the write when payload is None.
+
+    Two policies for "no upstream data" co-exist across the services and
+    look identical at the call site but mean different things:
+
+    - **Transient empty** (yfinance blip, TWSE timeout, FinMind 503):
+      pass ``payload=None`` so the next request retries. Mirrors the
+      "don't cache empty" guard in tw_market_service / us_market_service.
+    - **Permanent empty** (this symbol genuinely has no broker
+      breakdown, no upcoming events in the lookahead window): pre-
+      serialize a sentinel and pass that — subsequent requests hit
+      cache and return None fast without burning a fetch.
+
+    Failures are swallowed. Call-sites previously wrapped cache_set in
+    try/except by hand; folding it into the helper keeps the policy
+    explicit and the call site short.
+    """
+    if payload is None:
+        return
+    try:
+        await cache_set(key, payload, ttl_seconds)
+    except Exception:
+        pass
+
+
 async def cache_delete(key: str) -> None:
     r = await get_redis()
     await r.delete(key)

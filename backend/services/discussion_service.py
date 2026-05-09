@@ -130,18 +130,13 @@ _FULL_HISTORY_TURNS = 8
 _HISTORY_SUMMARY_CHARS = 120
 
 # Reasoning models surface their chain-of-thought wrapped in <think>...</think>
-# blocks. `strip_think_blocks` removes them post-hoc; `_ThinkBlockFilter`
-# below does the same as a streaming filter for SSE so the thinking never
-# flashes across the chat UI in the first place.
-# Both `strip_think_blocks` and the JSON-parse helpers live in
-# `services.llm_parsing_utils` so other LLM-fed pipelines (news sentiment
-# scorer, future tasks) reuse the same tolerant parser.
-from services.llm_parsing_utils import (  # noqa: E402
-    extract_json_object as _extract_json_object,
-    loads_lenient as _loads_lenient,
-    strip_code_fence as _strip_code_fence,
-    strip_think_blocks,
-)
+# blocks. `_ThinkBlockFilter` (below) drops them as a streaming SSE
+# filter so the thinking never flashes across the chat UI. The
+# post-hoc parsers — `strip_think_blocks` + the JSON-tolerant
+# `loads_lenient` / `extract_json_object` / `strip_code_fence` —
+# moved out of this module along with the per-turn / conclusion
+# parsers; they're imported directly from `services.llm_parsing_utils`
+# by `discussion/turn_parsing.py` and `discussion/conclusion_parsing.py`.
 
 
 class _ThinkBlockFilter:
@@ -214,8 +209,6 @@ class _ThinkBlockFilter:
         return out
 _DEFAULT_TOP_MOVERS = 8
 
-VALID_STANCES = ("agree", "dissent", "supplement")
-DEFAULT_STANCE = "supplement"
 
 # Status machine: draft → running → done. The "running" state lets the UI
 # show a busy indicator and lets future code reject parallel rounds on the
@@ -1608,87 +1601,15 @@ async def gather_market_context(
     )
 
 
-# TW listed leveraged / inverse / futures-tracking ETFs encode the
-# kind in the trailing letter of the 5-digit code:
-#   L = 2x leveraged (`00715L` 期街口布蘭特正 2)
-#   U = futures-tracking (`00642U` 期元大 S&P 石油)
-#   R = inverse (`00632R` 元大台灣 50 反 1)
-# These products mean-revert hard the day after a spike, so them
-# topping `top_gainers` consistently mis-leads personas into
-# recommending tomorrow's reversal candidate. Plain index / dividend
-# ETFs (`0050` `0056` `00878`) and ordinary stocks (`2330`) keep the
-# trailing-digit-only shape and pass the filter.
-_TW_SPECULATIVE_ETF_RE = re.compile(r"^\d{4,5}[LUR]$")
-
-
-def _is_speculative_etf(symbol: Any) -> bool:
-    if not isinstance(symbol, str):
-        return False
-    return bool(_TW_SPECULATIVE_ETF_RE.match(symbol))
-
-
-def _compact_screener_row(r: dict[str, Any]) -> dict[str, Any]:
-    """Strip the screener row to just the fields a persona needs, so the
-    LLM prompt stays compact (300 rows × 12 fields fills the context fast)."""
-    from services import tw_market_service
-    sym = r.get("symbol")
-    return {
-        "symbol": sym,
-        "name": r.get("name_zh") or r.get("name") or (
-            tw_market_service.get_company_name(sym) if sym else None
-        ),
-        "industry": tw_market_service.get_industry(sym) if sym else None,
-        "price": r.get("price"),
-        "change_pct": r.get("change_pct"),
-        "volume": r.get("volume"),
-        "pe": r.get("pe_ratio"),
-        "yield": r.get("dividend_yield"),
-    }
-
-
-def _compact_us_screener_row(r: dict[str, Any]) -> dict[str, Any]:
-    """US-side compact form (PR #215). Mirrors `_compact_screener_row`
-    but pulls from US screener output: industry / sector come from
-    the row directly (no global map like TW's `_industry_map`); PE /
-    yield often missing on Polygon snapshot tier so they're omitted
-    rather than passed through as 0."""
-    sym = r.get("symbol")
-    return {
-        "symbol":     sym,
-        "name":       r.get("name"),
-        "sector":     r.get("sector"),
-        "price":      r.get("price"),
-        "change_pct": r.get("change_pct"),
-        "volume":     r.get("volume"),
-    }
-
-
-def _tag_industry(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Enrich each row with `industry` + `name_zh` from the in-memory
-    company-info maps. Rows already carrying these keys are passed
-    through unchanged so callers that pre-tagged don't get clobbered.
-
-    Used for the chip-metric and revenue-grower aggregator outputs
-    so personas can see "外資買超 2330 (半導體業)" instead of just
-    "2330" — the industry tag turns a raw list of codes into
-    sector-flow analysis without an extra LLM tool call.
-    """
-    from services import tw_market_service
-    out: list[dict[str, Any]] = []
-    for r in rows:
-        sym = r.get("symbol")
-        enriched = dict(r)
-        if sym:
-            if "industry" not in enriched or not enriched["industry"]:
-                ind = tw_market_service.get_industry(sym)
-                if ind:
-                    enriched["industry"] = ind
-            if "name_zh" not in enriched or not enriched["name_zh"]:
-                nm = tw_market_service.get_company_name(sym)
-                if nm:
-                    enriched["name_zh"] = nm
-        out.append(enriched)
-    return out
+# Screener utilities extracted to discussion/screener_utils.py.
+# Re-export for back-compat with `discussion/context/blocks/{chip,http}.py`
+# (which lazy-import here) + any test that reaches in by name.
+from services.discussion.screener_utils import (  # noqa: E402,F401
+    _compact_screener_row,
+    _compact_us_screener_row,
+    _is_speculative_etf,
+    _tag_industry,
+)
 
 
 # ── turn loop ───────────────────────────────────────────────────────
@@ -2000,129 +1921,9 @@ def _format_history(prior_turns: list[DiscussionTurn]) -> str:
 # salvage path — the persona's content always lives behind this key in
 # our prompt template, so finding it gives us a reliable extraction
 # anchor when the JSON wrapper got cut off mid-string.
-_CONTENT_OPEN_RE = re.compile(r'"content"\s*:\s*"')
-_STANCE_RE = re.compile(r'"stance"\s*:\s*"([^"]*)"')
 
 # Standard JSON single-char escape map. `\u####` is handled inline
 # because it consumes a variable number of input characters.
-_JSON_ESCAPE_MAP = {
-    "n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f",
-    '"': '"', "\\": "\\", "/": "/",
-}
-
-
-def _decode_partial_json_string(s: str) -> str:
-    """Decode JSON escape sequences inside a string fragment that has
-    no closing quote (because the LLM hit max_tokens mid-content).
-    Stops at the first unescaped `"` (legitimate end) or end of input.
-    Drops a trailing partial escape (lone `\\` or incomplete `\\u####`)
-    so the rendered text doesn't carry a dangling backslash."""
-    out: list[str] = []
-    i = 0
-    n = len(s)
-    while i < n:
-        c = s[i]
-        if c == "\\":
-            if i + 1 >= n:
-                break
-            esc = s[i + 1]
-            mapped = _JSON_ESCAPE_MAP.get(esc)
-            if mapped is not None:
-                out.append(mapped)
-                i += 2
-                continue
-            if esc == "u":
-                if i + 6 > n:
-                    break
-                try:
-                    out.append(chr(int(s[i + 2:i + 6], 16)))
-                    i += 6
-                except ValueError:
-                    out.append(s[i:i + 2])
-                    i += 2
-                continue
-            out.append(esc)
-            i += 2
-        elif c == '"':
-            break
-        else:
-            out.append(c)
-            i += 1
-    return "".join(out)
-
-
-def _salvage_truncated_json(text: str) -> tuple[str, str] | None:
-    """Recover (stance, content) from a JSON wrapper that got truncated
-    when the LLM hit max_tokens mid-string.
-
-    Triggered after `_extract_json_object` fails to find a balanced
-    `{...}` — the closing `}` never appeared because the model ran out
-    of budget while writing the content. The wrapper looks like
-    `{"stance":"supplement","content":"...partial text`. We pull stance
-    out by regex (it's a short word that almost always finishes before
-    truncation hits) and take everything after `"content":"` as the
-    content body, JSON-decoding the standard escapes so embedded `\\n`
-    becomes a real newline.
-
-    Returns None when neither a `"content":"` opener nor any sign of the
-    JSON wrapper is present — the caller falls back to raw-text mode.
-    """
-    content_match = _CONTENT_OPEN_RE.search(text)
-    if content_match is None:
-        return None
-    stance_match = _STANCE_RE.search(text[:content_match.start()])
-    stance = stance_match.group(1) if stance_match else DEFAULT_STANCE
-    content = _decode_partial_json_string(text[content_match.end():])
-    return stance, content
-
-
-def _parse_turn_response(raw: str) -> tuple[str, str]:
-    """Return (stance, content). Falls back to (DEFAULT_STANCE, cleaned_raw)
-    when the model drifts off JSON format — better to record the prose
-    than to lose the turn entirely.
-
-    Parsing is layered to survive the most common LLM shape drifts:
-      1. strip `<think>...</think>` reasoning blocks
-      2. strip surrounding markdown code fence
-      3. parse with `strict=False` so embedded newlines / tabs in
-         Chinese content don't blow up json
-      4. if that fails, salvage the first balanced `{...}` object from
-         surrounding prose (handles "Here is my analysis: {...}" cases)
-      5. if no balanced object exists (LLM hit max_tokens mid-string so
-         the closing `"}` never arrived), regex-extract the partial
-         `content` field — keeps most of the persona's analysis instead
-         of surfacing the raw `{"stance":"...","content":"...` wrapper
-         to the user.
-    """
-    no_thinking = strip_think_blocks(raw)
-    cleaned = _strip_code_fence(no_thinking)
-    data: Any | None = None
-    try:
-        data = _loads_lenient(cleaned)
-    except json.JSONDecodeError:
-        salvaged = _extract_json_object(cleaned)
-        if salvaged is not None:
-            try:
-                data = _loads_lenient(salvaged)
-            except json.JSONDecodeError:
-                data = None
-    if isinstance(data, dict):
-        stance = str(data.get("stance", "")).strip().lower()
-        if stance not in VALID_STANCES:
-            stance = DEFAULT_STANCE
-        content = str(data.get("content", "")).strip()
-        return stance, content
-
-    truncated = _salvage_truncated_json(cleaned)
-    if truncated is not None:
-        stance, content = truncated
-        stance = stance.strip().lower()
-        if stance not in VALID_STANCES:
-            stance = DEFAULT_STANCE
-        content = content.strip()
-        if content:
-            return stance, content
-    return DEFAULT_STANCE, no_thinking.strip()
 
 
 async def _resolve_persona_specs(
@@ -3069,164 +2870,6 @@ def _format_transcript(turns: list[DiscussionTurn]) -> str:
     return "\n".join(lines)
 
 
-def _try_repair_truncated_json(text: str) -> str | None:
-    """Best-effort recovery for JSON output that got truncated mid-
-    emission (typical when an LLM hits `max_tokens` while writing the
-    object). Walks from the first `{`, tracks string + bracket depth,
-    and on EOF closes any open string + dangling brackets so the
-    result is parseable.
-
-    Returns the repaired substring, or None when the input has no
-    `{` to anchor on. Caller still pipes through `_loads_lenient` —
-    repair only fixes the structural truncation, not relaxed-JSON
-    quirks (those layers stack).
-
-    Conservative: trims trailing `,` / `:` since closing immediately
-    after either is invalid. The recovered fields may be partial
-    (e.g. `reasoning` cut mid-sentence), but a partial conclusion
-    is infinitely more useful than a parse-error placeholder for
-    the operator triaging the discussion.
-    """
-    start = text.find("{")
-    if start < 0:
-        return None
-    in_string = False
-    escape = False
-    bracket_stack: list[str] = []   # "{" / "["
-    last_real_char = ""
-    for c in text[start:]:
-        if escape:
-            escape = False
-            continue
-        if in_string:
-            if c == "\\":
-                escape = True
-                continue
-            if c == '"':
-                in_string = False
-            continue
-        if c == '"':
-            in_string = True
-            last_real_char = c
-            continue
-        if c.isspace():
-            continue
-        last_real_char = c
-        if c in "{[":
-            bracket_stack.append(c)
-        elif c == "}":
-            if bracket_stack and bracket_stack[-1] == "{":
-                bracket_stack.pop()
-        elif c == "]":
-            if bracket_stack and bracket_stack[-1] == "[":
-                bracket_stack.pop()
-
-    if not in_string and not bracket_stack:
-        return None   # already balanced — caller's earlier pass covers it
-
-    body = text[start:].rstrip()
-    # Drop a dangling trailing comma or colon (illegal right before
-    # a close-bracket).
-    while body and body[-1] in ",:":
-        body = body[:-1].rstrip()
-
-    suffix = ""
-    if in_string:
-        suffix += '"'
-    # If we ended right after a `:` (key with no value), drop the
-    # whole key/value pair to avoid `"foo":}` which is illegal.
-    if last_real_char == ":":
-        # Walk back to the last `,` or `{` and trim the orphan key.
-        for i in range(len(body) - 1, -1, -1):
-            if body[i] in ",{":
-                body = body[:i + 1] if body[i] == "," else body[:i + 1]
-                if body and body[-1] == ",":
-                    body = body[:-1]
-                break
-    for opener in reversed(bracket_stack):
-        suffix += "}" if opener == "{" else "]"
-    return body + suffix
-
-
-def _safe_conclusion(raw: str) -> dict[str, Any]:
-    cleaned = _strip_code_fence(strip_think_blocks(raw))
-    data: Any | None = None
-    try:
-        data = _loads_lenient(cleaned)
-    except json.JSONDecodeError:
-        salvaged = _extract_json_object(cleaned)
-        if salvaged is not None:
-            try:
-                data = _loads_lenient(salvaged)
-            except json.JSONDecodeError:
-                data = None
-    # PR #267: last-resort repair for truncated JSON. Reasoning
-    # models (M2.7 etc.) under post-mortem load can dump a long
-    # chain-of-thought + start the JSON, then run out of
-    # `max_tokens` mid-object — `_extract_json_object` returns
-    # None because the closing `}` was never emitted. Try closing
-    # any open string + brackets and re-parse before falling
-    # through to the parse-error placeholder.
-    if data is None:
-        repaired = _try_repair_truncated_json(cleaned)
-        if repaired is not None:
-            try:
-                data = _loads_lenient(repaired)
-            except json.JSONDecodeError:
-                data = None
-    if not isinstance(data, dict):
-        return {
-            "recommended_symbols": [],
-            "recommendations": [],
-            "reasoning": raw.strip()[:500] or "無法解析結論",
-            "risks": [],
-            "time_horizon": "short_term",
-            "consensus_score": 0.0,
-            "_parse_error": True,
-        }
-
-    # PR-C0: prefer the structured `recommendations: [{symbol, confidence}]`
-    # shape (each pick gets a per-symbol confidence). Old discussions and
-    # LLMs that miss the field fall through to the flat
-    # `recommended_symbols` list with a neutral 0.5 confidence so
-    # downstream Brier scoring (PR-C1) can always assume the structured
-    # shape exists.
-    recommendations = _parse_recommendations(data)
-    if not recommendations:
-        legacy_symbols = data.get("recommended_symbols") or []
-        if isinstance(legacy_symbols, list):
-            seen: set[str] = set()
-            for raw_symbol in legacy_symbols:
-                symbol = str(raw_symbol).strip()
-                if not symbol or symbol in seen:
-                    continue
-                seen.add(symbol)
-                recommendations.append({"symbol": symbol, "confidence": 0.5})
-                if len(recommendations) >= 5:
-                    break
-    recommended_symbols = [entry["symbol"] for entry in recommendations]
-
-    risks = data.get("risks") or []
-    if not isinstance(risks, list):
-        risks = []
-    horizon = str(data.get("time_horizon", "short_term"))
-    if horizon not in ("short_term", "medium_term", "long_term"):
-        horizon = "short_term"
-    try:
-        consensus = float(data.get("consensus_score", 0.0))
-    except (TypeError, ValueError):
-        consensus = 0.0
-    consensus = max(0.0, min(1.0, consensus))
-    return {
-        "recommended_symbols": recommended_symbols,
-        "recommendations": recommendations,
-        "reasoning": str(data.get("reasoning", ""))[:1000],
-        "risks": [str(r).strip() for r in risks if str(r).strip()][:10],
-        "time_horizon": horizon,
-        "consensus_score": round(consensus, 3),
-    }
-
-
 async def _apply_calibration_to_conclusion(
     db: AsyncSession,
     discussion: Discussion,
@@ -3296,143 +2939,6 @@ async def _apply_calibration_to_conclusion(
             # write a misleading number.
             continue
         rec["calibrated_confidence"] = round(calibrated, 4)
-
-
-def _parse_recommendations(data: dict[str, Any]) -> list[dict[str, Any]]:
-    """Parse and validate the `recommendations` list out of the
-    synthesizer JSON. Each entry must have a non-empty `symbol`; bad
-    `confidence` values (string, NaN, out of range) clamp to [0, 1] with
-    a neutral 0.5 fallback. Symbols dedup by first occurrence and the
-    list is capped at 5 to match the historical `recommended_symbols`
-    cap. Returns `[]` when the field is missing or unusable so the
-    caller can fall back to the legacy flat list.
-    """
-    raw = data.get("recommendations")
-    if not isinstance(raw, list):
-        return []
-    out: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for entry in raw:
-        if not isinstance(entry, dict):
-            continue
-        symbol = str(entry.get("symbol", "")).strip()
-        if not symbol or symbol in seen:
-            continue
-        try:
-            conf = float(entry.get("confidence", 0.5))
-        except (TypeError, ValueError):
-            conf = 0.5
-        if conf != conf:   # NaN guard
-            conf = 0.5
-        conf = max(0.0, min(1.0, conf))
-        seen.add(symbol)
-        out.append({"symbol": symbol, "confidence": round(conf, 3)})
-        if len(out) >= 5:
-            break
-    return out
-
-
-def compute_conclusion_diff(
-    orig: dict[str, Any] | None,
-    post: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    """PR-2: structured delta between an original conclusion and a
-    post-mortem revised one. Returns None when either side is missing
-    or unparseable so the caller can decide whether to skip writing
-    the column.
-
-    Shape returned (only non-trivial fields included):
-      - symbols_added: symbols in post but not orig
-      - symbols_removed: symbols in orig but not post
-      - confidence_changes: per-symbol {orig, post, delta} for
-        symbols present on BOTH sides where confidence shifted
-        (>= 0.05 absolute, suppress noise)
-      - consensus_score_delta: post - orig
-      - time_horizon_changed: bool
-      - reasoning_overlap: Jaccard index over whitespace-tokenised
-        reasoning text (rough but cheap proxy for "how much did the
-        narrative change")
-
-    Defensive on bad input: parse_error placeholders, empty dicts,
-    None — all return None so the column stays NULL rather than
-    writing a misleading half-diff.
-    """
-    if not isinstance(orig, dict) or not isinstance(post, dict):
-        return None
-    if orig.get("_parse_error") or post.get("_parse_error"):
-        return None
-
-    def _recs(c: dict[str, Any]) -> dict[str, float]:
-        out: dict[str, float] = {}
-        for r in c.get("recommendations") or []:
-            if not isinstance(r, dict):
-                continue
-            symbol = str(r.get("symbol", "")).strip()
-            if not symbol:
-                continue
-            try:
-                out[symbol] = float(r.get("confidence", 0.5))
-            except (TypeError, ValueError):
-                out[symbol] = 0.5
-        return out
-
-    orig_recs = _recs(orig)
-    post_recs = _recs(post)
-    orig_set, post_set = set(orig_recs), set(post_recs)
-    symbols_added = sorted(post_set - orig_set)
-    symbols_removed = sorted(orig_set - post_set)
-    confidence_changes: dict[str, dict[str, float]] = {}
-    for sym in sorted(orig_set & post_set):
-        o, p = orig_recs[sym], post_recs[sym]
-        if abs(p - o) >= 0.05:
-            confidence_changes[sym] = {
-                "orig": round(o, 3),
-                "post": round(p, 3),
-                "delta": round(p - o, 3),
-            }
-
-    try:
-        orig_consensus = float(orig.get("consensus_score", 0.0))
-    except (TypeError, ValueError):
-        orig_consensus = 0.0
-    try:
-        post_consensus = float(post.get("consensus_score", 0.0))
-    except (TypeError, ValueError):
-        post_consensus = 0.0
-
-    horizon_changed = (
-        str(orig.get("time_horizon", "")).strip()
-        != str(post.get("time_horizon", "")).strip()
-    )
-
-    def _tokens(text: str) -> set[str]:
-        # Cheap jaccard proxy. Hyphen-and-digit-aware split so
-        # symbol codes (2330) and percentages (-5%) survive as
-        # single tokens; lowercase for English; min token length
-        # 2 to drop noise like single Chinese punctuation.
-        return {
-            tok for tok in re.split(r"[\s,。、；;:.!?「」（）()/]+", text.lower())
-            if len(tok) >= 2
-        }
-
-    orig_tokens = _tokens(str(orig.get("reasoning", "")))
-    post_tokens = _tokens(str(post.get("reasoning", "")))
-    if orig_tokens or post_tokens:
-        union = len(orig_tokens | post_tokens)
-        overlap = (
-            round(len(orig_tokens & post_tokens) / union, 3) if union else 1.0
-        )
-    else:
-        overlap = 1.0
-
-    return {
-        "symbols_added": symbols_added,
-        "symbols_removed": symbols_removed,
-        "confidence_changes": confidence_changes,
-        "consensus_score_delta": round(post_consensus - orig_consensus, 3),
-        "time_horizon_changed": horizon_changed,
-        "reasoning_overlap": overlap,
-    }
 
 
 async def _attach_baseline_delta(
@@ -3993,158 +3499,44 @@ async def synthesize_conclusion(
     return conclusion
 
 
-def _extract_lessons_payload(raw: str) -> Any:
-    """Re-parse the synthesizer's raw output to surface the optional
-    `lessons` array. `_safe_conclusion` strips it out (only the
-    five canonical fields are kept) so we re-run the lenient parse
-    here. Returns the raw `lessons` value (`list` when the model
-    obeyed; anything else is filtered downstream)."""
-    try:
-        cleaned = _strip_code_fence(strip_think_blocks(raw))
-        data = _loads_lenient(cleaned)
-    except (json.JSONDecodeError, ValueError):
-        salvaged = _extract_json_object(cleaned) if cleaned else None
-        if salvaged is None:
-            return None
-        try:
-            data = _loads_lenient(salvaged)
-        except (json.JSONDecodeError, ValueError):
-            return None
-    if not isinstance(data, dict):
-        return None
-    return data.get("lessons")
+# ── Lessons extraction (extracted to discussion/lessons.py) ────────
+# Re-export for back-compat with `backtest_sweep_service` + the seven
+# `tests/test_discussion_*` files that reach into this module by name.
+from services.discussion.lessons import (  # noqa: E402,F401
+    _extract_lessons_payload,
+    extract_winning_thesis_lessons,
+)
 
 
-async def extract_winning_thesis_lessons(
-    db: AsyncSession,
-    discussion: Discussion,
-    *,
-    win_prompt_text: str,
-    user_id: str | None = None,
-) -> int:
-    """PR-2: extract structured `lessons` from a backtest discussion
-    that hit its win threshold WITHOUT running a full critique
-    round. Single LLM call given the win-band prompt
-    (`format_post_mortem_win_prompt`'s output, which already carries
-    the D1-D5 numbers + verdict + missed-winners table).
-
-    Closes the production-win gap: the post-mortem flow used to
-    `return` early on wins to save N personas × LLM cost per winning
-    date, leaving the learning loop one-sided (only miss-mode
-    lessons accumulated). One additional LLM call per win is the
-    minimum cost to record what worked.
-
-    Returns the number of lesson rows written (0..5). Best-effort
-    on every error path: LLM failure / parse failure / persist
-    failure all log + return 0; the sweep keeps going.
-
-    Skipped silently when:
-      - `discussion.as_of_date` is None (live discussion — lessons
-        are only meaningful for backtest replay)
-      - `discussion.conclusion` is missing or marked `_parse_error`
-      - the win prompt text is empty (no D1-D5 data resolved yet)
-    """
-    if discussion.as_of_date is None:
-        return 0
-    if not discussion.conclusion or discussion.conclusion.get("_parse_error"):
-        return 0
-    if not win_prompt_text:
-        return 0
-
-    if provider_model_resolver is None:   # for type-checker
-        pass
-    from services.system_task_config_service import resolve as _resolve_task
-    provider, model = await _resolve_task(db, "discussion_synthesizer")
-
-    # The win-band prompt asks the personas to reflect; here we
-    # collapse N reflection round + re-synth into a single LLM call
-    # whose only job is to emit the lessons array. The system prompt
-    # is intentionally narrow so the model doesn't try to also
-    # rewrite the conclusion or invent confidence numbers.
-    sys_prompt = (
-        "你是回測命中經驗的歸檔員。閱讀「事後檢討 — 命中經驗」反思題目，"
-        "把這次命中的可重用教訓整理成結構化 JSON。"
-        "**所有輸出必須使用繁體中文（台灣用語）**。"
-    )
-    user_prompt = win_prompt_text + (
-        "\n\n## 任務\n"
-        "**直接輸出合法 JSON**（不要 markdown fence、不要解釋、不要註解）：\n"
-        '{ "lessons": [\n'
-        '  {"category": "correct_signal_combo", "lesson_text": "...≤80字...",\n'
-        '   "related_symbols": ["..."], "missed_winners": ["..."]}\n'
-        "] }\n\n"
-        "欄位規則：\n"
-        "- 最多 5 條，重要先放\n"
-        "- category 五選一：correct_signal_combo | successful_thesis | "
-        "missing_signal_category | regime_match | other\n"
-        "- lesson_text ≤ 80 字、繁體中文、要點名具體訊號 / 產業 / 股票，"
-        "避免「下次要更小心」這類空話\n"
-        "- 沒有真正可重用的教訓（純 luck）→ 回 `\"lessons\": []`，不要硬擠"
-    )
-
-    assembled = ""
-    try:
-        async for event in stream_chat(
-            messages=[
-                {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            provider=provider,
-            model=model,
-            max_tokens=2048,
-            temperature=0.2,
-            db=db,
-            user_id=user_id,
-        ):
-            etype = event.get("type")
-            if etype == "delta":
-                assembled += event.get("text", "")
-            elif etype == "error":
-                log.warning(
-                    "discussion.win_lesson.llm_error",
-                    extra={
-                        "discussion_id": str(discussion.id),
-                        "message": event.get("message"),
-                    },
-                )
-                break
-    except Exception:
-        log.exception(
-            "discussion.win_lesson.stream_failed",
-            extra={"discussion_id": str(discussion.id)},
-        )
-        return 0
-
-    raw_obj = _extract_lessons_payload(assembled)
-    if not raw_obj:
-        return 0
-
-    try:
-        from services.discussion_lesson_service import (
-            extract_and_persist_lessons,
-        )
-        written = await extract_and_persist_lessons(
-            db,
-            discussion_id=discussion.id,
-            owner_user_id=discussion.owner_id,
-            market=discussion.market,
-            as_of_date=discussion.as_of_date,
-            lessons_payload=raw_obj,
-            ctx=None,
-            verdict="win",
-        )
-        return len(written)
-    except Exception:
-        log.exception(
-            "discussion.win_lesson.persist_failed",
-            extra={"discussion_id": str(discussion.id)},
-        )
-        return 0
+# Re-export the JSON-parse helpers from llm_parsing_utils that this
+# module's parsers used to expose. Several tests reach in via
+# `discussion_service.strip_think_blocks` / `_extract_json_object`
+# (the original names this module surfaced); the symbols have moved
+# to `services.llm_parsing_utils` but the test surface stays stable.
+from services.llm_parsing_utils import (  # noqa: E402,F401
+    extract_json_object as _extract_json_object,
+    strip_think_blocks,
+)
 
 
-# Type-checker hush: keep `extract_winning_thesis_lessons`'s `provider`
-# resolution lazy-imported inside the function to avoid circular imports
-# between discussion_service ↔ system_task_config_service. The sentinel
-# below makes mypy / pyright realise the early-return path has been
-# considered without spreading the lint suppression.
-provider_model_resolver = None
+# Conclusion parsing extracted to discussion/conclusion_parsing.py.
+# Re-export for back-compat with synthesize_conclusion (still in this
+# file) + tests/test_discussion_conclusion_diff.py.
+from services.discussion.conclusion_parsing import (  # noqa: E402,F401
+    _parse_recommendations,
+    _safe_conclusion,
+    _try_repair_truncated_json,
+    compute_conclusion_diff,
+)
+
+
+# Per-turn JSON parsers extracted to discussion/turn_parsing.py.
+# Re-export for back-compat with `_ask_persona` (still in this file)
+# + tests/test_discussion_service.py.
+from services.discussion.turn_parsing import (  # noqa: E402,F401
+    DEFAULT_STANCE,
+    VALID_STANCES,
+    _decode_partial_json_string,
+    _parse_turn_response,
+    _salvage_truncated_json,
+)

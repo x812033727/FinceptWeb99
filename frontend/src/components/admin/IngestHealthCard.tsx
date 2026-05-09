@@ -9,6 +9,15 @@ interface IngestHealth {
   ok: boolean;
   row_count: number;
   error: string | null;
+  // Optional: present when the upstream returned HTTP 200 with
+  // body.status != 200 (FinMind paywall / tier-unavailable). Distinct
+  // from `error` because the JSON body's raw msg is preserved here so
+  // the UI can render it without parsing the prefix back out.
+  silent_deny?: string | null;
+  // Optional: ISO date/datetime of the latest `ts` actually written
+  // by this run. Older than 2 calendar days vs `last_run_at` triggers
+  // an amber "stale data" pill.
+  latest_data_ts?: string | null;
 }
 
 interface IngestRetryResult {
@@ -19,7 +28,7 @@ interface IngestRetryResult {
 /**
  * Decide the status badge for one ingest row.
  *
- * Five states (in priority order):
+ * Six states (in priority order):
  *  - **pending**: never-run-yet (`last_run_at === null`). Newly-
  *    deployed cron before its first scheduled tick — neutral grey,
  *    not a failure.
@@ -28,9 +37,14 @@ interface IngestRetryResult {
  *    the admin "Retry now" endpoint while the background task is
  *    in-flight. Blue, so the operator sees their click registered
  *    without a misleading red badge.
+ *  - **silent deny**: error starts with `silent_paywall:` (or the
+ *    structured `silent_deny` field is set). The upstream returned
+ *    HTTP 200 with body.status != 200 — typically FinMind paywall /
+ *    quota burst. Purple, distinct from `skipped` so operators can
+ *    spot upstream-tier issues at a glance.
  *  - **skipped**: last run failed but the error message starts with
  *    `skipped:` — a known-permanent-state record from a fail-soft
- *    path (e.g. FinMind paywall in PR #183, or a deliberately-off
+ *    path (e.g. FinMind explicit 4xx paywall, or a deliberately-off
  *    cron). Yellow, not red, so it doesn't read as an actionable
  *    incident.
  *  - **error**: last run failed for any other reason. Red.
@@ -59,6 +73,12 @@ export function deriveIngestBadge(r: IngestHealth): { text: string; cls: string 
       cls: "bg-blue-500/10 text-blue-400 border border-blue-500/30",
     };
   }
+  if (r.silent_deny || errLower.startsWith("silent_paywall")) {
+    return {
+      text: "silent deny",
+      cls: "bg-purple-500/10 text-purple-400 border border-purple-500/30",
+    };
+  }
   if (errLower.startsWith("skipped")) {
     return {
       text: "skipped",
@@ -69,6 +89,28 @@ export function deriveIngestBadge(r: IngestHealth): { text: string; cls: string 
     text: "error",
     cls: "bg-red-500/10 text-red-400 border border-red-500/30",
   };
+}
+
+
+// 2 calendar days. Long enough to absorb weekends + a holiday Monday
+// without nagging, short enough to flag a stale ingest before personas
+// quote a week-old number. Per-task crons run daily, so >48h between
+// `last_run_at` and `latest_data_ts` is real drift.
+const STALE_DATA_MS = 2 * 24 * 3600 * 1000;
+
+/**
+ * True iff `latest_data_ts` is older than `last_run_at` minus the
+ * staleness budget. Returns false when either field is missing —
+ * tasks that don't write time-series data (verify, score, prune)
+ * legitimately have `latest_data_ts === null` and shouldn't render
+ * a stale badge.
+ */
+export function isDataStale(r: IngestHealth): boolean {
+  if (!r.latest_data_ts || !r.last_run_at) return false;
+  const dataAt = new Date(r.latest_data_ts).getTime();
+  const runAt = new Date(r.last_run_at).getTime();
+  if (!Number.isFinite(dataAt) || !Number.isFinite(runAt)) return false;
+  return runAt - dataAt > STALE_DATA_MS;
 }
 
 // Mirror of `RETRYABLE_INGEST_JOBS` in `backend/api/admin/router.py`.
@@ -294,7 +336,15 @@ export function IngestHealthCard() {
                     {r.row_count.toLocaleString()}
                   </td>
                   <td className="py-1.5 pr-3 text-muted-foreground align-top">
-                    {timeAgo(r.last_run_at)}
+                    <div>{timeAgo(r.last_run_at)}</div>
+                    {isDataStale(r) && (
+                      <span
+                        title={`資料新鮮度：寫入的最新 ts 為 ${r.latest_data_ts} — 比 last_run_at 落後超過 2 日`}
+                        className="inline-block mt-0.5 px-1 py-0.5 rounded text-[9px] bg-amber-500/10 text-amber-400 border border-amber-500/30"
+                      >
+                        data stale
+                      </span>
+                    )}
                   </td>
                   <td
                     className="py-1.5 text-muted-foreground truncate max-w-[24rem] align-top"

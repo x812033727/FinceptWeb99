@@ -24,9 +24,11 @@ import httpx
 
 import data.tw.finmind_connector as finmind
 from cache.redis_cache import acquire_lock, release_lock
+from data.tw.finmind_connector import FinMindSilentDeny
 from data.tw.finmind_paywall import (
     extract_body_message as _extract_body_message,
     looks_like_paywall as _looks_like_paywall,
+    raise_if_silent_denied,
 )
 from db.session import AsyncSessionLocal
 from services.ingest.repository import (
@@ -138,7 +140,9 @@ def _normalize_shareholding(items: list[dict]) -> list[ShareholdingRow]:
 
 async def _ingest_shareholding() -> dict[str, object]:
     start = (date.today() - timedelta(days=_SHAREHOLDING_LOOKBACK_DAYS)).isoformat()
-    items = await finmind.get_shareholding_market_wide(start)
+    items = raise_if_silent_denied(
+        await finmind.get_shareholding_market_wide(start),
+    )
     payload = _normalize_shareholding(items)
     if not payload:
         return {"rows": 0, "fetched": len(items)}
@@ -192,7 +196,9 @@ def _aggregate_total_institutional(items: list[dict]) -> list[MarketInstitutiona
 
 async def _ingest_total_institutional() -> dict[str, object]:
     start = (date.today() - timedelta(days=_TOTAL_INSTITUTIONAL_LOOKBACK_DAYS)).isoformat()
-    items = await finmind.get_total_institutional_market_wide(start)
+    items = raise_if_silent_denied(
+        await finmind.get_total_institutional_market_wide(start),
+    )
     payload = _aggregate_total_institutional(items)
     if not payload:
         return {"rows": 0, "fetched": len(items)}
@@ -236,9 +242,17 @@ async def run() -> None:
         results: dict[str, dict[str, object]] = {}
         sub_failures: list[str] = []
         sub_paywalls: list[str] = []
+        sub_silent_msgs: list[str] = []
         for name, fn in _SUBSTEPS:
             try:
                 results[name] = await fn()
+            except FinMindSilentDeny as exc:
+                sub_paywalls.append(f"{name}: {exc.body_msg[:80]}")
+                sub_silent_msgs.append(f"{name}: {exc.body_msg[:80]}")
+                log.warning(
+                    "ingest_holdings_aggregates_tw.silent_deny",
+                    extra={"substep": name, "upstream_message": exc.body_msg},
+                )
             except Exception as exc:
                 body_msg = _extract_body_message(exc)
                 if _looks_like_paywall(body_msg):
@@ -271,12 +285,17 @@ async def run() -> None:
 
         if sub_paywalls:
             await clear_failures(JOB_ID)
+            silent_payload = (
+                "; ".join(sub_silent_msgs) if sub_silent_msgs else None
+            )
             await record_health(
                 JOB_ID, ok=False, row_count=total_rows,
                 error=(
                     f"skipped: FinMind paywalled — {'; '.join(sub_paywalls)}. "
                     f"Successful sub-steps: {', '.join(success_names) or 'none'}."
                 ),
+                silent_deny=silent_payload,
+                source=("finmind" if silent_payload else None),
             )
             return
 

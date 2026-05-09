@@ -26,9 +26,11 @@ import httpx
 
 import data.tw.finmind_connector as finmind
 from cache.redis_cache import acquire_lock, release_lock
+from data.tw.finmind_connector import FinMindSilentDeny
 from data.tw.finmind_paywall import (
     extract_body_message as _extract_body_message,
     looks_like_paywall as _looks_like_paywall,
+    raise_if_silent_denied,
 )
 from db.session import AsyncSessionLocal
 from services.ingest.repository import (
@@ -95,7 +97,9 @@ def _format_error(exc: BaseException) -> str:
 
 async def _ingest_disposition() -> dict[str, object]:
     start = (date.today() - timedelta(days=_DISPOSITION_LOOKBACK_DAYS)).isoformat()
-    items = await finmind.get_disposition_market_wide(start)
+    items = raise_if_silent_denied(
+        await finmind.get_disposition_market_wide(start),
+    )
     payload: list[DispositionRow] = []
     for r in items:
         sym = (r.get("symbol") or "").strip()
@@ -121,7 +125,9 @@ async def _ingest_disposition() -> dict[str, object]:
 
 async def _ingest_suspended() -> dict[str, object]:
     start = (date.today() - timedelta(days=_SUSPENDED_LOOKBACK_DAYS)).isoformat()
-    items = await finmind.get_suspended_market_wide(start)
+    items = raise_if_silent_denied(
+        await finmind.get_suspended_market_wide(start),
+    )
     payload: list[SuspendedRow] = []
     for r in items:
         sym = (r.get("symbol") or "").strip()
@@ -144,7 +150,9 @@ async def _ingest_suspended() -> dict[str, object]:
 
 async def _ingest_day_trading() -> dict[str, object]:
     start = (date.today() - timedelta(days=_DAY_TRADING_LOOKBACK_DAYS)).isoformat()
-    items = await finmind.get_day_trading_market_wide(start)
+    items = raise_if_silent_denied(
+        await finmind.get_day_trading_market_wide(start),
+    )
     payload: list[DayTradingRow] = []
     for r in items:
         sym = (r.get("symbol") or "").strip()
@@ -200,9 +208,21 @@ async def run() -> None:
         results: dict[str, dict[str, object]] = {}
         sub_failures: list[str] = []
         sub_paywalls: list[str] = []
+        sub_silent_msgs: list[str] = []
         for name, fn in _SUBSTEPS:
             try:
                 results[name] = await fn()
+            except FinMindSilentDeny as exc:
+                # Treat HTTP 200 + body.status != 200 the same as an
+                # explicit 4xx paywall — known-permanent skip, no
+                # backoff. Track the body msg separately so the
+                # health row can report it via `silent_deny=...`.
+                sub_paywalls.append(f"{name}: {exc.body_msg[:80]}")
+                sub_silent_msgs.append(f"{name}: {exc.body_msg[:80]}")
+                log.warning(
+                    "ingest_risk_signals_tw.silent_deny",
+                    extra={"substep": name, "upstream_message": exc.body_msg},
+                )
             except Exception as exc:
                 body_msg = _extract_body_message(exc)
                 if _looks_like_paywall(body_msg):
@@ -243,12 +263,17 @@ async def run() -> None:
 
         if sub_paywalls:
             await clear_failures(JOB_ID)
+            silent_payload = (
+                "; ".join(sub_silent_msgs) if sub_silent_msgs else None
+            )
             await record_health(
                 JOB_ID, ok=False, row_count=total_rows,
                 error=(
                     f"skipped: FinMind paywalled — {'; '.join(sub_paywalls)}. "
                     f"Successful sub-steps: {', '.join(success_names) or 'none'}."
                 ),
+                silent_deny=silent_payload,
+                source=("finmind" if silent_payload else None),
             )
             return
 

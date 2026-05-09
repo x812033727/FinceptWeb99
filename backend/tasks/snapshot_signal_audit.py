@@ -15,12 +15,23 @@ One snapshot per market. Markets are taken from the discussion
 archive, not hardcoded — if a new market shows up, its rows land
 on the very next cron tick. The all-markets aggregate (`market
 IS NULL`) is computed unconditionally.
+
+Backoff is included for consistency with the other ingest tasks
+even though pure-DB ops are unlikely to fail transiently — keeps
+the admin UI's badge logic uniform.
 """
 import logging
 
 from cache.redis_cache import acquire_lock, release_lock
 from db.session import AsyncSessionLocal
-from services.ingest.repository import record_health
+from services.ingest.repository import (
+    backoff_remaining_seconds,
+    clear_failures,
+    get_failure_count,
+    get_health,
+    record_failure,
+    record_health,
+)
 from services.signal_audit_service import snapshot_audit_to_history
 
 log = logging.getLogger(__name__)
@@ -45,31 +56,59 @@ async def run() -> None:
         log.info("snapshot_signal_audit.skipped_lock_held")
         return
     try:
-        total_rows = 0
-        async with AsyncSessionLocal() as db:
-            for market in _SNAPSHOT_SCOPES:
-                try:
-                    written = await snapshot_audit_to_history(
-                        db, market=market,
+        remaining = await backoff_remaining_seconds(JOB_ID)
+        if remaining > 0:
+            failures = await get_failure_count(JOB_ID)
+            mins = max(1, remaining // 60)
+            previous = await get_health(JOB_ID)
+            tail = ""
+            if previous and previous.error and "skipped" not in (previous.error or ""):
+                tail = f"; last: {previous.error[:200]}"
+            await record_health(
+                JOB_ID, ok=False, row_count=0,
+                error=(
+                    f"skipped (backoff after {failures} failures, "
+                    f"~{mins} min remaining{tail})"
+                ),
+            )
+            return
+
+        try:
+            total_rows = 0
+            async with AsyncSessionLocal() as db:
+                for market in _SNAPSHOT_SCOPES:
+                    try:
+                        written = await snapshot_audit_to_history(
+                            db, market=market,
+                        )
+                    except Exception as exc:
+                        log.warning(
+                            "snapshot_signal_audit.scope_failed",
+                            extra={"market": market, "error": str(exc)},
+                        )
+                        continue
+                    total_rows += written
+                    log.info(
+                        "snapshot_signal_audit.scope_done",
+                        extra={"market": market, "rows": written},
                     )
-                except Exception as exc:
-                    log.warning(
-                        "snapshot_signal_audit.scope_failed",
-                        extra={"market": market, "error": str(exc)},
-                    )
-                    continue
-                total_rows += written
-                log.info(
-                    "snapshot_signal_audit.scope_done",
-                    extra={"market": market, "rows": written},
-                )
+        except Exception as exc:
+            failures = await record_failure(JOB_ID)
+            log.warning(
+                "snapshot_signal_audit.failed",
+                extra={"error": str(exc), "failures": failures},
+            )
+            await record_health(
+                JOB_ID, ok=False, row_count=0,
+                error=f"unexpected: {exc} (failure #{failures}; auto-backoff armed)",
+            )
+            return
+
+        await clear_failures(JOB_ID)
         log.info(
             "snapshot_signal_audit.done",
-            extra={"total_rows": total_rows},
+            extra={"rows_processed": total_rows},
         )
         await record_health(JOB_ID, ok=True, row_count=total_rows)
-    except Exception as exc:
-        log.exception("snapshot_signal_audit.failed")
-        await record_health(JOB_ID, ok=False, error=str(exc))
     finally:
         await release_lock(_LOCK_KEY)

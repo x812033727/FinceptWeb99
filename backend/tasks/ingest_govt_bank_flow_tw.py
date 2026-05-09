@@ -15,9 +15,11 @@ import httpx
 
 import data.tw.finmind_connector as finmind
 from cache.redis_cache import acquire_lock, release_lock
+from data.tw.finmind_connector import FinMindSilentDeny
 from data.tw.finmind_paywall import (
     extract_body_message as _extract_body_message,
     looks_like_paywall as _looks_like_paywall,
+    raise_if_silent_denied,
 )
 from db.session import AsyncSessionLocal
 from services.ingest.repository import (
@@ -117,6 +119,19 @@ async def run() -> None:
 
         try:
             row_count = await _do_run()
+        except FinMindSilentDeny as exc:
+            await clear_failures(JOB_ID)
+            log.warning(
+                "ingest_govt_bank_flow_tw.silent_deny",
+                extra={"upstream_message": exc.body_msg},
+            )
+            await record_health(
+                JOB_ID, ok=False, row_count=0,
+                error=f"silent_paywall: {exc.body_msg}",
+                silent_deny=exc.body_msg,
+                source="finmind",
+            )
+            return
         except Exception as exc:
             body_msg = _extract_body_message(exc)
             if _looks_like_paywall(body_msg):
@@ -159,7 +174,9 @@ async def run() -> None:
 
 async def _do_run() -> int:
     start = (date.today() - timedelta(days=_LOOKBACK_DAYS)).isoformat()
-    items = await finmind.get_government_bank_flow_market_wide(start)
+    items = raise_if_silent_denied(
+        await finmind.get_government_bank_flow_market_wide(start),
+    )
     if not items:
         return 0
 

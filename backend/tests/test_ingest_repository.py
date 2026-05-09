@@ -136,6 +136,47 @@ def test_ohlcv_bar_from_connector_row_drops_malformed():
     ) is None
 
 
+def test_ohlcv_bar_from_connector_row_drops_non_positive_close():
+    """Listed equities never trade at 0; an upstream zero is junk."""
+    assert OhlcvBar.from_connector_row(
+        "TW", "2330", "twse",
+        {"time": "2026-04-01", "open": 600, "high": 600, "low": 600, "close": 0},
+    ) is None
+    assert OhlcvBar.from_connector_row(
+        "TW", "2330", "twse",
+        {"time": "2026-04-01", "open": 600, "high": 600, "low": 600, "close": -1},
+    ) is None
+
+
+def test_ohlcv_bar_from_connector_row_drops_non_positive_open():
+    assert OhlcvBar.from_connector_row(
+        "TW", "2330", "twse",
+        {"time": "2026-04-01", "open": 0, "high": 600, "low": 590, "close": 595},
+    ) is None
+
+
+def test_ohlcv_bar_from_connector_row_keeps_zero_volume():
+    """Halt days have legitimate zero volume — must NOT be dropped."""
+    bar = OhlcvBar.from_connector_row(
+        "TW", "2330", "twse",
+        {"time": "2026-04-01", "open": 600, "high": 600, "low": 600, "close": 600, "volume": 0},
+    )
+    assert bar is not None
+    assert bar.volume == 0
+    assert bar.close == 600.0
+
+
+def test_ohlcv_bar_from_connector_row_allows_missing_close():
+    """A row with close=None still passes (gets stored as NULL); only
+    explicit non-positive numbers are rejected."""
+    bar = OhlcvBar.from_connector_row(
+        "TW", "2330", "twse",
+        {"time": "2026-04-01", "open": 600, "high": 600, "low": 595, "close": None},
+    )
+    assert bar is not None
+    assert bar.close is None
+
+
 @pytest.mark.asyncio
 async def test_chunked_upsert_handles_payloads_above_param_cap(
     db_session: AsyncSession,

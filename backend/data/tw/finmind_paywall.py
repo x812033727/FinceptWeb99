@@ -106,3 +106,32 @@ def is_paywall_response(exc: BaseException) -> bool:
                 ...
     """
     return looks_like_paywall(extract_body_message(exc))
+
+
+def raise_if_silent_denied(rows: list, *, days: int = 1) -> list:
+    """Promote a silent-deny (HTTP 200 + body.status != 200) into
+    :class:`FinMindSilentDeny` so the task layer can surface it as
+    `ok=False` instead of `ok=True row_count=0`.
+
+    FinMind's silent-deny returns 200 OK with an empty data array;
+    the connector exposes the body's ``msg`` via the
+    ``consume_last_silent_deny`` contextvar. Tasks call this helper
+    immediately after a FinMind read; it's a no-op when the call
+    was a real success or a legitimate empty.
+
+    Returns ``rows`` unchanged so it composes inline:
+
+        rows = raise_if_silent_denied(await finmind.get_x(...))
+    """
+    # Imported here (instead of at module top) so the import graph
+    # stays one-way: callers depend on `finmind_paywall`, which
+    # depends on `finmind_connector` — not the other way around.
+    from data.tw.finmind_connector import (
+        FinMindSilentDeny,
+        consume_last_silent_deny,
+    )
+
+    silent = consume_last_silent_deny()
+    if silent and not rows:
+        raise FinMindSilentDeny(silent, days=days)
+    return rows

@@ -18,6 +18,9 @@ cadence.
 TTL_QUOTE_TW = 60        # TWSE OpenAPI is 3–5 min delayed; 1 min is plenty
 TTL_QUOTE_US = 15        # Polygon is ~real-time; 15 s mirrors WS pump cadence
 TTL_QUOTE_CRYPTO = 10    # Kraken WS push refreshes faster than the cache
+TTL_QUOTE_US_OFF_HOURS = 5 * 60  # overseas indicator snapshots cached during
+                                  # off-hours; US indices barely move when US
+                                  # is closed but TW session is live.
 
 # ── history (daily OHLCV bars) ───────────────────────────────────
 TTL_HISTORY_DAILY = 4 * 3600        # 4 h — yesterday's bars don't change
@@ -35,6 +38,7 @@ TTL_EARNINGS = 6 * 3600              # next-earnings date refresh — yfinance
 TTL_INSTITUTIONAL = 4 * 3600        # 法人買賣超 — once per trading day
 TTL_MARGIN = 4 * 3600                # 融資融券 — once per trading day
 TTL_REVENUE = 12 * 3600              # 月營收 — monthly publication
+TTL_DERIVATIVES = 4 * 3600          # TAIFEX 三大法人 / 個股期 OI — daily post-close
 
 # ── screener / news / options ────────────────────────────────────
 TTL_SCREENER = 10 * 60               # 10 min — heavy compute upstream

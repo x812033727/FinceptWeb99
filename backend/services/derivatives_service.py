@@ -25,12 +25,11 @@ import logging
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from cache.cache_ttls import TTL_DERIVATIVES
 from cache.redis_cache import cache_get, cache_set
 from data.tw import finmind_connector as finmind
 
 log = logging.getLogger(__name__)
-
-_CACHE_TTL_SECONDS = 4 * 3600   # 4 hours
 # How many calendar days back to fetch to cover ~5 trading sessions
 # even with a holiday cluster.
 _LOOKBACK_DAYS = 14
@@ -111,7 +110,7 @@ async def get_taifex_positioning(
         }
 
     None when FinMind returns no rows (quota exhausted, paywall, or
-    genuine empty window). Cached for `_CACHE_TTL_SECONDS` per
+    genuine empty window). Cached for `TTL_DERIVATIVES` per
     (contract, as_of) — the same backtest replayed twice in a row
     only fans out one FinMind call.
     """
@@ -184,7 +183,7 @@ async def get_taifex_positioning(
     }
 
     try:
-        await cache_set(cache_key, json.dumps(result), _CACHE_TTL_SECONDS)
+        await cache_set(cache_key, json.dumps(result), TTL_DERIVATIVES)
     except Exception:
         pass
     return result
@@ -261,7 +260,7 @@ async def get_securities_lending_trend(
 
     None when FinMind returns no rows or fewer than `_SBL_MIN_SESSIONS`
     sessions in the window. Cached per (symbol, as_of) for
-    `_CACHE_TTL_SECONDS` so multi-persona rounds don't re-fan-out.
+    `TTL_DERIVATIVES` so multi-persona rounds don't re-fan-out.
     """
     end = as_of or datetime.now(UTC).date()
     cache_key = f"sbl:trend:{symbol}:{end.isoformat()}"
@@ -342,7 +341,7 @@ async def get_securities_lending_trend(
     }
 
     try:
-        await cache_set(cache_key, json.dumps(result), _CACHE_TTL_SECONDS)
+        await cache_set(cache_key, json.dumps(result), TTL_DERIVATIVES)
     except Exception:
         pass
     return result

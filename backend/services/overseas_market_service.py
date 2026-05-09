@@ -35,7 +35,8 @@ import logging
 from datetime import date as _date, datetime as _dt, timezone as _tz
 from typing import Any
 
-from cache.redis_cache import cache_get, cache_set
+from cache.cache_ttls import TTL_QUOTE_US_OFF_HOURS
+from cache.redis_cache import cache_get, cache_set_unless_empty
 
 log = logging.getLogger(__name__)
 
@@ -52,10 +53,6 @@ _OVERSEAS_INDICES: dict[str, str] = {
     "^VIX":  "VIX 波動率指數",        # serves as a partial options_iv_skew proxy
 }
 
-# How long the result is cached. Indices barely move during TW
-# trading hours (US is closed), so a long cache is fine; the cron-
-# free, lazy-fetch pattern keeps this from hammering yfinance.
-_CACHE_TTL_SECONDS = 5 * 60   # 5 min
 _CACHE_KEY_PREFIX = "overseas_indicators"
 
 
@@ -139,7 +136,7 @@ async def get_overseas_snapshot(
     """Return `{as_of, indices: [...]}` for the discussion ctx.
 
     Live mode (`as_of=None`) fans out one `get_quote` per ticker
-    and caches the rolled-up dict for `_CACHE_TTL_SECONDS` so
+    and caches the rolled-up dict for `TTL_QUOTE_US_OFF_HOURS` so
     parallel discussion runs don't hammer yfinance.
 
     Backtest mode reads daily bars and picks the as-of close. The
@@ -173,15 +170,13 @@ async def get_overseas_snapshot(
         "as_of": as_of.isoformat() if as_of else None,
         "indices": rows,
     }
-    if rows:
-        # Don't cache empty results — a transient yfinance outage
-        # would otherwise lock 5 min of zero state. Mirrors the
-        # tw_market_service / us_market_service "don't cache empty"
-        # convention.
-        await cache_set(
-            cache_key, json.dumps(out, ensure_ascii=False),
-            _CACHE_TTL_SECONDS,
-        )
+    # Transient-empty: skip cache when yfinance returned [] for the
+    # whole index list (likely an outage), so the next request retries.
+    await cache_set_unless_empty(
+        cache_key,
+        json.dumps(out, ensure_ascii=False) if rows else None,
+        TTL_QUOTE_US_OFF_HOURS,
+    )
     return out
 
 

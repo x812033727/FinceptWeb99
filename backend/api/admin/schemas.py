@@ -233,6 +233,12 @@ class IngestHealthOut(BaseModel):
     # data" pill. Tasks that aren't time-series (verify, score, prune)
     # leave this null.
     latest_data_ts: str | None = None
+    # Backend-computed: True iff `latest_data_ts` is more than 2
+    # *trading days* (Mon-Fri) behind `last_run_at`. Replaces the
+    # previous frontend calendar-day check that false-fired every
+    # Monday after a quiet weekend. Always False when latest_data_ts
+    # is null (non-time-series job).
+    data_stale: bool = False
 
 
 class IngestRetryResult(BaseModel):

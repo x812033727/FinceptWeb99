@@ -254,4 +254,45 @@ describe("isDataStale", () => {
       }),
     ).toBe(false);
   });
+
+  it("trusts the backend-computed data_stale field when present", () => {
+    // Backend sends data_stale=false for "Mon run / Fri data" (the
+    // weekend-aware case). The legacy client-side calendar check
+    // would have flagged this as stale; the new behaviour must
+    // defer to the backend's trading-day calculation.
+    expect(
+      isDataStale({
+        ...fresh,
+        last_run_at: "2026-04-27T08:00:00Z",   // Mon
+        latest_data_ts: "2026-04-24",           // Fri
+        data_stale: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("trusts data_stale=true even when the calendar gap is small", () => {
+    // Inverse: backend says stale (e.g. tighter per-job threshold).
+    // Frontend must NOT second-guess it.
+    expect(
+      isDataStale({
+        ...fresh,
+        last_run_at: "2026-05-01T08:00:00Z",
+        latest_data_ts: "2026-04-30",
+        data_stale: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("falls back to calendar-day check when data_stale is undefined", () => {
+    // Older serializer didn't ship data_stale; UI should keep
+    // working against the legacy IngestHealthOut shape.
+    expect(
+      isDataStale({
+        ...fresh,
+        last_run_at: "2026-05-09T12:00:00Z",
+        latest_data_ts: "2026-04-30",
+        // data_stale intentionally omitted
+      }),
+    ).toBe(true);
+  });
 });

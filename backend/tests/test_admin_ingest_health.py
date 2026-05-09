@@ -94,6 +94,51 @@ async def test_ingest_health_round_trips_silent_deny_and_freshness(
 
 
 @pytest.mark.asyncio
+async def test_ingest_health_computes_data_stale_via_trading_days(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """API-layer regression: the `data_stale` boolean must be derived
+    from `is_data_stale` (trading-day-aware), not from a calendar-day
+    check. Two rows in one query: one fresh (Mon run + prev-Fri data
+    = 0 trading days behind), one stale (Fri run + prev Mon data = 3
+    trading days behind)."""
+    email = "ingest_admin_stale@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client=client)
+
+    canned = [
+        IngestHealth(
+            job_id="ingest_ohlcv_tw",
+            last_run_at="2026-04-27T06:30:00+00:00",   # Mon morning
+            ok=True,
+            row_count=2000,
+            error=None,
+            latest_data_ts="2026-04-24",                # Fri's data
+        ),
+        IngestHealth(
+            job_id="ingest_taiex_history",
+            last_run_at="2026-05-01T07:10:00+00:00",   # Fri
+            ok=True,
+            row_count=1,
+            error=None,
+            latest_data_ts="2026-04-27",                # prev Mon
+        ),
+    ]
+    with patch(
+        "services.ingest.repository.list_health",
+        AsyncMock(return_value=canned),
+    ):
+        r = await client.get("/api/admin/ingest/health", headers=_auth(token))
+
+    assert r.status_code == 200
+    body = {row["job_id"]: row for row in r.json()}
+    # Mon run reading Fri data — weekend-aware = NOT stale
+    assert body["ingest_ohlcv_tw"]["data_stale"] is False
+    # Fri run with prev-Mon data — 3 trading days behind = stale
+    assert body["ingest_taiex_history"]["data_stale"] is True
+
+
+@pytest.mark.asyncio
 async def test_ingest_health_returns_empty_when_no_jobs(
     client: AsyncClient, db_session: AsyncSession,
 ):

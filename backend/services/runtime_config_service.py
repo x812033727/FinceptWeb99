@@ -327,6 +327,23 @@ _REGISTRY: dict[str, RuntimeSettingSpec] = {
             "requires re-embedding the existing corpus."
         ),
     ),
+    "LESSON_EMBEDDING_BOOST_ALPHA": RuntimeSettingSpec(
+        key="LESSON_EMBEDDING_BOOST_ALPHA",
+        type="float",
+        name="Lesson semantic-boost weight (alpha)",
+        description=(
+            "Weight on the cosine-similarity boost in the lesson "
+            "fetch ranking. boost = 1 + alpha * max(0, cos). "
+            "Default 1.0 means a perfect semantic match doubles the "
+            "lesson's rank score; 0 disables semantic ranking and "
+            "falls back to time + symbol + regime only. Tune down "
+            "(0.3-0.5) if embeddings start surfacing tangentially-"
+            "related lessons that crowd out the time/symbol-anchored "
+            "matches a persona actually needs."
+        ),
+        min_value=0.0,
+        max_value=5.0,
+    ),
 }
 
 

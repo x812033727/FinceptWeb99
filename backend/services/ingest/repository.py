@@ -1945,6 +1945,160 @@ async def read_recent_news_autosession(
         return []
 
 
+# ── Corporate announcements (TW MOPS 重大訊息, PR-D1) ───────────────
+
+
+@dataclass(frozen=True)
+class CorporateAnnouncementRow:
+    """Canonical insert shape for `corporate_announcements`. Mirrors
+    `NewsArticleRow` everywhere it makes sense (sentiment fields are
+    populated downstream by the same scorer); the meaningful
+    differences are `category` (required) and `body` (separate from
+    title because MOPS' multi-paragraph disclosures benefit from
+    being quoted verbatim into the discussion ctx)."""
+    market: str
+    symbol: str
+    announced_at: datetime
+    category: str
+    title: str
+    body: str | None
+    source_url: str | None
+    source: str
+    dedup_hash: str
+
+
+async def insert_corporate_announcements(
+    db: AsyncSession,
+    rows: Iterable[CorporateAnnouncementRow],
+) -> int:
+    """Bulk insert with on-conflict-do-nothing on `dedup_hash`. Same
+    chunking strategy as `insert_news_articles` (PG wire-protocol
+    32 767 param cap; 11 fields per row → 2 000 rows = 22 000 params,
+    headroom-comfortable)."""
+    from models.corporate_announcement import CorporateAnnouncement
+
+    payload = [
+        {
+            "market": r.market,
+            "symbol": r.symbol,
+            "announced_at": r.announced_at,
+            "category": r.category,
+            "title": r.title,
+            "body": r.body,
+            "source_url": r.source_url,
+            "source": r.source,
+            "dedup_hash": r.dedup_hash,
+        }
+        for r in rows
+        if r.title and r.symbol
+    ]
+    if not payload:
+        return 0
+
+    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
+    insert_fn = sqlite_insert if dialect == "sqlite" else pg_insert
+
+    for i in range(0, len(payload), _INSERT_NEWS_CHUNK_ROWS):
+        chunk = payload[i:i + _INSERT_NEWS_CHUNK_ROWS]
+        stmt = insert_fn(CorporateAnnouncement).values(chunk).on_conflict_do_nothing(
+            index_elements=["dedup_hash"],
+        )
+        await db.execute(stmt)
+    await db.commit()
+    return len(payload)
+
+
+async def insert_corporate_announcements_autosession(
+    rows: Iterable[CorporateAnnouncementRow],
+) -> int:
+    rows = list(rows)
+    if not rows:
+        return 0
+    try:
+        async with AsyncSessionLocal() as db:
+            return await insert_corporate_announcements(db, rows)
+    except Exception as exc:
+        log.warning(
+            "ingest.announcements.write_error",
+            extra={
+                "market": rows[0].market, "count": len(rows),
+                "error": str(exc),
+            },
+        )
+        return 0
+
+
+async def read_recent_announcements(
+    db: AsyncSession,
+    market: str,
+    *,
+    symbol: str | None = None,
+    limit: int = 10,
+    max_age_days: int = 7,
+) -> list[dict[str, Any]]:
+    """Read the most recent material-info disclosures for
+    `(market, symbol)` newer than `max_age_days`. Used by the
+    discussion ctx block (PR-D4 wires it). Default window is 7
+    days because MOPS material info loses signal value fast — the
+    market has already priced it in within a session or two for
+    most categories.
+
+    Returns the rows as plain dicts so the ctx path can serialize
+    cleanly without an ORM dependency. Sentiment columns are
+    included so personas can see "this earnings disclosure scored
+    +0.6 (bullish)" inline.
+    """
+    from models.corporate_announcement import CorporateAnnouncement
+
+    cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
+    stmt = (
+        select(CorporateAnnouncement)
+        .where(
+            CorporateAnnouncement.market == market,
+            CorporateAnnouncement.announced_at >= cutoff,
+        )
+        .order_by(CorporateAnnouncement.announced_at.desc())
+        .limit(limit)
+    )
+    if symbol is not None:
+        stmt = stmt.where(CorporateAnnouncement.symbol == symbol)
+    rows = (await db.scalars(stmt)).all()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        out.append({
+            "symbol":              r.symbol,
+            "announced_at":        r.announced_at.isoformat(),
+            "category":            r.category,
+            "title":               r.title,
+            "body":                r.body,
+            "source_url":          r.source_url,
+            "sentiment_score":     r.sentiment_score,
+            "sentiment_label":     r.sentiment_label,
+        })
+    return out
+
+
+async def read_recent_announcements_autosession(
+    market: str,
+    *,
+    symbol: str | None = None,
+    limit: int = 10,
+    max_age_days: int = 7,
+) -> list[dict[str, Any]]:
+    try:
+        async with AsyncSessionLocal() as db:
+            return await read_recent_announcements(
+                db, market,
+                symbol=symbol, limit=limit, max_age_days=max_age_days,
+            )
+    except Exception as exc:
+        log.warning(
+            "ingest.announcements.read_error",
+            extra={"market": market, "symbol": symbol, "error": str(exc)},
+        )
+        return []
+
+
 # ── Health snapshot ────────────────────────────────────────────────
 
 @dataclass

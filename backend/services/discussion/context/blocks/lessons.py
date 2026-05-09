@@ -48,6 +48,7 @@ async def fetch_recent_lessons(
     focus_symbols: list[str] | None,
     as_of: date | None,
     record_error: ErrorRecorder,
+    topic: str | None = None,
 ) -> None:
     try:
         from config import settings
@@ -81,6 +82,19 @@ async def fetch_recent_lessons(
         # service treats that as neutral (no boost, no penalty).
         current_regime = _classify_regime(ctx)
 
+        # PR-J2: query embedding for semantic-similarity ranking.
+        # Built from topic + market + focus_symbols, mirroring the
+        # `build_embed_text` format used at lesson-write time so
+        # cosine match is well-defined across both sides. Fail-soft
+        # — embedding failure (no API key, provider down) returns
+        # None and the fetch falls back to the legacy time/symbol/
+        # regime-only ranking. We compute it ONCE per round, not
+        # per fetch call, so the per-symbol fan-out below shares the
+        # same vector.
+        query_embedding = await _build_query_embedding(
+            db, topic=topic, market=market, focus_symbols=focus_symbols,
+        )
+
         market_rows = await fetch_relevant_lessons(
             db,
             owner_user_id=owner_id,
@@ -89,6 +103,7 @@ async def fetch_recent_lessons(
             discussion_as_of=as_of,
             limit=market_limit,
             current_regime=current_regime,
+            query_embedding=query_embedding,
         )
 
         per_symbol: dict[str, list[dict[str, Any]]] = {}
@@ -106,6 +121,7 @@ async def fetch_recent_lessons(
                     discussion_as_of=as_of,
                     limit=symbol_limit,
                     current_regime=current_regime,
+                    query_embedding=query_embedding,
                 )
                 if rows:
                     per_symbol[sym] = [summary_to_dict(r) for r in rows]
@@ -194,3 +210,51 @@ async def fetch_recent_lessons(
             pass
     except Exception as exc:
         record_error("recent_lessons", exc)
+
+
+async def _build_query_embedding(
+    db: "AsyncSession",
+    *,
+    topic: str | None,
+    market: str,
+    focus_symbols: list[str] | None,
+) -> list[float] | None:
+    """PR-J2: produce the per-round query embedding once for both the
+    market-wide and per-symbol fetches. Mirrors `lesson_embedding_
+    service.build_embed_text` so the query vector lands in the same
+    space the lesson vectors do.
+
+    Returns None on any failure path:
+      - empty topic + no focus_symbols (nothing to embed against)
+      - LESSON_EMBEDDING_ENABLED=False (master switch off)
+      - no API key configured (env empty + no system DB row)
+      - provider error / malformed response
+    The fetch path treats None as "no semantic boost, fall back to
+    legacy ranking" so degradation is graceful — never blocks the
+    round.
+    """
+    topic = (topic or "").strip()
+    syms = [s for s in (focus_symbols or []) if s]
+    if not topic and not syms:
+        return None
+    try:
+        from services.lesson_embedding_service import (
+            build_embed_text,
+            embed_texts,
+        )
+        text = build_embed_text(
+            topic or "(no-topic-supplied)",
+            market=market,
+            related_symbols=syms,
+        )
+        if not text:
+            return None
+        vectors, _model = await embed_texts(db, [text])
+        if not vectors:
+            return None
+        return vectors[0]
+    except Exception as exc:
+        log.debug(
+            "recent_lessons.query_embed_failed", extra={"error": str(exc)},
+        )
+        return None

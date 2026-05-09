@@ -215,6 +215,13 @@ class Settings(BaseSettings):
     LESSON_EMBEDDING_PROVIDER: str = "openai"
     LESSON_EMBEDDING_MODEL: str = "text-embedding-3-small"
     LESSON_EMBEDDING_DIMS: int = 1536
+    # PR-J2: weight on the cosine-similarity boost in the lesson
+    # fetch ranking. `boost = 1 + ALPHA * max(0, cos)` so 1.0 means
+    # perfect semantic match doubles the score; 0 disables semantic
+    # ranking entirely (legacy time + symbol + regime only). Tune
+    # down via RuntimeTunablesCard if the embedding-driven ranking
+    # surfaces noise on a specific corpus.
+    LESSON_EMBEDDING_BOOST_ALPHA: float = 1.0
 
     # Per-call LLM `max_tokens` budgets. 8192 is generous for non-thinking
     # models (their actual output is far smaller — the cap only ceilings

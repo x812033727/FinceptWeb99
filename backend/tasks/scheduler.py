@@ -184,6 +184,22 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # ── TW MOPS material-info disclosures (PR-D1) ─────────────────
+    # Every 30 min. Sister cron to ingest_news_tw but pulls the
+    # official 重大訊息 listing from MOPS, which is structured
+    # (category enum) and timestamped to the minute — much higher
+    # signal density than news. The same hourly score_news_sentiment
+    # cron then picks up unscored rows for LLM sentiment scoring.
+    from tasks.ingest_announcements_tw import run as run_ingest_announcements_tw
+    scheduler.add_job(
+        run_ingest_announcements_tw,
+        trigger=IntervalTrigger(minutes=30),
+        id="ingest_announcements_tw",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── TW chip metrics ───────────────────────────────────────────
     # Both fire post-close (TWSE close 13:30 Taipei = 05:30 UTC).
     # Slightly staggered so a slow-but-not-yet-stuck TWSE doesn't

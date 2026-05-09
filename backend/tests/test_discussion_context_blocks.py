@@ -609,6 +609,7 @@ async def test_build_market_context_initialises_default_shape(
         "broker_concentration",      # PR #285
         "overseas_indicators",       # PR #269
         "recent_lessons",            # learning loop
+        "corporate_announcements",   # PR-D1
         "errors",
     }
 

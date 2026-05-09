@@ -135,6 +135,29 @@ SCHEDULER_HEARTBEAT_AGE_SECONDS = Gauge(
     "than the heartbeat TTL or never started).",
 )
 
+# ── TWSE token bucket rate limiter ────────────────────────────────
+# Counts degradation events in `data/tw/twse_connector._wait_for_token`.
+# Operators alerting on this can distinguish:
+#   reason="redis_unavailable"  → Redis bucket unreachable; falling
+#                                  back to local Semaphore + 1.1s
+#                                  pacing for THIS process only.
+#                                  Cross-pod coordination is lost
+#                                  until Redis returns.
+#   reason="bucket_starvation"  → Waited > _MAX_WAIT (30s) without
+#                                  acquiring a token. Falls back to
+#                                  local pacing rather than spamming
+#                                  TWSE; the signal is "global TWSE
+#                                  pressure is sustained".
+TWSE_RATE_LIMIT_DEGRADED_TOTAL = Counter(
+    "twse_rate_limit_degraded_total",
+    "TWSE token-bucket fall-open events. `redis_unavailable` = Redis "
+    "raised; the connector kept the request flowing via local "
+    "Semaphore + 1.1s sleep. `bucket_starvation` = waited the full "
+    "_MAX_WAIT without acquiring a token; same fallback applies. "
+    "A non-zero rate of either is a leading indicator of TWSE 429s.",
+    ["reason"],
+)
+
 # ── Core Web Vitals (reported by the frontend) ────────────────────
 # LCP / INP / FCP / TTFB are time metrics in seconds; bucket
 # boundaries are tuned around Google's "Good / Needs improvement /

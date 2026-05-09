@@ -102,3 +102,83 @@ async def test_wait_for_token_polls_until_available(monkeypatch):
     assert used_redis is True
     assert calls["n"] == 3
     assert sleeps == [0.1, 0.1]
+
+
+@pytest.mark.asyncio
+async def test_wait_for_token_falls_back_to_local_pacing_on_starvation(monkeypatch):
+    """Regression: bucket starvation used to return True (i.e.
+    "Redis-acquired token, skip local pacing"), which silently
+    bypassed ALL rate limiting after 30s of starvation. The fix
+    returns False so the caller still applies the local 1.1s sleep —
+    slower under sustained pressure but won't spam TWSE.
+    """
+    async def always_empty(*_a, **_kw):
+        return False  # bucket has zero tokens forever
+
+    async def fake_sleep(_s: float) -> None:
+        pass  # collapse the 30s wait into a tight loop
+
+    monkeypatch.setattr("data.tw.twse_connector.acquire_token", always_empty)
+    monkeypatch.setattr("data.tw.twse_connector.asyncio.sleep", fake_sleep)
+
+    used_redis = await twse_connector._wait_for_token()
+    assert used_redis is False
+
+
+@pytest.mark.asyncio
+async def test_wait_for_token_increments_starvation_counter(monkeypatch):
+    """The bucket-starvation counter must fire exactly once per fall-
+    open event so operators can alert on sustained pressure."""
+    from middleware.metrics import TWSE_RATE_LIMIT_DEGRADED_TOTAL
+
+    async def always_empty(*_a, **_kw):
+        return False
+
+    async def fake_sleep(_s: float) -> None:
+        pass
+
+    monkeypatch.setattr("data.tw.twse_connector.acquire_token", always_empty)
+    monkeypatch.setattr("data.tw.twse_connector.asyncio.sleep", fake_sleep)
+
+    before = TWSE_RATE_LIMIT_DEGRADED_TOTAL.labels(reason="bucket_starvation")._value.get()
+    await twse_connector._wait_for_token()
+    after = TWSE_RATE_LIMIT_DEGRADED_TOTAL.labels(reason="bucket_starvation")._value.get()
+    assert after == before + 1
+
+
+@pytest.mark.asyncio
+async def test_wait_for_token_increments_redis_unavailable_counter():
+    """The Redis-unavailable counter is the leading signal that the
+    cross-pod coordination has dropped — distinct from bucket
+    starvation, which is sustained TWSE pressure with Redis healthy.
+    """
+    from middleware.metrics import TWSE_RATE_LIMIT_DEGRADED_TOTAL
+
+    async def boom(*_a, **_kw):
+        raise RedisUnavailable("connection refused")
+
+    before = TWSE_RATE_LIMIT_DEGRADED_TOTAL.labels(reason="redis_unavailable")._value.get()
+    with patch("data.tw.twse_connector.acquire_token", side_effect=boom):
+        result = await twse_connector._wait_for_token()
+    after = TWSE_RATE_LIMIT_DEGRADED_TOTAL.labels(reason="redis_unavailable")._value.get()
+    assert result is False
+    assert after == before + 1
+
+
+@pytest.mark.asyncio
+async def test_wait_for_token_does_not_increment_counter_on_success():
+    """The counter must stay flat when Redis returns a token on the
+    first try — otherwise the dashboard can't tell baseline noise
+    from real degradation."""
+    from middleware.metrics import TWSE_RATE_LIMIT_DEGRADED_TOTAL
+
+    async def ok(*_a, **_kw):
+        return True
+
+    redis_before = TWSE_RATE_LIMIT_DEGRADED_TOTAL.labels(reason="redis_unavailable")._value.get()
+    starve_before = TWSE_RATE_LIMIT_DEGRADED_TOTAL.labels(reason="bucket_starvation")._value.get()
+    with patch("data.tw.twse_connector.acquire_token", side_effect=ok):
+        result = await twse_connector._wait_for_token()
+    assert result is True
+    assert TWSE_RATE_LIMIT_DEGRADED_TOTAL.labels(reason="redis_unavailable")._value.get() == redis_before
+    assert TWSE_RATE_LIMIT_DEGRADED_TOTAL.labels(reason="bucket_starvation")._value.get() == starve_before

@@ -32,6 +32,22 @@ _yfin_stub = types.ModuleType("data.us.yfinance_connector")
 _yfin_stub.get_quote = AsyncMock()         # populated per-test
 _yfin_stub.get_history = AsyncMock()
 sys.modules.setdefault("data.us.yfinance_connector", _yfin_stub)
+# If a sibling test (test_event_calendar_service) registered its own
+# stub first, augment it with the get_quote / get_history attributes
+# we need so per-test patches land regardless of collection order.
+# Skip when the entry is the real connector (has __file__ from
+# yfinance_connector.py) so test_yfinance_connector.py still sees
+# the real surface.
+_existing = sys.modules["data.us.yfinance_connector"]
+if (
+    _existing is not _yfin_stub
+    and _existing.__class__ is types.ModuleType
+    and getattr(_existing, "__file__", None) is None
+):
+    if not hasattr(_existing, "get_quote"):
+        _existing.get_quote = AsyncMock()
+    if not hasattr(_existing, "get_history"):
+        _existing.get_history = AsyncMock()
 
 from services import overseas_market_service as svc   # noqa: E402
 
@@ -69,7 +85,7 @@ async def test_get_overseas_snapshot_live_returns_curated_universe():
 
     with patch("services.overseas_market_service.cache_get",
                AsyncMock(return_value=None)), \
-         patch("services.overseas_market_service.cache_set",
+         patch("services.overseas_market_service.cache_set_unless_empty",
                AsyncMock()), \
          patch("data.us.yfinance_connector.get_quote",
                side_effect=_fake_quote):
@@ -97,7 +113,7 @@ async def test_get_overseas_snapshot_skips_failing_ticker():
 
     with patch("services.overseas_market_service.cache_get",
                AsyncMock(return_value=None)), \
-         patch("services.overseas_market_service.cache_set",
+         patch("services.overseas_market_service.cache_set_unless_empty",
                AsyncMock()), \
          patch("data.us.yfinance_connector.get_quote",
                side_effect=_fake_quote):
@@ -123,7 +139,7 @@ async def test_get_overseas_snapshot_skips_zero_price():
 
     with patch("services.overseas_market_service.cache_get",
                AsyncMock(return_value=None)), \
-         patch("services.overseas_market_service.cache_set",
+         patch("services.overseas_market_service.cache_set_unless_empty",
                AsyncMock()), \
          patch("data.us.yfinance_connector.get_quote",
                side_effect=_fake_quote):
@@ -156,7 +172,7 @@ async def test_get_overseas_snapshot_backtest_picks_as_of_bar():
 
     with patch("services.overseas_market_service.cache_get",
                AsyncMock(return_value=None)), \
-         patch("services.overseas_market_service.cache_set",
+         patch("services.overseas_market_service.cache_set_unless_empty",
                AsyncMock()), \
          patch("data.us.yfinance_connector.get_history",
                side_effect=_fake_history):
@@ -180,7 +196,7 @@ async def test_get_overseas_snapshot_backtest_skips_when_only_one_bar():
 
     with patch("services.overseas_market_service.cache_get",
                AsyncMock(return_value=None)), \
-         patch("services.overseas_market_service.cache_set",
+         patch("services.overseas_market_service.cache_set_unless_empty",
                AsyncMock()), \
          patch("data.us.yfinance_connector.get_history",
                AsyncMock(return_value=history_bars)):
@@ -202,7 +218,7 @@ async def test_get_overseas_snapshot_backtest_skips_zero_prev_close():
 
     with patch("services.overseas_market_service.cache_get",
                AsyncMock(return_value=None)), \
-         patch("services.overseas_market_service.cache_set",
+         patch("services.overseas_market_service.cache_set_unless_empty",
                AsyncMock()), \
          patch("data.us.yfinance_connector.get_history",
                AsyncMock(return_value=history_bars)):
@@ -246,7 +262,7 @@ async def test_get_overseas_snapshot_falls_through_on_corrupt_cache():
     })
     with patch("services.overseas_market_service.cache_get",
                AsyncMock(return_value="not valid json {")), \
-         patch("services.overseas_market_service.cache_set",
+         patch("services.overseas_market_service.cache_set_unless_empty",
                AsyncMock()), \
          patch("data.us.yfinance_connector.get_quote",
                quote_mock):
@@ -265,11 +281,15 @@ async def test_get_overseas_snapshot_does_not_cache_empty_result():
     set_mock = AsyncMock()
     with patch("services.overseas_market_service.cache_get",
                AsyncMock(return_value=None)), \
-         patch("services.overseas_market_service.cache_set",
+         patch("services.overseas_market_service.cache_set_unless_empty",
                set_mock), \
          patch("data.us.yfinance_connector.get_quote",
                AsyncMock(side_effect=RuntimeError("upstream down"))):
         out = await svc.get_overseas_snapshot()
 
     assert out["indices"] == []
-    set_mock.assert_not_called()
+    # cache_set_unless_empty is invoked but with payload=None — the
+    # helper folds the empty-skip into one line at the call site.
+    set_mock.assert_awaited_once()
+    args = set_mock.call_args.args
+    assert args[1] is None

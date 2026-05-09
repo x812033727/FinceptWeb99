@@ -222,7 +222,7 @@ async def test_cache_miss_writes_result_back_with_ttl():
     args, _ = cache_set_mock.call_args
     assert args[0] == "taifex:positioning:TX:2026-04-30"
     # TTL is the third positional arg
-    assert args[2] == svc._CACHE_TTL_SECONDS
+    assert args[2] == svc.TTL_DERIVATIVES
 
 
 # ── Securities lending trend ──────────────────────────────────────

@@ -48,7 +48,7 @@ async def test_aggregates_per_broker_over_window():
                new=AsyncMock(return_value=rows)), \
          patch("services.broker_concentration_service.cache_get",
                new=AsyncMock(return_value=None)), \
-         patch("services.broker_concentration_service.cache_set",
+         patch("services.broker_concentration_service.cache_set_unless_empty",
                new=AsyncMock()):
         out = await svc.get_top_brokers_for_symbol(
             "2330", as_of=date(2026, 4, 15),
@@ -79,7 +79,7 @@ async def test_separates_top_buyers_from_top_sellers():
                new=AsyncMock(return_value=rows)), \
          patch("services.broker_concentration_service.cache_get",
                new=AsyncMock(return_value=None)), \
-         patch("services.broker_concentration_service.cache_set",
+         patch("services.broker_concentration_service.cache_set_unless_empty",
                new=AsyncMock()):
         out = await svc.get_top_brokers_for_symbol(
             "2330", as_of=date(2026, 4, 15),
@@ -111,7 +111,7 @@ async def test_caps_at_top_n():
                new=AsyncMock(return_value=rows)), \
          patch("services.broker_concentration_service.cache_get",
                new=AsyncMock(return_value=None)), \
-         patch("services.broker_concentration_service.cache_set",
+         patch("services.broker_concentration_service.cache_set_unless_empty",
                new=AsyncMock()):
         out = await svc.get_top_brokers_for_symbol(
             "2330", as_of=date(2026, 4, 15), top_n=3,
@@ -138,7 +138,7 @@ async def test_clamps_to_as_of_in_backtest_mode():
                new=AsyncMock(return_value=rows)), \
          patch("services.broker_concentration_service.cache_get",
                new=AsyncMock(return_value=None)), \
-         patch("services.broker_concentration_service.cache_set",
+         patch("services.broker_concentration_service.cache_set_unless_empty",
                new=AsyncMock()):
         out = await svc.get_top_brokers_for_symbol(
             "2330", as_of=date(2026, 4, 15),
@@ -157,7 +157,7 @@ async def test_returns_none_on_empty_finmind_response():
                new=AsyncMock(return_value=[])), \
          patch("services.broker_concentration_service.cache_get",
                new=AsyncMock(return_value=None)), \
-         patch("services.broker_concentration_service.cache_set",
+         patch("services.broker_concentration_service.cache_set_unless_empty",
                set_mock):
         out = await svc.get_top_brokers_for_symbol(
             "9999", as_of=date(2026, 4, 15),
@@ -176,7 +176,7 @@ async def test_returns_none_on_connector_failure():
                new=AsyncMock(side_effect=RuntimeError("FinMind 502"))), \
          patch("services.broker_concentration_service.cache_get",
                new=AsyncMock(return_value=None)), \
-         patch("services.broker_concentration_service.cache_set",
+         patch("services.broker_concentration_service.cache_set_unless_empty",
                new=AsyncMock()):
         out = await svc.get_top_brokers_for_symbol(
             "2330", as_of=date(2026, 4, 15),
@@ -224,7 +224,7 @@ async def test_for_focus_caps_per_discussion_fan_out():
                fetch_mock), \
          patch("services.broker_concentration_service.cache_get",
                new=AsyncMock(return_value=None)), \
-         patch("services.broker_concentration_service.cache_set",
+         patch("services.broker_concentration_service.cache_set_unless_empty",
                new=AsyncMock()):
         out = await svc.get_broker_concentration_for_focus(
             ["2330", "2454", "2317", "2603", "2891", "2882", "2880", "2308"],
@@ -246,7 +246,7 @@ async def test_for_focus_drops_synthetic_and_empty_symbols():
                fetch_mock), \
          patch("services.broker_concentration_service.cache_get",
                new=AsyncMock(return_value=None)), \
-         patch("services.broker_concentration_service.cache_set",
+         patch("services.broker_concentration_service.cache_set_unless_empty",
                new=AsyncMock()):
         out = await svc.get_broker_concentration_for_focus(
             ["_TAIEX", "2330", "", "2454"],

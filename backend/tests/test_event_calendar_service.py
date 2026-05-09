@@ -28,6 +28,18 @@ if "data.us.yfinance_connector" not in sys.modules:
         "data.us", types.ModuleType("data.us"),
     )
     _data_us.yfinance_connector = _stub
+elif (
+    sys.modules["data.us.yfinance_connector"].__class__ is types.ModuleType
+    and getattr(sys.modules["data.us.yfinance_connector"], "__file__", None) is None
+    and not hasattr(sys.modules["data.us.yfinance_connector"], "get_calendar")
+):
+    # Sibling test (e.g. test_overseas_market_service) installed a
+    # stub first that lacks `get_calendar`. Augment it so per-test
+    # patches of get_calendar have an attribute to override —
+    # without this, alphabetical collection order matters.
+    sys.modules["data.us.yfinance_connector"].get_calendar = (
+        AsyncMock(return_value=None)
+    )
 
 from services import event_calendar_service as svc  # noqa: E402
 
@@ -82,7 +94,7 @@ def _patches(*, cached=None, calendar):
     return (
         patch("services.event_calendar_service.cache_get",
               new=AsyncMock(return_value=cached)),
-        patch("services.event_calendar_service.cache_set", new=AsyncMock()),
+        patch("services.event_calendar_service.cache_set_unless_empty", new=AsyncMock()),
         patch("data.us.yfinance_connector.get_calendar",
               new=AsyncMock(return_value=calendar)),
     )
@@ -115,7 +127,7 @@ async def test_returns_none_when_no_events_in_lookahead_window():
         "services.event_calendar_service.cache_get",
         new=AsyncMock(return_value=None),
     ), patch(
-        "services.event_calendar_service.cache_set", new=cache_set_mock,
+        "services.event_calendar_service.cache_set_unless_empty", new=cache_set_mock,
     ), patch(
         "data.us.yfinance_connector.get_calendar",
         new=AsyncMock(return_value={

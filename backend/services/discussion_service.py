@@ -1608,87 +1608,15 @@ async def gather_market_context(
     )
 
 
-# TW listed leveraged / inverse / futures-tracking ETFs encode the
-# kind in the trailing letter of the 5-digit code:
-#   L = 2x leveraged (`00715L` 期街口布蘭特正 2)
-#   U = futures-tracking (`00642U` 期元大 S&P 石油)
-#   R = inverse (`00632R` 元大台灣 50 反 1)
-# These products mean-revert hard the day after a spike, so them
-# topping `top_gainers` consistently mis-leads personas into
-# recommending tomorrow's reversal candidate. Plain index / dividend
-# ETFs (`0050` `0056` `00878`) and ordinary stocks (`2330`) keep the
-# trailing-digit-only shape and pass the filter.
-_TW_SPECULATIVE_ETF_RE = re.compile(r"^\d{4,5}[LUR]$")
-
-
-def _is_speculative_etf(symbol: Any) -> bool:
-    if not isinstance(symbol, str):
-        return False
-    return bool(_TW_SPECULATIVE_ETF_RE.match(symbol))
-
-
-def _compact_screener_row(r: dict[str, Any]) -> dict[str, Any]:
-    """Strip the screener row to just the fields a persona needs, so the
-    LLM prompt stays compact (300 rows × 12 fields fills the context fast)."""
-    from services import tw_market_service
-    sym = r.get("symbol")
-    return {
-        "symbol": sym,
-        "name": r.get("name_zh") or r.get("name") or (
-            tw_market_service.get_company_name(sym) if sym else None
-        ),
-        "industry": tw_market_service.get_industry(sym) if sym else None,
-        "price": r.get("price"),
-        "change_pct": r.get("change_pct"),
-        "volume": r.get("volume"),
-        "pe": r.get("pe_ratio"),
-        "yield": r.get("dividend_yield"),
-    }
-
-
-def _compact_us_screener_row(r: dict[str, Any]) -> dict[str, Any]:
-    """US-side compact form (PR #215). Mirrors `_compact_screener_row`
-    but pulls from US screener output: industry / sector come from
-    the row directly (no global map like TW's `_industry_map`); PE /
-    yield often missing on Polygon snapshot tier so they're omitted
-    rather than passed through as 0."""
-    sym = r.get("symbol")
-    return {
-        "symbol":     sym,
-        "name":       r.get("name"),
-        "sector":     r.get("sector"),
-        "price":      r.get("price"),
-        "change_pct": r.get("change_pct"),
-        "volume":     r.get("volume"),
-    }
-
-
-def _tag_industry(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Enrich each row with `industry` + `name_zh` from the in-memory
-    company-info maps. Rows already carrying these keys are passed
-    through unchanged so callers that pre-tagged don't get clobbered.
-
-    Used for the chip-metric and revenue-grower aggregator outputs
-    so personas can see "外資買超 2330 (半導體業)" instead of just
-    "2330" — the industry tag turns a raw list of codes into
-    sector-flow analysis without an extra LLM tool call.
-    """
-    from services import tw_market_service
-    out: list[dict[str, Any]] = []
-    for r in rows:
-        sym = r.get("symbol")
-        enriched = dict(r)
-        if sym:
-            if "industry" not in enriched or not enriched["industry"]:
-                ind = tw_market_service.get_industry(sym)
-                if ind:
-                    enriched["industry"] = ind
-            if "name_zh" not in enriched or not enriched["name_zh"]:
-                nm = tw_market_service.get_company_name(sym)
-                if nm:
-                    enriched["name_zh"] = nm
-        out.append(enriched)
-    return out
+# Screener utilities extracted to discussion/screener_utils.py.
+# Re-export for back-compat with `discussion/context/blocks/{chip,http}.py`
+# (which lazy-import here) + any test that reaches in by name.
+from services.discussion.screener_utils import (  # noqa: E402,F401
+    _compact_screener_row,
+    _compact_us_screener_row,
+    _is_speculative_etf,
+    _tag_industry,
+)
 
 
 # ── turn loop ───────────────────────────────────────────────────────

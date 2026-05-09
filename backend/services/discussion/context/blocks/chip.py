@@ -33,7 +33,7 @@ async def fetch_top_foreign_buyers(
     """Ranked net foreign buy over the last 5 trading days. Personas
     cite "外資連 5 日買超 N 億" without burning an LLM tool call."""
     try:
-        from services.discussion_service import _tag_industry
+        from services.discussion.screener_utils import _tag_industry
         from services.ingest.repository import read_top_foreign_buyers
         ctx["top_foreign_buyers"] = _tag_industry(
             await read_top_foreign_buyers(
@@ -71,7 +71,7 @@ async def fetch_top_revenue_growers(
 ) -> None:
     """Top YoY revenue growth in the latest reported month."""
     try:
-        from services.discussion_service import _tag_industry
+        from services.discussion.screener_utils import _tag_industry
         from services.ingest.repository import read_top_revenue_growers
         ctx["top_revenue_growers"] = _tag_industry(
             await read_top_revenue_growers(
@@ -92,7 +92,7 @@ async def fetch_active_buybacks(
     """Active 庫藏股 — companies whose declared buyback execution
     window covers `as_of`. Bullish-signal block ("公司自家正在買回")."""
     try:
-        from services.discussion_service import _tag_industry
+        from services.discussion.screener_utils import _tag_industry
         from services.ingest.repository import read_active_buybacks
         ctx["active_buybacks"] = _tag_industry(
             await read_active_buybacks(
@@ -162,7 +162,7 @@ async def fetch_top_stock_futures_buyers(
     the prompt mention behind the block being non-empty.
     """
     try:
-        from services.discussion_service import _tag_industry
+        from services.discussion.screener_utils import _tag_industry
         from services.ingest.repository import (
             read_top_foreign_stock_futures_buyers,
         )

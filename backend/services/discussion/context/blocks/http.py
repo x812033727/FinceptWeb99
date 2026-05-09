@@ -35,7 +35,7 @@ async def fetch_screener(
     ETFs (2x leveraged / inverse / futures-tracking) on the TW side
     because they mean-revert the next session."""
     try:
-        from services.discussion_service import (
+        from services.discussion.screener_utils import (
             _compact_screener_row,
             _compact_us_screener_row,
             _is_speculative_etf,

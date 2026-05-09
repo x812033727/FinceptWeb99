@@ -184,6 +184,22 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # ── US SEC EDGAR 8-K filings (PR-D3) ──────────────────────────
+    # Hourly. Sister cron to ingest_announcements_tw but pulls SEC's
+    # recent 8-K filings ATOM feed instead of MOPS. Writes into the
+    # same corporate_announcements table with market='US' so the
+    # existing sentiment scorer + ctx block surface the rows
+    # uniformly across markets.
+    from tasks.ingest_announcements_us import run as run_ingest_announcements_us
+    scheduler.add_job(
+        run_ingest_announcements_us,
+        trigger=IntervalTrigger(hours=1),
+        id="ingest_announcements_us",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── TW MOPS material-info disclosures (PR-D1) ─────────────────
     # Every 30 min. Sister cron to ingest_news_tw but pulls the
     # official 重大訊息 listing from MOPS, which is structured

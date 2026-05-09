@@ -277,23 +277,29 @@ async def test_read_recent_announcements_market_view_returns_all_symbols(
 
 
 @pytest.mark.asyncio
-async def test_ctx_block_no_op_for_us_market(db_session: AsyncSession):
-    """US/GLOBAL has no MOPS feed; the block must early-return so
+async def test_ctx_block_no_op_for_global_market(db_session: AsyncSession):
+    """GLOBAL discussions are macro-themed and don't bind to a
+    single issuer-disclosure feed; the block must early-return so
     the default empty shape (set in `_initial_ctx`) is the only
-    thing personas see."""
+    thing personas see.
+
+    PR-D3 update: US is no longer in the early-return set — SEC
+    EDGAR ingest writes US rows into the same table, and the
+    market filter on `read_recent_announcements` keeps the two
+    markets isolated. The US-side coverage of this dispatch lives
+    in `tests/test_sec_edgar_announcements.py::
+    test_ctx_block_populates_us_market_view`.
+    """
     ctx: dict = {}
 
     def _record_error(_src, _exc):
         return None
 
     await announcements_block.fetch_corporate_announcements(
-        ctx, db_session, market="US",
+        ctx, db_session, market="GLOBAL",
         focus_symbols=["AAPL"], as_of_dt=None,
         record_error=_record_error,
     )
-    # Early-return leaves `corporate_announcements` UNSET (the
-    # builder's default-shape pass populates it); confirm we didn't
-    # accidentally write anything.
     assert "corporate_announcements" not in ctx
 
 

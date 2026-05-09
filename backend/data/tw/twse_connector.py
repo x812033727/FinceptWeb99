@@ -43,8 +43,24 @@ _LOCAL_DELAY = 1.1
 async def _wait_for_token() -> bool:
     """Block until a TWSE token is available.
 
-    Returns True if a token was acquired via Redis, False if Redis was
-    unreachable and the caller should fall back to local pacing.
+    Returns True iff a token was acquired via Redis. False signals
+    the caller to apply local Semaphore + 1.1s pacing instead. Two
+    paths fall to local pacing:
+
+      1. `RedisUnavailable` — bucket Lua/EVAL raised. Cross-pod
+         coordination is lost but the per-process Semaphore still
+         caps to 1 in-flight request and the local sleep still
+         spaces them.
+      2. `_MAX_WAIT` exceeded with bucket consistently empty —
+         sustained TWSE pressure, the global bucket can't keep up.
+         Previously this returned True ("proceed without local
+         pacing"), which silently dropped ALL rate limiting and
+         risked 429s. We now drop to local pacing for the same
+         reason as the Redis-unavailable path: better to be slow
+         than to spam TWSE.
+
+    Both fall-open paths increment `twse_rate_limit_degraded_total`
+    so operators can alert on sustained degradation.
     """
     elapsed = 0.0
     while elapsed < _MAX_WAIT:
@@ -52,13 +68,32 @@ async def _wait_for_token() -> bool:
             if await acquire_token(_BUCKET_KEY, _BUCKET_CAPACITY, _BUCKET_RATE):
                 return True
         except RedisUnavailable as exc:
-            logger.warning("TWSE token bucket unavailable, using local pacing: %s", exc)
+            _record_degraded("redis_unavailable", str(exc))
             return False
         await asyncio.sleep(_POLL_INTERVAL)
         elapsed += _POLL_INTERVAL
-    # Bucket starvation — proceed anyway to avoid permanent stall.
-    logger.warning("TWSE token bucket wait exceeded %ss; proceeding", _MAX_WAIT)
-    return True
+    _record_degraded("bucket_starvation", f"waited {_MAX_WAIT}s")
+    return False
+
+
+def _record_degraded(reason: str, detail: str) -> None:
+    """Bump the Prometheus counter and emit a structured warning.
+
+    Lazily imports the metric so unit tests that replay this module
+    in isolation (without the full middleware stack) don't have to
+    stub the counter — the import is cheap and only happens on
+    degradation events, which should be rare in steady state.
+    """
+    try:
+        from middleware.metrics import TWSE_RATE_LIMIT_DEGRADED_TOTAL
+        TWSE_RATE_LIMIT_DEGRADED_TOTAL.labels(reason=reason).inc()
+    except Exception:
+        pass
+    logger.warning(
+        "twse.rate_limit_degraded reason=%s detail=%s; using local pacing",
+        reason,
+        detail,
+    )
 
 
 async def _get(url: str, params: dict | None = None) -> Any:

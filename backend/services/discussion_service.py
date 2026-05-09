@@ -118,7 +118,6 @@ _MIN_PERSONAS = 2
 # what they need; the cap is purely an output-side ceiling.
 _MAX_TOPIC_CHARS = 500
 _MAX_RULES_CHARS = 2000
-_MAX_HISTORY_TURNS = 30     # how many prior turns to feed the next persona
 
 # When the transcript gets long, only the most recent
 # `_FULL_HISTORY_TURNS` turns are passed verbatim. Older turns are
@@ -126,8 +125,6 @@ _MAX_HISTORY_TURNS = 30     # how many prior turns to feed the next persona
 # 目標價...") capped at `_HISTORY_SUMMARY_CHARS` chars so the prompt
 # budget doesn't balloon at round 5 with 8 personas (40 turns × ~300
 # Chinese chars × 3 BPE tokens ≈ 36K input tokens just for history).
-_FULL_HISTORY_TURNS = 8
-_HISTORY_SUMMARY_CHARS = 120
 
 # Reasoning models surface their chain-of-thought wrapped in <think>...</think>
 # blocks. `_ThinkBlockFilter` (below) drops them as a streaming SSE
@@ -1850,73 +1847,6 @@ _TURN_PROMPT_TEMPLATE = (
 )
 
 
-def _summarize_turn_content(content: str) -> str:
-    """Compress a turn's full content down to one line for the older-
-    history block. Strips markdown emphasis + collapses whitespace +
-    truncates at `_HISTORY_SUMMARY_CHARS`. The persona doesn't need
-    the full text from 4 rounds ago — only the gist of the speaker's
-    previous position so they can spot drift / contradictions."""
-    body = (content or "").strip()
-    if not body:
-        return "（同意，無補充）"
-    # Drop markdown bold / italic markers + bullet hyphens.
-    body = body.replace("**", "").replace("__", "")
-    # Collapse whitespace + newlines.
-    body = " ".join(body.split())
-    if len(body) > _HISTORY_SUMMARY_CHARS:
-        body = body[:_HISTORY_SUMMARY_CHARS] + "…"
-    return body
-
-
-def _format_history(prior_turns: list[DiscussionTurn]) -> str:
-    """Build the `## 先前發言` block for a persona prompt.
-
-    Two-tier compression keeps the prompt budget bounded:
-      - The N most recent turns (`_FULL_HISTORY_TURNS`) appear in
-        full — these are the live debate the persona is reacting to.
-      - Older turns up to `_MAX_HISTORY_TURNS` appear as a single-
-        line summary so the persona retains continuity ("buffett 第
-        1 輪看好 2330, 我此輪也補強") without paying for verbatim
-        text from rounds ago.
-
-    The full window comes after the summary block so the LLM's
-    recency bias works in our favour — the most recent turn is the
-    last thing in the prompt before its own "你現在的任務" line.
-    """
-    if not prior_turns:
-        return "（你是本場第一位發言者）"
-    window = prior_turns[-_MAX_HISTORY_TURNS:]
-    if len(window) <= _FULL_HISTORY_TURNS:
-        recent = window
-        older: list[DiscussionTurn] = []
-    else:
-        split = len(window) - _FULL_HISTORY_TURNS
-        older = window[:split]
-        recent = window[split:]
-
-    def _render(t: DiscussionTurn, body: str) -> str:
-        # User injections aren't analyst opinions — render them as a
-        # directive from the discussion's owner so personas know the
-        # next round must respond to it. Keeps the same `第N輪` prefix
-        # for ordering / recency cues.
-        if t.persona_id == USER_PERSONA_ID:
-            return f"- 第{t.round}輪 · 【討論發起人插話】：{body}"
-        return f"- 第{t.round}輪 · {t.persona_id} · {t.stance}：{body}"
-
-    sections: list[str] = []
-    if older:
-        sections.append("（較早輪次摘要）")
-        for t in older:
-            sections.append(_render(t, _summarize_turn_content(t.content)))
-    if older and recent:
-        sections.append("")
-        sections.append("（最近發言全文）")
-    for t in recent:
-        body = t.content.strip() or "（同意，無補充）"
-        sections.append(_render(t, body))
-    return "\n".join(sections)
-
-
 # Matches the opening of a `"content": "` field. Used by the truncation
 # salvage path — the persona's content always lives behind this key in
 # our prompt template, so finding it gives us a reliable extraction
@@ -2841,35 +2771,6 @@ _SYNTHESIZER_USER_TEMPLATE = (
 )
 
 
-def _format_transcript(turns: list[DiscussionTurn]) -> str:
-    """Render the full transcript for the synthesizer prompt.
-
-    Persona turns get a `[第N輪/persona_id/stance]` prefix.
-    User-input turns (e.g. post-mortem self-critique prompts
-    injected via `inject_user_message`) are rendered as a clearly
-    labelled directive — without this distinction the synthesizer
-    LLM treats `_user` as just another analyst and may try to
-    *answer* the directive's questions in the `reasoning` field
-    instead of synthesizing the discussion. The longer post-mortem
-    prompt (4 structured questions) makes that failure mode worse:
-    the LLM dumps a long answer + runs out of `max_tokens` mid-JSON
-    and the response fails to parse.
-    """
-    if not turns:
-        return "（無發言）"
-    lines = []
-    for t in turns:
-        body = t.content.strip() or "（同意，無補充）"
-        if t.persona_id == USER_PERSONA_ID:
-            lines.append(
-                f"[第{t.round}輪 · 討論發起人指示（請納入後續分析考量，"
-                f"勿視為專家意見、勿直接回答其中的提問）]\n{body}"
-            )
-        else:
-            lines.append(f"[第{t.round}輪/{t.persona_id}/{t.stance}] {body}")
-    return "\n".join(lines)
-
-
 async def _apply_calibration_to_conclusion(
     db: AsyncSession,
     discussion: Discussion,
@@ -3539,4 +3440,17 @@ from services.discussion.turn_parsing import (  # noqa: E402,F401
     _decode_partial_json_string,
     _parse_turn_response,
     _salvage_truncated_json,
+)
+
+
+# Transcript / history formatters extracted to discussion/transcript_format.py.
+# Re-export for back-compat with `_ask_persona` + `synthesize_conclusion`
+# (still in this file).
+from services.discussion.transcript_format import (  # noqa: E402,F401
+    _FULL_HISTORY_TURNS,
+    _HISTORY_SUMMARY_CHARS,
+    _MAX_HISTORY_TURNS,
+    _format_history,
+    _format_transcript,
+    _summarize_turn_content,
 )

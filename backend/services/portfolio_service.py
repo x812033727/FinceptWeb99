@@ -13,11 +13,9 @@ from datetime import date, timedelta
 from typing import Any
 from uuid import UUID
 
-import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from analytics.portfolio_optimizer import optimize, efficient_frontier
 from cache.cache_ttls import (
     TTL_FX,
     TTL_FX_HISTORICAL,
@@ -26,9 +24,9 @@ from cache.cache_ttls import (
 from cache.redis_cache import cache_get, cache_set
 from data.us.fred_connector import get_latest
 from models.portfolio import Holding, Portfolio, Transaction, TransactionType
-from services.us_market_service import get_quote as us_quote, get_history as us_history
-from services.tw_market_service import get_quote as tw_quote, get_history as tw_history
-from services.crypto_market_service import get_quote as crypto_quote, get_history as crypto_history
+from services.crypto_market_service import get_quote as crypto_quote
+from services.tw_market_service import get_quote as tw_quote
+from services.us_market_service import get_quote as us_quote
 
 logger = logging.getLogger(__name__)
 
@@ -613,91 +611,6 @@ async def get_portfolio_detail(portfolio_id: str, user_id: str, db: AsyncSession
 
 # ── Optimisation ──────────────────────────────────────────────────
 
-async def optimise_portfolio(
-    portfolio_id: str,
-    user_id: str,
-    target_risk: str,
-    max_weight: float,
-    db: AsyncSession,
-) -> dict[str, Any]:
-    p = await get_portfolio(portfolio_id, user_id, db)
-    if not p:
-        raise ValueError("Portfolio not found")
-
-    holdings = list(await db.scalars(select(Holding).where(Holding.portfolio_id == UUID(portfolio_id))))
-    if not holdings:
-        raise ValueError("Portfolio has no holdings")
-
-    # Fetch 252 days of daily returns for each holding
-    async def _get_returns(h: Holding) -> tuple[str, list[float]]:
-        try:
-            mkt = str(h.market.value)
-            if mkt == "US":
-                bars = await us_history(h.symbol, period="1y", interval="1d")
-            elif mkt == "CRYPTO":
-                bars = await crypto_history(h.symbol, interval="1d", limit=365)
-            else:
-                bars = await tw_history(h.symbol, months=12)
-            closes = [b["close"] for b in bars if b.get("close")]
-            if len(closes) < 20:
-                return h.symbol, []
-            import numpy as np
-            returns = list(np.diff(closes) / closes[:-1])
-            return h.symbol, returns
-        except Exception:
-            return h.symbol, []
-
-    results = await asyncio.gather(*[_get_returns(h) for h in holdings])
-
-    # Build aligned returns DataFrame
-    series = {sym: rets for sym, rets in results if rets}
-    if not series:
-        raise ValueError("Insufficient price history for optimisation")
-
-    min_len = min(len(v) for v in series.values())
-    aligned = {sym: rets[-min_len:] for sym, rets in series.items()}
-    returns_df = pd.DataFrame(aligned)
-
-    result = optimize(
-        returns_df,
-        constraints={"target_risk": target_risk, "max_weight": max_weight, "min_weight": 0.0},
-    )
-    result["frontier"] = efficient_frontier(returns_df, n_points=20)
-    return result
-
-
-async def get_performance(
-    portfolio_id: str,
-    user_id: str,
-    db: AsyncSession,
-    days: int = 90,
-) -> list[dict]:
-    """Return daily value snapshots for the portfolio over the last N days."""
-    from datetime import date
-    from sqlalchemy import and_, select
-    from models.portfolio import PortfolioSnapshot
-
-    portfolio = await get_portfolio(portfolio_id, user_id, db)
-    if not portfolio:
-        raise ValueError("Portfolio not found")
-
-    cutoff = date.today() - timedelta(days=days)
-    rows = list(
-        (
-            await db.scalars(
-                select(PortfolioSnapshot)
-                .where(
-                    and_(
-                        PortfolioSnapshot.portfolio_id == portfolio.id,
-                        PortfolioSnapshot.snapshot_date >= cutoff,
-                    )
-                )
-                .order_by(PortfolioSnapshot.snapshot_date)
-            )
-        ).all()
-    )
-    return [{"date": r.snapshot_date.isoformat(), "value": r.total_value_usd} for r in rows]
-
 
 async def get_transactions(
     portfolio_id: str, user_id: str, db: AsyncSession, limit: int = 200
@@ -712,3 +625,11 @@ async def get_transactions(
         .limit(limit)
     )
     return list(rows.all())
+
+
+# Portfolio analytics extracted to portfolio_analytics.py.
+# Re-export for back-compat with `api/portfolio/router.py`.
+from services.portfolio_analytics import (  # noqa: E402,F401
+    get_performance,
+    optimise_portfolio,
+)

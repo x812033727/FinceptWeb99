@@ -11,11 +11,25 @@ scheduler = AsyncIOScheduler(timezone="UTC")
 
 def setup_jobs() -> None:
     from tasks.crypto_market_refresh import refresh_crypto_quotes
+    from tasks.scheduler_heartbeat import write_heartbeat
     from tasks.tw_market_refresh import refresh_tw_quotes, refresh_tw_symbol_map
     from tasks.us_market_refresh import (
         refresh_sp500_universe,
         refresh_us_quotes,
         refresh_us_screener,
+    )
+
+    # ── Scheduler liveness heartbeat ──────────────────────────────
+    # Every 30s — writes a Redis key with a TTL so the AdminPage can
+    # detect a silent scheduler death (the only signal otherwise is
+    # last_run_at aging out 24h+ later for daily crons).
+    scheduler.add_job(
+        write_heartbeat,
+        trigger=IntervalTrigger(seconds=30),
+        id="scheduler_heartbeat",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
     )
 
     # ── US market quote polling ───────────────────────────────────

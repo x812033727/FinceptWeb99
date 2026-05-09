@@ -203,6 +203,85 @@ async def test_all_whitelisted_jobs_are_retryable(
 
 
 @pytest.mark.asyncio
+async def test_scheduler_health_requires_admin(client: AsyncClient):
+    token = await _register_login(client, "scheduler_viewer@test.com")
+    r = await client.get("/api/admin/scheduler/health", headers=_auth(token))
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_scheduler_health_returns_heartbeat_snapshot(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """End-to-end: admin hits /scheduler/health, gets the structured
+    snapshot back. Shape mirrors `SchedulerHeartbeat` dataclass."""
+    from services.scheduler_health import SchedulerHeartbeat
+
+    email = "scheduler_admin@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client=client)
+
+    canned = SchedulerHeartbeat(
+        last_beat_at="2026-05-09T12:00:00+00:00",
+        age_seconds=15.0,
+        stale=False,
+        version="0.5.84",
+        ttl_seconds=180,
+    )
+    with patch(
+        "services.scheduler_health.read_heartbeat",
+        AsyncMock(return_value=canned),
+    ):
+        r = await client.get(
+            "/api/admin/scheduler/health", headers=_auth(token),
+        )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["last_beat_at"] == "2026-05-09T12:00:00+00:00"
+    assert body["age_seconds"] == 15.0
+    assert body["stale"] is False
+    assert body["version"] == "0.5.84"
+    assert body["ttl_seconds"] == 180
+
+
+@pytest.mark.asyncio
+async def test_scheduler_health_surfaces_stale_when_missing(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """When the heartbeat key is missing entirely, the endpoint still
+    returns 200 (so the AdminPage doesn't error) — but `stale=True`
+    + `last_beat_at=None` so the UI can render the dead-scheduler
+    warning."""
+    from services.scheduler_health import SchedulerHeartbeat
+
+    email = "scheduler_admin_dead@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client=client)
+
+    canned = SchedulerHeartbeat(
+        last_beat_at=None,
+        age_seconds=None,
+        stale=True,
+        version=None,
+        ttl_seconds=180,
+    )
+    with patch(
+        "services.scheduler_health.read_heartbeat",
+        AsyncMock(return_value=canned),
+    ):
+        r = await client.get(
+            "/api/admin/scheduler/health", headers=_auth(token),
+        )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["last_beat_at"] is None
+    assert body["age_seconds"] is None
+    assert body["stale"] is True
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("job_id", [
     "ingest_news_tw",
     "ingest_news_international",

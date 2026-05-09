@@ -233,6 +233,65 @@ function timeAgo(iso: string | null): string {
   return `${Math.round(diffSec / 86400)}d ago`;
 }
 
+interface SchedulerHeartbeat {
+  last_beat_at: string | null;
+  age_seconds: number | null;
+  stale: boolean;
+  version: string | null;
+  ttl_seconds: number;
+}
+
+/**
+ * Decide the scheduler-heartbeat badge.
+ *
+ *   - `stale=true` + `last_beat_at=null` → red "scheduler dead": Redis
+ *     key is missing entirely (TTL expired or never written). Use
+ *     phrasing that points the operator at "is the process running?"
+ *     not "did Redis hiccup?".
+ *   - `stale=true` with a `last_beat_at` → amber "scheduler stale": the
+ *     scheduler beat at some point but >60s ago. Likely event-loop
+ *     wedge, not a full process death.
+ *   - `stale=false` → green with the age in seconds.
+ */
+export function deriveSchedulerBadge(
+  hb: SchedulerHeartbeat | undefined,
+): { text: string; cls: string; tooltip: string } {
+  if (!hb) {
+    return {
+      text: "loading",
+      cls: "bg-muted/30 text-muted-foreground border border-border",
+      tooltip: "Querying /admin/scheduler/health…",
+    };
+  }
+  if (hb.stale && hb.last_beat_at === null) {
+    return {
+      text: "scheduler dead",
+      cls: "bg-red-500/10 text-red-400 border border-red-500/30",
+      tooltip:
+        `No heartbeat in Redis. APScheduler may have crashed — ` +
+        `check pod logs and confirm the FastAPI lifespan started ` +
+        `setup_jobs(). TTL: ${hb.ttl_seconds}s.`,
+    };
+  }
+  if (hb.stale) {
+    return {
+      text: `scheduler stale (${Math.round(hb.age_seconds ?? 0)}s)`,
+      cls: "bg-amber-500/10 text-amber-400 border border-amber-500/30",
+      tooltip:
+        `Last heartbeat ${Math.round(hb.age_seconds ?? 0)}s ago — ` +
+        `expected every 30s. Event loop may be wedged on a slow ` +
+        `LLM call or a long DB transaction. Version: ${hb.version ?? "?"}.`,
+    };
+  }
+  return {
+    text: `scheduler ok (${Math.round(hb.age_seconds ?? 0)}s)`,
+    cls: "bg-green-500/10 text-green-400 border border-green-500/30",
+    tooltip:
+      `Heartbeat ${Math.round(hb.age_seconds ?? 0)}s ago — within the ` +
+      `60s freshness budget. Version: ${hb.version ?? "?"}.`,
+  };
+}
+
 export function IngestHealthCard() {
   const qc = useQueryClient();
   const { open, toggle } = useCollapsible("admin.ingest-health");
@@ -240,6 +299,15 @@ export function IngestHealthCard() {
     queryKey: ["admin", "ingest-health"],
     queryFn: () => api.get("/admin/ingest/health").then((r) => r.data),
     refetchInterval: 60_000,
+  });
+  // Heartbeat polled at 15s — needs to be tighter than the row poll
+  // (60s) so a scheduler death is surfaced quickly. Independent
+  // queryKey so stale ingest data doesn't make heartbeat refetch
+  // unnecessarily, and vice-versa.
+  const { data: heartbeat } = useQuery<SchedulerHeartbeat>({
+    queryKey: ["admin", "scheduler-health"],
+    queryFn: () => api.get("/admin/scheduler/health").then((r) => r.data),
+    refetchInterval: 15_000,
   });
   // Union with the whitelist so newly-deployed jobs that haven't
   // hit their first cron tick yet still appear in the table — admin
@@ -275,9 +343,22 @@ export function IngestHealthCard() {
         open={open} toggle={toggle}
         title="Scheduled Ingest Health"
         headerRight={
-          <span className="text-[10px] text-muted-foreground">
-            refreshes every 60s
-          </span>
+          <div className="flex items-center gap-2">
+            {(() => {
+              const sched = deriveSchedulerBadge(heartbeat);
+              return (
+                <span
+                  className={`px-1.5 py-0.5 rounded text-[10px] ${sched.cls}`}
+                  title={sched.tooltip}
+                >
+                  {sched.text}
+                </span>
+              );
+            })()}
+            <span className="text-[10px] text-muted-foreground">
+              refreshes every 60s
+            </span>
+          </div>
         }
       />
       {open && (<>

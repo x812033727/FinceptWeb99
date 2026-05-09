@@ -240,6 +240,34 @@ class IngestRetryResult(BaseModel):
     message: str
 
 
+class SchedulerHeartbeatOut(BaseModel):
+    """APScheduler liveness probe snapshot.
+
+    The heartbeat task writes a Redis key every 30s; this endpoint
+    reads it back so the AdminPage can show "scheduler heartbeat: 5s
+    ago" instead of inferring liveness from individual cron freshness.
+    """
+    # ISO-8601 timestamp of the most recent heartbeat write. Null
+    # when the Redis key is missing (scheduler dead longer than the
+    # TTL window, or has never written).
+    last_beat_at: str | None = None
+    # Seconds since `last_beat_at`. Null when no heartbeat exists.
+    age_seconds: float | None = None
+    # True iff the heartbeat is older than the staleness threshold
+    # (60s) OR is missing entirely. The frontend uses this directly
+    # for the green/red badge.
+    stale: bool
+    # `_version.__version__` of the pod that wrote the heartbeat —
+    # useful during a rolling deploy to confirm WHICH process is
+    # live. Null when missing or when the payload predates this field.
+    version: str | None = None
+    # Configured Redis TTL of the heartbeat key. Mirrors the constant
+    # in `tasks/scheduler_heartbeat.py` so the UI can display "stale
+    # threshold: 60s, key TTL: 180s" without a separate constant
+    # roundtrip.
+    ttl_seconds: int
+
+
 # ── Signal-citation audit ────────────────────────────────────────
 
 class SignalCoverageRow(BaseModel):

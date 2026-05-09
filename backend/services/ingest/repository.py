@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, or_ as sa_or, select
+from sqlalchemy import delete, func, or_ as sa_or, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -2176,15 +2176,33 @@ async def record_health(
         log.warning("ingest.health.record_failed",
                     extra={"job_id": job_id, "error": str(exc)})
 
+    outcome = _classify_outcome(
+        ok=ok, error=error, silent_deny=silent_deny,
+    )
+
+    # Append-only history for the AdminPage 7-day sparkline. Best-
+    # effort: a DB write failure here logs but doesn't break the cron
+    # — the Redis snapshot above is the source of truth for the
+    # "current" status row, history is purely cumulative.
+    try:
+        from models.ingest_health_history import IngestHealthHistory
+        async with AsyncSessionLocal() as db:
+            db.add(IngestHealthHistory(
+                job_id=job_id,
+                outcome=outcome,
+                row_count=int(row_count),
+            ))
+            await db.commit()
+    except Exception as exc:
+        log.debug("ingest.health.history_append_failed",
+                  extra={"job_id": job_id, "error": str(exc)})
+
     try:
         from middleware.metrics import (
             INGEST_DATA_FRESHNESS_SECONDS,
             INGEST_ROWS_WRITTEN_TOTAL,
             INGEST_RUNS_TOTAL,
             INGEST_SILENT_DENY_TOTAL,
-        )
-        outcome = _classify_outcome(
-            ok=ok, error=error, silent_deny=silent_deny,
         )
         INGEST_RUNS_TOTAL.labels(job_id=job_id, outcome=outcome).inc()
         if ok and row_count > 0:
@@ -2347,6 +2365,81 @@ async def list_health() -> list[IngestHealth]:
         if h is not None:
             out.append(h)
     return out
+
+
+# ── Sparkline aggregation ─────────────────────────────────────────
+
+
+@dataclass
+class IngestHealthHistoryDay:
+    """One day's outcome roll-up for a single job. Days with zero
+    runs are omitted from the result list — the frontend treats a
+    gap as "no data" automatically."""
+    date: str          # ISO date in UTC
+    ok: int = 0
+    silent_deny: int = 0
+    failed: int = 0
+    skipped: int = 0
+
+
+async def get_health_history(
+    job_id: str, *, days: int = 7,
+) -> list[IngestHealthHistoryDay]:
+    """Daily outcome counts for `job_id` over the last `days` UTC
+    calendar days, oldest-first.
+
+    Days with zero runs are omitted — the UI's sparkline renders a
+    gray "no data" cell for any missing date in the window. The
+    aggregation runs entirely in SQL (`GROUP BY date(recorded_at)`)
+    so a 7-day query stays a single index range scan + group-by.
+
+    Returns an empty list (rather than raising) when the DB is
+    unreachable, mirroring `list_health`'s fail-soft behaviour so
+    the admin endpoint doesn't 500 on a transient blip.
+    """
+    if days <= 0:
+        return []
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    try:
+        async with AsyncSessionLocal() as db:
+            from models.ingest_health_history import IngestHealthHistory
+            day_col = func.date(IngestHealthHistory.recorded_at)
+            stmt = (
+                select(
+                    day_col.label("d"),
+                    IngestHealthHistory.outcome,
+                    func.count().label("n"),
+                )
+                .where(
+                    IngestHealthHistory.job_id == job_id,
+                    IngestHealthHistory.recorded_at >= cutoff,
+                )
+                .group_by(day_col, IngestHealthHistory.outcome)
+                .order_by(day_col)
+            )
+            rows = (await db.execute(stmt)).all()
+    except Exception as exc:
+        log.warning(
+            "ingest.health.history_query_failed",
+            extra={"job_id": job_id, "error": str(exc)},
+        )
+        return []
+
+    by_day: dict[str, IngestHealthHistoryDay] = {}
+    for d, outcome, n in rows:
+        # `func.date(...)` returns a `date` on Postgres and a string on
+        # SQLite; normalize so the API always emits ISO-string dates.
+        day_str = d.isoformat() if hasattr(d, "isoformat") else str(d)
+        bucket = by_day.setdefault(day_str, IngestHealthHistoryDay(date=day_str))
+        if outcome == "ok":
+            bucket.ok = int(n)
+        elif outcome == "silent_deny":
+            bucket.silent_deny = int(n)
+        elif outcome == "failed":
+            bucket.failed = int(n)
+        elif outcome == "skipped":
+            bucket.skipped = int(n)
+    return [by_day[k] for k in sorted(by_day.keys())]
 
 
 # ── Convenience: open a new session for ad-hoc reads ───────────────

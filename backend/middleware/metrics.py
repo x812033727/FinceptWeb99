@@ -122,6 +122,19 @@ INGEST_DATA_FRESHNESS_SECONDS = Gauge(
     ["job_id"],
 )
 
+# ── APScheduler liveness probe ────────────────────────────────────
+# A 30s heartbeat task writes a Redis key; this gauge reflects the
+# read-side freshness so operators can alert on a silent scheduler
+# death. `-1` is the sentinel for "no heartbeat key found at all"
+# (TTL expired or never written) — alerting rules can match either
+# `> 60` (stale) or `== -1` (fully dead).
+SCHEDULER_HEARTBEAT_AGE_SECONDS = Gauge(
+    "scheduler_heartbeat_age_seconds",
+    "Seconds since APScheduler's heartbeat task last wrote its "
+    "Redis key. -1 means the key is missing (scheduler dead longer "
+    "than the heartbeat TTL or never started).",
+)
+
 # ── Core Web Vitals (reported by the frontend) ────────────────────
 # LCP / INP / FCP / TTFB are time metrics in seconds; bucket
 # boundaries are tuned around Google's "Good / Needs improvement /

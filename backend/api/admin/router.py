@@ -28,6 +28,7 @@ from .schemas import (
     DeployTriggerOut,
     IngestHealthOut,
     IngestRetryResult,
+    SchedulerHeartbeatOut,
     LessonPromoteOut,
     LLMKeyInfo,
     LLMKeyUpsert,
@@ -449,6 +450,27 @@ async def ingest_health(_: Admin) -> list[IngestHealthOut]:
         )
         for h in await ingest_repo.list_health()
     ]
+
+
+@router.get("/scheduler/health", response_model=SchedulerHeartbeatOut)
+async def scheduler_heartbeat(_: Admin) -> SchedulerHeartbeatOut:
+    """APScheduler liveness probe — has the scheduler process beat
+    its 30s-cadence heartbeat recently?
+
+    Distinct from `/ingest/health` because per-job freshness can't
+    distinguish "job legitimately throttled" from "scheduler dead".
+    A missing heartbeat signals the latter unambiguously.
+    """
+    from services.scheduler_health import read_heartbeat
+
+    snap = await read_heartbeat()
+    return SchedulerHeartbeatOut(
+        last_beat_at=snap.last_beat_at,
+        age_seconds=snap.age_seconds,
+        stale=snap.stale,
+        version=snap.version,
+        ttl_seconds=snap.ttl_seconds,
+    )
 
 
 async def _run_ingest_job_once(job_id: str) -> None:

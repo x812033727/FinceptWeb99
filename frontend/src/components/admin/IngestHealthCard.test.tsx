@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { deriveIngestBadge, isDataStale } from "./IngestHealthCard";
+import {
+  deriveIngestBadge,
+  deriveSchedulerBadge,
+  isDataStale,
+} from "./IngestHealthCard";
 
 const baseRow = {
   job_id: "ingest_x",
@@ -139,6 +143,66 @@ describe("deriveIngestBadge", () => {
       silent_deny: "Your level is register",
     });
     expect(out.text).toBe("silent deny");
+  });
+});
+
+
+describe("deriveSchedulerBadge", () => {
+  it("returns loading when the query hasn't resolved yet", () => {
+    const out = deriveSchedulerBadge(undefined);
+    expect(out.text).toBe("loading");
+    expect(out.cls).toContain("muted-foreground");
+  });
+
+  it("returns scheduler dead (red) when heartbeat key is missing", () => {
+    const out = deriveSchedulerBadge({
+      last_beat_at: null,
+      age_seconds: null,
+      stale: true,
+      version: null,
+      ttl_seconds: 180,
+    });
+    expect(out.text).toBe("scheduler dead");
+    expect(out.cls).toContain("text-red-400");
+    expect(out.tooltip).toContain("No heartbeat in Redis");
+  });
+
+  it("returns scheduler stale (amber) when last beat older than 60s", () => {
+    const out = deriveSchedulerBadge({
+      last_beat_at: "2026-05-09T12:00:00+00:00",
+      age_seconds: 75,
+      stale: true,
+      version: "0.5.84",
+      ttl_seconds: 180,
+    });
+    expect(out.text).toContain("75");
+    expect(out.text).toContain("scheduler stale");
+    expect(out.cls).toContain("text-amber-400");
+    expect(out.tooltip).toContain("Event loop may be wedged");
+  });
+
+  it("returns scheduler ok (green) when heartbeat is fresh", () => {
+    const out = deriveSchedulerBadge({
+      last_beat_at: "2026-05-09T12:00:00+00:00",
+      age_seconds: 12,
+      stale: false,
+      version: "0.5.84",
+      ttl_seconds: 180,
+    });
+    expect(out.text).toContain("12");
+    expect(out.text).toContain("scheduler ok");
+    expect(out.cls).toContain("text-green-400");
+  });
+
+  it("rounds the age to the nearest second", () => {
+    const out = deriveSchedulerBadge({
+      last_beat_at: "2026-05-09T12:00:00+00:00",
+      age_seconds: 3.7,
+      stale: false,
+      version: "0.5.84",
+      ttl_seconds: 180,
+    });
+    expect(out.text).toContain("4");
   });
 });
 

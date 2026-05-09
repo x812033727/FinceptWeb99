@@ -311,6 +311,22 @@ _REGISTRY: dict[str, RuntimeSettingSpec] = {
         min_value=1,
         max_value=10,
     ),
+    "LESSON_EMBEDDING_ENABLED": RuntimeSettingSpec(
+        key="LESSON_EMBEDDING_ENABLED",
+        type="bool",
+        name="Compute lesson semantic embeddings",
+        description=(
+            "Master switch for the inline embedding write that runs "
+            "every time a post-mortem persists new lessons. Flip OFF "
+            "to stop spending on the embeddings provider (e.g. while "
+            "rotating API keys). The fetch ranking continues to work "
+            "from existing embeddings; rows persisted while OFF will "
+            "have NULL embedding until the backfill script runs. "
+            "Provider + model are env-only (LESSON_EMBEDDING_PROVIDER "
+            "/ LESSON_EMBEDDING_MODEL) because changing the model "
+            "requires re-embedding the existing corpus."
+        ),
+    ),
 }
 
 

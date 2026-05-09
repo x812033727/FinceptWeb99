@@ -201,6 +201,21 @@ class Settings(BaseSettings):
     LESSONS_PER_MARKET_LIMIT: int = 5
     LESSONS_PER_SYMBOL_LIMIT: int = 3
 
+    # PR-J1: lesson semantic embedding. The fetch ranking will (in J2)
+    # fold cosine similarity between a query embedding and per-lesson
+    # embedding into the score so "半導體高估值風險" surfaces for a
+    # discussion about 2330 even when the symbol overlap is empty.
+    # Disable to skip the inline embed write entirely (the fetch path
+    # gracefully ignores NULL embeddings as "no semantic boost").
+    # Provider/model are env-only — no admin-tunable equivalent because
+    # changing the model requires a re-embed pass via
+    # `scripts/backfill_lesson_embeddings.py`, which is an operational
+    # decision, not an in-flight setting.
+    LESSON_EMBEDDING_ENABLED: bool = True
+    LESSON_EMBEDDING_PROVIDER: str = "openai"
+    LESSON_EMBEDDING_MODEL: str = "text-embedding-3-small"
+    LESSON_EMBEDDING_DIMS: int = 1536
+
     # Per-call LLM `max_tokens` budgets. 8192 is generous for non-thinking
     # models (their actual output is far smaller — the cap only ceilings
     # them) and gives reasoning models like MiniMax-M2.7 / DeepSeek-R1

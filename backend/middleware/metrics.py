@@ -62,6 +62,14 @@ LESSONS_DEDUP_SKIPPED_TOTAL = Counter(
     "lesson_text was persisted within the dedup window.",
     ["market"],
 )
+LESSON_EMBEDDINGS_TOTAL = Counter(
+    "lesson_embeddings_total",
+    "Lesson semantic-embedding outcomes from the inline write path "
+    "and the backfill cron. `success` = vector persisted; "
+    "`skipped` = embedding disabled or no API key resolved; "
+    "`failed` = provider returned an error or malformed payload.",
+    ["outcome"],
+)
 
 # ── Walk-forward orchestrator (PR-A1 + post-merge audit) ──────────
 

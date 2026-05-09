@@ -43,7 +43,6 @@ import asyncio
 import json
 import logging
 import math
-import re
 import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
@@ -79,29 +78,15 @@ log = logging.getLogger(__name__)
 #     "USD" would be mistaken for tickers in TW topics.
 #   - GLOBAL / crypto: matched against the curated Top-20 universe in
 #     `data/crypto/symbols.py` so `BTC` triggers but `ETH-USD` doesn't.
-_TW_SYMBOL_RE = re.compile(r"(?<![\w])(\d{4,6})(?![\w])")
-_CASHTAG_RE = re.compile(r"\$([A-Z]{1,5})\b")
-_BARE_US_TICKER_RE = re.compile(r"\b([A-Z]{1,5})\b")
 # Year-like 4-digit numbers — keep generous; TW codes never overlap.
-_YEAR_MIN = 1900
-_YEAR_MAX = 2099
 # Common 1-5 letter uppercase tokens that look like US tickers but
 # aren't. Prevents `discussion_service` from sentimening "USD news".
 # Not exhaustive — the topic field is short, false positives are
 # cheap (worst case: an empty per-symbol news block), and adding new
 # entries here is a 1-line patch.
-_US_TICKER_STOPWORDS = frozenset({
-    "A", "AI", "AN", "ARE", "AS", "AT", "BE", "BY", "CAN", "CEO",
-    "CFO", "CTO", "DCF", "DXY", "EPS", "ETF", "EU", "FED", "FOMC",
-    "FOR", "FX", "GDP", "GET", "I", "IF", "IN", "IPO", "IS", "IT",
-    "M2", "NEW", "NO", "NOT", "OF", "ON", "OR", "PE", "ROE",
-    "SEC", "SP", "SPX", "TBD", "THE", "TO", "UK", "US", "USA", "USD",
-    "VAR", "VIX", "WTI", "YOU",
-})
 
 _VALID_MARKETS = ("TW", "US", "GLOBAL")
 _DEFAULT_MARKET = "TW"
-_MAX_FOCUS_SYMBOLS = 5
 
 # ── tuning knobs ────────────────────────────────────────────────────
 
@@ -631,108 +616,6 @@ async def force_reset_status(
 # ── market context ──────────────────────────────────────────────────
 
 
-def _is_year_like(code: str) -> bool:
-    """4-digit numeric tokens in the year range — `2026 Q1 法說` would
-    otherwise be tagged as a TW stock code and pollute the per-symbol
-    sentiment lookup."""
-    if len(code) != 4 or not code.isdigit():
-        return False
-    return _YEAR_MIN <= int(code) <= _YEAR_MAX
-
-
-def _crypto_universe() -> list[str]:
-    """Top-20 crypto base assets, normalised to uppercase. Imported
-    lazily so a unit test that monkeypatches `data.crypto.symbols`
-    sees the patched value, and so the discussion service stays
-    decoupled from the crypto module loading at import time."""
-    try:
-        from data.crypto.symbols import TOP20
-    except Exception:
-        return []
-    return [str(s).upper() for s in TOP20 if s]
-
-
-def extract_focus_symbols(text: str, *, market: str = _DEFAULT_MARKET) -> list[str]:
-    """Pull stock / crypto codes out of free text. Deduped, capped at
-    `_MAX_FOCUS_SYMBOLS`, returned in encounter order.
-
-    Behaviour by market:
-      - TW: 4-6 digit numeric codes; 4-digit year-like values
-        (1900-2099) are filtered to avoid mis-tagging dates.
-      - US: cashtag `$AAPL` always honoured; bare uppercase 1-5 letter
-        tokens honoured if they aren't in `_US_TICKER_STOPWORDS`.
-      - GLOBAL: cashtags + crypto base assets from the curated Top-20
-        universe (BTC / ETH / SOL …). Year-filtered TW codes are also
-        honoured because the international news bucket sometimes
-        carries cross-listed TW ADRs (TSM / UMC).
-
-    Cashtag matches are honoured for every market — `$AAPL` in a TW
-    discussion still pulls AAPL into the per-symbol news bucket,
-    because the user's intent is explicit.
-    """
-    raw = text or ""
-    seen: list[str] = []
-
-    def _push(code: str) -> bool:
-        if code not in seen:
-            seen.append(code)
-        return len(seen) >= _MAX_FOCUS_SYMBOLS
-
-    for tag in _CASHTAG_RE.findall(raw):
-        if _push(tag):
-            return seen
-
-    market = (market or _DEFAULT_MARKET).upper()
-    if market == "TW":
-        for code in _TW_SYMBOL_RE.findall(raw):
-            if _is_year_like(code):
-                continue
-            if _push(code):
-                break
-    elif market == "US":
-        for tok in _BARE_US_TICKER_RE.findall(raw):
-            if tok in _US_TICKER_STOPWORDS:
-                continue
-            if _push(tok):
-                break
-    else:  # GLOBAL — accept TW digits + crypto base assets
-        universe = set(_crypto_universe())
-        for tok in _BARE_US_TICKER_RE.findall(raw):
-            if tok not in universe:
-                continue
-            if _push(tok):
-                return seen
-        for code in _TW_SYMBOL_RE.findall(raw):
-            if _is_year_like(code):
-                continue
-            if _push(code):
-                break
-
-    # Name-based fallback for TW + GLOBAL markets (PR #221). Topics
-    # written with the company short name ("討論台積電 / 鴻海 短線
-    # 走勢") miss the digit-only regex. Lookup against the in-memory
-    # `_name_map` populated by the daily symbol-refresh cron picks
-    # those up so `prior_discussions` / `per_symbol_news_sentiment` /
-    # `focus_briefs` actually find them. Skipped for US — different
-    # name conventions, and the bare-ticker regex already covers
-    # the common case there.
-    if market in ("TW", "GLOBAL") and len(seen) < _MAX_FOCUS_SYMBOLS:
-        try:
-            from services.tw_market_service import (
-                find_symbols_by_names_in_text,
-            )
-            remaining = _MAX_FOCUS_SYMBOLS - len(seen)
-            for sym in find_symbols_by_names_in_text(raw, limit=remaining):
-                if _push(sym):
-                    break
-        except Exception:
-            # Fresh deploy where symbol map hasn't loaded, or any
-            # other defensive failure — fall through with whatever
-            # the regex-only pass found.
-            pass
-    return seen
-
-
 # ── focus_briefs (per-symbol mini analyst report) ──────────────────
 #
 # `gather_market_context` already pulls per-symbol news sentiment for
@@ -751,130 +634,7 @@ def extract_focus_symbols(text: str, *, market: str = _DEFAULT_MARKET) -> list[s
 
 
 _FOCUS_BRIEF_HISTORY_MONTHS = 12         # enough for 52w high/low
-_FOCUS_BRIEF_REVENUE_MONTHS = 6
-_FOCUS_BRIEF_CHIP_DAYS = 5
 _FOCUS_BRIEF_PEER_COUNT = 3
-
-
-def _bar_close(bar: dict[str, Any]) -> float | None:
-    c = bar.get("close")
-    try:
-        return float(c) if c is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _ma(closes: list[float], window: int) -> float | None:
-    if len(closes) < window:
-        return None
-    return round(sum(closes[-window:]) / window, 4)
-
-
-def _rsi(closes: list[float], window: int = 14) -> float | None:
-    """Wilder's RSI on the last `window` returns. Falls through to None
-    when there's not enough data — fresh-listed names that landed in
-    the topic get a None instead of a misleading 50."""
-    if len(closes) <= window:
-        return None
-    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
-    gains = [max(d, 0.0) for d in deltas[-window:]]
-    losses = [max(-d, 0.0) for d in deltas[-window:]]
-    avg_gain = sum(gains) / window
-    avg_loss = sum(losses) / window
-    if avg_loss == 0:
-        return 100.0 if avg_gain > 0 else 50.0
-    rs = avg_gain / avg_loss
-    return round(100.0 - (100.0 / (1.0 + rs)), 2)
-
-
-def _pct_change(start: float | None, end: float | None) -> float | None:
-    if not start or not end or start == 0:
-        return None
-    return round((end - start) / start * 100.0, 2)
-
-
-def _compute_technicals(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Compute summary technicals from a daily-OHLCV history list.
-
-    Returns None when fewer than 20 bars available — the moving
-    averages would be too thin to carry signal and the persona is
-    better off seeing "技術指標不足" than misleading numbers.
-    """
-    closes = [c for c in (_bar_close(b) for b in bars) if c is not None]
-    if len(closes) < 20:
-        return None
-    last = closes[-1]
-    high_52w = max(closes[-min(252, len(closes)):])
-    low_52w = min(closes[-min(252, len(closes)):])
-    return {
-        "last_close":      round(last, 4),
-        "ma20":            _ma(closes, 20),
-        "ma60":            _ma(closes, 60),
-        "ma120":           _ma(closes, 120),
-        "high_52w":        round(high_52w, 4),
-        "low_52w":         round(low_52w, 4),
-        "dist_high_52w_pct": _pct_change(high_52w, last),
-        "dist_low_52w_pct":  _pct_change(low_52w, last),
-        "perf_5d_pct":     _pct_change(
-            closes[-6] if len(closes) >= 6 else None, last,
-        ),
-        "perf_20d_pct":    _pct_change(
-            closes[-21] if len(closes) >= 21 else None, last,
-        ),
-        "perf_60d_pct":    _pct_change(
-            closes[-61] if len(closes) >= 61 else None, last,
-        ),
-        "rsi14":           _rsi(closes, 14),
-    }
-
-
-def _summarize_revenue(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Take the latest `_FOCUS_BRIEF_REVENUE_MONTHS` rows from a
-    `tw_market_service.get_revenue` response, drop noise fields."""
-    if not rows:
-        return []
-    tail = rows[-_FOCUS_BRIEF_REVENUE_MONTHS:]
-    out: list[dict[str, Any]] = []
-    for r in tail:
-        out.append({
-            "month":       (r.get("date") or "")[:7],
-            "revenue_yoy": r.get("revenue_yoy"),
-            "revenue_mom": r.get("revenue_mom"),
-        })
-    return out
-
-
-def _summarize_institutional(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Sum 5-day net foreign / SITC / dealer over the rows. Returns
-    None when nothing came back — caller drops the block."""
-    if not rows:
-        return None
-    fini_net = sitc_net = dealer_net = 0
-    days = 0
-    for r in rows[-_FOCUS_BRIEF_CHIP_DAYS:]:
-        fini_net += int(r.get("fini_buy") or 0) - int(r.get("fini_sell") or 0)
-        sitc_net += int(r.get("sitc_buy") or 0) - int(r.get("sitc_sell") or 0)
-        dealer_net += int(r.get("dealer_buy") or 0) - int(r.get("dealer_sell") or 0)
-        days += 1
-    if days == 0:
-        return None
-    return {
-        "fini_net_5d":   fini_net,
-        "sitc_net_5d":   sitc_net,
-        "dealer_net_5d": dealer_net,
-        "days":          days,
-    }
-
-
-def _summarize_margin(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
-    if not rows:
-        return None
-    latest = rows[-1]
-    return {
-        "as_of":           latest.get("date"),
-        "margin_balance":  latest.get("margin_balance"),
-        "short_balance":   latest.get("short_balance"),
-    }
 
 
 async def _get_tw_peers(
@@ -3453,4 +3213,38 @@ from services.discussion.transcript_format import (  # noqa: E402,F401
     _format_history,
     _format_transcript,
     _summarize_turn_content,
+)
+
+
+# Symbol extraction extracted to discussion/symbols.py.
+# Re-export for back-compat with `gather_market_context` +
+# `synthesize_conclusion` (still in this file).
+from services.discussion.symbols import (  # noqa: E402,F401
+    _BARE_US_TICKER_RE,
+    _CASHTAG_RE,
+    _MAX_FOCUS_SYMBOLS,
+    _TW_SYMBOL_RE,
+    _US_TICKER_STOPWORDS,
+    _YEAR_MAX,
+    _YEAR_MIN,
+    _crypto_universe,
+    _is_year_like,
+    extract_focus_symbols,
+)
+
+
+# Pure technicals + summaries extracted to discussion/technicals.py.
+# Re-export for back-compat with focus brief builders (still in this
+# file) + the two window constants the builders also reference.
+from services.discussion.technicals import (  # noqa: E402,F401
+    _FOCUS_BRIEF_CHIP_DAYS,
+    _FOCUS_BRIEF_REVENUE_MONTHS,
+    _bar_close,
+    _compute_technicals,
+    _ma,
+    _pct_change,
+    _rsi,
+    _summarize_institutional,
+    _summarize_margin,
+    _summarize_revenue,
 )

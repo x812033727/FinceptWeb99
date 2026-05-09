@@ -37,6 +37,7 @@ from ai.llm_router import stream_chat
 from cache.redis_cache import cache_incr
 from config import settings
 from db.session import AsyncSessionLocal
+from models.corporate_announcement import CorporateAnnouncement
 from models.news_article import NewsArticle
 from services.llm_parsing_utils import (
     extract_json_object,
@@ -196,14 +197,24 @@ def _parse_response(text: str) -> list[dict]:
     return data
 
 
-async def _score_batch(
-    rows: list[NewsArticle],
+async def _run_llm_score(
+    items_str: str,
+    valid_ids: set[int],
     *,
     provider: str,
     model: str,
     db: AsyncSession,
+    persona_id: str,
 ) -> tuple[list[_Scored] | None, str | None]:
-    """One LLM call per batch.
+    """Shared LLM-call core for both the news scorer (`_score_batch`)
+    and the announcement scorer (`_score_announcement_batch`). Takes
+    a pre-formatted items string + the set of valid IDs to filter
+    the response against.
+
+    `persona_id` is what the usage event gets recorded under so
+    admins can split background-task cost between
+    `_system:news_sentiment` and `_system:announcement_sentiment`
+    in UsageCard.
 
     Two-axis result:
       - `(scored, None)` — LLM responded with parseable JSON. `scored`
@@ -213,33 +224,16 @@ async def _score_batch(
       - `(None, error_msg)` — LLM totally failed: error event from
         the stream, exception during streaming, empty content, or
         unparseable response. Caller MUST NOT stamp the input rows
-        so the next pass can retry transient failures (e.g. provider
-        outage, temporary rate-limit, prompt that confused one
-        request but might work on the next). `error_msg` is the
-        diagnostic for surfacing into the discussion ctx.
-
-    Token usage is recorded against `persona_id="_system:news_sentiment"`
-    so admins can see background-task cost in UsageCard alongside chat
-    usage.
+        so the next pass can retry transient failures.
     """
-    if not rows:
-        return [], None
-
-    prompt = _PROMPT_TEMPLATE.format(items=_format_items(rows))
     messages = [
         {"role": "system", "content": "你是專業的金融新聞情緒分析助理，只輸出 JSON。"},
-        {"role": "user", "content": prompt},
+        {"role": "user", "content": _PROMPT_TEMPLATE.format(items=items_str)},
     ]
 
     assembled = ""
     usage_seen: dict[str, int] | None = None
     error_msg: str | None = None
-    # `max_tokens` is admin-tunable via RuntimeTunablesCard
-    # (`SENTIMENT_LLM_MAX_TOKENS`, default 8192). 8192 leaves ~6-7K
-    # headroom for chain-of-thought on reasoning models (MiniMax-M2.7,
-    # DeepSeek-R1) before the JSON array of ~500-1000 tokens lands. M2.7
-    # has a 205K context window, so the cap is purely an output-side
-    # budget; non-thinking models still emit only what they need.
     try:
         from services.runtime_config_service import get_int as _runtime_get_int
         max_tokens_budget = await _runtime_get_int(db, "SENTIMENT_LLM_MAX_TOKENS")
@@ -266,17 +260,15 @@ async def _score_batch(
                 }
             elif etype == "error":
                 error_msg = event.get("message") or "llm error"
-                # `extra={"message": ...}` collides with LogRecord's
-                # built-in `message` attribute and raises — use a
-                # distinct key so the warning actually emits.
                 log.warning(
                     "news_sentiment.llm_error",
-                    extra={"llm_error": error_msg},
+                    extra={"llm_error": error_msg, "persona_id": persona_id},
                 )
-                # Drain rather than early-return — usage event sometimes
-                # arrives after error, and we want to bill it consistently.
     except Exception as exc:
-        log.warning("news_sentiment.stream_failed", extra={"error": str(exc)})
+        log.warning(
+            "news_sentiment.stream_failed",
+            extra={"error": str(exc), "persona_id": persona_id},
+        )
         return None, f"stream exception: {exc}"
 
     if usage_seen is not None:
@@ -286,7 +278,7 @@ async def _score_batch(
             user_id=None,
             provider=provider,
             model=model,
-            persona_id="_system:news_sentiment",
+            persona_id=persona_id,
             prompt_tokens=usage_seen["prompt_tokens"],
             completion_tokens=usage_seen["completion_tokens"],
         )
@@ -300,13 +292,9 @@ async def _score_batch(
     parsed = _parse_response(assembled)
     cleaned_check = strip_code_fence(strip_think_blocks(assembled)).strip()
     if not parsed and cleaned_check not in ("[]", ""):
-        # Non-empty content that didn't parse as a JSON array — treat
-        # as transient failure so the next pass retries instead of
-        # stamping these rows as un-scoreable forever.
         snippet = assembled.strip().replace("\n", " ")[:200]
         return None, f"llm response did not parse as JSON array; raw={snippet}"
 
-    by_id = {r.id: r for r in rows}
     out: list[_Scored] = []
     for item in parsed:
         try:
@@ -314,11 +302,30 @@ async def _score_batch(
             score = float(item["score"])
         except (KeyError, TypeError, ValueError):
             continue
-        if aid not in by_id:
+        if aid not in valid_ids:
             continue
         score = max(-1.0, min(1.0, score))
         out.append(_Scored(article_id=aid, score=score, label=_bucket(score)))
     return out, None
+
+
+async def _score_batch(
+    rows: list[NewsArticle],
+    *,
+    provider: str,
+    model: str,
+    db: AsyncSession,
+) -> tuple[list[_Scored] | None, str | None]:
+    """News-side wrapper around `_run_llm_score`. See its docstring
+    for the two-axis result contract."""
+    if not rows:
+        return [], None
+    return await _run_llm_score(
+        items_str=_format_items(rows),
+        valid_ids={r.id for r in rows},
+        provider=provider, model=model, db=db,
+        persona_id="_system:news_sentiment",
+    )
 
 
 async def _fetch_unscored(
@@ -369,6 +376,202 @@ async def _write_scores(
         await db.execute(stmt)
     await db.commit()
     return written
+
+
+# ── Corporate announcement scoring (PR-D1b) ──────────────────────
+#
+# Mirrors the news-side functions above but operates on
+# `corporate_announcements`. The shared LLM core (`_run_llm_score`)
+# means the prompt + parse + clamp + filter logic stays single-
+# sourced — only the format string + I/O bindings are
+# announcement-specific.
+#
+# Cost: shared daily cap with news (`_can_make_llm_call` reads the
+# same Redis counter). At 100 calls/day default cap and ~50-150
+# MOPS rows per day, announcements typically consume 3-8 batches
+# per day, leaving plenty of headroom for news.
+
+
+def _format_announcement_items(rows: list[CorporateAnnouncement]) -> str:
+    """Same JSON-array shape as `_format_items` but includes the
+    announcement category in the title — material-info LLM scoring
+    is more accurate when the model sees `(category)` framing
+    alongside the disclosure title (a "減資" disclosure with a
+    neutral-sounding title still warrants a bearish prior, etc.)."""
+    lines = []
+    for r in rows:
+        symbol = f"[{r.symbol}] " if r.symbol else ""
+        category = f"({r.category}) " if r.category else ""
+        title = r.title.strip().replace("\n", " ")[:120]
+        lines.append(f'  {{"id": {r.id}, "title": "{symbol}{category}{title}"}}')
+    return "[\n" + ",\n".join(lines) + "\n]"
+
+
+async def _fetch_unscored_announcements(
+    db: AsyncSession, *, limit: int, max_age_days: int,
+) -> list[CorporateAnnouncement]:
+    cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
+    stmt = (
+        select(CorporateAnnouncement)
+        .where(
+            CorporateAnnouncement.sentiment_scored_at.is_(None),
+            CorporateAnnouncement.announced_at >= cutoff,
+        )
+        .order_by(CorporateAnnouncement.announced_at.desc())
+        .limit(limit)
+    )
+    return list((await db.scalars(stmt)).all())
+
+
+async def _score_announcement_batch(
+    rows: list[CorporateAnnouncement],
+    *,
+    provider: str,
+    model: str,
+    db: AsyncSession,
+) -> tuple[list[_Scored] | None, str | None]:
+    """Announcement-side wrapper around `_run_llm_score`. Records
+    usage under `_system:announcement_sentiment` so admins can split
+    cost between the two background-task lanes in UsageCard."""
+    if not rows:
+        return [], None
+    return await _run_llm_score(
+        items_str=_format_announcement_items(rows),
+        valid_ids={r.id for r in rows},
+        provider=provider, model=model, db=db,
+        persona_id="_system:announcement_sentiment",
+    )
+
+
+async def _write_announcement_scores(
+    db: AsyncSession, scored: list[_Scored], *, fallback_ids: list[int],
+) -> int:
+    """Mirror of `_write_scores` for `corporate_announcements`. Same
+    fallback-stamp behaviour: every input row gets `sentiment_
+    scored_at` updated even when the LLM didn't return for it, so
+    the next pass doesn't keep retrying the same un-scoreable
+    headlines."""
+    now = datetime.now(UTC)
+    by_id = {s.article_id: s for s in scored}
+    written = 0
+    for aid in fallback_ids:
+        s = by_id.get(aid)
+        if s is None:
+            stmt = (
+                update(CorporateAnnouncement)
+                .where(CorporateAnnouncement.id == aid)
+                .values(sentiment_scored_at=now)
+            )
+        else:
+            stmt = (
+                update(CorporateAnnouncement)
+                .where(CorporateAnnouncement.id == aid)
+                .values(
+                    sentiment_score=s.score,
+                    sentiment_label=s.label,
+                    sentiment_scored_at=now,
+                )
+            )
+            written += 1
+        await db.execute(stmt)
+    await db.commit()
+    return written
+
+
+async def score_pending_announcements(
+    *,
+    db: AsyncSession | None = None,
+    batch_size: int = _BATCH_SIZE,
+    max_batches: int = 4,
+    provider: str | None = None,
+    model: str | None = None,
+    max_age_days: int | None = None,
+) -> dict[str, int]:
+    """Mirror of `score_pending` for `corporate_announcements`.
+
+    Sharing the same LLM provider/model defaults as news scoring
+    (resolved via the `news_sentiment` system task config) — keeps
+    operators from having to dial in two separate model selections
+    when both lanes are fundamentally doing the same task.
+
+    Daily cap is shared via `_can_make_llm_call` against the same
+    Redis counter so the 100/day default protects the operator's
+    budget across BOTH lanes.
+
+    Returns the same counter shape as `score_pending` so the cron
+    aggregator can render combined status uniformly.
+    """
+    own_session = db is None
+    session = db if db is not None else AsyncSessionLocal()
+    if max_age_days is None:
+        try:
+            from services.runtime_config_service import (
+                get_int as _runtime_get_int,
+            )
+            max_age_days = await _runtime_get_int(
+                session, "SENTIMENT_CRON_MAX_AGE_DAYS",
+            )
+        except Exception as exc:
+            log.warning(
+                "announcement_sentiment.runtime_max_age_failed",
+                extra={"error": str(exc)},
+            )
+            max_age_days = settings.SENTIMENT_CRON_MAX_AGE_DAYS
+    considered = 0
+    scored_count = 0
+    batches_run = 0
+    cap_hit = False
+    last_error: str | None = None
+    try:
+        if provider is None or model is None:
+            from services.system_task_config_service import resolve as _resolve_task
+            r_provider, r_model = await _resolve_task(session, "news_sentiment")
+            provider = provider or r_provider
+            model = model or r_model
+        for _ in range(max_batches):
+            if not await _can_make_llm_call(session):
+                cap_hit = True
+                log.warning(
+                    "announcement_sentiment.daily_cap_hit",
+                    extra={"cap": settings.SENTIMENT_DAILY_LLM_CALL_CAP},
+                )
+                break
+            rows = await _fetch_unscored_announcements(
+                session, limit=batch_size, max_age_days=max_age_days,
+            )
+            if not rows:
+                break
+            scored, batch_error = await _score_announcement_batch(
+                rows, provider=provider, model=model, db=session,
+            )
+            if scored is None:
+                last_error = batch_error
+                log.warning(
+                    "announcement_sentiment.batch_failed_skipping_stamp",
+                    extra={"error": batch_error, "rows": len(rows)},
+                )
+                break
+            ids = [r.id for r in rows]
+            written = await _write_announcement_scores(
+                session, scored, fallback_ids=ids,
+            )
+            considered += len(rows)
+            scored_count += written
+            batches_run += 1
+            if not scored:
+                break
+        result: dict[str, int | str] = {
+            "considered": considered,
+            "scored": scored_count,
+            "batches": batches_run,
+            "cap_hit": int(cap_hit),
+        }
+        if last_error:
+            result["error"] = last_error
+        return result
+    finally:
+        if own_session:
+            await session.close()
 
 
 async def score_pending(

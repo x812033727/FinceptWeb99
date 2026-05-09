@@ -38,7 +38,16 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from .blocks import (
-    chip, derivatives, http, lessons, news, overseas, owner, risk, technical,
+    announcements,
+    chip,
+    derivatives,
+    http,
+    lessons,
+    news,
+    overseas,
+    owner,
+    risk,
+    technical,
 )
 
 # Progress callback type. Caller (e.g. `run_round`) provides one so
@@ -131,6 +140,16 @@ def _initial_ctx(*, market: str, as_of: date | None) -> dict[str, Any]:
         # cache; no DB table. Bounded fan-out (≤ 5 focus_symbols)
         # to cap Sponsor quota burn per discussion.
         "broker_concentration": [],
+        # PR-D1: TW MOPS 重大訊息 official disclosures, last 7 days
+        # (live) / 14 days (backtest). Shape:
+        # `{market: [{symbol, announced_at, category, title, body,
+        # source_url, sentiment_score, sentiment_label}, ...],
+        # per_symbol: {sym: [...]}}`. Always present (default empty
+        # shape) so the prompt template doesn't have to handle
+        # missing keys; populated only for `market='TW'` — empty
+        # for US / GLOBAL until PR-D3 wires SEC 8-K under a
+        # parallel block.
+        "corporate_announcements": {"market": [], "per_symbol": {}},
         # Past-discussion lessons retrieved by `discussion_lesson_service`
         # for the same market + per focus_symbol. Shape:
         # `{market: [LessonSummary, ...], per_symbol: {sym: [...], ...}}`.
@@ -325,6 +344,13 @@ async def build_market_context(
         ctx, db, market=market, focus_symbols=focus_symbols,
         as_of_dt=as_of_dt, record_error=record_error,
         max_focus_symbols=max_focus_symbols,
+    )
+
+    # PR-D1: TW MOPS 重大訊息. DB-bound, no LLM call, fast.
+    await announcements.fetch_corporate_announcements(
+        ctx, db, market=market,
+        focus_symbols=focus_symbols,
+        as_of_dt=as_of_dt, record_error=record_error,
     )
 
     if owner_id is not None:

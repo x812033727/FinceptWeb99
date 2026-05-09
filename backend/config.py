@@ -223,6 +223,14 @@ class Settings(BaseSettings):
     # surfaces noise on a specific corpus.
     LESSON_EMBEDDING_BOOST_ALPHA: float = 1.0
 
+    # SEC EDGAR contact email (PR-D3). SEC's documented courtesy
+    # User-Agent format includes contact info — when our hourly
+    # 8-K ingest cron misbehaves SEC ops emails the listed contact
+    # before rate-limiting / blocking the request. Empty falls back
+    # to a generic project address; production deployments should
+    # set this to a real maintainer email.
+    SEC_EDGAR_USER_AGENT_EMAIL: str = ""
+
     # Per-call LLM `max_tokens` budgets. 8192 is generous for non-thinking
     # models (their actual output is far smaller — the cap only ceilings
     # them) and gives reasoning models like MiniMax-M2.7 / DeepSeek-R1

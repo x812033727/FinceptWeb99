@@ -1,12 +1,12 @@
-"""TW MOPS material-info disclosures block (PR-D1).
+"""Corporate disclosures block (PR-D1 + PR-D3).
 
 Reads `corporate_announcements` for the discussion's market and
 surfaces two views:
 
   - `corporate_announcements.market` — top-N most recent disclosures
     across the entire market in the last 7 days, useful for sector-
-    wide signals (a wave of 財報 / 庫藏股 disclosures often presages
-    a sector move).
+    wide signals (a wave of 財報 / 庫藏股 / 8-K item 2.02 disclosures
+    often presages a sector move).
 
   - `corporate_announcements.per_symbol` — per focus_symbol, the
     most recent disclosures for that specific issuer. Personas
@@ -14,19 +14,28 @@ surfaces two views:
     the issuer's own filing, structured by category, and timestamped
     to the minute.
 
+Per-market source dispatch:
+  - `market='TW'` → MOPS 重大訊息 ingest
+    (`tasks/ingest_announcements_tw.py`, source='mops_t05st02')
+  - `market='US'` → SEC EDGAR 8-K ingest
+    (`tasks/ingest_announcements_us.py`, source='sec_edgar_8k')
+  - `market='GLOBAL'` → no-op; macro discussions don't bind to a
+    single issuer-disclosure feed
+
+Both source-specific cron jobs write into the SAME
+`corporate_announcements` table with the appropriate `market`
+value, so the read-side ctx block is market-agnostic — just hands
+the discussion's market to `read_recent_announcements` and the
+existing index does the rest.
+
 Both views read the same `read_recent_announcements` helper so the
-sentiment fields populate uniformly once the hourly scorer extends
-to the announcements archive.
+sentiment fields populate uniformly via the hourly scorer (D1b).
 
 Backtest correctness: `read_recent_announcements` filters by
 `announced_at >= now - max_age_days` (live) or anchored to the
 discussion's `as_of_dt` (backtest). The latter prevents a sweep
 discussion at as_of=2025-06-01 from reading a 2025-06-15 disclosure
 — same backtest-safety contract as the news sentiment block.
-
-TW-only: MOPS is the source. US 8-K coverage will land in PR-D3
-under a parallel `sec_filings` block; this one stays
-market-conditioned so the dispatch is explicit at the call site.
 """
 from __future__ import annotations
 
@@ -65,10 +74,12 @@ async def fetch_corporate_announcements(
     we record the error and leave the default empty shape so the
     discussion still proceeds.
     """
-    if (market or "").upper() != "TW":
-        # US/GLOBAL markets don't have a MOPS feed. The default
-        # empty shape is set in `_initial_ctx`; we just no-op here
-        # so the dispatch is explicit + grep-able.
+    market_upper = (market or "").upper()
+    if market_upper not in ("TW", "US"):
+        # GLOBAL discussions are macro-themed and don't bind to a
+        # single issuer-disclosure feed. The default empty shape is
+        # set in `_initial_ctx`; we just no-op here so the dispatch
+        # is explicit + grep-able.
         return
 
     try:

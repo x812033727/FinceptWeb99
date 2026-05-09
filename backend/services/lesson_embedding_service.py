@@ -202,8 +202,19 @@ async def _resolve_provider_and_key(
     db: AsyncSession | None,
 ) -> tuple[str, str, str]:
     """Resolve `(provider, model, api_key)` for the embedding call.
-    Mirrors `llm_router._resolve_api_key` so admin-stored OpenAI keys
-    work without re-implementing the chain.
+
+    Two-tier resolution: env-supplied key first, then the admin-stored
+    DB system row (`LLMProviderKey`). Intentionally does NOT route
+    through `llm_router._resolve_api_key` because that helper's
+    tier-4 admin-key fallback issues a JOIN against `users`, and that
+    JOIN has been observed to leak result-set processor state into
+    SQLAlchemy 2.0's cyextension row cache under aiosqlite +
+    StaticPool — surfacing as the next test's `select(User)` reading
+    User.id as a stray float (same flake class as PR f909d76's
+    `'float' object has no attribute 'replace'`). Embedding is a
+    background-only feature — no per-user customization is needed —
+    so the simpler chain is sufficient AND eliminates the flake
+    surface.
 
     Returns `("", "", "")` when the configured provider isn't
     supported yet — caller treats that as "skip embed".
@@ -219,19 +230,25 @@ async def _resolve_provider_and_key(
         return "", "", ""
     model = getattr(settings, "LESSON_EMBEDDING_MODEL", "") or _PROVIDERS[provider][1]
 
-    api_key = ""
-    if db is not None:
+    attr_map = {"openai": "OPENAI_API_KEY"}
+    api_key = getattr(settings, attr_map.get(provider, ""), "") or ""
+
+    # Tier 2 — admin-stored system row in `llm_provider_keys`. Single
+    # `db.get(...)` lookup, no JOIN, no row-processor cross-talk.
+    if not api_key and db is not None:
         try:
-            from ai.llm_router import _resolve_api_key
-            api_key = await _resolve_api_key(provider, db, None)
+            from auth.llm_key_crypto import decrypt
+            from models.llm_provider_key import LLMProviderKey
+            row = await db.get(LLMProviderKey, provider)
+            if row is not None:
+                plain = decrypt(row.encrypted_key)
+                if plain:
+                    api_key = plain
         except Exception as exc:
             log.debug(
-                "lesson_embedding.key_lookup_failed",
+                "lesson_embedding.system_key_lookup_failed",
                 extra={"provider": provider, "error": str(exc)},
             )
-    if not api_key:
-        attr_map = {"openai": "OPENAI_API_KEY"}
-        api_key = getattr(settings, attr_map.get(provider, ""), "") or ""
     return provider, model, api_key
 
 

@@ -20,6 +20,7 @@ from api.auth.router import router as auth_router
 from api.crypto_market.router import router as crypto_router
 from api.discussion.router import router as discussion_router
 from api.global_market.router import router as global_router
+from api.announcements.router import router as announcements_router
 from api.portfolio.router import router as portfolio_router
 from api.system.router import router as system_router
 from api.tw_market.router import router as tw_router
@@ -235,6 +236,7 @@ app.include_router(alerts_router, prefix="/api/alerts", tags=["Alerts"])
 app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
 app.include_router(discussion_router, prefix="/api/discussion", tags=["Discussion"])
 app.include_router(global_router, prefix="/api/global", tags=["Global Market"])
+app.include_router(announcements_router, prefix="/api/announcements", tags=["Announcements"])
 app.include_router(system_router, prefix="/api/system", tags=["System"])
 app.include_router(finmind_router, prefix="/api/finmind", tags=["FinMind Clone"])
 

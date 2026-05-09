@@ -48,16 +48,28 @@ def _format_lane(label: str, result: dict) -> str:
 def _format_combined_status(news: dict, ann: dict) -> str:
     """Build a single-line IngestHealthCard status from both lanes.
 
-    Shape: `news=N/S (Bb) ann=N/S (Bb)` plus any cap-hit / error
-    suffix. Examples:
-      - `news=20/20 (1b) ann=8/8 (1b)`            (healthy)
-      - `news=80/0 (4b) ann=0/0 (0b) (LLM ...)`   (news LLM unparseable)
-      - `news=80/40 (2b) ann=0/0 (0b) cap_hit`    (news ate the cap)
+    Shape: `news=N/S (Bb) ann=N/S (Bb)` plus any cap-hit / cooldown /
+    error suffix. Examples:
+      - `news=20/20 (1b) ann=8/8 (1b)`                (healthy)
+      - `news=80/0 (4b) ann=0/0 (0b) (LLM ...)`       (LLM unparseable)
+      - `news=80/40 (2b) ann=0/0 (0b) cap_hit`        (news ate the cap)
+      - `news=0/0 (0b) ann=0/0 (0b) cooldown (anthropic)` (provider down)
+
+    `cooldown_active` reads as a separate suffix from `cap_hit` so the
+    operator can distinguish "we hit the daily LLM budget" from "the
+    LLM provider is in failure backoff". Both halt scoring but for
+    different reasons + different timelines.
     """
     parts = [_format_lane("news", news), _format_lane("ann", ann)]
     cap_hit = bool(news.get("cap_hit") or ann.get("cap_hit"))
     if cap_hit:
         parts.append("cap_hit (daily LLM limit)")
+    cooldown = bool(news.get("cooldown_active") or ann.get("cooldown_active"))
+    if cooldown:
+        provider = (
+            news.get("provider") or ann.get("provider") or "unknown"
+        )
+        parts.append(f"cooldown ({provider})")
     err = news.get("error") or ann.get("error")
     if err:
         parts.append(f"err={str(err)[:120]}")

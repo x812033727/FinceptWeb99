@@ -158,6 +158,21 @@ TWSE_RATE_LIMIT_DEGRADED_TOTAL = Counter(
     ["reason"],
 )
 
+# ── News sentiment provider cooldown ──────────────────────────────
+# Bumped every time `_record_provider_failure` engages a per-provider
+# failure backoff (1h → 6h capped). Operators can alert on a sustained
+# rate to detect a provider outage that the daily-cap counter alone
+# wouldn't surface — the new backoff means a flat rate of 1/hour
+# during an outage stops at the first failure instead of spinning
+# 24 cap-burning attempts per day.
+SENTIMENT_PROVIDER_COOLDOWN_TOTAL = Counter(
+    "sentiment_provider_cooldown_total",
+    "News-sentiment scorer provider cooldowns triggered. `lane` "
+    "splits a news-only outage from an announcement-only outage so "
+    "an MOPS-side LLM glitch doesn't get blamed on the news pipeline.",
+    ["provider", "lane"],
+)
+
 # ── Core Web Vitals (reported by the frontend) ────────────────────
 # LCP / INP / FCP / TTFB are time metrics in seconds; bucket
 # boundaries are tuned around Google's "Good / Needs improvement /

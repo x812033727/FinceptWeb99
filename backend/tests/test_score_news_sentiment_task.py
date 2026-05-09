@@ -73,3 +73,38 @@ def test_status_handles_missing_keys_defensively():
     out = _format_combined_status({}, {})
     assert "news=0/0 (0b)" in out
     assert "ann=0/0 (0b)" in out
+
+
+def test_status_surfaces_provider_cooldown_distinct_from_cap_hit():
+    """When a lane is in provider failure cooldown the status must
+    say `cooldown (provider_name)` — distinct from `cap_hit`. Both
+    halt scoring but for different reasons + different timelines:
+    cap_hit resets at UTC midnight, cooldown resets after the
+    backoff TTL (1h-6h)."""
+    out = _format_combined_status(
+        {
+            "considered": 0, "scored": 0, "batches": 0,
+            "cap_hit": 0, "cooldown_active": 1, "provider": "anthropic",
+        },
+        {"considered": 0, "scored": 0, "batches": 0, "cap_hit": 0},
+    )
+    assert "cooldown (anthropic)" in out
+    assert "cap_hit" not in out
+
+
+def test_status_renders_cap_hit_and_cooldown_together():
+    """Both states can co-occur — cap exhausted AND a separate provider
+    in cooldown. Both must surface so the operator sees the full
+    picture rather than only the first-encountered halt reason."""
+    out = _format_combined_status(
+        {
+            "considered": 80, "scored": 40, "batches": 2,
+            "cap_hit": 1, "cooldown_active": 0,
+        },
+        {
+            "considered": 0, "scored": 0, "batches": 0,
+            "cap_hit": 0, "cooldown_active": 1, "provider": "anthropic",
+        },
+    )
+    assert "cap_hit" in out
+    assert "cooldown (anthropic)" in out

@@ -34,7 +34,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai.llm_router import stream_chat
-from cache.redis_cache import cache_incr
+from cache.redis_cache import cache_delete, cache_get, cache_incr, cache_set
 from config import settings
 from db.session import AsyncSessionLocal
 from models.corporate_announcement import CorporateAnnouncement
@@ -49,6 +49,129 @@ from services.llm_parsing_utils import (
 log = logging.getLogger(__name__)
 
 
+# ── Per-provider failure backoff ──────────────────────────────────
+# When the LLM provider returns a transient error (503, network
+# blip, malformed JSON, parse failure), we want to stop hitting it
+# for a while instead of burning the daily cap on certain-failure
+# calls. The previous behaviour reserved one cap unit per *attempt*
+# (success or fail), so a 24h provider outage = 24 cap units burned
+# without any rows scored — the next morning's healthy provider
+# couldn't even start until the daily reset.
+#
+# Two Redis keys per provider:
+#   sentiment:fail_count:{provider}  integer, TTL 7d (failure window
+#                                    naturally ages out after a quiet
+#                                    week so a one-off blip doesn't
+#                                    leave a long memory)
+#   sentiment:cooldown:{provider}    marker key, TTL == backoff window;
+#                                    while present, the cron skips the
+#                                    provider entirely
+#
+# Backoff schedule (capped at 6h):
+#   1 fail  → 1h cooldown
+#   2 fail  → 2h cooldown
+#   3 fail  → 4h cooldown
+#   4+ fail → 6h cooldown
+# A successful batch clears both keys, so a flapping provider that
+# briefly recovers resets back to 1h on the next failure.
+
+_COOLDOWN_KEY_PREFIX = "sentiment:cooldown:"
+_FAIL_COUNT_KEY_PREFIX = "sentiment:fail_count:"
+_BACKOFF_SCHEDULE_HOURS = [1, 2, 4, 6]
+_FAIL_COUNT_TTL = 7 * 86400
+
+
+async def _is_provider_in_cooldown(provider: str) -> bool:
+    """Return True iff the provider is currently in failure cooldown.
+
+    Fail-open on Redis outage (returns False) — without Redis we
+    can't enforce the cooldown, but the daily cap counter
+    (`_can_make_llm_call`) ALREADY fails closed, so runaway spend
+    is already prevented. Logging here is debug because Redis
+    health is observed elsewhere.
+    """
+    try:
+        return (await cache_get(_COOLDOWN_KEY_PREFIX + provider)) is not None
+    except Exception as exc:
+        log.debug(
+            "news_sentiment.cooldown_check_failed",
+            extra={"provider": provider, "error": str(exc)},
+        )
+        return False
+
+
+async def _record_provider_failure(provider: str, *, lane: str) -> int:
+    """Bump the failure counter and set/extend the cooldown TTL
+    according to `_BACKOFF_SCHEDULE_HOURS`.
+
+    `lane` is one of "news" | "announcement" — used for the
+    Prometheus counter so operators can split a news-only outage
+    from an announcement-only outage. Returns the new failure
+    count for log/test correlation.
+    """
+    try:
+        count = await cache_incr(
+            _FAIL_COUNT_KEY_PREFIX + provider, ttl_seconds=_FAIL_COUNT_TTL,
+        )
+    except Exception as exc:
+        log.warning(
+            "news_sentiment.fail_count_incr_failed",
+            extra={"provider": provider, "error": str(exc)},
+        )
+        # Treat as first failure when counter unavailable — at least
+        # imposes the 1h floor instead of letting the cron spin.
+        count = 1
+
+    idx = min(max(count, 1) - 1, len(_BACKOFF_SCHEDULE_HOURS) - 1)
+    hours = _BACKOFF_SCHEDULE_HOURS[idx]
+    try:
+        await cache_set(
+            _COOLDOWN_KEY_PREFIX + provider, "1", ttl_seconds=hours * 3600,
+        )
+    except Exception as exc:
+        log.warning(
+            "news_sentiment.cooldown_set_failed",
+            extra={"provider": provider, "error": str(exc)},
+        )
+
+    try:
+        from middleware.metrics import SENTIMENT_PROVIDER_COOLDOWN_TOTAL
+        SENTIMENT_PROVIDER_COOLDOWN_TOTAL.labels(
+            provider=provider, lane=lane,
+        ).inc()
+    except Exception:
+        pass
+
+    log.warning(
+        "news_sentiment.provider_cooldown_set",
+        extra={
+            "provider": provider,
+            "fail_count": count,
+            "cooldown_hours": hours,
+            "lane": lane,
+        },
+    )
+    return count
+
+
+async def _clear_provider_cooldown(provider: str) -> None:
+    """Reset the failure counter + cooldown after a successful batch.
+
+    Called on every success rather than only-on-recovery so a flapping
+    provider doesn't gradually escalate to the 6h cap from incidental
+    sub-hour blips.
+    """
+    try:
+        await cache_delete(_COOLDOWN_KEY_PREFIX + provider)
+        await cache_delete(_FAIL_COUNT_KEY_PREFIX + provider)
+    except Exception as exc:
+        log.debug(
+            "news_sentiment.cooldown_clear_failed",
+            extra={"provider": provider, "error": str(exc)},
+        )
+
+
+# ── Daily LLM-call cap (separate from per-provider cooldown) ──────
 async def _can_make_llm_call(db: AsyncSession | None = None) -> bool:
     """Atomically reserve one LLM call against the daily cap.
 
@@ -528,6 +651,20 @@ async def score_pending_announcements(
             r_provider, r_model = await _resolve_task(session, "news_sentiment")
             provider = provider or r_provider
             model = model or r_model
+
+        # Skip the entire run when the provider is in failure
+        # cooldown — saves the daily cap units the previous code
+        # would burn ramming a known-down provider once per hour.
+        if await _is_provider_in_cooldown(provider):
+            log.info(
+                "announcement_sentiment.provider_in_cooldown",
+                extra={"provider": provider},
+            )
+            return {
+                "considered": 0, "scored": 0, "batches": 0,
+                "cap_hit": 0, "cooldown_active": 1,
+                "provider": provider,
+            }
         for _ in range(max_batches):
             if not await _can_make_llm_call(session):
                 cap_hit = True
@@ -546,6 +683,7 @@ async def score_pending_announcements(
             )
             if scored is None:
                 last_error = batch_error
+                await _record_provider_failure(provider, lane="announcement")
                 log.warning(
                     "announcement_sentiment.batch_failed_skipping_stamp",
                     extra={"error": batch_error, "rows": len(rows)},
@@ -558,6 +696,11 @@ async def score_pending_announcements(
             considered += len(rows)
             scored_count += written
             batches_run += 1
+            # First successful batch clears the cooldown so a
+            # provider that briefly flapped doesn't carry stale
+            # backoff state into the next hour.
+            if batches_run == 1:
+                await _clear_provider_cooldown(provider)
             if not scored:
                 break
         result: dict[str, int | str] = {
@@ -638,6 +781,20 @@ async def score_pending(
             r_provider, r_model = await _resolve_task(session, "news_sentiment")
             provider = provider or r_provider
             model = model or r_model
+
+        # Skip the entire run when the provider is in failure
+        # cooldown — saves the daily cap units the previous code
+        # would burn ramming a known-down provider once per hour.
+        if await _is_provider_in_cooldown(provider):
+            log.info(
+                "news_sentiment.provider_in_cooldown",
+                extra={"provider": provider},
+            )
+            return {
+                "considered": 0, "scored": 0, "batches": 0,
+                "cap_hit": 0, "cooldown_active": 1,
+                "provider": provider,
+            }
         for _ in range(max_batches):
             if not await _can_make_llm_call(session):
                 cap_hit = True
@@ -661,6 +818,7 @@ async def score_pending(
                 # un-scoreable. Break to avoid burning the rest of
                 # the cap on the same failure mode.
                 last_error = batch_error
+                await _record_provider_failure(provider, lane="news")
                 log.warning(
                     "news_sentiment.batch_failed_skipping_stamp",
                     extra={"error": batch_error, "rows": len(rows)},
@@ -671,6 +829,11 @@ async def score_pending(
             considered += len(rows)
             scored_count += written
             batches_run += 1
+            # First successful batch clears the cooldown so a
+            # provider that briefly flapped doesn't carry stale
+            # backoff state into the next hour.
+            if batches_run == 1:
+                await _clear_provider_cooldown(provider)
             if not scored:
                 # LLM responded with parseable but empty result —
                 # break out instead of burning the remaining batches

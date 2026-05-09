@@ -4216,7 +4216,7 @@ async def test_assemble_focus_briefs_fan_out_collects_per_symbol():
         return {"symbol": sym, "quote": {"price": 100.0}}
 
     with patch(
-        "services.discussion_service._build_tw_focus_brief",
+        "services.discussion.focus_briefs._build_tw_focus_brief",
         new=fake_brief,
     ):
         out = await discussion_service._assemble_focus_briefs(

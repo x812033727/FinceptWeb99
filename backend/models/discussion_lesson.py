@@ -29,7 +29,7 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base
@@ -130,6 +130,34 @@ class DiscussionLesson(Base):
     )
     recent_hit_rate_10: Mapped[float | None] = mapped_column(
         Float, nullable=True,
+    )
+    # PR-J1: semantic embedding for similarity-based retrieval. NULL
+    # when the lesson hasn't been embedded yet (just-written rows
+    # before the inline embed runs, or pre-J1 historical rows the
+    # backfill script hasn't reached). `embedding_model` records
+    # which model produced the vector so a future model upgrade
+    # can target a specific subset for re-embed; `embedded_at`
+    # distinguishes "never embedded" from "embed attempted".
+    # Stored as JSONB list-of-floats — pgvector would be the
+    # production-grade choice but the candidate window in
+    # fetch_relevant_lessons is capped at 200 rows so Python
+    # cosine over the JSONB payload is fast enough, and skipping
+    # the extension keeps the SQLite test stack working.
+    embedding: Mapped[list[float] | None] = mapped_column(
+        # `none_as_null=True` so a Python `None` lands as SQL NULL —
+        # without it SQLAlchemy stores the JSON literal `null` and the
+        # backfill's `embedding IS NULL` filter never matches, leaving
+        # un-embedded rows invisible to the cron.
+        JSONB(none_as_null=True).with_variant(
+            JSON(none_as_null=True), "sqlite",
+        ),
+        nullable=True,
+    )
+    embedding_model: Mapped[str | None] = mapped_column(
+        String(64), nullable=True,
+    )
+    embedded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

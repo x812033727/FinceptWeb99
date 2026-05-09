@@ -327,6 +327,23 @@ async def extract_and_persist_lessons(
     except Exception:
         pass
 
+    # PR-J1: best-effort inline embedding so the just-persisted
+    # lessons are immediately retrievable by semantic similarity in
+    # the next discussion round. Embedding failures (missing API
+    # key, provider down) leave embedding=NULL — the backfill cron
+    # picks up the slack later, and the J2 fetch path treats NULL
+    # as "no semantic boost, fall back to legacy score". Catch
+    # every exception class so a transient provider error can NEVER
+    # disturb the post-mortem write that just succeeded.
+    try:
+        from services.lesson_embedding_service import embed_lessons_bulk
+        await embed_lessons_bulk(db, written)
+    except Exception as exc:
+        log.debug(
+            "discussion_lessons.inline_embed_failed",
+            extra={"error": str(exc), "n_rows": len(written)},
+        )
+
     return written
 
 

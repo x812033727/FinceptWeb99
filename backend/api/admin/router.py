@@ -438,6 +438,8 @@ async def ingest_health(_: Admin) -> list[IngestHealthOut]:
     State lives in Redis with a 7-day TTL; entries disappear after a
     week of silence so a removed job doesn't linger forever.
     """
+    from services.freshness import is_data_stale
+
     return [
         IngestHealthOut(
             job_id=h.job_id,
@@ -447,6 +449,10 @@ async def ingest_health(_: Admin) -> list[IngestHealthOut]:
             error=h.error,
             silent_deny=h.silent_deny,
             latest_data_ts=h.latest_data_ts,
+            data_stale=is_data_stale(
+                last_run_at=h.last_run_at,
+                latest_data_ts=h.latest_data_ts,
+            ),
         )
         for h in await ingest_repo.list_health()
     ]

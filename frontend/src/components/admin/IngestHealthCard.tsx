@@ -15,9 +15,14 @@ interface IngestHealth {
   // the UI can render it without parsing the prefix back out.
   silent_deny?: string | null;
   // Optional: ISO date/datetime of the latest `ts` actually written
-  // by this run. Older than 2 calendar days vs `last_run_at` triggers
+  // by this run. Older than 2 trading days vs `last_run_at` triggers
   // an amber "stale data" pill.
   latest_data_ts?: string | null;
+  // Backend-computed flag (since the trading-day check needs server-
+  // side calendar logic). When the field is present the frontend
+  // trusts it as-is; falls back to a client-side calendar-day check
+  // for older deploys whose serializer didn't emit this field.
+  data_stale?: boolean;
 }
 
 interface IngestRetryResult {
@@ -99,13 +104,20 @@ export function deriveIngestBadge(r: IngestHealth): { text: string; cls: string 
 const STALE_DATA_MS = 2 * 24 * 3600 * 1000;
 
 /**
- * True iff `latest_data_ts` is older than `last_run_at` minus the
- * staleness budget. Returns false when either field is missing —
+ * True iff `latest_data_ts` is older than `last_run_at` by more than
+ * the staleness budget. Returns false when either field is missing —
  * tasks that don't write time-series data (verify, score, prune)
  * legitimately have `latest_data_ts === null` and shouldn't render
  * a stale badge.
+ *
+ * Prefers the backend-computed `data_stale` field, which uses
+ * trading-day arithmetic (Mon-Fri). Falls back to a calendar-day
+ * check for older deploys where the field is absent. The fallback
+ * has the known false-positive over weekends — operators upgrading
+ * past this commit get the corrected behaviour.
  */
 export function isDataStale(r: IngestHealth): boolean {
+  if (typeof r.data_stale === "boolean") return r.data_stale;
   if (!r.latest_data_ts || !r.last_run_at) return false;
   const dataAt = new Date(r.latest_data_ts).getTime();
   const runAt = new Date(r.last_run_at).getTime();

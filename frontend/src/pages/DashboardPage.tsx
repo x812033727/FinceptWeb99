@@ -236,6 +236,126 @@ function OverseasIndicators() {
   );
 }
 
+// ── Corporate announcements (PR-D4) ───────────────────────────────
+
+interface AnnouncementItem {
+  symbol: string;
+  announced_at: string;
+  category: string;
+  title: string;
+  body: string | null;
+  source_url: string | null;
+  sentiment_score?: number | null;
+  sentiment_label?: "bullish" | "bearish" | "neutral" | null;
+}
+
+function AnnouncementsList({ items }: { items: AnnouncementItem[] }) {
+  const { i18n } = useTranslation();
+  return (
+    <div className="divide-y divide-border/50">
+      {items.slice(0, 5).map((item, i) => {
+        const badge = item.sentiment_label
+          ? SENTIMENT_BADGE[item.sentiment_label]
+          : null;
+        const inner = (
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap mb-0.5 text-xs">
+              <span className="font-mono tabular-nums text-primary">
+                {item.symbol}
+              </span>
+              <span className="px-1.5 py-0.5 rounded bg-muted/30 text-muted-foreground border border-border text-[10px]">
+                {item.category}
+              </span>
+            </div>
+            <p className="text-sm text-foreground leading-snug line-clamp-2">
+              {item.title}
+            </p>
+            <div className="mt-1 flex items-center gap-1.5 flex-wrap text-xs text-muted-foreground">
+              <span>
+                {new Date(item.announced_at).toLocaleDateString(i18n.language, {
+                  month: "short", day: "numeric",
+                })}
+              </span>
+              {badge && (
+                <span
+                  className={`px-1.5 py-0.5 rounded border text-[10px] ${badge.cls}`}
+                >
+                  {badge.label}
+                </span>
+              )}
+            </div>
+          </div>
+        );
+        // External link only when source_url populated. SEC EDGAR
+        // always provides one; MOPS sometimes doesn't (the connector
+        // tolerates None). Wrap-as-anchor only when there's somewhere
+        // to go; otherwise render a non-interactive row so a stray
+        // click doesn't open about:blank.
+        return item.source_url ? (
+          <a
+            key={i}
+            href={item.source_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-start gap-3 px-4 py-3 hover:bg-accent/5 transition-colors"
+          >
+            {inner}
+          </a>
+        ) : (
+          <div
+            key={i}
+            className="flex items-start gap-3 px-4 py-3"
+          >
+            {inner}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function RecentAnnouncements({
+  market,
+  titleKey,
+}: {
+  market: "TW" | "US";
+  titleKey: string;
+}) {
+  const { t } = useTranslation();
+  const { data: items = [], isLoading } = useQuery<AnnouncementItem[]>({
+    queryKey: ["announcements", market, "recent"],
+    // 5-min stale matches the ingest cadence (TW 30 min / US hourly).
+    queryFn: () =>
+      api
+        .get(`/announcements/recent?market=${market}&limit=20`)
+        .then((r) => r.data),
+    staleTime: 5 * 60_000,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="text-xs text-muted-foreground animate-pulse">
+        {t("dashboard.loading_announcements")}
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-card border border-border rounded-lg overflow-hidden">
+      <div className="px-4 py-3 border-b border-border">
+        <h2 className="text-sm font-medium text-foreground">{t(titleKey)}</h2>
+      </div>
+      {!items.length ? (
+        <div className="px-4 py-6 text-xs text-muted-foreground text-center">
+          {t("dashboard.no_announcements")}
+        </div>
+      ) : (
+        <AnnouncementsList items={items} />
+      )}
+    </div>
+  );
+}
+
 function RecentTWNews() {
   const { t } = useTranslation();
   const { data: items = [], isLoading } = useQuery<NewsItem[]>({
@@ -362,6 +482,24 @@ export default function DashboardPage() {
               {t("dashboard.latest_global_news")}
             </h2>
             <RecentGlobalNews />
+          </div>
+          <div>
+            <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
+              {t("dashboard.latest_tw_announcements")}
+            </h2>
+            <RecentAnnouncements
+              market="TW"
+              titleKey="dashboard.tw_announcements"
+            />
+          </div>
+          <div>
+            <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
+              {t("dashboard.latest_us_announcements")}
+            </h2>
+            <RecentAnnouncements
+              market="US"
+              titleKey="dashboard.us_announcements"
+            />
           </div>
         </div>
       </div>

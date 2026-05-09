@@ -1564,6 +1564,7 @@ async def gather_market_context(
     exclude_discussion_id: uuid.UUID | None = None,
     as_of: date | None = None,
     progress_cb: Any = None,
+    topic: str | None = None,
 ) -> dict[str, Any]:
     """Build a structured snapshot of the market state for the personas.
 
@@ -1598,6 +1599,7 @@ async def gather_market_context(
         as_of=as_of,
         max_focus_symbols=_MAX_FOCUS_SYMBOLS,
         progress_cb=progress_cb,
+        topic=topic,
     )
 
 
@@ -2453,6 +2455,7 @@ async def run_round(
                     exclude_discussion_id=discussion.id,
                     as_of=discussion.as_of_date,
                     progress_cb=_emit_progress,
+                    topic=discussion.topic,
                 )
             finally:
                 # Sentinel — signals to the drainer that no more
@@ -3229,6 +3232,7 @@ async def synthesize_conclusion(
             owner_id=discussion.owner_id,
             exclude_discussion_id=discussion.id,
             as_of=discussion.as_of_date,
+            topic=discussion.topic,
         )
 
     # PR #267: detect a post-mortem self-critique cycle in the

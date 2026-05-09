@@ -174,6 +174,7 @@ async def build_market_context(
     as_of: date | None = None,
     max_focus_symbols: int = 5,
     progress_cb: ProgressCb | None = None,
+    topic: str | None = None,
 ) -> dict[str, Any]:
     ctx = _initial_ctx(market=market, as_of=as_of)
     record_error = _make_error_recorder(ctx)
@@ -340,10 +341,14 @@ async def build_market_context(
             )
         # Past-discussion lessons are owner-scoped — only fired when
         # we have an owner_id. Backtest-time-safe via `as_of`.
+        # `topic` (PR-J2) lets the lessons block compute a query
+        # embedding for semantic-similarity ranking — None falls
+        # back to the pre-J2 time/symbol-only ranking gracefully.
         await lessons.fetch_recent_lessons(
             ctx, db, owner_id=owner_id, market=market,
             focus_symbols=focus_symbols, as_of=as_of,
             record_error=record_error,
+            topic=topic,
         )
 
     await _progress("ctx_ready")

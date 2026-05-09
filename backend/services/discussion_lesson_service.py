@@ -358,6 +358,20 @@ async def _resolve_halflife(db: AsyncSession) -> int:
         return settings.LESSONS_DECAY_HALFLIFE_DAYS
 
 
+async def _resolve_semantic_alpha(db: AsyncSession) -> float:
+    """PR-J2: semantic-boost weight. Resolved through runtime config
+    so admins can dial the boost down/off without a redeploy if the
+    embedding-driven ranking surfaces noise on a specific corpus.
+    Falls back to the compiled default on any DB / Redis hiccup so
+    the read path stays available.
+    """
+    try:
+        from services.runtime_config_service import get_float as _get_float
+        return await _get_float(db, "LESSON_EMBEDDING_BOOST_ALPHA")
+    except Exception:
+        return float(getattr(settings, "LESSON_EMBEDDING_BOOST_ALPHA", 1.0))
+
+
 # PR-B1: tier-aware half-life multipliers. base = the runtime
 # configured `LESSONS_DECAY_HALFLIFE_DAYS` (default 60). episodic
 # lessons keep that exact half-life; semantic ones decay 3x slower
@@ -386,10 +400,66 @@ _REGIME_MISMATCH_BOOST = 0.7
 _WIN_LESSON_BOOST = 0.8
 
 
+def _semantic_boost(
+    query_embedding: list[float] | None,
+    lesson_embedding: list[float] | None,
+    *,
+    alpha: float,
+) -> float:
+    """PR-J2: cosine-similarity boost over the lesson's embedding.
+
+    `boost = 1.0 + alpha * max(0, cos(query, lesson))`.
+
+    Always >= 1.0 so a thin lesson library doesn't get pushed below
+    the noise floor when no query is supplied — semantic match only
+    LIFTS, never penalizes (PR-B1's regime mismatch already plays
+    that role for the regime-aware penalty bucket). Negative cosine
+    is clamped to 0 because a lesson contradicting the query is no
+    less informative than one unrelated to it; it just shouldn't
+    earn a boost.
+
+    NULL on either side returns 1.0 (neutral) so:
+      - rows persisted before PR-J1 (no embedding) stay rank-eligible
+      - the J1 inline-embed failure path (provider down, key missing)
+        doesn't blackhole future lookups
+      - alpha=0 disables semantic ranking entirely without code change
+    """
+    if alpha <= 0.0 or not query_embedding or not lesson_embedding:
+        return 1.0
+    cos = _cosine_similarity(query_embedding, lesson_embedding)
+    if cos <= 0.0:
+        return 1.0
+    return 1.0 + alpha * cos
+
+
+def _cosine_similarity(
+    a: list[float] | None, b: list[float] | None,
+) -> float:
+    """In-process cosine. Inlined rather than imported from
+    `lesson_embedding_service.cosine` so the lesson read-path has no
+    dependency on the embedding write-path module — keeps a clean
+    cycle barrier between the two services.
+    """
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = 0.0
+    norm_a = 0.0
+    norm_b = 0.0
+    for x, y in zip(a, b):
+        dot += x * y
+        norm_a += x * x
+        norm_b += y * y
+    if norm_a <= 0.0 or norm_b <= 0.0:
+        return 0.0
+    return dot / math.sqrt(norm_a * norm_b)
+
+
 def _score(
     lesson: DiscussionLesson, *,
     anchor: date, focus_symbols: set[str], halflife_days: int,
     current_regime: str | None = None,
+    query_embedding: list[float] | None = None,
+    alpha: float = 0.0,
 ) -> float:
     tier = getattr(lesson, "tier", None) or "episodic"
     multiplier = _TIER_HALFLIFE_MULTIPLIER.get(tier, 1.0)
@@ -420,7 +490,21 @@ def _score(
     category = getattr(lesson, "category", "") or ""
     win_boost = _WIN_LESSON_BOOST if category in WIN_CATEGORIES else 1.0
 
-    return recency * symbol_boost * regime_boost * win_boost
+    # PR-J2: semantic-match boost. Multiplicative + always >= 1.0
+    # (see `_semantic_boost` for the floor rationale).
+    semantic_boost = _semantic_boost(
+        query_embedding,
+        getattr(lesson, "embedding", None),
+        alpha=alpha,
+    )
+
+    return (
+        recency
+        * symbol_boost
+        * regime_boost
+        * win_boost
+        * semantic_boost
+    )
 
 
 def _to_summary(lesson: DiscussionLesson) -> LessonSummary:
@@ -445,6 +529,7 @@ async def fetch_relevant_lessons(
     discussion_as_of: date | None = None,
     limit: int = 5,
     current_regime: str | None = None,
+    query_embedding: list[float] | None = None,
 ) -> list[LessonSummary]:
     """Owner+market scoped fetch with backtest-safe time filter.
 
@@ -460,13 +545,24 @@ async def fetch_relevant_lessons(
     fully dropped so a thin regime can still surface fallback
     context). NULL on either side is neutral.
 
+    `query_embedding` (PR-J2) is the semantic embedding of the
+    current discussion (typically built from `topic + market +
+    focus_symbols` by the ctx block). When supplied, lessons whose
+    own embedding has positive cosine similarity get a multiplicative
+    lift (peak 1+α at perfect match). NULL on either side keeps the
+    pre-J2 ranking — so a partly-embedded corpus mid-backfill grades
+    correctly without the boost amplifying noise from un-embedded
+    rows.
+
     Returns up to `limit` `LessonSummary` rows ranked by the
-    time-decay × symbol-boost × regime-boost score, descending.
+    time-decay × symbol-boost × regime-boost × semantic-boost score,
+    descending.
     """
     if limit <= 0 or owner_user_id is None or not market:
         return []
 
     halflife = await _resolve_halflife(db)
+    alpha = await _resolve_semantic_alpha(db)
     anchor = discussion_as_of or datetime.now(UTC).date()
 
     # Cap candidate fan-out to avoid pathological growth of
@@ -504,6 +600,8 @@ async def fetch_relevant_lessons(
                 lesson, anchor=anchor, focus_symbols=focus,
                 halflife_days=halflife,
                 current_regime=current_regime,
+                query_embedding=query_embedding,
+                alpha=alpha,
             ),
             lesson,
         ))

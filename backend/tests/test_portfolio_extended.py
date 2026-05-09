@@ -252,7 +252,7 @@ async def test_optimise_with_holdings(client: AsyncClient):
 
     bars = _synthetic_bars(252)
 
-    with patch("services.portfolio_service.us_history", new_callable=AsyncMock) as mock_hist:
+    with patch("services.portfolio_analytics.us_history", new_callable=AsyncMock) as mock_hist:
         mock_hist.return_value = bars
 
         r = await client.post(
@@ -287,7 +287,7 @@ async def test_optimise_target_risk_variants(client: AsyncClient):
     bars = _synthetic_bars(252)
 
     for risk in ("conservative", "moderate", "aggressive"):
-        with patch("services.portfolio_service.us_history", new_callable=AsyncMock) as mock_hist:
+        with patch("services.portfolio_analytics.us_history", new_callable=AsyncMock) as mock_hist:
             mock_hist.return_value = bars
             r = await client.post(
                 f"/api/portfolio/{pid}/optimise",

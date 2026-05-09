@@ -246,6 +246,26 @@ class IngestRetryResult(BaseModel):
     message: str
 
 
+class IngestHealthHistoryDayOut(BaseModel):
+    """One day's outcome roll-up for the sparkline UI."""
+    date: str          # ISO date (UTC)
+    ok: int = 0
+    silent_deny: int = 0
+    failed: int = 0
+    skipped: int = 0
+
+
+class IngestHealthHistoryOut(BaseModel):
+    """Sparkline payload for one ingest job over a rolling window.
+
+    `days` echoes the requested window so the frontend can render
+    a constant-width strip (gray cells for dates with no rows).
+    """
+    job_id: str
+    days: int
+    history: list[IngestHealthHistoryDayOut]
+
+
 class SchedulerHeartbeatOut(BaseModel):
     """APScheduler liveness probe snapshot.
 

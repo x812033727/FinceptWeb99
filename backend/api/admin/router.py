@@ -26,6 +26,8 @@ from .schemas import (
     AdminUserItem,
     DeployStatusOut,
     DeployTriggerOut,
+    IngestHealthHistoryDayOut,
+    IngestHealthHistoryOut,
     IngestHealthOut,
     IngestRetryResult,
     SchedulerHeartbeatOut,
@@ -538,6 +540,38 @@ async def _run_ingest_job_once(job_id: str) -> None:
     elif job_id == "snapshot_signal_audit":
         from tasks.snapshot_signal_audit import run
         await run()
+
+
+@router.get(
+    "/ingest/{job_id}/history",
+    response_model=IngestHealthHistoryOut,
+)
+async def ingest_health_history(
+    job_id: str, _: Admin, days: int = 7,
+) -> IngestHealthHistoryOut:
+    """Daily outcome roll-up for `job_id` over the last `days` UTC
+    calendar days. Powers the IngestHealthCard's per-row sparkline.
+
+    `days` is clamped to [1, 30] to bound the worst-case query — the
+    frontend only renders 7 cells anyway, but the parameter stays
+    flexible for ad-hoc operator queries via curl.
+    """
+    bounded = max(1, min(30, days))
+    rows = await ingest_repo.get_health_history(job_id, days=bounded)
+    return IngestHealthHistoryOut(
+        job_id=job_id,
+        days=bounded,
+        history=[
+            IngestHealthHistoryDayOut(
+                date=r.date,
+                ok=r.ok,
+                silent_deny=r.silent_deny,
+                failed=r.failed,
+                skipped=r.skipped,
+            )
+            for r in rows
+        ],
+    )
 
 
 @router.post("/ingest/{job_id}/retry", response_model=IngestRetryResult)

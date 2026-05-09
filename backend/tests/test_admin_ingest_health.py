@@ -139,6 +139,93 @@ async def test_ingest_health_computes_data_stale_via_trading_days(
 
 
 @pytest.mark.asyncio
+async def test_ingest_history_endpoint_returns_aggregated_payload(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """End-to-end: admin GET /ingest/{job_id}/history returns the
+    daily aggregate produced by `repository.get_health_history`,
+    sorted oldest-first, with `days` echoing the requested window."""
+    from datetime import UTC, datetime, timedelta
+    from models.ingest_health_history import IngestHealthHistory
+
+    email = "ingest_history_admin@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client=client)
+
+    base = datetime.now(UTC).replace(hour=12, minute=0, second=0, microsecond=0)
+    db_session.add_all([
+        IngestHealthHistory(
+            job_id="ingest_news_tw", outcome="ok",
+            row_count=10, recorded_at=base - timedelta(days=2),
+        ),
+        IngestHealthHistory(
+            job_id="ingest_news_tw", outcome="failed",
+            recorded_at=base - timedelta(days=2, hours=1),
+        ),
+        IngestHealthHistory(
+            job_id="ingest_news_tw", outcome="silent_deny",
+            recorded_at=base - timedelta(days=1),
+        ),
+    ])
+    await db_session.commit()
+
+    r = await client.get(
+        "/api/admin/ingest/ingest_news_tw/history",
+        headers=_auth(token),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["job_id"] == "ingest_news_tw"
+    assert body["days"] == 7
+    assert len(body["history"]) == 2
+    # Oldest first — frontend renders the strip in this order.
+    day_a = (base - timedelta(days=2)).date().isoformat()
+    day_b = (base - timedelta(days=1)).date().isoformat()
+    assert body["history"][0]["date"] == day_a
+    assert body["history"][0]["ok"] == 1
+    assert body["history"][0]["failed"] == 1
+    assert body["history"][1]["date"] == day_b
+    assert body["history"][1]["silent_deny"] == 1
+
+
+@pytest.mark.asyncio
+async def test_ingest_history_endpoint_clamps_days_parameter(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """`days` is clamped to [1, 30]. A request for days=999 should
+    return days=30 in the response, not blow up the DB query."""
+    email = "ingest_history_clamp@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client=client)
+
+    r = await client.get(
+        "/api/admin/ingest/ingest_x/history?days=999",
+        headers=_auth(token),
+    )
+    assert r.status_code == 200
+    assert r.json()["days"] == 30
+
+    r = await client.get(
+        "/api/admin/ingest/ingest_x/history?days=0",
+        headers=_auth(token),
+    )
+    assert r.status_code == 200
+    assert r.json()["days"] == 1
+
+
+@pytest.mark.asyncio
+async def test_ingest_history_requires_admin(client: AsyncClient):
+    """Non-admin users should not see ingest history payloads —
+    `/api/admin/*` is consistently 403 for viewer + analyst roles."""
+    token = await _register_login(client, "ingest_history_viewer@test.com")
+    r = await client.get(
+        "/api/admin/ingest/ingest_news_tw/history",
+        headers=_auth(token),
+    )
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_ingest_health_returns_empty_when_no_jobs(
     client: AsyncClient, db_session: AsyncSession,
 ):

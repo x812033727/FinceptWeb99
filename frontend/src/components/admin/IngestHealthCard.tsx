@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import api from "@/lib/api";
 import { CollapsibleHeader } from "@/components/Collapsible";
 import { useCollapsible } from "@/hooks/useCollapsible";
+import { IngestHealthSparkline } from "./IngestHealthSparkline";
 
 interface IngestHealth {
   job_id: string;
@@ -395,6 +396,7 @@ export function IngestHealthCard() {
                 <th className="text-left py-1.5 pr-3">Job</th>
                 <th className="text-left py-1.5 pr-3">排程</th>
                 <th className="text-left py-1.5 pr-3">Status</th>
+                <th className="text-left py-1.5 pr-3" title="過去 7 天每日結果 (UTC)，最右邊是今天">7d</th>
                 <th className="text-right py-1.5 pr-3">Rows</th>
                 <th className="text-left py-1.5 pr-3">Last Run</th>
                 <th className="text-left py-1.5">Error</th>
@@ -424,6 +426,9 @@ export function IngestHealthCard() {
                     >
                       {badgeText}
                     </span>
+                  </td>
+                  <td className="py-1.5 pr-3 align-top">
+                    <IngestHealthSparkline jobId={r.job_id} />
                   </td>
                   <td className="py-1.5 pr-3 text-right tabular-nums align-top">
                     {r.row_count.toLocaleString()}

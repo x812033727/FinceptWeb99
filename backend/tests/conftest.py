@@ -57,6 +57,7 @@ import models.discussion_lesson  # noqa: E402,F401
 import models.discussion_round_context  # noqa: E402,F401
 import models.discussion_strategy_template  # noqa: E402,F401
 import models.fundamentals_snapshot  # noqa: E402,F401
+import models.ingest_health_history  # noqa: E402,F401
 import models.llm_provider_key  # noqa: E402,F401
 import models.llm_usage_event  # noqa: E402,F401
 import models.market_provider_key  # noqa: E402,F401

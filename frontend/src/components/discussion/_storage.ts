@@ -1,0 +1,162 @@
+/**
+ * Defaults + localStorage helpers for the discussion UI. Topic / rules
+ * / collapse-state / post-mortem result snapshots — anything that
+ * survives a page reload but doesn't belong on the server.
+ *
+ * Imported by `_helpers.tsx` (re-export shim) so the existing 38
+ * importers across the discussion/ component group keep working.
+ */
+import type { Turn } from "@/types/discussion";
+import type { PostMortemResponse } from "./_api";
+
+// ── defaults ──────────────────────────────────────────────────────
+
+export const DEFAULT_TOPIC =
+  "找出本週（未來 5 個交易日）值得短線進場的台股 1-3 檔，並列出進場條件與停損點。";
+
+export const DEFAULT_RULES = [
+  "1. 每位專家發言 ≤ 200 字。",
+  "2. 必須引用至少一個具體數據（價、量、法人、新聞情緒）。",
+  "3. 反對其他專家時必須點名是反對誰、為什麼。",
+  "4. 不得推薦未在「市場現況」的 top_gainers / top_losers 中出現的標的。",
+  "5. 短線定義：5 個交易日內出場。",
+].join("\n");
+
+export const DEFAULT_PERSONAS = ["market_analyst", "trading_coach", "lynch", "simons"];
+
+export const STANCE_BADGE: Record<Turn["stance"], { label: string; cls: string }> = {
+  agree: { label: "✓ 同意", cls: "bg-green-900/30 text-green-300 border-green-800/50" },
+  dissent: { label: "✗ 異議", cls: "bg-red-900/30 text-red-300 border-red-800/50" },
+  supplement: { label: "↳ 補充", cls: "bg-blue-900/30 text-blue-300 border-blue-800/50" },
+  user_input: { label: "✎ 插話", cls: "bg-amber-900/30 text-amber-300 border-amber-800/50" },
+};
+
+// ── localStorage: topic / rules / collapse state ──────────────────
+
+const LS_TOPIC_KEY = "fincept.discussion.last_topic";
+const LS_RULES_KEY = "fincept.discussion.last_rules";
+
+export function readDefaultTopic(): string {
+  try {
+    return localStorage.getItem(LS_TOPIC_KEY) ?? DEFAULT_TOPIC;
+  } catch {
+    return DEFAULT_TOPIC;
+  }
+}
+export function readDefaultRules(): string {
+  try {
+    return localStorage.getItem(LS_RULES_KEY) ?? DEFAULT_RULES;
+  } catch {
+    return DEFAULT_RULES;
+  }
+}
+export function rememberTopic(topic: string): void {
+  try {
+    localStorage.setItem(LS_TOPIC_KEY, topic);
+  } catch {
+    /* localStorage disabled (private mode, full quota) — silent */
+  }
+}
+export function rememberRules(rules: string): void {
+  try {
+    localStorage.setItem(LS_RULES_KEY, rules);
+  } catch {
+    /* see rememberTopic */
+  }
+}
+
+const LS_COLLAPSE_KEY = "fincept.discussion.collapse";
+
+export interface CollapseState {
+  topic: boolean;
+  rules: boolean;
+  personas: boolean;
+  sidebar: boolean;
+  autoRun: boolean;
+}
+
+const DEFAULT_COLLAPSE: CollapseState = {
+  topic: false,
+  rules: false,
+  personas: false,
+  sidebar: false,
+  // Per-user opt-in setting; collapsed by default so it doesn't dominate
+  // the sidebar — most days users come here to read the transcript, not
+  // tweak the daily auto-run config.
+  autoRun: true,
+};
+
+export function readCollapse(): CollapseState {
+  try {
+    const raw = localStorage.getItem(LS_COLLAPSE_KEY);
+    if (raw) return { ...DEFAULT_COLLAPSE, ...JSON.parse(raw) };
+  } catch {
+    // ignore — fall through to mobile-aware default
+  }
+  // First-time visitors on a phone have ~600px of vertical space — the
+  // sidebar + topic + rules + personas all expanded would push the
+  // transcript off-screen. Default the heaviest sections closed on
+  // mobile so the discussion content is visible immediately. Tablet /
+  // desktop (≥ 1024px) keep the original "everything open" default.
+  const isMobile =
+    typeof window !== "undefined" && window.innerWidth < 1024;
+  return isMobile
+    ? { ...DEFAULT_COLLAPSE, sidebar: true, personas: true, rules: true }
+    : DEFAULT_COLLAPSE;
+}
+
+export function rememberCollapse(s: CollapseState): void {
+  try {
+    localStorage.setItem(LS_COLLAPSE_KEY, JSON.stringify(s));
+  } catch {
+    /* private mode / quota — silent */
+  }
+}
+
+// ── localStorage: post-mortem snapshot persistence (PR #268) ─────
+// The mutation result is in-memory only — without persistence the
+// scannable leaderboard disappears on page reload, leaving only the
+// markdown-formatted gainers list inside the user_input turn.
+// Operators end up reloading and wondering "did the post-mortem even
+// happen". Keyed by discussion ID so each backtest carries its own
+// snapshot. Survives same-browser reloads but not across browsers —
+// acceptable trade-off (it's operator situational awareness, not
+// durable state).
+
+const POST_MORTEM_STORAGE_PREFIX = "discussion.postMortem.";
+
+export function rememberPostMortemResult(
+  discussionId: string, data: PostMortemResponse,
+): void {
+  try {
+    localStorage.setItem(
+      `${POST_MORTEM_STORAGE_PREFIX}${discussionId}`,
+      JSON.stringify(data),
+    );
+  } catch {
+    /* private mode / quota — best-effort */
+  }
+}
+
+export function readPostMortemResult(
+  discussionId: string,
+): PostMortemResponse | null {
+  try {
+    const raw = localStorage.getItem(
+      `${POST_MORTEM_STORAGE_PREFIX}${discussionId}`,
+    );
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PostMortemResponse;
+    // Sanity-check shape — corrupt entries (e.g. older format)
+    // shouldn't crash the card.
+    if (
+      typeof parsed?.next_trading_day === "string" &&
+      Array.isArray(parsed?.top_gainers)
+    ) {
+      return parsed;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}

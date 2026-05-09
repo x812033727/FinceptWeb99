@@ -37,6 +37,21 @@ def patch_session(db_session: AsyncSession):
         yield
 
 
+@pytest.fixture
+def no_backoff():
+    """Short-circuit Redis-backed backoff helpers so tests reach `_do_run`."""
+    with patch(
+        "tasks.ingest_taiex_history.backoff_remaining_seconds",
+        AsyncMock(return_value=0),
+    ), patch(
+        "tasks.ingest_taiex_history.clear_failures", AsyncMock(),
+    ), patch(
+        "tasks.ingest_taiex_history.record_failure",
+        AsyncMock(return_value=1),
+    ):
+        yield
+
+
 @pytest.mark.asyncio
 async def test_lock_held_skips_work(patch_session):
     from tasks import ingest_taiex_history
@@ -56,7 +71,7 @@ async def test_lock_held_skips_work(patch_session):
 
 @pytest.mark.asyncio
 async def test_writes_taiex_bars_with_index_symbol(
-    patch_session, db_session: AsyncSession,
+    patch_session, no_backoff, db_session: AsyncSession,
 ):
     from tasks import ingest_taiex_history
 
@@ -96,7 +111,7 @@ async def test_writes_taiex_bars_with_index_symbol(
 
 @pytest.mark.asyncio
 async def test_rerun_dedupes_and_updates(
-    patch_session, db_session: AsyncSession,
+    patch_session, no_backoff, db_session: AsyncSession,
 ):
     """Same date upserted with updated values overwrites, no dupes."""
     from tasks import ingest_taiex_history
@@ -136,7 +151,7 @@ async def test_rerun_dedupes_and_updates(
 
 @pytest.mark.asyncio
 async def test_empty_response_records_zero_rows(
-    patch_session, db_session: AsyncSession,
+    patch_session, no_backoff, db_session: AsyncSession,
 ):
     from tasks import ingest_taiex_history
 

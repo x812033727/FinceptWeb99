@@ -33,6 +33,7 @@ from sqlalchemy import select
 
 import data.tw.finmind_connector as finmind
 from cache.redis_cache import acquire_lock, release_lock
+from data.tw.finmind_connector import FinMindSilentDeny
 from db.session import AsyncSessionLocal
 from models.tw_revenue_monthly import TwRevenueMonthly
 from services.ingest.repository import (
@@ -61,6 +62,7 @@ _LOOKBACK_DAYS = 90
 from data.tw.finmind_paywall import (  # noqa: E402
     extract_body_message as _extract_body_message,
     looks_like_paywall as _looks_like_paywall,
+    raise_if_silent_denied,
 )
 
 _HTTP_HINTS: dict[int, str] = {
@@ -119,6 +121,24 @@ async def run() -> None:
 
         try:
             row_count = await _do_run()
+        except FinMindSilentDeny as exc:
+            # HTTP 200 + body.status != 200 — FinMind accepted the
+            # request but returned nothing because the tier doesn't
+            # grant access. Treat exactly like an explicit 402 paywall:
+            # don't arm backoff (permanent state), don't bump failure
+            # counter, but flip ok=False so the admin badge surfaces it.
+            await clear_failures(JOB_ID)
+            log.warning(
+                "ingest_revenue_tw.silent_deny",
+                extra={"upstream_message": exc.body_msg},
+            )
+            await record_health(
+                JOB_ID, ok=False, row_count=0,
+                error=f"silent_paywall: {exc.body_msg}",
+                silent_deny=exc.body_msg,
+                source="finmind",
+            )
+            return
         except Exception as exc:
             body_msg = _extract_body_message(exc)
             if _looks_like_paywall(body_msg):
@@ -246,7 +266,9 @@ async def _enrich_growth_rates(
 
 async def _do_run() -> int:
     start = (date.today() - timedelta(days=_LOOKBACK_DAYS)).isoformat()
-    items = await finmind.get_monthly_revenue_market_wide(start)
+    items = raise_if_silent_denied(
+        await finmind.get_monthly_revenue_market_wide(start),
+    )
     if not items:
         return 0
 

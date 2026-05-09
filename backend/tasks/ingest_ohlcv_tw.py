@@ -8,10 +8,16 @@ when both upstreams are simultaneously unavailable.
 
 The task is multi-pod safe via a Redis SET-NX lock — the holder
 renews-by-TTL so a crashed pod doesn't wedge tomorrow's run.
+
+Failure handling mirrors `tasks/ingest_margin_tw.py` — exponential
+1h → 6h backoff, last-error preserved across the cooldown window so
+admins see why the job was skipped without scraping logs.
 """
 import asyncio
 import logging
 from datetime import date, timedelta
+
+import httpx
 
 import data.tw.finmind_connector as finmind
 import data.tw.twse_connector as twse
@@ -19,6 +25,11 @@ from cache.redis_cache import acquire_lock, release_lock
 from db.session import AsyncSessionLocal
 from services.ingest.repository import (
     OhlcvBar,
+    backoff_remaining_seconds,
+    clear_failures,
+    get_failure_count,
+    get_health,
+    record_failure,
     record_health,
     upsert_ohlcv_bars,
 )
@@ -37,55 +48,129 @@ _LOCK_TTL = 30 * 60   # 30 min covers 1.1 s/req × ~2000 syms = ~37 min worst ca
 _TWSE_INTER_SYMBOL_SLEEP = 0.0
 
 
+_HTTP_HINTS: dict[int, str] = {
+    400: "TWSE rejected the request — query may be malformed",
+    403: "TWSE refused — UA blocked or geo-restricted",
+    429: "TWSE rate-limit — backoff and retry later",
+    500: "TWSE upstream error",
+    502: "TWSE bad gateway",
+    503: "TWSE unavailable",
+    504: "TWSE gateway timeout",
+}
+
+
+def _format_error(exc: BaseException) -> str:
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        reason = exc.response.reason_phrase or "?"
+        hint = _HTTP_HINTS.get(code, "")
+        suffix = f" ({hint})" if hint else ""
+        return f"HTTP {code} {reason}{suffix}"
+    if isinstance(exc, httpx.TimeoutException):
+        return f"timeout: {exc}"
+    if isinstance(exc, httpx.ConnectError):
+        return f"connect failed: {exc}"
+    if isinstance(exc, httpx.HTTPError):
+        return f"http error: {exc}"
+    return f"unexpected: {exc}"
+
+
 async def run() -> None:
     """Entry point invoked by APScheduler."""
     if not await acquire_lock(_LOCK_KEY, _LOCK_TTL):
         log.info("ingest_ohlcv_tw.skipped_lock_held")
         return
     try:
-        await _do_run()
-    except Exception as exc:
-        log.exception("ingest_ohlcv_tw.failed")
-        await record_health(JOB_ID, ok=False, error=str(exc))
+        remaining = await backoff_remaining_seconds(JOB_ID)
+        if remaining > 0:
+            failures = await get_failure_count(JOB_ID)
+            mins = max(1, remaining // 60)
+            previous = await get_health(JOB_ID)
+            tail = ""
+            if previous and previous.error and "skipped" not in (previous.error or ""):
+                tail = f"; last: {previous.error[:200]}"
+            await record_health(
+                JOB_ID, ok=False, row_count=0,
+                error=(
+                    f"skipped (backoff after {failures} failures, "
+                    f"~{mins} min remaining{tail})"
+                ),
+            )
+            return
+
+        try:
+            row_count, latest_ts = await _do_run()
+        except Exception as exc:
+            detail = _format_error(exc)
+            failures = await record_failure(JOB_ID)
+            log.warning(
+                "ingest_ohlcv_tw.failed",
+                extra={"error": detail, "failures": failures},
+            )
+            await record_health(
+                JOB_ID, ok=False, row_count=0,
+                error=f"{detail} (failure #{failures}; auto-backoff armed)",
+            )
+            return
+
+        await clear_failures(JOB_ID)
+        log.info(
+            "ingest_ohlcv_tw.done",
+            extra={"rows_processed": row_count},
+        )
+        await record_health(
+            JOB_ID, ok=True, row_count=row_count,
+            latest_data_ts=latest_ts,
+        )
     finally:
         await release_lock(_LOCK_KEY)
 
 
-async def _do_run() -> None:
+async def _do_run() -> tuple[int, date | None]:
+    """Returns (rows_written, latest_bar_ts). Raises on universe load
+    failure or when every symbol's both upstreams failed (treat as
+    real outage instead of a fake-success row_count=0). Per-symbol
+    legitimate-empty (weekend, halt) does NOT count as a failure."""
     symbols = await _load_symbols()
     if not symbols:
         log.warning("ingest_ohlcv_tw.no_symbols")
-        await record_health(JOB_ID, ok=False, error="no_symbols")
-        return
+        # No upstream call yet — treat as a benign "universe not loaded";
+        # `run()` will record ok=True with row_count=0 (clear_failures
+        # path) since this isn't an outage.
+        return 0, None
 
     today = date.today()
     total = 0
-    failures = 0
+    latest_ts: date | None = None
+    dual_failures = 0   # both TWSE + FinMind raised for this symbol
 
     async with AsyncSessionLocal() as db:
         for sym in symbols:
-            try:
-                bars = await _fetch_one(sym, today)
-            except Exception as exc:
-                failures += 1
-                log.warning("ingest_ohlcv_tw.symbol_failed",
-                            extra={"symbol": sym, "error": str(exc)})
+            bars, both_failed = await _fetch_one(sym, today)
+            if both_failed:
+                dual_failures += 1
                 continue
-
             if not bars:
                 continue
 
             written = await upsert_ohlcv_bars(db, bars)
             total += written
+            for b in bars:
+                if latest_ts is None or b.ts > latest_ts:
+                    latest_ts = b.ts
 
             if _TWSE_INTER_SYMBOL_SLEEP:
                 await asyncio.sleep(_TWSE_INTER_SYMBOL_SLEEP)
 
-    log.info(
-        "ingest_ohlcv_tw.done",
-        extra={"symbols": len(symbols), "rows_written": total, "failures": failures},
-    )
-    await record_health(JOB_ID, ok=True, row_count=total)
+    if total == 0 and dual_failures == len(symbols):
+        # Every symbol's BOTH upstreams failed — real outage, not a
+        # quiet day. Promote to a top-level error so the backoff path
+        # arms; otherwise a TWSE+FinMind dual-down would record
+        # ok=True row_count=0 and look identical to a holiday.
+        raise RuntimeError(
+            f"all {dual_failures} symbols failed both upstreams"
+        )
+    return total, latest_ts
 
 
 async def _load_symbols() -> list[str]:
@@ -108,12 +193,18 @@ async def _load_symbols() -> list[str]:
     return sorted(_exchange_map.keys())
 
 
-async def _fetch_one(symbol: str, today: date) -> list[OhlcvBar]:
+async def _fetch_one(symbol: str, today: date) -> tuple[list[OhlcvBar], bool]:
     """TWSE first (full month for `today`), FinMind fallback (last 7 days).
+
+    Returns ``(bars, both_failed)``. ``both_failed`` is True iff TWSE
+    AND FinMind both raised — caller uses this to detect a real
+    upstream outage. A successful call that returned no rows
+    (legitimate weekend / halt) reports ``([], False)``.
 
     TWSE returns the entire month containing `today` in one call so we
     pick up any prior days we might have missed during a partial run.
     """
+    twse_failed = False
     try:
         rows = await twse.get_daily_ohlcv(symbol, today)
         bars = [
@@ -121,8 +212,9 @@ async def _fetch_one(symbol: str, today: date) -> list[OhlcvBar]:
         ]
         bars = [b for b in bars if b is not None]
         if bars:
-            return bars
+            return bars, False
     except Exception as exc:
+        twse_failed = True
         log.warning("ingest_ohlcv_tw.twse_failed",
                     extra={"symbol": symbol, "error": str(exc)})
 
@@ -132,8 +224,8 @@ async def _fetch_one(symbol: str, today: date) -> list[OhlcvBar]:
         bars = [
             OhlcvBar.from_connector_row("TW", symbol, "finmind", r) for r in rows
         ]
-        return [b for b in bars if b is not None]
+        return [b for b in bars if b is not None], False
     except Exception as exc:
         log.warning("ingest_ohlcv_tw.finmind_failed",
                     extra={"symbol": symbol, "error": str(exc)})
-        return []
+        return [], twse_failed

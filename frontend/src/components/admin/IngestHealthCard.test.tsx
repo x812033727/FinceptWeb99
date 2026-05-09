@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveIngestBadge } from "./IngestHealthCard";
+import { deriveIngestBadge, isDataStale } from "./IngestHealthCard";
 
 const baseRow = {
   job_id: "ingest_x",
@@ -111,5 +111,83 @@ describe("deriveIngestBadge", () => {
       error: "skipped: paywalled",
     });
     expect(out.text).toBe("pending");
+  });
+
+  it("returns silent deny when error starts with 'silent_paywall:'", () => {
+    // FinMind silent-deny: HTTP 200 + body.status != 200. The task
+    // layer's `raise_if_silent_denied` translates the contextvar into
+    // FinMindSilentDeny which becomes `error="silent_paywall: ..."`.
+    // Distinct purple badge so operators can tell tier-issue apart
+    // from a real outage at a glance.
+    const out = deriveIngestBadge({
+      ...baseRow,
+      ok: false,
+      error: "silent_paywall: Your level is register, not sponsor.",
+    });
+    expect(out.text).toBe("silent deny");
+    expect(out.cls).toContain("text-purple-400");
+  });
+
+  it("returns silent deny when the structured silent_deny field is set", () => {
+    // The silent_deny field is the canonical signal. A row with the
+    // field populated but no `error` prefix (older serializer) should
+    // still get the purple badge.
+    const out = deriveIngestBadge({
+      ...baseRow,
+      ok: false,
+      error: null,
+      silent_deny: "Your level is register",
+    });
+    expect(out.text).toBe("silent deny");
+  });
+});
+
+
+describe("isDataStale", () => {
+  const fresh: ReturnType<typeof Object.assign> = {
+    job_id: "ingest_x",
+    ok: true,
+    row_count: 100,
+    error: null,
+  };
+
+  it("returns false when latest_data_ts is missing (non-time-series job)", () => {
+    expect(
+      isDataStale({
+        ...fresh,
+        last_run_at: "2026-05-01T12:00:00Z",
+        latest_data_ts: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when latest_data_ts is within 2 days of last_run_at", () => {
+    expect(
+      isDataStale({
+        ...fresh,
+        last_run_at: "2026-05-01T12:00:00Z",
+        latest_data_ts: "2026-04-30",
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when latest_data_ts is more than 2 days behind last_run_at", () => {
+    expect(
+      isDataStale({
+        ...fresh,
+        last_run_at: "2026-05-09T12:00:00Z",
+        latest_data_ts: "2026-04-30",
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when both timestamps are missing (initial pending state)", () => {
+    expect(
+      isDataStale({
+        ...fresh,
+        last_run_at: null,
+        latest_data_ts: null,
+      }),
+    ).toBe(false);
   });
 });

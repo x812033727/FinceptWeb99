@@ -91,6 +91,37 @@ WALK_FORWARD_FOLDS_TOTAL = Counter(
     ["outcome"],
 )
 
+# ── Scheduled ingest tasks ────────────────────────────────────────
+# Wired inside `services.ingest.repository.record_health` so every
+# task that already calls record_health gets instrumentation for
+# free. `outcome` derived from (ok, error prefix, silent_deny):
+#   ok=True                              → "ok"
+#   error startswith "skipped"|"queued"  → "skipped"
+#   silent_deny is not None              → "silent_deny"
+#   otherwise ok=False                   → "failed"
+INGEST_RUNS_TOTAL = Counter(
+    "ingest_runs_total",
+    "Scheduled ingest task runs by terminal outcome.",
+    ["job_id", "outcome"],
+)
+INGEST_ROWS_WRITTEN_TOTAL = Counter(
+    "ingest_rows_written_total",
+    "Rows successfully upserted by scheduled ingest tasks.",
+    ["job_id"],
+)
+INGEST_SILENT_DENY_TOTAL = Counter(
+    "ingest_silent_deny_total",
+    "Ingest tasks that detected upstream silent-deny "
+    "(HTTP 200 + body.status != 200, e.g. FinMind paywall).",
+    ["job_id", "source"],
+)
+INGEST_DATA_FRESHNESS_SECONDS = Gauge(
+    "ingest_data_freshness_seconds",
+    "Age (now - max(latest_data_ts)) of the most recent data each "
+    "ingest task has written. Unset when the task did not report a ts.",
+    ["job_id"],
+)
+
 # ── Core Web Vitals (reported by the frontend) ────────────────────
 # LCP / INP / FCP / TTFB are time metrics in seconds; bucket
 # boundaries are tuned around Google's "Good / Needs improvement /

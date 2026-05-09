@@ -66,7 +66,14 @@ class OhlcvBar:
     ) -> "OhlcvBar | None":
         """Coerce a connector dict (`{time, open, high, low, close, volume}`)
         into a typed OhlcvBar. Returns None for malformed rows so callers
-        can `filter(None, ...)` instead of try/except per row."""
+        can `filter(None, ...)` instead of try/except per row.
+
+        Drops rows with non-positive ``close`` or ``open`` — listed
+        equities never trade at 0 and an upstream zero is almost
+        always a parser swallowing a placeholder ('—', 'N/A'). Logs
+        each dropped row at WARNING so operators can see how many
+        junk rows the upstream is emitting today.
+        """
         ts_raw = row.get("time") or row.get("date")
         if not ts_raw:
             return None
@@ -74,14 +81,34 @@ class OhlcvBar:
             ts = date.fromisoformat(str(ts_raw)[:10])
         except ValueError:
             return None
+        close = _to_float(row.get("close"))
+        open_ = _to_float(row.get("open"))
+        if close is not None and close <= 0:
+            log.warning(
+                "ohlcv.non_positive_close",
+                extra={
+                    "market": market, "symbol": symbol, "source": source,
+                    "ts": ts.isoformat(), "close": close,
+                },
+            )
+            return None
+        if open_ is not None and open_ <= 0:
+            log.warning(
+                "ohlcv.non_positive_open",
+                extra={
+                    "market": market, "symbol": symbol, "source": source,
+                    "ts": ts.isoformat(), "open": open_,
+                },
+            )
+            return None
         return cls(
             market=market,
             symbol=symbol,
             ts=ts,
-            open=_to_float(row.get("open")),
+            open=open_,
             high=_to_float(row.get("high")),
             low=_to_float(row.get("low")),
-            close=_to_float(row.get("close")),
+            close=close,
             volume=_to_int(row.get("volume")),
             source=source,
         )
@@ -1927,30 +1954,109 @@ class IngestHealth:
     ok: bool
     row_count: int
     error: str | None
+    silent_deny: str | None = None
+    latest_data_ts: str | None = None
+
+
+def _classify_outcome(
+    *, ok: bool, error: str | None, silent_deny: str | None,
+) -> str:
+    """Map a record_health call to a stable Prometheus outcome label.
+
+    silent_deny wins over plain failure so operators can split paywall /
+    quota events from real upstream errors. `skipped` and `queued` are
+    fold together — both mean "we deliberately didn't try this run".
+    """
+    if ok:
+        return "ok"
+    if silent_deny is not None:
+        return "silent_deny"
+    err = (error or "").lower()
+    if err.startswith("skipped") or err.startswith("queued"):
+        return "skipped"
+    return "failed"
 
 
 async def record_health(
-    job_id: str, *, ok: bool, row_count: int = 0, error: str | None = None,
+    job_id: str,
+    *,
+    ok: bool,
+    row_count: int = 0,
+    error: str | None = None,
+    silent_deny: str | None = None,
+    latest_data_ts: "date | datetime | None" = None,
+    source: str | None = None,
 ) -> None:
-    """Persist a per-job health snapshot in Redis.
+    """Persist a per-job health snapshot in Redis + emit Prometheus.
 
     Stored as a single JSON blob keyed by job_id with a long TTL so the
     admin dashboard can reflect "last successful run" even after a quiet
     weekend. A separate Postgres table would be more durable but isn't
     needed yet — Redis state is regenerated on the next scheduled run.
+
+    The Prometheus side is wired here (rather than per-task) so every
+    existing caller picks up `ingest_runs_total` / `ingest_rows_*` for
+    free; new caller-side kwargs (silent_deny, latest_data_ts, source)
+    are all optional + keyword-only so the ~50 existing call sites
+    keep working unchanged.
     """
+    ts_iso: str | None = None
+    if latest_data_ts is not None:
+        if isinstance(latest_data_ts, datetime):
+            ts_iso = latest_data_ts.isoformat()
+        else:
+            ts_iso = latest_data_ts.isoformat()
+
     payload = json.dumps({
         "job_id": job_id,
         "last_run_at": datetime.now(UTC).isoformat(),
         "ok": ok,
         "row_count": int(row_count),
         "error": error,
+        "silent_deny": silent_deny,
+        "latest_data_ts": ts_iso,
     })
     try:
         await cache_set(_HEALTH_KEY_PREFIX + job_id, payload, _HEALTH_TTL)
     except Exception as exc:
         log.warning("ingest.health.record_failed",
                     extra={"job_id": job_id, "error": str(exc)})
+
+    try:
+        from middleware.metrics import (
+            INGEST_DATA_FRESHNESS_SECONDS,
+            INGEST_ROWS_WRITTEN_TOTAL,
+            INGEST_RUNS_TOTAL,
+            INGEST_SILENT_DENY_TOTAL,
+        )
+        outcome = _classify_outcome(
+            ok=ok, error=error, silent_deny=silent_deny,
+        )
+        INGEST_RUNS_TOTAL.labels(job_id=job_id, outcome=outcome).inc()
+        if ok and row_count > 0:
+            INGEST_ROWS_WRITTEN_TOTAL.labels(job_id=job_id).inc(row_count)
+        if silent_deny is not None:
+            INGEST_SILENT_DENY_TOTAL.labels(
+                job_id=job_id, source=(source or "unknown"),
+            ).inc()
+        if latest_data_ts is not None:
+            now_utc = datetime.now(UTC)
+            if isinstance(latest_data_ts, datetime):
+                ts_dt = latest_data_ts
+                if ts_dt.tzinfo is None:
+                    ts_dt = ts_dt.replace(tzinfo=UTC)
+            else:
+                # date → end-of-day UTC for an upper-bound freshness read
+                ts_dt = datetime.combine(
+                    latest_data_ts, datetime.min.time(), tzinfo=UTC,
+                )
+            age = max(0.0, (now_utc - ts_dt).total_seconds())
+            INGEST_DATA_FRESHNESS_SECONDS.labels(job_id=job_id).set(age)
+    except Exception as exc:
+        # Metrics are best-effort: if the prometheus_client registry
+        # isn't importable in a test fixture, don't break the task.
+        log.debug("ingest.health.metrics_failed",
+                  extra={"job_id": job_id, "error": str(exc)})
 
 
 async def get_health(job_id: str) -> IngestHealth | None:
@@ -1967,6 +2073,8 @@ async def get_health(job_id: str) -> IngestHealth | None:
         ok=bool(data.get("ok", False)),
         row_count=int(data.get("row_count", 0)),
         error=data.get("error"),
+        silent_deny=data.get("silent_deny"),
+        latest_data_ts=data.get("latest_data_ts"),
     )
 
 

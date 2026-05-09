@@ -20,6 +20,7 @@ import logging
 from services._quote_helpers import (
     DAILY_MOVE_MAX_PCT,
     sanitize_change_pct,
+    sanitize_price,
 )
 
 
@@ -108,3 +109,43 @@ def test_market_parameter_is_passed_through_to_log(caplog):
                 if r.message == "quote.change_pct_out_of_bounds"]
     assert len(rejected) == 2
     assert {rejected[0].market, rejected[1].market} == {"TW", "US"}
+
+
+# ── sanitize_price ────────────────────────────────────────────────
+
+
+def test_sanitize_price_passes_through_positive():
+    assert sanitize_price("2330", "TW", 600.0) == 600.0
+    assert sanitize_price("AAPL", "US", 0.01) == 0.01
+
+
+def test_sanitize_price_returns_none_for_none_input():
+    assert sanitize_price("2330", "TW", None) is None
+
+
+def test_sanitize_price_drops_zero():
+    assert sanitize_price("2330", "TW", 0.0) is None
+
+
+def test_sanitize_price_drops_negative():
+    assert sanitize_price("2330", "TW", -1.0) is None
+
+
+def test_sanitize_price_logs_on_rejection(caplog):
+    with caplog.at_level(logging.WARNING, logger="services._quote_helpers"):
+        result = sanitize_price("2330", "TW", 0.0)
+    assert result is None
+    matching = [r for r in caplog.records
+                if r.message == "quote.price_non_positive"]
+    assert matching
+    assert matching[0].symbol == "2330"
+    assert matching[0].market == "TW"
+    assert matching[0].price == 0.0
+
+
+def test_sanitize_price_does_not_log_for_valid_value(caplog):
+    with caplog.at_level(logging.WARNING, logger="services._quote_helpers"):
+        sanitize_price("AAPL", "US", 150.0)
+    assert not any(
+        r.message == "quote.price_non_positive" for r in caplog.records
+    )

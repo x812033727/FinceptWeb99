@@ -444,6 +444,8 @@ async def ingest_health(_: Admin) -> list[IngestHealthOut]:
             ok=h.ok,
             row_count=h.row_count,
             error=h.error,
+            silent_deny=h.silent_deny,
+            latest_data_ts=h.latest_data_ts,
         )
         for h in await ingest_repo.list_health()
     ]

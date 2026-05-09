@@ -18,6 +18,23 @@ def patch_session(db_session):
         yield
 
 
+@pytest.fixture
+def no_backoff():
+    """Short-circuit Redis-backed backoff helpers so tests reach the
+    actual prune call. Mock Redis returns truthy values for ttl
+    which would otherwise divert to the backoff-skip branch."""
+    with patch(
+        "tasks.ingest_quotes_retention_tw.backoff_remaining_seconds",
+        AsyncMock(return_value=0),
+    ), patch(
+        "tasks.ingest_quotes_retention_tw.clear_failures", AsyncMock(),
+    ), patch(
+        "tasks.ingest_quotes_retention_tw.record_failure",
+        AsyncMock(return_value=1),
+    ):
+        yield
+
+
 @pytest.mark.asyncio
 async def test_lock_held_skips_work(patch_session):
     from tasks import ingest_quotes_retention_tw
@@ -33,7 +50,7 @@ async def test_lock_held_skips_work(patch_session):
 
 
 @pytest.mark.asyncio
-async def test_run_calls_prune_with_retention_window(patch_session):
+async def test_run_calls_prune_with_retention_window(patch_session, no_backoff):
     from tasks import ingest_quotes_retention_tw
 
     with patch("tasks.ingest_quotes_retention_tw.acquire_lock",
@@ -55,7 +72,7 @@ async def test_run_calls_prune_with_retention_window(patch_session):
 
 
 @pytest.mark.asyncio
-async def test_prune_failure_records_failed_health(patch_session):
+async def test_prune_failure_records_failed_health(patch_session, no_backoff):
     from tasks import ingest_quotes_retention_tw
 
     with patch("tasks.ingest_quotes_retention_tw.acquire_lock",
@@ -69,4 +86,5 @@ async def test_prune_failure_records_failed_health(patch_session):
 
     kwargs = health.await_args.kwargs
     assert kwargs["ok"] is False
-    assert kwargs["error"] == "boom"
+    assert "boom" in kwargs["error"]
+    assert "auto-backoff armed" in kwargs["error"]

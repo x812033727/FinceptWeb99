@@ -43,7 +43,6 @@ import asyncio
 import json
 import logging
 import math
-import re
 import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
@@ -79,29 +78,15 @@ log = logging.getLogger(__name__)
 #     "USD" would be mistaken for tickers in TW topics.
 #   - GLOBAL / crypto: matched against the curated Top-20 universe in
 #     `data/crypto/symbols.py` so `BTC` triggers but `ETH-USD` doesn't.
-_TW_SYMBOL_RE = re.compile(r"(?<![\w])(\d{4,6})(?![\w])")
-_CASHTAG_RE = re.compile(r"\$([A-Z]{1,5})\b")
-_BARE_US_TICKER_RE = re.compile(r"\b([A-Z]{1,5})\b")
 # Year-like 4-digit numbers — keep generous; TW codes never overlap.
-_YEAR_MIN = 1900
-_YEAR_MAX = 2099
 # Common 1-5 letter uppercase tokens that look like US tickers but
 # aren't. Prevents `discussion_service` from sentimening "USD news".
 # Not exhaustive — the topic field is short, false positives are
 # cheap (worst case: an empty per-symbol news block), and adding new
 # entries here is a 1-line patch.
-_US_TICKER_STOPWORDS = frozenset({
-    "A", "AI", "AN", "ARE", "AS", "AT", "BE", "BY", "CAN", "CEO",
-    "CFO", "CTO", "DCF", "DXY", "EPS", "ETF", "EU", "FED", "FOMC",
-    "FOR", "FX", "GDP", "GET", "I", "IF", "IN", "IPO", "IS", "IT",
-    "M2", "NEW", "NO", "NOT", "OF", "ON", "OR", "PE", "ROE",
-    "SEC", "SP", "SPX", "TBD", "THE", "TO", "UK", "US", "USA", "USD",
-    "VAR", "VIX", "WTI", "YOU",
-})
 
 _VALID_MARKETS = ("TW", "US", "GLOBAL")
 _DEFAULT_MARKET = "TW"
-_MAX_FOCUS_SYMBOLS = 5
 
 # ── tuning knobs ────────────────────────────────────────────────────
 
@@ -118,7 +103,6 @@ _MIN_PERSONAS = 2
 # what they need; the cap is purely an output-side ceiling.
 _MAX_TOPIC_CHARS = 500
 _MAX_RULES_CHARS = 2000
-_MAX_HISTORY_TURNS = 30     # how many prior turns to feed the next persona
 
 # When the transcript gets long, only the most recent
 # `_FULL_HISTORY_TURNS` turns are passed verbatim. Older turns are
@@ -126,8 +110,6 @@ _MAX_HISTORY_TURNS = 30     # how many prior turns to feed the next persona
 # 目標價...") capped at `_HISTORY_SUMMARY_CHARS` chars so the prompt
 # budget doesn't balloon at round 5 with 8 personas (40 turns × ~300
 # Chinese chars × 3 BPE tokens ≈ 36K input tokens just for history).
-_FULL_HISTORY_TURNS = 8
-_HISTORY_SUMMARY_CHARS = 120
 
 # Reasoning models surface their chain-of-thought wrapped in <think>...</think>
 # blocks. `_ThinkBlockFilter` (below) drops them as a streaming SSE
@@ -634,108 +616,6 @@ async def force_reset_status(
 # ── market context ──────────────────────────────────────────────────
 
 
-def _is_year_like(code: str) -> bool:
-    """4-digit numeric tokens in the year range — `2026 Q1 法說` would
-    otherwise be tagged as a TW stock code and pollute the per-symbol
-    sentiment lookup."""
-    if len(code) != 4 or not code.isdigit():
-        return False
-    return _YEAR_MIN <= int(code) <= _YEAR_MAX
-
-
-def _crypto_universe() -> list[str]:
-    """Top-20 crypto base assets, normalised to uppercase. Imported
-    lazily so a unit test that monkeypatches `data.crypto.symbols`
-    sees the patched value, and so the discussion service stays
-    decoupled from the crypto module loading at import time."""
-    try:
-        from data.crypto.symbols import TOP20
-    except Exception:
-        return []
-    return [str(s).upper() for s in TOP20 if s]
-
-
-def extract_focus_symbols(text: str, *, market: str = _DEFAULT_MARKET) -> list[str]:
-    """Pull stock / crypto codes out of free text. Deduped, capped at
-    `_MAX_FOCUS_SYMBOLS`, returned in encounter order.
-
-    Behaviour by market:
-      - TW: 4-6 digit numeric codes; 4-digit year-like values
-        (1900-2099) are filtered to avoid mis-tagging dates.
-      - US: cashtag `$AAPL` always honoured; bare uppercase 1-5 letter
-        tokens honoured if they aren't in `_US_TICKER_STOPWORDS`.
-      - GLOBAL: cashtags + crypto base assets from the curated Top-20
-        universe (BTC / ETH / SOL …). Year-filtered TW codes are also
-        honoured because the international news bucket sometimes
-        carries cross-listed TW ADRs (TSM / UMC).
-
-    Cashtag matches are honoured for every market — `$AAPL` in a TW
-    discussion still pulls AAPL into the per-symbol news bucket,
-    because the user's intent is explicit.
-    """
-    raw = text or ""
-    seen: list[str] = []
-
-    def _push(code: str) -> bool:
-        if code not in seen:
-            seen.append(code)
-        return len(seen) >= _MAX_FOCUS_SYMBOLS
-
-    for tag in _CASHTAG_RE.findall(raw):
-        if _push(tag):
-            return seen
-
-    market = (market or _DEFAULT_MARKET).upper()
-    if market == "TW":
-        for code in _TW_SYMBOL_RE.findall(raw):
-            if _is_year_like(code):
-                continue
-            if _push(code):
-                break
-    elif market == "US":
-        for tok in _BARE_US_TICKER_RE.findall(raw):
-            if tok in _US_TICKER_STOPWORDS:
-                continue
-            if _push(tok):
-                break
-    else:  # GLOBAL — accept TW digits + crypto base assets
-        universe = set(_crypto_universe())
-        for tok in _BARE_US_TICKER_RE.findall(raw):
-            if tok not in universe:
-                continue
-            if _push(tok):
-                return seen
-        for code in _TW_SYMBOL_RE.findall(raw):
-            if _is_year_like(code):
-                continue
-            if _push(code):
-                break
-
-    # Name-based fallback for TW + GLOBAL markets (PR #221). Topics
-    # written with the company short name ("討論台積電 / 鴻海 短線
-    # 走勢") miss the digit-only regex. Lookup against the in-memory
-    # `_name_map` populated by the daily symbol-refresh cron picks
-    # those up so `prior_discussions` / `per_symbol_news_sentiment` /
-    # `focus_briefs` actually find them. Skipped for US — different
-    # name conventions, and the bare-ticker regex already covers
-    # the common case there.
-    if market in ("TW", "GLOBAL") and len(seen) < _MAX_FOCUS_SYMBOLS:
-        try:
-            from services.tw_market_service import (
-                find_symbols_by_names_in_text,
-            )
-            remaining = _MAX_FOCUS_SYMBOLS - len(seen)
-            for sym in find_symbols_by_names_in_text(raw, limit=remaining):
-                if _push(sym):
-                    break
-        except Exception:
-            # Fresh deploy where symbol map hasn't loaded, or any
-            # other defensive failure — fall through with whatever
-            # the regex-only pass found.
-            pass
-    return seen
-
-
 # ── focus_briefs (per-symbol mini analyst report) ──────────────────
 #
 # `gather_market_context` already pulls per-symbol news sentiment for
@@ -754,130 +634,7 @@ def extract_focus_symbols(text: str, *, market: str = _DEFAULT_MARKET) -> list[s
 
 
 _FOCUS_BRIEF_HISTORY_MONTHS = 12         # enough for 52w high/low
-_FOCUS_BRIEF_REVENUE_MONTHS = 6
-_FOCUS_BRIEF_CHIP_DAYS = 5
 _FOCUS_BRIEF_PEER_COUNT = 3
-
-
-def _bar_close(bar: dict[str, Any]) -> float | None:
-    c = bar.get("close")
-    try:
-        return float(c) if c is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _ma(closes: list[float], window: int) -> float | None:
-    if len(closes) < window:
-        return None
-    return round(sum(closes[-window:]) / window, 4)
-
-
-def _rsi(closes: list[float], window: int = 14) -> float | None:
-    """Wilder's RSI on the last `window` returns. Falls through to None
-    when there's not enough data — fresh-listed names that landed in
-    the topic get a None instead of a misleading 50."""
-    if len(closes) <= window:
-        return None
-    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
-    gains = [max(d, 0.0) for d in deltas[-window:]]
-    losses = [max(-d, 0.0) for d in deltas[-window:]]
-    avg_gain = sum(gains) / window
-    avg_loss = sum(losses) / window
-    if avg_loss == 0:
-        return 100.0 if avg_gain > 0 else 50.0
-    rs = avg_gain / avg_loss
-    return round(100.0 - (100.0 / (1.0 + rs)), 2)
-
-
-def _pct_change(start: float | None, end: float | None) -> float | None:
-    if not start or not end or start == 0:
-        return None
-    return round((end - start) / start * 100.0, 2)
-
-
-def _compute_technicals(bars: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Compute summary technicals from a daily-OHLCV history list.
-
-    Returns None when fewer than 20 bars available — the moving
-    averages would be too thin to carry signal and the persona is
-    better off seeing "技術指標不足" than misleading numbers.
-    """
-    closes = [c for c in (_bar_close(b) for b in bars) if c is not None]
-    if len(closes) < 20:
-        return None
-    last = closes[-1]
-    high_52w = max(closes[-min(252, len(closes)):])
-    low_52w = min(closes[-min(252, len(closes)):])
-    return {
-        "last_close":      round(last, 4),
-        "ma20":            _ma(closes, 20),
-        "ma60":            _ma(closes, 60),
-        "ma120":           _ma(closes, 120),
-        "high_52w":        round(high_52w, 4),
-        "low_52w":         round(low_52w, 4),
-        "dist_high_52w_pct": _pct_change(high_52w, last),
-        "dist_low_52w_pct":  _pct_change(low_52w, last),
-        "perf_5d_pct":     _pct_change(
-            closes[-6] if len(closes) >= 6 else None, last,
-        ),
-        "perf_20d_pct":    _pct_change(
-            closes[-21] if len(closes) >= 21 else None, last,
-        ),
-        "perf_60d_pct":    _pct_change(
-            closes[-61] if len(closes) >= 61 else None, last,
-        ),
-        "rsi14":           _rsi(closes, 14),
-    }
-
-
-def _summarize_revenue(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Take the latest `_FOCUS_BRIEF_REVENUE_MONTHS` rows from a
-    `tw_market_service.get_revenue` response, drop noise fields."""
-    if not rows:
-        return []
-    tail = rows[-_FOCUS_BRIEF_REVENUE_MONTHS:]
-    out: list[dict[str, Any]] = []
-    for r in tail:
-        out.append({
-            "month":       (r.get("date") or "")[:7],
-            "revenue_yoy": r.get("revenue_yoy"),
-            "revenue_mom": r.get("revenue_mom"),
-        })
-    return out
-
-
-def _summarize_institutional(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Sum 5-day net foreign / SITC / dealer over the rows. Returns
-    None when nothing came back — caller drops the block."""
-    if not rows:
-        return None
-    fini_net = sitc_net = dealer_net = 0
-    days = 0
-    for r in rows[-_FOCUS_BRIEF_CHIP_DAYS:]:
-        fini_net += int(r.get("fini_buy") or 0) - int(r.get("fini_sell") or 0)
-        sitc_net += int(r.get("sitc_buy") or 0) - int(r.get("sitc_sell") or 0)
-        dealer_net += int(r.get("dealer_buy") or 0) - int(r.get("dealer_sell") or 0)
-        days += 1
-    if days == 0:
-        return None
-    return {
-        "fini_net_5d":   fini_net,
-        "sitc_net_5d":   sitc_net,
-        "dealer_net_5d": dealer_net,
-        "days":          days,
-    }
-
-
-def _summarize_margin(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
-    if not rows:
-        return None
-    latest = rows[-1]
-    return {
-        "as_of":           latest.get("date"),
-        "margin_balance":  latest.get("margin_balance"),
-        "short_balance":   latest.get("short_balance"),
-    }
 
 
 async def _get_tw_peers(
@@ -1852,73 +1609,6 @@ _TURN_PROMPT_TEMPLATE = (
 )
 
 
-def _summarize_turn_content(content: str) -> str:
-    """Compress a turn's full content down to one line for the older-
-    history block. Strips markdown emphasis + collapses whitespace +
-    truncates at `_HISTORY_SUMMARY_CHARS`. The persona doesn't need
-    the full text from 4 rounds ago — only the gist of the speaker's
-    previous position so they can spot drift / contradictions."""
-    body = (content or "").strip()
-    if not body:
-        return "（同意，無補充）"
-    # Drop markdown bold / italic markers + bullet hyphens.
-    body = body.replace("**", "").replace("__", "")
-    # Collapse whitespace + newlines.
-    body = " ".join(body.split())
-    if len(body) > _HISTORY_SUMMARY_CHARS:
-        body = body[:_HISTORY_SUMMARY_CHARS] + "…"
-    return body
-
-
-def _format_history(prior_turns: list[DiscussionTurn]) -> str:
-    """Build the `## 先前發言` block for a persona prompt.
-
-    Two-tier compression keeps the prompt budget bounded:
-      - The N most recent turns (`_FULL_HISTORY_TURNS`) appear in
-        full — these are the live debate the persona is reacting to.
-      - Older turns up to `_MAX_HISTORY_TURNS` appear as a single-
-        line summary so the persona retains continuity ("buffett 第
-        1 輪看好 2330, 我此輪也補強") without paying for verbatim
-        text from rounds ago.
-
-    The full window comes after the summary block so the LLM's
-    recency bias works in our favour — the most recent turn is the
-    last thing in the prompt before its own "你現在的任務" line.
-    """
-    if not prior_turns:
-        return "（你是本場第一位發言者）"
-    window = prior_turns[-_MAX_HISTORY_TURNS:]
-    if len(window) <= _FULL_HISTORY_TURNS:
-        recent = window
-        older: list[DiscussionTurn] = []
-    else:
-        split = len(window) - _FULL_HISTORY_TURNS
-        older = window[:split]
-        recent = window[split:]
-
-    def _render(t: DiscussionTurn, body: str) -> str:
-        # User injections aren't analyst opinions — render them as a
-        # directive from the discussion's owner so personas know the
-        # next round must respond to it. Keeps the same `第N輪` prefix
-        # for ordering / recency cues.
-        if t.persona_id == USER_PERSONA_ID:
-            return f"- 第{t.round}輪 · 【討論發起人插話】：{body}"
-        return f"- 第{t.round}輪 · {t.persona_id} · {t.stance}：{body}"
-
-    sections: list[str] = []
-    if older:
-        sections.append("（較早輪次摘要）")
-        for t in older:
-            sections.append(_render(t, _summarize_turn_content(t.content)))
-    if older and recent:
-        sections.append("")
-        sections.append("（最近發言全文）")
-    for t in recent:
-        body = t.content.strip() or "（同意，無補充）"
-        sections.append(_render(t, body))
-    return "\n".join(sections)
-
-
 # Matches the opening of a `"content": "` field. Used by the truncation
 # salvage path — the persona's content always lives behind this key in
 # our prompt template, so finding it gives us a reliable extraction
@@ -2844,35 +2534,6 @@ _SYNTHESIZER_USER_TEMPLATE = (
 )
 
 
-def _format_transcript(turns: list[DiscussionTurn]) -> str:
-    """Render the full transcript for the synthesizer prompt.
-
-    Persona turns get a `[第N輪/persona_id/stance]` prefix.
-    User-input turns (e.g. post-mortem self-critique prompts
-    injected via `inject_user_message`) are rendered as a clearly
-    labelled directive — without this distinction the synthesizer
-    LLM treats `_user` as just another analyst and may try to
-    *answer* the directive's questions in the `reasoning` field
-    instead of synthesizing the discussion. The longer post-mortem
-    prompt (4 structured questions) makes that failure mode worse:
-    the LLM dumps a long answer + runs out of `max_tokens` mid-JSON
-    and the response fails to parse.
-    """
-    if not turns:
-        return "（無發言）"
-    lines = []
-    for t in turns:
-        body = t.content.strip() or "（同意，無補充）"
-        if t.persona_id == USER_PERSONA_ID:
-            lines.append(
-                f"[第{t.round}輪 · 討論發起人指示（請納入後續分析考量，"
-                f"勿視為專家意見、勿直接回答其中的提問）]\n{body}"
-            )
-        else:
-            lines.append(f"[第{t.round}輪/{t.persona_id}/{t.stance}] {body}")
-    return "\n".join(lines)
-
-
 async def _apply_calibration_to_conclusion(
     db: AsyncSession,
     discussion: Discussion,
@@ -3543,4 +3204,51 @@ from services.discussion.turn_parsing import (  # noqa: E402,F401
     _decode_partial_json_string,
     _parse_turn_response,
     _salvage_truncated_json,
+)
+
+
+# Transcript / history formatters extracted to discussion/transcript_format.py.
+# Re-export for back-compat with `_ask_persona` + `synthesize_conclusion`
+# (still in this file).
+from services.discussion.transcript_format import (  # noqa: E402,F401
+    _FULL_HISTORY_TURNS,
+    _HISTORY_SUMMARY_CHARS,
+    _MAX_HISTORY_TURNS,
+    _format_history,
+    _format_transcript,
+    _summarize_turn_content,
+)
+
+
+# Symbol extraction extracted to discussion/symbols.py.
+# Re-export for back-compat with `gather_market_context` +
+# `synthesize_conclusion` (still in this file).
+from services.discussion.symbols import (  # noqa: E402,F401
+    _BARE_US_TICKER_RE,
+    _CASHTAG_RE,
+    _MAX_FOCUS_SYMBOLS,
+    _TW_SYMBOL_RE,
+    _US_TICKER_STOPWORDS,
+    _YEAR_MAX,
+    _YEAR_MIN,
+    _crypto_universe,
+    _is_year_like,
+    extract_focus_symbols,
+)
+
+
+# Pure technicals + summaries extracted to discussion/technicals.py.
+# Re-export for back-compat with focus brief builders (still in this
+# file) + the two window constants the builders also reference.
+from services.discussion.technicals import (  # noqa: E402,F401
+    _FOCUS_BRIEF_CHIP_DAYS,
+    _FOCUS_BRIEF_REVENUE_MONTHS,
+    _bar_close,
+    _compute_technicals,
+    _ma,
+    _pct_change,
+    _rsi,
+    _summarize_institutional,
+    _summarize_margin,
+    _summarize_revenue,
 )

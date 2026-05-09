@@ -40,3 +40,26 @@ def sanitize_change_pct(
         )
         return None
     return chg_pct
+
+
+def sanitize_price(
+    symbol: str, market: str, price: float | None,
+) -> float | None:
+    """Return ``price`` if strictly positive, else ``None``.
+
+    Listed equities never trade at 0 or below; a non-positive close
+    almost always means an upstream parser hit a placeholder ('—',
+    'N/A', etc.) coerced into 0. Letting it through poisons cached
+    quotes (chg_pct = -100% headlines) and OHLCV history (zero candles
+    that break ATR / volatility math). Caller-side should drop the
+    affected row instead of writing it.
+    """
+    if price is None:
+        return None
+    if price <= 0:
+        log.warning(
+            "quote.price_non_positive",
+            extra={"symbol": symbol, "market": market, "price": price},
+        )
+        return None
+    return price

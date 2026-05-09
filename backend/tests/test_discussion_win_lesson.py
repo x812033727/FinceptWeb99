@@ -140,8 +140,7 @@ async def test_writes_lessons_from_llm_response(
             },
         ],
     })
-    with patch.object(
-        discussion_service, "stream_chat",
+    with patch("services.discussion.lessons.stream_chat",
         return_value=_stream_yielding(fake_response),
     ), patch(
         "services.system_task_config_service.resolve",
@@ -178,8 +177,7 @@ async def test_returns_zero_on_unparseable_llm_output(
     await db_session.commit()
     await db_session.refresh(disc)
 
-    with patch.object(
-        discussion_service, "stream_chat",
+    with patch("services.discussion.lessons.stream_chat",
         return_value=_stream_yielding("This is not JSON at all"),
     ), patch(
         "services.system_task_config_service.resolve",
@@ -207,8 +205,7 @@ async def test_returns_zero_on_llm_exception(
         raise RuntimeError("LLM down")
         yield  # pragma: no cover
 
-    with patch.object(
-        discussion_service, "stream_chat", side_effect=_boom,
+    with patch("services.discussion.lessons.stream_chat", side_effect=_boom,
     ), patch(
         "services.system_task_config_service.resolve",
         AsyncMock(return_value=("openai", "gpt-4o-mini")),
@@ -232,8 +229,7 @@ async def test_empty_lessons_array_returns_zero(
     await db_session.commit()
     await db_session.refresh(disc)
 
-    with patch.object(
-        discussion_service, "stream_chat",
+    with patch("services.discussion.lessons.stream_chat",
         return_value=_stream_yielding('{"lessons": []}'),
     ), patch(
         "services.system_task_config_service.resolve",

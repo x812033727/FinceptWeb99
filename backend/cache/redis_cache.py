@@ -219,6 +219,16 @@ def key_finmind_quota_exhausted_counter() -> str:
     backfills are saturating the FinMind cap."""
     return "finmind:quota_exhausted:hourly"
 
+def key_finmind_ip_banned() -> str:
+    """Circuit-breaker flag set when FinMind responds with HTTP 403 +
+    body `{"msg": "ip banned", "retry_after": NNNN}`. Stored value is
+    the upstream `retry_after` seconds; TTL is `retry_after + 60s`
+    (capped to 1h) so the flag self-clears. While present, every
+    `_query` call short-circuits without contacting FinMind — this is
+    the whole point: each request during a ban risks resetting /
+    extending FinMind's countdown via their abuse detector."""
+    return "finmind:ip_banned"
+
 def key_ai_counter(user_id: str) -> str:
     return f"ai:requests:{user_id}"
 

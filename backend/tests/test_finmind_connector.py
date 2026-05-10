@@ -67,6 +67,20 @@ def install_http(response):
     return patch.object(finmind.httpx, "AsyncClient", lambda **_: fake), fake
 
 
+class _FakeClientAcceptsHeaders(FakeClient):
+    """Variant for the dedicated-endpoint path which calls
+    `c.get(url, params=..., headers=...)`."""
+
+    async def get(self, url, params=None, headers=None):  # type: ignore[override]
+        self.calls.append((url, params or {}))
+        return self.response
+
+
+def install_http_with_headers(response):
+    fake = _FakeClientAcceptsHeaders(response)
+    return patch.object(finmind.httpx, "AsyncClient", lambda **_: fake), fake
+
+
 # ── _query: quota gate ───────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -112,6 +126,118 @@ async def test_query_uses_one_hour_ttl_on_counter():
 
     _, kwargs = cache_mock.call_args
     assert kwargs.get("ttl_seconds") == 3600
+
+
+# ── _query: IP-ban circuit breaker ───────────────────────────────
+
+@pytest.mark.asyncio
+async def test_query_short_circuits_when_ip_ban_flag_is_set():
+    """If a previous call set the Redis IP-ban flag, every subsequent
+    call must short-circuit without contacting FinMind — each request
+    during a ban risks resetting the upstream `retry_after` countdown."""
+    patcher_http, fake = install_http(FakeResponse({"status": 200, "data": [{"x": 1}]}))
+    with patcher_http, \
+            patch.object(finmind, "cache_get", new=AsyncMock(return_value="1646")), \
+            patch.object(finmind, "cache_incr", new=AsyncMock(return_value=1)):
+        out = await finmind._query("TaiwanStockPrice", "2330", "2024-01-01")
+
+    assert out == []
+    # The whole point: NO request must go out while banned.
+    assert fake.calls == []
+
+
+@pytest.mark.asyncio
+async def test_query_short_circuits_strict_raises_FinMindIPBanned():
+    """In `quota_strict()` mode (backfill / scheduler), the cached
+    IP-ban flag must surface as a typed exception so chunks record
+    as `failed` rather than silently `done (0 rows)`."""
+    patcher_http, _ = install_http(FakeResponse({"status": 200, "data": []}))
+    with patcher_http, \
+            patch.object(finmind, "cache_get", new=AsyncMock(return_value="1646")), \
+            patch.object(finmind, "cache_incr", new=AsyncMock(return_value=1)), \
+            finmind.quota_strict():
+        with pytest.raises(finmind.FinMindIPBanned):
+            await finmind._query("TaiwanStockPrice", "2330", "2024-01-01")
+
+
+@pytest.mark.asyncio
+async def test_query_records_ip_ban_when_finmind_returns_403_ip_banned():
+    """Live detection: HTTP 403 + body.msg == 'ip banned' must set the
+    Redis circuit-breaker flag with TTL ≈ retry_after, log, and return
+    [] (lenient mode) instead of bubbling up an HTTPStatusError."""
+    banned_body = {"msg": "ip banned", "status": 403, "retry_after": 1646}
+    patcher_http, fake = install_http(FakeResponse(banned_body, status_code=403))
+    cache_set_mock = AsyncMock()
+    with patcher_http, \
+            patch.object(finmind, "cache_get", new=AsyncMock(return_value=None)), \
+            patch.object(finmind, "cache_incr", new=AsyncMock(return_value=1)), \
+            patch.object(finmind, "cache_set", new=cache_set_mock):
+        out = await finmind._query("TaiwanStockPrice", "2330", "2024-01-01")
+
+    assert out == []
+    # Request DID fire (we couldn't have known we were banned otherwise),
+    # but exactly once — no retry.
+    assert len(fake.calls) == 1
+    cache_set_mock.assert_called_once()
+    args, kwargs = cache_set_mock.call_args
+    assert args[0] == finmind.key_finmind_ip_banned()
+    assert args[1] == "1646"
+    # TTL should be retry_after + buffer (60s), capped to 1h.
+    assert kwargs["ttl_seconds"] == min(1646 + 60, 3600)
+
+
+@pytest.mark.asyncio
+async def test_query_records_ip_ban_strict_raises_FinMindIPBanned():
+    """Strict mode (backfill) must raise `FinMindIPBanned` after
+    setting the flag, so the caller logs the failure as a real
+    `failed` chunk in the ledger rather than `done (0 rows)`."""
+    banned_body = {"msg": "ip banned", "status": 403, "retry_after": 1800}
+    patcher_http, _ = install_http(FakeResponse(banned_body, status_code=403))
+    with patcher_http, \
+            patch.object(finmind, "cache_get", new=AsyncMock(return_value=None)), \
+            patch.object(finmind, "cache_incr", new=AsyncMock(return_value=1)), \
+            patch.object(finmind, "cache_set", new=AsyncMock()), \
+            finmind.quota_strict():
+        with pytest.raises(finmind.FinMindIPBanned):
+            await finmind._query("TaiwanStockPrice", "2330", "2024-01-01")
+
+
+@pytest.mark.asyncio
+async def test_query_passes_through_403_without_ip_banned_body():
+    """A regular 403 (token expired, dataset tier not covered, …) must
+    keep its existing `HTTPStatusError` semantics so operators can
+    distinguish it from an IP-ban in the ledger. Detection is
+    body-driven, not status-only."""
+    paywall_body = {"msg": "Forbidden", "status": 403}
+    patcher_http, _ = install_http(FakeResponse(paywall_body, status_code=403))
+    cache_set_mock = AsyncMock()
+    with patcher_http, \
+            patch.object(finmind, "cache_get", new=AsyncMock(return_value=None)), \
+            patch.object(finmind, "cache_incr", new=AsyncMock(return_value=1)), \
+            patch.object(finmind, "cache_set", new=cache_set_mock):
+        with pytest.raises(httpx.HTTPStatusError):
+            await finmind._query("TaiwanStockPrice", "2330", "2024-01-01")
+
+    # Crucially: the IP-ban flag must NOT be set for non-ban 403s.
+    cache_set_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_query_caps_ip_ban_ttl_to_one_hour():
+    """If FinMind sends a wildly large `retry_after`, cap it so the
+    breaker self-clears in ≤1h — anything longer warrants operator
+    eyeballs, not silent waiting."""
+    banned_body = {"msg": "ip banned", "status": 403, "retry_after": 999999}
+    patcher_http, _ = install_http(FakeResponse(banned_body, status_code=403))
+    cache_set_mock = AsyncMock()
+    with patcher_http, \
+            patch.object(finmind, "cache_get", new=AsyncMock(return_value=None)), \
+            patch.object(finmind, "cache_incr", new=AsyncMock(return_value=1)), \
+            patch.object(finmind, "cache_set", new=cache_set_mock):
+        await finmind._query("TaiwanStockPrice", "2330", "2024-01-01")
+
+    _, kwargs = cache_set_mock.call_args
+    assert kwargs["ttl_seconds"] == 3600
 
 
 # ── _query: API envelope behaviour ───────────────────────────────

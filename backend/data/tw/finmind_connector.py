@@ -12,8 +12,11 @@ import httpx
 
 from cache.redis_cache import (
     cache_decr,
+    cache_get,
     cache_incr,
+    cache_set,
     key_finmind_counter,
+    key_finmind_ip_banned,
     key_finmind_quota_exhausted_counter,
 )
 from config import settings
@@ -95,6 +98,34 @@ async def _query(dataset: str, data_id: str, start_date: str, end_date: str | No
     if not token:
         log.debug("finmind.empty_token", extra={"dataset": dataset})
 
+    # IP-ban circuit breaker. When a previous call observed FinMind's
+    # `{"msg":"ip banned","retry_after":NNNN}` 403 response we set a
+    # Redis key with TTL=retry_after (capped, see `_record_ip_ban`).
+    # While the key exists, short-circuit unconditionally — every
+    # request during a ban risks re-triggering FinMind's abuse
+    # detection and extending the countdown. Without this guard a
+    # */15min cron + retry storm keeps the IP banned indefinitely.
+    try:
+        banned_hint = await cache_get(key_finmind_ip_banned())
+    except Exception:
+        banned_hint = None
+    if banned_hint is not None:
+        log.warning(
+            "finmind.ip_banned_short_circuit",
+            extra={
+                "dataset": dataset,
+                "data_id": data_id or "_market",
+                "retry_after_hint_s": banned_hint,
+                "strict": _strict_quota.get(),
+            },
+        )
+        if _strict_quota.get():
+            raise FinMindIPBanned(
+                f"FinMind IP-banned (cached retry_after≈{banned_hint}s, "
+                f"dataset={dataset})"
+            )
+        return []
+
     # 3600s = 1h. FinMind's actual rate limit is per-hour (600/hr for
     # registered free tier, 300/hr anonymous, 6000/hr for sponsor).
     # The counter window matches — a 24h TTL was wasting 24× the
@@ -165,6 +196,8 @@ async def _query(dataset: str, data_id: str, start_date: str, end_date: str | No
         headers = {"Authorization": f"Bearer {token}"}
         async with httpx.AsyncClient(timeout=15.0) as c:
             r = await c.get(url, params=params, headers=headers)
+            if await _maybe_record_ip_ban(r, dataset, data_id):
+                return []
             r.raise_for_status()
             body = r.json()
     else:
@@ -179,6 +212,8 @@ async def _query(dataset: str, data_id: str, start_date: str, end_date: str | No
 
         async with httpx.AsyncClient(timeout=15.0) as c:
             r = await c.get(_BASE, params=params)
+            if await _maybe_record_ip_ban(r, dataset, data_id):
+                return []
             r.raise_for_status()
             body = r.json()
 
@@ -213,6 +248,88 @@ class FinMindQuotaExhausted(Exception):
     paths set strict mode so a quota overrun marks the chunk as
     failed — preventing the silent `done (0 rows)` failure mode
     that would let `run_due` skip the chunk forever."""
+
+
+class FinMindIPBanned(Exception):
+    """Raised by `_query` when FinMind's abuse detector has banned
+    our outbound IP (HTTP 403 + body `{"msg":"ip banned",
+    "retry_after":NNNN}`) AND the caller is in strict mode. The
+    connector also sets a Redis circuit-breaker flag with TTL ≈
+    `retry_after`, so subsequent calls short-circuit without firing
+    a request — every request during a ban risks resetting FinMind's
+    countdown and effectively makes the ban permanent. Live-serving
+    callers (default mode) get `[]` instead of this exception so a
+    user request degrades to fallback rather than 500-ing."""
+
+
+# Cap for the IP-ban circuit-breaker TTL. Upstream `retry_after`
+# values observed have been ~1600s; 1h is the practical max we'd
+# want to silently sit on without surfacing — anything longer
+# warrants operator attention. The lower bound prevents a near-zero
+# `retry_after` from leaving the breaker effectively off.
+_IP_BAN_TTL_MIN_S = 60
+_IP_BAN_TTL_MAX_S = 3600
+_IP_BAN_TTL_BUFFER_S = 60
+
+
+async def _maybe_record_ip_ban(
+    r: "httpx.Response", dataset: str, data_id: str,
+) -> bool:
+    """If `r` is a FinMind IP-ban response, set the circuit-breaker
+    flag and either raise (strict mode) or signal the caller to
+    return `[]` by returning True. Otherwise returns False so the
+    caller falls through to its normal `raise_for_status()` path.
+
+    Detection is body-based (`msg == "ip banned"`) rather than
+    status-only because regular 403s — token expired, dataset tier
+    not covered — must keep their original failure semantics so
+    operators can distinguish them in the ledger.
+    """
+    if r.status_code != 403:
+        return False
+    try:
+        body = r.json()
+    except Exception:
+        return False
+    if not isinstance(body, dict) or body.get("msg") != "ip banned":
+        return False
+    try:
+        retry_after_raw = int(body.get("retry_after") or 0)
+    except (TypeError, ValueError):
+        retry_after_raw = 0
+    # Default ban window when upstream omits / mangles retry_after.
+    # 30 min matches the lower end of observed FinMind values.
+    retry_after = retry_after_raw if retry_after_raw > 0 else 1800
+    ttl = max(
+        _IP_BAN_TTL_MIN_S,
+        min(retry_after + _IP_BAN_TTL_BUFFER_S, _IP_BAN_TTL_MAX_S),
+    )
+    try:
+        await cache_set(
+            key_finmind_ip_banned(),
+            str(retry_after),
+            ttl_seconds=ttl,
+        )
+    except Exception:
+        # Circuit breaker is best-effort — we still want to surface
+        # the ban to the caller even if Redis is briefly unavailable.
+        pass
+    log.error(
+        "finmind.ip_banned",
+        extra={
+            "dataset": dataset,
+            "data_id": data_id or "_market",
+            "retry_after_s": retry_after,
+            "circuit_ttl_s": ttl,
+            "strict": _strict_quota.get(),
+        },
+    )
+    if _strict_quota.get():
+        raise FinMindIPBanned(
+            f"FinMind IP-banned (retry_after={retry_after}s, "
+            f"dataset={dataset})"
+        )
+    return True
 
 
 _strict_quota: contextvars.ContextVar[bool] = contextvars.ContextVar(

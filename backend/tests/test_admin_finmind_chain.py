@@ -90,7 +90,7 @@ def stub_chain(monkeypatch):
     async def _get_state():
         return dict(state)
 
-    async def _start(datasets, days=3650, reset_stuck_first=True):
+    async def _start(datasets, days=1095, reset_stuck_first=True):
         if raise_on_start:
             raise raise_on_start[0]
         calls["start"].append({
@@ -179,7 +179,7 @@ async def test_start_chain_with_default_payload(
     assert len(stub_chain["calls"]["start"]) == 1
     call = stub_chain["calls"]["start"][0]
     assert "TaiwanStockPriceAdj" in call["datasets"]
-    assert call["days"] == 3650
+    assert call["days"] == 1095
 
 
 @pytest.mark.asyncio

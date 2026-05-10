@@ -248,7 +248,7 @@ export default function FinmindBackfillCard() {
   );
   const selected =
     userSelection ?? new Set<string>(s?.default_datasets ?? []);
-  const [days, setDays] = useState<number>(3650);
+  const [days, setDays] = useState<number>(1095);
 
   const isRunning = s?.status === "running";
   const isStopping = s?.status === "stopping";
@@ -418,7 +418,7 @@ export default function FinmindBackfillCard() {
                   />
                 </label>
                 <span className="text-muted-foreground">
-                  3650 = 10 年 (預設)
+                  1095 = 3 年 (預設)
                 </span>
               </div>
             </div>

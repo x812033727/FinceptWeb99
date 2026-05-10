@@ -117,13 +117,28 @@ async def stub_helpers(monkeypatch):
     async def _fake_reset_stuck():
         return fakes["stuck_reset_count"]
 
-    async def _fake_count_done(ds: str):
-        return fakes["dataset_progress"].get(ds, (0, 0))
+    async def _fake_count_progress_one(ds: str):
+        # Test fixture stores per-dataset (done, failed) tuples; the
+        # service now also tracks total. Synthesize total = done +
+        # failed unless an explicit 3-tuple is provided.
+        rec = fakes["dataset_progress"].get(ds, (0, 0))
+        if len(rec) == 3:
+            return rec
+        done, failed = rec
+        return (done, failed, done + failed)
 
-    async def _fake_count_done_many(datasets):
-        return sum(
-            fakes["dataset_progress"].get(d, (0, 0))[0] for d in datasets
-        )
+    async def _fake_count_progress_many(datasets):
+        done = 0
+        total = 0
+        for d in datasets:
+            rec = fakes["dataset_progress"].get(d, (0, 0))
+            if len(rec) == 3:
+                done += rec[0]
+                total += rec[2]
+            else:
+                done += rec[0]
+                total += rec[0] + rec[1]
+        return (done, total)
 
     async def _fake_per_dataset_progress(datasets, universe_size):
         return []
@@ -149,12 +164,12 @@ async def stub_helpers(monkeypatch):
         "services.finmind_chain_service.reset_stuck", _fake_reset_stuck
     )
     monkeypatch.setattr(
-        "services.finmind_chain_service._count_done_for_dataset",
-        _fake_count_done,
+        "services.finmind_chain_service._count_progress_for_dataset",
+        _fake_count_progress_one,
     )
     monkeypatch.setattr(
-        "services.finmind_chain_service._count_done_for_datasets",
-        _fake_count_done_many,
+        "services.finmind_chain_service._count_progress_for_datasets",
+        _fake_count_progress_many,
     )
     monkeypatch.setattr(
         "services.finmind_chain_service._per_dataset_progress",
@@ -494,6 +509,91 @@ async def test_get_state_does_not_heal_when_lock_held(
 
     assert state["status"] == "running"
     assert state["current_dataset"] == "TaiwanStockPriceAdj"
+
+
+@pytest.mark.asyncio
+async def test_get_state_overrides_chunks_from_ledger_when_running(
+    fake_redis, stub_helpers,
+):
+    """Regression: redis-persisted `chunks_total = len(universe)` plus
+    `chunks_done` baseline-from-ledger let the per-dataset bar exceed
+    100% (TaiwanStockMarginPurchaseShortSale showed 127933/126465 on
+    2026-05-10). When the chain is running, get_state() must rebuild
+    chunks_done/failed/total from the ledger so done ≤ total always."""
+    from services.finmind_chain_service import (
+        LOCK_KEY,
+        STATE_KEY,
+        ChainState,
+        get_state,
+    )
+
+    stub_helpers["dataset_progress"] = {
+        # Same shape as the prod incident: ledger has done=127933,
+        # failed=154609, pending=313 (total=282855); the persisted
+        # chain state still has the buggy len(universe) baseline.
+        "TaiwanStockMarginPurchaseShortSale": (127933, 154609, 282855),
+    }
+    live = ChainState(
+        status="running",
+        queue=[],
+        selected_datasets=["TaiwanStockMarginPurchaseShortSale"],
+        current_dataset="TaiwanStockMarginPurchaseShortSale",
+        current_symbol="2330",
+        chunks_done=127933,
+        chunks_total=126465,   # the buggy len(universe) baseline
+        chunks_failed=154609,
+        universe_size=126465,
+    )
+    fake_redis[STATE_KEY] = live.to_json()
+    fake_redis[LOCK_KEY] = "worker-A:123"
+
+    state = await get_state()
+
+    assert state["chunks_done"] == 127933
+    assert state["chunks_failed"] == 154609
+    assert state["chunks_total"] == 282855
+    assert state["chunks_done"] <= state["chunks_total"]
+    # Overall bar should agree with ledger sum, not universe × N.
+    assert state["total_chunks_done"] == 127933
+    assert state["total_chunks_total"] == 282855
+
+
+@pytest.mark.asyncio
+async def test_get_state_leaves_chunks_alone_when_idle(
+    fake_redis, stub_helpers,
+):
+    """When the chain is idle, the override path is skipped — the last
+    in-flight values stay visible (and tests like
+    test_chain_runs_to_completion_for_one_dataset rely on it)."""
+    from services.finmind_chain_service import (
+        STATE_KEY,
+        ChainState,
+        get_state,
+    )
+
+    stub_helpers["dataset_progress"] = {
+        "TaiwanStockPriceAdj": (3, 0, 3),
+    }
+    persisted = ChainState(
+        status="idle",
+        queue=[],
+        selected_datasets=["TaiwanStockPriceAdj"],
+        current_dataset=None,
+        current_symbol=None,
+        chunks_done=3,
+        chunks_total=3,
+        chunks_failed=0,
+    )
+    fake_redis[STATE_KEY] = persisted.to_json()
+
+    state = await get_state()
+
+    assert state["status"] == "idle"
+    assert state["chunks_done"] == 3
+    assert state["chunks_total"] == 3
+    # Overall totals still come from the ledger helper.
+    assert state["total_chunks_done"] == 3
+    assert state["total_chunks_total"] == 3
 
 
 @pytest.mark.asyncio

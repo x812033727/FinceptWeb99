@@ -294,8 +294,12 @@ async def test_full_chain_run_completes_and_marks_idle(
 
     s = await get_state()
     assert s["status"] == "idle"
-    assert s["chunks_done"] == 3
-    assert s["chunks_failed"] == 0
+    # When idle the live per-dataset bar is hidden (zeroed) — overall
+    # progress lives in total_chunks_done. The stub fakes
+    # _count_progress_for_datasets, so total_done reflects what we
+    # primed in `dataset_progress` (empty here → 0).
+    assert s["chunks_done"] == 0
+    assert s["chunks_total"] == 0
     assert LOCK_KEY not in fake_redis  # released
 
     assert len(stub_ingest_chunk["calls"]) == 3
@@ -414,8 +418,10 @@ async def test_chain_continues_when_chunk_fails(
 
     s = await get_state()
     assert s["status"] == "idle"
-    assert s["chunks_done"] == 2  # symbols 1 and 3
-    assert s["chunks_failed"] == 1  # symbol 2 quota-failed
+    # Idle path zeroes the live counters — assert via recent_errors
+    # that the failed chunk still got recorded for operator visibility.
+    assert s["chunks_done"] == 0
+    assert s["chunks_total"] == 0
     assert any(
         "FinMindQuotaExhausted" in e for e in s["recent_errors"]
     ), s["recent_errors"]
@@ -559,12 +565,16 @@ async def test_get_state_overrides_chunks_from_ledger_when_running(
 
 
 @pytest.mark.asyncio
-async def test_get_state_leaves_chunks_alone_when_idle(
+async def test_get_state_zeros_chunks_when_idle(
     fake_redis, stub_helpers,
 ):
-    """When the chain is idle, the override path is skipped — the last
-    in-flight values stay visible (and tests like
-    test_chain_runs_to_completion_for_one_dataset rely on it)."""
+    """Idle chain: the live per-dataset bar is hidden by zeroing
+    `chunks_*`. Without this, a stale `chunks_done=127933,
+    chunks_total=126465` (the literal 2026-05-10 incident shape)
+    persists in redis and the front-end keeps rendering 101% across
+    sessions even when no dataset is being processed. Overall
+    progress still flows through `total_chunks_done/total` from the
+    ledger helper."""
     from services.finmind_chain_service import (
         STATE_KEY,
         ChainState,
@@ -572,28 +582,29 @@ async def test_get_state_leaves_chunks_alone_when_idle(
     )
 
     stub_helpers["dataset_progress"] = {
-        "TaiwanStockPriceAdj": (3, 0, 3),
+        "TaiwanStockMarginPurchaseShortSale": (127933, 154609, 282855),
     }
     persisted = ChainState(
         status="idle",
         queue=[],
-        selected_datasets=["TaiwanStockPriceAdj"],
+        selected_datasets=["TaiwanStockMarginPurchaseShortSale"],
         current_dataset=None,
         current_symbol=None,
-        chunks_done=3,
-        chunks_total=3,
-        chunks_failed=0,
+        chunks_done=127933,
+        chunks_total=126465,   # the buggy len(universe) baseline
+        chunks_failed=154609,
     )
     fake_redis[STATE_KEY] = persisted.to_json()
 
     state = await get_state()
 
     assert state["status"] == "idle"
-    assert state["chunks_done"] == 3
-    assert state["chunks_total"] == 3
+    assert state["chunks_done"] == 0
+    assert state["chunks_total"] == 0
+    assert state["chunks_failed"] == 0
     # Overall totals still come from the ledger helper.
-    assert state["total_chunks_done"] == 3
-    assert state["total_chunks_total"] == 3
+    assert state["total_chunks_done"] == 127933
+    assert state["total_chunks_total"] == 282855
 
 
 @pytest.mark.asyncio

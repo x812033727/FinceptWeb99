@@ -490,9 +490,10 @@ async def get_state() -> dict:
     # incremented from the historical-cumulative `done` count in the
     # ledger, which can outpace symbol count and produce >100%. Read
     # fresh from the ledger when a dataset is currently active so the
-    # bar always agrees with reality. Outside an active run we leave
-    # the persisted values alone — they're harmless and downstream
-    # consumers (tests, debugging) still see the last in-flight state.
+    # bar always agrees with reality. When idle (no current_dataset)
+    # we zero out so the frontend's `chunks_total > 0 &&` guard hides
+    # the live bar — otherwise a stale-but-paradoxical 127933/126465
+    # lingers across chain runs (the trigger for the 2026-05-10 fix).
     state_dict = {**state.__dict__}
     if (
         state.status in ("running", "stopping")
@@ -504,6 +505,10 @@ async def get_state() -> dict:
         state_dict["chunks_done"] = cur_done
         state_dict["chunks_failed"] = cur_failed
         state_dict["chunks_total"] = cur_total
+    else:
+        state_dict["chunks_done"] = 0
+        state_dict["chunks_failed"] = 0
+        state_dict["chunks_total"] = 0
     per_dataset = await _per_dataset_progress(
         state.selected_datasets, state.universe_size,
     )

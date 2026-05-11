@@ -280,11 +280,16 @@ async def reset_stuck() -> int:
 # ── Per-dataset chunk count helpers ────────────────────────────
 
 
-async def _count_done_for_dataset(dataset_code: str) -> tuple[int, int]:
-    """Return (done_count, failed_count) for chunks already persisted
-    for this dataset. Used to compute initial chunks_done when a chain
-    restarts mid-dataset (so the progress bar reflects work-remaining,
-    not work-this-session)."""
+async def _count_progress_for_dataset(
+    dataset_code: str,
+) -> tuple[int, int, int]:
+    """Return (done, failed, total) row counts in
+    `finmind.backfill_progress` for one dataset. `total` covers every
+    status (done + failed + pending + running + skipped), so it's a
+    safe denominator for `done/total` and never lets the bar exceed
+    100% — unlike `len(universe)`, which only counts symbols and
+    misses the multi-chunk-per-symbol rows that `run_due` cron + chain
+    UI both write."""
     from finmind.db.session import FinmindAsyncSessionLocal
 
     async with FinmindAsyncSessionLocal() as session:
@@ -292,32 +297,40 @@ async def _count_done_for_dataset(dataset_code: str) -> tuple[int, int]:
             """
             SELECT
               count(*) FILTER (WHERE status='done')   AS done,
-              count(*) FILTER (WHERE status='failed') AS failed
+              count(*) FILTER (WHERE status='failed') AS failed,
+              count(*)                                AS total
               FROM finmind.backfill_progress
              WHERE dataset_code=:ds
             """
         ), {"ds": dataset_code})
         row = result.first()
-        return (int(row[0] or 0), int(row[1] or 0))
+        return (int(row[0] or 0), int(row[1] or 0), int(row[2] or 0))
 
 
-async def _count_done_for_datasets(datasets: list[str]) -> int:
-    """Sum of `done` chunks across the given datasets. Powers the
-    overall progress bar — answers `已完成 X / 預期 Y` for the whole
-    chain, not just the current dataset."""
+async def _count_progress_for_datasets(
+    datasets: list[str],
+) -> tuple[int, int]:
+    """Return (done, total) summed across the given datasets. Powers
+    the overall progress bar — answers `已完成 X / 預期 Y` for the
+    whole chain, not just the current dataset. `total` is the ledger
+    row count, not `universe_size × len(datasets)`, so the bar stays
+    bounded by what's actually scheduled."""
     if not datasets:
-        return 0
+        return (0, 0)
     from finmind.db.session import FinmindAsyncSessionLocal
 
     async with FinmindAsyncSessionLocal() as session:
         result = await session.execute(text(
             """
-            SELECT count(*)
+            SELECT
+              count(*) FILTER (WHERE status='done') AS done,
+              count(*)                              AS total
               FROM finmind.backfill_progress
-             WHERE status='done' AND dataset_code = ANY(:ds)
+             WHERE dataset_code = ANY(:ds)
             """
         ), {"ds": list(datasets)})
-        return int(result.scalar() or 0)
+        row = result.first()
+        return (int(row[0] or 0), int(row[1] or 0))
 
 
 async def _per_dataset_progress(
@@ -463,17 +476,44 @@ async def get_state() -> dict:
     state.stop_requested = await _stop_requested()
     # Overall progress across ALL datasets in this chain run. When the
     # chain is idle and selected_datasets is empty, both totals are 0
-    # — the frontend renders "—" instead of "0/0" in that case.
-    total_done = (
-        await _count_done_for_datasets(state.selected_datasets)
-        if state.selected_datasets else 0
+    # — the frontend renders "—" instead of "0/0" in that case. The
+    # denominator is the ledger row count (sum of all backfill_progress
+    # rows for the selected datasets), not `universe_size × len(...)`,
+    # so the bar stays bounded by what's actually scheduled and never
+    # exceeds 100% even when the cron `run_due` writer has produced
+    # multi-chunk-per-symbol rows.
+    total_done, total_total = await _count_progress_for_datasets(
+        state.selected_datasets
     )
-    total_total = state.universe_size * len(state.selected_datasets)
+    # Per-dataset live counters: the redis-persisted `state.chunks_*`
+    # baseline is `len(universe)` (symbols), but `chunks_done` is
+    # incremented from the historical-cumulative `done` count in the
+    # ledger, which can outpace symbol count and produce >100%. Read
+    # fresh from the ledger when a dataset is currently active so the
+    # bar always agrees with reality. When idle (no current_dataset)
+    # we zero out so the frontend's `chunks_total > 0 &&` guard hides
+    # the live bar — otherwise a stale-but-paradoxical 127933/126465
+    # lingers across chain runs (the trigger for the 2026-05-10 fix).
+    state_dict = {**state.__dict__}
+    if (
+        state.status in ("running", "stopping")
+        and state.current_dataset
+    ):
+        cur_done, cur_failed, cur_total = (
+            await _count_progress_for_dataset(state.current_dataset)
+        )
+        state_dict["chunks_done"] = cur_done
+        state_dict["chunks_failed"] = cur_failed
+        state_dict["chunks_total"] = cur_total
+    else:
+        state_dict["chunks_done"] = 0
+        state_dict["chunks_failed"] = 0
+        state_dict["chunks_total"] = 0
     per_dataset = await _per_dataset_progress(
         state.selected_datasets, state.universe_size,
     )
     return {
-        **state.__dict__,
+        **state_dict,
         "quota_used": used,
         "quota_limit": limit,
         "quota_limit_global": global_limit,
@@ -592,13 +632,21 @@ async def _run_chain(datasets: list[str], days: int) -> None:
             if await _stop_requested():
                 break
 
-            done0, failed0 = await _count_done_for_dataset(ds)
+            done0, failed0, total0 = await _count_progress_for_dataset(ds)
             state = await _read_state()
             state.current_dataset = ds
             state.current_symbol = None
             state.chunks_done = done0
             state.chunks_failed = failed0
-            state.chunks_total = len(universe)
+            # Ledger row count, not len(universe) — multi-chunk-per-
+            # symbol rows produced by the cron `run_due` writer would
+            # otherwise push done past total. Floor to len(universe)
+            # so a brand-new dataset with empty backfill_progress
+            # still shows a sensible denominator until the first chunks
+            # land. get_state() re-queries this on every poll so any
+            # mid-run drift (new pending rows getting created) is
+            # corrected on the read path within ~3 s.
+            state.chunks_total = max(total0, len(universe))
             await _write_state(state)
 
             for symbol in universe:

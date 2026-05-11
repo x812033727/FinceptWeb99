@@ -117,13 +117,28 @@ async def stub_helpers(monkeypatch):
     async def _fake_reset_stuck():
         return fakes["stuck_reset_count"]
 
-    async def _fake_count_done(ds: str):
-        return fakes["dataset_progress"].get(ds, (0, 0))
+    async def _fake_count_progress_one(ds: str):
+        # Test fixture stores per-dataset (done, failed) tuples; the
+        # service now also tracks total. Synthesize total = done +
+        # failed unless an explicit 3-tuple is provided.
+        rec = fakes["dataset_progress"].get(ds, (0, 0))
+        if len(rec) == 3:
+            return rec
+        done, failed = rec
+        return (done, failed, done + failed)
 
-    async def _fake_count_done_many(datasets):
-        return sum(
-            fakes["dataset_progress"].get(d, (0, 0))[0] for d in datasets
-        )
+    async def _fake_count_progress_many(datasets):
+        done = 0
+        total = 0
+        for d in datasets:
+            rec = fakes["dataset_progress"].get(d, (0, 0))
+            if len(rec) == 3:
+                done += rec[0]
+                total += rec[2]
+            else:
+                done += rec[0]
+                total += rec[0] + rec[1]
+        return (done, total)
 
     async def _fake_per_dataset_progress(datasets, universe_size):
         return []
@@ -149,12 +164,12 @@ async def stub_helpers(monkeypatch):
         "services.finmind_chain_service.reset_stuck", _fake_reset_stuck
     )
     monkeypatch.setattr(
-        "services.finmind_chain_service._count_done_for_dataset",
-        _fake_count_done,
+        "services.finmind_chain_service._count_progress_for_dataset",
+        _fake_count_progress_one,
     )
     monkeypatch.setattr(
-        "services.finmind_chain_service._count_done_for_datasets",
-        _fake_count_done_many,
+        "services.finmind_chain_service._count_progress_for_datasets",
+        _fake_count_progress_many,
     )
     monkeypatch.setattr(
         "services.finmind_chain_service._per_dataset_progress",
@@ -279,8 +294,12 @@ async def test_full_chain_run_completes_and_marks_idle(
 
     s = await get_state()
     assert s["status"] == "idle"
-    assert s["chunks_done"] == 3
-    assert s["chunks_failed"] == 0
+    # When idle the live per-dataset bar is hidden (zeroed) — overall
+    # progress lives in total_chunks_done. The stub fakes
+    # _count_progress_for_datasets, so total_done reflects what we
+    # primed in `dataset_progress` (empty here → 0).
+    assert s["chunks_done"] == 0
+    assert s["chunks_total"] == 0
     assert LOCK_KEY not in fake_redis  # released
 
     assert len(stub_ingest_chunk["calls"]) == 3
@@ -399,8 +418,10 @@ async def test_chain_continues_when_chunk_fails(
 
     s = await get_state()
     assert s["status"] == "idle"
-    assert s["chunks_done"] == 2  # symbols 1 and 3
-    assert s["chunks_failed"] == 1  # symbol 2 quota-failed
+    # Idle path zeroes the live counters — assert via recent_errors
+    # that the failed chunk still got recorded for operator visibility.
+    assert s["chunks_done"] == 0
+    assert s["chunks_total"] == 0
     assert any(
         "FinMindQuotaExhausted" in e for e in s["recent_errors"]
     ), s["recent_errors"]
@@ -494,6 +515,96 @@ async def test_get_state_does_not_heal_when_lock_held(
 
     assert state["status"] == "running"
     assert state["current_dataset"] == "TaiwanStockPriceAdj"
+
+
+@pytest.mark.asyncio
+async def test_get_state_overrides_chunks_from_ledger_when_running(
+    fake_redis, stub_helpers,
+):
+    """Regression: redis-persisted `chunks_total = len(universe)` plus
+    `chunks_done` baseline-from-ledger let the per-dataset bar exceed
+    100% (TaiwanStockMarginPurchaseShortSale showed 127933/126465 on
+    2026-05-10). When the chain is running, get_state() must rebuild
+    chunks_done/failed/total from the ledger so done ≤ total always."""
+    from services.finmind_chain_service import (
+        LOCK_KEY,
+        STATE_KEY,
+        ChainState,
+        get_state,
+    )
+
+    stub_helpers["dataset_progress"] = {
+        # Same shape as the prod incident: ledger has done=127933,
+        # failed=154609, pending=313 (total=282855); the persisted
+        # chain state still has the buggy len(universe) baseline.
+        "TaiwanStockMarginPurchaseShortSale": (127933, 154609, 282855),
+    }
+    live = ChainState(
+        status="running",
+        queue=[],
+        selected_datasets=["TaiwanStockMarginPurchaseShortSale"],
+        current_dataset="TaiwanStockMarginPurchaseShortSale",
+        current_symbol="2330",
+        chunks_done=127933,
+        chunks_total=126465,   # the buggy len(universe) baseline
+        chunks_failed=154609,
+        universe_size=126465,
+    )
+    fake_redis[STATE_KEY] = live.to_json()
+    fake_redis[LOCK_KEY] = "worker-A:123"
+
+    state = await get_state()
+
+    assert state["chunks_done"] == 127933
+    assert state["chunks_failed"] == 154609
+    assert state["chunks_total"] == 282855
+    assert state["chunks_done"] <= state["chunks_total"]
+    # Overall bar should agree with ledger sum, not universe × N.
+    assert state["total_chunks_done"] == 127933
+    assert state["total_chunks_total"] == 282855
+
+
+@pytest.mark.asyncio
+async def test_get_state_zeros_chunks_when_idle(
+    fake_redis, stub_helpers,
+):
+    """Idle chain: the live per-dataset bar is hidden by zeroing
+    `chunks_*`. Without this, a stale `chunks_done=127933,
+    chunks_total=126465` (the literal 2026-05-10 incident shape)
+    persists in redis and the front-end keeps rendering 101% across
+    sessions even when no dataset is being processed. Overall
+    progress still flows through `total_chunks_done/total` from the
+    ledger helper."""
+    from services.finmind_chain_service import (
+        STATE_KEY,
+        ChainState,
+        get_state,
+    )
+
+    stub_helpers["dataset_progress"] = {
+        "TaiwanStockMarginPurchaseShortSale": (127933, 154609, 282855),
+    }
+    persisted = ChainState(
+        status="idle",
+        queue=[],
+        selected_datasets=["TaiwanStockMarginPurchaseShortSale"],
+        current_dataset=None,
+        current_symbol=None,
+        chunks_done=127933,
+        chunks_total=126465,   # the buggy len(universe) baseline
+        chunks_failed=154609,
+    )
+    fake_redis[STATE_KEY] = persisted.to_json()
+
+    state = await get_state()
+
+    assert state["status"] == "idle"
+    assert state["chunks_done"] == 0
+    assert state["chunks_total"] == 0
+    assert state["chunks_failed"] == 0
+    # Overall totals still come from the ledger helper.
+    assert state["total_chunks_done"] == 127933
+    assert state["total_chunks_total"] == 282855
 
 
 @pytest.mark.asyncio

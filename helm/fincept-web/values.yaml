@@ -115,6 +115,17 @@ env:
     # Only used when FINMIND_USE_MAIN_DB=false. Empty = the in-code
     # default; set to your in-cluster postgres_finmind URL when applicable.
     FINMIND_DATABASE_URL: ""
+    # SMTP — daily auto-run discussion email report. Leave HOST + FROM
+    # empty to disable the feature (the cron skips with a log warning).
+    # See `services.email_service.is_configured`.
+    SMTP_HOST: ""
+    SMTP_PORT: "587"
+    SMTP_USER: ""
+    SMTP_PASSWORD: ""
+    SMTP_FROM: ""
+    SMTP_USE_TLS: "true"
+    SMTP_USE_SSL: "false"
+    SMTP_TIMEOUT_SECONDS: "20"
 
 podSecurityContext:
   runAsNonRoot: true

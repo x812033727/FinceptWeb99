@@ -111,6 +111,11 @@ class AutoRunConfigRequest(BaseModel):
     topic: str = Field(min_length=1, max_length=500)
     rules: str = Field(min_length=1, max_length=2000)
     market: str | None = Field(default=None, max_length=8)
+    # When true, the daily auto-run cron emails the user a Markdown
+    # report of the resulting discussion. Silently no-ops when the
+    # deployment has no SMTP credentials configured (see
+    # `services.email_service.is_configured`).
+    send_email: bool = False
 
 
 class AutoRunConfigResponse(BaseModel):
@@ -119,6 +124,7 @@ class AutoRunConfigResponse(BaseModel):
     topic: str
     rules: str
     market: str
+    send_email: bool = False
     updated_at: datetime | None = None
 
 

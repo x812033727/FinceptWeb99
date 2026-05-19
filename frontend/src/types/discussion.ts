@@ -229,6 +229,7 @@ export interface AutoRunConfig {
   topic: string;
   rules: string;
   market: DiscussionMarket;
+  send_email: boolean;
   updated_at: string | null;
 }
 

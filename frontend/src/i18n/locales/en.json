@@ -811,6 +811,8 @@
     "auto_run_title": "Daily auto-run",
     "auto_run_subtitle": "When enabled, the system runs one round-table for you every day at 04:00 Asia/Taipei (5h before TW market open). Results appear in the discussion list below.",
     "auto_run_enabled": "Enable daily auto-run",
+    "auto_run_send_email": "Email me the report when it finishes",
+    "auto_run_send_email_hint": "After each daily run, a Markdown report of the discussion is sent to your account email.",
     "auto_run_topic_label": "Daily topic",
     "auto_run_topic_placeholder": "e.g. Find 1-3 TW stocks worth a short-term entry this week, with entry criteria and stop-loss.",
     "auto_run_rules_label": "Daily rules",

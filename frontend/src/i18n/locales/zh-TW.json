@@ -811,6 +811,8 @@
     "auto_run_title": "每日自動討論",
     "auto_run_subtitle": "啟用後，每天台北時間 04:00（台股開盤前 5 小時）自動跑一場圓桌。結果會出現在下方討論清單。",
     "auto_run_enabled": "啟用每日自動討論",
+    "auto_run_send_email": "完成後寄送報告到我的信箱",
+    "auto_run_send_email_hint": "每天自動討論結束後，會把完整 Markdown 報告寄到您註冊的 email。",
     "auto_run_topic_label": "每日主題",
     "auto_run_topic_placeholder": "例：找出本週值得短線進場的台股 1-3 檔，並列出進場條件與停損點。",
     "auto_run_rules_label": "每日規則",

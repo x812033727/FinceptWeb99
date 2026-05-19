@@ -33,9 +33,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from cache.redis_cache import acquire_lock, release_lock
 from db.session import AsyncSessionLocal
-from models.discussion import Discussion
+from models.discussion import Discussion, DiscussionTurn
 from models.discussion_auto_run_config import DiscussionAutoRunConfig
-from services import discussion_auto_run_config_service, discussion_service
+from models.user import User
+from services import discussion_auto_run_config_service, discussion_service, email_service
 from services.ingest.repository import (
     backoff_remaining_seconds,
     clear_failures,
@@ -255,6 +256,9 @@ async def _run_for_user(
         },
     )
 
+    if cfg.send_email:
+        await _maybe_send_report_email(db, cfg, discussion, conclusion)
+
     # `verify_after_date` is now seeded inside `synthesize_conclusion`
     # (PR #218), so the dedicated UPDATE that used to live here is
     # redundant and was using `_AUTO_ROUNDS=5` as a calendar-day arg
@@ -263,3 +267,85 @@ async def _run_for_user(
     # explicitly bypasses it via direct DB writes, that test owns
     # setting verify_after_date too.
     return True
+
+
+async def _maybe_send_report_email(
+    db: AsyncSession,
+    cfg: DiscussionAutoRunConfig,
+    discussion: Discussion,
+    conclusion: dict,
+) -> None:
+    """Send the post-run discussion report to the opted-in user's
+    account email. Fail-closed on every error — the auto-run task's
+    primary deliverable (the discussion row) has already landed, so
+    an email transport failure must not propagate out and trip
+    auto-backoff.
+
+    Skip silently (just a log warning) when:
+    - SMTP isn't configured on this deployment (`is_configured()`)
+    - the user's row is missing (shouldn't happen — FK to users)
+    - the user has no email on file
+    """
+    if not email_service.is_configured():
+        log.warning(
+            "auto_run_discussion.email_skipped_not_configured",
+            extra={"user_id": str(cfg.user_id)},
+        )
+        return
+
+    user = await db.scalar(select(User).where(User.id == cfg.user_id))
+    if user is None or not (user.email or "").strip():
+        log.warning(
+            "auto_run_discussion.email_skipped_no_address",
+            extra={"user_id": str(cfg.user_id)},
+        )
+        return
+
+    turns = list((await db.scalars(
+        select(DiscussionTurn)
+        .where(DiscussionTurn.discussion_id == discussion.id)
+        .order_by(DiscussionTurn.round, DiscussionTurn.turn_index)
+    )).all())
+
+    from ai.agents import get_agent
+    persona_name: dict[str, str] = {}
+    for pid in (discussion.persona_ids or []):
+        try:
+            persona_name[pid] = get_agent(pid).name
+        except ValueError:
+            persona_name[pid] = pid
+
+    body = email_service.render_discussion_report_markdown(
+        discussion, conclusion, turns, persona_name=persona_name,
+    )
+    created_tw = (
+        discussion.created_at.strftime("%Y-%m-%d")
+        if discussion.created_at else ""
+    )
+    subject = f"[Fincept] 每日專家圓桌討論 {created_tw}".strip()
+
+    try:
+        await email_service.send_email(
+            to=user.email,
+            subject=subject,
+            body_markdown=body,
+            attachment_filename=f"discussion_{discussion.id}.md",
+            attachment_content=body,
+        )
+        log.info(
+            "auto_run_discussion.email_sent",
+            extra={
+                "user_id": str(cfg.user_id),
+                "discussion_id": str(discussion.id),
+                "to": user.email,
+            },
+        )
+    except Exception as exc:
+        log.warning(
+            "auto_run_discussion.email_failed",
+            extra={
+                "user_id": str(cfg.user_id),
+                "discussion_id": str(discussion.id),
+                "error": str(exc),
+            },
+        )

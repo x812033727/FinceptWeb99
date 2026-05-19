@@ -50,6 +50,7 @@ async def upsert_config(
     topic: str,
     rules: str,
     market: str | None = None,
+    send_email: bool = False,
 ) -> DiscussionAutoRunConfig:
     """Insert or update a user's auto-run config.
 
@@ -68,6 +69,7 @@ async def upsert_config(
         row = DiscussionAutoRunConfig(
             user_id=user_id,
             enabled=bool(enabled),
+            send_email=bool(send_email),
             persona_ids=pids,
             topic=topic,
             rules=rules,
@@ -76,6 +78,7 @@ async def upsert_config(
         db.add(row)
     else:
         row.enabled = bool(enabled)
+        row.send_email = bool(send_email)
         row.persona_ids = pids
         row.topic = topic
         row.rules = rules

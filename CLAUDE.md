@@ -419,15 +419,19 @@ FinceptWeb/
   computed payload — persisted column when present, on-demand
   compute against `ohlcv_daily` when NULL so newly-concluded
   discussions show partial data without waiting a day.
-- **Daily auto-run** (`tasks/auto_run_discussion.py`, cron 00:00 UTC):
+- **Daily auto-run** (`tasks/auto_run_discussion.py`, cron 20:00 UTC =
+  04:00 Asia/Taipei next day — 5h before TW market open):
   per-user opt-in via `discussion_auto_run_configs` (migration `0020`).
   Each user with `enabled=True` gets one `auto_run=True` discussion per
-  UTC day, owned by themselves so it surfaces in their own owner-scoped
-  sidebar. Topic / rules / persona roster are user-supplied (no
-  fallback default). Per-user idempotency: a second tick on the same
-  UTC date sees the existing row and skips. One user's failure doesn't
-  block others — partial runs report `ok=true row_count=<successes>`
-  with the per-user error in the health row's error column.
+  Taipei calendar day, owned by themselves so it surfaces in their own
+  owner-scoped sidebar. Topic / rules / persona roster are user-
+  supplied (no fallback default). Per-user idempotency keyed on the
+  Taipei calendar day (half-open UTC range via
+  `tw_trading_calendar.tw_day_utc_bounds`): a second tick on the same
+  Taipei date sees the existing row and skips. One user's failure
+  doesn't block others — partial runs report `ok=true
+  row_count=<successes>` with the per-user error in the health row's
+  error column.
   Config UI: `AutoRunConfigCard` at the top of `DiscussionPage`'s
   sidebar (collapsed by default).
   API: `GET/PUT /api/discussion/auto-run/config`.

@@ -65,6 +65,35 @@ export function rememberRules(rules: string): void {
   }
 }
 
+const LS_ROUNDS_PER_CLICK_KEY = "fincept.discussion.rounds_per_click";
+const DEFAULT_ROUNDS_PER_CLICK = 5;
+const MIN_ROUNDS_PER_CLICK = 1;
+const MAX_ROUNDS_PER_CLICK = 10;
+
+export function readRoundsPerClick(): number {
+  try {
+    const raw = localStorage.getItem(LS_ROUNDS_PER_CLICK_KEY);
+    if (raw === null) return DEFAULT_ROUNDS_PER_CLICK;
+    const n = Number.parseInt(raw, 10);
+    if (!Number.isFinite(n)) return DEFAULT_ROUNDS_PER_CLICK;
+    return Math.min(MAX_ROUNDS_PER_CLICK, Math.max(MIN_ROUNDS_PER_CLICK, n));
+  } catch {
+    return DEFAULT_ROUNDS_PER_CLICK;
+  }
+}
+
+export function rememberRoundsPerClick(n: number): void {
+  try {
+    const clamped = Math.min(
+      MAX_ROUNDS_PER_CLICK,
+      Math.max(MIN_ROUNDS_PER_CLICK, Math.trunc(n)),
+    );
+    localStorage.setItem(LS_ROUNDS_PER_CLICK_KEY, String(clamped));
+  } catch {
+    /* private mode / quota — silent */
+  }
+}
+
 const LS_COLLAPSE_KEY = "fincept.discussion.collapse";
 
 export interface CollapseState {

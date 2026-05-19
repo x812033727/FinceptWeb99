@@ -28,9 +28,10 @@ have 5 bars yet — that's a holiday-in-window or a delisting issue;
 the cron's daily cadence + idempotency make a re-attempt safe.
 
 Notes on day-1 open snapshot:
-  We don't capture day1_open at auto-run time (00:00 UTC, market
-  hasn't opened). The verifier captures it lazily from the first
-  history bar at or after the discussion's TW-local creation date,
+  We don't capture day1_open at auto-run time (20:00 UTC = 04:00
+  Taipei, market still hours from opening). The verifier captures it
+  lazily from the first history bar at or after the discussion's
+  TW-local creation date,
   caches it on the discussion row, and uses it for the gain calc.
   Storing the snapshot pins the comparison against the original
   open price even if the upstream connector later corrects the bar.

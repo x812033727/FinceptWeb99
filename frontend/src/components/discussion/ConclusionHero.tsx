@@ -61,21 +61,35 @@ export function ConclusionHero({
           <div className="flex flex-wrap gap-1.5">
             {conclusion.recommended_symbols.map((s) => {
               const close = d1Pct(s);
+              const name = conclusion.symbol_names?.[s];
               return (
                 <button
                   key={s}
                   type="button"
                   onClick={() => onSymbolClick?.(s)}
-                  title={t("discussion.click_for_deep_dive")}
+                  title={
+                    name
+                      ? `${name} (${s}) — ${t("discussion.click_for_deep_dive")}`
+                      : t("discussion.click_for_deep_dive")
+                  }
                   className={cn(
-                    "inline-flex flex-col items-start px-2.5 py-1.5 rounded text-xs font-mono transition-colors min-h-[40px]",
+                    "inline-flex flex-col items-start px-2.5 py-1.5 rounded text-xs transition-colors min-h-[40px]",
                     isPostMortem
                       ? "bg-purple-900/40 text-purple-100 hover:bg-purple-900/70 ring-1 ring-purple-800/60"
                       : "bg-amber-900/40 text-amber-100 hover:bg-amber-900/70 ring-1 ring-amber-800/60",
                   )}
                 >
-                  <span className="font-semibold">{s}</span>
-                  <span className="text-[9px] opacity-70 leading-tight">
+                  {name ? (
+                    <>
+                      <span className="font-semibold leading-tight">{name}</span>
+                      <span className="font-mono text-[9px] opacity-70 leading-tight">
+                        {s}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="font-semibold font-mono">{s}</span>
+                  )}
+                  <span className="font-mono text-[9px] opacity-70 leading-tight">
                     {close == null
                       ? "D1 —"
                       : close === undefined

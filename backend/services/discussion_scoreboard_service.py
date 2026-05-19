@@ -74,19 +74,21 @@ async def compute_scoreboard(
     endpoint can serve the on-demand path without a full session
     factory.
     """
+    from services.discussion.symbol_names import resolve_display_name
+
     syms = _recommended_symbols(discussion)
     anchor_tw = _anchor_date(discussion)
     cached_opens: dict[str, float] = dict(discussion.day1_open_prices or {})
 
     rows: list[dict[str, Any]] = []
     for sym in syms:
-        rows.append(
-            await _compute_for_symbol(
-                sym=sym,
-                anchor_tw=anchor_tw,
-                cached_open=cached_opens.get(sym),
-            )
+        row = await _compute_for_symbol(
+            sym=sym,
+            anchor_tw=anchor_tw,
+            cached_open=cached_opens.get(sym),
         )
+        row["name"] = resolve_display_name(discussion.market, sym)
+        rows.append(row)
 
     anchor_iso = anchor_tw.isoformat()
     return {

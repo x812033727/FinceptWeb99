@@ -74,6 +74,7 @@ from config import settings
 from db.session import get_db, get_db_session_factory
 from models.discussion import Discussion
 from services import discussion_auto_run_config_service, discussion_service
+from services.discussion.symbol_names import enrich_conclusion_with_names
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -148,6 +149,21 @@ def _coerce_owner_uuid(user: dict) -> uuid.UUID:
 
 
 def _to_response(d: Discussion) -> DiscussionResponse:
+    # Inject company-name lookups into both conclusion shapes at
+    # serialization time so historical rows benefit without
+    # rewriting `discussions.conclusion` JSONB. Dicts are mutated in
+    # place via a shallow copy to avoid leaking the enrichment back
+    # onto the ORM instance (which SQLAlchemy would then dirty-track
+    # and try to flush on the next commit).
+    primary = enrich_conclusion_with_names(
+        d.market, dict(d.conclusion) if isinstance(d.conclusion, dict) else d.conclusion,
+    )
+    post_mortem = enrich_conclusion_with_names(
+        d.market,
+        dict(d.post_mortem_conclusion)
+        if isinstance(d.post_mortem_conclusion, dict)
+        else d.post_mortem_conclusion,
+    )
     return DiscussionResponse(
         id=d.id,
         topic=d.topic,
@@ -156,8 +172,8 @@ def _to_response(d: Discussion) -> DiscussionResponse:
         market=d.market,
         status=d.status,
         current_round=d.current_round,
-        conclusion=d.conclusion,
-        post_mortem_conclusion=d.post_mortem_conclusion,
+        conclusion=primary,
+        post_mortem_conclusion=post_mortem,
         post_mortem_diff=d.post_mortem_diff,
         verdict=d.verdict,
         verdict_reason=d.verdict_reason,
@@ -675,6 +691,7 @@ async def conclude_session(
     except Exception:
         await _refund(user, count=1)
         raise
+    enrich_conclusion_with_names(row.market, conclusion)
     return ConclusionResponse(discussion_id=row.id, conclusion=conclusion)
 
 

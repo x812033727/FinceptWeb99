@@ -19,7 +19,16 @@ function ScoreboardRowView({ row }: { row: ScoreboardRow }) {
   return (
     <div className="border border-border rounded p-2 space-y-1">
       <div className="flex items-center justify-between gap-2">
-        <span className="font-mono text-sm text-foreground">{row.symbol}</span>
+        {row.name ? (
+          <span className="flex flex-col leading-tight">
+            <span className="text-sm text-foreground">{row.name}</span>
+            <span className="font-mono text-[10px] text-muted-foreground">
+              {row.symbol}
+            </span>
+          </span>
+        ) : (
+          <span className="font-mono text-sm text-foreground">{row.symbol}</span>
+        )}
         <span className="text-[10px] text-muted-foreground">
           {t("discussion.scoreboard_day1_open")}：
           <span className="font-mono ml-1 text-foreground/80">

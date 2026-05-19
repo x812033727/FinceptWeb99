@@ -111,6 +111,13 @@ export interface PostMortemDiff {
 
 export interface Conclusion {
   recommended_symbols: string[];
+  /** Backend enrichment (PR for "show company name in result"): maps
+   * symbol → display name when an in-memory lookup is available — TW
+   * codes pick up 公司簡稱 from `tw_market_service._name_map`, crypto
+   * codes pick up the canonical name from `data.crypto.symbols.NAMES`.
+   * Absent / missing entries mean the symbol falls back to the bare
+   * code (US, or a TW code not yet loaded by the symbol-map cron). */
+  symbol_names?: Record<string, string>;
   /** Per-pick confidence breakdown (PR-C0). Optional for forward-
    * compat with old conclusions read out of the DB before this PR
    * landed. New conclusions always carry it; consumers should prefer
@@ -204,6 +211,9 @@ export interface RoundContextSnapshot {
 
 export interface ScoreboardRow {
   symbol: string;
+  /** Display name (e.g. "台積電", "Bitcoin") when an in-memory lookup
+   * resolves; NULL otherwise so the UI falls back to the bare code. */
+  name?: string | null;
   day1_open: number | null;
   daily_closes: (number | null)[];
   change_pcts: (number | null)[];

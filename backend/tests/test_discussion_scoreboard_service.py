@@ -896,3 +896,46 @@ async def test_persist_scoreboard_no_brier_when_partial(
     refreshed = await db_session.get(Discussion, d.id)
     assert refreshed.brier_score is None
     assert refreshed.outcome_vector is None
+
+
+# ── company-name enrichment ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_compute_scoreboard_enriches_name_for_tw_symbols(
+    db_session: AsyncSession,
+):
+    """TW scoreboard rows pick up `name` from the in-memory company
+    map so the frontend can render `台積電 (2330)` instead of a bare
+    code. Lookup failures (symbol not in map) stay None."""
+    from unittest.mock import patch
+
+    user = await _make_user(db_session, "scorer-name-tw@example.com")
+    d = await _make_discussion(
+        db_session,
+        owner_id=user.id,
+        created_at=datetime(2026, 4, 27, 6, 0, tzinfo=UTC),
+        recommended=["2330", "9999"],
+    )
+    await _seed_bars(
+        db_session, "2330", start=date(2026, 4, 27),
+        closes=[600, 605, 610, 612, 615],
+    )
+    await _seed_bars(
+        db_session, "9999", start=date(2026, 4, 27),
+        closes=[50, 51, 52, 53, 54],
+    )
+
+    name_map = {"2330": "台積電"}
+    with patch(
+        "services.tw_market_service.get_company_name",
+        side_effect=lambda sym: name_map.get(sym),
+    ):
+        result = await discussion_scoreboard_service.compute_scoreboard(
+            db_session, d,
+        )
+
+    by_sym = {r["symbol"]: r for r in result["rows"]}
+    assert by_sym["2330"]["name"] == "台積電"
+    assert by_sym["9999"]["name"] is None
+

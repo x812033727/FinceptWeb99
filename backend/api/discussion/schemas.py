@@ -128,6 +128,11 @@ class InjectUserMessageRequest(BaseModel):
 
 class ScoreboardRow(BaseModel):
     symbol: str
+    # Display name (e.g. "台積電" for "2330", "Bitcoin" for "BTC") when
+    # an in-memory lookup is available — see
+    # `services.discussion.symbol_names`. NULL for US symbols and any
+    # TW code that hasn't loaded into the symbol-map cron yet.
+    name: str | None = None
     day1_open: float | None
     daily_closes: list[float | None]
     change_pcts: list[float | None]

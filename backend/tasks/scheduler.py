@@ -483,15 +483,17 @@ def setup_jobs() -> None:
     )
 
     # ── Auto-run discussion ───────────────────────────────────────
-    # Daily at 00:00 UTC = 08:00 Asia/Taipei (1h before TW market opens
-    # at 09:00 Taipei). Job creates a 5-round expert discussion under
-    # the admin user, runs it to completion, captures the synthesizer
-    # picks, and seeds verify_after_date so the verifier task can grade
-    # it 5 trading days later. Internal trading-day gate skips weekends.
+    # Daily at 20:00 UTC = 04:00 Asia/Taipei next day (5h before TW
+    # market opens at 09:00 Taipei). Job creates a 5-round expert
+    # discussion per enabled user, runs it to completion, captures the
+    # synthesizer picks, and seeds verify_after_date so the verifier
+    # task can grade it 5 trading days later. Internal trading-day gate
+    # evaluates against the Taipei calendar so 20:00 UTC Sunday (=
+    # 04:00 Taipei Monday) correctly treats this as the Monday tick.
     from tasks.auto_run_discussion import run as run_auto_run_discussion
     scheduler.add_job(
         run_auto_run_discussion,
-        trigger=CronTrigger(hour=0, minute=0, timezone="UTC"),
+        trigger=CronTrigger(hour=20, minute=0, timezone="UTC"),
         id="auto_run_discussion",
         replace_existing=True,
         max_instances=1,

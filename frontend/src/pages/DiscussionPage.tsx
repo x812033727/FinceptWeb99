@@ -71,8 +71,10 @@ import {
   readDefaultRules,
   readDefaultTopic,
   readPostMortemResult,
+  readRoundsPerClick,
   rememberCollapse,
   rememberPostMortemResult,
+  rememberRoundsPerClick,
   rememberRules,
   rememberTopic,
   signedPct,
@@ -157,6 +159,19 @@ export default function DiscussionPage() {
     }>
   >([]);
   const abortRef = useRef<AbortController | null>(null);
+  // Multi-round driver: lets the user fire N consecutive rounds with
+  // one click. `loopProgress` drives the "Round X of N" badge + the
+  // graceful-cancel button; `cancelRequestedRef` is a plain ref because
+  // only the loop body reads it between iterations and a state flip
+  // would re-render without effect.
+  const [roundsPerClick, setRoundsPerClick] = useState<number>(readRoundsPerClick);
+  const [loopProgress, setLoopProgress] = useState<{ current: number; total: number } | null>(null);
+  // Two-headed cancel signal: the ref is what the loop body checks
+  // between iterations (synchronous, no stale-closure pitfalls), the
+  // state is what flips the cancel button's label to "Cancelling…" so
+  // the user gets immediate visual feedback.
+  const cancelRequestedRef = useRef(false);
+  const [cancelling, setCancelling] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   // Virtualization parent for the desktop sessions rail. Keeps the
   // DOM small (~30 rows) regardless of how many discussions the user
@@ -323,7 +338,7 @@ export default function DiscussionPage() {
       canStart: () =>
         Boolean(selectedId) && !isStreaming && !postMortemMut.isPending,
       runPostMortem: () => postMortemMut.mutateAsync(),
-      runRound,
+      runRound: async () => { await runOneRound(); },
       runConclude: () => {
         if (selectedId) concludeMut.mutate();
       },
@@ -438,8 +453,8 @@ export default function DiscussionPage() {
     updateMut.mutate({ rules });
   }
 
-  async function runRound() {
-    if (!selectedId || isStreaming) return;
+  async function runOneRound(): Promise<{ ok: boolean }> {
+    if (!selectedId) return { ok: false };
     setIsStreaming(true);
     setStreamError(null);
     setStreamingTurns([]);
@@ -450,6 +465,7 @@ export default function DiscussionPage() {
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    let roundOk = true;
 
     try {
       const resp = await fetch(`/api/discussion/sessions/${selectedId}/round`, {
@@ -595,6 +611,7 @@ export default function DiscussionPage() {
                 break;
               case "error":
                 setStreamError(obj.message ?? "未知錯誤");
+                roundOk = false;
                 break;
             }
           } catch {
@@ -603,6 +620,7 @@ export default function DiscussionPage() {
         }
       }
     } catch (e: unknown) {
+      roundOk = false;
       if ((e as Error).name !== "AbortError") {
         setStreamError((e as Error).message);
       }
@@ -620,6 +638,32 @@ export default function DiscussionPage() {
       queryClient.refetchQueries({ queryKey: ["discussion-sessions"] });
       setStreamingTurns([]);
     }
+    return { ok: roundOk };
+  }
+
+  async function runRounds() {
+    if (!selectedId || isStreaming) return;
+    cancelRequestedRef.current = false;
+    setCancelling(false);
+    const total = roundsPerClick;
+    setLoopProgress({ current: 0, total });
+    try {
+      for (let i = 0; i < total; i++) {
+        if (cancelRequestedRef.current) break;
+        setLoopProgress({ current: i + 1, total });
+        const { ok } = await runOneRound();
+        if (!ok) break;
+      }
+    } finally {
+      setLoopProgress(null);
+      cancelRequestedRef.current = false;
+      setCancelling(false);
+    }
+  }
+
+  function cancelLoop() {
+    cancelRequestedRef.current = true;
+    setCancelling(true);
   }
 
   function stopStreaming() {
@@ -1095,17 +1139,51 @@ export default function DiscussionPage() {
                 {t("ai.stop")}
               </button>
             ) : (
-              <button
-                onClick={runRound}
-                className={cn(
-                  "rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors min-h-[36px]",
-                  primarySize
-                )}
-              >
-                {detail?.current_round
-                  ? t("discussion.next_round", { round: detail.current_round + 1 })
-                  : t("discussion.start_round")}
-              </button>
+              <>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={roundsPerClick}
+                  onChange={(e) => {
+                    const n = Math.min(
+                      10,
+                      Math.max(1, Number.parseInt(e.target.value, 10) || 1),
+                    );
+                    setRoundsPerClick(n);
+                    rememberRoundsPerClick(n);
+                  }}
+                  disabled={loopProgress !== null}
+                  aria-label={t("discussion.rounds_per_click_label")}
+                  title={t("discussion.rounds_per_click_label")}
+                  className="w-14 px-2 py-1 rounded-md border border-border text-xs min-h-[36px] bg-transparent text-foreground"
+                />
+                <button
+                  onClick={runRounds}
+                  className={cn(
+                    "rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors min-h-[36px]",
+                    primarySize
+                  )}
+                >
+                  {t("discussion.run_n_rounds", { n: roundsPerClick })}
+                </button>
+              </>
+            )}
+            {loopProgress !== null && (
+              <>
+                <span className="px-2 py-1 rounded-md border border-border text-xs text-muted-foreground min-h-[36px] inline-flex items-center">
+                  {t("discussion.round_progress", loopProgress)}
+                </span>
+                <button
+                  onClick={cancelLoop}
+                  disabled={cancelling}
+                  className="px-3 py-1.5 rounded-md border border-border text-xs text-muted-foreground hover:border-primary/40 transition-colors disabled:opacity-50 min-h-[36px]"
+                >
+                  {cancelling
+                    ? t("discussion.cancelling")
+                    : t("discussion.cancel_multi_round")}
+                </button>
+              </>
             )}
             <button
               onClick={() => concludeMut.mutate()}

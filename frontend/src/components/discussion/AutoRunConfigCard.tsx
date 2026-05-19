@@ -5,8 +5,8 @@ import type { AgentInfo, AutoRunConfig, DiscussionMarket } from "@/types/discuss
 import { fetchAutoRunConfig, saveAutoRunConfig } from "./_helpers";
 
 // Sits at the top of the sidebar. Lets each user opt themselves into
-// the daily 00:00 UTC scheduler and pick their own topic / rules /
-// persona roster.
+// the daily 20:00 UTC = 04:00 台北 scheduler and pick their own topic
+// / rules / persona roster.
 export function AutoRunConfigCard({
   agents,
   collapsed,

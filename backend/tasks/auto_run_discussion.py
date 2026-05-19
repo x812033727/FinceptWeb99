@@ -1,18 +1,20 @@
 """Daily auto-run discussion — per-user opt-in.
 
-Cron: 00:00 UTC = 08:00 Asia/Taipei (1h before TW market open at 09:00
-Taipei). Skips weekends. Iterates every user who has flipped
-`discussion_auto_run_configs.enabled` to true (PR #126) and runs one
-discussion per user using their saved topic / rules / persona roster.
-The resulting Discussion row is owned by the user themselves so it
-shows up in their own DiscussionPage sidebar without any cross-user
-permission changes.
+Cron: 20:00 UTC = 04:00 Asia/Taipei next day (5h before TW market
+open at 09:00 Taipei). Skips weekends. Iterates every user who has
+flipped `discussion_auto_run_configs.enabled` to true (PR #126) and
+runs one discussion per user using their saved topic / rules /
+persona roster. The resulting Discussion row is owned by the user
+themselves so it shows up in their own DiscussionPage sidebar without
+any cross-user permission changes.
 
-Per-user idempotency: a second tick on the same UTC date sees the
-existing auto_run row for that user and skips them. Health record's
-`row_count` is the number of users we successfully ran for in this
-tick (not the total enabled — failures and same-day duplicates don't
-count).
+Per-user idempotency: keyed on the Taipei calendar day (not the UTC
+date) so 20:00 UTC Sunday and 03:59 UTC Monday — both Monday in
+Taipei — count as the same tick. The filter uses a half-open UTC
+range covering Taipei 00:00→24:00 on the resolved Taipei date.
+Health record's `row_count` is the number of users we successfully
+ran for in this tick (not the total enabled — failures and same-day
+duplicates don't count).
 
 Failure mode: if any user's run crashes, we log + record_failure +
 move on to the next user. The current user's discussion row stays
@@ -25,9 +27,8 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import UTC, datetime
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cache.redis_cache import acquire_lock, release_lock
@@ -42,7 +43,11 @@ from services.ingest.repository import (
     record_failure,
     record_health,
 )
-from services.tw_trading_calendar import is_today_likely_trading_day
+from services.tw_trading_calendar import (
+    is_today_likely_trading_day,
+    tw_day_utc_bounds,
+    utcnow_tw_date,
+)
 
 log = logging.getLogger(__name__)
 
@@ -58,7 +63,8 @@ _TW_SYMBOL_RE = re.compile(r"^\d{4,6}$")
 
 
 async def run() -> None:
-    """Entry point invoked by APScheduler at 00:00 UTC daily."""
+    """Entry point invoked by APScheduler at 20:00 UTC daily (= 04:00
+    Asia/Taipei next day)."""
     if not await acquire_lock(_LOCK_KEY, _LOCK_TTL):
         log.info("auto_run_discussion.skipped_lock_held")
         return
@@ -162,13 +168,19 @@ async def _run_for_user(
     """
     user_id = cfg.user_id
 
-    # Per-user idempotency: once per UTC date.
-    today_utc = datetime.now(UTC).date()
+    # Per-user idempotency: once per Taipei calendar day. Filter via a
+    # half-open UTC range covering 00:00→24:00 Taipei on the resolved
+    # Taipei date — `created_at` is timestamptz, so a plain
+    # `func.date(...)` extracts the UTC date and would be off-by-one
+    # against a Taipei-localised today.
+    today_tw = utcnow_tw_date()
+    tw_start, tw_end = tw_day_utc_bounds(today_tw)
     existing = await db.scalar(
         select(Discussion.id).where(
             Discussion.owner_id == user_id,
             Discussion.auto_run.is_(True),
-            func.date(Discussion.created_at) == today_utc,
+            Discussion.created_at >= tw_start,
+            Discussion.created_at < tw_end,
         ).limit(1)
     )
     if existing is not None:

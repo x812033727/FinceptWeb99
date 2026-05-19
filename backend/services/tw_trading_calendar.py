@@ -51,9 +51,9 @@ async def is_today_likely_trading_day(db: AsyncSession | None = None) -> bool:
     yesterday? if no, this is probably a holiday tomorrow too")
     doesn't break callers.
 
-    Cached in Redis for 12h: at the auto-run cron tick (00:00 UTC =
-    08:00 Taipei), the check fires once and stays cached until the
-    next day rolls over.
+    Cached in Redis for 12h: at the auto-run cron tick (20:00 UTC =
+    04:00 Taipei next day), the check fires once and stays cached
+    until the next day rolls over.
     """
     today = _today_tw()
     cached = await cache_get(f"{_CACHE_KEY}:{today.isoformat()}")
@@ -103,3 +103,13 @@ def to_tw_date(dt: datetime) -> date:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
     return dt.astimezone(_TW).date()
+
+
+def tw_day_utc_bounds(day: date) -> tuple[datetime, datetime]:
+    """Return the half-open UTC range `[start, end)` covering a
+    Taipei calendar day. Used for filtering `timestamptz` columns
+    by Taipei-local day without leaning on Postgres-specific
+    `AT TIME ZONE` SQL."""
+    from datetime import time as _time
+    start = _TW.localize(datetime.combine(day, _time.min)).astimezone(UTC)
+    return start, start + timedelta(days=1)

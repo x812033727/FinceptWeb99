@@ -174,12 +174,23 @@ async def get_daily_ohlcv(symbol: str, query_date: date | None = None) -> list[d
     """
     Single stock daily OHLCV for one month.
     TWSE returns the entire month's data for the given date.
+
+    TWSE retired the OpenAPI variant (`/v1/exchangeReport/STOCK_DAY`)
+    around 2026-05 — it now 302s to /404.html. We hit the legacy
+    `www.twse.com.tw/exchangeReport/STOCK_DAY` instead, which still
+    serves the same dataset behind the `{stat, fields, data}`
+    envelope (unwrapped via :func:`_unwrap_legacy_table`). Same
+    cutover pattern as :func:`get_institutional` / `get_total_institutional`.
     """
-    data = await _get(
-        f"{_BASE}/exchangeReport/STOCK_DAY",
+    raw = await _get(
+        f"{_LEGACY_BASE}/exchangeReport/STOCK_DAY",
         params={"response": "json", "date": _twse_date(query_date), "stockNo": symbol},
     )
-    rows = data if isinstance(data, list) else []
+    rows = _unwrap_legacy_table(raw)
+    # Backwards-compat: if a future TWSE rev returns a plain list of
+    # dicts (the pre-2026-05 OpenAPI shape), accept it.
+    if not rows and isinstance(raw, list):
+        rows = raw
     result = []
     for r in rows:
         try:
@@ -548,20 +559,25 @@ async def get_total_institutional(
     the caller's pivot pass matches on substring so the row count
     stays correct even when TWSE adds sub-categories (e.g. splitting
     自營商 into 自行買賣 / 避險).
+
+    TWSE retired the OpenAPI variant (`/v1/fund/BFI82U`) around
+    2026-05 — same cutover as STOCK_DAY / T86. Hit the legacy
+    `www.twse.com.tw/fund/BFI82U` instead; the `{stat, fields, data}`
+    envelope is unwrapped via :func:`_unwrap_legacy_table`.
     """
-    data = await _get(
-        f"{_BASE}/fund/BFI82U",
+    raw = await _get(
+        f"{_LEGACY_BASE}/fund/BFI82U",
         params={
             "response": "json",
             "dayDate": _twse_date(query_date),
             "type": "day",
         },
     )
-    rows = data if isinstance(data, list) else []
-    # OpenAPI variant returns a flat list; legacy returns the wrapped
-    # `{stat, fields, data}` envelope. Handle both.
-    if not rows and isinstance(data, dict):
-        rows = _unwrap_legacy_table(data)
+    rows = _unwrap_legacy_table(raw)
+    # Backwards-compat: accept a plain list of dicts if a future
+    # TWSE rev revives the OpenAPI shape.
+    if not rows and isinstance(raw, list):
+        rows = raw
     result: list[dict[str, Any]] = []
     for r in rows:
         name = (

@@ -223,7 +223,10 @@ async def test_compute_scoreboard_handles_missing_ohlcv(
         recommended=["9999"],
     )
     with patch(
-        "services.tw_market_service.get_history",
+        "data.tw.twse_connector.get_daily_ohlcv",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "data.tw.finmind_connector.get_daily_ohlcv",
         new=AsyncMock(return_value=[]),
     ):
         result = await discussion_scoreboard_service.compute_scoreboard(
@@ -242,9 +245,11 @@ async def test_compute_scoreboard_falls_back_to_live_when_db_empty(
 ):
     """Symbol's bars never landed in `ohlcv_daily` (transient cron
     failure for one symbol while the rest of the universe ingested
-    fine). The live waterfall in `tw_market_service.get_history`
-    must fill the gap so the user sees actual D1-D5 data instead
-    of all dashes."""
+    fine). The scoreboard live fallback must hit TWSE STOCK_DAY
+    directly so the user sees actual D1-D5 data instead of all
+    dashes — even when `tw_market_service.get_history`'s DB tier
+    would otherwise short-circuit on stale-but-fresh archive bars
+    that don't cover the anchor window."""
     from unittest.mock import AsyncMock, patch
 
     user = await _make_user(db_session, "scorer-livefallback@example.com")
@@ -255,16 +260,21 @@ async def test_compute_scoreboard_falls_back_to_live_when_db_empty(
         recommended=["2375"],
     )
     # Note: NO `_seed_bars` call — DB is intentionally empty.
-    # Live waterfall returns 5 fresh bars instead.
+    # Live waterfall returns 5 fresh bars instead. The connector
+    # is called once per (year, month) the window touches; this
+    # one's anchor + lookahead both fall inside 2026-04 so a
+    # single TWSE call covers the whole range.
     live_bars = [
         {"time": "2026-04-27", "open": 100, "high": 102, "low":  99, "close": 101, "volume": 1_000},
         {"time": "2026-04-28", "open": 101, "high": 103, "low": 100, "close": 102, "volume": 1_000},
         {"time": "2026-04-29", "open": 102, "high": 104, "low": 101, "close": 103, "volume": 1_000},
         {"time": "2026-04-30", "open": 103, "high": 105, "low": 102, "close": 104, "volume": 1_000},
+        # Window extends one calendar day into May; include the
+        # 2026-05-01 bar so the 5-day window resolves fully.
         {"time": "2026-05-01", "open": 104, "high": 106, "low": 103, "close": 105, "volume": 1_000},
     ]
     with patch(
-        "services.tw_market_service.get_history",
+        "data.tw.twse_connector.get_daily_ohlcv",
         new=AsyncMock(return_value=live_bars),
     ):
         result = await discussion_scoreboard_service.compute_scoreboard(
@@ -274,6 +284,101 @@ async def test_compute_scoreboard_falls_back_to_live_when_db_empty(
     r = result["rows"][0]
     assert r["day1_open"] == 100
     assert r["daily_closes"] == [101, 102, 103, 104, 105]
+    assert r["days_resolved"] == 5
+
+
+@pytest.mark.asyncio
+async def test_compute_scoreboard_live_fallback_falls_back_to_finmind(
+    db_session: AsyncSession,
+):
+    """TWSE returns nothing for the window (upstream outage / 302
+    on the OpenAPI gateway) → fallback must still try FinMind so
+    the user isn't left with an empty card."""
+    from unittest.mock import AsyncMock, patch
+
+    user = await _make_user(db_session, "scorer-livefallback-fm@example.com")
+    created = datetime(2026, 4, 27, 6, 0, tzinfo=UTC)
+    d = await _make_discussion(
+        db_session,
+        owner_id=user.id, created_at=created,
+        recommended=["2375"],
+    )
+    fm_bars = [
+        {"time": "2026-04-27", "open": 50, "high": 52, "low": 49, "close": 51, "volume": 1_000},
+        {"time": "2026-04-28", "open": 51, "high": 53, "low": 50, "close": 52, "volume": 1_000},
+        {"time": "2026-04-29", "open": 52, "high": 54, "low": 51, "close": 53, "volume": 1_000},
+        {"time": "2026-04-30", "open": 53, "high": 55, "low": 52, "close": 54, "volume": 1_000},
+        {"time": "2026-05-01", "open": 54, "high": 56, "low": 53, "close": 55, "volume": 1_000},
+    ]
+    with patch(
+        "data.tw.twse_connector.get_daily_ohlcv",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "data.tw.finmind_connector.get_daily_ohlcv",
+        new=AsyncMock(return_value=fm_bars),
+    ):
+        result = await discussion_scoreboard_service.compute_scoreboard(
+            db_session, d,
+        )
+
+    r = result["rows"][0]
+    assert r["day1_open"] == 50
+    assert r["days_resolved"] == 5
+
+
+@pytest.mark.asyncio
+async def test_compute_scoreboard_live_fallback_bypasses_stale_get_history(
+    db_session: AsyncSession,
+):
+    """Regression guard for the deployed-system root cause behind
+    PR followup: `tw_market_service.get_history`'s DB tier 2
+    treats 5-day-stale bars as fresh and would short-circuit
+    without calling TWSE. The scoreboard live fallback MUST hit
+    the connector directly so it sees current data even when
+    that service would not.
+
+    Setup: archive has bars from before the anchor window — old
+    enough that the window read returns []. If the fallback
+    routed through `get_history`, the DB tier 2 would return the
+    pre-anchor bars and the scoreboard's downstream filter would
+    strip them all → days_resolved=0. With the direct connector
+    call this fails to deceive us."""
+    from unittest.mock import AsyncMock, patch
+
+    user = await _make_user(db_session, "scorer-bypass-stale@example.com")
+    created = datetime(2026, 4, 27, 6, 0, tzinfo=UTC)
+    d = await _make_discussion(
+        db_session,
+        owner_id=user.id, created_at=created,
+        recommended=["2375"],
+    )
+    # Seed PRE-anchor bars only — the [anchor, end] window read
+    # returns [] so the live fallback fires.
+    await _seed_bars(
+        db_session, "2375", start=date(2026, 4, 20),
+        closes=[80, 81, 82, 83, 84],
+        opens=[80, 81, 82, 83, 84],
+    )
+    # The fix: scoreboard calls twse.get_daily_ohlcv directly
+    # rather than going through tw_market_service.get_history.
+    # If the patch reaches us at all, the fallback worked.
+    twse_call = AsyncMock(return_value=[
+        {"time": "2026-04-27", "open": 90, "high": 92, "low": 89, "close": 91, "volume": 1_000},
+        {"time": "2026-04-28", "open": 91, "high": 93, "low": 90, "close": 92, "volume": 1_000},
+        {"time": "2026-04-29", "open": 92, "high": 94, "low": 91, "close": 93, "volume": 1_000},
+        {"time": "2026-04-30", "open": 93, "high": 95, "low": 92, "close": 94, "volume": 1_000},
+        {"time": "2026-05-01", "open": 94, "high": 96, "low": 93, "close": 95, "volume": 1_000},
+    ])
+    with patch(
+        "data.tw.twse_connector.get_daily_ohlcv",
+        new=twse_call,
+    ):
+        result = await discussion_scoreboard_service.compute_scoreboard(
+            db_session, d,
+        )
+    twse_call.assert_awaited()  # connector was hit directly
+    r = result["rows"][0]
+    assert r["day1_open"] == 90
     assert r["days_resolved"] == 5
 
 
@@ -341,7 +446,7 @@ async def test_compute_scoreboard_debug_trace_marks_live_fallback(
     ]
     traces: list[dict] = []
     with patch(
-        "services.tw_market_service.get_history",
+        "data.tw.twse_connector.get_daily_ohlcv",
         new=AsyncMock(return_value=live_bars),
     ):
         await discussion_scoreboard_service.compute_scoreboard(
@@ -351,6 +456,7 @@ async def test_compute_scoreboard_debug_trace_marks_live_fallback(
     assert t["archive_bars_count"] == 0
     assert t["live_fallback_tried"] is True
     assert t["live_fallback_bars_count"] == 5
+    assert t["live_fallback_source"] == "twse"
     assert t["day1_open_source"] == "live_fallback"
 
 
@@ -456,7 +562,7 @@ async def test_compute_scoreboard_skips_live_fallback_when_db_has_bars(
     )
 
     fallback = AsyncMock(return_value=[])
-    with patch("services.tw_market_service.get_history", new=fallback):
+    with patch("data.tw.twse_connector.get_daily_ohlcv", new=fallback):
         await discussion_scoreboard_service.compute_scoreboard(
             db_session, d,
         )

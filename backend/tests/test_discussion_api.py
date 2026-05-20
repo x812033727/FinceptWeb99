@@ -523,17 +523,19 @@ async def test_get_scoreboard_returns_rows_when_concluded(
     """Discussion with a conclusion → endpoint returns rows even
     when the cron hasn't persisted `daily_close_prices` yet (the
     on-demand compute path)."""
-    # Block the scoreboard service's live-fallback path
-    # (`tw_market_service.get_history`) so this test can't reach a
-    # real TWSE/FinMind upstream in CI. Without this, the on-demand
-    # compute finds zero archived bars, falls through to live, gets
+    # Block the scoreboard service's live-fallback path (direct
+    # TWSE + FinMind connector calls) so this test can't reach a
+    # real upstream in CI. Without this, the on-demand compute
+    # finds zero archived bars, falls through to live, gets
     # today's bar back, and `days_resolved` ends up 1 instead of 0.
-    from services import tw_market_service as _tw_svc
+    from data.tw import finmind_connector as _fm
+    from data.tw import twse_connector as _twse
 
-    async def _no_history(symbol, months=12):
+    async def _no_bars(*args, **kwargs):
         return []
 
-    monkeypatch.setattr(_tw_svc, "get_history", _no_history)
+    monkeypatch.setattr(_twse, "get_daily_ohlcv", _no_bars)
+    monkeypatch.setattr(_fm, "get_daily_ohlcv", _no_bars)
 
     h = await _register(client, "scoreboard_ondemand@example.com")
     r = await client.post(
@@ -578,12 +580,14 @@ async def test_get_scoreboard_debug_mode_returns_trace(
     """`?debug=true` returns the per-symbol diagnostic trace +
     cron eligibility + trading-window resolution so an operator
     can see why a scoreboard came back empty."""
-    from services import tw_market_service as _tw_svc
+    from data.tw import finmind_connector as _fm
+    from data.tw import twse_connector as _twse
 
-    async def _no_history(symbol, months=12):
+    async def _no_bars(*args, **kwargs):
         return []
 
-    monkeypatch.setattr(_tw_svc, "get_history", _no_history)
+    monkeypatch.setattr(_twse, "get_daily_ohlcv", _no_bars)
+    monkeypatch.setattr(_fm, "get_daily_ohlcv", _no_bars)
 
     h = await _register(client, "scoreboard_debug@example.com")
     r = await client.post(

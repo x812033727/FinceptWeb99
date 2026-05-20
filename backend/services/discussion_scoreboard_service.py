@@ -253,12 +253,19 @@ async def _compute_for_symbol(
     helper (closed inside repository.py) so we don't have to thread
     a session through and risk holding it across the whole batch.
 
-    Falls back to `tw_market_service.get_history` (TWSE → FinMind
-    waterfall) when the DB archive has zero bars for this symbol —
-    covers the case where the daily OHLCV cron had a transient
-    failure for one symbol but the rest of the universe ingested
-    fine. The fallback's own Redis cache (4h TTL) keeps repeated
-    scoreboard reads cheap.
+    Live fallback hits the TWSE per-stock OHLCV endpoint directly
+    (and FinMind as a backstop) when the DB archive has zero bars
+    for the requested [anchor_tw, lookahead_end] window. We
+    deliberately bypass `tw_market_service.get_history` here — that
+    service's DB tier 2 treats up-to-5-days-stale archive bars as
+    "fresh" and short-circuits without calling upstream, which is
+    correct for a K-line chart use case but wrong for the
+    scoreboard: when the archive is missing the anchor-week
+    specifically (the daily ingest cron lagged or upstream was
+    broken when it ran), we need a guaranteed upstream read.
+    Successful fallback bars are upserted into `ohlcv_daily` so
+    subsequent reads on this discussion serve directly from the
+    archive without re-firing the fallback.
     """
     end = anchor_tw + timedelta(days=_LOOKAHEAD_CALENDAR_DAYS)
     if debug_trace is not None:
@@ -289,34 +296,19 @@ async def _compute_for_symbol(
     if not bars:
         if debug_trace is not None:
             debug_trace["live_fallback_tried"] = True
-        try:
-            from services import tw_market_service
-            live_bars = await tw_market_service.get_history(sym, months=1)
-            # `get_history` returns bars with `time` ISO strings,
-            # same shape as the repository helper. Constrain to
-            # [anchor_tw, end] so the downstream filter still works.
-            iso_end = end.isoformat()
-            iso_start_chk = anchor_tw.isoformat()
-            bars = [
-                b for b in (live_bars or [])
-                if iso_start_chk <= (b.get("time") or "") <= iso_end
-            ]
-            if bars:
-                live_fallback_used = True
-                log.info(
-                    "scoreboard.live_fallback_recovered",
-                    extra={"symbol": sym, "bars": len(bars)},
-                )
-            if debug_trace is not None:
-                debug_trace["live_fallback_bars_count"] = len(bars)
-        except Exception as exc:
-            log.warning(
-                "scoreboard.live_fallback_failed",
-                extra={"symbol": sym, "error": str(exc)},
+        bars, source = await _live_fallback_fetch(
+            sym=sym,
+            anchor_tw=anchor_tw,
+            end=end,
+            debug_trace=debug_trace,
+        )
+        if bars:
+            live_fallback_used = True
+            log.info(
+                "scoreboard.live_fallback_recovered",
+                extra={"symbol": sym, "bars": len(bars), "source": source},
             )
-            if debug_trace is not None:
-                debug_trace["live_fallback_error"] = str(exc)
-                debug_trace["live_fallback_bars_count"] = 0
+            await _persist_fallback_bars_to_archive(sym, bars, source)
     elif debug_trace is not None:
         debug_trace["live_fallback_tried"] = False
         debug_trace["live_fallback_bars_count"] = 0
@@ -373,6 +365,123 @@ async def _compute_for_symbol(
         "change_pcts": change_pcts,
         "days_resolved": days_resolved,
     }
+
+
+async def _live_fallback_fetch(
+    *,
+    sym: str,
+    anchor_tw: date,
+    end: date,
+    debug_trace: dict[str, Any] | None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Pull bars in `[anchor_tw, end]` directly from upstream.
+
+    TWSE STOCK_DAY returns one full calendar month per call, so we
+    fan out across the months the window touches (typically one,
+    occasionally two when the anchor lies in the last week of a
+    month and the window crosses into the next). FinMind catches
+    the TWSE-down case. Returns the filtered bars + which upstream
+    provided them ("twse" / "finmind"), or `([], None)` if both
+    upstreams produced nothing in the requested window.
+    """
+    from data.tw import finmind_connector as _fm
+    from data.tw import twse_connector as _twse
+
+    iso_anchor = anchor_tw.isoformat()
+    iso_end = end.isoformat()
+
+    months_to_fetch = sorted({
+        date(anchor_tw.year, anchor_tw.month, 1),
+        date(end.year, end.month, 1),
+    })
+
+    twse_bars: list[dict[str, Any]] = []
+    twse_error: str | None = None
+    seen_dates: set[str] = set()
+    for first in months_to_fetch:
+        try:
+            m = await _twse.get_daily_ohlcv(sym, first)
+            # Dedup by `time` field — TWSE returns the whole month
+            # per call, so adjacent months overlap zero bars in
+            # practice, but a defensive dedup keeps the filter
+            # honest if anything ever ships duplicate rows.
+            for r in (m or []):
+                t = r.get("time") or ""
+                if t and t not in seen_dates:
+                    seen_dates.add(t)
+                    twse_bars.append(r)
+        except Exception as exc:
+            twse_error = str(exc)
+            log.warning(
+                "scoreboard.live_fallback.twse_failed",
+                extra={"symbol": sym, "month": first.isoformat(), "error": twse_error},
+            )
+
+    bars = [
+        b for b in twse_bars
+        if iso_anchor <= (b.get("time") or "") <= iso_end
+    ]
+    source: str | None = "twse" if bars else None
+
+    if debug_trace is not None:
+        debug_trace["live_fallback_source_twse_bars"] = len(twse_bars)
+        if twse_error:
+            debug_trace["live_fallback_twse_error"] = twse_error
+
+    if not bars:
+        try:
+            fm_bars = await _fm.get_daily_ohlcv(sym, iso_anchor)
+            bars = [
+                b for b in (fm_bars or [])
+                if iso_anchor <= (b.get("time") or "") <= iso_end
+            ]
+            if debug_trace is not None:
+                debug_trace["live_fallback_source_finmind_bars"] = len(bars)
+            if bars:
+                source = "finmind"
+        except Exception as exc:
+            log.warning(
+                "scoreboard.live_fallback.finmind_failed",
+                extra={"symbol": sym, "error": str(exc)},
+            )
+            if debug_trace is not None:
+                debug_trace["live_fallback_finmind_error"] = str(exc)
+
+    if debug_trace is not None:
+        debug_trace["live_fallback_bars_count"] = len(bars)
+        debug_trace["live_fallback_source"] = source
+
+    return bars, source
+
+
+async def _persist_fallback_bars_to_archive(
+    sym: str, bars: list[dict[str, Any]], source: str | None,
+) -> None:
+    """Write the fallback's bars into `ohlcv_daily` so the next
+    scoreboard read for this discussion serves from the archive
+    instead of refetching upstream. Best-effort — a failure here
+    must not break the user-facing scoreboard render."""
+    if not bars or not source:
+        return
+    try:
+        from services.ingest.repository import (
+            OhlcvBar,
+            upsert_ohlcv_bars_autosession,
+        )
+        ohlcv_bars = [
+            b for b in (
+                OhlcvBar.from_connector_row("TW", sym, source, r)
+                for r in bars
+            )
+            if b is not None
+        ]
+        if ohlcv_bars:
+            await upsert_ohlcv_bars_autosession(ohlcv_bars)
+    except Exception as exc:
+        log.warning(
+            "scoreboard.live_fallback.archive_write_failed",
+            extra={"symbol": sym, "error": str(exc)},
+        )
 
 
 # ── debug payload (PR followup #426) ───────────────────────────────

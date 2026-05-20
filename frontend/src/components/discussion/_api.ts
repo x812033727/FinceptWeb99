@@ -845,6 +845,7 @@ export async function saveAutoRunConfig(body: {
   topic: string;
   rules: string;
   market?: string;
+  send_email?: boolean;
 }): Promise<AutoRunConfig> {
   const res = await api.put<AutoRunConfig>("/discussion/auto-run/config", body);
   return res.data;

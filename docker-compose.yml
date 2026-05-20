@@ -107,6 +107,18 @@ services:
       FINMIND_USE_MAIN_DB:    ${FINMIND_USE_MAIN_DB:-true}
       FINMIND_AUTO_INIT:      ${FINMIND_AUTO_INIT:-true}
       FINMIND_DATABASE_URL:   ${FINMIND_DATABASE_URL:-postgresql+asyncpg://finmind:finmind_dev_password@postgres_finmind:5432/finmind_clone}
+      # SMTP — daily auto-run discussion email report. Leave HOST/FROM
+      # empty to disable (the cron skips silently). Same passthrough
+      # pattern as the FinMind vars above so .env edits actually reach
+      # the container.
+      SMTP_HOST:              ${SMTP_HOST:-}
+      SMTP_PORT:              ${SMTP_PORT:-587}
+      SMTP_USER:              ${SMTP_USER:-}
+      SMTP_PASSWORD:          ${SMTP_PASSWORD:-}
+      SMTP_FROM:              ${SMTP_FROM:-}
+      SMTP_USE_TLS:           ${SMTP_USE_TLS:-true}
+      SMTP_USE_SSL:           ${SMTP_USE_SSL:-false}
+      SMTP_TIMEOUT_SECONDS:   ${SMTP_TIMEOUT_SECONDS:-20}
     volumes:
       # Bidirectional channel for the admin one-click redeploy button.
       # Backend touches /host-trigger/deploy-trigger to fire the host's

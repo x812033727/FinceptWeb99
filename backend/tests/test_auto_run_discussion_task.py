@@ -73,10 +73,12 @@ async def _enable_for(
     topic: str = "topic",
     rules: str = "rules",
     enabled: bool = True,
+    send_email: bool = False,
 ) -> DiscussionAutoRunConfig:
     cfg = DiscussionAutoRunConfig(
         user_id=user.id,
         enabled=enabled,
+        send_email=send_email,
         persona_ids=persona_ids or ["buffett", "lynch"],
         topic=topic,
         rules=rules,
@@ -514,3 +516,187 @@ async def test_one_user_failure_doesnt_block_others(
     assert last.kwargs["ok"] is True
     assert last.kwargs["row_count"] == 1
     assert "boom" in (last.kwargs.get("error") or "")
+
+
+# ── Email report (send_email opt-in) ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_sends_email_when_opted_in(
+    patch_session, db_session: AsyncSession,
+):
+    """`cfg.send_email=True` + SMTP configured → cron calls
+    `email_service.send_email` once with the user's address as the
+    recipient and a non-empty Markdown body containing the topic."""
+    from tasks import auto_run_discussion
+
+    user = await _make_user(db_session, "report@example.com")
+    await _enable_for(db_session, user, topic="my topic", rules="r", send_email=True)
+
+    async def _fake_run_round(*_a, **_kw):
+        return
+        yield  # pragma: no cover
+
+    synth = AsyncMock(return_value={
+        "recommended_symbols": ["2330"], "reasoning": "x",
+        "risks": [], "time_horizon": "short_term", "consensus_score": 0.5,
+    })
+    send_email = AsyncMock()
+
+    patches = _stub_lock_helpers() + [
+        patch("tasks.auto_run_discussion.is_today_likely_trading_day",
+              AsyncMock(return_value=True)),
+        patch.object(discussion_service, "run_round", _fake_run_round),
+        patch.object(discussion_service, "synthesize_conclusion", synth),
+        patch("services.email_service.is_configured", return_value=True),
+        patch("services.email_service.send_email", send_email),
+    ]
+    _enter_all(patches)
+    try:
+        await auto_run_discussion.run()
+    finally:
+        _exit_all(patches)
+
+    send_email.assert_awaited_once()
+    kwargs = send_email.await_args.kwargs
+    assert kwargs["to"] == "report@example.com"
+    assert "my topic" in kwargs["body_markdown"]
+    assert kwargs["attachment_filename"].endswith(".md")
+
+
+@pytest.mark.asyncio
+async def test_skips_email_when_not_opted_in(
+    patch_session, db_session: AsyncSession,
+):
+    """`cfg.send_email=False` (default) → no SMTP attempt even with
+    a fully configured deployment. Guards the opt-in contract."""
+    from tasks import auto_run_discussion
+
+    user = await _make_user(db_session)
+    await _enable_for(db_session, user, send_email=False)
+
+    async def _fake_run_round(*_a, **_kw):
+        return
+        yield  # pragma: no cover
+
+    synth = AsyncMock(return_value={
+        "recommended_symbols": [], "reasoning": "x",
+        "risks": [], "time_horizon": "short_term", "consensus_score": 0.0,
+    })
+    send_email = AsyncMock()
+
+    patches = _stub_lock_helpers() + [
+        patch("tasks.auto_run_discussion.is_today_likely_trading_day",
+              AsyncMock(return_value=True)),
+        patch.object(discussion_service, "run_round", _fake_run_round),
+        patch.object(discussion_service, "synthesize_conclusion", synth),
+        patch("services.email_service.is_configured", return_value=True),
+        patch("services.email_service.send_email", send_email),
+    ]
+    _enter_all(patches)
+    try:
+        await auto_run_discussion.run()
+    finally:
+        _exit_all(patches)
+
+    send_email.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_email_skipped_when_smtp_not_configured(
+    patch_session, db_session: AsyncSession,
+):
+    """User opted in but SMTP isn't configured on this deployment →
+    `is_configured()` returns False, send_email is never called, and
+    the cron still reports success (the report is not a hard
+    deliverable — the discussion itself is)."""
+    from tasks import auto_run_discussion
+
+    user = await _make_user(db_session)
+    await _enable_for(db_session, user, send_email=True)
+
+    async def _fake_run_round(*_a, **_kw):
+        return
+        yield  # pragma: no cover
+
+    synth = AsyncMock(return_value={
+        "recommended_symbols": [], "reasoning": "x",
+        "risks": [], "time_horizon": "short_term", "consensus_score": 0.0,
+    })
+    send_email = AsyncMock()
+
+    patches = _stub_lock_helpers() + [
+        patch("tasks.auto_run_discussion.is_today_likely_trading_day",
+              AsyncMock(return_value=True)),
+        patch.object(discussion_service, "run_round", _fake_run_round),
+        patch.object(discussion_service, "synthesize_conclusion", synth),
+        patch("services.email_service.is_configured", return_value=False),
+        patch("services.email_service.send_email", send_email),
+    ]
+    _enter_all(patches)
+    try:
+        await auto_run_discussion.run()
+    finally:
+        _exit_all(patches)
+
+    send_email.assert_not_called()
+
+    auto_rows = (await db_session.scalars(
+        select(Discussion).where(Discussion.auto_run.is_(True))
+    )).all()
+    assert len(auto_rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_email_send_failure_doesnt_break_run(
+    patch_session, db_session: AsyncSession,
+):
+    """SMTP transport error → cron logs + continues. The discussion
+    row is still committed, the run reports success, and no
+    exception propagates out to trip auto-backoff."""
+    from tasks import auto_run_discussion
+
+    user = await _make_user(db_session)
+    await _enable_for(db_session, user, send_email=True)
+
+    async def _fake_run_round(*_a, **_kw):
+        return
+        yield  # pragma: no cover
+
+    synth = AsyncMock(return_value={
+        "recommended_symbols": [], "reasoning": "x",
+        "risks": [], "time_horizon": "short_term", "consensus_score": 0.0,
+    })
+    send_email = AsyncMock(side_effect=RuntimeError("SMTP 535 auth failed"))
+
+    health = AsyncMock()
+    patches = [
+        patch("tasks.auto_run_discussion.acquire_lock",
+              AsyncMock(return_value=True)),
+        patch("tasks.auto_run_discussion.release_lock", AsyncMock()),
+        patch("tasks.auto_run_discussion.backoff_remaining_seconds",
+              AsyncMock(return_value=0)),
+        patch("tasks.auto_run_discussion.record_health", health),
+        patch("tasks.auto_run_discussion.record_failure",
+              AsyncMock(return_value=1)),
+        patch("tasks.auto_run_discussion.clear_failures", AsyncMock()),
+        patch("tasks.auto_run_discussion.get_failure_count",
+              AsyncMock(return_value=0)),
+        patch("tasks.auto_run_discussion.is_today_likely_trading_day",
+              AsyncMock(return_value=True)),
+        patch.object(discussion_service, "run_round", _fake_run_round),
+        patch.object(discussion_service, "synthesize_conclusion", synth),
+        patch("services.email_service.is_configured", return_value=True),
+        patch("services.email_service.send_email", send_email),
+    ]
+    _enter_all(patches)
+    try:
+        await auto_run_discussion.run()
+    finally:
+        _exit_all(patches)
+
+    send_email.assert_awaited_once()
+    health.assert_awaited()
+    last = health.await_args_list[-1]
+    assert last.kwargs["ok"] is True
+    assert last.kwargs["row_count"] == 1

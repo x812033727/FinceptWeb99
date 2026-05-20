@@ -36,6 +36,7 @@ export function AutoRunConfigCard({
   const [rules, setRules] = useState("");
   const [personaIds, setPersonaIds] = useState<string[]>([]);
   const [market, setMarket] = useState<DiscussionMarket>("TW");
+  const [sendEmail, setSendEmail] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSaved, setShowSaved] = useState(false);
 
@@ -51,6 +52,7 @@ export function AutoRunConfigCard({
     setRules(cfg.rules);
     setPersonaIds(cfg.persona_ids);
     setMarket(cfg.market ?? "TW");
+    setSendEmail(!!cfg.send_email);
   }, [cfg]);
 
   const saveMut = useMutation({
@@ -94,6 +96,7 @@ export function AutoRunConfigCard({
       topic: topic.trim(),
       rules: rules.trim(),
       market,
+      send_email: sendEmail,
     });
   }
 
@@ -142,6 +145,21 @@ export function AutoRunConfigCard({
                   className="accent-primary"
                 />
                 <span>{t("discussion.auto_run_enabled")}</span>
+              </label>
+
+              <label className="flex items-start gap-2 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={sendEmail}
+                  onChange={(e) => setSendEmail(e.target.checked)}
+                  className="accent-primary mt-0.5"
+                />
+                <span className="flex flex-col">
+                  <span>{t("discussion.auto_run_send_email")}</span>
+                  <span className="text-[10px] text-muted-foreground">
+                    {t("discussion.auto_run_send_email_hint")}
+                  </span>
+                </span>
               </label>
 
               <div className="flex items-center gap-2 text-[11px]">

@@ -51,6 +51,9 @@ class DiscussionAutoRunConfig(Base):
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false(),
     )
+    send_email: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false(),
+    )
     persona_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     market: Mapped[str] = mapped_column(
         String(8), nullable=False, default="TW", server_default="TW",

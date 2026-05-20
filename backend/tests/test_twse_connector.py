@@ -129,9 +129,35 @@ async def test_get_all_twse_symbols_returns_empty_when_endpoint_returns_non_list
 # ── get_daily_ohlcv: ROC calendar conversion ─────────────────────
 
 @pytest.mark.asyncio
-async def test_get_daily_ohlcv_converts_roc_date_to_ce():
-    """TWSE returns dates as `<roc_year>/MM/DD` where roc_year + 1911 =
-    western year. 113 → 2024."""
+async def test_get_daily_ohlcv_converts_roc_date_to_ce_from_legacy_envelope():
+    """Post-2026-05 cutover: TWSE STOCK_DAY now serves only through the
+    legacy `www.twse.com.tw/exchangeReport/STOCK_DAY` URL with the
+    `{stat, fields, data}` envelope. Connector must unwrap and parse
+    ROC dates (113 + 1911 = 2024)."""
+    payload = {
+        "stat": "OK",
+        "date": "20240401",
+        "fields": ["日期", "成交股數", "成交金額", "開盤價", "最高價", "最低價", "收盤價", "漲跌價差", "成交筆數"],
+        "data": [
+            ["113/04/01", "12,345,678", "9,000,000,000", "780.00", "790.00", "775.00", "785.00", "+5.00", "10,000"],
+        ],
+    }
+    patcher, _ = install_get(payload)
+    with patcher:
+        bars = await twse.get_daily_ohlcv("2330")
+
+    assert len(bars) == 1
+    assert bars[0]["time"] == "2024-04-01"
+    assert bars[0]["open"] == 780.0
+    assert bars[0]["close"] == 785.0
+    assert bars[0]["volume"] == 12345678
+
+
+@pytest.mark.asyncio
+async def test_get_daily_ohlcv_falls_back_to_list_of_dicts_passthrough():
+    """Backwards-compat: if a future TWSE rev returns the pre-2026-05
+    OpenAPI shape (plain list of dicts), the connector still parses it
+    so a partial rollback doesn't break the deployed backend."""
     payload = [
         {
             "日期": "113/04/01",
@@ -145,20 +171,23 @@ async def test_get_daily_ohlcv_converts_roc_date_to_ce():
 
     assert len(bars) == 1
     assert bars[0]["time"] == "2024-04-01"
-    assert bars[0]["open"] == 780.0
     assert bars[0]["close"] == 785.0
-    assert bars[0]["volume"] == 12345678
 
 
 @pytest.mark.asyncio
 async def test_get_daily_ohlcv_skips_malformed_rows_silently():
     """A bad row in the middle of the response shouldn't break the
     whole response — the connector wraps each row in try/except."""
-    payload = [
-        {"日期": "113/04/01", "開盤價": "10", "最高價": "11", "最低價": "9", "收盤價": "10.5", "成交股數": "100"},
-        {"日期": "garbage"},  # bad row
-        {"日期": "113/04/02", "開盤價": "10.5", "最高價": "11.5", "最低價": "10", "收盤價": "11", "成交股數": "200"},
-    ]
+    payload = {
+        "stat": "OK",
+        "date": "20240401",
+        "fields": ["日期", "開盤價", "最高價", "最低價", "收盤價", "成交股數"],
+        "data": [
+            ["113/04/01", "10", "11", "9", "10.5", "100"],
+            ["garbage"],
+            ["113/04/02", "10.5", "11.5", "10", "11", "200"],
+        ],
+    }
     patcher, _ = install_get(payload)
     with patcher:
         bars = await twse.get_daily_ohlcv("2330")
@@ -168,14 +197,28 @@ async def test_get_daily_ohlcv_skips_malformed_rows_silently():
 
 
 @pytest.mark.asyncio
-async def test_get_daily_ohlcv_passes_date_and_stockno_params():
-    patcher, mock = install_get([])
+async def test_get_daily_ohlcv_hits_legacy_url_with_correct_params():
+    """Verify the connector targets the legacy `www.twse.com.tw`
+    host (the OpenAPI variant 302s to /404.html post-2026-05) and
+    forwards the YYYYMMDD date + stockNo params."""
+    patcher, mock = install_get({"stat": "OK", "fields": [], "data": []})
     with patcher:
         await twse.get_daily_ohlcv("2330", date(2024, 4, 1))
-    # mock was awaited with the date in YYYYMMDD form and the stock no.
-    _, kwargs = mock.call_args
+    args, kwargs = mock.call_args
+    assert "www.twse.com.tw" in args[0]
     assert kwargs["params"]["date"] == "20240401"
     assert kwargs["params"]["stockNo"] == "2330"
+
+
+@pytest.mark.asyncio
+async def test_get_daily_ohlcv_returns_empty_on_holiday():
+    """Weekend / holiday queries return `stat != "OK"` — must yield []
+    instead of raising so the upstream waterfall can move on."""
+    payload = {"stat": "很抱歉，沒有符合條件的資料!", "date": "20240407"}
+    patcher, _ = install_get(payload)
+    with patcher:
+        bars = await twse.get_daily_ohlcv("2330", date(2024, 4, 7))
+    assert bars == []
 
 
 # ── get_realtime_quote ────────────────────────────────────────────
@@ -319,6 +362,49 @@ async def test_get_institutional_accepts_legacy_dict_array_passthrough():
 
     assert len(rows) == 1
     assert rows[0]["fini_buy"] == 1_000_000
+
+
+# ── get_total_institutional (BFI82U legacy cutover) ──────────────
+
+
+@pytest.mark.asyncio
+async def test_get_total_institutional_parses_legacy_envelope():
+    """Post-2026-05 cutover: BFI82U serves only through
+    `www.twse.com.tw/fund/BFI82U` with the `{stat, fields, data}`
+    envelope. Connector must unwrap and produce one row per
+    institutional unit with buy/sell amounts."""
+    payload = {
+        "stat": "OK",
+        "date": "20260520",
+        "fields": ["單位名稱", "買進金額", "賣出金額", "買賣差額"],
+        "data": [
+            ["自營商(自行買賣)", "10,212,050,189", "16,762,156,861", "-6,550,106,672"],
+            ["投信", "35,288,356,651", "25,079,598,064", "10,208,758,587"],
+            ["外資及陸資(不含外資自營商)", "383,226,867,202", "429,847,483,184", "-46,620,615,982"],
+        ],
+    }
+    patcher, _ = install_get(payload)
+    with patcher:
+        rows = await twse.get_total_institutional()
+
+    assert len(rows) == 3
+    by_name = {r["name"]: r for r in rows}
+    assert by_name["自營商(自行買賣)"]["buy"] == 10_212_050_189
+    assert by_name["投信"]["sell"] == 25_079_598_064
+    assert by_name["外資及陸資(不含外資自營商)"]["buy"] == 383_226_867_202
+
+
+@pytest.mark.asyncio
+async def test_get_total_institutional_hits_legacy_url():
+    """Verify the connector targets the legacy host (the OpenAPI
+    `/v1/fund/BFI82U` 302s to /404.html post-2026-05)."""
+    patcher, mock = install_get({"stat": "OK", "fields": [], "data": []})
+    with patcher:
+        await twse.get_total_institutional(date(2026, 5, 20))
+    args, kwargs = mock.call_args
+    assert "www.twse.com.tw" in args[0]
+    assert "/fund/BFI82U" in args[0]
+    assert kwargs["params"]["dayDate"] == "20260520"
 
 
 def test_unwrap_legacy_table_handles_malformed_payloads():

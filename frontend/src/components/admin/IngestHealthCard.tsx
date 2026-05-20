@@ -132,6 +132,7 @@ export function isDataStale(r: IngestHealth): boolean {
 const RETRYABLE_INGEST_JOBS = new Set([
   "ingest_news_tw",
   "ingest_news_international",
+  "ingest_ohlcv_tw",
   "ingest_institutional_tw",
   "ingest_margin_tw",
   "ingest_revenue_tw",

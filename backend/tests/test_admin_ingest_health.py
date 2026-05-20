@@ -300,6 +300,7 @@ async def test_ingest_retry_clears_backoff_and_queues_run(
 @pytest.mark.parametrize("job_id", [
     "ingest_news_tw",
     "ingest_news_international",
+    "ingest_ohlcv_tw",
     "ingest_institutional_tw",
     "ingest_margin_tw",
     "ingest_revenue_tw",
@@ -417,6 +418,7 @@ async def test_scheduler_health_surfaces_stale_when_missing(
 @pytest.mark.parametrize("job_id", [
     "ingest_news_tw",
     "ingest_news_international",
+    "ingest_ohlcv_tw",
     "ingest_institutional_tw",
     "ingest_margin_tw",
     "ingest_revenue_tw",
@@ -433,6 +435,7 @@ async def test_run_ingest_job_once_dispatches_each_id(job_id: str):
     module_path = {
         "ingest_news_tw": "tasks.ingest_news_tw",
         "ingest_news_international": "tasks.ingest_news_international",
+        "ingest_ohlcv_tw": "tasks.ingest_ohlcv_tw",
         "ingest_institutional_tw": "tasks.ingest_institutional_tw",
         "ingest_margin_tw": "tasks.ingest_margin_tw",
         "ingest_revenue_tw": "tasks.ingest_revenue_tw",

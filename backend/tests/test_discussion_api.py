@@ -567,6 +567,62 @@ async def test_get_scoreboard_returns_rows_when_concluded(
     assert body["rows"][0]["symbol"] == "2330"
     # No OHLCV pre-seeded → days_resolved=0 with all-None arrays.
     assert body["rows"][0]["days_resolved"] == 0
+    # Plain (non-debug) call → no debug payload.
+    assert body.get("debug") is None
+
+
+@pytest.mark.asyncio
+async def test_get_scoreboard_debug_mode_returns_trace(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch,
+):
+    """`?debug=true` returns the per-symbol diagnostic trace +
+    cron eligibility + trading-window resolution so an operator
+    can see why a scoreboard came back empty."""
+    from services import tw_market_service as _tw_svc
+
+    async def _no_history(symbol, months=12):
+        return []
+
+    monkeypatch.setattr(_tw_svc, "get_history", _no_history)
+
+    h = await _register(client, "scoreboard_debug@example.com")
+    r = await client.post(
+        "/api/discussion/sessions",
+        headers=h,
+        json={"topic": "x", "rules": "y", "persona_ids": ["buffett", "lynch"]},
+    )
+    discussion_id = r.json()["id"]
+
+    row = await db_session.scalar(
+        select(Discussion).where(Discussion.id == uuid.UUID(discussion_id))
+    )
+    row.conclusion = {
+        "recommended_symbols": ["2330"],
+        "reasoning": "x", "risks": [],
+        "time_horizon": "short_term", "consensus_score": 0.5,
+    }
+    await db_session.commit()
+
+    r = await client.get(
+        f"/api/discussion/sessions/{discussion_id}/scoreboard?debug=true",
+        headers=h,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    dbg = body["debug"]
+    assert dbg is not None
+    assert dbg["discussion"]["recommended_symbols"] == ["2330"]
+    assert dbg["discussion"]["daily_close_prices_state"] == "null"
+    assert dbg["cron_eligibility"]["eligible"] is True
+    assert dbg["cron_eligibility"]["daily_close_missing"] is True
+    assert dbg["trading_window"]["window_days_target"] == 5
+    # Per-symbol trace: archive empty + live fallback tried (returned []).
+    assert len(dbg["per_symbol"]) == 1
+    t = dbg["per_symbol"][0]
+    assert t["symbol"] == "2330"
+    assert t["archive_bars_count"] == 0
+    assert t["live_fallback_tried"] is True
+    assert t["day1_open_source"] == "none"
 
 
 # ── inject_user_message endpoint ──────────────────────────────────

@@ -231,6 +231,11 @@ export interface ScoreboardResponse {
   // break during the rollout.
   created_at_tw_date: string;
   rows: ScoreboardRow[];
+  // Diagnostic payload populated only when `?debug=true`. Shape is
+  // intentionally loose (the backend keeps it open so new fields
+  // can be added without forcing a frontend rebuild) so the UI
+  // renders it via JSON.stringify rather than a typed schema.
+  debug?: Record<string, unknown> | null;
 }
 
 export interface AutoRunConfig {

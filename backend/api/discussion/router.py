@@ -346,13 +346,20 @@ async def get_scoreboard(
     discussion_id: uuid.UUID,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
+    debug: bool = False,
 ):
     """D1-D5 daily close + change % vs day-1 open per recommended
     symbol. Owner-scoped. Reads the persisted `daily_close_prices`
     column when populated (filled in by the daily 09:30 UTC cron);
     falls back to an on-demand compute against `ohlcv_daily` when
     NULL so newly-concluded discussions show partial data
-    immediately instead of waiting a day."""
+    immediately instead of waiting a day.
+
+    `?debug=true` adds a `debug` payload with cron eligibility,
+    trading-window resolution, per-symbol archive/live-fallback
+    trace, and the last cron-run snapshot — for "why is this
+    scoreboard empty" investigations.
+    """
     from services import discussion_scoreboard_service
 
     row = await discussion_service.get_discussion(
@@ -366,14 +373,21 @@ async def get_scoreboard(
             detail="Discussion has no conclusion to score yet",
         )
 
+    debug_traces: list[dict] | None = [] if debug else None
     payload = await discussion_scoreboard_service.compute_scoreboard(
-        db, row,
+        db, row, debug_traces=debug_traces,
     )
+    debug_payload: dict | None = None
+    if debug_traces is not None:
+        debug_payload = await discussion_scoreboard_service.build_scoreboard_debug_payload(
+            row, debug_traces,
+        )
     return ScoreboardResponse(
         discussion_id=row.id,
         anchor_date=payload["anchor_date"],
         created_at_tw_date=payload["created_at_tw_date"],
         rows=[ScoreboardRow(**r) for r in payload["rows"]],
+        debug=debug_payload,
     )
 
 

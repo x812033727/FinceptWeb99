@@ -278,6 +278,161 @@ async def test_compute_scoreboard_falls_back_to_live_when_db_empty(
 
 
 @pytest.mark.asyncio
+async def test_compute_scoreboard_populates_debug_traces(
+    db_session: AsyncSession,
+):
+    """`debug_traces=[]` collects per-symbol diagnostics — archive
+    bars count + window dates + day1_open source — without altering
+    the returned payload shape."""
+    user = await _make_user(db_session, "scorer-debug-trace@example.com")
+    created = datetime(2026, 4, 27, 6, 0, tzinfo=UTC)
+    d = await _make_discussion(
+        db_session,
+        owner_id=user.id, created_at=created,
+        recommended=["2330"],
+    )
+    await _seed_bars(
+        db_session, "2330", start=date(2026, 4, 27),
+        closes=[602, 605, 607, 609, 610],
+        opens=[600, 603, 605, 607, 609],
+    )
+
+    traces: list[dict] = []
+    result = await discussion_scoreboard_service.compute_scoreboard(
+        db_session, d, debug_traces=traces,
+    )
+    assert result["rows"][0]["days_resolved"] == 5
+    assert len(traces) == 1
+    t = traces[0]
+    assert t["symbol"] == "2330"
+    assert t["archive_bars_count"] == 5
+    assert t["archive_dates"] == [
+        "2026-04-27", "2026-04-28", "2026-04-29",
+        "2026-04-30", "2026-05-01",
+    ]
+    assert t["live_fallback_tried"] is False
+    assert t["window_bars_count"] == 5
+    assert t["day1_open_source"] == "archive"
+    assert t["days_resolved"] == 5
+
+
+@pytest.mark.asyncio
+async def test_compute_scoreboard_debug_trace_marks_live_fallback(
+    db_session: AsyncSession,
+):
+    """When the archive is empty and the live waterfall fills in,
+    the per-symbol trace reports `live_fallback_tried=True` and the
+    day1_open_source flips to `live_fallback`."""
+    from unittest.mock import AsyncMock, patch
+
+    user = await _make_user(db_session, "scorer-debug-livefallback@example.com")
+    created = datetime(2026, 4, 27, 6, 0, tzinfo=UTC)
+    d = await _make_discussion(
+        db_session,
+        owner_id=user.id, created_at=created,
+        recommended=["2375"],
+    )
+    live_bars = [
+        {"time": "2026-04-27", "open": 100, "high": 102, "low":  99, "close": 101, "volume": 1_000},
+        {"time": "2026-04-28", "open": 101, "high": 103, "low": 100, "close": 102, "volume": 1_000},
+        {"time": "2026-04-29", "open": 102, "high": 104, "low": 101, "close": 103, "volume": 1_000},
+        {"time": "2026-04-30", "open": 103, "high": 105, "low": 102, "close": 104, "volume": 1_000},
+        {"time": "2026-05-01", "open": 104, "high": 106, "low": 103, "close": 105, "volume": 1_000},
+    ]
+    traces: list[dict] = []
+    with patch(
+        "services.tw_market_service.get_history",
+        new=AsyncMock(return_value=live_bars),
+    ):
+        await discussion_scoreboard_service.compute_scoreboard(
+            db_session, d, debug_traces=traces,
+        )
+    t = traces[0]
+    assert t["archive_bars_count"] == 0
+    assert t["live_fallback_tried"] is True
+    assert t["live_fallback_bars_count"] == 5
+    assert t["day1_open_source"] == "live_fallback"
+
+
+@pytest.mark.asyncio
+async def test_build_scoreboard_debug_payload_shape(
+    db_session: AsyncSession,
+):
+    """`build_scoreboard_debug_payload` rolls per-symbol traces +
+    cron-eligibility + trading-window resolution into one blob.
+
+    Validates the contract used by the `/scoreboard?debug=true`
+    endpoint: discussion eligibility for the daily cron, anchor
+    source labelling, daily_close_prices state, and that the
+    last-cron-run lookup is best-effort (None tolerated)."""
+    user = await _make_user(db_session, "scorer-debug-payload@example.com")
+    created = datetime(2026, 4, 27, 6, 0, tzinfo=UTC)
+    d = await _make_discussion(
+        db_session,
+        owner_id=user.id, created_at=created,
+        recommended=["2330"],
+        as_of_date=date(2026, 4, 20),   # backtest mode
+    )
+    traces = [{"symbol": "2330", "archive_bars_count": 0}]
+    payload = await discussion_scoreboard_service.build_scoreboard_debug_payload(
+        d, traces,
+    )
+
+    # Discussion block reflects the row state.
+    assert payload["discussion"]["recommended_symbols"] == ["2330"]
+    assert payload["discussion"]["anchor_source"] == "as_of_date"
+    assert payload["discussion"]["anchor_date"] == "2026-04-20"
+    assert payload["discussion"]["daily_close_prices_state"] == "null"
+    assert payload["discussion"]["conclusion_present"] is True
+
+    # Cron eligibility: conclusion present + daily_close_prices NULL
+    # → eligible regardless of created_at age.
+    elig = payload["cron_eligibility"]
+    assert elig["eligible"] is True
+    assert elig["daily_close_missing"] is True
+    assert elig["skip_reason"] is None
+
+    # Trading window mirrors module constants.
+    tw = payload["trading_window"]
+    assert tw["anchor_tw"] == "2026-04-20"
+    assert tw["window_days_target"] == 5
+    assert tw["lookahead_calendar_days"] == 14
+
+    assert payload["per_symbol"] == traces
+
+
+@pytest.mark.asyncio
+async def test_build_scoreboard_debug_payload_skip_already_scored(
+    db_session: AsyncSession,
+):
+    """Old discussion that's already fully scored: `daily_close_prices`
+    populated, `created_at` outside the 14-day refresh window →
+    cron would skip it. Payload reports the skip reason."""
+    user = await _make_user(db_session, "scorer-debug-skip@example.com")
+    created = datetime.now(UTC) - timedelta(days=30)
+    d = await _make_discussion(
+        db_session,
+        owner_id=user.id, created_at=created,
+        recommended=["2330"],
+    )
+    # Stamp daily_close_prices so the daily_close_missing check fails.
+    d.daily_close_prices = {"2330": [600.0, 601.0, 602.0, 603.0, 604.0]}
+    db_session.add(d)
+    await db_session.commit()
+    await db_session.refresh(d)
+
+    payload = await discussion_scoreboard_service.build_scoreboard_debug_payload(
+        d, [],
+    )
+    elig = payload["cron_eligibility"]
+    assert elig["eligible"] is False
+    assert elig["daily_close_missing"] is False
+    assert elig["within_refresh_window"] is False
+    assert elig["skip_reason"] == "already_scored_and_outside_refresh_window"
+    assert payload["discussion"]["daily_close_prices_state"] == "populated"
+
+
+@pytest.mark.asyncio
 async def test_compute_scoreboard_skips_live_fallback_when_db_has_bars(
     db_session: AsyncSession,
 ):

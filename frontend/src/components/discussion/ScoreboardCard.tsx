@@ -73,6 +73,7 @@ export function ScoreboardCard({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const [debugOpen, setDebugOpen] = useState(false);
   // Auto-expand the moment a conclusion lands so the user sees the
   // D1-D5 outcomes (especially in backtest mode where data is
   // immediately available). One-shot — only fires on the
@@ -86,6 +87,9 @@ export function ScoreboardCard({
     prevHasConclusion.current = hasConclusion;
   }, [hasConclusion]);
 
+  // Plain (no debug) query stays cached across debug toggles — the
+  // debug query is a separate cache key so toggling it never blows
+  // away the user's main scoreboard view.
   const { data, isLoading, isError, error } = useQuery<ScoreboardResponse>({
     queryKey: ["discussion-scoreboard", discussionId],
     queryFn: () => fetchScoreboard(discussionId),
@@ -94,6 +98,14 @@ export function ScoreboardCard({
     // log the error to console for every card on the page.
     enabled: open && hasConclusion,
     staleTime: 60_000,
+    retry: false,
+  });
+
+  const debugQuery = useQuery<ScoreboardResponse>({
+    queryKey: ["discussion-scoreboard-debug", discussionId],
+    queryFn: () => fetchScoreboard(discussionId, { debug: true }),
+    enabled: open && hasConclusion && debugOpen,
+    staleTime: 30_000,
     retry: false,
   });
 
@@ -138,6 +150,38 @@ export function ScoreboardCard({
             </p>
           ) : (
             data.rows.map((r) => <ScoreboardRowView key={r.symbol} row={r} />)
+          )}
+          {hasConclusion && (
+            <div className="pt-2 border-t border-border/40">
+              <button
+                type="button"
+                onClick={() => setDebugOpen((v) => !v)}
+                className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {debugOpen ? "▼" : "▶"} debug
+              </button>
+              {debugOpen && (
+                <div className="mt-1">
+                  {debugQuery.isLoading ? (
+                    <p className="text-[10px] text-muted-foreground animate-pulse">
+                      loading debug payload…
+                    </p>
+                  ) : debugQuery.isError ? (
+                    <p className="text-[10px] text-red-400">
+                      {(debugQuery.error as Error)?.message || "debug fetch failed"}
+                    </p>
+                  ) : debugQuery.data?.debug ? (
+                    <pre className="text-[10px] font-mono leading-tight whitespace-pre-wrap break-all bg-muted/40 border border-border/60 rounded p-2 max-h-96 overflow-auto">
+                      {JSON.stringify(debugQuery.data.debug, null, 2)}
+                    </pre>
+                  ) : (
+                    <p className="text-[10px] text-muted-foreground">
+                      (no debug payload returned)
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}

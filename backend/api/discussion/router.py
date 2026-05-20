@@ -583,6 +583,7 @@ async def get_auto_run_config(
             topic="",
             rules="",
             market="TW",
+            send_email=False,
             updated_at=None,
         )
     return AutoRunConfigResponse(
@@ -591,6 +592,7 @@ async def get_auto_run_config(
         topic=row.topic,
         rules=row.rules,
         market=row.market,
+        send_email=bool(row.send_email),
         updated_at=row.updated_at,
     )
 
@@ -610,6 +612,7 @@ async def put_auto_run_config(
             topic=body.topic,
             rules=body.rules,
             market=body.market,
+            send_email=body.send_email,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -619,6 +622,7 @@ async def put_auto_run_config(
         topic=row.topic,
         rules=row.rules,
         market=row.market,
+        send_email=bool(row.send_email),
         updated_at=row.updated_at,
     )
 

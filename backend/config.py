@@ -295,6 +295,26 @@ class Settings(BaseSettings):
     def metrics_allow_cidrs(self) -> list[str]:
         return [c.strip() for c in self.METRICS_ALLOW_CIDRS.split(",") if c.strip()]
 
+    # SMTP — used by `services.email_service` to send the daily
+    # auto-run discussion report (opt-in per user via
+    # `discussion_auto_run_configs.send_email`). When any of
+    # SMTP_HOST / SMTP_FROM is empty the email service silently
+    # skips with a log warning instead of crashing the cron — see
+    # `email_service.is_configured()`. Set all four (and credentials
+    # if your relay requires auth) to enable.
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = ""
+    # STARTTLS is the typical relay setup (Gmail, SES, Mailgun on
+    # 587). Set false + port=25 for an internal unauthenticated
+    # relay, or wire up implicit-TLS on 465 separately by setting
+    # SMTP_USE_TLS=false and SMTP_USE_SSL=true.
+    SMTP_USE_TLS: bool = True
+    SMTP_USE_SSL: bool = False
+    SMTP_TIMEOUT_SECONDS: int = 20
+
     # Environment
     DEBUG: bool = False
 

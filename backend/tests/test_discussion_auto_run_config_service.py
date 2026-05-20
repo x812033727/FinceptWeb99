@@ -110,6 +110,47 @@ async def test_upsert_rejects_empty_topic(
 
 
 @pytest.mark.asyncio
+async def test_upsert_persists_send_email_flag(
+    db_session: AsyncSession, user: User,
+):
+    """`send_email` (opt-in daily email report) defaults to False and
+    round-trips through upsert. Pins the field through service →
+    DB so a future refactor that forgets to copy it surfaces here."""
+    cfg = await svc.upsert_config(
+        db_session,
+        user_id=user.id,
+        enabled=True,
+        persona_ids=["buffett", "lynch"],
+        topic="t",
+        rules="r",
+    )
+    assert cfg.send_email is False
+
+    cfg2 = await svc.upsert_config(
+        db_session,
+        user_id=user.id,
+        enabled=True,
+        persona_ids=["buffett", "lynch"],
+        topic="t",
+        rules="r",
+        send_email=True,
+    )
+    assert cfg2.send_email is True
+
+    # Flipping it back must also stick — the update branch matters.
+    cfg3 = await svc.upsert_config(
+        db_session,
+        user_id=user.id,
+        enabled=True,
+        persona_ids=["buffett", "lynch"],
+        topic="t",
+        rules="r",
+        send_email=False,
+    )
+    assert cfg3.send_email is False
+
+
+@pytest.mark.asyncio
 async def test_list_enabled_filters_disabled(
     db_session: AsyncSession,
 ):

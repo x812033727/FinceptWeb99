@@ -1,5 +1,12 @@
 """Per-discussion scoreboard service: D1-D5 daily close vs day-1 open.
 
+Debug mode (PR followup #426): callers can pass an empty
+`debug_traces` list into `compute_scoreboard` to receive per-symbol
+diagnostic dicts, and `build_scoreboard_debug_payload` rolls those
+plus discussion-level eligibility / trading-window info into one
+JSON-serialisable blob the `/scoreboard?debug=true` endpoint exposes
+for "why is this discussion's scoreboard empty" debugging.
+
 PR-C1 also exposes Brier score + reliability bucketing on top of
 the same scoreboard computation, so PR-C2's calibration fitter
 and the sweep aggregate dashboard can surface "did the synthesizer
@@ -45,7 +52,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import update
@@ -54,6 +61,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models.discussion import Discussion
 from services.ingest.repository import read_ohlcv_range_autosession
 from services.tw_trading_calendar import to_tw_date
+
+# Mirror of `tasks.score_discussion_outcomes._REFRESH_WINDOW_DAYS`.
+# Kept here too so the debug payload can report cron eligibility
+# without importing the task module (avoids a circular import path
+# through `db.session` when this service is imported at startup).
+_CRON_REFRESH_WINDOW_DAYS = 14
 
 log = logging.getLogger(__name__)
 
@@ -67,12 +80,20 @@ _LOOKAHEAD_CALENDAR_DAYS = 14
 async def compute_scoreboard(
     db: AsyncSession,  # noqa: ARG001 (sig kept symmetric with persist_)
     discussion: Discussion,
+    *,
+    debug_traces: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Read-only computation. See module docstring for the contract.
 
     Returns the dict shape directly — no DB writes — so the API
     endpoint can serve the on-demand path without a full session
     factory.
+
+    When `debug_traces` is non-None, the function appends one dict
+    per recommended symbol with per-step diagnostics (archive read
+    count, live-fallback usage, window slice, day1_open source).
+    Mutating the caller-supplied list keeps the return shape stable
+    so existing callers don't have to unpack a tuple.
     """
     from services.discussion.symbol_names import resolve_display_name
 
@@ -82,13 +103,19 @@ async def compute_scoreboard(
 
     rows: list[dict[str, Any]] = []
     for sym in syms:
+        symbol_trace: dict[str, Any] | None = (
+            {"symbol": sym} if debug_traces is not None else None
+        )
         row = await _compute_for_symbol(
             sym=sym,
             anchor_tw=anchor_tw,
             cached_open=cached_opens.get(sym),
+            debug_trace=symbol_trace,
         )
         row["name"] = resolve_display_name(discussion.market, sym)
         rows.append(row)
+        if symbol_trace is not None:
+            debug_traces.append(symbol_trace)
 
     anchor_iso = anchor_tw.isoformat()
     return {
@@ -220,6 +247,7 @@ async def _compute_for_symbol(
     sym: str,
     anchor_tw: date,
     cached_open: float | None,
+    debug_trace: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One symbol's scoreboard row. Reads OHLCV via the autosession
     helper (closed inside repository.py) so we don't have to thread
@@ -233,6 +261,8 @@ async def _compute_for_symbol(
     scoreboard reads cheap.
     """
     end = anchor_tw + timedelta(days=_LOOKAHEAD_CALENDAR_DAYS)
+    if debug_trace is not None:
+        debug_trace["lookahead_end"] = end.isoformat()
     bars: list[dict[str, Any]] = []
     try:
         bars = await read_ohlcv_range_autosession(
@@ -244,12 +274,21 @@ async def _compute_for_symbol(
             extra={"symbol": sym, "error": str(exc)},
         )
         bars = []
+        if debug_trace is not None:
+            debug_trace["archive_read_error"] = str(exc)
+
+    if debug_trace is not None:
+        debug_trace["archive_bars_count"] = len(bars)
+        debug_trace["archive_dates"] = [b.get("time") for b in bars]
 
     # Live fallback for symbols completely missing from the archive.
     # Only fires on `bars == []` so a partial window (e.g. 3 of 5
     # days ingested) doesn't burn an extra upstream call when we
     # already have what we need.
+    live_fallback_used = False
     if not bars:
+        if debug_trace is not None:
+            debug_trace["live_fallback_tried"] = True
         try:
             from services import tw_market_service
             live_bars = await tw_market_service.get_history(sym, months=1)
@@ -263,15 +302,24 @@ async def _compute_for_symbol(
                 if iso_start_chk <= (b.get("time") or "") <= iso_end
             ]
             if bars:
+                live_fallback_used = True
                 log.info(
                     "scoreboard.live_fallback_recovered",
                     extra={"symbol": sym, "bars": len(bars)},
                 )
+            if debug_trace is not None:
+                debug_trace["live_fallback_bars_count"] = len(bars)
         except Exception as exc:
             log.warning(
                 "scoreboard.live_fallback_failed",
                 extra={"symbol": sym, "error": str(exc)},
             )
+            if debug_trace is not None:
+                debug_trace["live_fallback_error"] = str(exc)
+                debug_trace["live_fallback_bars_count"] = 0
+    elif debug_trace is not None:
+        debug_trace["live_fallback_tried"] = False
+        debug_trace["live_fallback_bars_count"] = 0
 
     # Filter to bars on or after the anchor date. The repository
     # helper already constrains by [start, end] but we re-check
@@ -282,14 +330,22 @@ async def _compute_for_symbol(
     window = future[:WINDOW_DAYS]
 
     day1_open: float | None = None
+    day1_open_source = "none"
     if window:
         first_open = window[0].get("open")
         if isinstance(first_open, (int, float)):
             day1_open = float(first_open)
+            day1_open_source = "live_fallback" if live_fallback_used else "archive"
     if cached_open is not None:
         # Cached snapshot wins — stable baseline even when an
         # upstream correction shifts the bar later.
         day1_open = cached_open
+        day1_open_source = "cache"
+
+    if debug_trace is not None:
+        debug_trace["window_bars_count"] = len(window)
+        debug_trace["window_dates"] = [b.get("time") for b in window]
+        debug_trace["day1_open_source"] = day1_open_source
 
     daily_closes: list[float | None] = []
     for i in range(WINDOW_DAYS):
@@ -307,6 +363,8 @@ async def _compute_for_symbol(
             change_pcts.append(round((c - day1_open) / day1_open, 6))
 
     days_resolved = sum(1 for c in daily_closes if c is not None)
+    if debug_trace is not None:
+        debug_trace["days_resolved"] = days_resolved
 
     return {
         "symbol": sym,
@@ -314,6 +372,117 @@ async def _compute_for_symbol(
         "daily_closes": daily_closes,
         "change_pcts": change_pcts,
         "days_resolved": days_resolved,
+    }
+
+
+# ── debug payload (PR followup #426) ───────────────────────────────
+
+
+async def build_scoreboard_debug_payload(
+    discussion: Discussion,
+    per_symbol_traces: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Roll per-symbol traces + discussion-level eligibility info +
+    last cron-run snapshot into a single JSON-serialisable blob the
+    `/scoreboard?debug=true` endpoint exposes.
+
+    Mirrors the cron filter logic in
+    `tasks.score_discussion_outcomes._do_run` so an operator can
+    see at a glance whether THIS discussion would be picked up on
+    the next tick (and if not, why).
+    """
+    # Avoid an import-time cycle: the task module imports this
+    # service.
+    from tasks.score_discussion_outcomes import (
+        JOB_ID as CRON_JOB_ID,
+    )
+    from services.ingest.repository import get_health
+
+    now = datetime.now(UTC)
+    refresh_floor = now - timedelta(days=_CRON_REFRESH_WINDOW_DAYS)
+
+    # SQLite-backed tests round-trip TIMESTAMPTZ columns as naive
+    # datetimes even though the inserted values were aware. Coerce
+    # to UTC here so the comparison below works portably; production
+    # asyncpg-backed PostgreSQL already returns aware values.
+    created_at = discussion.created_at
+    if created_at is not None and created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    conclusion_present = bool(discussion.conclusion)
+    daily_close_missing = discussion.daily_close_prices is None
+    within_refresh_window = (
+        created_at is not None and created_at >= refresh_floor
+    )
+    eligible = conclusion_present and (
+        daily_close_missing or within_refresh_window
+    )
+    skip_reason: str | None
+    if not conclusion_present:
+        skip_reason = "no_conclusion"
+    elif not (daily_close_missing or within_refresh_window):
+        skip_reason = "already_scored_and_outside_refresh_window"
+    else:
+        skip_reason = None
+
+    raw_recommended = _recommended_symbols(discussion)
+    anchor_tw = _anchor_date(discussion)
+
+    daily = discussion.daily_close_prices
+    if daily is None:
+        daily_state = "null"
+    elif not daily:
+        daily_state = "empty_dict"
+    else:
+        daily_state = "populated"
+
+    cron_health: dict[str, Any] | None = None
+    try:
+        health = await get_health(CRON_JOB_ID)
+        if health is not None:
+            cron_health = {
+                "last_run_at":    health.last_run_at,
+                "ok":             health.ok,
+                "row_count":      health.row_count,
+                "error":          health.error,
+                "latest_data_ts": health.latest_data_ts,
+            }
+    except Exception as exc:
+        log.warning(
+            "scoreboard.debug.cron_health_lookup_failed",
+            extra={"error": str(exc)},
+        )
+
+    return {
+        "discussion": {
+            "status":                    discussion.status,
+            "created_at":                created_at.isoformat() if created_at else None,
+            "as_of_date":                discussion.as_of_date.isoformat() if discussion.as_of_date else None,
+            "anchor_date":               anchor_tw.isoformat(),
+            "anchor_source":             "as_of_date" if discussion.as_of_date else "created_at_tw",
+            "market":                    discussion.market,
+            "conclusion_present":        conclusion_present,
+            "recommended_symbols":       raw_recommended,
+            "daily_close_prices_state":  daily_state,
+            "daily_close_prices_keys":   sorted((daily or {}).keys()),
+            "day1_open_prices_keys":     sorted((discussion.day1_open_prices or {}).keys()),
+        },
+        "cron_eligibility": {
+            "eligible":                       eligible,
+            "conclusion_present":             conclusion_present,
+            "daily_close_missing":            daily_close_missing,
+            "within_refresh_window":          within_refresh_window,
+            "refresh_window_days":            _CRON_REFRESH_WINDOW_DAYS,
+            "refresh_floor":                  refresh_floor.isoformat(),
+            "skip_reason":                    skip_reason,
+        },
+        "trading_window": {
+            "anchor_tw":          anchor_tw.isoformat(),
+            "lookahead_calendar_days": _LOOKAHEAD_CALENDAR_DAYS,
+            "lookahead_end":      (anchor_tw + timedelta(days=_LOOKAHEAD_CALENDAR_DAYS)).isoformat(),
+            "window_days_target": WINDOW_DAYS,
+        },
+        "per_symbol":  per_symbol_traces,
+        "last_cron_run": cron_health,
     }
 
 

@@ -823,10 +823,14 @@ export async function fetchRoundContexts(id: string): Promise<RoundContextSnapsh
   return res.data;
 }
 
-export async function fetchScoreboard(id: string): Promise<ScoreboardResponse> {
-  const res = await api.get<ScoreboardResponse>(
-    `/discussion/sessions/${id}/scoreboard`,
-  );
+export async function fetchScoreboard(
+  id: string,
+  options?: { debug?: boolean },
+): Promise<ScoreboardResponse> {
+  const url = options?.debug
+    ? `/discussion/sessions/${id}/scoreboard?debug=true`
+    : `/discussion/sessions/${id}/scoreboard`;
+  const res = await api.get<ScoreboardResponse>(url);
   return res.data;
 }
 

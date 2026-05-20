@@ -245,6 +245,14 @@ class ScoreboardResponse(BaseModel):
     # value is unchanged from before backtest support).
     created_at_tw_date: str
     rows: list[ScoreboardRow]
+    # Populated only when `GET /scoreboard?debug=true` — carries
+    # cron eligibility, trading-window resolution, per-symbol
+    # archive/live-fallback trace, and the last cron-run snapshot
+    # so an operator can see why a particular discussion's
+    # scoreboard came back partial / empty. Shape is intentionally
+    # loose (dict) because the contents are a diagnostic surface,
+    # not a stable contract.
+    debug: dict | None = None
 
 
 # ── Backtest sweep (PR #274) ─────────────────────────────────────

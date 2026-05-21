@@ -83,16 +83,17 @@ export function formatTaipeiDateCompact(iso: string): string {
   return parts.replace(/-/g, "");
 }
 
+export type OutcomeBand = "big_win" | "win" | "big_loss" | "loss";
+
 export interface FormattedSymbolLine {
   symbol: string;
   changePcts: (number | null)[];
+  band: OutcomeBand | null;
 }
 
 export interface FormattedTitle {
   text?: string;
   date?: string;
-  verdictMark?: string;
-  verdictCls?: string;
   lines?: FormattedSymbolLine[];
 }
 
@@ -151,16 +152,36 @@ export const BAND_LABELS: Record<
   unverifiable: { mark: "", cls: "text-muted-foreground" },
 };
 
+// TS mirror of `backend/services/outcome_classifier.py::classify_outcome`.
+// Same defaults (20 % / 5 % / -5 %), same precedence (大敗 → 大勝 → 勝 → 敗).
+// `changePcts` are FRACTIONS (0.05 = +5 %), matching the values that
+// `formatDiscussionTitle` already produces from day1_open + closes.
+// D5 = the LAST array slot; partial windows (trailing nulls) block the
+// big_win path but still allow big_loss / win / loss to fire.
+export function classifySymbolBand(
+  changePcts: (number | null)[],
+  thresholds: {
+    bigWinPct: number;
+    winPct: number;
+    bigLossPct: number;
+  } = { bigWinPct: 0.2, winPct: 0.05, bigLossPct: -0.05 },
+): OutcomeBand | null {
+  const numeric = changePcts.filter((p): p is number => p !== null);
+  if (!numeric.length) return null;
+  const peak = Math.max(...numeric);
+  const trough = Math.min(...numeric);
+  const d5 = changePcts[changePcts.length - 1];
+  if (trough <= thresholds.bigLossPct) return "big_loss";
+  if (d5 !== null && d5 !== undefined && d5 >= thresholds.bigWinPct) {
+    return "big_win";
+  }
+  if (peak >= thresholds.winPct) return "win";
+  return "loss";
+}
+
 export function formatDiscussionTitle(s: {
   topic: string;
   conclusion: Conclusion | null;
-  verdict?:
-    | "big_win"
-    | "win"
-    | "big_loss"
-    | "loss"
-    | "unverifiable"
-    | null;
   created_at: string;
   /** PR #276: backtest discussions display the as_of_date (the
    *  date being analyzed) in the sidebar title rather than
@@ -186,18 +207,13 @@ export function formatDiscussionTitle(s: {
     : s.created_at;
   const date = formatTaipeiDateCompact(dateSource);
 
-  // Verdict pill: derive from the canonical 4-band table. Unknown
-  // values (legacy data with custom strings, or null) fall back to
-  // a neutral foreground colour.
-  const band = s.verdict ? BAND_LABELS[s.verdict] : undefined;
-  const verdictMark = band?.mark ?? "";
-  const verdictCls = band?.cls ?? "text-foreground";
-
-  // Per-cell colour is driven by `pctClass(p)` at render time
-  // (consumer side) — discussion-level verdict colour goes on the
-  // symbol code; each percent gets its own +/− sign-based colour.
-  // Keeps "勝負" (verdict) and "當日漲跌" (daily move) visually
-  // independent instead of conflating them into one row colour.
+  // Per-symbol band classification: each symbol is graded against the
+  // 4-band rule independently (大敗優先) rather than rolled up into a
+  // single discussion-level verdict. Earlier the sidebar pulled the
+  // discussion-level `verdict` field, but pre-cutover rows still
+  // carry legacy "win"/"loss" strings that contradict their own
+  // close prices — computing live from day1_open + daily_close_prices
+  // avoids that stale-string trap.
   const opens = s.day1_open_prices ?? {};
   const closes_legacy = s.day5_close_prices ?? {};
   const closes_daily = s.daily_close_prices ?? {};
@@ -211,10 +227,11 @@ export function formatDiscussionTitle(s: {
     const changePcts: (number | null)[] = safeDailyCloses.map((c) =>
       c !== null && open !== null && open > 0 ? (c - open) / open : null,
     );
-    return { symbol: sym, changePcts };
+    const band = classifySymbolBand(changePcts);
+    return { symbol: sym, changePcts, band };
   });
 
-  return { date, verdictMark, verdictCls, lines };
+  return { date, lines };
 }
 
 // ── inline markdown renderer ──────────────────────────────────────

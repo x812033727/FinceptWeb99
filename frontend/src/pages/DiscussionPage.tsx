@@ -65,6 +65,7 @@ import {
   fetchScoreboard,
   fetchSession,
   fetchSessions,
+  BAND_LABELS,
   formatDateLong,
   formatDateShort,
   formatDiscussionTitle,
@@ -139,27 +140,29 @@ function SessionRowBody({ s }: { s: Discussion }) {
         <div className="line-clamp-2 font-bold text-foreground">{tt.text}</div>
       ) : (
         <div className="space-y-0.5">
-          <div className="font-bold">
-            {tt.date}
-            {tt.verdictMark ? (
-              <span className={`ml-1 ${tt.verdictCls ?? ""}`}>
-                {tt.verdictMark}
-              </span>
-            ) : null}
-          </div>
-          {tt.lines?.map((ln) => (
-            <div key={ln.symbol} className="font-mono">
-              <span className={tt.verdictCls ?? ""}>{ln.symbol}</span>:{" "}
-              {ln.changePcts.map((p, i) => (
-                <span key={i}>
-                  <span className={pctClass(p)}>
-                    {p !== null ? signedPct(p) : "—"}
+          <div className="font-bold">{tt.date}</div>
+          {tt.lines?.map((ln) => {
+            const bandLabel = ln.band ? BAND_LABELS[ln.band] : undefined;
+            return (
+              <div key={ln.symbol} className="font-mono">
+                <span className={bandLabel?.cls ?? ""}>{ln.symbol}</span>
+                {bandLabel?.mark ? (
+                  <span className={`ml-1 text-[10px] ${bandLabel.cls}`}>
+                    {bandLabel.mark}
                   </span>
-                  {i < ln.changePcts.length - 1 ? "/" : ""}
-                </span>
-              ))}
-            </div>
-          ))}
+                ) : null}
+                :{" "}
+                {ln.changePcts.map((p, i) => (
+                  <span key={i}>
+                    <span className={pctClass(p)}>
+                      {p !== null ? signedPct(p) : "—"}
+                    </span>
+                    {i < ln.changePcts.length - 1 ? "/" : ""}
+                  </span>
+                ))}
+              </div>
+            );
+          })}
         </div>
       )}
       <div className="mt-1 flex items-center gap-2 text-[10px] flex-wrap">

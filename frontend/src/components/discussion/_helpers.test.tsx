@@ -14,6 +14,7 @@ import type { Conclusion, DiscussionDetail, Turn } from "@/types/discussion";
 import {
   buildDiscussionExportFilename,
   buildDiscussionMarkdown,
+  classifySymbolBand,
   formatCompactNumber,
   formatDiscussionTitle,
   latestNonNull,
@@ -121,6 +122,51 @@ describe("formatCompactNumber", () => {
   });
 });
 
+// ── classifySymbolBand — 4-band per-symbol classifier ────────────
+
+describe("classifySymbolBand", () => {
+  it("big_loss when any close ≤ -5% (大敗優先), even with a strong D5 rebound", () => {
+    // Matches the screenshot row that prompted this refactor: a
+    // legacy verdict='win' discussion where 2337 actually crashed.
+    expect(
+      classifySymbolBand([-0.017, -0.055, -0.07, -0.163, -0.18]),
+    ).toBe("big_loss");
+    // D1 -8%, D5 +25% → still big_loss (precedence locks the loss in)
+    expect(
+      classifySymbolBand([-0.08, 0.05, 0.10, 0.18, 0.25]),
+    ).toBe("big_loss");
+  });
+
+  it("big_win only when D5 close ≥ +20%", () => {
+    expect(classifySymbolBand([0.05, 0.10, 0.15, 0.18, 0.22])).toBe("big_win");
+    // Peak +25% at D1 but D5 only +3% → win, not big_win (D5 is the gate)
+    expect(classifySymbolBand([0.25, 0.20, 0.15, 0.10, 0.03])).toBe("win");
+  });
+
+  it("win when peak crosses +5% but neither D5 ≥ +20% nor any close ≤ -5%", () => {
+    expect(classifySymbolBand([0.01, 0.06, 0.03, 0.02, 0.01])).toBe("win");
+    // Edge at exactly +5%
+    expect(classifySymbolBand([0.05, 0.04, 0.03, 0.02, 0.01])).toBe("win");
+  });
+
+  it("loss when no band crossed", () => {
+    expect(classifySymbolBand([0.01, 0.02, 0.03, 0.02, 0.01])).toBe("loss");
+    // Edge: trough -4.9% (above -5% bar) → still loss, not big_loss
+    expect(classifySymbolBand([-0.049, -0.02, -0.01, 0.0, 0.01])).toBe("loss");
+  });
+
+  it("partial window — big_win blocked when D5 is null, but other bands still fire", () => {
+    // D2 hit +25% but D5 unresolved → win (big_win requires D5)
+    expect(classifySymbolBand([0.05, 0.25, null, null, null])).toBe("win");
+    // D1 crashed -7% → big_loss even with the window incomplete
+    expect(classifySymbolBand([-0.07, null, null, null, null])).toBe("big_loss");
+  });
+
+  it("returns null when every close is null", () => {
+    expect(classifySymbolBand([null, null, null, null, null])).toBe(null);
+  });
+});
+
 // ── formatDiscussionTitle — the rich one ─────────────────────────
 
 const baseConclusion: Conclusion = {
@@ -198,59 +244,18 @@ describe("formatDiscussionTitle", () => {
     expect(out.date).toBe("20260503");
   });
 
-  it("marks 勝 in green when verdict=win", () => {
+  it("no longer emits a discussion-level verdict pill — per-symbol bands replace it", () => {
+    // Even when the (now-ignored) `verdict` field is set, the
+    // function returns no `verdictMark` / `verdictCls`. Per-symbol
+    // bands on each line are the new source of truth, computed live
+    // from day1_open_prices + daily_close_prices.
     const out = formatDiscussionTitle({
       topic: "x",
       conclusion: baseConclusion,
-      verdict: "win",
       created_at: "2025-05-01T00:00:00Z",
     });
-    expect(out.verdictMark).toBe("勝");
-    expect(out.verdictCls).toBe("text-green-500");
-  });
-
-  it("marks 大勝 in emerald when verdict=big_win", () => {
-    const out = formatDiscussionTitle({
-      topic: "x",
-      conclusion: baseConclusion,
-      verdict: "big_win",
-      created_at: "2025-05-01T00:00:00Z",
-    });
-    expect(out.verdictMark).toBe("大勝");
-    expect(out.verdictCls).toBe("text-emerald-500");
-  });
-
-  it("marks 敗 in orange when verdict=loss", () => {
-    const out = formatDiscussionTitle({
-      topic: "x",
-      conclusion: baseConclusion,
-      verdict: "loss",
-      created_at: "2025-05-01T00:00:00Z",
-    });
-    expect(out.verdictMark).toBe("敗");
-    expect(out.verdictCls).toBe("text-orange-500");
-  });
-
-  it("marks 大敗 in red when verdict=big_loss", () => {
-    const out = formatDiscussionTitle({
-      topic: "x",
-      conclusion: baseConclusion,
-      verdict: "big_loss",
-      created_at: "2025-05-01T00:00:00Z",
-    });
-    expect(out.verdictMark).toBe("大敗");
-    expect(out.verdictCls).toBe("text-red-600");
-  });
-
-  it("uses muted styling when verdict=unverifiable", () => {
-    const out = formatDiscussionTitle({
-      topic: "x",
-      conclusion: baseConclusion,
-      verdict: "unverifiable",
-      created_at: "2025-05-01T00:00:00Z",
-    });
-    expect(out.verdictMark).toBe("");
-    expect(out.verdictCls).toBe("text-muted-foreground");
+    expect("verdictMark" in out).toBe(false);
+    expect("verdictCls" in out).toBe(false);
   });
 
   it("computes per-day change_pct against day-1 open", () => {
@@ -266,19 +271,48 @@ describe("formatDiscussionTitle", () => {
     expect(line.symbol).toBe("2330");
     expect(line.changePcts[0]).toBeCloseTo(0.00333, 5);
     expect(line.changePcts[4]).toBeCloseTo(0.05, 6);
+    // D5 hit exactly +5% → win band (not big_win — needs +20% at D5)
+    expect(line.band).toBe("win");
   });
 
-  it("yields a negative change_pct for downside days (consumer renders red via pctClass)", () => {
+  it("classifies a symbol as big_loss when any close ≤ -5%, regardless of recovery", () => {
     const out = formatDiscussionTitle({
       topic: "x",
       conclusion: { ...baseConclusion, recommended_symbols: ["2330"] },
       day1_open_prices: { "2330": 600 },
-      // D1 -7% (consumer should colour the cell red via pctClass)
+      // D1 -7% then recovers — 大敗優先 locks the band in
       daily_close_prices: { "2330": [558, 580, 610, 615, 620] },
       created_at: "2025-05-01T00:00:00Z",
     });
     expect(out.lines![0].changePcts[0]!).toBeLessThan(0);
     expect(out.lines![0].changePcts[4]!).toBeGreaterThan(0);
+    expect(out.lines![0].band).toBe("big_loss");
+  });
+
+  it("each symbol is graded independently — one big_loss does not infect siblings", () => {
+    // Screenshot scenario: 2337 and 3044 both crash, frontend
+    // surfaces them as separate big_loss rows. A third symbol that
+    // happens to win wouldn't be pulled down by its peers.
+    const out = formatDiscussionTitle({
+      topic: "x",
+      conclusion: {
+        ...baseConclusion,
+        recommended_symbols: ["2337", "3044", "9999"],
+      },
+      day1_open_prices: { "2337": 100, "3044": 100, "9999": 100 },
+      daily_close_prices: {
+        "2337": [98.3, 94.5, 93, 83.7, 82],     // -18% trough → big_loss
+        "3044": [95.9, 89.4, 87.8, 86.6, 86.6], // -13.4% trough → big_loss
+        "9999": [102, 105, 108, 106, 122],      // D5 +22% → big_win
+      },
+      created_at: "2025-05-01T00:00:00Z",
+    });
+    const byCode = Object.fromEntries(
+      out.lines!.map((l) => [l.symbol, l.band]),
+    );
+    expect(byCode["2337"]).toBe("big_loss");
+    expect(byCode["3044"]).toBe("big_loss");
+    expect(byCode["9999"]).toBe("big_win");
   });
 
   it("yields null change_pct entries when every close is unresolved", () => {

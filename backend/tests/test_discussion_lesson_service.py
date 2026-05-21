@@ -924,10 +924,61 @@ def test_win_categories_accepted_in_normalize():
 
 def test_win_categories_set_export():
     """Other modules (lessons context block) consume `WIN_CATEGORIES`
-    to split rendering. Make sure the set is the published 2."""
+    to split rendering. After the 4-band cutover the set carries the
+    original 2 plus the 3 regime_* categories — "won, but it was
+    regime not stock-picking" lessons belong on the win side of the
+    fetch split."""
     assert svc.WIN_CATEGORIES == frozenset({
-        "correct_signal_combo", "successful_thesis",
+        "correct_signal_combo",
+        "successful_thesis",
+        "regime_context",
+        "regime_capture",
+        "regime_signal",
     })
+
+
+def test_new_4band_categories_preserved_by_coerce():
+    """The 4-band prompts ask the LLM for these category names; the
+    coerce step MUST keep them as-is rather than flattening to
+    "other" — otherwise post-mortem lessons lose their semantic
+    identity in future ctx injection."""
+    for cat in [
+        "risk_management",          # big_loss prompt
+        "regime_context",           # big_win prompt
+        "regime_capture",           # big_win prompt
+        "regime_signal",            # big_win prompt
+        "missing_signal_category",  # win prompt
+    ]:
+        assert svc._normalize_category(cat) == cat, (
+            f"category {cat!r} got coerced to {svc._normalize_category(cat)!r} "
+            "— post-mortem extraction will silently lose this label"
+        )
+
+
+def test_risk_management_is_miss_side_for_fetch_split():
+    """Even though `risk_management` comes from a big_loss post-mortem
+    on what's technically a written discussion, semantically it's a
+    miss-side lesson (we failed at risk control). It belongs in the
+    「過去失誤教訓」block, NOT 「過去命中經驗」."""
+    assert "risk_management" in svc.ALLOWED_CATEGORIES
+    assert "risk_management" not in svc.WIN_CATEGORIES
+
+
+def test_missing_signal_category_is_miss_side_for_fetch_split():
+    """`missing_signal_category` comes from a `win` post-mortem when
+    the discussion won but missed bigger winners. Semantically it's
+    a gap / miss, so it goes on the miss-side fetch."""
+    assert "missing_signal_category" in svc.ALLOWED_CATEGORIES
+    assert "missing_signal_category" not in svc.WIN_CATEGORIES
+
+
+def test_regime_categories_are_win_side_for_fetch_split():
+    """The three regime_* categories come from big_win post-mortems
+    where the discussion correctly identified a regime tailwind.
+    They belong on the win-side fetch (lessons from won
+    discussions, even if cautionary about regime-riding)."""
+    for cat in ("regime_context", "regime_capture", "regime_signal"):
+        assert cat in svc.WIN_CATEGORIES
 
 
 def test_score_applies_win_lesson_penalty():

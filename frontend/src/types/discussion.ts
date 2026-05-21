@@ -149,7 +149,15 @@ export interface Conclusion {
 
 export type DiscussionStatus = "draft" | "running" | "done";
 
-export type Verdict = "win" | "loss" | "unverifiable";
+// 4-band verdict (大勝/勝/大敗/敗) plus legacy "win"/"loss" for rows
+// graded before the 4-band cutover. `unverifiable` covers
+// no-symbols-recommended and stale-grace cases.
+export type Verdict =
+  | "big_win"
+  | "win"
+  | "big_loss"
+  | "loss"
+  | "unverifiable";
 
 export type DiscussionMarket = "TW" | "US" | "GLOBAL";
 

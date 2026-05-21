@@ -54,7 +54,7 @@ _DEFAULT_DAYS = 5
 
 
 OutcomeStatus = Literal[
-    "miss", "marginal_win", "win", "strong_win", "insufficient_data",
+    "big_loss", "loss", "win", "big_win", "insufficient_data",
 ]
 
 
@@ -380,42 +380,33 @@ def _format_daily_gainers(
 def evaluate_recommendation_outcome(
     rec_perf: list[RecommendedPerformance],
     *,
-    threshold_pct: float,
+    big_win_day5_pct: float,
+    win_pct: float,
+    big_loss_pct: float,
     window_days: int,
     trading_days: list[date],
-    marginal_threshold_pct: float | None = None,
-    strong_threshold_pct: float | None = None,
 ) -> OutcomeVerdict:
-    """Classify the best recommended-symbol peak into a verdict band.
+    """Classify the recommended-symbol set into a 4-band verdict.
 
-    Two modes:
-      - **Legacy single-bar** (default): pass `threshold_pct` only.
-        Returns `win` when any symbol's peak ≥ threshold, else `miss`.
-        Used by older callers / tests.
-      - **Three-tier** (post-mortem dispatcher): pass all three of
-        `marginal_threshold_pct`, `threshold_pct` (= win bar),
-        `strong_threshold_pct`. Classifies into:
+    Precedence (matches `services.outcome_classifier`, 大敗優先):
+      - **big_loss** — any symbol's any-day close ≤ big_loss_pct
+      - **big_win** — else any symbol's D5 close ≥ big_win_day5_pct
+      - **win** — else any symbol's peak close ≥ win_pct
+      - **loss** — otherwise
 
-          peak < marginal              → miss
-          marginal ≤ peak < win        → marginal_win
-          win ≤ peak < strong          → win
-          peak ≥ strong                → strong_win
+    `OutcomeVerdict.threshold_pct` is set to the bar that drove the
+    classification (big_win → big_win_day5_pct, win → win_pct,
+    big_loss → big_loss_pct, loss → win_pct as the bar that was
+    missed). Used by the band-specific prompt formatters for the
+    "通過/未達 X% 門檻" copy.
 
-    `OutcomeVerdict.threshold_pct` is set to the bar that the result
-    was classified against — i.e. for `marginal_win` it's the marginal
-    bar (the one crossed), for `win` it's the win bar, for
-    `strong_win` it's the strong bar, and for `miss` it's the lowest
-    bar that was missed (= marginal in tiered mode, threshold_pct in
-    legacy mode). This keeps the prompt's "通過/未達 X% 門檻" copy
-    accurate per band.
+    `winners` carries every symbol whose peak ≥ win_pct sorted
+    desc — populated for win / big_win paths so the prompt can list
+    "你的命中標的". Empty for big_loss / loss paths.
     """
-    tiered = (
-        marginal_threshold_pct is not None
-        and strong_threshold_pct is not None
-    )
-    miss_bar = (
-        marginal_threshold_pct if tiered else threshold_pct
-    )
+    from services.outcome_classifier import classify_outcome
+
+    miss_bar = win_pct
 
     if not trading_days:
         return OutcomeVerdict(
@@ -437,101 +428,138 @@ def evaluate_recommendation_outcome(
             reason="no recommended symbols had entry-day bars",
         )
 
+    # Build per-symbol classifications via the shared classifier.
+    # Each `RecommendedPerformance.days` is already filtered to known
+    # days — pad to len(window) so the last element corresponds to
+    # the last evaluation day (D5) for the big_win check.
+    # Tuple: (base_close, band, peak_pct, trough_pct, day5_pct)
+    classifications: dict[str, tuple[float, str, float | None, float | None, float | None]] = {}
     best_pct: float | None = None
     qualified: list[WinnerEntry] = []
     for r in rec_perf:
-        peak_in_window: tuple[float, date] | None = None
-        for dp in r.days:
-            if dp.trading_day not in window:
+        day_map = {dp.trading_day: dp for dp in r.days}
+        closes: list[float | None] = []
+        peak_day_in_window: date | None = None
+        peak_pct_in_window: float | None = None
+        for d in window:
+            dp = day_map.get(d)
+            if dp is None:
+                closes.append(None)
                 continue
-            if peak_in_window is None or dp.change_pct > peak_in_window[0]:
-                peak_in_window = (dp.change_pct, dp.trading_day)
-        if peak_in_window is None:
+            closes.append(dp.close)
+            if (
+                peak_pct_in_window is None
+                or dp.change_pct > peak_pct_in_window
+            ):
+                peak_pct_in_window = dp.change_pct
+                peak_day_in_window = d
+        result = classify_outcome(
+            d1_buy=r.base_close,
+            closes=closes,
+            big_win_day5_pct=big_win_day5_pct,
+            win_pct=win_pct,
+            big_loss_pct=big_loss_pct,
+        )
+        if result is None:
             continue
-        peak_pct, peak_day = peak_in_window
-        if best_pct is None or peak_pct > best_pct:
-            best_pct = peak_pct
-        if peak_pct >= miss_bar:
-            qualified.append(WinnerEntry(
-                symbol=r.symbol,
-                peak_pct=round(peak_pct, 4),
-                peak_day=peak_day,
-            ))
+        classifications[r.symbol] = (
+            r.base_close,
+            result.band,
+            result.peak_pct,
+            result.trough_pct,
+            result.day5_pct,
+        )
+        if peak_pct_in_window is not None:
+            if best_pct is None or peak_pct_in_window > best_pct:
+                best_pct = peak_pct_in_window
+            if peak_pct_in_window >= win_pct and peak_day_in_window is not None:
+                qualified.append(WinnerEntry(
+                    symbol=r.symbol,
+                    peak_pct=round(peak_pct_in_window, 4),
+                    peak_day=peak_day_in_window,
+                ))
+
+    if not classifications:
+        return OutcomeVerdict(
+            status="insufficient_data",
+            threshold_pct=miss_bar,
+            window_days=window_days,
+            winners=[],
+            best_pct=None,
+            reason="no recommended symbols had resolvable D1 buy + closes",
+        )
 
     qualified_sorted = sorted(
         qualified, key=lambda w: w.peak_pct, reverse=True,
     )
 
-    if not tiered:
-        # Legacy binary win/miss against the single bar.
-        if qualified:
-            return OutcomeVerdict(
-                status="win",
-                threshold_pct=threshold_pct,
-                window_days=window_days,
-                winners=qualified_sorted,
-                best_pct=(
-                    round(best_pct, 4) if best_pct is not None else None
-                ),
-                reason=(
-                    f"{len(qualified)} symbol(s) reached >= "
-                    f"{threshold_pct:g}% within {window_days} trading days"
-                ),
-            )
+    # Discussion-level roll-up (大敗優先).
+    losers = [
+        (sym, troughp) for sym, (_b, _band, _p, troughp, _d5) in classifications.items()
+        if _band == "big_loss"
+    ]
+    if losers:
+        worst_sym, worst_trough = min(losers, key=lambda p: (p[1] or 0.0))
         return OutcomeVerdict(
-            status="miss",
-            threshold_pct=threshold_pct,
+            status="big_loss",
+            threshold_pct=big_loss_pct,
             window_days=window_days,
             winners=[],
             best_pct=round(best_pct, 4) if best_pct is not None else None,
             reason=(
-                f"all recommendations peaked below {threshold_pct:g}% "
-                f"within {window_days} trading days"
-            ),
-        )
-
-    # Tiered classification. `qualified` already contains every symbol
-    # whose peak ≥ marginal — the band classification just looks at
-    # the BEST peak to decide which prompt to fire.
-    if best_pct is None or best_pct < marginal_threshold_pct:
-        return OutcomeVerdict(
-            status="miss",
-            threshold_pct=marginal_threshold_pct,
-            window_days=window_days,
-            winners=[],
-            best_pct=round(best_pct, 4) if best_pct is not None else None,
-            reason=(
-                f"all recommendations peaked below "
-                f"{marginal_threshold_pct:g}% within {window_days} "
+                f"{worst_sym} dropped to {worst_trough:.2f}% (≤ "
+                f"{big_loss_pct:g}% threshold) within {window_days} "
                 f"trading days"
             ),
         )
 
-    if best_pct >= strong_threshold_pct:
-        band_status: OutcomeStatus = "strong_win"
-        band_threshold = strong_threshold_pct
-    elif best_pct >= threshold_pct:
-        band_status = "win"
-        band_threshold = threshold_pct
-    else:
-        band_status = "marginal_win"
-        band_threshold = marginal_threshold_pct
+    bigs = [
+        (sym, d5p) for sym, (_b, _band, _p, _t, d5p) in classifications.items()
+        if _band == "big_win"
+    ]
+    if bigs:
+        best_sym, best_d5 = max(bigs, key=lambda p: (p[1] or 0.0))
+        return OutcomeVerdict(
+            status="big_win",
+            threshold_pct=big_win_day5_pct,
+            window_days=window_days,
+            winners=qualified_sorted,
+            best_pct=round(best_pct, 4) if best_pct is not None else None,
+            reason=(
+                f"{best_sym} D5 close {best_d5:+.2f}% (≥ "
+                f"{big_win_day5_pct:g}% threshold) within {window_days} "
+                f"trading days"
+            ),
+        )
+
+    if any(_band == "win" for _b, _band, _p, _t, _d5 in classifications.values()):
+        return OutcomeVerdict(
+            status="win",
+            threshold_pct=win_pct,
+            window_days=window_days,
+            winners=qualified_sorted,
+            best_pct=round(best_pct, 4) if best_pct is not None else None,
+            reason=(
+                f"{len(qualified_sorted)} symbol(s) peaked ≥ "
+                f"{win_pct:g}% (best {best_pct:.2f}%) within "
+                f"{window_days} trading days"
+            ),
+        )
 
     return OutcomeVerdict(
-        status=band_status,
-        threshold_pct=band_threshold,
+        status="loss",
+        threshold_pct=win_pct,
         window_days=window_days,
-        winners=qualified_sorted,
-        best_pct=round(best_pct, 4),
+        winners=[],
+        best_pct=round(best_pct, 4) if best_pct is not None else None,
         reason=(
-            f"{len(qualified_sorted)} symbol(s) reached >= "
-            f"{band_threshold:g}% (best {best_pct:.2f}%) within "
-            f"{window_days} trading days"
+            f"all recommendations peaked below {win_pct:g}% "
+            f"within {window_days} trading days"
         ),
     )
 
 
-def format_post_mortem_miss_prompt(
+def format_post_mortem_loss_prompt(
     *,
     as_of: date,
     trading_days: list[date],
@@ -540,13 +568,24 @@ def format_post_mortem_miss_prompt(
     verdict: OutcomeVerdict,
     company_name_lookup: dict[str, str | None] | None = None,
 ) -> str:
-    """Miss-branch prompt: omit the self-eval section entirely. The
+    """Loss-branch prompt: omit the self-eval section entirely. The
     recommendation already lost, asking personas to re-grade their own
     picks adds noise; we want them focused on which signals would have
     surfaced the actual winners.
+
+    Used for both `loss` (didn't reach +5% peak) and `big_loss` (crashed
+    ≤ -5% on any day). The big_loss path injects an extra header line
+    flagging risk-management failure — that's the only difference,
+    since the rest of the prompt structure (mining for missed winners)
+    applies identically.
     """
     name_lookup = company_name_lookup or {}
-    lines: list[str] = ["【事後檢討 — 漲幅榜複盤】", ""]
+    is_big_loss = verdict.status == "big_loss"
+    header = (
+        "【事後檢討 — 大敗 (≤-5%)，重點檢視風險控管】"
+        if is_big_loss else "【事後檢討 — 漲幅榜複盤】"
+    )
+    lines: list[str] = [header, ""]
 
     last_day_label = (
         f"D{len(trading_days)} ({trading_days[-1].isoformat()})"
@@ -564,12 +603,47 @@ def format_post_mortem_miss_prompt(
         f"{verdict.best_pct:+.2f}%"
         if verdict.best_pct is not None else "（無資料）"
     )
-    lines.append(
-        f"❌ 你的推薦 {', '.join(recommended_symbols) or '（無）'} 在 "
-        f"{verdict.window_days} 個交易日內最高僅 {best}，"
-        f"未達 {verdict.threshold_pct:g}% 門檻。"
-    )
+    if is_big_loss:
+        # big_loss carries the trough in verdict.reason already;
+        # surface it inline so the prompt opens with the loss
+        # magnitude rather than the irrelevant "best peak".
+        lines.append(
+            f"🚨 你的推薦 {', '.join(recommended_symbols) or '（無）'} 在 "
+            f"{verdict.window_days} 個交易日內出現 ≤ "
+            f"{verdict.threshold_pct:g}% 的單日收盤跌幅 "
+            f"（最佳推薦窗內最高 {best}）。"
+            "**這是大敗。** 即使後續反彈，風險控管的問題已經發生。"
+        )
+    else:
+        lines.append(
+            f"❌ 你的推薦 {', '.join(recommended_symbols) or '（無）'} 在 "
+            f"{verdict.window_days} 個交易日內最高僅 {best}，"
+            f"未達 {verdict.threshold_pct:g}% 門檻。"
+        )
     lines.append("")
+
+    if is_big_loss:
+        lines.append("## A. 風險控管反思（這次的訊號哪裡出錯了）")
+        lines.append("")
+        lines.append(
+            "1. **負向訊號是否被忽略**：round 1 的 ctx 區塊"
+            "（外資台指期 / margin_balance / day_trading_trend / "
+            "overseas_indicators / single_stock_futures_oi 等）裡，"
+            "有沒有任何訊號其實在說「下行風險偏高」但被你弱化處理？"
+            "請點名是哪一筆數據、原本給了什麼權重、應該給多少。"
+        )
+        lines.append(
+            "2. **停損 / 止盈規則缺位**：你的推薦邏輯有提供進場後的"
+            "風險邊界嗎？例如「跌破 5 日均線出場」「-3% 停損」？"
+            "如果沒有，請補上 `risk_management` lesson "
+            "（category 必須用這個名字，下次討論才能撈得到）。"
+        )
+        lines.append(
+            "3. **倉位大小**：你的推薦有沒有暗示倉位比例？"
+            "single-bet 滿倉式推薦在大敗時是災難級虧損，請補上"
+            "「建議部位 = X% 資金」之類的明確約束。"
+        )
+        lines.append("")
 
     lines.append("## 真正的贏家（你錯過了誰）")
     lines.append("")
@@ -713,7 +787,7 @@ def format_post_mortem_win_prompt(
     return "\n".join(lines)
 
 
-def format_post_mortem_marginal_win_prompt(
+def format_post_mortem_big_win_prompt(
     *,
     as_of: date,
     trading_days: list[date],
@@ -723,96 +797,7 @@ def format_post_mortem_marginal_win_prompt(
     verdict: OutcomeVerdict,
     company_name_lookup: dict[str, str | None] | None = None,
 ) -> str:
-    """Marginal-win post-mortem: peak crossed the lower band but not
-    the win bar. Skeptical framing — TW large-caps regularly clear
-    3% in a 5-session window by noise alone, so a marginal-win is
-    closer to "didn't lose" than to a real success. The prompt
-    forces the personas to defend whether the call was skill or
-    coin-flip, and explicitly compares against the daily leaderboard
-    to make sure they didn't merely pick a stock that drifted up
-    while the actual movers ran ahead."""
-    name_lookup = company_name_lookup or {}
-    lines: list[str] = ["【事後檢討 — 勉強過線】", ""]
-
-    last_day_label = (
-        f"D{len(trading_days)} ({trading_days[-1].isoformat()})"
-        if trading_days else "（無資料）"
-    )
-    lines.append(
-        f"回測日期 **{as_of.isoformat()}**，"
-        f"評估窗口 **D1 ({trading_days[0].isoformat()}) ~ {last_day_label}**。"
-        if trading_days
-        else f"回測日期 **{as_of.isoformat()}**，但評估窗口的 ohlcv 尚未抵達。"
-    )
-    lines.append("")
-
-    best = (
-        f"{verdict.best_pct:+.2f}%"
-        if verdict.best_pct is not None else "（無資料）"
-    )
-    lines.append(
-        f"⚠️ 你的推薦 {', '.join(recommended_symbols) or '（無）'} 在 "
-        f"{verdict.window_days} 個交易日內最高僅 {best}，"
-        f"勉強過 {verdict.threshold_pct:g}% 但沒過 win 門檻。"
-        f"在 TW 大型股 5 日窗口裡這個幅度離雜訊很近，**不要當成命中**。"
-    )
-    lines.append("")
-
-    lines.append("## A. 你的推薦 D1-D5 表現")
-    lines.append("")
-    lines.extend(_format_recommended_table(
-        recommended_performance, trading_days, name_lookup,
-    ))
-    lines.append("")
-
-    lines.append("## B. 每日漲幅榜首（看真正的贏家在哪裡）")
-    lines.append("")
-    lines.extend(_format_daily_gainers(daily_top_gainers, name_lookup))
-
-    lines.append("## C. 反思（請直球面對「這是技術還是運氣」）")
-    lines.append("")
-    lines.append(
-        "1. **訊號是否真的存在**：這次勉強過線，請誠實判斷 round 1 的"
-        "關鍵訊號是「明確指向上漲」還是「方向模糊但你選了多」？"
-        "如果是後者，請直接標記 `coin_flip` lesson。"
-    )
-    lines.append(
-        "2. **真正的贏家差距**：B 區塊裡有沒有任何標的漲幅 ≥3× 你的最佳推薦？"
-        "如果有，請點名是哪一檔、是什麼產業，並回頭看 round 1 的 ctx —— "
-        "（focus_briefs / news_sentiment / 外資台指期 / industry_rs / "
-        "single_stock_futures_oi / day_trading_trend / 借券 / "
-        "overseas_indicators / upcoming_event 等）—— 是否其實有訊號指向那一檔？"
-    )
-    lines.append(
-        "3. **這次該不該寫進 lessons**：如果 (1) 是 coin_flip 而 (2) 有更明顯的"
-        "錯過，請以 miss 角度寫 lesson（`missed_signal` / `missing_signal_category`），"
-        "**不要**用 `correct_signal_combo`。"
-        "勉強過線寫成命中會污染下次的命中經驗 ctx。"
-    )
-    lines.append(
-        "4. **下次的訊號補強**：要把這次的 marginal call 升級成 win 等級，"
-        "round 1 需要新增哪一類訊號？請具體列出資料來源。"
-    )
-    lines.append("")
-    lines.append(
-        "請務必區分 `coin_flip` / `missed_signal` / `missing_signal_category` "
-        "這幾個 category，不要因為 peak >3% 就硬寫成 `correct_signal_combo`。"
-        "回答完後本輪結束，使用者會再彙整一次最終結論。"
-    )
-    return "\n".join(lines)
-
-
-def format_post_mortem_strong_win_prompt(
-    *,
-    as_of: date,
-    trading_days: list[date],
-    recommended_performance: list[RecommendedPerformance],
-    daily_top_gainers: list[DailyGainers],
-    recommended_symbols: list[str],
-    verdict: OutcomeVerdict,
-    company_name_lookup: dict[str, str | None] | None = None,
-) -> str:
-    """Strong-win post-mortem: peak ≥10%. In a 5-session TW window
+    """Big-win post-mortem: D5 close ≥ +20%. In a 5-session TW window
     that magnitude is almost always sector-wide or macro driven
     (大盤齊揚 / 類股輪動 / 重大事件). The prompt forces the
     personas to disambiguate stock-picking from regime-riding
@@ -821,7 +806,7 @@ def format_post_mortem_strong_win_prompt(
     "I'm a great stock picker" when really the whole semiconductor
     sector ran 15%."""
     name_lookup = company_name_lookup or {}
-    lines: list[str] = ["【事後檢討 — 強勢命中】", ""]
+    lines: list[str] = ["【事後檢討 — 大勝】", ""]
 
     last_day_label = (
         f"D{len(trading_days)} ({trading_days[-1].isoformat()})"
@@ -842,8 +827,8 @@ def format_post_mortem_strong_win_prompt(
     lines.append(
         f"🚀 你的推薦 {', '.join(recommended_symbols) or '（無）'} 在 "
         f"{verdict.window_days} 個交易日內最高達 {best}，"
-        f"通過 {verdict.threshold_pct:g}% 強勢門檻。"
-        f"5 個交易日 ≥10% 的幅度在 TW 通常**不是純粹個股因素**，"
+        f"D5 收盤通過 {verdict.threshold_pct:g}% 大勝門檻。"
+        f"5 個交易日 ≥{verdict.threshold_pct:g}% 的幅度在 TW 通常**不是純粹個股因素**，"
         f"請先區分這是 stock-picking 還是 regime-riding。"
     )
     lines.append("")
@@ -863,8 +848,8 @@ def format_post_mortem_strong_win_prompt(
     lines.append("")
     lines.append(
         "1. **regime 還是 picking**：這 5 個交易日 TAIEX / 你推薦標的的"
-        "**同產業**漲幅是多少？如果同類股普遍 +8% 以上，那這次 +10% 主要是"
-        "regime-riding，請標記 `regime_context` lesson"
+        "**同產業**漲幅是多少？如果同類股普遍漲幅超過大勝門檻的一半以上，"
+        "那這次大勝主要是 regime-riding，請標記 `regime_context` lesson"
         "（例：「2026-Q1 半導體類股齊漲 +12%，個股 alpha 不顯著」）。"
         "**不要**直接寫 `correct_signal_combo`。"
     )
@@ -991,9 +976,9 @@ def format_post_mortem_prompt(
 async def _resolve_thresholds(
     db: AsyncSession,
 ) -> tuple[float, float, float, int]:
-    """Read the four post-mortem tunables from runtime config, with the
+    """Read the four outcome tunables from runtime config, with the
     compiled defaults as fallback. Returns
-    `(marginal, win, strong, window_days)`.
+    `(big_win_day5_pct, win_pct, big_loss_pct, window_days)`.
 
     Best-effort — any resolver hiccup falls back to compiled settings
     rather than blocking the post-mortem flow. If the on-DB values
@@ -1001,36 +986,34 @@ async def _resolve_thresholds(
     defaults so the classifier never receives a degenerate band
     layout. The runtime upsert path enforces ordering at write time
     so this is purely defensive."""
-    marginal = settings.POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT
-    win_bar = settings.POST_MORTEM_WIN_THRESHOLD_PCT
-    strong = settings.POST_MORTEM_STRONG_WIN_THRESHOLD_PCT
+    big_win = settings.OUTCOME_BIG_WIN_DAY5_THRESHOLD_PCT
+    win_bar = settings.OUTCOME_WIN_THRESHOLD_PCT
+    big_loss = settings.OUTCOME_BIG_LOSS_THRESHOLD_PCT
     window = settings.POST_MORTEM_WINDOW_DAYS
     try:
         from services.runtime_config_service import (
             get_float as _get_float,
             get_int as _get_int,
         )
-        marginal = await _get_float(
-            db, "POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT",
-        )
-        win_bar = await _get_float(db, "POST_MORTEM_WIN_THRESHOLD_PCT")
-        strong = await _get_float(
-            db, "POST_MORTEM_STRONG_WIN_THRESHOLD_PCT",
-        )
+        big_win = await _get_float(db, "OUTCOME_BIG_WIN_DAY5_THRESHOLD_PCT")
+        win_bar = await _get_float(db, "OUTCOME_WIN_THRESHOLD_PCT")
+        big_loss = await _get_float(db, "OUTCOME_BIG_LOSS_THRESHOLD_PCT")
         window = await _get_int(db, "POST_MORTEM_WINDOW_DAYS")
     except Exception as exc:
         log.debug("post_mortem.runtime_config_fallback",
                   extra={"error": str(exc)})
 
-    if not (marginal < win_bar < strong):
+    if not (big_loss < 0 < win_bar < big_win):
         log.warning(
             "post_mortem.threshold_ordering_invalid_fallback",
-            extra={"marginal": marginal, "win": win_bar, "strong": strong},
+            extra={
+                "big_loss": big_loss, "win": win_bar, "big_win": big_win,
+            },
         )
-        marginal = settings.POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT
-        win_bar = settings.POST_MORTEM_WIN_THRESHOLD_PCT
-        strong = settings.POST_MORTEM_STRONG_WIN_THRESHOLD_PCT
-    return marginal, win_bar, strong, window
+        big_win = settings.OUTCOME_BIG_WIN_DAY5_THRESHOLD_PCT
+        win_bar = settings.OUTCOME_WIN_THRESHOLD_PCT
+        big_loss = settings.OUTCOME_BIG_LOSS_THRESHOLD_PCT
+    return big_win, win_bar, big_loss, window
 
 
 async def build_post_mortem_message(
@@ -1045,7 +1028,7 @@ async def build_post_mortem_message(
     Returns a `PostMortemPayload`:
       - `trading_days == []` → archive doesn't reach 1 day past as_of.
         Caller surfaces a 400.
-      - `verdict.status` ∈ {`miss`, `marginal_win`, `win`, `strong_win`}
+      - `verdict.status` ∈ {`big_loss`, `loss`, `win`, `big_win`}
         → `prompt_text` carries the band-specific 事後檢討 prompt
         (every band now includes the per-day top-N leaderboard).
       - `verdict.status == "insufficient_data"` (rare) →
@@ -1056,7 +1039,7 @@ async def build_post_mortem_message(
             "post_mortem requires a backtest discussion (as_of_date is null)"
         )
 
-    marginal_pct, win_pct, strong_pct, window_days = (
+    big_win_pct, win_pct, big_loss_pct, window_days = (
         await _resolve_thresholds(db)
     )
     effective_days = days if days is not None else window_days
@@ -1072,7 +1055,7 @@ async def build_post_mortem_message(
         return PostMortemPayload(
             verdict=OutcomeVerdict(
                 status="insufficient_data",
-                threshold_pct=marginal_pct,
+                threshold_pct=win_pct,
                 window_days=window_days,
                 winners=[],
                 best_pct=None,
@@ -1095,9 +1078,9 @@ async def build_post_mortem_message(
 
     verdict = evaluate_recommendation_outcome(
         rec_perf,
-        threshold_pct=win_pct,
-        marginal_threshold_pct=marginal_pct,
-        strong_threshold_pct=strong_pct,
+        big_win_day5_pct=big_win_pct,
+        win_pct=win_pct,
+        big_loss_pct=big_loss_pct,
         window_days=window_days,
         trading_days=trading_days,
     )
@@ -1122,8 +1105,8 @@ async def build_post_mortem_message(
     window_days_truncated = trading_days[:window_days]
     daily_truncated = daily[:window_days]
 
-    if verdict.status == "strong_win":
-        text = format_post_mortem_strong_win_prompt(
+    if verdict.status == "big_win":
+        text = format_post_mortem_big_win_prompt(
             as_of=discussion.as_of_date,
             trading_days=window_days_truncated,
             recommended_performance=rec_perf,
@@ -1142,18 +1125,10 @@ async def build_post_mortem_message(
             verdict=verdict,
             company_name_lookup=name_lookup,
         )
-    elif verdict.status == "marginal_win":
-        text = format_post_mortem_marginal_win_prompt(
-            as_of=discussion.as_of_date,
-            trading_days=window_days_truncated,
-            recommended_performance=rec_perf,
-            daily_top_gainers=daily_truncated,
-            recommended_symbols=recommended,
-            verdict=verdict,
-            company_name_lookup=name_lookup,
-        )
-    elif verdict.status == "miss":
-        text = format_post_mortem_miss_prompt(
+    elif verdict.status in ("big_loss", "loss"):
+        # big_loss adds a risk-management header but reuses the
+        # loss prompt body (mining for missed winners).
+        text = format_post_mortem_loss_prompt(
             as_of=discussion.as_of_date,
             trading_days=window_days_truncated,
             daily_top_gainers=daily_truncated,

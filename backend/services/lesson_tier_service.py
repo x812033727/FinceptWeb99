@@ -122,7 +122,8 @@ async def record_lesson_outcome(
     if discussion is None:
         return status_payload
     status_payload["verdict"] = discussion.verdict
-    if discussion.verdict != "win":
+    from services.outcome_classifier import is_winning_verdict
+    if not is_winning_verdict(discussion.verdict):
         return status_payload
 
     snapshots_q = select(DiscussionRoundContext.context).where(

@@ -131,7 +131,9 @@ async def test_aggregate_includes_verdict_and_pnl(
     payload = await svc.aggregate_sweep(db_session, sweep)
     assert payload["discussions_total"] == 2
     assert payload["verdict_counts"] == {
-        "win": 1, "loss": 1, "unverifiable": 0, "pending": 0,
+        "big_win": 0, "win": 1,
+        "big_loss": 0, "loss": 1,
+        "unverifiable": 0, "pending": 0,
     }
     assert payload["win_rate"] == 0.5
 
@@ -139,6 +141,57 @@ async def test_aggregate_includes_verdict_and_pnl(
     assert payload["avg_pnl_pct"][0] == pytest.approx(0.015)
     assert payload["avg_pnl_pct"][1] == pytest.approx(0.10)
     assert payload["avg_pnl_pct"][4] == pytest.approx(0.20)
+
+
+@pytest.mark.asyncio
+async def test_aggregate_counts_big_bands_into_win_rate(
+    db_session: AsyncSession, owner: User,
+):
+    """4-band rollup: `big_win` and `big_loss` count toward win/loss
+    rate alongside the regular bands, and `verdict_counts` exposes
+    all four cells for the dashboard breakdown."""
+    sweep = _make_sweep(owner.id, completed=["2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08"])
+    db_session.add(sweep)
+    await db_session.commit()
+    await db_session.refresh(sweep)
+
+    discs = [
+        _make_disc(
+            owner_id=owner.id, sweep_id=sweep.id,
+            as_of=date(2026, 1, 5), verdict="big_win",
+            opens={"2330": 100.0},
+            daily={"2330": [105.0, 110.0, 115.0, 118.0, 125.0]},
+        ),
+        _make_disc(
+            owner_id=owner.id, sweep_id=sweep.id,
+            as_of=date(2026, 1, 6), verdict="win",
+            opens={"2454": 200.0},
+            daily={"2454": [202.0, 205.0, 210.0, 208.0, 204.0]},
+        ),
+        _make_disc(
+            owner_id=owner.id, sweep_id=sweep.id,
+            as_of=date(2026, 1, 7), verdict="big_loss",
+            opens={"1101": 50.0},
+            daily={"1101": [48.0, 46.0, 47.0, 47.5, 48.5]},
+        ),
+        _make_disc(
+            owner_id=owner.id, sweep_id=sweep.id,
+            as_of=date(2026, 1, 8), verdict="loss",
+            opens={"2603": 80.0},
+            daily={"2603": [79.0, 81.0, 80.0, 82.0, 81.5]},
+        ),
+    ]
+    db_session.add_all(discs)
+    await db_session.commit()
+
+    payload = await svc.aggregate_sweep(db_session, sweep)
+    assert payload["discussions_total"] == 4
+    assert payload["verdict_counts"] == {
+        "big_win": 1, "win": 1, "big_loss": 1, "loss": 1,
+        "unverifiable": 0, "pending": 0,
+    }
+    # wins = big_win + win = 2; losses = big_loss + loss = 2 → 0.5
+    assert payload["win_rate"] == 0.5
 
 
 @pytest.mark.asyncio

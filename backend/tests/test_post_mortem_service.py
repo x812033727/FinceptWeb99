@@ -485,40 +485,46 @@ _W_DAYS = [
 ]
 
 
+# 4-band classifier kwargs (used by evaluate_recommendation_outcome).
+# Match the production defaults so threshold rendering in prompts is
+# realistic.
+_BANDS = {"big_win_day5_pct": 20.0, "win_pct": 5.0, "big_loss_pct": -5.0}
+
+
 def test_evaluate_outcome_marks_win_when_any_symbol_peak_reaches_threshold():
-    """One symbol clears 3% peak → status=win; the other's miss
+    """One symbol clears 5% peak → status=win; the other's loss
     doesn't downgrade the verdict (any-symbol semantic)."""
     rec = [
-        _perf("2330", [(_W_DAYS[0], 1.0), (_W_DAYS[1], 5.0), (_W_DAYS[2], 2.0)]),
+        _perf("2330", [(_W_DAYS[0], 1.0), (_W_DAYS[1], 6.0), (_W_DAYS[2], 2.0)]),
         _perf("2454", [(_W_DAYS[0], 0.5), (_W_DAYS[1], -2.0)]),
     ]
     v = svc.evaluate_recommendation_outcome(
-        rec, threshold_pct=3.0, window_days=5, trading_days=_W_DAYS,
+        rec, window_days=5, trading_days=_W_DAYS, **_BANDS,
     )
     assert v.status == "win"
-    assert v.best_pct == 5.0
+    assert v.best_pct == 6.0
     assert {w.symbol for w in v.winners} == {"2330"}
     assert v.winners[0].peak_day == _W_DAYS[1]
 
 
-def test_evaluate_outcome_marks_miss_when_all_peaks_below_threshold():
-    """All recs peak below 3% → status=miss; best_pct still surfaced
-    so the operator can see how close it came."""
+def test_evaluate_outcome_marks_loss_when_all_peaks_below_win_threshold():
+    """All recs peak below 5% (and no day ≤ -5%) → status=loss;
+    best_pct still surfaced so the operator can see how close it came."""
     rec = [
         _perf("2330", [(_W_DAYS[0], 1.0), (_W_DAYS[1], 1.5)]),
         _perf("2454", [(_W_DAYS[0], -0.5), (_W_DAYS[1], 2.5)]),
     ]
     v = svc.evaluate_recommendation_outcome(
-        rec, threshold_pct=3.0, window_days=5, trading_days=_W_DAYS,
+        rec, window_days=5, trading_days=_W_DAYS, **_BANDS,
     )
-    assert v.status == "miss"
+    assert v.status == "loss"
     assert v.winners == []
     assert v.best_pct == 2.5
 
 
 def test_evaluate_outcome_marks_insufficient_data_with_empty_window():
     v = svc.evaluate_recommendation_outcome(
-        [], threshold_pct=3.0, window_days=5, trading_days=[],
+        [], window_days=5, trading_days=[], **_BANDS,
     )
     assert v.status == "insufficient_data"
     assert v.best_pct is None
@@ -528,43 +534,44 @@ def test_evaluate_outcome_marks_insufficient_data_with_no_recs_having_bars():
     """Trading days resolved but every recommendation lacks bars
     inside the window → can't grade → insufficient_data."""
     v = svc.evaluate_recommendation_outcome(
-        [], threshold_pct=3.0, window_days=5, trading_days=_W_DAYS,
+        [], window_days=5, trading_days=_W_DAYS, **_BANDS,
     )
     assert v.status == "insufficient_data"
 
 
 def test_evaluate_outcome_window_narrows_horizon():
-    """Peak that lands on D5 doesn't count when the runtime window
+    """Peak that lands on D4 doesn't count when the runtime window
     is set to 3 days — important for shorter horizon backtests."""
     rec = [_perf("2330", [
         (_W_DAYS[0], 0.5), (_W_DAYS[1], 0.5), (_W_DAYS[2], 1.0),
-        (_W_DAYS[3], 5.0),
+        (_W_DAYS[3], 6.0),
     ])]
     v = svc.evaluate_recommendation_outcome(
-        rec, threshold_pct=3.0, window_days=3, trading_days=_W_DAYS,
+        rec, window_days=3, trading_days=_W_DAYS, **_BANDS,
     )
-    assert v.status == "miss"
+    assert v.status == "loss"
     assert v.best_pct == 1.0
 
 
-# ── format_post_mortem_miss_prompt ───────────────────────────────
+# ── format_post_mortem_loss_prompt ───────────────────────────────
 
 
-def test_miss_prompt_omits_self_eval_section_and_includes_threshold_note():
-    """The miss branch removes the A self-eval block — personas already
+def test_loss_prompt_omits_self_eval_section_and_includes_threshold_note():
+    """The loss branch removes the A self-eval block — personas already
     lost, asking them to re-grade adds noise. The prompt must instead
-    surface the threshold + best_pct so the negative framing is honest."""
+    surface the win threshold + best_pct so the negative framing is honest.
+    """
     days = [_W_DAYS[0], _W_DAYS[1]]
     daily = [svc.DailyGainers(
         trading_day=days[0],
         gainers=[svc.GainerRow("6505", 9.83, 110.0, 100.16, days[0])],
     )]
     verdict = svc.OutcomeVerdict(
-        status="miss",
-        threshold_pct=3.0, window_days=5, winners=[],
-        best_pct=1.5, reason="all peaks below threshold",
+        status="loss",
+        threshold_pct=5.0, window_days=5, winners=[],
+        best_pct=1.5, reason="all peaks below win threshold",
     )
-    text = svc.format_post_mortem_miss_prompt(
+    text = svc.format_post_mortem_loss_prompt(
         as_of=date(2026, 3, 23),
         trading_days=days,
         daily_top_gainers=daily,
@@ -574,14 +581,46 @@ def test_miss_prompt_omits_self_eval_section_and_includes_threshold_note():
     # Negative framing
     assert "事後檢討 — 漲幅榜複盤" in text
     assert "+1.50%" in text
-    assert "未達 3%" in text
-    # Section A explicitly removed in the miss branch
+    assert "未達 5%" in text
+    # Section A explicitly removed in the loss branch
     assert "A. 你的推薦 D1-D5 自評" not in text
     # B-equivalent (winners) still present
     assert "6505" in text
     # Reflection prompts focus on "missed", not self-grading
     assert "缺漏的主題" in text or "漏看" in text
     assert "自評勝負" not in text
+
+
+def test_big_loss_prompt_adds_risk_management_header():
+    """The big_loss branch reuses the loss prompt body but injects an
+    extra risk-management section so personas can't paper over a
+    crash with "we just missed the winners" narrative.
+    """
+    days = [_W_DAYS[0], _W_DAYS[1]]
+    daily = [svc.DailyGainers(
+        trading_day=days[0],
+        gainers=[svc.GainerRow("6505", 9.83, 110.0, 100.16, days[0])],
+    )]
+    verdict = svc.OutcomeVerdict(
+        status="big_loss",
+        threshold_pct=-5.0, window_days=5, winners=[],
+        best_pct=1.5, reason="2330 trough -7.0% (≤ -5% threshold)",
+    )
+    text = svc.format_post_mortem_loss_prompt(
+        as_of=date(2026, 3, 23),
+        trading_days=days,
+        daily_top_gainers=daily,
+        recommended_symbols=["2330"],
+        verdict=verdict,
+    )
+    # big_loss-specific risk-management section + header
+    assert "大敗" in text
+    assert "風險控管" in text
+    assert "risk_management" in text
+    # Standard loss-branch leaderboard still present
+    assert "6505" in text
+    # Section A self-eval still removed
+    assert "A. 你的推薦 D1-D5 自評" not in text
 
 
 # ── build_post_mortem_message routing (verdict propagation) ──────
@@ -638,11 +677,11 @@ async def test_build_post_mortem_message_returns_win_prompt(
 
 
 @pytest.mark.asyncio
-async def test_build_post_mortem_message_returns_miss_prompt_when_below_threshold(
+async def test_build_post_mortem_message_returns_loss_prompt_when_below_threshold(
     db_session: AsyncSession,
 ):
-    """All recs peak below 3% → prompt_text is the miss-branch
-    prompt (without the self-eval section)."""
+    """All recs peak below 5% (and no day ≤ -5%) → prompt_text is the
+    loss-branch prompt (without the self-eval section)."""
     from datetime import datetime as _dt
     from uuid import uuid4
 
@@ -669,10 +708,47 @@ async def test_build_post_mortem_message_returns_miss_prompt_when_below_threshol
 
     payload = await svc.build_post_mortem_message(db_session, fake_disc)
     assert payload.verdict is not None
-    assert payload.verdict.status == "miss"
+    assert payload.verdict.status == "loss"
     assert payload.prompt_text
     assert "事後檢討 — 漲幅榜複盤" in payload.prompt_text
     assert "A. 你的推薦 D1-D5 自評" not in payload.prompt_text
+
+
+@pytest.mark.asyncio
+async def test_build_post_mortem_message_returns_big_loss_when_any_day_crashes(
+    db_session: AsyncSession,
+):
+    """Any close ≤ -5% → big_loss branch even when later days recover.
+    Confirms the 大敗優先 rule end-to-end through build_post_mortem_message."""
+    from datetime import datetime as _dt
+    from uuid import uuid4
+
+    base = date(2026, 3, 23)
+    days = [date(2026, 3, 24), date(2026, 3, 25), date(2026, 3, 26),
+            date(2026, 3, 27), date(2026, 3, 30)]
+    db_session.add_all([
+        _bar("2330", base, 100.0),
+        _bar("2330", days[0], 92.0),     # -8% — triggers big_loss
+        _bar("2330", days[1], 95.0),
+        _bar("2330", days[2], 98.0),
+        _bar("2330", days[3], 100.0),
+        _bar("2330", days[4], 125.0),    # D5 +25% — would be big_win without 大敗優先
+    ])
+    await db_session.commit()
+
+    fake_disc = type("Disc", (), {})()
+    fake_disc.id = uuid4()
+    fake_disc.owner_id = uuid4()
+    fake_disc.market = "TW"
+    fake_disc.as_of_date = base
+    fake_disc.conclusion = {"recommended_symbols": ["2330"]}
+    fake_disc.created_at = _dt.now()
+
+    payload = await svc.build_post_mortem_message(db_session, fake_disc)
+    assert payload.verdict is not None
+    assert payload.verdict.status == "big_loss"
+    assert "大敗" in payload.prompt_text
+    assert "風險控管" in payload.prompt_text
 
 
 # ── verdict serialiser ───────────────────────────────────────────
@@ -691,129 +767,84 @@ def test_verdict_to_dict_round_trip():
     assert out["best_pct"] == 5.0
 
 
-# ── Three-tier verdict classification ────────────────────────────
+# ── 4-band verdict classification ────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    "peak_pct,expected_status,expected_threshold",
-    [
-        (2.5,  "miss",         3.0),    # below marginal
-        (3.5,  "marginal_win", 3.0),    # marginal band
-        (7.0,  "win",          5.0),    # win band
-        (12.0, "strong_win",  10.0),    # strong band
-    ],
-)
-def test_evaluate_outcome_three_tier_classification_picks_band_status(
-    peak_pct: float, expected_status: str, expected_threshold: float,
-):
-    """Three-tier mode classifies the best peak into one of four bands
-    and stamps `threshold_pct` with the bar that band was classified
-    against — so the prompt's 「通過/未達 X% 門檻」 copy always names
-    the right number."""
-    rec = [_perf("2330", [(_W_DAYS[0], peak_pct), (_W_DAYS[1], peak_pct - 1)])]
-    v = svc.evaluate_recommendation_outcome(
-        rec,
-        threshold_pct=5.0,
-        marginal_threshold_pct=3.0,
-        strong_threshold_pct=10.0,
-        window_days=5,
-        trading_days=_W_DAYS,
-    )
-    assert v.status == expected_status
-    assert v.threshold_pct == expected_threshold
-    assert v.best_pct == peak_pct
-
-
-def test_evaluate_outcome_legacy_single_threshold_unchanged_by_three_tier_kwargs():
-    """When `marginal_threshold_pct` / `strong_threshold_pct` are NOT
-    passed, behavior collapses to the legacy binary win/miss against
-    the single `threshold_pct` — preserving existing call sites and
-    the verifier's own classification semantics."""
-    rec = [_perf("2330", [(_W_DAYS[0], 4.0)])]
-    v = svc.evaluate_recommendation_outcome(
-        rec, threshold_pct=3.0, window_days=5, trading_days=_W_DAYS,
-    )
-    assert v.status == "win"   # 4% > 3% legacy bar
-    assert v.threshold_pct == 3.0
-
-
-def test_evaluate_outcome_three_tier_marginal_win_collects_qualified_winners():
-    """A marginal-win verdict still surfaces the symbols that
-    crossed the lower (marginal) bar — sorted by peak_pct desc — so
-    the prompt can name them. Symbols below the marginal bar are
-    excluded from `winners` even when their peak is positive."""
+def test_evaluate_outcome_big_loss_overrides_big_win():
+    """大敗優先: any close ≤ -5% triggers big_loss even when D5 ≥ +20%.
+    Confirms the discussion-level precedence agrees with the per-symbol
+    classifier."""
     rec = [
-        _perf("2330", [(_W_DAYS[0], 1.5), (_W_DAYS[1], 1.0)]),    # below marginal
-        _perf("2454", [(_W_DAYS[0], 4.0), (_W_DAYS[1], 3.5)]),    # marginal
-        _perf("2603", [(_W_DAYS[0], 4.5), (_W_DAYS[1], 1.0)]),    # marginal
+        _perf("2330", [
+            (_W_DAYS[0], -8.0),   # triggers big_loss
+            (_W_DAYS[1], 5.0),
+            (_W_DAYS[2], 10.0),
+            (_W_DAYS[3], 20.0),
+            (_W_DAYS[4], 25.0),   # D5 +25% — would be big_win without precedence
+        ]),
     ]
     v = svc.evaluate_recommendation_outcome(
-        rec,
-        threshold_pct=5.0,
-        marginal_threshold_pct=3.0,
-        strong_threshold_pct=10.0,
-        window_days=5,
-        trading_days=_W_DAYS,
+        rec, window_days=5, trading_days=_W_DAYS, **_BANDS,
     )
-    assert v.status == "marginal_win"
-    assert [w.symbol for w in v.winners] == ["2603", "2454"]
-    assert v.best_pct == 4.5
+    assert v.status == "big_loss"
+    assert v.threshold_pct == -5.0
 
 
-# ── New prompt builders: marginal_win + strong_win ───────────────
-
-
-def test_format_marginal_win_prompt_uses_skeptical_framing():
-    """Marginal-win prompt must (a) flag the call as 「勉強過線」,
-    (b) include the leaderboard, (c) steer the LLM AWAY from
-    `correct_signal_combo` toward `coin_flip` / `missed_signal`
-    categories — otherwise the learning loop pollutes the
-    命中經驗 ctx with noise-level outcomes."""
-    days, rec, daily = _sample_payload()
-    text = svc.format_post_mortem_marginal_win_prompt(
-        as_of=date(2026, 3, 23),
-        trading_days=days,
-        recommended_performance=rec,
-        daily_top_gainers=daily,
-        recommended_symbols=["2330"],
-        verdict=svc.OutcomeVerdict(
-            status="marginal_win", threshold_pct=3.0, window_days=5,
-            winners=[svc.WinnerEntry("2330", 3.5, days[1])],
-            best_pct=3.5, reason="ok",
-        ),
+def test_evaluate_outcome_big_win_requires_d5_close():
+    """big_win is gated on the LAST day's close, not the peak — a
+    spike that fades by D5 stays as win, not big_win."""
+    rec = [
+        _perf("2330", [
+            (_W_DAYS[0], 25.0),    # peak +25% on D1
+            (_W_DAYS[1], 15.0),
+            (_W_DAYS[2], 10.0),
+            (_W_DAYS[3], 5.0),
+            (_W_DAYS[4], 3.0),     # D5 only +3%
+        ]),
+    ]
+    v = svc.evaluate_recommendation_outcome(
+        rec, window_days=5, trading_days=_W_DAYS, **_BANDS,
     )
-    # Skeptical banner
-    assert "勉強過線" in text
-    assert "不要當成命中" in text
-    # Section B leaderboard present (rows from sample payload)
-    assert "B. 每日漲幅榜首" in text
-    assert "6505" in text
-    # Skeptical category steering (away from correct_signal_combo)
-    assert "coin_flip" in text
-    assert "missed_signal" in text or "missing_signal_category" in text
-    # Explicit guard: do NOT default to correct_signal_combo
-    assert "不要" in text and "correct_signal_combo" in text
+    assert v.status == "win"   # peak ≥ 5% but D5 < 20%
+    assert v.best_pct == 25.0
 
 
-def test_format_strong_win_prompt_demands_regime_disambiguation():
-    """Strong-win prompt must force the regime-vs-stockpicking
-    interrogation — without it, +10% in 5 days gets credited to the
+def test_evaluate_outcome_big_win_when_d5_clears_threshold():
+    rec = [
+        _perf("2330", [
+            (_W_DAYS[0], 5.0), (_W_DAYS[1], 10.0), (_W_DAYS[2], 15.0),
+            (_W_DAYS[3], 18.0), (_W_DAYS[4], 22.0),
+        ]),
+    ]
+    v = svc.evaluate_recommendation_outcome(
+        rec, window_days=5, trading_days=_W_DAYS, **_BANDS,
+    )
+    assert v.status == "big_win"
+    assert v.threshold_pct == 20.0
+
+
+# ── New prompt builder: big_win ──────────────────────────────────
+
+
+def test_format_big_win_prompt_demands_regime_disambiguation():
+    """big_win prompt must force the regime-vs-stockpicking
+    interrogation — without it, ≥+20% in 5 days gets credited to the
     persona's pick when it was really sector / macro driven."""
     days, rec, daily = _sample_payload()
-    text = svc.format_post_mortem_strong_win_prompt(
+    text = svc.format_post_mortem_big_win_prompt(
         as_of=date(2026, 3, 23),
         trading_days=days,
         recommended_performance=rec,
         daily_top_gainers=daily,
         recommended_symbols=["2330"],
         verdict=svc.OutcomeVerdict(
-            status="strong_win", threshold_pct=10.0, window_days=5,
-            winners=[svc.WinnerEntry("2330", 12.0, days[1])],
-            best_pct=12.0, reason="ok",
+            status="big_win", threshold_pct=20.0, window_days=5,
+            winners=[svc.WinnerEntry("2330", 22.0, days[1])],
+            best_pct=22.0, reason="ok",
         ),
     )
-    # Strong banner
-    assert "強勢命中" in text or "強勢門檻" in text
+    # Big-win banner
+    assert "大勝" in text
     # Section B leaderboard present
     assert "B. 每日漲幅榜首" in text
     # Regime-vs-stockpicking categories surfaced
@@ -832,16 +863,16 @@ async def test_resolve_thresholds_returns_four_tuple_with_compiled_defaults(
     db_session: AsyncSession,
 ):
     """No DB overrides → resolver returns the compiled defaults
-    (3.0, 5.0, 10.0, 5). Confirms the 4-tuple contract that
+    (20.0, 5.0, -5.0, 5). Confirms the 4-tuple contract that
     `build_post_mortem_message` depends on."""
-    marginal, win_bar, strong, window = await svc._resolve_thresholds(
+    big_win, win_bar, big_loss, window = await svc._resolve_thresholds(
         db_session,
     )
-    assert marginal == 3.0
+    assert big_win == 20.0
     assert win_bar == 5.0
-    assert strong == 10.0
+    assert big_loss == -5.0
     assert window == 5
-    assert marginal < win_bar < strong   # ordering invariant
+    assert big_loss < 0 < win_bar < big_win   # ordering invariant
 
 
 @pytest.mark.asyncio
@@ -864,72 +895,34 @@ async def test_resolve_thresholds_falls_back_when_db_values_violate_ordering(
         role=UserRole.admin,
     )
     db_session.add(u)
-    # Write degenerate values: marginal > win.
+    # Write degenerate values: big_loss positive (breaks invariant).
     db_session.add(RuntimeSetting(
-        key="POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT",
-        value=8.0, updated_by_id=u.id,
+        key="OUTCOME_BIG_LOSS_THRESHOLD_PCT",
+        value=3.0, updated_by_id=u.id,
     ))
     db_session.add(RuntimeSetting(
-        key="POST_MORTEM_WIN_THRESHOLD_PCT",
+        key="OUTCOME_WIN_THRESHOLD_PCT",
         value=5.0, updated_by_id=u.id,
     ))
     await db_session.commit()
 
-    marginal, win_bar, strong, _ = await svc._resolve_thresholds(
+    big_win, win_bar, big_loss, _ = await svc._resolve_thresholds(
         db_session,
     )
     # Falls back to compiled defaults.
-    assert marginal == 3.0
+    assert big_win == 20.0
     assert win_bar == 5.0
-    assert strong == 10.0
+    assert big_loss == -5.0
 
 
 # ── build_post_mortem_message dispatch — three-tier branches ─────
 
 
 @pytest.mark.asyncio
-async def test_build_post_mortem_message_returns_marginal_win_prompt(
+async def test_build_post_mortem_message_returns_big_win_prompt(
     db_session: AsyncSession,
 ):
-    """Peak in [3%, 5%) → marginal_win branch. Prompt carries the
-    skeptical banner + leaderboard + coin_flip steering."""
-    from datetime import datetime as _dt
-    from uuid import uuid4
-
-    base = date(2026, 3, 23)
-    days = [date(2026, 3, 24), date(2026, 3, 25), date(2026, 3, 26),
-            date(2026, 3, 27), date(2026, 3, 30)]
-    db_session.add_all([
-        _bar("2330", base, 100.0),
-        _bar("2330", days[0], 102.0),
-        _bar("2330", days[1], 103.5),    # +3.5% — marginal band
-        _bar("2330", days[2], 102.0),
-        _bar("2330", days[3], 101.5),
-        _bar("2330", days[4], 100.5),
-    ])
-    await db_session.commit()
-
-    fake_disc = type("Disc", (), {})()
-    fake_disc.id = uuid4()
-    fake_disc.owner_id = uuid4()
-    fake_disc.market = "TW"
-    fake_disc.as_of_date = base
-    fake_disc.conclusion = {"recommended_symbols": ["2330"]}
-    fake_disc.created_at = _dt.now()
-
-    payload = await svc.build_post_mortem_message(db_session, fake_disc)
-    assert payload.verdict is not None
-    assert payload.verdict.status == "marginal_win"
-    assert payload.prompt_text
-    assert "勉強過線" in payload.prompt_text
-    assert "B. 每日漲幅榜首" in payload.prompt_text
-
-
-@pytest.mark.asyncio
-async def test_build_post_mortem_message_returns_strong_win_prompt(
-    db_session: AsyncSession,
-):
-    """Peak ≥ 10% → strong_win branch. Prompt carries the regime
+    """D5 close ≥ +20% → big_win branch. Prompt carries the regime
     interrogation + leaderboard."""
     from datetime import datetime as _dt
     from uuid import uuid4
@@ -940,10 +933,10 @@ async def test_build_post_mortem_message_returns_strong_win_prompt(
     db_session.add_all([
         _bar("2330", base, 100.0),
         _bar("2330", days[0], 105.0),
-        _bar("2330", days[1], 113.0),    # +13% — strong band
-        _bar("2330", days[2], 110.0),
-        _bar("2330", days[3], 108.0),
-        _bar("2330", days[4], 106.0),
+        _bar("2330", days[1], 110.0),
+        _bar("2330", days[2], 115.0),
+        _bar("2330", days[3], 118.0),
+        _bar("2330", days[4], 122.0),    # D5 +22% — big_win
     ])
     await db_session.commit()
 
@@ -957,9 +950,9 @@ async def test_build_post_mortem_message_returns_strong_win_prompt(
 
     payload = await svc.build_post_mortem_message(db_session, fake_disc)
     assert payload.verdict is not None
-    assert payload.verdict.status == "strong_win"
+    assert payload.verdict.status == "big_win"
     assert payload.prompt_text
-    assert "強勢" in payload.prompt_text
+    assert "大勝" in payload.prompt_text
     assert "B. 每日漲幅榜首" in payload.prompt_text
     assert "regime" in payload.prompt_text
 

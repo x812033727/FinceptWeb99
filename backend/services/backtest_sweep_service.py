@@ -386,7 +386,10 @@ async def _run_post_mortem_pass(
     # lessons alongside the miss-side lessons that were already
     # being recorded. Cost: 1 extra LLM call per win (vs the
     # previous 0); still 90%+ cheaper than the full critique round.
-    if payload.verdict is not None and payload.verdict.status == "win":
+    if (
+        payload.verdict is not None
+        and payload.verdict.status in ("win", "big_win")
+    ):
         try:
             from middleware.metrics import POST_MORTEM_SKIPPED_TOTAL
             POST_MORTEM_SKIPPED_TOTAL.labels(market=discussion.market).inc()

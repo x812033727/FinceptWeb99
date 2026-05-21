@@ -174,74 +174,80 @@ async def test_upsert_unknown_key_raises(
         )
 
 
-# ── post-mortem threshold ordering invariant ──────────────────────
+# ── outcome threshold ordering invariant ──────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_upsert_post_mortem_marginal_above_win_rejected(
+async def test_upsert_outcome_win_equal_big_win_rejected(
     db_session: AsyncSession, admin_user: User,
 ):
-    """Setting marginal=8 with the default win=5 must be rejected so the
-    post-mortem classifier never receives a degenerate band layout."""
-    with pytest.raises(ValueError, match="marginal"):
+    """Setting win=20 with the default big_win=20 violates the
+    `win < big_win` strict inequality and must be rejected."""
+    with pytest.raises(ValueError, match="big_win"):
         await svc.upsert(
-            db_session, "POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT", 8.0,
+            db_session, "OUTCOME_WIN_THRESHOLD_PCT", 20.0,
             updated_by_id=admin_user.id,
         )
 
 
 @pytest.mark.asyncio
-async def test_upsert_post_mortem_win_above_strong_rejected(
+async def test_upsert_outcome_big_loss_positive_rejected(
     db_session: AsyncSession, admin_user: User,
 ):
-    """Setting win=15 with the default strong=10 must be rejected."""
-    with pytest.raises(ValueError, match="strong"):
+    """big_loss must stay negative (the rule is "any close ≤ this
+    crashes us into big_loss"; a positive value would force every
+    discussion into big_loss)."""
+    # Spec max is -1.0, so we can't write 0 (out of bounds); this
+    # test confirms the max-bound rejection path is reachable.
+    with pytest.raises(ValueError, match="OUTCOME_BIG_LOSS_THRESHOLD_PCT"):
         await svc.upsert(
-            db_session, "POST_MORTEM_WIN_THRESHOLD_PCT", 15.0,
+            db_session, "OUTCOME_BIG_LOSS_THRESHOLD_PCT", 0.5,
             updated_by_id=admin_user.id,
         )
 
 
 @pytest.mark.asyncio
-async def test_upsert_post_mortem_strong_below_win_rejected(
+async def test_upsert_outcome_big_win_below_win_rejected(
     db_session: AsyncSession, admin_user: User,
 ):
-    """Setting strong=4 with the default win=5 must be rejected."""
-    with pytest.raises(ValueError, match="strong"):
+    """Setting big_win=5 with the default win=5 violates the strict
+    inequality `win < big_win` and must be rejected."""
+    with pytest.raises(ValueError, match="big_win"):
         await svc.upsert(
-            db_session, "POST_MORTEM_STRONG_WIN_THRESHOLD_PCT", 4.0,
+            db_session, "OUTCOME_BIG_WIN_DAY5_THRESHOLD_PCT", 5.0,
             updated_by_id=admin_user.id,
         )
 
 
 @pytest.mark.asyncio
-async def test_upsert_post_mortem_thresholds_accepts_valid_ordering(
+async def test_upsert_outcome_thresholds_accepts_valid_ordering(
     db_session: AsyncSession, admin_user: User,
 ):
-    """A valid bump (e.g. marginal=2, win=4, strong=8) must be accepted
-    when applied in an order that never breaks the invariant."""
-    # Bump strong first to make headroom, then win, then marginal.
+    """A valid retune (e.g. big_loss=-10, win=3, big_win=25) must be
+    accepted when applied in an order that never breaks the invariant
+    (big_loss < 0 < win < big_win)."""
+    # Bump big_win first to make headroom, then drop win, then drop big_loss.
     await svc.upsert(
-        db_session, "POST_MORTEM_STRONG_WIN_THRESHOLD_PCT", 8.0,
+        db_session, "OUTCOME_BIG_WIN_DAY5_THRESHOLD_PCT", 25.0,
         updated_by_id=admin_user.id,
     )
     await svc.upsert(
-        db_session, "POST_MORTEM_WIN_THRESHOLD_PCT", 4.0,
+        db_session, "OUTCOME_WIN_THRESHOLD_PCT", 3.0,
         updated_by_id=admin_user.id,
     )
     await svc.upsert(
-        db_session, "POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT", 2.0,
+        db_session, "OUTCOME_BIG_LOSS_THRESHOLD_PCT", -10.0,
         updated_by_id=admin_user.id,
     )
     assert await svc.get_float(
-        db_session, "POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT",
-    ) == 2.0
+        db_session, "OUTCOME_BIG_WIN_DAY5_THRESHOLD_PCT",
+    ) == 25.0
     assert await svc.get_float(
-        db_session, "POST_MORTEM_WIN_THRESHOLD_PCT",
-    ) == 4.0
+        db_session, "OUTCOME_WIN_THRESHOLD_PCT",
+    ) == 3.0
     assert await svc.get_float(
-        db_session, "POST_MORTEM_STRONG_WIN_THRESHOLD_PCT",
-    ) == 8.0
+        db_session, "OUTCOME_BIG_LOSS_THRESHOLD_PCT",
+    ) == -10.0
 
 
 # ── delete / restore ──────────────────────────────────────────────

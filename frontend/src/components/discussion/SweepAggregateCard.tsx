@@ -126,6 +126,18 @@ function fmtPct(n: number | null, decimals = 1): string {
 function KpiRow({ agg }: { agg: SweepAggregate }) {
   const { t } = useTranslation();
   const v = agg.verdict_counts;
+  // 4-band rollup: big_win + win on the upside, big_loss + loss on
+  // the downside. Hover tooltip carries the 4-way breakdown so the
+  // dashboard stays compact while still surfacing the detail.
+  const bigWin = v.big_win ?? 0;
+  const bigLoss = v.big_loss ?? 0;
+  const totalWin = bigWin + v.win;
+  const totalLoss = bigLoss + v.loss;
+  const winLossTip = t(
+    "aggregate.win_loss_tip",
+    "大勝 {{bw}} / 勝 {{w}} | 大敗 {{bl}} / 敗 {{l}}",
+    { bw: bigWin, w: v.win, bl: bigLoss, l: v.loss },
+  );
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
       <Tile
@@ -139,7 +151,8 @@ function KpiRow({ agg }: { agg: SweepAggregate }) {
       />
       <Tile
         label={t("aggregate.win_loss", "勝/負")}
-        value={`${v.win} / ${v.loss}`}
+        value={`${totalWin} / ${totalLoss}`}
+        labelTip={winLossTip}
       />
       <Tile
         label={t("aggregate.pending", "未驗")}

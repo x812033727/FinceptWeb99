@@ -209,7 +209,18 @@ describe("formatDiscussionTitle", () => {
     expect(out.verdictCls).toBe("text-green-500");
   });
 
-  it("marks 敗 in red when verdict=loss", () => {
+  it("marks 大勝 in emerald when verdict=big_win", () => {
+    const out = formatDiscussionTitle({
+      topic: "x",
+      conclusion: baseConclusion,
+      verdict: "big_win",
+      created_at: "2025-05-01T00:00:00Z",
+    });
+    expect(out.verdictMark).toBe("大勝");
+    expect(out.verdictCls).toBe("text-emerald-500");
+  });
+
+  it("marks 敗 in orange when verdict=loss", () => {
     const out = formatDiscussionTitle({
       topic: "x",
       conclusion: baseConclusion,
@@ -217,7 +228,18 @@ describe("formatDiscussionTitle", () => {
       created_at: "2025-05-01T00:00:00Z",
     });
     expect(out.verdictMark).toBe("敗");
-    expect(out.verdictCls).toBe("text-red-500");
+    expect(out.verdictCls).toBe("text-orange-500");
+  });
+
+  it("marks 大敗 in red when verdict=big_loss", () => {
+    const out = formatDiscussionTitle({
+      topic: "x",
+      conclusion: baseConclusion,
+      verdict: "big_loss",
+      created_at: "2025-05-01T00:00:00Z",
+    });
+    expect(out.verdictMark).toBe("大敗");
+    expect(out.verdictCls).toBe("text-red-600");
   });
 
   it("uses muted styling when verdict=unverifiable", () => {
@@ -231,23 +253,34 @@ describe("formatDiscussionTitle", () => {
     expect(out.verdictCls).toBe("text-muted-foreground");
   });
 
-  it("computes per-day change_pct against day-1 open and applies the +3% win threshold (green)", () => {
+  it("colours the per-day strip green when any close beats the +5% win bar", () => {
     const out = formatDiscussionTitle({
       topic: "x",
       conclusion: { ...baseConclusion, recommended_symbols: ["2330"] },
       day1_open_prices: { "2330": 600 },
-      // D1 close +0.33%, D2 +0.83%, …, D5 = 618 → +3.00% exactly = WIN
-      daily_close_prices: { "2330": [602, 605, 610, 615, 618] },
+      // D1 +0.33% … D5 = 630 → +5.00% exactly = win bar (≥5%)
+      daily_close_prices: { "2330": [602, 605, 610, 615, 630] },
       created_at: "2025-05-01T00:00:00Z",
     });
     const line = out.lines![0];
     expect(line.symbol).toBe("2330");
     expect(line.cls).toBe("text-green-500");
-    // (618 - 600) / 600 = 0.03 → matches the WIN_THRESHOLD edge
-    expect(line.changePcts[4]).toBeCloseTo(0.03, 6);
+    expect(line.changePcts[4]).toBeCloseTo(0.05, 6);
   });
 
-  it("renders red when no day's close beats the +3% win threshold", () => {
+  it("colours the per-day strip red when any close crosses the -5% big_loss bar", () => {
+    const out = formatDiscussionTitle({
+      topic: "x",
+      conclusion: { ...baseConclusion, recommended_symbols: ["2330"] },
+      day1_open_prices: { "2330": 600 },
+      // D1 -7%, recovers later — big_loss precedence on the cell strip
+      daily_close_prices: { "2330": [558, 580, 610, 615, 620] },
+      created_at: "2025-05-01T00:00:00Z",
+    });
+    expect(out.lines![0].cls).toBe("text-red-500");
+  });
+
+  it("renders muted when no day crosses ±5%", () => {
     const out = formatDiscussionTitle({
       topic: "x",
       conclusion: { ...baseConclusion, recommended_symbols: ["2330"] },
@@ -255,7 +288,7 @@ describe("formatDiscussionTitle", () => {
       daily_close_prices: { "2330": [602, 605, 610, 615, 617] }, // max 2.83 %
       created_at: "2025-05-01T00:00:00Z",
     });
-    expect(out.lines![0].cls).toBe("text-red-500");
+    expect(out.lines![0].cls).toBe("text-muted-foreground");
   });
 
   it("renders muted when every change_pct is null (no resolved closes)", () => {

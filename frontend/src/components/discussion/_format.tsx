@@ -138,10 +138,30 @@ export function formatCompactNumber(n: number): string {
   return n.toLocaleString();
 }
 
+// 4-band verdict label + colour table (大勝/勝/大敗/敗). Legacy
+// "win"/"loss" rows fall into the same buckets via the matching key
+// so historical discussions keep their badge.
+export const BAND_LABELS: Record<
+  string,
+  { mark: string; cls: string }
+> = {
+  big_win: { mark: "大勝", cls: "text-emerald-500" },
+  win: { mark: "勝", cls: "text-green-500" },
+  big_loss: { mark: "大敗", cls: "text-red-600" },
+  loss: { mark: "敗", cls: "text-orange-500" },
+  unverifiable: { mark: "", cls: "text-muted-foreground" },
+};
+
 export function formatDiscussionTitle(s: {
   topic: string;
   conclusion: Conclusion | null;
-  verdict?: "win" | "loss" | "unverifiable" | null;
+  verdict?:
+    | "big_win"
+    | "win"
+    | "big_loss"
+    | "loss"
+    | "unverifiable"
+    | null;
   created_at: string;
   /** PR #276: backtest discussions display the as_of_date (the
    *  date being analyzed) in the sidebar title rather than
@@ -167,16 +187,21 @@ export function formatDiscussionTitle(s: {
     : s.created_at;
   const date = formatTaipeiDateCompact(dateSource);
 
-  let verdictMark = "";
-  let verdictCls = "text-foreground";
-  if (s.verdict === "win") { verdictMark = "勝"; verdictCls = "text-green-500"; }
-  else if (s.verdict === "loss") { verdictMark = "敗"; verdictCls = "text-red-500"; }
-  else if (s.verdict === "unverifiable") { verdictCls = "text-muted-foreground"; }
+  // Verdict pill: derive from the canonical 4-band table. Unknown
+  // values (legacy data with custom strings, or null) fall back to
+  // a neutral foreground colour.
+  const band = s.verdict ? BAND_LABELS[s.verdict] : undefined;
+  const verdictMark = band?.mark ?? "";
+  const verdictCls = band?.cls ?? "text-foreground";
 
+  // Sidebar D1-D5 cell colour mirrors the win threshold (5%) on the
+  // upside and the big_loss threshold (-5%) on the downside —
+  // matches the 4-band classifier's two bars (the big_win 20% bar
+  // is reserved for the verdict pill, not per-day cells which would
+  // otherwise read "all amber" on +6%-+15% days).
   const opens = s.day1_open_prices ?? {};
   const closes_legacy = s.day5_close_prices ?? {};
   const closes_daily = s.daily_close_prices ?? {};
-  const WIN_THRESHOLD = 0.03;
   const lines: FormattedSymbolLine[] = syms.slice(0, 3).map((sym) => {
     const open = sym in opens ? opens[sym] : null;
     let dailyCloses: (number | null)[] | null = closes_daily[sym] ?? null;
@@ -187,16 +212,20 @@ export function formatDiscussionTitle(s: {
     const changePcts: (number | null)[] = safeDailyCloses.map((c) =>
       c !== null && open !== null && open > 0 ? (c - open) / open : null,
     );
-    const maxPct = changePcts.reduce<number | null>(
+    const peakPct = changePcts.reduce<number | null>(
       (acc, p) => (p !== null && (acc === null || p > acc) ? p : acc),
       null,
     );
-    const cls =
-      maxPct === null
-        ? "text-muted-foreground"
-        : maxPct >= WIN_THRESHOLD
-          ? "text-green-500"
-          : "text-red-500";
+    const troughPct = changePcts.reduce<number | null>(
+      (acc, p) => (p !== null && (acc === null || p < acc) ? p : acc),
+      null,
+    );
+    let cls = "text-muted-foreground";
+    if (troughPct !== null && troughPct <= -0.05) {
+      cls = "text-red-500";
+    } else if (peakPct !== null && peakPct >= 0.05) {
+      cls = "text-green-500";
+    }
     return { symbol: sym, changePcts, cls };
   });
 

@@ -658,7 +658,15 @@ export interface SweepAggregate {
   parent_sweep_id?: string | null;
   discussions_total: number;
   verdict_counts: {
-    win: number; loss: number; unverifiable: number; pending: number;
+    /** 4-band rollout: big_win + win count as wins, big_loss + loss
+     *  as losses. Legacy "win"/"loss" rows from before the cutover
+     *  land in the matching key without re-classification. */
+    big_win?: number;
+    win: number;
+    big_loss?: number;
+    loss: number;
+    unverifiable: number;
+    pending: number;
   };
   win_rate: number | null;
   avg_pnl_pct: (number | null)[];

@@ -4,24 +4,22 @@ Cron: 08:30 UTC = 16:30 Asia/Taipei (3h after TW close at 13:30 Taipei).
 Picks up every discussion (manual + auto-run, PR #218) whose
 `verify_after_date <= today` and `verdict IS NULL`, fetches OHLCV
 bars for the recommended symbols over the 5-trading-day window
-starting from the discussion's day-1, and computes win/loss:
+starting from the discussion's day-1, and classifies each row into
+the 4-band outcome via `services.outcome_classifier.classify_discussion`:
 
-  win  = max(high) >= day1_open × (1 + threshold/100) for ANY recommended symbol
-  loss = no symbol crossed the threshold and at least one symbol's
-         5-day window resolved against `tw_market_service.get_history`
-  unverifiable = synthesizer returned no symbols (set immediately;
-                 nothing to grade)
+  big_loss  — any symbol's any-day close ≤ big_loss_pct (default -5%)
+  big_win   — else any symbol's D5 close ≥ big_win_day5_pct (default 20%)
+  win       — else any symbol's peak close ≥ win_pct (default 5%)
+  loss      — otherwise
+  unverifiable — synthesizer returned no symbols, OR the stale-grace
+                 cap was hit before any bar resolved
 
-The threshold tracks `POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT` (the
-lower band of the post-mortem 4-bucket verdict, default 3%) — anything
-crossing the marginal bar is "not a clean miss" and shouldn't be
-graded as `loss` for the cross-session memory field. Note the
-verifier deliberately uses **intra-day high** while the post-mortem
-uses **peak close**: high ≥ close, so the verifier's bar is more
-permissive on purpose (it grades reachable highs, not realized
-closes). Aligning the threshold VALUE keeps the two grading
-mechanisms in the same numerical ballpark while preserving the
-metric distinction.
+All comparisons are on CLOSE prices (matches the post-mortem and
+Brier sides). The legacy `intra-day high` rule from earlier in the
+project was over-permissive — it counted single-bar spikes that
+round-tripped the same session as "wins". The new rule grades only
+realized closes, which is the actual outcome the recommendation
+would have produced.
 
 Defer (verdict stays NULL, retry tomorrow) when none of the symbols
 have 5 bars yet — that's a holiday-in-window or a delisting issue;
@@ -31,20 +29,22 @@ Notes on day-1 open snapshot:
   We don't capture day1_open at auto-run time (20:00 UTC = 04:00
   Taipei, market still hours from opening). The verifier captures it
   lazily from the first history bar at or after the discussion's
-  TW-local creation date,
-  caches it on the discussion row, and uses it for the gain calc.
-  Storing the snapshot pins the comparison against the original
-  open price even if the upstream connector later corrects the bar.
+  TW-local creation date, caches it on the discussion row, and uses
+  it as the entry-price reference. Storing the snapshot pins the
+  comparison against the original open price even if the upstream
+  connector later corrects the bar.
 """
 from __future__ import annotations
 
 import logging
 import re
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import select, update
 
 from cache.redis_cache import acquire_lock, release_lock
+from config import settings
 from db.session import AsyncSessionLocal
 from models.discussion import Discussion
 from services import tw_market_service
@@ -55,6 +55,10 @@ from services.ingest.repository import (
     record_failure,
     record_health,
 )
+from services.outcome_classifier import (
+    classify_discussion,
+    is_winning_verdict,
+)
 from services.tw_trading_calendar import to_tw_date
 
 log = logging.getLogger(__name__)
@@ -63,7 +67,6 @@ JOB_ID = "verify_discussion_outcome"
 _LOCK_KEY = "lock:verify_discussion_outcome"
 _LOCK_TTL = 10 * 60
 
-_DEFAULT_WIN_THRESHOLD = 0.03   # fallback when runtime config can't be read
 _WINDOW_TRADING_DAYS = 5
 # Stale-grace cap (PR #223): if `today - verify_after_date` exceeds
 # this and we still can't resolve a single bar for any recommended
@@ -122,30 +125,34 @@ async def run() -> None:
         await release_lock(_LOCK_KEY)
 
 
-async def _resolve_threshold(db) -> float:
-    """Read the per-pick win threshold (as a fraction, e.g. 0.03 = 3%)
-    from `POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT` runtime config so
-    the verifier and the post-mortem dispatcher stay aligned. Falls
-    back to the compiled default on any resolver hiccup so the cron
-    never blocks on Redis / runtime-config issues."""
+async def _resolve_thresholds(db) -> tuple[float, float, float]:
+    """Read the three outcome thresholds (in percent units, e.g. 5.0)
+    from runtime config so verifier / post-mortem / Brier stay aligned.
+    Falls back to compiled settings on any resolver hiccup so the
+    cron never blocks on Redis / runtime-config issues.
+
+    Returns `(big_win_day5_pct, win_pct, big_loss_pct)`.
+    """
+    big_win = settings.OUTCOME_BIG_WIN_DAY5_THRESHOLD_PCT
+    win = settings.OUTCOME_WIN_THRESHOLD_PCT
+    big_loss = settings.OUTCOME_BIG_LOSS_THRESHOLD_PCT
     try:
         from services.runtime_config_service import get_float as _get_float
-        pct = await _get_float(
-            db, "POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT",
-        )
-        return pct / 100.0
+        big_win = await _get_float(db, "OUTCOME_BIG_WIN_DAY5_THRESHOLD_PCT")
+        win = await _get_float(db, "OUTCOME_WIN_THRESHOLD_PCT")
+        big_loss = await _get_float(db, "OUTCOME_BIG_LOSS_THRESHOLD_PCT")
     except Exception as exc:
         log.debug(
             "verify_discussion_outcome.threshold_fallback",
             extra={"error": str(exc)},
         )
-        return _DEFAULT_WIN_THRESHOLD
+    return big_win, win, big_loss
 
 
 async def _do_run() -> int:
     async with AsyncSessionLocal() as db:
         today = datetime.now(UTC).date()
-        threshold = await _resolve_threshold(db)
+        big_win_pct, win_pct, big_loss_pct = await _resolve_thresholds(db)
         # `auto_run` filter dropped (PR #218): manual discussions
         # had `verify_after_date` set by `synthesize_conclusion` since
         # the same PR, so the same date-based gate now covers both
@@ -165,14 +172,21 @@ async def _do_run() -> int:
             extra={
                 "count": len(pending),
                 "today": today.isoformat(),
-                "threshold": threshold,
+                "big_win_pct": big_win_pct,
+                "win_pct": win_pct,
+                "big_loss_pct": big_loss_pct,
             },
         )
 
         verified = 0
         for d in pending:
             try:
-                wrote = await _verify_one(db, d, threshold=threshold)
+                wrote = await _verify_one(
+                    db, d,
+                    big_win_pct=big_win_pct,
+                    win_pct=win_pct,
+                    big_loss_pct=big_loss_pct,
+                )
                 if wrote:
                     verified += 1
             except Exception:
@@ -187,14 +201,21 @@ async def _do_run() -> int:
 
 
 async def _verify_one(
-    db, d: Discussion, *, threshold: float = _DEFAULT_WIN_THRESHOLD,
+    db,
+    d: Discussion,
+    *,
+    big_win_pct: float,
+    win_pct: float,
+    big_loss_pct: float,
 ) -> bool:
-    """Compute and persist the verdict for one row. Returns True if a
-    verdict was written, False if we deferred (waiting for more bars).
+    """Compute and persist the 4-band verdict for one row. Returns
+    True if a verdict was written, False if we deferred (waiting for
+    more bars).
 
-    `threshold` is the fractional gain bar (e.g. 0.03 = 3%) sourced from
-    `POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT` runtime config; default
-    fallback keeps the legacy 3% behavior on resolver failure.
+    Delegates band classification to
+    `services.outcome_classifier.classify_discussion`. Thresholds are
+    in PERCENT UNITS (e.g. 5.0 = +5%, -5.0 = -5%) — the classifier
+    takes them as-is. All comparisons use CLOSE prices.
 
     Uses the atomic-UPDATE + manual-mirror pattern (PR #114) to avoid
     SQLAlchemy's "Instance not persistent" error on PostgreSQL when
@@ -220,6 +241,9 @@ async def _verify_one(
 
     day1_opens: dict[str, float] = dict(d.day1_open_prices or {})
     day5_closes: dict[str, float] = dict(d.day5_close_prices or {})
+    daily_closes_persist: dict[str, list[float | None]] = dict(
+        d.daily_close_prices or {},
+    )
     # Backtest mode (PR #224): the post-window starts at `as_of_date`
     # instead of `created_at.date()`. A discussion built today that
     # backtests `as_of='2025-01-15'` is verified against bars from
@@ -229,11 +253,7 @@ async def _verify_one(
     else:
         anchor_tw = to_tw_date(d.created_at)
 
-    win_symbol: str | None = None
-    win_gain: float | None = None
-    best_gain: float = float("-inf")
-    best_symbol: str | None = None
-    resolved_any = False
+    per_symbol: dict[str, tuple[float, list[float | None]]] = {}
 
     for sym in symbols:
         if d.as_of_date is not None:
@@ -273,61 +293,52 @@ async def _verify_one(
         if day1_open <= 0:
             continue
 
-        # Capture the day-5 close once (lazy snapshot, same pattern as
-        # day1_open). Used by the frontend to render
-        # `4958:55/51 (-7.3%)` per symbol; pinning it here means the
-        # display value doesn't drift if the upstream connector later
-        # corrects the bar.
-        if sym not in day5_closes:
-            day5_close = _coerce_float(window[-1].get("close"))
-            if day5_close is not None and day5_close > 0:
-                day5_closes[sym] = day5_close
-
-        highs = [
-            h for h in (_coerce_float(b.get("high")) for b in window)
-            if h is not None
+        # Pull all 5 closes for the classifier. The last one is
+        # also pinned to day5_close_prices for the frontend's
+        # `(D5/D1 -7.3%)` rendering.
+        closes: list[float | None] = [
+            _coerce_float(b.get("close")) for b in window
         ]
-        if not highs:
+        if sym not in day5_closes:
+            last_close = closes[-1]
+            if last_close is not None and last_close > 0:
+                day5_closes[sym] = last_close
+        # Also persist the full D1-D5 close array so the scoreboard /
+        # Brier paths can reuse it without re-fetching ohlcv.
+        if sym not in daily_closes_persist:
+            daily_closes_persist[sym] = closes
+
+        if all(c is None for c in closes):
             continue
 
-        max_high = max(highs)
-        gain = (max_high - day1_open) / day1_open
-        resolved_any = True
-        if gain >= threshold:
-            win_symbol = sym
-            win_gain = gain
-            break
-        if gain > best_gain:
-            best_gain = gain
-            best_symbol = sym
+        per_symbol[sym] = (day1_open, closes)
 
-    if win_symbol is not None:
-        await _set_verdict(
-            db, d,
-            verdict="win",
-            reason=f"{win_symbol} max high {(win_gain or 0) * 100:.1f}% over day1 open",
-            day1_opens=day1_opens,
-            day5_closes=day5_closes,
+    if per_symbol:
+        result = classify_discussion(
+            per_symbol=per_symbol,
+            big_win_day5_pct=big_win_pct,
+            win_pct=win_pct,
+            big_loss_pct=big_loss_pct,
         )
-        return True
-
-    # No winner found. Two sub-cases: (a) at least one symbol resolved
-    # but came up short → loss, (b) nothing resolved → defer.
-    if resolved_any:
-        reason = (
-            f"best gain {best_gain * 100:.1f}% by {best_symbol} "
-            f"(under {threshold * 100:.0f}% threshold)"
-            if best_symbol is not None
-            else f"no symbol crossed {threshold * 100:.0f}% threshold"
-        )
-        await _set_verdict(
-            db, d,
-            verdict="loss",
-            reason=reason,
-            day1_opens=day1_opens,
-            day5_closes=day5_closes,
-        )
-        return True
+        if result is not None:
+            sym_cls = result.classifications.get(result.winner_symbol or "")
+            reason = _format_verdict_reason(
+                result.band,
+                result.winner_symbol,
+                sym_cls,
+                big_win_pct=big_win_pct,
+                win_pct=win_pct,
+                big_loss_pct=big_loss_pct,
+            )
+            await _set_verdict(
+                db, d,
+                verdict=result.band,
+                reason=reason,
+                day1_opens=day1_opens,
+                day5_closes=day5_closes,
+                daily_closes=daily_closes_persist,
+            )
+            return True
 
     # PR #223 stale-grace: if no symbol resolved AND we're more than
     # `_STALE_GRACE_DAYS` past the original `verify_after_date`, give
@@ -377,19 +388,23 @@ async def _set_verdict(
     reason: str,
     day1_opens: dict[str, float],
     day5_closes: dict[str, float] | None = None,
+    daily_closes: dict[str, list[float | None]] | None = None,
 ) -> None:
     now = datetime.now(UTC)
     closes = day5_closes if day5_closes is not None else {}
+    values: dict[str, Any] = {
+        "verdict": verdict,
+        "verdict_reason": reason,
+        "verified_at": now,
+        "day1_open_prices": day1_opens or None,
+        "day5_close_prices": closes or None,
+    }
+    if daily_closes is not None:
+        values["daily_close_prices"] = daily_closes or None
     await db.execute(
         update(Discussion)
         .where(Discussion.id == d.id)
-        .values(
-            verdict=verdict,
-            verdict_reason=reason,
-            verified_at=now,
-            day1_open_prices=day1_opens or None,
-            day5_close_prices=closes or None,
-        )
+        .values(**values)
         .execution_options(synchronize_session=False)
     )
     await db.commit()
@@ -400,12 +415,14 @@ async def _set_verdict(
     d.verified_at = now
     d.day1_open_prices = day1_opens or None
     d.day5_close_prices = closes or None
+    if daily_closes is not None:
+        d.daily_close_prices = daily_closes or None
 
     # PR-B2: bump hit_count on every lesson cited by this discussion's
-    # round contexts when the verdict turns positive. record_lesson_outcome
-    # is gated on verdict=='win' internally so calling unconditionally
-    # is safe; failure only logs.
-    if verdict == "win":
+    # round contexts when the verdict is a winning band (legacy "win"
+    # or new "big_win"). record_lesson_outcome is gated internally so
+    # calling unconditionally is safe; failure only logs.
+    if is_winning_verdict(verdict):
         try:
             from services.lesson_tier_service import (
                 record_lesson_outcome,
@@ -441,3 +458,39 @@ def _coerce_float(v) -> float | None:
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+def _format_verdict_reason(
+    band: str,
+    winner_symbol: str | None,
+    sym_cls,
+    *,
+    big_win_pct: float,
+    win_pct: float,
+    big_loss_pct: float,
+) -> str:
+    """Human-readable verdict_reason for the discussion sidebar.
+    `sym_cls` is the OutcomeClassification of the winning symbol
+    (None when classifications was empty — shouldn't happen for a
+    written verdict but defensive anyway)."""
+    if sym_cls is None or winner_symbol is None:
+        return f"{band}: no classification details"
+    if band == "big_loss":
+        return (
+            f"{winner_symbol} trough close {sym_cls.trough_pct:.2f}% "
+            f"(≤ {big_loss_pct:g}% threshold)"
+        )
+    if band == "big_win":
+        return (
+            f"{winner_symbol} D5 close {sym_cls.day5_pct:+.2f}% "
+            f"(≥ {big_win_pct:g}% threshold)"
+        )
+    if band == "win":
+        return (
+            f"{winner_symbol} peak close {sym_cls.peak_pct:+.2f}% "
+            f"(≥ {win_pct:g}% threshold)"
+        )
+    return (
+        f"{winner_symbol} peak {sym_cls.peak_pct:+.2f}% / trough "
+        f"{sym_cls.trough_pct:+.2f}% — no band crossed"
+    )

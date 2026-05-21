@@ -98,12 +98,13 @@ async def _gather_persona_participation(
         .distinct()
     )).all())
 
+    from services.outcome_classifier import is_winning_verdict
     participation: dict[str, int] = defaultdict(int)
     win_attribution: dict[str, int] = defaultdict(int)
     for d_id, persona_id in turn_pairs:
         participation[persona_id] += 1
         verdict = by_id[d_id].verdict if d_id in by_id else None
-        if verdict == "win":
+        if is_winning_verdict(verdict):
             win_attribution[persona_id] += 1
     return (dict(participation), dict(win_attribution), len(discussions))
 

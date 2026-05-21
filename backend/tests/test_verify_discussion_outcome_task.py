@@ -133,19 +133,19 @@ def _bars(
     n: int,
     *,
     open_: float,
-    highs: list[float],
-    closes: list[float] | None = None,
+    closes: list[float],
 ) -> list[dict]:
-    """Synthesize OHLCV bars starting from `start`. `highs[i]` and the
-    optional `closes[i]` drive what the verifier sees per day. Bars
-    used to test win/loss/defer paths."""
+    """Synthesize OHLCV bars starting from `start`. `closes[i]` drives
+    what the 4-band classifier sees per day. `high` and `low` are
+    derived around close ± 1% for completeness — the new verifier
+    only reads close, so they're decorative."""
     return [
         {
             "time": (start + timedelta(days=i)).isoformat(),
             "open": open_,
-            "high": highs[i],
-            "low": open_ * 0.95,
-            "close": closes[i] if closes is not None else (open_ + highs[i]) / 2,
+            "high": closes[i] * 1.005,
+            "low": closes[i] * 0.99,
+            "close": closes[i],
             "volume": 10_000_000,
         }
         for i in range(n)
@@ -153,13 +153,17 @@ def _bars(
 
 
 @pytest.mark.asyncio
-async def test_win_when_max_high_above_3pct(
+async def test_win_when_peak_close_above_5pct(
     patch_session, db_session: AsyncSession, owner: User,
 ):
+    """Any close ≥ +5% (and no day ≤ -5%) → win band."""
     d = await _make_pending(db_session, owner.id, symbols=["2330"])
     created_date = d.created_at.date()
 
-    bars = _bars(created_date, 5, open_=100.0, highs=[100.5, 101.0, 103.5, 102.0, 102.5], closes=[100.2, 100.8, 102.5, 101.5, 102.0])
+    # open=100; D3 close=106 (+6%) — clears the 5% bar but D5 only +2%
+    # so it's win, not big_win.
+    bars = _bars(created_date, 5, open_=100.0,
+                 closes=[100.5, 101.0, 106.0, 103.0, 102.0])
     patches = _stub_lock_helpers() + [
         patch("services.tw_market_service.get_history",
               AsyncMock(return_value=bars)),
@@ -175,6 +179,7 @@ async def test_win_when_max_high_above_3pct(
     await db_session.refresh(refreshed)
     assert refreshed.verdict == "win"
     assert "2330" in (refreshed.verdict_reason or "")
+    assert "peak close" in (refreshed.verdict_reason or "")
     assert refreshed.day1_open_prices == {"2330": 100.0}
     # day-5 close is the LAST bar's close — used by the frontend to
     # render `2330:100/102 (+2.0%)` in the sidebar.
@@ -182,12 +187,71 @@ async def test_win_when_max_high_above_3pct(
 
 
 @pytest.mark.asyncio
-async def test_loss_when_max_high_under_3pct(
+async def test_big_win_when_d5_close_above_20pct(
     patch_session, db_session: AsyncSession, owner: User,
 ):
+    """D5 close ≥ +20% (and no day ≤ -5%) → big_win band."""
+    d = await _make_pending(db_session, owner.id, symbols=["2330"])
+    created_date = d.created_at.date()
+    bars = _bars(created_date, 5, open_=100.0,
+                 closes=[105, 110, 115, 118, 122])   # D5 +22%
+    patches = _stub_lock_helpers() + [
+        patch("services.tw_market_service.get_history",
+              AsyncMock(return_value=bars)),
+    ]
+    _enter_all(patches)
+    try:
+        from tasks import verify_discussion_outcome
+        await verify_discussion_outcome.run()
+    finally:
+        _exit_all(patches)
+
+    refreshed = await db_session.get(Discussion, d.id)
+    await db_session.refresh(refreshed)
+    assert refreshed.verdict == "big_win"
+    assert "D5 close" in (refreshed.verdict_reason or "")
+
+
+@pytest.mark.asyncio
+async def test_big_loss_overrides_big_win_priority(
+    patch_session, db_session: AsyncSession, owner: User,
+):
+    """大敗優先: any close ≤ -5% triggers big_loss even when D5 closes
+    above the big_win threshold. This is the headline behavior change
+    of the 4-band rule — we want to be confident the verifier honors
+    it."""
+    d = await _make_pending(db_session, owner.id, symbols=["2330"])
+    created_date = d.created_at.date()
+    # D1 crashes -8% (triggers big_loss), then D5 rebounds to +25%
+    # (would be big_win under naive precedence).
+    bars = _bars(created_date, 5, open_=100.0,
+                 closes=[92, 95, 100, 110, 125])
+    patches = _stub_lock_helpers() + [
+        patch("services.tw_market_service.get_history",
+              AsyncMock(return_value=bars)),
+    ]
+    _enter_all(patches)
+    try:
+        from tasks import verify_discussion_outcome
+        await verify_discussion_outcome.run()
+    finally:
+        _exit_all(patches)
+
+    refreshed = await db_session.get(Discussion, d.id)
+    await db_session.refresh(refreshed)
+    assert refreshed.verdict == "big_loss"
+    assert "trough close" in (refreshed.verdict_reason or "")
+
+
+@pytest.mark.asyncio
+async def test_loss_when_no_threshold_crossed(
+    patch_session, db_session: AsyncSession, owner: User,
+):
+    """No close crosses ±5% → loss band."""
     d = await _make_pending(db_session, owner.id, symbols=["2454"])
     created_date = d.created_at.date()
-    bars = _bars(created_date, 5, open_=200.0, highs=[201, 202, 202.5, 203, 202])
+    bars = _bars(created_date, 5, open_=200.0,
+                 closes=[201, 202, 203, 202.5, 201.5])
     patches = _stub_lock_helpers() + [
         patch("services.tw_market_service.get_history",
               AsyncMock(return_value=bars)),
@@ -202,22 +266,25 @@ async def test_loss_when_max_high_under_3pct(
     refreshed = await db_session.get(Discussion, d.id)
     await db_session.refresh(refreshed)
     assert refreshed.verdict == "loss"
-    assert "under 3%" in (refreshed.verdict_reason or "")
+    assert "no band crossed" in (refreshed.verdict_reason or "")
 
 
 @pytest.mark.asyncio
 async def test_any_symbol_can_trigger_win(
     patch_session, db_session: AsyncSession, owner: User,
 ):
-    """Three symbols, only the second crosses 3%. Verdict='win', reason
-    names the winning symbol."""
+    """Three symbols, only the second crosses +5% peak close. Verdict='win',
+    reason names the winning symbol."""
     d = await _make_pending(db_session, owner.id, symbols=["1101", "2330", "2454"])
     created_date = d.created_at.date()
 
     by_sym = {
-        "1101": _bars(created_date, 5, open_=50.0, highs=[50.5, 50.8, 50.4, 50.2, 50.1]),
-        "2330": _bars(created_date, 5, open_=600.0, highs=[605, 610, 625, 615, 612]),  # +4.2%
-        "2454": _bars(created_date, 5, open_=900.0, highs=[902, 903, 901, 900, 899]),
+        "1101": _bars(created_date, 5, open_=50.0,
+                       closes=[50.2, 50.5, 50.3, 50.1, 50.0]),
+        "2330": _bars(created_date, 5, open_=600.0,
+                       closes=[610, 620, 635, 625, 620]),  # peak +5.83%
+        "2454": _bars(created_date, 5, open_=900.0,
+                       closes=[902, 903, 901, 900, 899]),
     }
 
     async def _fake_history(symbol, **_):
@@ -341,7 +408,6 @@ async def test_defers_when_window_under_5_bars(
     in a wrong answer."""
     d = await _make_pending(db_session, owner.id, symbols=["2330"])
     bars = _bars(d.created_at.date(), 4, open_=100.0,
-                 highs=[101, 102, 103, 104],
                  closes=[100.5, 101.5, 102.5, 103.5])
 
     patches = _stub_lock_helpers() + [
@@ -414,7 +480,7 @@ async def test_only_processes_pending_rows(
     await db_session.commit()
 
     bars = _bars(eligible_auto.created_at.date(), 5, open_=100.0,
-                 highs=[103.5, 102, 102, 102, 102])
+                 closes=[101, 102, 106, 103, 102])   # peak close +6%
     patches = _stub_lock_helpers() + [
         patch("services.tw_market_service.get_history",
               AsyncMock(return_value=bars)),
@@ -453,7 +519,7 @@ async def test_lazy_day1_open_snapshot(
         db_session, owner.id, symbols=["2330"], day1_open_prices=None,
     )
     bars = _bars(d.created_at.date(), 5, open_=120.0,
-                 highs=[121, 122, 124, 124, 124])  # +3.3% peak
+                 closes=[121, 122, 127, 124, 124])   # peak close +5.8%
     patches = _stub_lock_helpers() + [
         patch("services.tw_market_service.get_history",
               AsyncMock(return_value=bars)),
@@ -485,7 +551,7 @@ async def test_filters_non_numeric_symbols(
     async def _fake_history(symbol, **_):
         history_calls.append(symbol)
         return _bars(d.created_at.date(), 5, open_=100.0,
-                     highs=[103.5, 102, 102, 102, 102])
+                     closes=[101, 102, 106, 103, 102])   # peak close +6%
 
     patches = _stub_lock_helpers() + [
         patch("services.tw_market_service.get_history",

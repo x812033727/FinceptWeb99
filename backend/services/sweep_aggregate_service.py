@@ -161,7 +161,9 @@ def _empty_payload(**extra: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "discussions_total": 0,
         "verdict_counts": {
-            "win": 0, "loss": 0, "unverifiable": 0, "pending": 0,
+            "big_win": 0, "win": 0,
+            "big_loss": 0, "loss": 0,
+            "unverifiable": 0, "pending": 0,
         },
         "win_rate": None,
         "avg_pnl_pct": [None] * WINDOW_DAYS,
@@ -299,13 +301,16 @@ def _aggregate_discussions(
             calibrated_brier_sum_loss += d_cal_brier * samples
             calibrated_brier_total_samples += samples
 
-        # Persona attribution (in-roster only).
+        # Persona attribution (in-roster only). Both legacy `"win"` and
+        # new `"big_win"` count as wins via the shared helper so
+        # historical rows keep contributing correctly.
+        from services.outcome_classifier import is_winning_verdict
         roster_set = set(roster)
         for pid in (d.persona_ids or []):
             if pid not in roster_set:
                 continue
             persona_disc_count[pid] += 1
-            if verdict == "win":
+            if is_winning_verdict(verdict):
                 persona_win_count[pid] += 1
 
     avg_pnl: list[float | None] = []
@@ -315,8 +320,10 @@ def _aggregate_discussions(
         else:
             avg_pnl.append(pnl_sum[i] / pnl_n[i])
 
-    win = verdict_ctr.get("win", 0)
-    loss = verdict_ctr.get("loss", 0)
+    # win = legacy "win" + new "big_win" (legacy rows have no big_win
+    # bucket so this is additive and safe). Same for losses.
+    win = verdict_ctr.get("win", 0) + verdict_ctr.get("big_win", 0)
+    loss = verdict_ctr.get("loss", 0) + verdict_ctr.get("big_loss", 0)
     win_rate: float | None
     if win + loss == 0:
         win_rate = None
@@ -364,8 +371,10 @@ def _aggregate_discussions(
     return {
         "discussions_total": len(discussions),
         "verdict_counts": {
-            "win": win,
-            "loss": loss,
+            "big_win": verdict_ctr.get("big_win", 0),
+            "win": verdict_ctr.get("win", 0),
+            "big_loss": verdict_ctr.get("big_loss", 0),
+            "loss": verdict_ctr.get("loss", 0),
             "unverifiable": verdict_ctr.get("unverifiable", 0),
             "pending": verdict_ctr.get("pending", 0),
         },

@@ -118,8 +118,9 @@ async def _gather_window_hit_rate(
     )).all())
     if not verdicts:
         return (None, 0)
+    from services.outcome_classifier import is_winning_verdict
     total = len(verdicts)
-    wins = sum(1 for v in verdicts if v == "win")
+    wins = sum(1 for v in verdicts if is_winning_verdict(v))
     return (wins / total, total)
 
 

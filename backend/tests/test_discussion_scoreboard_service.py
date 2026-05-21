@@ -749,7 +749,9 @@ def _disc_for_brier(
 
 
 def test_brier_basic_textbook_example():
-    """Conf 0.8, outcome 1 (peak ≥ threshold) → loss = (0.8 - 1)² = 0.04."""
+    """Conf 0.8, outcome 1 (peak ≥ threshold) → loss = (0.8 - 1)² = 0.04.
+    Also confirms `verdict_band` is emitted alongside `outcome_binary`
+    so the 4-band frontend can read either field."""
     d = _disc_for_brier(
         recommendations=[{"symbol": "2330", "confidence": 0.8}],
         # peak D1-D5 = (110 - 100) / 100 = 10% > threshold 5% → outcome 1
@@ -760,7 +762,40 @@ def test_brier_basic_textbook_example():
     assert out is not None
     assert out["brier_score"] == pytest.approx(0.04, abs=1e-6)
     assert out["samples"] == 1
-    assert out["outcome_vector"][0]["outcome_binary"] == 1
+    entry = out["outcome_vector"][0]
+    assert entry["outcome_binary"] == 1
+    assert entry["verdict_band"] == "win"   # peak 10% ≥ 5% win bar, D5 < 20%
+    assert entry["peak_pct"] == pytest.approx(10.0)
+    assert entry["day5_pct"] == pytest.approx(9.0)
+
+
+def test_brier_emits_big_loss_band_on_crash():
+    """Any close ≤ -5% → verdict_band="big_loss" (outcome_binary=0)."""
+    d = _disc_for_brier(
+        recommendations=[{"symbol": "2330", "confidence": 0.4}],
+        # D2 close = 92 → -8% vs day-1 open 100 → big_loss
+        daily={"2330": [98.0, 92.0, 95.0, 100.0, 105.0]},
+        opens={"2330": 100.0},
+    )
+    out = discussion_scoreboard_service.compute_brier_for_discussion(d)
+    assert out is not None
+    entry = out["outcome_vector"][0]
+    assert entry["verdict_band"] == "big_loss"
+    assert entry["outcome_binary"] == 0
+
+
+def test_brier_emits_big_win_band_when_d5_above_20pct():
+    """D5 close ≥ +20% AND no day ≤ -5% → verdict_band="big_win"."""
+    d = _disc_for_brier(
+        recommendations=[{"symbol": "2330", "confidence": 0.9}],
+        daily={"2330": [105.0, 110.0, 115.0, 118.0, 122.0]},   # D5 +22%
+        opens={"2330": 100.0},
+    )
+    out = discussion_scoreboard_service.compute_brier_for_discussion(d)
+    assert out is not None
+    entry = out["outcome_vector"][0]
+    assert entry["verdict_band"] == "big_win"
+    assert entry["outcome_binary"] == 1
 
 
 def test_brier_handles_outcome_zero_when_below_threshold():

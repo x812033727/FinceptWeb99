@@ -615,11 +615,11 @@ async def test_verify_train_fold_isolates_per_discussion_failure(
         "tasks.verify_discussion_outcome", fromlist=["_verify_one"],
     )._verify_one
 
-    async def flaky_verify(db, d):
+    async def flaky_verify(db, d, **kwargs):
         call_count["n"] += 1
         if call_count["n"] == 2:
             raise RuntimeError("simulated archive read error")
-        return await real_verify(db, d)
+        return await real_verify(db, d, **kwargs)
 
     monkeypatch.setattr(
         "tasks.verify_discussion_outcome._verify_one",

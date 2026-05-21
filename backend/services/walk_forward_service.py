@@ -691,10 +691,11 @@ async def _verify_test_fold_discussions(test_sweep_id: UUID) -> int:
     from sqlalchemy import select as _select
 
     from models.discussion import Discussion as _Discussion
-    from tasks.verify_discussion_outcome import _verify_one
+    from tasks.verify_discussion_outcome import _resolve_thresholds, _verify_one
 
     resolved = 0
     async with AsyncSessionLocal() as db:
+        big_win_pct, win_pct, big_loss_pct = await _resolve_thresholds(db)
         rows = (await db.scalars(
             _select(_Discussion).where(
                 _Discussion.sweep_id == test_sweep_id,
@@ -704,7 +705,12 @@ async def _verify_test_fold_discussions(test_sweep_id: UUID) -> int:
             if d.verdict is not None:
                 continue
             try:
-                ok = await _verify_one(db, d)
+                ok = await _verify_one(
+                    db, d,
+                    big_win_pct=big_win_pct,
+                    win_pct=win_pct,
+                    big_loss_pct=big_loss_pct,
+                )
                 if ok:
                     resolved += 1
             except Exception as exc:
@@ -745,10 +751,11 @@ async def _verify_train_fold_discussions(train_sweep_id: UUID) -> int:
     from sqlalchemy import select as _select
 
     from models.discussion import Discussion as _Discussion
-    from tasks.verify_discussion_outcome import _verify_one
+    from tasks.verify_discussion_outcome import _resolve_thresholds, _verify_one
 
     resolved = 0
     async with AsyncSessionLocal() as db:
+        big_win_pct, win_pct, big_loss_pct = await _resolve_thresholds(db)
         rows = (await db.scalars(
             _select(_Discussion).where(
                 _Discussion.sweep_id == train_sweep_id,
@@ -758,7 +765,12 @@ async def _verify_train_fold_discussions(train_sweep_id: UUID) -> int:
             if d.verdict is not None:
                 continue   # already verified, skip
             try:
-                ok = await _verify_one(db, d)
+                ok = await _verify_one(
+                    db, d,
+                    big_win_pct=big_win_pct,
+                    win_pct=win_pct,
+                    big_loss_pct=big_loss_pct,
+                )
                 if ok:
                     resolved += 1
             except Exception as exc:

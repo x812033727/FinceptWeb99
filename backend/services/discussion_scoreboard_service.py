@@ -60,6 +60,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.discussion import Discussion
 from services.ingest.repository import read_ohlcv_range_autosession
+from services.outcome_classifier import (
+    DEFAULT_BIG_LOSS_PCT,
+    DEFAULT_BIG_WIN_DAY5_PCT,
+    DEFAULT_WIN_PCT,
+    band_to_binary,
+    classify_outcome,
+)
 from services.tw_trading_calendar import to_tw_date
 
 # Mirror of `tasks.score_discussion_outcomes._REFRESH_WINDOW_DAYS`.
@@ -598,16 +605,18 @@ async def build_scoreboard_debug_payload(
 # ── PR-C1: Brier score + reliability bucketing ──────────────────────
 
 
-# Default win threshold mirrors the post_mortem service. Lifted to a
-# parameter so unit tests can pin it without poking the runtime
-# config plumbing.
-DEFAULT_BRIER_THRESHOLD_PCT = 5.0
+# Defaults mirror `services.outcome_classifier`. Lifted to keyword
+# arguments so unit tests can pin them without poking the runtime
+# config plumbing. Production callers leave them at the defaults; the
+# 4-band classifier reads runtime config itself via its caller.
 
 
 def compute_brier_for_discussion(
     discussion: Discussion,
     *,
-    threshold_pct: float = DEFAULT_BRIER_THRESHOLD_PCT,
+    big_win_day5_pct: float = DEFAULT_BIG_WIN_DAY5_PCT,
+    win_pct: float = DEFAULT_WIN_PCT,
+    big_loss_pct: float = DEFAULT_BIG_LOSS_PCT,
     window_days: int = WINDOW_DAYS,
 ) -> dict[str, Any] | None:
     """Compute the per-discussion Brier score from `conclusion.
@@ -617,9 +626,10 @@ def compute_brier_for_discussion(
       `{"brier_score": float,         # raw confidence
         "calibrated_brier_score": float | None,  # PR-C2 follow-up
         "outcome_vector": [{symbol, confidence, calibrated_confidence,
-                            outcome_binary, peak_pct}, ...],
+                            outcome_binary, verdict_band, peak_pct,
+                            day5_pct, trough_pct}, ...],
         "samples": int,
-        "threshold_pct": float}`
+        "win_pct": float}`
 
     or `None` when:
       - the discussion has no `recommendations` (pre-PR-C0 row that
@@ -628,10 +638,12 @@ def compute_brier_for_discussion(
       - none of the recommendations have a fully-resolved D1-D5
         window (so every outcome would be skipped)
 
-    `outcome_binary` per symbol = 1 iff the symbol's peak D1-D5
-    change_pct is `>= threshold_pct`. Symbols with insufficient bars
-    are skipped (not counted as 0) — caller's `samples` field tells
-    the consumer how many actually contributed.
+    `outcome_binary` per symbol stays binary (1 if classifier band is
+    win or big_win, else 0) so Brier / calibration math stays
+    comparable to historical rows. `verdict_band` adds the 4-band
+    detail for the frontend; downstream code that wants the fine
+    detail reads `verdict_band`, while the binary calibrator path
+    keeps reading `outcome_binary`.
 
     PR-C2 follow-up: when a recommendation also carries a
     `calibrated_confidence` (set by the calibration apply step in
@@ -684,17 +696,26 @@ def compute_brier_for_discussion(
 
         closes = daily.get(symbol) or []
         day1_open = opens.get(symbol)
-        peak_pct = _peak_change_pct(
-            closes, day1_open=day1_open, window_days=window_days,
+        if day1_open is None or day1_open <= 0:
+            continue
+        result = classify_outcome(
+            d1_buy=day1_open,
+            closes=list(closes[:window_days]),
+            big_win_day5_pct=big_win_day5_pct,
+            win_pct=win_pct,
+            big_loss_pct=big_loss_pct,
         )
-        if peak_pct is None:
+        if result is None:
             continue   # insufficient data — skip the symbol entirely
-        outcome_binary = 1 if peak_pct >= threshold_pct else 0
+        outcome_binary = band_to_binary(result.band)
         vector_entry: dict[str, Any] = {
             "symbol": symbol,
             "confidence": round(confidence, 4),
             "outcome_binary": outcome_binary,
-            "peak_pct": round(peak_pct, 4),
+            "verdict_band": result.band,
+            "peak_pct": result.peak_pct,
+            "trough_pct": result.trough_pct,
+            "day5_pct": result.day5_pct,
         }
         if calibrated is not None:
             vector_entry["calibrated_confidence"] = round(calibrated, 4)
@@ -723,7 +744,7 @@ def compute_brier_for_discussion(
         "calibrated_brier_score": calibrated_brier,
         "outcome_vector": outcome_vector,
         "samples": len(losses),
-        "threshold_pct": threshold_pct,
+        "win_pct": win_pct,
     }
 
 

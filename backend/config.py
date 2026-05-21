@@ -172,28 +172,37 @@ class Settings(BaseSettings):
     # hanging the whole round indefinitely.
     DISCUSSION_PERSONA_TIMEOUT_SECONDS: int = 60
 
-    # Post-mortem verdict bands. Classifies the best peak D1-D{window}
-    # cumulative-return across recommended symbols into four buckets and
-    # routes the post-mortem to a band-specific prompt:
+    # Discussion outcome thresholds (4-band classification). The
+    # single source of truth is `services.outcome_classifier`; the
+    # verifier task, post-mortem service, and Brier scoreboard all
+    # consult these defaults via runtime_config. Priority is
+    # 大敗 → 大勝 → 勝 → 敗 (any close ≤ -5% always wins, even when
+    # D5 ≥ +20%): a recommendation that crashed mid-window is a
+    # real risk-management failure regardless of how it rebounded.
     #
-    #   peak <  marginal           → miss          (full miss prompt)
-    #   marginal ≤ peak < win      → marginal_win  (skeptical "barely passed" prompt)
-    #   win      ≤ peak < strong   → win           (celebratory + survivor-bias guards)
-    #   peak ≥ strong              → strong_win    (regime-vs-stockpicking interrogation)
+    #   band      condition
+    #   big_loss  any D1-D{window} close ≤ -5%   (any close BELOW this bar)
+    #   big_win   D5 close ≥ +20%                (specifically the last day)
+    #   win       any close ≥ +5%
+    #   loss      otherwise
     #
-    # Defaults 3/5/10 reflect TW large-cap noise: 3% peak in 5 sessions is
-    # achievable by random luck in a basket of N picks, 5% is meaningful
-    # and matches the Brier outcome_binary upper band, ≥10% in 5 sessions
-    # is almost always regime-driven (sector rotation, macro news) and
-    # demands explicit interrogation. Invariant `marginal < win < strong`
-    # is enforced at runtime upsert time.
+    # Invariant `big_loss < 0 < win < big_win_day5` enforced at runtime
+    # upsert time. Legacy POST_MORTEM_* threshold env-vars are no
+    # longer consulted (kept on Settings for older shells that still
+    # set them; new code reads OUTCOME_* instead).
+    OUTCOME_BIG_WIN_DAY5_THRESHOLD_PCT: float = 20.0
+    OUTCOME_WIN_THRESHOLD_PCT: float = 5.0
+    OUTCOME_BIG_LOSS_THRESHOLD_PCT: float = -5.0
+    POST_MORTEM_WINDOW_DAYS: int = 5
+    # Deprecated since the 4-band cutover — kept for backwards
+    # compatibility with any deployed .env / Helm values that still
+    # set these names. Nothing in the codebase reads them anymore.
     POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT: float = 3.0
     POST_MORTEM_WIN_THRESHOLD_PCT: float = 5.0
     POST_MORTEM_STRONG_WIN_THRESHOLD_PCT: float = 10.0
-    POST_MORTEM_WINDOW_DAYS: int = 5
 
-    # Discussion learning loop. Each post-mortem (status=miss) extracts
-    # structured lessons into `discussion_lessons`; subsequent discussions
+    # Discussion learning loop. Each post-mortem (status=loss/big_loss)
+    # extracts structured lessons into `discussion_lessons`; subsequent discussions
     # gather them into ctx as `recent_lessons.market` + per_symbol blocks
     # so personas see "what past discussions on this market got wrong".
     LESSONS_INJECTION_ENABLED: bool = True

@@ -208,6 +208,46 @@ async def test_record_outcome_no_op_on_loss(
 
 
 @pytest.mark.asyncio
+async def test_record_outcome_bumps_hits_on_big_win(
+    db_session: AsyncSession, owner: User,
+):
+    """4-band rollout: the new `big_win` verdict must also bump
+    lesson hit_count (else the learning loop ignores the strongest
+    outcomes). Uses the shared `is_winning_verdict` helper."""
+    lesson = await _seed_lesson(db_session, owner_id=owner.id)
+    d = await _seed_discussion_with_lessons(
+        db_session, owner_id=owner.id,
+        verdict="big_win", market_lesson_ids=[lesson.id],
+    )
+    out = await svc.record_lesson_outcome(
+        db_session, discussion_id=d.id,
+    )
+    assert out["verdict"] == "big_win"
+    assert out["updated"] == 1
+    await db_session.refresh(lesson)
+    assert lesson.hit_count == 1
+
+
+@pytest.mark.asyncio
+async def test_record_outcome_no_op_on_big_loss(
+    db_session: AsyncSession, owner: User,
+):
+    """`big_loss` is on the losing side — no hit_count bump."""
+    lesson = await _seed_lesson(db_session, owner_id=owner.id)
+    d = await _seed_discussion_with_lessons(
+        db_session, owner_id=owner.id,
+        verdict="big_loss", market_lesson_ids=[lesson.id],
+    )
+    out = await svc.record_lesson_outcome(
+        db_session, discussion_id=d.id,
+    )
+    assert out["verdict"] == "big_loss"
+    assert out["updated"] == 0
+    await db_session.refresh(lesson)
+    assert lesson.hit_count == 0
+
+
+@pytest.mark.asyncio
 async def test_record_outcome_dedupes_lesson_ids_across_rounds(
     db_session: AsyncSession, owner: User,
 ):

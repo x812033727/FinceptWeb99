@@ -209,48 +209,44 @@ _REGISTRY: dict[str, RuntimeSettingSpec] = {
         min_value=512,
         max_value=131_072,
     ),
-    "POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT": RuntimeSettingSpec(
-        key="POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT",
+    "OUTCOME_BIG_WIN_DAY5_THRESHOLD_PCT": RuntimeSettingSpec(
+        key="OUTCOME_BIG_WIN_DAY5_THRESHOLD_PCT",
         type="float",
-        name="Post-mortem marginal-win threshold (%)",
+        name="Outcome 大勝 (D5 close) threshold (%)",
         description=(
-            "Lower band of the 4-bucket verdict. A peak D1-D{window} "
-            "below this is a clear miss; equal/above but under the "
-            "win threshold is 'marginal_win' and gets the skeptical "
-            "barely-passed prompt. Default 3% is roughly TW noise floor "
-            "in a 5-session window. Must be < win threshold."
+            "D5 (last evaluation day) close vs D1 buy price ≥ this → "
+            "大勝 (big_win). Specifically the LAST day's close, not "
+            "the peak — captures recommendations that finished strong, "
+            "not those that spiked and faded. Must be > win threshold."
         ),
-        min_value=0.5,
-        max_value=20.0,
-    ),
-    "POST_MORTEM_WIN_THRESHOLD_PCT": RuntimeSettingSpec(
-        key="POST_MORTEM_WIN_THRESHOLD_PCT",
-        type="float",
-        name="Post-mortem win threshold (%)",
-        description=(
-            "Mid band of the 4-bucket verdict. Peaks between this and "
-            "the strong threshold count as a clear 'win' and get the "
-            "celebratory + survivor-bias prompt. Default 5% matches "
-            "the Brier outcome_binary upper band. Must be > marginal "
-            "threshold and < strong threshold."
-        ),
-        min_value=0.5,
-        max_value=20.0,
-    ),
-    "POST_MORTEM_STRONG_WIN_THRESHOLD_PCT": RuntimeSettingSpec(
-        key="POST_MORTEM_STRONG_WIN_THRESHOLD_PCT",
-        type="float",
-        name="Post-mortem strong-win threshold (%)",
-        description=(
-            "Upper band of the 4-bucket verdict. Peaks at or above "
-            "this trigger 'strong_win' — the regime-vs-stockpicking "
-            "interrogation prompt. Default 10% in a 5-session TW window "
-            "is almost always sector / macro driven, so the prompt "
-            "specifically asks personas to disambiguate skill from "
-            "regime. Must be > win threshold."
-        ),
-        min_value=0.5,
+        min_value=5.0,
         max_value=50.0,
+    ),
+    "OUTCOME_WIN_THRESHOLD_PCT": RuntimeSettingSpec(
+        key="OUTCOME_WIN_THRESHOLD_PCT",
+        type="float",
+        name="Outcome 勝 threshold (%)",
+        description=(
+            "Any D1-D{window} close vs D1 buy price ≥ this → 勝 (win). "
+            "Uses the peak close (max), so any single up-day clearing "
+            "this bar counts. Must be > 0 and < big_win threshold."
+        ),
+        min_value=1.0,
+        max_value=20.0,
+    ),
+    "OUTCOME_BIG_LOSS_THRESHOLD_PCT": RuntimeSettingSpec(
+        key="OUTCOME_BIG_LOSS_THRESHOLD_PCT",
+        type="float",
+        name="Outcome 大敗 threshold (%)",
+        description=(
+            "Any D1-D{window} close vs D1 buy price ≤ this → 大敗 "
+            "(big_loss). Negative number (e.g. -5). Takes priority "
+            "over all winning bands — a recommendation that crashed "
+            "≥5% on any day is graded big_loss even if it later "
+            "rebounded past the big_win threshold by D5. Must be < 0."
+        ),
+        min_value=-50.0,
+        max_value=-1.0,
     ),
     "POST_MORTEM_WINDOW_DAYS": RuntimeSettingSpec(
         key="POST_MORTEM_WINDOW_DAYS",
@@ -516,35 +512,37 @@ async def list_settings(db: AsyncSession) -> list[SettingInfo]:
     return out
 
 
-_POST_MORTEM_THRESHOLD_KEYS = (
-    "POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT",
-    "POST_MORTEM_WIN_THRESHOLD_PCT",
-    "POST_MORTEM_STRONG_WIN_THRESHOLD_PCT",
+_OUTCOME_THRESHOLD_KEYS = (
+    "OUTCOME_BIG_LOSS_THRESHOLD_PCT",
+    "OUTCOME_WIN_THRESHOLD_PCT",
+    "OUTCOME_BIG_WIN_DAY5_THRESHOLD_PCT",
 )
 
 
-async def _validate_post_mortem_threshold_ordering(
+async def _validate_outcome_threshold_ordering(
     db: AsyncSession, *, key: str, value: float,
 ) -> None:
-    """Enforce `marginal < win < strong` across the three post-mortem
-    threshold keys. Reads the OTHER two effective values (cache → DB →
-    default) and rejects the upsert if the candidate would break the
-    invariant. Without this an admin could set marginal=6, win=5 and
-    silently corrupt the verdict classifier."""
-    if key not in _POST_MORTEM_THRESHOLD_KEYS:
+    """Enforce `big_loss < 0 < win < big_win_day5` across the three
+    outcome threshold keys. Reads the OTHER two effective values
+    (cache → DB → default) and rejects the upsert if the candidate
+    would break the invariant. Without this an admin could set
+    big_loss=-1, win=5, big_win=3 and silently corrupt the band
+    classifier so 勝 picks would never escape into 大勝.
+    """
+    if key not in _OUTCOME_THRESHOLD_KEYS:
         return
     others = {
         k: float(await get(db, k))
-        for k in _POST_MORTEM_THRESHOLD_KEYS if k != key
+        for k in _OUTCOME_THRESHOLD_KEYS if k != key
     }
     pending = {**others, key: value}
-    marginal = pending["POST_MORTEM_MARGINAL_WIN_THRESHOLD_PCT"]
-    win = pending["POST_MORTEM_WIN_THRESHOLD_PCT"]
-    strong = pending["POST_MORTEM_STRONG_WIN_THRESHOLD_PCT"]
-    if not (marginal < win < strong):
+    big_loss = pending["OUTCOME_BIG_LOSS_THRESHOLD_PCT"]
+    win = pending["OUTCOME_WIN_THRESHOLD_PCT"]
+    big_win = pending["OUTCOME_BIG_WIN_DAY5_THRESHOLD_PCT"]
+    if not (big_loss < 0 < win < big_win):
         raise ValueError(
-            f"post-mortem thresholds must satisfy "
-            f"marginal ({marginal}) < win ({win}) < strong ({strong})"
+            f"outcome thresholds must satisfy "
+            f"big_loss ({big_loss}) < 0 < win ({win}) < big_win ({big_win})"
         )
 
 
@@ -558,7 +556,7 @@ async def upsert(
     spec = get_spec(key)
     value = _coerce(spec, raw_value)   # raises ValueError on type / bounds
 
-    await _validate_post_mortem_threshold_ordering(
+    await _validate_outcome_threshold_ordering(
         db, key=key, value=float(value) if spec.type == "float" else 0.0,
     )
 

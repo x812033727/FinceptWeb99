@@ -68,6 +68,7 @@ import {
   formatDateLong,
   formatDateShort,
   formatDiscussionTitle,
+  pctClass,
   readCollapse,
   readDefaultRules,
   readDefaultTopic,
@@ -138,16 +139,22 @@ function SessionRowBody({ s }: { s: Discussion }) {
         <div className="line-clamp-2 font-bold text-foreground">{tt.text}</div>
       ) : (
         <div className="space-y-0.5">
-          <div className={`font-bold ${tt.verdictCls ?? ""}`}>
+          <div className="font-bold">
             {tt.date}
-            {tt.verdictMark ? ` ${tt.verdictMark}` : ""}
+            {tt.verdictMark ? (
+              <span className={`ml-1 ${tt.verdictCls ?? ""}`}>
+                {tt.verdictMark}
+              </span>
+            ) : null}
           </div>
           {tt.lines?.map((ln) => (
-            <div key={ln.symbol} className={`font-mono ${ln.cls}`}>
-              {ln.symbol}:{" "}
+            <div key={ln.symbol} className="font-mono">
+              <span className={tt.verdictCls ?? ""}>{ln.symbol}</span>:{" "}
               {ln.changePcts.map((p, i) => (
                 <span key={i}>
-                  {p !== null ? signedPct(p) : "—"}
+                  <span className={pctClass(p)}>
+                    {p !== null ? signedPct(p) : "—"}
+                  </span>
                   {i < ln.changePcts.length - 1 ? "/" : ""}
                 </span>
               ))}

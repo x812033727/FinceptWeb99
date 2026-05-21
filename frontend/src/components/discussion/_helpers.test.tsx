@@ -253,45 +253,35 @@ describe("formatDiscussionTitle", () => {
     expect(out.verdictCls).toBe("text-muted-foreground");
   });
 
-  it("colours the per-day strip green when any close beats the +5% win bar", () => {
+  it("computes per-day change_pct against day-1 open", () => {
     const out = formatDiscussionTitle({
       topic: "x",
       conclusion: { ...baseConclusion, recommended_symbols: ["2330"] },
       day1_open_prices: { "2330": 600 },
-      // D1 +0.33% … D5 = 630 → +5.00% exactly = win bar (≥5%)
+      // D1 +0.33% … D5 = 630 → +5.00% exactly
       daily_close_prices: { "2330": [602, 605, 610, 615, 630] },
       created_at: "2025-05-01T00:00:00Z",
     });
     const line = out.lines![0];
     expect(line.symbol).toBe("2330");
-    expect(line.cls).toBe("text-green-500");
+    expect(line.changePcts[0]).toBeCloseTo(0.00333, 5);
     expect(line.changePcts[4]).toBeCloseTo(0.05, 6);
   });
 
-  it("colours the per-day strip red when any close crosses the -5% big_loss bar", () => {
+  it("yields a negative change_pct for downside days (consumer renders red via pctClass)", () => {
     const out = formatDiscussionTitle({
       topic: "x",
       conclusion: { ...baseConclusion, recommended_symbols: ["2330"] },
       day1_open_prices: { "2330": 600 },
-      // D1 -7%, recovers later — big_loss precedence on the cell strip
+      // D1 -7% (consumer should colour the cell red via pctClass)
       daily_close_prices: { "2330": [558, 580, 610, 615, 620] },
       created_at: "2025-05-01T00:00:00Z",
     });
-    expect(out.lines![0].cls).toBe("text-red-500");
+    expect(out.lines![0].changePcts[0]!).toBeLessThan(0);
+    expect(out.lines![0].changePcts[4]!).toBeGreaterThan(0);
   });
 
-  it("renders muted when no day crosses ±5%", () => {
-    const out = formatDiscussionTitle({
-      topic: "x",
-      conclusion: { ...baseConclusion, recommended_symbols: ["2330"] },
-      day1_open_prices: { "2330": 600 },
-      daily_close_prices: { "2330": [602, 605, 610, 615, 617] }, // max 2.83 %
-      created_at: "2025-05-01T00:00:00Z",
-    });
-    expect(out.lines![0].cls).toBe("text-muted-foreground");
-  });
-
-  it("renders muted when every change_pct is null (no resolved closes)", () => {
+  it("yields null change_pct entries when every close is unresolved", () => {
     const out = formatDiscussionTitle({
       topic: "x",
       conclusion: { ...baseConclusion, recommended_symbols: ["2330"] },
@@ -299,7 +289,6 @@ describe("formatDiscussionTitle", () => {
       daily_close_prices: { "2330": [null, null, null, null, null] },
       created_at: "2025-05-01T00:00:00Z",
     });
-    expect(out.lines![0].cls).toBe("text-muted-foreground");
     expect(out.lines![0].changePcts).toEqual([null, null, null, null, null]);
   });
 

@@ -60,31 +60,57 @@ from models.discussion_lesson import DiscussionLesson
 
 log = logging.getLogger(__name__)
 
-# Seven categories the synthesizer must constrain itself to. Anything
-# outside this set is coerced to "other" at write time.
+# Lesson categories used by the post-mortem extraction pipeline.
+# Anything outside this set is coerced to "other" at write time, so
+# every category referenced in a post-mortem prompt MUST appear here
+# — otherwise the LLM's labels get silently flattened to "other" and
+# the lesson loses its semantic identity for future ctx injection.
 #
-# PR-B0 shipped 5 miss-side categories. PR-B3 adds 2 win-side
-# categories so the post-mortem on a successful discussion can capture
-# *why* it worked (which signal combo + thesis actually played out)
-# without poisoning the existing miss-side accounting.
+# Miss-side categories (originally PR-B0): describe what went wrong
+# or what data was missing. Surfaced in the "過去失誤教訓" ctx block.
+#
+# Win-side categories (PR-B3 + the 4-band cutover): describe what
+# worked (or what regime / luck factor explained the win). Surfaced
+# in the "過去命中經驗" block via `WIN_CATEGORIES`.
 ALLOWED_CATEGORIES: frozenset[str] = frozenset({
-    # miss-side (PR-B0)
+    # miss-side
     "missed_sector",
     "wrong_signal_weight",
     "missing_data",
     "over_confidence",
     "other",
-    # win-side (PR-B3)
+    "missing_signal_category",   # 4-band: win-side prompt asks for
+                                 # this when a non-recommended symbol
+                                 # outran the picks by ≥ 2×
+    "risk_management",           # 4-band: big_loss prompt asks for
+                                 # this when stop-loss / position-
+                                 # sizing rules were missing
+    # win-side
     "correct_signal_combo",
     "successful_thesis",
+    "regime_context",            # 4-band: big_win was regime-driven,
+                                 # not stock-picking
+    "regime_capture",            # 4-band: alpha < 2 %, win came from
+                                 # riding the regime
+    "regime_signal",             # 4-band: signals that flagged the
+                                 # regime turn in advance
 })
 
-# Win-side categories — used by PR-B3 to split the fetch render into
-# 「過去命中經驗」vs 「過去失誤教訓」blocks so the LLM sees positive
-# vs negative cases unambiguously rather than mixed in one list.
+# Win-side subset used to split the lesson-fetch render into
+# 「過去命中經驗」(win-side) vs 「過去失誤教訓」(miss-side) blocks
+# so the LLM sees positive vs negative cases unambiguously rather
+# than mixed in one list.
+#
+# `risk_management` and `missing_signal_category` are NOT included
+# here even though they may appear on won discussions — their
+# semantic is "we missed / failed at X", which belongs on the
+# miss-side fetch.
 WIN_CATEGORIES: frozenset[str] = frozenset({
     "correct_signal_combo",
     "successful_thesis",
+    "regime_context",
+    "regime_capture",
+    "regime_signal",
 })
 
 _MIN_LESSON_LEN = 20

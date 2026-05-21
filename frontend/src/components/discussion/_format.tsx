@@ -86,7 +86,6 @@ export function formatTaipeiDateCompact(iso: string): string {
 export interface FormattedSymbolLine {
   symbol: string;
   changePcts: (number | null)[];
-  cls: string;
 }
 
 export interface FormattedTitle {
@@ -194,11 +193,11 @@ export function formatDiscussionTitle(s: {
   const verdictMark = band?.mark ?? "";
   const verdictCls = band?.cls ?? "text-foreground";
 
-  // Sidebar D1-D5 cell colour mirrors the win threshold (5%) on the
-  // upside and the big_loss threshold (-5%) on the downside —
-  // matches the 4-band classifier's two bars (the big_win 20% bar
-  // is reserved for the verdict pill, not per-day cells which would
-  // otherwise read "all amber" on +6%-+15% days).
+  // Per-cell colour is driven by `pctClass(p)` at render time
+  // (consumer side) — discussion-level verdict colour goes on the
+  // symbol code; each percent gets its own +/− sign-based colour.
+  // Keeps "勝負" (verdict) and "當日漲跌" (daily move) visually
+  // independent instead of conflating them into one row colour.
   const opens = s.day1_open_prices ?? {};
   const closes_legacy = s.day5_close_prices ?? {};
   const closes_daily = s.daily_close_prices ?? {};
@@ -212,21 +211,7 @@ export function formatDiscussionTitle(s: {
     const changePcts: (number | null)[] = safeDailyCloses.map((c) =>
       c !== null && open !== null && open > 0 ? (c - open) / open : null,
     );
-    const peakPct = changePcts.reduce<number | null>(
-      (acc, p) => (p !== null && (acc === null || p > acc) ? p : acc),
-      null,
-    );
-    const troughPct = changePcts.reduce<number | null>(
-      (acc, p) => (p !== null && (acc === null || p < acc) ? p : acc),
-      null,
-    );
-    let cls = "text-muted-foreground";
-    if (troughPct !== null && troughPct <= -0.05) {
-      cls = "text-red-500";
-    } else if (peakPct !== null && peakPct >= 0.05) {
-      cls = "text-green-500";
-    }
-    return { symbol: sym, changePcts, cls };
+    return { symbol: sym, changePcts };
   });
 
   return { date, verdictMark, verdictCls, lines };

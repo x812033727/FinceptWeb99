@@ -18,6 +18,14 @@ Markets covered:
   every conclusion render would add a per-symbol upstream call. Bare
   symbol still surfaces, which is the existing behaviour.
 
+TW codes are also pattern-detected (4-6 digit numeric, optional
+``R``/``L`` 反向/槓桿 suffix) so a discussion whose ``market`` field
+isn't ``TW`` — legacy rows that defaulted before the field existed,
+or a GLOBAL/US discussion that recommended a Taiwan stock — still
+picks up names from the TW map. The pattern is disjoint from US
+tickers (alphabetic) and crypto codes (alphabetic), so the broader
+lookup doesn't risk false positives.
+
 Pure / no DB / no I/O. ``screener_utils._tag_industry`` already wires
 the same TW name map into context rows; this helper applies the same
 lookup at result-serialization time so the names survive the
@@ -25,13 +33,33 @@ structured-conclusion bottleneck.
 """
 from __future__ import annotations
 
+import re
 from typing import Iterable
+
+# 4-6 digit TW securities code, optionally followed by a single uppercase
+# letter (``R`` for 反向 ETF, ``L`` for 槓桿 ETF). Matches the same shape
+# ``services.tw_market_service._ETF_CODE`` accepts plus regular stock
+# codes like ``2330`` / ``6415`` and 6-digit emerging ones like ``911616``.
+_TW_CODE_PATTERN = re.compile(r"^\d{4,6}[A-Z]?$")
+
+
+def _looks_like_tw_code(symbol: str) -> bool:
+    return bool(_TW_CODE_PATTERN.match(symbol))
 
 
 def resolve_display_name(market: str, symbol: str) -> str | None:
     m = (market or "").upper()
     if not symbol:
         return None
+    # Pattern-detect TW codes regardless of ``market`` so legacy rows
+    # whose market wasn't normalised to ``TW`` still surface 公司簡稱
+    # in the chip. ``_name_map`` is per-process: a miss falls through
+    # to the market-keyed branches below.
+    if _looks_like_tw_code(symbol):
+        from services import tw_market_service
+        name = tw_market_service.get_company_name(symbol)
+        if name:
+            return name
     if m == "TW":
         from services import tw_market_service
         return tw_market_service.get_company_name(symbol)

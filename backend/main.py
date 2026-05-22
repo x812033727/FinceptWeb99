@@ -165,11 +165,18 @@ async def lifespan(app: FastAPI):
     # full interval has elapsed, so without this the search endpoint and
     # exchange lookup would return empty for the first 24 hours after a
     # cold start.
-    from services.tw_market_service import refresh_symbol_map
+    from services.tw_market_service import (
+        load_symbol_map_from_cache,
+        refresh_symbol_map,
+    )
     from tasks.tw_etf_yields_refresh import warmup_tw_etf_yields
 
     async def _tw_warmup() -> None:
         # Symbol map first — the ETF yield refresh iterates _exchange_map.
+        # Warm from Redis snapshot before hitting TWSE so the chip-name
+        # lookup (and search / industry endpoints) work instantly on
+        # cold start even when the upstream fetch is slow or blocked.
+        await load_symbol_map_from_cache()
         await refresh_symbol_map()
         await warmup_tw_etf_yields()
 

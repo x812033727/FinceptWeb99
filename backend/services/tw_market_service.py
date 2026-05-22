@@ -87,6 +87,76 @@ def get_exchange(symbol: str) -> str:
     return _exchange_map.get(symbol, "TWSE")
 
 
+# Redis-backed snapshot of the three in-memory maps. Survives pod
+# restarts so cold-start chip rendering (and search / industry lookups
+# everywhere else) doesn't sit blank until the next TWSE refresh —
+# and gives multi-pod deployments a consistent view when one pod's
+# upstream refresh succeeds and another's gets rate-limited.
+_SYMBOL_MAP_CACHE_KEY = "tw:symbol_map:v1"
+_SYMBOL_MAP_CACHE_TTL = 7 * 24 * 3600  # 7 days
+
+
+async def _persist_symbol_map_to_cache(
+    exch: dict[str, str],
+    industry: dict[str, str],
+    name: dict[str, str],
+) -> None:
+    """Best-effort: snapshot the three maps into Redis so any pod that
+    cold-starts after this can warm in instantly. Silent on Redis
+    outage — the in-memory maps are still authoritative for this
+    process; the cache is a recovery aid, not a hard dependency."""
+    try:
+        from cache.redis_cache import cache_set
+        payload = json.dumps({
+            "exchange": exch,
+            "industry": industry,
+            "name": name,
+        })
+        await cache_set(_SYMBOL_MAP_CACHE_KEY, payload, _SYMBOL_MAP_CACHE_TTL)
+    except Exception as exc:
+        log.debug("tw symbol_map cache write skipped: %s", exc)
+
+
+async def load_symbol_map_from_cache() -> bool:
+    """Warm the in-memory maps from Redis. Called once during app
+    startup (before ``refresh_symbol_map`` attempts the upstream
+    fetch) so a cold-start pod has 公司名稱 / 產業 / 上市櫃 lookups
+    available immediately — chips and search don't sit blank for the
+    ~10s the TWSE fetch takes (or forever, if TWSE is blocking us).
+
+    Returns True if any of the three maps was populated from cache.
+    Empty / missing cache + Redis outages return False so the caller
+    can log it but proceed to attempt the upstream refresh either way.
+    """
+    global _exchange_map, _industry_map, _name_map
+    try:
+        from cache.redis_cache import cache_get
+        raw = await cache_get(_SYMBOL_MAP_CACHE_KEY)
+    except Exception as exc:
+        log.debug("tw symbol_map cache read skipped: %s", exc)
+        return False
+    if not raw:
+        return False
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return False
+    loaded = False
+    exch = payload.get("exchange")
+    if isinstance(exch, dict) and exch:
+        _exchange_map = {str(k): str(v) for k, v in exch.items()}
+        loaded = True
+    industry = payload.get("industry")
+    if isinstance(industry, dict) and industry:
+        _industry_map = {str(k): str(v) for k, v in industry.items()}
+        loaded = True
+    name = payload.get("name")
+    if isinstance(name, dict) and name:
+        _name_map = {str(k): str(v) for k, v in name.items()}
+        loaded = True
+    return loaded
+
+
 async def refresh_symbol_map() -> None:
     """Called by scheduler daily. Refreshes three in-memory maps:
 
@@ -99,6 +169,11 @@ async def refresh_symbol_map() -> None:
     `MainSubject` / `IndustryName` column when present, else None.
     Failures on any source are tolerated — partial maps are better
     than blank state.
+
+    After updating in-memory state, snapshots the three maps to Redis
+    (key ``tw:symbol_map:v1``, 7-day TTL) so cold-start pods +
+    siblings that lose their TWSE call to rate-limiting can warm in
+    from cache via :func:`load_symbol_map_from_cache`.
     """
     global _exchange_map, _industry_map, _name_map
     new_exch: dict[str, str] = {}
@@ -157,6 +232,15 @@ async def refresh_symbol_map() -> None:
         _industry_map = new_industry
     if new_name:
         _name_map = new_name
+
+    # Snapshot whatever we have to Redis even on partial-failure: the
+    # union of "what we already had in-memory plus what we just
+    # fetched" is still a better starting point for a cold-start
+    # sibling than nothing at all.
+    if _exchange_map or _industry_map or _name_map:
+        await _persist_symbol_map_to_cache(
+            _exchange_map, _industry_map, _name_map,
+        )
 
 
 def get_industry(symbol: str) -> str | None:

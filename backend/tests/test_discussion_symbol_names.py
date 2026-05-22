@@ -43,6 +43,41 @@ def test_resolve_display_name_handles_empty_inputs():
     assert resolve_display_name("TW", "") is None
 
 
+def test_resolve_display_name_tw_pattern_works_for_non_tw_market():
+    # A discussion whose ``market`` field defaulted/was set to GLOBAL
+    # (or a legacy row that lacked the field entirely) can still
+    # surface 公司簡稱 for its TW-coded recommendations — the chip
+    # rendering doesn't depend on the market metadata being correct.
+    with patch(
+        "services.tw_market_service.get_company_name",
+        side_effect=lambda sym: {
+            "2388": "威盛", "3037": "欣興", "6415": "矽力-KY",
+        }.get(sym),
+    ):
+        assert resolve_display_name("GLOBAL", "2388") == "威盛"
+        assert resolve_display_name("US", "3037") == "欣興"
+        # 6-digit TW code (emerging market / KY suffix elided) still
+        # matches the pattern.
+        assert resolve_display_name("", "6415") == "矽力-KY"
+
+
+def test_resolve_display_name_tw_pattern_does_not_false_match_us_tickers():
+    # US tickers are alphabetic — pattern shouldn't match, so the
+    # TW lookup branch never runs (which means no need to mock).
+    assert resolve_display_name("US", "AAPL") is None
+    assert resolve_display_name("US", "BRK.A") is None
+
+
+def test_resolve_display_name_tw_pattern_with_etf_suffix():
+    # ``00632R`` (元大台灣50反一) — 反向 ETF, ends in ``R``. Pattern
+    # accepts the trailing uppercase letter.
+    with patch(
+        "services.tw_market_service.get_company_name",
+        side_effect=lambda sym: {"00632R": "元大台灣50反1"}.get(sym),
+    ):
+        assert resolve_display_name("GLOBAL", "00632R") == "元大台灣50反1"
+
+
 def test_build_symbol_names_map_skips_misses_and_dedupes():
     with patch(
         "services.tw_market_service.get_company_name",

@@ -72,6 +72,7 @@ import models.strategy_health_metric  # noqa: E402,F401
 import models.strategy_version  # noqa: E402,F401
 import models.system_task_config  # noqa: E402,F401
 import models.tw_chip_metrics  # noqa: E402,F401
+import models.tw_company_info  # noqa: E402,F401
 import models.tw_govt_bank_flow  # noqa: E402,F401
 import models.tw_holdings_aggregates  # noqa: E402,F401
 import models.tw_revenue_monthly  # noqa: E402,F401

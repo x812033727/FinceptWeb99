@@ -167,16 +167,22 @@ async def lifespan(app: FastAPI):
     # cold start.
     from services.tw_market_service import (
         load_symbol_map_from_cache,
+        load_symbol_map_from_db,
         refresh_symbol_map,
     )
     from tasks.tw_etf_yields_refresh import warmup_tw_etf_yields
 
     async def _tw_warmup() -> None:
         # Symbol map first — the ETF yield refresh iterates _exchange_map.
-        # Warm from Redis snapshot before hitting TWSE so the chip-name
-        # lookup (and search / industry endpoints) work instantly on
-        # cold start even when the upstream fetch is slow or blocked.
-        await load_symbol_map_from_cache()
+        # Three-tier cold-start chain so chip-name / search / industry
+        # endpoints work the instant the app accepts traffic:
+        #   Redis snapshot (fastest, shared across pods)
+        #     → DB seed (deploy-survival when Redis is empty)
+        #       → TWSE upstream (fresh data; may be blocked or slow).
+        # The DB tier only runs when Redis didn't populate the maps,
+        # so a happy-path warm cache short-circuits the extra query.
+        if not await load_symbol_map_from_cache():
+            await load_symbol_map_from_db()
         await refresh_symbol_map()
         await warmup_tw_etf_yields()
 

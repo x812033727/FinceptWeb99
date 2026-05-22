@@ -157,6 +157,116 @@ async def load_symbol_map_from_cache() -> bool:
     return loaded
 
 
+async def load_symbol_map_from_db() -> bool:
+    """Postgres-backed fallback for the in-memory maps when Redis is
+    empty. Sits between :func:`load_symbol_map_from_cache` and the
+    upstream :func:`refresh_symbol_map` so a fresh-deploy pod whose
+    Redis key doesn't exist yet (cache eviction or first-deploy of
+    this code) AND can't reach TWSE still serves chip names from the
+    last persisted snapshot.
+
+    Returns True iff any of the three maps was populated from DB.
+    Silent on missing table (alembic not yet run) / connection errors
+    — caller falls through to ``refresh_symbol_map``.
+    """
+    global _exchange_map, _industry_map, _name_map
+    try:
+        from sqlalchemy import select
+
+        from db.session import AsyncSessionLocal
+        from models.tw_company_info import TwCompanyInfo
+    except ImportError:
+        return False
+    try:
+        async with AsyncSessionLocal() as db:
+            rows = (await db.scalars(select(TwCompanyInfo))).all()
+    except Exception as exc:
+        log.debug("tw symbol_map DB read skipped: %s", exc)
+        return False
+    if not rows:
+        return False
+    new_exch: dict[str, str] = {}
+    new_industry: dict[str, str] = {}
+    new_name: dict[str, str] = {}
+    for r in rows:
+        sym = (r.symbol or "").strip()
+        if not sym:
+            continue
+        new_exch[sym] = (r.exchange or "TWSE").strip()
+        if r.industry:
+            new_industry[sym] = r.industry
+        if r.name_zh:
+            new_name[sym] = r.name_zh
+    loaded = False
+    if new_exch:
+        _exchange_map = new_exch
+        loaded = True
+    if new_industry:
+        _industry_map = new_industry
+        loaded = True
+    if new_name:
+        _name_map = new_name
+        loaded = True
+    return loaded
+
+
+async def _persist_symbol_map_to_db(
+    exch: dict[str, str],
+    industry: dict[str, str],
+    name: dict[str, str],
+) -> None:
+    """Best-effort: upsert every populated symbol into ``tw_company_info``
+    after a successful TWSE refresh. Silent on errors — Redis snapshot
+    remains the primary recovery path; the DB tier is the deploy-
+    survival fallback for the case where Redis is also empty."""
+    if not (exch or industry or name):
+        return
+    try:
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        from db.session import AsyncSessionLocal
+        from models.tw_company_info import TwCompanyInfo
+    except ImportError:
+        return
+    symbols = set(exch) | set(industry) | set(name)
+    payload = [
+        {
+            "symbol": s,
+            "exchange": exch.get(s) or "TWSE",
+            "industry": industry.get(s),
+            "name_zh": name.get(s),
+        }
+        for s in symbols
+        if s
+    ]
+    if not payload:
+        return
+    try:
+        async with AsyncSessionLocal() as db:
+            dialect = (
+                db.bind.dialect.name if db.bind is not None else "postgresql"
+            )
+            insert_fn = sqlite_insert if dialect == "sqlite" else pg_insert
+            chunk_size = 4000
+            for i in range(0, len(payload), chunk_size):
+                batch = payload[i:i + chunk_size]
+                stmt = insert_fn(TwCompanyInfo).values(batch)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["symbol"],
+                    set_={
+                        "exchange": stmt.excluded.exchange,
+                        "industry": stmt.excluded.industry,
+                        "name_zh": stmt.excluded.name_zh,
+                        "updated_at": datetime.now(UTC),
+                    },
+                )
+                await db.execute(stmt)
+            await db.commit()
+    except Exception as exc:
+        log.debug("tw symbol_map DB write skipped: %s", exc)
+
+
 async def refresh_symbol_map() -> None:
     """Called by scheduler daily. Refreshes three in-memory maps:
 
@@ -173,7 +283,11 @@ async def refresh_symbol_map() -> None:
     After updating in-memory state, snapshots the three maps to Redis
     (key ``tw:symbol_map:v1``, 7-day TTL) so cold-start pods +
     siblings that lose their TWSE call to rate-limiting can warm in
-    from cache via :func:`load_symbol_map_from_cache`.
+    from cache via :func:`load_symbol_map_from_cache`. The same
+    snapshot is also upserted into ``tw_company_info`` via
+    :func:`_persist_symbol_map_to_db` so pods that come up with an
+    empty Redis (first deploy of this code, or after a cache flush)
+    still have a recovery path that survives across deploys.
     """
     global _exchange_map, _industry_map, _name_map
     new_exch: dict[str, str] = {}
@@ -236,9 +350,13 @@ async def refresh_symbol_map() -> None:
     # Snapshot whatever we have to Redis even on partial-failure: the
     # union of "what we already had in-memory plus what we just
     # fetched" is still a better starting point for a cold-start
-    # sibling than nothing at all.
+    # sibling than nothing at all. Same payload also goes to Postgres
+    # so a future cold-start with empty Redis can still warm in.
     if _exchange_map or _industry_map or _name_map:
         await _persist_symbol_map_to_cache(
+            _exchange_map, _industry_map, _name_map,
+        )
+        await _persist_symbol_map_to_db(
             _exchange_map, _industry_map, _name_map,
         )
 

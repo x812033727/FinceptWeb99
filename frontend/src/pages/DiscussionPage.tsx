@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { errorDetail, notifyRateLimited } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
+import { useToastStore } from "@/store/toastStore";
 import { cn } from "@/lib/utils";
 import { useCollapsible as useCollapsibleHook } from "@/hooks/useCollapsible";
 import type {
@@ -53,7 +54,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  DEFAULT_PERSONAS,
   concludeSession,
   createSession,
   deleteSession,
@@ -71,11 +71,14 @@ import {
   formatDiscussionTitle,
   pctClass,
   readCollapse,
+  readDefaultMarket,
+  readDefaultPersonas,
   readDefaultRules,
   readDefaultTopic,
   readPostMortemResult,
   readRoundsPerClick,
   rememberCollapse,
+  rememberDiscussionDefaults,
   rememberPostMortemResult,
   rememberRoundsPerClick,
   rememberRules,
@@ -187,6 +190,7 @@ export default function DiscussionPage() {
   const { t } = useTranslation();
   const token = useAuthStore((s) => s.token);
   const queryClient = useQueryClient();
+  const pushToast = useToastStore((s) => s.push);
 
   const { data: agents = [] } = useQuery({
     queryKey: ["ai-agents"],
@@ -218,8 +222,8 @@ export default function DiscussionPage() {
   function toggleCollapse(key: keyof CollapseState) {
     setCollapse((prev) => ({ ...prev, [key]: !prev[key] }));
   }
-  const [personaIds, setPersonaIds] = useState<string[]>(DEFAULT_PERSONAS);
-  const [market, setMarket] = useState<DiscussionMarket>("TW");
+  const [personaIds, setPersonaIds] = useState<string[]>(readDefaultPersonas);
+  const [market, setMarket] = useState<DiscussionMarket>(readDefaultMarket);
   // Backtest anchor (PR #224). Empty string = live mode. ISO date
   // ("2025-01-15") = "pretend it's that date" — backend fetches
   // historical-only ctx + verifier grades against next 5 trading
@@ -551,6 +555,20 @@ export default function DiscussionPage() {
     updateMut.mutate({ rules });
   }
 
+  // Snapshot the current config-form values as the user's per-browser
+  // defaults. Fires from the form's footer button — not tied to a
+  // create / update mutation, so the user can lock in a persona roster
+  // + market choice without first creating a discussion. as_of_date is
+  // intentionally excluded (it's a per-backtest anchor, not something
+  // anyone wants as a "default").
+  function saveAsDefaults() {
+    rememberDiscussionDefaults({ topic, rules, personaIds, market });
+    pushToast({
+      severity: "success",
+      title: t("discussion.save_as_defaults_done"),
+    });
+  }
+
   async function runOneRound(): Promise<{ ok: boolean }> {
     if (!selectedId) return { ok: false };
     setIsStreaming(true);
@@ -782,7 +800,8 @@ export default function DiscussionPage() {
     setSelectedId(null);
     setTopic(readDefaultTopic());
     setRules(readDefaultRules());
-    setPersonaIds(DEFAULT_PERSONAS);
+    setPersonaIds(readDefaultPersonas());
+    setMarket(readDefaultMarket());
     setStreamingTurns([]);
     setStreamError(null);
     setSessionsSheetOpen(false);
@@ -1143,6 +1162,21 @@ export default function DiscussionPage() {
               {t("discussion.backtest_badge")}
             </span>
           )}
+        </div>
+
+        <div className="flex items-center gap-2 pt-1 border-t border-border/40">
+          <button
+            type="button"
+            onClick={saveAsDefaults}
+            disabled={isStreaming}
+            className="px-2 py-1 text-[11px] rounded border border-border text-muted-foreground hover:border-primary/40 hover:text-foreground transition-colors disabled:opacity-50 min-h-[28px]"
+            title={t("discussion.save_as_defaults_hint")}
+          >
+            {t("discussion.save_as_defaults")}
+          </button>
+          <span className="text-[10px] text-muted-foreground">
+            {t("discussion.save_as_defaults_hint")}
+          </span>
         </div>
       </>
     );

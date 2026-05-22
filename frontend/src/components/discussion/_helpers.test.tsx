@@ -15,11 +15,17 @@ import {
   buildDiscussionExportFilename,
   buildDiscussionMarkdown,
   classifySymbolBand,
+  DEFAULT_PERSONAS,
   formatCompactNumber,
   formatDiscussionTitle,
   latestNonNull,
   pctClass,
+  readDefaultMarket,
+  readDefaultPersonas,
   readPostMortemResult,
+  rememberDiscussionDefaults,
+  rememberMarket,
+  rememberPersonas,
   rememberPostMortemResult,
   runPostMortemFlowSteps,
   signedPct,
@@ -659,6 +665,106 @@ describe("rememberPostMortemResult / readPostMortemResult", () => {
         value: realStorage,
       });
     }
+  });
+});
+
+// ── persona + market default-snapshot helpers ────────────────────
+
+describe("readDefaultPersonas / rememberPersonas", () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+
+  it("returns the hardcoded DEFAULT_PERSONAS when nothing has been saved", () => {
+    expect(readDefaultPersonas()).toEqual(DEFAULT_PERSONAS);
+  });
+
+  it("round-trips a user-curated persona roster", () => {
+    rememberPersonas(["buffett", "munger", "lynch"]);
+    expect(readDefaultPersonas()).toEqual(["buffett", "munger", "lynch"]);
+  });
+
+  it("falls back to DEFAULT_PERSONAS when the stored value is corrupted JSON", () => {
+    localStorage.setItem(
+      "fincept.discussion.default_personas", "not valid {json",
+    );
+    expect(readDefaultPersonas()).toEqual(DEFAULT_PERSONAS);
+  });
+
+  it("falls back when the stored value isn't an array", () => {
+    localStorage.setItem(
+      "fincept.discussion.default_personas",
+      JSON.stringify({ buffett: true }),
+    );
+    expect(readDefaultPersonas()).toEqual(DEFAULT_PERSONAS);
+  });
+
+  it("falls back when the stored array is empty", () => {
+    /* A round with 0 personas can't run — keeping DEFAULT_PERSONAS as
+       the floor stops a corrupt snapshot from breaking 「+ 新討論」. */
+    localStorage.setItem(
+      "fincept.discussion.default_personas",
+      JSON.stringify([]),
+    );
+    expect(readDefaultPersonas()).toEqual(DEFAULT_PERSONAS);
+  });
+
+  it("falls back when the stored array has non-string entries", () => {
+    localStorage.setItem(
+      "fincept.discussion.default_personas",
+      JSON.stringify(["buffett", 42, null]),
+    );
+    expect(readDefaultPersonas()).toEqual(DEFAULT_PERSONAS);
+  });
+});
+
+describe("readDefaultMarket / rememberMarket", () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+
+  it("returns 'TW' when nothing has been saved", () => {
+    expect(readDefaultMarket()).toBe("TW");
+  });
+
+  it("round-trips US", () => {
+    rememberMarket("US");
+    expect(readDefaultMarket()).toBe("US");
+  });
+
+  it("round-trips GLOBAL", () => {
+    rememberMarket("GLOBAL");
+    expect(readDefaultMarket()).toBe("GLOBAL");
+  });
+
+  it("falls back to 'TW' when the stored value isn't a known market", () => {
+    /* A user-edited localStorage key (or a future market enum change
+       that drops an old value) shouldn't poison the form state with
+       a string the <select> can't render. */
+    localStorage.setItem("fincept.discussion.default_market", "JP");
+    expect(readDefaultMarket()).toBe("TW");
+  });
+});
+
+describe("rememberDiscussionDefaults", () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+
+  it("snapshots all four fields in one call", () => {
+    rememberDiscussionDefaults({
+      topic: "my custom topic",
+      rules: "1. concise",
+      personaIds: ["buffett", "munger"],
+      market: "US",
+    });
+    /* Re-read through the individual readers — proves the combined
+       writer hits every key, not just the first one. */
+    expect(localStorage.getItem("fincept.discussion.last_topic")).toBe(
+      "my custom topic",
+    );
+    expect(localStorage.getItem("fincept.discussion.last_rules")).toBe(
+      "1. concise",
+    );
+    expect(readDefaultPersonas()).toEqual(["buffett", "munger"]);
+    expect(readDefaultMarket()).toBe("US");
   });
 });
 

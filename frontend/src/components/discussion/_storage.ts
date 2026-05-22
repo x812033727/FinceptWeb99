@@ -6,7 +6,7 @@
  * Imported by `_helpers.tsx` (re-export shim) so the existing 38
  * importers across the discussion/ component group keep working.
  */
-import type { Turn } from "@/types/discussion";
+import type { DiscussionMarket, Turn } from "@/types/discussion";
 import type { PostMortemResponse } from "./_api";
 
 // ── defaults ──────────────────────────────────────────────────────
@@ -63,6 +63,81 @@ export function rememberRules(rules: string): void {
   } catch {
     /* see rememberTopic */
   }
+}
+
+// Personas + market: the original code reset these to the
+// `DEFAULT_PERSONAS` / `"TW"` constants every time the user opened a
+// fresh draft. Users who don't trade TW or who have a stable preferred
+// roster (e.g. "always include trading_coach + lynch + my macro pick")
+// had to re-toggle 4 buttons every session. Now the discussion config
+// form's 「儲存為預設」 button persists the current selection, and a
+// fresh draft hydrates from here instead.
+
+const LS_PERSONAS_KEY = "fincept.discussion.default_personas";
+const LS_MARKET_KEY = "fincept.discussion.default_market";
+
+const VALID_MARKETS: ReadonlyArray<DiscussionMarket> = ["TW", "US", "GLOBAL"];
+
+export function readDefaultPersonas(): string[] {
+  try {
+    const raw = localStorage.getItem(LS_PERSONAS_KEY);
+    if (!raw) return [...DEFAULT_PERSONAS];
+    const parsed = JSON.parse(raw);
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length === 0 ||
+      !parsed.every((x) => typeof x === "string" && x.length > 0)
+    ) {
+      return [...DEFAULT_PERSONAS];
+    }
+    return parsed as string[];
+  } catch {
+    return [...DEFAULT_PERSONAS];
+  }
+}
+
+export function rememberPersonas(personaIds: string[]): void {
+  try {
+    localStorage.setItem(LS_PERSONAS_KEY, JSON.stringify(personaIds));
+  } catch {
+    /* private mode / quota — silent, see rememberTopic */
+  }
+}
+
+export function readDefaultMarket(): DiscussionMarket {
+  try {
+    const raw = localStorage.getItem(LS_MARKET_KEY);
+    if (!raw) return "TW";
+    if ((VALID_MARKETS as readonly string[]).includes(raw)) {
+      return raw as DiscussionMarket;
+    }
+    return "TW";
+  } catch {
+    return "TW";
+  }
+}
+
+export function rememberMarket(market: DiscussionMarket): void {
+  try {
+    localStorage.setItem(LS_MARKET_KEY, market);
+  } catch {
+    /* see rememberTopic */
+  }
+}
+
+// Single entry point for the config-form 「儲存為預設」 button —
+// snapshots the four user-facing fields in one call so callers don't
+// forget one (e.g. saving topic but not market).
+export function rememberDiscussionDefaults(values: {
+  topic: string;
+  rules: string;
+  personaIds: string[];
+  market: DiscussionMarket;
+}): void {
+  rememberTopic(values.topic);
+  rememberRules(values.rules);
+  rememberPersonas(values.personaIds);
+  rememberMarket(values.market);
 }
 
 const LS_ROUNDS_PER_CLICK_KEY = "fincept.discussion.rounds_per_click";

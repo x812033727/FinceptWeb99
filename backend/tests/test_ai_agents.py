@@ -1,6 +1,6 @@
 """Inventory + sanity tests for the agent persona catalogue.
 
-The 23 personas (7 functional + 16 legendary investors / traders) are
+The 24 personas (7 functional + 17 legendary investors / traders) are
 pure data — these tests guard against accidental drops, broken
 provider/model defaults, and empty system prompts.
 """
@@ -26,16 +26,16 @@ _FUNCTIONAL_IDS = {
 _MASTER_IDS = {
     "buffett", "graham", "munger",            # value
     "lynch", "fisher", "smith",               # quality-growth
-    "marks", "klarman",                       # contrarian
+    "marks", "klarman", "kostolany",          # contrarian
     "dalio", "soros",                         # macro
     "simons", "asness",                       # quant
     "livermore", "ptj", "minervini", "raschke",  # short-term traders
 }
 
 
-def test_total_agent_count_is_23():
+def test_total_agent_count_is_24():
     listed = list_agents()
-    assert len(listed) == 23, f"expected 23 agents, got {len(listed)}: {[a['id'] for a in listed]}"
+    assert len(listed) == 24, f"expected 24 agents, got {len(listed)}: {[a['id'] for a in listed]}"
 
 
 def test_all_expected_agent_ids_present():
@@ -92,6 +92,7 @@ def test_master_persona_prompts_mention_their_signature_concepts():
         "smith": ["roce", "compounder"],
         "marks": ["second-level", "cycle"],
         "klarman": ["margin of safety", "asymmetric"],
+        "kostolany": ["egg", "psychology", "weak hands"],
         "dalio": ["all-weather", "debt cycle"],
         "soros": ["reflexiv"],
         "simons": ["statistical", "factor"],

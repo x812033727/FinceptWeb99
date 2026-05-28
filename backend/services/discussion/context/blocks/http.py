@@ -55,8 +55,13 @@ async def fetch_screener(
         )
         if market == "TW":
             from services import tw_market_service
+            # Allocate a diagnostic sink so the screener populates
+            # the recovery-tier trace and we can surface it on ctx
+            # for JSON-view auditing (Part F).
+            screener_diagnostic: dict[str, Any] = {}
             rows = await tw_market_service.get_screener(
                 limit=200, min_volume=1_000_000, as_of=as_of,
+                diagnostic=screener_diagnostic if as_of is None else None,
             )
             # TW screener uses STOCK_DAY_ALL in live mode (post-14:30
             # Taipei refresh) or `ohlcv_daily` clamped to `<= as_of`
@@ -106,6 +111,11 @@ async def fetch_screener(
                     (rows[0].get("data_source") if rows else None)
                     or "twse"
                 )
+            # Surface the full recovery-tier trace so a future audit
+            # can tell at a glance which tier produced the rendered
+            # rows (and which earlier tiers bailed + why).
+            if as_of is None and screener_diagnostic:
+                ctx["screener_diagnostic"] = screener_diagnostic
         elif market == "US":
             from services import us_market_service
             rows = await us_market_service.get_screener(

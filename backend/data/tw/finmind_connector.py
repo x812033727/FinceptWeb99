@@ -500,6 +500,35 @@ async def get_monthly_revenue_market_wide(
     ]
 
 
+async def get_daily_ohlcv_market_wide(
+    start_date: str, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """All-listed TW daily OHLCV in one FinMind call. Returns rows
+    `{stock_id, time, open, high, low, close, volume}` with
+    `stock_id` matching what TWSE STOCK_DAY_ALL exposes as `Code`.
+    Used by the screener's FinMind sponsor recovery tier — same
+    quota cost as a single per-symbol fetch, so price-tier callers
+    that already have a token should prefer this over fanning out.
+
+    Empty list on quota / 402 / missing-token — matches every other
+    market-wide wrapper in this module.
+    """
+    rows = await _query("TaiwanStockPrice", "", start_date, end_date)
+    return [
+        {
+            "stock_id": r.get("stock_id"),
+            "time":     r.get("date"),
+            "open":     r.get("open"),
+            "high":     r.get("max"),
+            "low":      r.get("min"),
+            "close":    r.get("close"),
+            "volume":   r.get("Trading_Volume"),
+        }
+        for r in rows
+        if r.get("stock_id")
+    ]
+
+
 # ── Financials ────────────────────────────────────────────────────
 
 async def get_financials(symbol: str, start_date: str = "2020-01-01") -> list[dict[str, Any]]:

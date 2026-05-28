@@ -1844,26 +1844,10 @@ def _yf_ticker_for(symbol: str, exchange: str) -> str:
     return f"{symbol}{suffix}"
 
 
-async def _yfinance_session_is_fresh(
-    yf_2330_close: float | None,
-    detected_session: date,
-) -> bool:
-    """Verify yfinance's bellwether close looks newer than the
-    STOCK_DAY_ALL detected session. Returns True when yfinance's
-    2330.TW close DIFFERS from `ohlcv_daily`'s 2330 close on
-    `detected_session` — i.e. Yahoo has a value our archive doesn't
-    have for that date, so it must come from a later session.
-    Returns False if yfinance's value matches the detected_session
-    close (Yahoo is also lagging) or if no comparison is possible."""
-    if yf_2330_close is None:
-        return False
-    recent = await _bellwether_ohlcv_closes(
-        symbol=_STALENESS_BELLWETHER, lookback_days=5,
-    )
-    for ts, db_close in recent:
-        if ts == detected_session and abs(db_close - yf_2330_close) < 0.01:
-            return False
-    return True
+# `_yfinance_session_is_fresh` was merged into the shared
+# `_independent_source_is_fresh` helper (defined below) when Part F
+# added the FinMind recovery tier — both pipelines now share the
+# same bellwether check shape.
 
 
 async def _recover_screener_via_yfinance(
@@ -1872,6 +1856,7 @@ async def _recover_screener_via_yfinance(
     detected_session: date,
     expected_today: date,
     limit: int,
+    diagnostic: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]] | None:
     """Last-ditch screener recovery using Yahoo's chart endpoint.
 
@@ -1934,8 +1919,10 @@ async def _recover_screener_via_yfinance(
     except Exception as exc:
         log.warning("tw.screener.yfinance_batch_failed",
                     extra={"error": str(exc)})
+        _record_attempt(diagnostic, "yfinance", "error")
         return None
     if not quotes:
+        _record_attempt(diagnostic, "yfinance", "empty_response")
         return None
 
     bell_ticker = _yf_ticker_for(_STALENESS_BELLWETHER, "TWSE")
@@ -1944,9 +1931,13 @@ async def _recover_screener_via_yfinance(
         float(yf_2330.get("price")) if yf_2330 and yf_2330.get("price") is not None
         else None
     )
-    if not await _yfinance_session_is_fresh(yf_2330_close, detected_session):
+    if yf_2330_close is None:
+        _record_attempt(diagnostic, "yfinance", "bellwether_missing")
+        return None
+    if not await _independent_source_is_fresh(yf_2330_close, detected_session):
         log.info("tw.screener.yfinance_also_stale",
                  extra={"detected_session": detected_session.isoformat()})
+        _record_attempt(diagnostic, "yfinance", "also_stale")
         return None
 
     session_stamp = expected_today.isoformat()
@@ -1991,12 +1982,168 @@ async def _recover_screener_via_yfinance(
         recovered.append(patched)
 
     if not recovered:
+        _record_attempt(diagnostic, "yfinance", "no_symbols_matched")
         return None
     # Re-rank by volume desc (same order the live path produces) so
     # downstream gainers/losers logic, which sorts by change_pct,
     # picks the same head/tail it would have on a healthy day.
     recovered.sort(key=lambda r: r.get("volume") or 0, reverse=True)
+    _record_attempt(diagnostic, "yfinance", "recovered")
     return recovered[:limit]
+
+
+async def _recover_screener_via_finmind(
+    *,
+    candidates: list[dict[str, Any]],
+    detected_session: date,
+    expected_today: date,
+    limit: int,
+    diagnostic: dict[str, Any] | None = None,
+) -> list[dict[str, Any]] | None:
+    """Independent-pipeline recovery via FinMind sponsor's
+    `TaiwanStockPrice` market-wide call. Same bellwether-based
+    freshness check as the yfinance path — bails when FinMind's 2330
+    close matches DB's `detected_session` close (FinMind is also
+    stuck on the same session) or when the response is empty (no
+    sponsor token / quota exhausted).
+
+    Ordered ahead of yfinance because the user has paid for the
+    sponsor tier and FinMind's pipeline is typically more reliable
+    for TW data than Yahoo's third-party feed. One TaiwanStockPrice
+    call returns ~1700 rows so quota cost is one request regardless
+    of candidate count.
+    """
+    if not candidates:
+        _record_attempt(diagnostic, "finmind", "no_candidates")
+        return None
+
+    sess_iso = expected_today.isoformat()
+    try:
+        rows = await finmind.get_daily_ohlcv_market_wide(sess_iso, sess_iso)
+    except Exception as exc:
+        log.warning("tw.screener.finmind_batch_failed",
+                    extra={"error": str(exc)})
+        _record_attempt(diagnostic, "finmind", "error")
+        return None
+    if not rows:
+        _record_attempt(diagnostic, "finmind", "empty_response")
+        return None
+
+    by_symbol = {r["stock_id"]: r for r in rows if r.get("stock_id")}
+    bell_row = by_symbol.get(_STALENESS_BELLWETHER)
+    bell_close = (
+        float(bell_row["close"]) if bell_row and bell_row.get("close") is not None
+        else None
+    )
+    if bell_close is None:
+        _record_attempt(diagnostic, "finmind", "bellwether_missing")
+        return None
+
+    if not await _independent_source_is_fresh(bell_close, detected_session):
+        _record_attempt(diagnostic, "finmind", "also_stale")
+        return None
+
+    session_stamp = expected_today.isoformat()
+    recovered: list[dict[str, Any]] = []
+    for row in candidates:
+        sym = row.get("symbol")
+        if not sym:
+            continue
+        fm = by_symbol.get(sym)
+        if not fm or fm.get("close") is None:
+            continue
+        new_price = float(fm["close"])
+        new_open = float(fm["open"]) if fm.get("open") is not None else None
+        new_change = (
+            (new_price - new_open) if new_open is not None else None
+        )
+        new_change_pct = (
+            round((new_price - new_open) / new_open * 100, 4)
+            if new_open else None
+        )
+        sanitized = _sanitize_change_pct(sym, new_change_pct)
+        if sanitized is None and new_change_pct is not None:
+            new_change = None
+        new_change_pct = sanitized
+
+        patched = dict(row)
+        patched["price"] = new_price
+        patched["change"] = new_change
+        patched["change_pct"] = new_change_pct
+        if fm.get("volume") is not None:
+            patched["volume"] = int(fm["volume"])
+        patched["actual_session"] = session_stamp
+        patched["data_source"] = "finmind_recovery"
+        patched["is_stale"] = False
+        recovered.append(patched)
+
+    if not recovered:
+        _record_attempt(diagnostic, "finmind", "no_symbols_matched")
+        return None
+    recovered.sort(key=lambda r: r.get("volume") or 0, reverse=True)
+    _record_attempt(diagnostic, "finmind", "recovered")
+    return recovered[:limit]
+
+
+def _record_attempt(
+    diagnostic: dict[str, Any] | None, tier: str, outcome: str,
+) -> None:
+    """Append an attempt record to the screener diagnostic sink (if
+    provided). Centralised so every recovery tier records in the same
+    shape — `fetch_screener` reads this back to surface on the ctx."""
+    if diagnostic is None:
+        return
+    diagnostic.setdefault("attempts", []).append(
+        {"tier": tier, "outcome": outcome},
+    )
+
+
+def _set_final_data_source(
+    diagnostic: dict[str, Any] | None, source: str,
+) -> None:
+    if diagnostic is None:
+        return
+    diagnostic["final_data_source"] = source
+
+
+def _seed_diagnostic(
+    diagnostic: dict[str, Any] | None,
+    *,
+    freshness_session: date,
+    ohlcv_latest: date | None,
+) -> None:
+    if diagnostic is None:
+        return
+    diagnostic.setdefault("freshness_session", freshness_session.isoformat())
+    diagnostic.setdefault(
+        "ohlcv_latest",
+        ohlcv_latest.isoformat() if ohlcv_latest else None,
+    )
+    diagnostic.setdefault("attempts", [])
+
+
+async def _independent_source_is_fresh(
+    candidate_2330_close: float | None,
+    detected_session: date,
+) -> bool:
+    """Shared "is this independent pipeline ALSO stale?" check used by
+    both FinMind and yfinance recovery tiers. Returns False if
+    `candidate_2330_close` matches DB's 2330 close on `detected_session`
+    within 0.01 TWD — the source is reporting the same session that
+    TWSE's live tier already showed us was stale.
+
+    Returns True when no match is found (the source has a value that
+    isn't in our archive yet → presumably a newer session).
+    """
+    if candidate_2330_close is None:
+        return False
+    recent = await _bellwether_ohlcv_closes(
+        symbol=_STALENESS_BELLWETHER, lookback_days=5,
+    )
+    for ts, db_close in recent:
+        if ts == detected_session and abs(db_close - candidate_2330_close) < 0.01:
+            return False
+    return True
 
 
 def _passes_fundamental_filters(
@@ -2036,6 +2183,7 @@ async def get_screener(
     etf_only: bool = False,
     limit: int = 100,
     as_of: date | None = None,
+    diagnostic: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """
     `as_of` (PR #226): backtest mode. When set, builds the screener
@@ -2043,6 +2191,11 @@ async def get_screener(
     Valuation filters (PE/PB/yield) are skipped in backtest because
     the per-day valuation archive doesn't extend back. Result is
     NOT cached in backtest mode (per-as_of cache key would explode).
+
+    `diagnostic` (Part F): when callers pass a mutable dict, the live
+    path populates it with the recovery-tier attempts + final source
+    so the JSON view can surface exactly which tier produced the
+    rendered rows. None for other callers means zero overhead.
     """
     if as_of is not None:
         return await _get_screener_backtest(
@@ -2064,6 +2217,11 @@ async def get_screener(
     )
     ohlcv_latest = await get_latest_ohlcv_session()
     freshness_session = _latest_complete_session()
+    _seed_diagnostic(
+        diagnostic,
+        freshness_session=freshness_session,
+        ohlcv_latest=ohlcv_latest,
+    )
     ohlcv_tag = ohlcv_latest.isoformat() if ohlcv_latest else "none"
     key = (
         f"tw:screener:{exchange}:{min_volume}:"
@@ -2072,6 +2230,7 @@ async def get_screener(
     )
     cached = await cache_get(key)
     if cached:
+        _set_final_data_source(diagnostic, "cache_hit")
         return json.loads(cached)
 
     # Staleness fast-path: if `ohlcv_daily` already holds the latest
@@ -2097,9 +2256,12 @@ async def get_screener(
             row["actual_session"] = ohlcv_latest.isoformat()
             row["data_source"] = "ohlcv_daily_today"
             row["is_stale"] = False
+        _record_attempt(diagnostic, "ohlcv_fast_path", "fired")
+        _set_final_data_source(diagnostic, "ohlcv_daily_today")
         if result:
             await cache_set(key, json.dumps(result), TTL_SCREENER)
         return result
+    _record_attempt(diagnostic, "ohlcv_fast_path", "skipped")
 
     try:
         all_stocks = await twse.get_all_twse_symbols()
@@ -2186,6 +2348,8 @@ async def get_screener(
     # close gets returned instead of a stale TWSE row.
     is_stale_unrecoverable = False
     detected_session = await _detect_stock_day_all_session(all_stocks)
+    if diagnostic is not None and detected_session is not None:
+        diagnostic["detected_session"] = detected_session.isoformat()
     if detected_session is not None:
         if (
             ohlcv_latest is not None
@@ -2204,6 +2368,8 @@ async def get_screener(
                 row["actual_session"] = ohlcv_latest.isoformat()
                 row["data_source"] = "ohlcv_daily_recovered"
                 row["is_stale"] = False
+            _record_attempt(diagnostic, "ohlcv_recovery", "recovered")
+            _set_final_data_source(diagnostic, "ohlcv_daily_recovered")
             if recovered:
                 await cache_set(key, json.dumps(recovered), TTL_SCREENER)
             return recovered
@@ -2212,25 +2378,42 @@ async def get_screener(
         # `expected_today` short-circuit silently disabled recovery
         # outside the 14:30-onwards window.
         stale = detected_session < freshness_session
-        # Last-ditch independent recovery via yfinance when both TWSE
-        # and `ohlcv_daily` are stuck on the same session. Yahoo's
-        # chart endpoint draws from a different pipeline than TWSE
-        # OpenAPI, so it usually has today's close even when our
-        # primary chain is mid-outage.
+        # Two-tier independent recovery: FinMind sponsor first
+        # (paid + market-wide single call), then yfinance (free
+        # + independent). Both check 2330 against ohlcv_daily so
+        # they bail when their own pipeline is also stuck on the
+        # same session TWSE returned.
         if stale and not needs_valuations:
+            recovered = await _recover_screener_via_finmind(
+                candidates=result,
+                detected_session=detected_session,
+                expected_today=freshness_session,
+                limit=limit,
+                diagnostic=diagnostic,
+            )
+            if recovered is not None:
+                _set_final_data_source(diagnostic, "finmind_recovery")
+                await cache_set(key, json.dumps(recovered), TTL_SCREENER)
+                return recovered
             recovered = await _recover_screener_via_yfinance(
                 candidates=result,
                 detected_session=detected_session,
                 expected_today=freshness_session,
                 limit=limit,
+                diagnostic=diagnostic,
             )
             if recovered is not None:
+                _set_final_data_source(diagnostic, "yfinance_recovery")
                 await cache_set(key, json.dumps(recovered), TTL_SCREENER)
                 return recovered
         is_stale_unrecoverable = stale
         for row in result:
             row["actual_session"] = detected_session.isoformat()
             row["is_stale"] = stale
+        if stale:
+            _set_final_data_source(diagnostic, "twse_stale")
+        else:
+            _set_final_data_source(diagnostic, "twse")
     else:
         # Detector inconclusive (bellwether missing, DB empty, no close
         # match). Stamp with the freshness resolver's session so the
@@ -2239,6 +2422,7 @@ async def get_screener(
         for row in result:
             row["actual_session"] = freshness_session.isoformat()
             row["is_stale"] = None
+        _set_final_data_source(diagnostic, "twse_unverified")
 
     # Don't cache an empty screener for 10 min — mirrors the US service so
     # a transient TWSE OpenAPI failure doesn't lock the page into "no

@@ -727,7 +727,11 @@ export default function DiscussionPage() {
                 break;
               case "error":
                 setStreamError(obj.message ?? "未知錯誤");
-                roundOk = false;
+                // Per-persona soft errors (timeout / LLM error) carry a
+                // persona_id and the round still completes — they must NOT
+                // abort the multi-round loop. Only round-fatal errors (no
+                // persona_id, emitted by the router) do.
+                if (!obj.persona_id) roundOk = false;
                 break;
             }
           } catch {

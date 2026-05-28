@@ -772,3 +772,238 @@ async def test_intraday_with_matched_twse_does_not_attempt_recovery():
         # fast path fires. yfinance must not be reached.
         await svc.get_screener(limit=50, min_volume=1_000_000)
     yf_mock.assert_not_awaited()
+
+
+# ── Part F: FinMind sponsor recovery + diagnostic sink ───────────
+
+
+@pytest.mark.asyncio
+async def test_finmind_recovery_succeeds_before_yfinance_is_tried():
+    """Pre-open Friday 00:01 Taipei, TWSE stuck on 2026-05-27, ohlcv
+    also stuck on 2026-05-27. FinMind sponsor's market-wide call
+    returns Thursday (2026-05-28) data. Assert recovery patches the
+    8110 row to today's close, stamps `data_source="finmind_recovery"`,
+    and yfinance is NEVER called — FinMind is ahead in the chain.
+    """
+    thursday = date(2026, 5, 28)
+    wednesday = date(2026, 5, 27)
+    twse_rows = [
+        {"Code": "2330", "Name": "TSMC", "成交股數": "5000000",
+         "收盤價": "1080.0", "漲跌價差": "5.0"},
+        {"Code": "8110", "Name": "華東", "成交股數": "68790601",
+         "收盤價": "60.6", "漲跌價差": "5.5"},
+    ]
+    fm_rows = [
+        {"stock_id": "2330", "time": thursday.isoformat(),
+         "open": 1080.0, "high": 1110.0, "low": 1075.0,
+         "close": 1100.0, "volume": 5_000_000},
+        {"stock_id": "8110", "time": thursday.isoformat(),
+         "open": 60.6, "high": 62.5, "low": 60.0,
+         "close": 62.0, "volume": 70_000_000},
+    ]
+    yf_mock = AsyncMock(return_value={})
+    diagnostic: dict = {}
+    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(
+             svc, "get_latest_ohlcv_session",
+             AsyncMock(return_value=wednesday),
+         ), \
+         patch.object(
+             svc, "_bellwether_ohlcv_closes",
+             AsyncMock(return_value=[(wednesday, 1080.0)]),
+         ), \
+         patch.object(
+             svc.twse, "get_all_twse_symbols",
+             AsyncMock(return_value=twse_rows),
+         ), \
+         patch.object(
+             svc.finmind, "get_daily_ohlcv_market_wide",
+             AsyncMock(return_value=fm_rows),
+         ), \
+         patch(
+             "data.us.yfinance_connector.get_batch_quotes",
+             yf_mock,
+         ), \
+         _patch_tw_now(year=2026, month=5, day=29, hh=0, mm=1):
+        result = await svc.get_screener(
+            limit=50, min_volume=1_000_000, diagnostic=diagnostic,
+        )
+
+    by_symbol = {r["symbol"]: r for r in result}
+    assert by_symbol["8110"]["price"] == 62.0
+    assert by_symbol["8110"]["actual_session"] == thursday.isoformat()
+    assert by_symbol["8110"]["data_source"] == "finmind_recovery"
+    assert by_symbol["8110"]["is_stale"] is False
+    yf_mock.assert_not_awaited()
+    # Diagnostic sink captures the chain.
+    assert diagnostic["freshness_session"] == thursday.isoformat()
+    assert diagnostic["final_data_source"] == "finmind_recovery"
+    assert {a["tier"] for a in diagnostic["attempts"]} >= {
+        "ohlcv_fast_path", "finmind",
+    }
+    finmind_attempt = next(
+        a for a in diagnostic["attempts"] if a["tier"] == "finmind"
+    )
+    assert finmind_attempt["outcome"] == "recovered"
+
+
+@pytest.mark.asyncio
+async def test_finmind_also_stale_falls_through_to_yfinance():
+    """FinMind's 2330 close matches DB's 2026-05-27 close → FinMind
+    is also stuck → recovery returns None, yfinance is then tried.
+    Diagnostic carries both attempt records."""
+    thursday = date(2026, 5, 28)
+    wednesday = date(2026, 5, 27)
+    twse_rows = [
+        {"Code": "2330", "Name": "TSMC", "成交股數": "5000000",
+         "收盤價": "1080.0", "漲跌價差": "5.0"},
+        {"Code": "8110", "Name": "華東", "成交股數": "2000000",
+         "收盤價": "60.6", "漲跌價差": "5.5"},
+    ]
+    # FinMind also on Wednesday — same 2330 close as the TWSE response.
+    fm_rows = [
+        {"stock_id": "2330", "time": wednesday.isoformat(),
+         "open": 1075.0, "high": 1085.0, "low": 1070.0,
+         "close": 1080.0, "volume": 5_000_000},
+        {"stock_id": "8110", "time": wednesday.isoformat(),
+         "open": 55.1, "high": 60.6, "low": 55.1,
+         "close": 60.6, "volume": 68_000_000},
+    ]
+    # yfinance on Thursday (fresher) — recovery should land here.
+    yf_quotes = {
+        "2330.TW": {"price": 1100.0, "change_pct": 1.85, "volume": 5_000_000},
+        "8110.TW": {"price": 62.0, "change_pct": 2.31, "volume": 70_000_000},
+    }
+    diagnostic: dict = {}
+    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(
+             svc, "get_latest_ohlcv_session",
+             AsyncMock(return_value=wednesday),
+         ), \
+         patch.object(
+             svc, "_bellwether_ohlcv_closes",
+             AsyncMock(return_value=[(wednesday, 1080.0)]),
+         ), \
+         patch.object(
+             svc.twse, "get_all_twse_symbols",
+             AsyncMock(return_value=twse_rows),
+         ), \
+         patch.object(
+             svc.finmind, "get_daily_ohlcv_market_wide",
+             AsyncMock(return_value=fm_rows),
+         ), \
+         patch(
+             "data.us.yfinance_connector.get_batch_quotes",
+             AsyncMock(return_value=yf_quotes),
+         ), \
+         _patch_tw_now(year=2026, month=5, day=29, hh=0, mm=1):
+        result = await svc.get_screener(
+            limit=50, min_volume=1_000_000, diagnostic=diagnostic,
+        )
+
+    by_symbol = {r["symbol"]: r for r in result}
+    assert by_symbol["8110"]["price"] == 62.0
+    assert by_symbol["8110"]["data_source"] == "yfinance_recovery"
+    assert diagnostic["final_data_source"] == "yfinance_recovery"
+    outcomes = {a["tier"]: a["outcome"] for a in diagnostic["attempts"]}
+    assert outcomes["finmind"] == "also_stale"
+    assert outcomes["yfinance"] == "recovered"
+    _ = thursday  # context only
+
+
+@pytest.mark.asyncio
+async def test_finmind_empty_response_falls_through_to_yfinance():
+    """FinMind quota exhausted / no token / 402 → market-wide returns
+    []. Recovery bails with `empty_response`, yfinance is tried."""
+    wednesday = date(2026, 5, 27)
+    twse_rows = [
+        {"Code": "2330", "Name": "TSMC", "成交股數": "5000000",
+         "收盤價": "1080.0", "漲跌價差": "5.0"},
+    ]
+    yf_quotes = {
+        "2330.TW": {"price": 1100.0, "change_pct": 1.85, "volume": 5_000_000},
+    }
+    diagnostic: dict = {}
+    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(
+             svc, "get_latest_ohlcv_session",
+             AsyncMock(return_value=wednesday),
+         ), \
+         patch.object(
+             svc, "_bellwether_ohlcv_closes",
+             AsyncMock(return_value=[(wednesday, 1080.0)]),
+         ), \
+         patch.object(
+             svc.twse, "get_all_twse_symbols",
+             AsyncMock(return_value=twse_rows),
+         ), \
+         patch.object(
+             svc.finmind, "get_daily_ohlcv_market_wide",
+             AsyncMock(return_value=[]),
+         ), \
+         patch(
+             "data.us.yfinance_connector.get_batch_quotes",
+             AsyncMock(return_value=yf_quotes),
+         ), \
+         _patch_tw_now(year=2026, month=5, day=29, hh=0, mm=1):
+        await svc.get_screener(
+            limit=50, min_volume=1_000_000, diagnostic=diagnostic,
+        )
+
+    outcomes = {a["tier"]: a["outcome"] for a in diagnostic["attempts"]}
+    assert outcomes["finmind"] == "empty_response"
+    assert outcomes["yfinance"] == "recovered"
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_captures_all_recovery_tiers_bailing():
+    """Worst-case observability: TWSE stale, FinMind also stale,
+    yfinance returns empty. Result rows stay stale but the diagnostic
+    sink names every tier and its bail reason — operator can read the
+    JSON view and decide whether to wait or escalate."""
+    wednesday = date(2026, 5, 27)
+    twse_rows = [
+        {"Code": "2330", "Name": "TSMC", "成交股數": "5000000",
+         "收盤價": "1080.0", "漲跌價差": "5.0"},
+    ]
+    fm_rows = [
+        {"stock_id": "2330", "time": wednesday.isoformat(),
+         "open": 1075.0, "high": 1085.0, "low": 1070.0,
+         "close": 1080.0, "volume": 5_000_000},  # matches Wed → stale
+    ]
+    diagnostic: dict = {}
+    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(
+             svc, "get_latest_ohlcv_session",
+             AsyncMock(return_value=wednesday),
+         ), \
+         patch.object(
+             svc, "_bellwether_ohlcv_closes",
+             AsyncMock(return_value=[(wednesday, 1080.0)]),
+         ), \
+         patch.object(
+             svc.twse, "get_all_twse_symbols",
+             AsyncMock(return_value=twse_rows),
+         ), \
+         patch.object(
+             svc.finmind, "get_daily_ohlcv_market_wide",
+             AsyncMock(return_value=fm_rows),
+         ), \
+         patch(
+             "data.us.yfinance_connector.get_batch_quotes",
+             AsyncMock(return_value={}),
+         ), \
+         _patch_tw_now(year=2026, month=5, day=29, hh=0, mm=1):
+        result = await svc.get_screener(
+            limit=50, min_volume=1_000_000, diagnostic=diagnostic,
+        )
+
+    assert all(r["is_stale"] is True for r in result)
+    assert diagnostic["final_data_source"] == "twse_stale"
+    outcomes = {a["tier"]: a["outcome"] for a in diagnostic["attempts"]}
+    assert outcomes["finmind"] == "also_stale"
+    assert outcomes["yfinance"] == "empty_response"

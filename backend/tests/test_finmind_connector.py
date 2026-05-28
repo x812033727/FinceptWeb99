@@ -461,6 +461,56 @@ async def test_get_monthly_revenue_maps_to_canonical_field_names():
     assert out[0]["symbol"] == "2330"
 
 
+# ── get_daily_ohlcv_market_wide ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_daily_ohlcv_market_wide_normalises_and_keeps_stock_id():
+    """`data_id=""` market-wide call returns rows with `stock_id`
+    embedded per row. The wrapper normalises FinMind's `max` / `min`
+    / `Trading_Volume` field names to canonical `high` / `low` /
+    `volume` while preserving `stock_id` so the screener recovery
+    tier can route by it (same as TWSE's `Code`)."""
+    rows = [
+        {"stock_id": "2330", "date": "2024-04-01",
+         "open": 780, "max": 790, "min": 775, "close": 785,
+         "Trading_Volume": 1234567},
+        {"stock_id": "8110", "date": "2024-04-01",
+         "open": 60, "max": 62, "min": 59, "close": 62,
+         "Trading_Volume": 70_000_000},
+    ]
+    patcher, _ = install_query(rows)
+    with patcher:
+        out = await finmind.get_daily_ohlcv_market_wide("2024-04-01")
+    by_symbol = {r["stock_id"]: r for r in out}
+    assert by_symbol["2330"] == {
+        "stock_id": "2330", "time": "2024-04-01",
+        "open": 780, "high": 790, "low": 775, "close": 785,
+        "volume": 1234567,
+    }
+    assert by_symbol["8110"]["close"] == 62
+
+
+@pytest.mark.asyncio
+async def test_get_daily_ohlcv_market_wide_drops_missing_stock_id():
+    """Rows without `stock_id` are dropped — same defensive pattern
+    as `get_monthly_revenue_market_wide` so an upstream glitch can't
+    poison the recovery routing dict with empty keys."""
+    rows = [
+        {"stock_id": "2330", "date": "2024-04-01",
+         "open": 780, "max": 790, "min": 775, "close": 785,
+         "Trading_Volume": 1234567},
+        {"date": "2024-04-01",  # no stock_id
+         "open": 0, "max": 0, "min": 0, "close": 0,
+         "Trading_Volume": 0},
+    ]
+    patcher, _ = install_query(rows)
+    with patcher:
+        out = await finmind.get_daily_ohlcv_market_wide("2024-04-01")
+    assert len(out) == 1
+    assert out[0]["stock_id"] == "2330"
+
+
 # ── get_news (TaiwanStockNews) ───────────────────────────────────
 
 @pytest.mark.asyncio

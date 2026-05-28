@@ -1699,6 +1699,13 @@ async def _get_all_valuations_cached() -> dict[str, dict[str, float | None]]:
 # response is one trading day behind.
 _STALENESS_BELLWETHER = "2330"
 
+# Stale screener results cache for 60s rather than the full
+# `TTL_SCREENER` (10 min). With 10 min, a single stale fetch shadows
+# every subsequent call for the rest of the window — even after TWSE
+# refreshes or `ohlcv_daily` catches up. 60s keeps recovery attempts
+# cheap (no thundering herd) without locking in bad data.
+_TTL_SCREENER_STALE = 60
+
 
 def _expected_today_session() -> date | None:
     """Taipei-local today's session date when the post-close
@@ -1824,6 +1831,169 @@ async def _detect_stock_day_all_session(
     return None
 
 
+def _yf_ticker_for(symbol: str, exchange: str) -> str:
+    """Map a TW symbol to its Yahoo Finance ticker. TWSE listed →
+    `XXXX.TW`, TPEx → `XXXX.TWO`. Used by the yfinance recovery path
+    only; the rest of the codebase keeps the bare 4-digit symbol."""
+    suffix = ".TWO" if exchange == "TPEx" else ".TW"
+    return f"{symbol}{suffix}"
+
+
+async def _yfinance_session_is_fresh(
+    yf_2330_close: float | None,
+    detected_session: date,
+) -> bool:
+    """Verify yfinance's bellwether close looks newer than the
+    STOCK_DAY_ALL detected session. Returns True when yfinance's
+    2330.TW close DIFFERS from `ohlcv_daily`'s 2330 close on
+    `detected_session` — i.e. Yahoo has a value our archive doesn't
+    have for that date, so it must come from a later session.
+    Returns False if yfinance's value matches the detected_session
+    close (Yahoo is also lagging) or if no comparison is possible."""
+    if yf_2330_close is None:
+        return False
+    recent = await _bellwether_ohlcv_closes(
+        symbol=_STALENESS_BELLWETHER, lookback_days=5,
+    )
+    for ts, db_close in recent:
+        if ts == detected_session and abs(db_close - yf_2330_close) < 0.01:
+            return False
+    return True
+
+
+async def _recover_screener_via_yfinance(
+    *,
+    candidates: list[dict[str, Any]],
+    detected_session: date,
+    expected_today: date | None,
+    limit: int,
+) -> list[dict[str, Any]] | None:
+    """Last-ditch screener recovery using Yahoo's chart endpoint.
+
+    Yahoo's pipeline is independent of the TWSE OpenAPI data
+    warehouse, so when STOCK_DAY_ALL and STOCK_DAY both lag (and the
+    daily cron is consequently stuck), yfinance usually still has
+    today's close. We:
+
+    1. Build a `.TW`/`.TWO` ticker list from the top-by-|change_pct|
+       candidates so the batch call is bounded.
+    2. Probe 2330 to confirm Yahoo isn't also lagging the same
+       session. If it is, return None and let the caller fall back to
+       the labelled-stale path.
+    3. Patch the matched rows' price / change / change_pct / volume
+       from Yahoo's response, drop rows Yahoo couldn't price (halts,
+       delistings), re-rank, and return.
+
+    Returns None on any failure path so the caller's fallback always
+    runs — yfinance is recovery, never load-bearing.
+    """
+    if not candidates:
+        return None
+    from data.us import yfinance_connector as yf
+
+    # Take the top candidates by |change_pct| from each end plus the
+    # bellwether 2330 (always included so the freshness check below
+    # can run even if 2330 didn't make either end's cut).
+    by_abs = sorted(
+        (
+            c for c in candidates
+            if isinstance(c.get("change_pct"), (int, float))
+        ),
+        key=lambda c: abs(c["change_pct"]),
+        reverse=True,
+    )
+    pool: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in by_abs:
+        sym = row.get("symbol")
+        if not sym or sym in seen:
+            continue
+        pool.append(row)
+        seen.add(sym)
+        if len(pool) >= max(limit, 50):
+            break
+    # Force the bellwether in for the freshness probe even if it's
+    # outside the top-|change_pct| pool.
+    if _STALENESS_BELLWETHER not in seen:
+        for row in candidates:
+            if row.get("symbol") == _STALENESS_BELLWETHER:
+                pool.append(row)
+                break
+
+    tickers = [
+        _yf_ticker_for(r["symbol"], r.get("exchange") or "TWSE")
+        for r in pool
+    ]
+    try:
+        quotes = await yf.get_batch_quotes(tickers)
+    except Exception as exc:
+        log.warning("tw.screener.yfinance_batch_failed",
+                    extra={"error": str(exc)})
+        return None
+    if not quotes:
+        return None
+
+    bell_ticker = _yf_ticker_for(_STALENESS_BELLWETHER, "TWSE")
+    yf_2330 = quotes.get(bell_ticker)
+    yf_2330_close = (
+        float(yf_2330.get("price")) if yf_2330 and yf_2330.get("price") is not None
+        else None
+    )
+    if not await _yfinance_session_is_fresh(yf_2330_close, detected_session):
+        log.info("tw.screener.yfinance_also_stale",
+                 extra={"detected_session": detected_session.isoformat()})
+        return None
+
+    session_stamp = (expected_today or detected_session).isoformat()
+    recovered: list[dict[str, Any]] = []
+    for row in candidates:
+        sym = row.get("symbol")
+        if not sym:
+            continue
+        ticker = _yf_ticker_for(sym, row.get("exchange") or "TWSE")
+        yq = quotes.get(ticker)
+        if not yq or yq.get("price") is None:
+            # Yahoo couldn't price this one (halt, untracked, etc.).
+            # Drop it — keeping the stale row would dilute the
+            # re-ranking with phantom moves.
+            continue
+        new_price = float(yq["price"])
+        new_change_pct = (
+            float(yq["change_pct"])
+            if yq.get("change_pct") is not None else None
+        )
+        new_change = None
+        if new_change_pct is not None:
+            prev = new_price / (1 + new_change_pct / 100.0) if (
+                1 + new_change_pct / 100.0
+            ) else None
+            new_change = new_price - prev if prev else None
+        sanitized = _sanitize_change_pct(sym, new_change_pct)
+        if sanitized is None and new_change_pct is not None:
+            new_change = None
+        new_change_pct = sanitized
+
+        patched = dict(row)
+        patched["price"] = new_price
+        patched["change"] = new_change
+        patched["change_pct"] = new_change_pct
+        new_vol = yq.get("volume")
+        if new_vol is not None:
+            patched["volume"] = int(new_vol)
+        patched["actual_session"] = session_stamp
+        patched["data_source"] = "yfinance_recovery"
+        patched["is_stale"] = False
+        recovered.append(patched)
+
+    if not recovered:
+        return None
+    # Re-rank by volume desc (same order the live path produces) so
+    # downstream gainers/losers logic, which sorts by change_pct,
+    # picks the same head/tail it would have on a healthy day.
+    recovered.sort(key=lambda r: r.get("volume") or 0, reverse=True)
+    return recovered[:limit]
+
+
 def _passes_fundamental_filters(
     v: dict[str, float | None],
     *,
@@ -1879,10 +2049,21 @@ async def get_screener(
             limit=limit,
         )
 
+    # Cache key includes `ohlcv_latest` so when the daily ingest cron
+    # advances the archive, the existing 10-min cache slot is invalidated
+    # automatically — otherwise a stale entry written before today's
+    # bar landed would shadow a now-correct fast-path result for the
+    # remainder of the TTL window.
+    needs_valuations_early = any(
+        v is not None for v in (min_pe, max_pe, min_pb, max_pb, min_dividend_yield)
+    )
+    ohlcv_latest = await get_latest_ohlcv_session()
+    expected_today = _expected_today_session()
+    ohlcv_tag = ohlcv_latest.isoformat() if ohlcv_latest else "none"
     key = (
         f"tw:screener:{exchange}:{min_volume}:"
         f"{min_pe}:{max_pe}:{min_pb}:{max_pb}:{min_dividend_yield}:"
-        f"{include_etf}:{etf_only}:{limit}"
+        f"{include_etf}:{etf_only}:{limit}:{ohlcv_tag}"
     )
     cached = await cache_get(key)
     if cached:
@@ -1893,11 +2074,6 @@ async def get_screener(
     # and finishes within ~40 min, so any discussion run post-15:10
     # Taipei should hit this branch and get today's verified close
     # instead of relying on STOCK_DAY_ALL's refresh cadence.
-    needs_valuations_early = any(
-        v is not None for v in (min_pe, max_pe, min_pb, max_pb, min_dividend_yield)
-    )
-    ohlcv_latest = await get_latest_ohlcv_session()
-    expected_today = _expected_today_session()
     if (
         not needs_valuations_early
         and ohlcv_latest is not None
@@ -2003,6 +2179,7 @@ async def get_screener(
     # today. When `ohlcv_daily` already holds a newer bar than the
     # detected session, recompute via the backtest path so the actual
     # close gets returned instead of a stale TWSE row.
+    is_stale_unrecoverable = False
     detected_session = await _detect_stock_day_all_session(all_stocks)
     if detected_session is not None:
         if (
@@ -2029,6 +2206,22 @@ async def get_screener(
             expected_today is not None
             and detected_session < expected_today
         )
+        # Last-ditch independent recovery via yfinance when both TWSE
+        # and `ohlcv_daily` are stuck on the same session. Yahoo's
+        # chart endpoint draws from a different pipeline than TWSE
+        # OpenAPI, so it usually has today's close even when our
+        # primary chain is mid-outage.
+        if stale and not needs_valuations:
+            recovered = await _recover_screener_via_yfinance(
+                candidates=result,
+                detected_session=detected_session,
+                expected_today=expected_today,
+                limit=limit,
+            )
+            if recovered is not None:
+                await cache_set(key, json.dumps(recovered), TTL_SCREENER)
+                return recovered
+        is_stale_unrecoverable = stale
         for row in result:
             row["actual_session"] = detected_session.isoformat()
             row["is_stale"] = stale
@@ -2046,8 +2239,12 @@ async def get_screener(
     # Don't cache an empty screener for 10 min — mirrors the US service so
     # a transient TWSE OpenAPI failure doesn't lock the page into "no
     # results" until the next background refresh.
+    # When the screener returned stale, cache for 60s only so the next
+    # call within a minute is fast but anything after retries a fresh
+    # recovery — a full 10-min lock would shadow a TWSE refresh.
     if result:
-        await cache_set(key, json.dumps(result), TTL_SCREENER)
+        ttl = _TTL_SCREENER_STALE if is_stale_unrecoverable else TTL_SCREENER
+        await cache_set(key, json.dumps(result), ttl)
     else:
         log.warning("tw.screener.empty_result")
     return result

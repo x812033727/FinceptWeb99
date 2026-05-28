@@ -681,6 +681,17 @@
     "conclusion_title": "Conclusion (initial synthesis)",
     "post_mortem_conclusion_title": "📋 Post-mortem Revised Conclusion",
     "conclusion_parse_error": "Conclusion parse failed, please re-synthesize",
+    "captured_session_label": "Data as of",
+    "captured_session_intraday": "intraday live",
+    "captured_session_phase": {
+      "backtest": "backtest",
+      "intraday": "intraday",
+      "today_close_published": "today's close",
+      "between_close_and_publish": "post-close, pre-publish",
+      "pre_open_today": "pre-open",
+      "weekend_or_holiday": "non-trading day",
+      "crypto_24_7": "Crypto 24/7"
+    },
     "quality": {
       "skipped": "Quality check skipped (parse error)",
       "passed": "Quality check passed",

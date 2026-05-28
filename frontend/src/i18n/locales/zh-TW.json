@@ -681,6 +681,17 @@
     "conclusion_title": "結論摘要（初次彙整）",
     "post_mortem_conclusion_title": "📋 事後檢討後修正結論",
     "conclusion_parse_error": "結論格式解析失敗，請重新彙整",
+    "captured_session_label": "資料截至",
+    "captured_session_intraday": "盤中即時",
+    "captured_session_phase": {
+      "backtest": "回測",
+      "intraday": "盤中",
+      "today_close_published": "今日收盤已公布",
+      "between_close_and_publish": "已收盤待公告",
+      "pre_open_today": "盤前",
+      "weekend_or_holiday": "非交易日",
+      "crypto_24_7": "Crypto 24/7"
+    },
     "quality": {
       "skipped": "品質檢查跳過（解析錯誤）",
       "passed": "品質檢查通過",

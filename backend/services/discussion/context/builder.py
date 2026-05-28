@@ -37,6 +37,8 @@ from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from services.discussion.freshness import resolve_captured_session
+
 from .blocks import (
     announcements,
     chip,
@@ -69,6 +71,18 @@ def _initial_ctx(*, market: str, as_of: date | None) -> dict[str, Any]:
     return {
         "market": market,
         "captured_at": datetime.now(UTC).isoformat(),
+        # `captured_session` carries the actual trading session the
+        # numeric blocks below are anchored to. Distinct from
+        # `captured_at` (wall-clock NOW): a TW discussion fired 11:00
+        # Taipei has `captured_at=2026-05-28T03:00` but
+        # `captured_session.session_date=2026-05-27` because
+        # `STOCK_DAY_ALL` / `ohlcv_daily` still serve yesterday's
+        # close intraday. The prompt template surfaces this near the
+        # top so personas can't confuse "now" with "the close we're
+        # actually looking at".
+        "captured_session": resolve_captured_session(
+            market=market, as_of=as_of,
+        ),
         "backtest": as_of is not None,
         "as_of": as_of.isoformat() if as_of is not None else None,
         "top_gainers": [],

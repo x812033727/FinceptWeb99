@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
-import type { RoundContextSnapshot } from "@/types/discussion";
+import type { CapturedSession, RoundContextSnapshot } from "@/types/discussion";
+import { CapturedSessionInline } from "./CapturedSessionBadge";
 import {
   fetchRoundContexts,
   formatCompactNumber,
@@ -23,6 +24,12 @@ function RoundContextRow({ snap }: { snap: RoundContextSnapshot }) {
   const { t, i18n } = useTranslation();
   const [showJson, setShowJson] = useState(false);
   const summary = useMemo(() => summarizeContext(snap.context), [snap.context]);
+  // `captured_session` is injected into every ctx since the freshness
+  // phase; older snapshots (pre-Phase-1) lack it, so the inline badge
+  // simply renders nothing for those rows (drops back to wall-clock
+  // captured_at as the only visible date — matches the legacy UI).
+  const capturedSession = (snap.context as { captured_session?: CapturedSession })
+    .captured_session;
 
   const taiexLine = summary.taiex_value != null
     ? `TAIEX ${toFixedSmart(summary.taiex_value)}${
@@ -74,16 +81,19 @@ function RoundContextRow({ snap }: { snap: RoundContextSnapshot }) {
 
   return (
     <div className="border border-border rounded p-2 space-y-1">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <span className="text-xs font-semibold text-primary">
           {t("discussion.round_label", { round: snap.round })}
         </span>
-        <span className="text-[10px] text-muted-foreground">
-          {new Date(snap.captured_at).toLocaleString(i18n.language, {
-            month: "2-digit", day: "2-digit",
-            hour: "2-digit", minute: "2-digit",
-          })}
-        </span>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <CapturedSessionInline session={capturedSession} />
+          <span className="text-[10px] text-muted-foreground">
+            {new Date(snap.captured_at).toLocaleString(i18n.language, {
+              month: "2-digit", day: "2-digit",
+              hour: "2-digit", minute: "2-digit",
+            })}
+          </span>
+        </div>
       </div>
       <div className="space-y-0.5 text-[11px] text-foreground/80">
         {taiexLine && <div>{taiexLine}</div>}

@@ -1038,6 +1038,7 @@ async def _ask_persona(
         topic=topic,
         rules=rules,
         annotation=annotation,
+        freshness_preamble=_format_freshness_preamble(context),
         context=json.dumps(filtered_ctx, ensure_ascii=False, indent=2),
         history=_format_history(prior_turns),
     )
@@ -1891,6 +1892,7 @@ async def synthesize_conclusion(
     user_prompt = _SYNTHESIZER_USER_TEMPLATE.format(
         topic=discussion.topic,
         rules=discussion.rules,
+        freshness_preamble=_format_freshness_preamble(context),
         context=json.dumps(context, ensure_ascii=False, indent=2),
         transcript=_format_transcript(turns),
     )
@@ -2037,6 +2039,15 @@ async def synthesize_conclusion(
         )
 
     conclusion = _safe_conclusion(assembled)
+    # Carry the ctx's data-freshness anchor through to the conclusion so
+    # the frontend ConclusionCard can render a "資料截至 X 收盤" badge
+    # without re-fetching the round-context snapshot. Mirrors the same
+    # `captured_session` block the personas saw during synthesis — the
+    # discussion's authoritative answer to "what session does this
+    # conclusion describe?"
+    sess = (context or {}).get("captured_session")
+    if isinstance(sess, dict):
+        conclusion["captured_session"] = sess
     # PR-1: attach stance / confidence / contradiction / hallucination
     # quality signals to the conclusion JSON so the UI can warn the
     # operator about outputs that look structurally ok (parses, has
@@ -2243,6 +2254,7 @@ from services.discussion.prompts import (  # noqa: E402,F401
     _SYNTHESIZER_SYSTEM,
     _SYNTHESIZER_USER_TEMPLATE,
     _TURN_PROMPT_TEMPLATE,
+    _format_freshness_preamble,
     _persona_schema_annotation,
 )
 

@@ -631,19 +631,27 @@ def test_turn_prompt_template_carries_signal_citation_guidance():
 
 
 def test_turn_prompt_template_renders_with_standard_substitutions():
-    """All five `{topic}/{rules}/{annotation}/{context}/{history}`
-    placeholders must remain — adding the citation-guidance section
-    in PR #X mustn't accidentally consume one of them via brace mismatch."""
+    """All six placeholders (`{topic}/{rules}/{annotation}/
+    {freshness_preamble}/{context}/{history}`) must remain — adding
+    sections to the template mustn't accidentally consume one of them
+    via brace mismatch. `freshness_preamble` landed as part of the
+    expert-quote-freshness phase so personas can never confuse
+    captured_at (wall-clock NOW) with the trading session whose
+    numbers are actually in ctx.
+    """
     rendered = discussion_service._TURN_PROMPT_TEMPLATE.format(
         topic="2330 短線分析",
         rules="字數 ≤ 500",
         annotation="## annotation",
+        freshness_preamble="- 基準交易日：2026-05-27",
         context='{"k":1}',
         history="（首輪）",
     )
     assert "2330 短線分析" in rendered
     assert "字數 ≤ 500" in rendered
     assert "## annotation" in rendered
+    assert "2026-05-27" in rendered
+    assert "## 資料時效" in rendered
     assert '{"k":1}' in rendered
     assert "（首輪）" in rendered
     # The literal JSON example in the task instruction must survive
@@ -719,6 +727,38 @@ def test_persona_schema_annotation_always_keeps_errors_bullet():
         {"market": "TW", "captured_at": "t", "errors": []},
     )
     assert "- errors" in out
+
+
+def test_format_freshness_preamble_surfaces_session_date_and_hint():
+    """The freshness preamble is what stops personas confusing
+    `captured_at` (wall-clock NOW) with the actual trading session
+    the numbers came from. It must literally show both the
+    session_date and the human hint so the LLM can't miss them.
+    """
+    ctx = {
+        "captured_session": {
+            "session_date": "2026-05-26",
+            "phase": "intraday",
+            "is_intraday": False,
+            "hint_zh": "TWSE 盤中 (2026-05-27)。多數區塊報價仍反映 2026-05-26 收盤。",
+        },
+    }
+    out = discussion_service._format_freshness_preamble(ctx)
+    assert "2026-05-26" in out
+    assert "intraday" in out
+    assert "2026-05-27" in out  # from the hint
+    assert "TWSE" in out
+
+
+def test_format_freshness_preamble_falls_back_on_legacy_ctx():
+    """Old round_context snapshots written before this PR landed
+    don't carry `captured_session`. The preamble must NOT raise; it
+    emits a generic notice so the prompt template still renders
+    and personas drop back to per-block `as_of_session` reads.
+    """
+    out = discussion_service._format_freshness_preamble({})
+    assert "captured_session" in out
+    assert "as_of_session" in out
 
 
 def test_persona_schema_annotation_preserves_block_order():

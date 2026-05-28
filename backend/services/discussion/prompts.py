@@ -34,13 +34,36 @@ from typing import Any
 # `risk_warnings` keeps its emphasis on the negative-filter semantics
 # (that's where weak models most often go wrong).
 _BLOCK_ANNOTATIONS: dict[str, str] = {
-    "top_gainers":               "- top_gainers / top_losers：當日漲跌幅前 10（動能 + 籌碼面）。",
-    "index":                     "- index：大盤 (TAIEX) 即時報價 + 30 日歷史，用以判斷市場 regime。",
+    "captured_session": (
+        "- captured_session：**本次討論所有報價／技術指標／籌碼數據的真實基準日**。"
+        "`session_date` = 多數區塊資料所屬的交易日；`phase` 描述本次討論所處時段"
+        "（`intraday` 盤中 / `today_close_published` 今日已公布收盤 / "
+        "`between_close_and_publish` 已收盤待 STOCK_DAY_ALL 更新 / "
+        "`pre_open_today` 盤前 / `weekend_or_holiday` 非交易日 / `backtest` 回測模式）；"
+        "`hint_zh` 是給你看的「現在這份 ctx 真實反映的是哪天的盤」說明。"
+        "**禁止把 `session_date` 之後尚未發生的交易日當成已知資訊引用**——"
+        "如 `phase=intraday` 表示今日盤面尚未收盤，不可說「今日 +X%」這類斷言；"
+        "個別行的 `as_of_session` 若與 `captured_session.session_date` 不一致時，"
+        "以該行自己的 `as_of_session` 為準。"
+    ),
+    "top_gainers": (
+        "- top_gainers / top_losers：**`as_of_session` 標示之交易日**的漲跌幅前 10"
+        "（動能 + 籌碼面）。注意：TWSE `STOCK_DAY_ALL` 端點要等 14:30 後才會更新"
+        "今日收盤，所以盤中 (phase=intraday) 拿到的是昨日收盤排行，不是今日盤中。"
+    ),
+    "index": (
+        "- index：大盤 (TAIEX) 報價 + 30 日歷史，用以判斷市場 regime。"
+        "`is_intraday=true` 時 `value`／`change_pct` 是真正盤中即時數值（`MI_5MINS` 5 分鐘更新），"
+        "`is_intraday=false` 時則為最近一次完成的收盤。`history_last_session` 是 30 日線最後一根 bar 日期。"
+    ),
     "news_sentiment":            "- news_sentiment：所屬市場整體新聞情緒（bullish/bearish/neutral 計數，全視窗統計而非 headlines 抽樣）。",
     "per_symbol_news_sentiment": "- per_symbol_news_sentiment：主題提及之個股新聞情緒。",
     "short_term_signals": (
         "- short_term_signals：focus_symbols 的 Tier-1 短線技術訊號 "
-        "(1-5 日視窗) — `volume_ratio`（量能 / 20 日均量倍數，>2 = 突破型）、"
+        "(1-5 日視窗)。**每檔的 `as_of_session` 是計算用最後一根 bar 的日期，"
+        "若早於 `captured_session.session_date` 表示這些技術指標尚未納入最新一日盤面**——"
+        "RSI / MACD / gap_pct / return_5d 都是基於該日收盤算出。"
+        "`volume_ratio`（量能 / 20 日均量倍數，>2 = 突破型）、"
         "`return_5d` / `return_20d`（短中期報酬 %）、`rsi_14`（< 30 超賣 / > 70 超買）、"
         "`gap_pct`（今日開盤跳空 %）、`kd_k` / `kd_d`（KD 9-3-3，K 從下方穿越 D"
         "且 < 20 = 偏多反轉，從上方穿越 D 且 > 80 = 偏空反轉）、"
@@ -125,12 +148,14 @@ _BLOCK_ANNOTATIONS: dict[str, str] = {
     ),
     "market_institutional_5d":   "- market_institutional_5d：全市場三大法人近 5 日淨買賣超（大盤方向）。",
     "focus_briefs": (
-        "- focus_briefs：**主題提及之個股小型分析師簡報**——`quote` 即時報價、"
-        "`technicals`（MA20/60/120、52w 高低與距離、5/20/60 日漲跌幅、RSI14）、"
+        "- focus_briefs：**主題提及之個股小型分析師簡報**——`quote`（含 `as_of_session` "
+        "標示報價所屬交易日 + `is_intraday` 是否盤中即時）、"
+        "`technicals`（MA20/60/120、52w 高低與距離、5/20/60 日漲跌幅、RSI14，也帶 `as_of_session`）、"
         "`fundamentals`（PE/PB/殖利率/EPS）、`revenue_trend`（近 6 月營收年/月增）、"
         "`chip_5d`（外資 / 投信 / 自營近 5 日淨買賣）、`margin_latest`（最新融資餘額）、"
         "`peers`（同產業 3 檔可比標的）。**有此區塊就要引用具體數據**，"
-        "不要只憑 headlines 推論。"
+        "不要只憑 headlines 推論。**引用報價時要連帶說明 `as_of_session`** "
+        "（例：「2330 以 5/27 收盤 1,100 元為基準」），不要只說「目前股價」。"
     ),
     "macro": (
         "- macro：宏觀利率與匯率快照（Fed Funds / US 10Y / 10Y-2Y 殖利率價差 / "
@@ -182,6 +207,47 @@ _SCHEMA_HEADER = (
 )
 
 
+def _format_freshness_preamble(ctx: dict[str, Any]) -> str:
+    """Build the '## 資料時效' block placed at the top of every persona
+    + synthesizer prompt. Reads `ctx['captured_session']` so the LLM
+    sees the actual session anchor in plain prose right before it sees
+    the JSON ctx — same data the per-block annotation also describes,
+    but lifted up so weak models (Haiku / Llama-3.3 / GPT-4o-mini)
+    don't miss it buried in the JSON.
+
+    Falls back gracefully when an older ctx (pre-Phase-1) lacks the
+    `captured_session` block — emits a generic notice so the prompt
+    still renders.
+    """
+    sess = ctx.get("captured_session") or {}
+    session_date = sess.get("session_date")
+    phase = sess.get("phase")
+    is_intraday = sess.get("is_intraday")
+    hint = sess.get("hint_zh") or ""
+    if not session_date and not hint:
+        return (
+            "本次 ctx 未攜帶 captured_session 元資料；"
+            "請以個別區塊的 `as_of_session` 為準判讀。"
+        )
+    lines = []
+    if session_date:
+        lines.append(f"- **基準交易日 (session_date)**：{session_date}")
+    if phase:
+        lines.append(f"- **時段標籤 (phase)**：{phase}")
+    if is_intraday is not None:
+        lines.append(f"- **是否盤中即時 (is_intraday)**：{is_intraday}")
+    if hint:
+        lines.append(f"- **說明**：{hint}")
+    lines.append(
+        "- **準則**：不要把 `session_date` 之後尚未發生的盤面當成"
+        "已知資訊。若 phase=`intraday`，禁止以「今日漲了 X%」"
+        "這種已實現語氣描述今日；改用「截至昨日收盤 + 今日盤中 TAIEX "
+        "走勢」這種精確措辭。各區塊行內的 `as_of_session` 與本基準"
+        "不一致時，以該行為準。"
+    )
+    return "\n".join(lines)
+
+
 def _persona_schema_annotation(ctx: dict[str, Any]) -> str:
     """Build a schema annotation listing only the blocks present in
     `ctx`. Avoids the failure mode where the prompt advertises
@@ -223,6 +289,8 @@ _TURN_PROMPT_TEMPLATE = (
     "  - 用「漲停」不用「涨停」、用「資金」不用「资金」、用「電子」不用「电子」。\n"
     "  - 金融術語照台灣慣用：殖利率 / 本益比 / 三大法人 / 月營收年增。\n"
     "  - 不要混入簡體字，即使你的訓練資料偏向簡體也要轉繁。\n\n"
+    "## 資料時效（必讀）\n"
+    "{freshness_preamble}\n\n"
     "## 主題\n{topic}\n\n"
     "## 共同規則\n{rules}\n\n"
     "{annotation}\n\n"
@@ -269,6 +337,7 @@ _SYNTHESIZER_SYSTEM = (
 _SYNTHESIZER_USER_TEMPLATE = (
     "## 討論主題\n{topic}\n\n"
     "## 討論規則\n{rules}\n\n"
+    "## 資料時效（必讀）\n{freshness_preamble}\n\n"
     + _CONTEXT_SCHEMA_ANNOTATION + "\n\n"
     "## 市場現況\n```json\n{context}\n```\n\n"
     "## 全部發言（依序）\n{transcript}\n\n"

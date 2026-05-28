@@ -160,24 +160,41 @@ async def _build_tw_focus_brief(
     }
 
     # Quote — cached behind Redis 15s, safe to call even mid-round.
+    # Stamp `as_of_session` so personas can see whether the quote is
+    # today's close (post-14:30 Taipei) or yesterday's (intraday /
+    # pre-open). Without this stamp the persona has no way to tell
+    # `quote.price` is stale and will reference it as "today's price".
     try:
+        from services.discussion.freshness import tw_quote_session
         q = await tw_market_service.get_quote(symbol)
         brief["quote"] = {
             "price":      q.get("price"),
             "change_pct": q.get("change_pct"),
             "volume":     q.get("volume"),
             "prev_close": q.get("prev_close"),
+            # STOCK_DAY_ALL serves a session-close even during
+            # intraday — `is_intraday=False` here is correct.
+            "as_of_session": tw_quote_session(),
+            "is_intraday": False,
         }
     except Exception as exc:
         log.warning("focus_brief.quote.failed",
                     extra={"symbol": symbol, "error": str(exc)})
 
     # History → technicals. 12 months is enough for 52w stats + 60d MA.
+    # The bar series feeds `_compute_technicals`; we additionally tag
+    # the technicals payload with `as_of_session` = the latest bar's
+    # date so personas can tell whether the RSI / MA values are
+    # computed against today's close or a prior session.
     try:
         bars = await tw_market_service.get_history(
             symbol, months=_FOCUS_BRIEF_HISTORY_MONTHS,
         )
-        brief["technicals"] = _compute_technicals(bars or [])
+        technicals = _compute_technicals(bars or [])
+        if technicals is not None and bars:
+            technicals["as_of_session"] = str(bars[-1].get("time") or "")[:10]
+            technicals["is_intraday"] = False
+        brief["technicals"] = technicals
     except Exception as exc:
         log.warning("focus_brief.history.failed",
                     extra={"symbol": symbol, "error": str(exc)})
@@ -285,7 +302,11 @@ async def _build_tw_focus_brief_backtest(
         bars = []
 
     if bars:
-        brief["technicals"] = _compute_technicals(bars)
+        technicals = _compute_technicals(bars)
+        if technicals is not None:
+            technicals["as_of_session"] = str(bars[-1].get("time") or "")[:10]
+            technicals["is_intraday"] = False
+        brief["technicals"] = technicals
         # Synthetic quote: last close as price; change_pct vs prior bar.
         last = bars[-1]
         prev = bars[-2] if len(bars) >= 2 else None
@@ -301,6 +322,8 @@ async def _build_tw_focus_brief_backtest(
             "change_pct": round(change_pct, 2) if change_pct is not None else None,
             "volume":     int(last.get("volume") or 0),
             "prev_close": prev_close,
+            "as_of_session": str(last.get("time") or "")[:10],
+            "is_intraday": False,
         }
     return brief
 
@@ -321,12 +344,21 @@ async def _build_us_focus_brief(symbol: str) -> dict[str, Any]:
         "fundamentals": None,
     }
     try:
+        from services.discussion.freshness import (
+            us_quote_is_intraday,
+            us_quote_session,
+        )
         q = await us_market_service.get_quote(symbol)
         brief["quote"] = {
             "price":      q.get("price"),
             "change_pct": q.get("change_pct"),
             "volume":     q.get("volume"),
             "prev_close": q.get("prev_close"),
+            # US live quote via yfinance / Polygon / Stooq / Finnhub
+            # waterfall — intraday when NYSE is in session, otherwise
+            # last close.
+            "as_of_session": us_quote_session(),
+            "is_intraday": us_quote_is_intraday(),
         }
     except Exception as exc:
         log.warning("focus_brief.us_quote.failed",
@@ -334,7 +366,11 @@ async def _build_us_focus_brief(symbol: str) -> dict[str, Any]:
 
     try:
         bars = await us_market_service.get_history(symbol, period="1y", interval="1d")
-        brief["technicals"] = _compute_technicals(bars or [])
+        technicals = _compute_technicals(bars or [])
+        if technicals is not None and bars:
+            technicals["as_of_session"] = str(bars[-1].get("time") or "")[:10]
+            technicals["is_intraday"] = False
+        brief["technicals"] = technicals
     except Exception as exc:
         log.warning("focus_brief.us_history.failed",
                     extra={"symbol": symbol, "error": str(exc)})

@@ -145,6 +145,27 @@ export interface Conclusion {
    * even via the lenient salvage path — the UI shows a degraded
    * "解析失敗" badge instead of pretending the conclusion is real. */
   _parse_error?: boolean;
+  /** Data-freshness anchor: which trading session this conclusion's
+   * numbers actually reference. Copied verbatim from
+   * `ctx["captured_session"]` at synthesis time so the
+   * ConclusionCard can render a "資料截至 5/27 收盤" badge without
+   * re-fetching the round-context snapshot. Optional for forward-
+   * compat with conclusions written before the freshness phase. */
+  captured_session?: CapturedSession;
+}
+
+/** Session anchor metadata attached to every discussion ctx + carried
+ * onto the conclusion. The string `session_date` is the trading day
+ * whose close most of the numeric blocks reference; `phase` describes
+ * where the discussion sits relative to that day (backtest /
+ * intraday / today_close_published / pre_open_today / etc.). The
+ * `hint_zh` field is the human-friendly explanation the persona
+ * prompt also surfaces. */
+export interface CapturedSession {
+  session_date: string | null;
+  phase: string;
+  is_intraday: boolean;
+  hint_zh: string;
 }
 
 export type DiscussionStatus = "draft" | "running" | "done";

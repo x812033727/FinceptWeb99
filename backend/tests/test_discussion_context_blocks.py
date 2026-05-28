@@ -593,7 +593,9 @@ async def test_build_market_context_initialises_default_shape(
     (single_stock_futures_oi), #283 (taiwan_vix), #284
     (upcoming_events_calendar), #285 (broker_concentration)."""
     expected_keys = {
-        "market", "captured_at", "backtest", "as_of",
+        "market", "captured_at",
+        "captured_session",          # PR for expert-quote freshness
+        "backtest", "as_of",
         "top_gainers", "top_losers", "index",
         "news_sentiment", "news_backfill", "per_symbol_news_sentiment",
         "short_term_signals",
@@ -631,6 +633,19 @@ async def test_build_market_context_initialises_default_shape(
     assert set(ctx.keys()) == expected_keys
     assert ctx["market"] == "TW"
     assert ctx["backtest"] is False
+    # `captured_session` must be a fully-populated dict in live mode —
+    # downstream blocks (focus_briefs.quote, screener rows) read its
+    # `session_date` to stamp per-row `as_of_session` consistently.
+    # If it ever defaults to None / partial, personas re-anchor on
+    # `captured_at` and the original "yesterday's close looks like
+    # today's" bug regresses silently.
+    sess = ctx["captured_session"]
+    assert isinstance(sess, dict)
+    assert set(sess.keys()) == {
+        "session_date", "phase", "is_intraday", "hint_zh",
+    }
+    assert sess["hint_zh"]
+    assert isinstance(sess["is_intraday"], bool)
 
 
 @pytest.mark.asyncio

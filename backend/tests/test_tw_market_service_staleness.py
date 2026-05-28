@@ -21,6 +21,22 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytz
 
+# Stub `data.us.yfinance_connector` so the screener's lazy import in
+# `_recover_screener_via_yfinance` resolves without dragging pandas /
+# yfinance into the test env. The real connector is just a thin wrapper
+# around `yf.download`; tests patch the function attribute directly so
+# the stub body is irrelevant.
+import sys as _sys
+import types as _types
+if "data.us.yfinance_connector" not in _sys.modules:
+    _stub = _types.ModuleType("data.us.yfinance_connector")
+    async def _stub_batch_quotes(tickers):  # noqa: ARG001
+        return {}
+    _stub.get_batch_quotes = _stub_batch_quotes
+    _sys.modules["data.us.yfinance_connector"] = _stub
+    import data.us as _data_us
+    _data_us.yfinance_connector = _stub
+
 from services import tw_market_service as svc
 from services.discussion.context.builder import _maybe_downgrade_captured_session
 
@@ -323,3 +339,232 @@ def test_downgrade_noop_when_no_screener_session():
     ctx = {"captured_session": dict(original)}
     _maybe_downgrade_captured_session(ctx)
     assert ctx["captured_session"] == original
+
+
+# ── yfinance recovery path (Part C) ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_yfinance_recovers_when_twse_and_ohlcv_both_stuck():
+    """The user-reported case: at 23:29 Taipei on 2026-05-28, TWSE
+    STOCK_DAY_ALL still serves 2026-05-27 close (60.6 for 8110),
+    `ohlcv_daily` also stuck on 2026-05-27 because the daily cron
+    drew from the same upstream. yfinance's chart endpoint has
+    independent infrastructure and returns today's actual close (62).
+    Assert the recovery patches the 8110 row to 62 + stamps with
+    today's session + drops the stale TWSE values.
+    """
+    today = date(2026, 5, 28)
+    yesterday = date(2026, 5, 27)
+    twse_rows = [
+        {"Code": "2330", "Name": "TSMC", "成交股數": "5000000",
+         "收盤價": "1080.0", "漲跌價差": "5.0"},
+        {"Code": "8110", "Name": "華東", "成交股數": "68790601",
+         "收盤價": "60.6", "漲跌價差": "5.5"},
+    ]
+    yf_quotes = {
+        "2330.TW": {"price": 1100.0, "change_pct": 1.85, "volume": 5_000_000},
+        "8110.TW": {"price": 62.0, "change_pct": 2.31, "volume": 70_000_000},
+    }
+    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()) as cache_set_mock, \
+         patch.object(
+             svc, "get_latest_ohlcv_session",
+             AsyncMock(return_value=yesterday),
+         ), \
+         patch.object(
+             svc, "_bellwether_ohlcv_closes",
+             AsyncMock(return_value=[(yesterday, 1080.0)]),
+         ), \
+         patch.object(
+             svc.twse, "get_all_twse_symbols",
+             AsyncMock(return_value=twse_rows),
+         ), \
+         patch(
+             "data.us.yfinance_connector.get_batch_quotes",
+             AsyncMock(return_value=yf_quotes),
+         ), \
+         _patch_tw_now(year=2026, month=5, day=28, hh=23, mm=29):
+        result = await svc.get_screener(limit=50, min_volume=1_000_000)
+
+    by_symbol = {r["symbol"]: r for r in result}
+    assert "8110" in by_symbol
+    assert by_symbol["8110"]["price"] == 62.0
+    assert by_symbol["8110"]["actual_session"] == today.isoformat()
+    assert by_symbol["8110"]["data_source"] == "yfinance_recovery"
+    assert by_symbol["8110"]["is_stale"] is False
+    # Recovered result caches with full TTL (not the 60s stale TTL)
+    assert cache_set_mock.await_count == 1
+    last_call = cache_set_mock.await_args
+    assert last_call.args[2] == svc.TTL_SCREENER
+
+
+@pytest.mark.asyncio
+async def test_yfinance_skipped_when_also_lagging():
+    """yfinance's 2330 close matches `ohlcv_daily`'s 2026-05-27 close
+    within epsilon → Yahoo is also stuck on yesterday's session.
+    Recovery bails out and the labelled-stale path takes over."""
+    today = date(2026, 5, 28)
+    yesterday = date(2026, 5, 27)
+    twse_rows = [
+        {"Code": "2330", "Name": "TSMC", "成交股數": "5000000",
+         "收盤價": "1080.0", "漲跌價差": "5.0"},
+        {"Code": "8110", "Name": "華東", "成交股數": "2000000",
+         "收盤價": "60.6", "漲跌價差": "5.5"},
+    ]
+    yf_quotes = {
+        "2330.TW": {"price": 1080.0, "change_pct": 0.5, "volume": 5_000_000},
+        "8110.TW": {"price": 60.6, "change_pct": 9.98, "volume": 70_000_000},
+    }
+    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()) as cache_set_mock, \
+         patch.object(
+             svc, "get_latest_ohlcv_session",
+             AsyncMock(return_value=yesterday),
+         ), \
+         patch.object(
+             svc, "_bellwether_ohlcv_closes",
+             AsyncMock(return_value=[(yesterday, 1080.0)]),
+         ), \
+         patch.object(
+             svc.twse, "get_all_twse_symbols",
+             AsyncMock(return_value=twse_rows),
+         ), \
+         patch(
+             "data.us.yfinance_connector.get_batch_quotes",
+             AsyncMock(return_value=yf_quotes),
+         ), \
+         _patch_tw_now(year=2026, month=5, day=28, hh=23, mm=29):
+        result = await svc.get_screener(limit=50, min_volume=1_000_000)
+
+    by_symbol = {r["symbol"]: r for r in result}
+    assert by_symbol["8110"]["price"] == 60.6
+    assert by_symbol["8110"]["actual_session"] == yesterday.isoformat()
+    assert by_symbol["8110"]["is_stale"] is True
+    assert by_symbol["8110"]["data_source"] == "twse"
+    # Stale result caches with the short TTL so a TWSE refresh isn't
+    # shadowed for 10 minutes.
+    assert cache_set_mock.await_count == 1
+    assert cache_set_mock.await_args.args[2] == svc._TTL_SCREENER_STALE
+    _ = today  # silence linter; date is used for context
+
+
+@pytest.mark.asyncio
+async def test_yfinance_recovery_skipped_when_batch_empty():
+    """yfinance batch returns empty (transient Yahoo outage / DNS
+    failure / `yf.download` returned an empty frame). Recovery bails
+    and the labelled-stale path takes over without crashing."""
+    today = date(2026, 5, 28)
+    yesterday = date(2026, 5, 27)
+    twse_rows = [
+        {"Code": "2330", "Name": "TSMC", "成交股數": "5000000",
+         "收盤價": "1080.0", "漲跌價差": "5.0"},
+        {"Code": "8110", "Name": "華東", "成交股數": "2000000",
+         "收盤價": "60.6", "漲跌價差": "5.5"},
+    ]
+    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()) as cache_set_mock, \
+         patch.object(
+             svc, "get_latest_ohlcv_session",
+             AsyncMock(return_value=yesterday),
+         ), \
+         patch.object(
+             svc, "_bellwether_ohlcv_closes",
+             AsyncMock(return_value=[(yesterday, 1080.0)]),
+         ), \
+         patch.object(
+             svc.twse, "get_all_twse_symbols",
+             AsyncMock(return_value=twse_rows),
+         ), \
+         patch(
+             "data.us.yfinance_connector.get_batch_quotes",
+             AsyncMock(return_value={}),
+         ), \
+         _patch_tw_now(year=2026, month=5, day=28, hh=23, mm=29):
+        result = await svc.get_screener(limit=50, min_volume=1_000_000)
+
+    by_symbol = {r["symbol"]: r for r in result}
+    assert by_symbol["8110"]["price"] == 60.6
+    assert by_symbol["8110"]["is_stale"] is True
+    assert cache_set_mock.await_args.args[2] == svc._TTL_SCREENER_STALE
+    _ = today
+
+
+# ── Cache freshness key + TTL ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_cache_key_includes_ohlcv_latest_to_invalidate_on_advance():
+    """When `ohlcv_daily` advances from yesterday to today (e.g. the
+    daily cron just finished), the cache key changes so a previously
+    cached stale entry doesn't shadow the fast-path's fresh result."""
+    today = date(2026, 5, 28)
+    yesterday = date(2026, 5, 27)
+
+    # Round 1: ohlcv stuck on yesterday, returns stale + caches under
+    # the yesterday-tagged key.
+    twse_rows = [
+        {"Code": "2330", "Name": "TSMC", "成交股數": "5000000",
+         "收盤價": "1080.0", "漲跌價差": "5.0"},
+    ]
+    cache: dict[str, str] = {}
+
+    async def _cache_get(k: str) -> str | None:
+        return cache.get(k)
+
+    async def _cache_set(k: str, v: str, ttl: int) -> None:
+        cache[k] = v
+
+    with patch.object(svc, "cache_get", AsyncMock(side_effect=_cache_get)), \
+         patch.object(svc, "cache_set", AsyncMock(side_effect=_cache_set)), \
+         patch.object(
+             svc, "get_latest_ohlcv_session",
+             AsyncMock(return_value=yesterday),
+         ), \
+         patch.object(
+             svc, "_bellwether_ohlcv_closes",
+             AsyncMock(return_value=[(yesterday, 1080.0)]),
+         ), \
+         patch.object(
+             svc.twse, "get_all_twse_symbols",
+             AsyncMock(return_value=twse_rows),
+         ), \
+         patch(
+             "data.us.yfinance_connector.get_batch_quotes",
+             AsyncMock(return_value={}),
+         ), \
+         _patch_tw_now(year=2026, month=5, day=28, hh=15):
+        round_1 = await svc.get_screener(limit=50, min_volume=1_000_000)
+        assert any(r.get("is_stale") for r in round_1)
+
+    yesterday_keys = list(cache.keys())
+    assert any(yesterday.isoformat() in k for k in yesterday_keys)
+
+    # Round 2: ohlcv_daily has now advanced. Same call → different cache
+    # key (today's ohlcv tag) → the yesterday-cached stale entry doesn't
+    # shadow the fast-path retry.
+    backtest_rows = [
+        {"symbol": "2330", "market": "TW", "exchange": "TWSE",
+         "name_zh": "TSMC", "price": 1100.0, "change": 20.0,
+         "change_pct": 1.85, "volume": 5_000_000, "pe_ratio": None,
+         "pb_ratio": None, "dividend_yield": None,
+         "data_source": "ohlcv_daily", "as_of": today.isoformat()},
+    ]
+    with patch.object(svc, "cache_get", AsyncMock(side_effect=_cache_get)), \
+         patch.object(svc, "cache_set", AsyncMock(side_effect=_cache_set)), \
+         patch.object(
+             svc, "get_latest_ohlcv_session",
+             AsyncMock(return_value=today),
+         ), \
+         patch.object(
+             svc, "_get_screener_backtest",
+             AsyncMock(return_value=backtest_rows),
+         ), \
+         _patch_tw_now(year=2026, month=5, day=28, hh=15):
+        round_2 = await svc.get_screener(limit=50, min_volume=1_000_000)
+
+    assert round_2 != round_1
+    assert all(
+        r["data_source"] == "ohlcv_daily_today" and not r["is_stale"]
+        for r in round_2
+    )

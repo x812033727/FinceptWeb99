@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import type { Conclusion, DiscussionDetail } from "@/types/discussion";
 import { useCollapsible } from "@/hooks/useCollapsible";
 import { BaselineDeltaBadge } from "./BaselineDeltaBadge";
+import { CapturedSessionBadge } from "./CapturedSessionBadge";
 import { ConclusionHero } from "./ConclusionHero";
 import { QualitySignalsRow } from "./QualitySignalsRow";
 import { downloadDiscussionMarkdown } from "./_helpers";
@@ -139,6 +140,7 @@ export function ConclusionCard({
         <p className="text-xs text-red-300">{t("discussion.conclusion_parse_error")}</p>
       ) : (
         <>
+          <CapturedSessionBadge session={conclusion.captured_session} />
           <QualitySignalsRow signals={conclusion.quality_signals} />
           <BaselineDeltaBadge conclusion={conclusion} />
           <ConclusionHero

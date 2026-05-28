@@ -49,9 +49,21 @@ def _is_speculative_etf(symbol: Any) -> bool:
     return bool(_TW_SPECULATIVE_ETF_RE.match(symbol))
 
 
-def _compact_screener_row(r: dict[str, Any]) -> dict[str, Any]:
+def _compact_screener_row(
+    r: dict[str, Any],
+    *,
+    as_of_session: str | None = None,
+    is_intraday: bool = False,
+) -> dict[str, Any]:
     """Strip the screener row to just the fields a persona needs, so the
-    LLM prompt stays compact (300 rows × 12 fields fills the context fast)."""
+    LLM prompt stays compact (300 rows × 12 fields fills the context fast).
+
+    `as_of_session` / `is_intraday` stamp each row with the trading
+    session its price came from. TW live mode pulls from
+    `STOCK_DAY_ALL` which only refreshes post-14:30 Taipei → during
+    intraday the price is yesterday's close, and we want personas to
+    see that explicitly rather than infer "today" from `captured_at`.
+    """
     from services import tw_market_service
     sym = r.get("symbol")
     return {
@@ -65,10 +77,17 @@ def _compact_screener_row(r: dict[str, Any]) -> dict[str, Any]:
         "volume": r.get("volume"),
         "pe": r.get("pe_ratio"),
         "yield": r.get("dividend_yield"),
+        "as_of_session": as_of_session,
+        "is_intraday": is_intraday,
     }
 
 
-def _compact_us_screener_row(r: dict[str, Any]) -> dict[str, Any]:
+def _compact_us_screener_row(
+    r: dict[str, Any],
+    *,
+    as_of_session: str | None = None,
+    is_intraday: bool = False,
+) -> dict[str, Any]:
     """US-side compact form (PR #215). Mirrors `_compact_screener_row`
     but pulls from US screener output: industry / sector come from
     the row directly (no global map like TW's `_industry_map`); PE /
@@ -82,6 +101,8 @@ def _compact_us_screener_row(r: dict[str, Any]) -> dict[str, Any]:
         "price":      r.get("price"),
         "change_pct": r.get("change_pct"),
         "volume":     r.get("volume"),
+        "as_of_session": as_of_session,
+        "is_intraday": is_intraday,
     }
 
 

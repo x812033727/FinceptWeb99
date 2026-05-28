@@ -105,7 +105,16 @@ class ShortTermSignals:
     def to_dict(self) -> dict[str, Any]:
         return {
             "symbol":       self.symbol,
+            # `as_of` IS this block's `as_of_session` (the date of the
+            # latest OHLCV bar that fed the compute). Surfaced under
+            # both names so the freshness convention matches other
+            # ctx blocks while keeping the historical key name.
             "as_of":        self.as_of,
+            "as_of_session": self.as_of,
+            # `ohlcv_daily` is EOD-only, so intraday is structurally
+            # false. Explicit `False` lets the prompt template apply
+            # the same freshness annotation it uses elsewhere.
+            "is_intraday":  False,
             "close":        round(self.close, 4),
             "volume_ratio": _round_or_none(self.volume_ratio, 2),
             "return_5d":    _round_or_none(self.return_5d, 2),
@@ -407,6 +416,12 @@ async def compute_short_term_signals(
     if today_open is not None and prev_close not in (None, 0):
         gap_pct = (today_open - prev_close) / prev_close * 100
 
+    # `as_of` reflects the latest BAR's date — NOT today. When a live
+    # discussion fires intraday TW (before 14:30 Taipei ingest_ohlcv_tw
+    # cron), the freshest bar is yesterday, so RSI / MACD / gap_pct
+    # are computed against yesterday's close. We stamp the actual bar
+    # date so personas see "as_of=2026-05-27" instead of inferring
+    # "today" from the surrounding ctx.
     signals = ShortTermSignals(
         symbol=symbol,
         as_of=str(latest.get("time") or end.isoformat()),

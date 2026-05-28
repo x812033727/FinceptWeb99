@@ -3,6 +3,11 @@
 When TWSE + FinMind + MOPS all fail, callers used to lock in a TTL_QUOTE
 (60s) of zero-state data. Mirroring `us_market_service.get_quote` we now
 skip cache_set when the result is empty so the next request retries.
+
+Also exercises the Phase 2 MIS-Tier-0 integration: during TWSE regular
+session the waterfall must hit `twse_mis` BEFORE `twse.get_realtime_quote`
+so personas / watchlist callers see today's intraday tick instead of
+yesterday's STOCK_DAY_ALL close.
 """
 from __future__ import annotations
 
@@ -17,15 +22,109 @@ from services import tw_market_service as svc
 
 @pytest.mark.asyncio
 async def test_get_quote_zero_price_not_cached():
-    """All upstream sources failed ⇒ price=0 ⇒ don't cache."""
+    """All upstream sources failed ⇒ price=0 ⇒ don't cache.
+
+    Tier 0 (TWSE MIS intraday) is stubbed alongside the other tiers
+    so the test is deterministic regardless of whether wall-clock
+    NOW happens to be inside the regular session — without the stub
+    the connector would otherwise attempt a real HTTP call to
+    mis.twse.com.tw and either hang or randomly succeed depending
+    on the test host.
+    """
     with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
          patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
+         patch.object(svc.twse_mis, "get_realtime_quote", AsyncMock(return_value=None)), \
          patch.object(svc.twse, "get_realtime_quote", AsyncMock(side_effect=RuntimeError)), \
          patch.object(svc.finmind, "get_daily_ohlcv", AsyncMock(return_value=[])):
         result = await svc.get_quote("2330")
 
     mock_set.assert_not_awaited()
     assert result["price"] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_quote_serves_mis_intraday_when_market_open():
+    """During TWSE regular session, the MIS Tier 0 must take
+    precedence. The `data_source` field is the operator-visible
+    indicator that intraday data is flowing — falling through to
+    `twse` (STOCK_DAY_ALL) silently is exactly the bug that
+    motivated this phase.
+    """
+    mis_raw = {
+        "symbol": "2330", "name_zh": "台積電",
+        "close": 1095.0, "prev_close": 1090.0,
+        "open": 1100.0, "high": 1105.0, "low": 1095.0,
+        "volume": 12_345_600, "tlong": "1716797400000",
+    }
+    twse_called = AsyncMock(return_value={
+        "close": 999, "prev_close": 999,  # poison value — must NOT win
+    })
+    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "_is_tw_market_open", lambda: True), \
+         patch.object(svc.twse_mis, "get_realtime_quote",
+                      AsyncMock(return_value=mis_raw)), \
+         patch.object(svc.twse, "get_realtime_quote", twse_called):
+        result = await svc.get_quote("2330")
+
+    twse_called.assert_not_awaited()
+    assert result["price"] == 1095.0
+    assert result["data_source"] == "twse_mis"
+    # MIS is true intraday → personas should NOT treat it as a
+    # historical close anchor.
+    assert result["is_intraday"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_quote_skips_mis_outside_session():
+    """Pre-open / post-close / weekend — MIS would just return
+    yesterday's last value and we'd burn a wasted HTTP RTT. Tier 0
+    must short-circuit on `_is_tw_market_open() == False` so the
+    existing tiers stay in charge of the EOD anchor.
+    """
+    mis_called = AsyncMock(return_value=None)
+    twse_raw = {
+        "symbol": "2330", "name_zh": "台積電",
+        "close": 1090.0, "prev_close": 1085.0, "change": 5.0,
+        "open": 1088.0, "high": 1092.0, "low": 1085.0,
+        "volume": 8_000_000,
+    }
+    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "_is_tw_market_open", lambda: False), \
+         patch.object(svc.twse_mis, "get_realtime_quote", mis_called), \
+         patch.object(svc.twse, "get_realtime_quote", AsyncMock(return_value=twse_raw)):
+        result = await svc.get_quote("2330")
+
+    mis_called.assert_not_awaited()
+    assert result["price"] == 1090.0
+    assert result["data_source"] == "twse"
+    assert result["is_intraday"] is False
+
+
+@pytest.mark.asyncio
+async def test_get_quote_mis_failure_falls_through_to_twse():
+    """MIS connectivity issues (403 from missing JSESSIONID, network
+    glitch, malformed JSON) must NOT blank the quote — Tier 1's
+    STOCK_DAY_ALL still has yesterday's close, which beats nothing.
+    """
+    twse_raw = {
+        "symbol": "2330", "name_zh": "台積電",
+        "close": 1090.0, "prev_close": 1085.0, "change": 5.0,
+        "open": 1088.0, "high": 1092.0, "low": 1085.0,
+        "volume": 8_000_000,
+    }
+    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "_is_tw_market_open", lambda: True), \
+         patch.object(svc.twse_mis, "get_realtime_quote",
+                      AsyncMock(side_effect=RuntimeError("boom"))), \
+         patch.object(svc.twse, "get_realtime_quote",
+                      AsyncMock(return_value=twse_raw)):
+        result = await svc.get_quote("2330")
+
+    assert result["price"] == 1090.0
+    assert result["data_source"] == "twse"
 
 
 @pytest.mark.asyncio
@@ -37,11 +136,18 @@ async def test_get_quote_real_price_is_cached():
     }
     with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
          patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
+         patch.object(svc.twse_mis, "get_realtime_quote", AsyncMock(return_value=None)), \
          patch.object(svc.twse, "get_realtime_quote", AsyncMock(return_value=raw)):
         result = await svc.get_quote("2330")
 
     mock_set.assert_awaited_once()
     assert result["price"] == 820.0
+    # Freshness stamps (post-Phase-1) must accompany every cached
+    # quote so the focus_briefs forwarder can carry the session
+    # anchor onto the prompt.
+    assert "as_of_session" in result
+    assert "is_intraday" in result
+    assert result["is_intraday"] is False  # STOCK_DAY_ALL = EOD
 
 
 # ── get_history ───────────────────────────────────────────────────

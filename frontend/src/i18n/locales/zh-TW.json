@@ -992,6 +992,7 @@
       "smith":             { "name": "史密斯 Terry Smith", "short": "史", "description": "高 ROCE 複利股、Don't overpay、不要動" },
       "marks":             { "name": "馬克斯 Howard Marks", "short": "馬", "description": "第二層思考、市場循環、風險優先" },
       "klarman":           { "name": "克拉曼 Seth Klarman", "short": "克", "description": "安全邊際、特殊情況、低相關性、極致耐心" },
+      "kostolany":         { "name": "科斯托蘭尼 André Kostolany", "short": "科", "description": "雞蛋理論、行情 = 資金 + 心理、固執者 vs 猶豫者、長期逆向投機" },
       "dalio":             { "name": "達里歐 Ray Dalio", "short": "達", "description": "全天候、債務循環、四種經濟環境" },
       "soros":             { "name": "索羅斯 George Soros", "short": "索", "description": "反身性、宏觀對沖、不對稱押注" },
       "simons":            { "name": "西蒙斯 Jim Simons", "short": "西", "description": "純量化：統計訊號、因子分解、out-of-sample 測試" },

@@ -992,6 +992,7 @@
       "smith":             { "name": "Terry Smith", "short": "SM", "description": "ROCE 20%+ compounders; don't overpay, do nothing" },
       "marks":             { "name": "Howard Marks", "short": "MK", "description": "Second-level thinking, market cycles, risk-first" },
       "klarman":           { "name": "Seth Klarman", "short": "KL", "description": "Margin of safety, special situations, ultimate patience" },
+      "kostolany":         { "name": "André Kostolany", "short": "AK", "description": "Liquidity + crowd psychology; the market-cycle 'egg'; strong vs weak hands; long-horizon contrarian speculation" },
       "dalio":             { "name": "Ray Dalio", "short": "DA", "description": "All-weather, debt cycles, four economic environments" },
       "soros":             { "name": "George Soros", "short": "SO", "description": "Reflexivity, macro hedges, asymmetric bets" },
       "simons":            { "name": "Jim Simons", "short": "SI", "description": "Pure quant: statistical signals, factors, out-of-sample" },

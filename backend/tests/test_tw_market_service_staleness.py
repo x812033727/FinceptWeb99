@@ -50,7 +50,7 @@ _TW = pytz.timezone("Asia/Taipei")
 
 def _patch_tw_now(*, year: int, month: int, day: int, hh: int, mm: int = 0):
     """Freeze both freshness clocks to a single Taipei wall-clock so
-    `_expected_today_session` returns deterministic values."""
+    `_latest_complete_session` returns deterministic values."""
     local = _TW.localize(datetime(year, month, day, hh, mm))
     utc = local.astimezone(UTC)
 
@@ -82,28 +82,40 @@ def _reset_ohlcv_latest_cache():
     svc._ohlcv_latest_cache = None
 
 
-# ── _expected_today_session ───────────────────────────────────────
+# ── _latest_complete_session ──────────────────────────────────────
 
 
-def test_expected_today_session_returns_today_post_publish():
+def test_latest_complete_session_returns_today_post_publish():
     """Wed 15:00 Taipei is past 14:30 STOCK_DAY_ALL publish, so the
-    expected "today's close" session is today's date."""
+    latest complete session is today."""
     with _patch_tw_now(year=2026, month=5, day=27, hh=15):
-        assert svc._expected_today_session() == date(2026, 5, 27)
+        assert svc._latest_complete_session() == date(2026, 5, 27)
 
 
-def test_expected_today_session_returns_none_pre_publish():
-    """Wed 11:00 Taipei is intraday; STOCK_DAY_ALL hasn't refreshed
-    so there is no "today's close" to expect yet."""
+def test_latest_complete_session_returns_prev_day_intraday():
+    """Wed 11:00 Taipei is intraday; today's close hasn't published.
+    The latest COMPLETE session is the prior trading day — used by
+    the screener so staleness detection still fires when TWSE serves
+    something older than that."""
     with _patch_tw_now(year=2026, month=5, day=27, hh=11):
-        assert svc._expected_today_session() is None
+        assert svc._latest_complete_session() == date(2026, 5, 26)
 
 
-def test_expected_today_session_returns_none_on_weekend():
-    """Sat 10:00 Taipei is non-trading; the freshness phase is
-    `weekend_or_holiday`, not `today_close_published`."""
+def test_latest_complete_session_returns_prev_day_pre_open():
+    """Fri 00:01 Taipei (after midnight crossover) — pre-open phase.
+    Latest complete session is the prior weekday's close. The
+    user-reported bug case: at this hour the original
+    `_expected_today_session()` returned None and short-circuited
+    the yfinance recovery despite TWSE being a day behind."""
+    with _patch_tw_now(year=2026, month=5, day=29, hh=0, mm=1):
+        assert svc._latest_complete_session() == date(2026, 5, 28)
+
+
+def test_latest_complete_session_returns_recent_weekday_on_weekend():
+    """Sat 10:00 Taipei — most recent weekday's close is the
+    relevant anchor, not None."""
     with _patch_tw_now(year=2026, month=5, day=30, hh=10):
-        assert svc._expected_today_session() is None
+        assert svc._latest_complete_session() == date(2026, 5, 29)
 
 
 # ── get_screener fast path: ohlcv_daily has today ─────────────────
@@ -635,3 +647,128 @@ def test_compact_screener_row_data_source_is_none_when_missing():
         raw, as_of_session="2026-05-28", is_intraday=False,
     )
     assert compact["data_source"] is None
+
+
+def test_compact_screener_row_passes_is_stale_through():
+    """`is_stale` shares the same passthrough path as `data_source`
+    (Part E). Without it the JSON view can't tell a recovery hit
+    from a stale-but-tagged twse row."""
+    for stale in (True, False, None):
+        raw = {
+            "symbol": "8110",
+            "price": 60.6,
+            "data_source": "twse",
+            "is_stale": stale,
+        }
+        compact = _compact_screener_row(
+            raw, as_of_session="2026-05-27", is_intraday=False,
+        )
+        assert compact["is_stale"] is stale
+
+
+def test_compact_us_screener_row_passes_is_stale_through():
+    for stale in (True, False, None):
+        raw = {
+            "symbol": "NVDA",
+            "name": "NVIDIA Corp",
+            "price": 145.0,
+            "data_source": "polygon",
+            "is_stale": stale,
+        }
+        compact = _compact_us_screener_row(
+            raw, as_of_session="2026-05-28", is_intraday=False,
+        )
+        assert compact["is_stale"] is stale
+
+
+# ── Part E: staleness gate covers all phases of day ──────────────
+
+
+@pytest.mark.asyncio
+async def test_yfinance_recovery_fires_pre_open_when_twse_is_a_day_behind():
+    """Pre-open Friday 00:01 Taipei — the user's reported bug case.
+    Latest complete session per freshness is Thursday (2026-05-28);
+    TWSE STOCK_DAY_ALL still serves 2026-05-27. Pre-Part-E the
+    yfinance gate short-circuited at this hour because
+    `_expected_today_session()` returned None outside post-publish.
+    Part E moves the gate to `_latest_complete_session()` which is
+    populated at every hour of the day, so yfinance recovery now
+    fires and returns Thursday's actual close.
+    """
+    thursday = date(2026, 5, 28)
+    wednesday = date(2026, 5, 27)
+    twse_rows = [
+        {"Code": "2330", "Name": "TSMC", "成交股數": "5000000",
+         "收盤價": "1080.0", "漲跌價差": "5.0"},
+        {"Code": "8110", "Name": "華東", "成交股數": "68790601",
+         "收盤價": "60.6", "漲跌價差": "5.5"},
+    ]
+    yf_quotes = {
+        "2330.TW": {"price": 1100.0, "change_pct": 1.85, "volume": 5_000_000},
+        "8110.TW": {"price": 62.0, "change_pct": 2.31, "volume": 70_000_000},
+    }
+    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(
+             svc, "get_latest_ohlcv_session",
+             AsyncMock(return_value=wednesday),
+         ), \
+         patch.object(
+             svc, "_bellwether_ohlcv_closes",
+             AsyncMock(return_value=[(wednesday, 1080.0)]),
+         ), \
+         patch.object(
+             svc.twse, "get_all_twse_symbols",
+             AsyncMock(return_value=twse_rows),
+         ), \
+         patch(
+             "data.us.yfinance_connector.get_batch_quotes",
+             AsyncMock(return_value=yf_quotes),
+         ), \
+         _patch_tw_now(year=2026, month=5, day=29, hh=0, mm=1):
+        result = await svc.get_screener(limit=50, min_volume=1_000_000)
+
+    by_symbol = {r["symbol"]: r for r in result}
+    assert by_symbol["8110"]["price"] == 62.0
+    assert by_symbol["8110"]["actual_session"] == thursday.isoformat()
+    assert by_symbol["8110"]["data_source"] == "yfinance_recovery"
+    assert by_symbol["8110"]["is_stale"] is False
+
+
+@pytest.mark.asyncio
+async def test_intraday_with_matched_twse_does_not_attempt_recovery():
+    """Intraday Friday 11:00 Taipei. Latest complete session is
+    Thursday. TWSE serves Thursday's close (matches DB). No stale
+    detection, no recovery attempt — regression guard that the
+    relaxed gate doesn't fire recovery during healthy intraday
+    when the screener data IS what we expect.
+    """
+    thursday = date(2026, 5, 28)
+    twse_rows = [
+        {"Code": "2330", "Name": "TSMC", "成交股數": "5000000",
+         "收盤價": "1100.0", "漲跌價差": "5.0"},
+    ]
+    yf_mock = AsyncMock(return_value={})
+    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(
+             svc, "get_latest_ohlcv_session",
+             AsyncMock(return_value=thursday),
+         ), \
+         patch.object(
+             svc, "_bellwether_ohlcv_closes",
+             AsyncMock(return_value=[(thursday, 1100.0)]),
+         ), \
+         patch.object(
+             svc.twse, "get_all_twse_symbols",
+             AsyncMock(return_value=twse_rows),
+         ), \
+         patch(
+             "data.us.yfinance_connector.get_batch_quotes",
+             yf_mock,
+         ), \
+         _patch_tw_now(year=2026, month=5, day=29, hh=11):
+        # ohlcv_latest = Thursday >= freshness_session (Thursday) so
+        # fast path fires. yfinance must not be reached.
+        await svc.get_screener(limit=50, min_volume=1_000_000)
+    yf_mock.assert_not_awaited()

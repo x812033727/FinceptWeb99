@@ -1707,18 +1707,23 @@ _STALENESS_BELLWETHER = "2330"
 _TTL_SCREENER_STALE = 60
 
 
-def _expected_today_session() -> date | None:
-    """Taipei-local today's session date when the post-close
-    STOCK_DAY_ALL window has opened (>= 14:30 Taipei on a weekday).
-    Returns None otherwise — the live screener path is the right
-    behaviour pre-14:30 / weekends since `ohlcv_daily` won't have a
-    newer bar than yesterday."""
+def _latest_complete_session() -> date:
+    """The latest TW trading session whose close data SHOULD be
+    available right now, per the freshness resolver. Returns a date
+    for any wall-clock time:
+      - Post-14:30 Taipei weekday → today
+      - Pre-open / intraday / between_close_and_publish → prev trading day
+      - Weekend → most recent weekday
+    Used as the single staleness reference so the screener and the
+    captured_session block agree on what "stale" means — the original
+    `_expected_today_session()` only returned a date for
+    `today_close_published`, which silently disabled the yfinance
+    recovery the other 88% of the day.
+    """
     from services.discussion.freshness import _tw_latest_complete_session
     now_tw = datetime.now(UTC).astimezone(_TW)
-    sess, phase = _tw_latest_complete_session(now_tw)
-    if phase == "today_close_published":
-        return sess
-    return None
+    sess, _phase = _tw_latest_complete_session(now_tw)
+    return sess
 
 # Per-pod cache for ohlcv_daily latest-session lookups. The daily
 # ingest cron writes once at 06:30 UTC and a stale read up to 60s old
@@ -1865,7 +1870,7 @@ async def _recover_screener_via_yfinance(
     *,
     candidates: list[dict[str, Any]],
     detected_session: date,
-    expected_today: date | None,
+    expected_today: date,
     limit: int,
 ) -> list[dict[str, Any]] | None:
     """Last-ditch screener recovery using Yahoo's chart endpoint.
@@ -1944,7 +1949,7 @@ async def _recover_screener_via_yfinance(
                  extra={"detected_session": detected_session.isoformat()})
         return None
 
-    session_stamp = (expected_today or detected_session).isoformat()
+    session_stamp = expected_today.isoformat()
     recovered: list[dict[str, Any]] = []
     for row in candidates:
         sym = row.get("symbol")
@@ -2058,7 +2063,7 @@ async def get_screener(
         v is not None for v in (min_pe, max_pe, min_pb, max_pb, min_dividend_yield)
     )
     ohlcv_latest = await get_latest_ohlcv_session()
-    expected_today = _expected_today_session()
+    freshness_session = _latest_complete_session()
     ohlcv_tag = ohlcv_latest.isoformat() if ohlcv_latest else "none"
     key = (
         f"tw:screener:{exchange}:{min_volume}:"
@@ -2069,16 +2074,16 @@ async def get_screener(
     if cached:
         return json.loads(cached)
 
-    # Staleness fast-path: if `ohlcv_daily` already holds today's
-    # session, prefer it. The daily TW ingest cron writes at 06:30 UTC
-    # and finishes within ~40 min, so any discussion run post-15:10
-    # Taipei should hit this branch and get today's verified close
-    # instead of relying on STOCK_DAY_ALL's refresh cadence.
+    # Staleness fast-path: if `ohlcv_daily` already holds the latest
+    # complete session per the freshness resolver, prefer it. Fires
+    # post-publish (14:30 Taipei +) when DB has today, AND pre-open
+    # / intraday / weekend when DB has the latest weekday close — the
+    # backtest path is the right behaviour in all cases since
+    # `freshness_session` is exactly the session we want anchored on.
     if (
         not needs_valuations_early
         and ohlcv_latest is not None
-        and expected_today is not None
-        and ohlcv_latest >= expected_today
+        and ohlcv_latest >= freshness_session
     ):
         result = await _get_screener_backtest(
             as_of=ohlcv_latest,
@@ -2202,10 +2207,11 @@ async def get_screener(
             if recovered:
                 await cache_set(key, json.dumps(recovered), TTL_SCREENER)
             return recovered
-        stale = (
-            expected_today is not None
-            and detected_session < expected_today
-        )
+        # Compare against the freshness resolver's session so stale
+        # is recognised at any hour of the day — the previous
+        # `expected_today` short-circuit silently disabled recovery
+        # outside the 14:30-onwards window.
+        stale = detected_session < freshness_session
         # Last-ditch independent recovery via yfinance when both TWSE
         # and `ohlcv_daily` are stuck on the same session. Yahoo's
         # chart endpoint draws from a different pipeline than TWSE
@@ -2215,7 +2221,7 @@ async def get_screener(
             recovered = await _recover_screener_via_yfinance(
                 candidates=result,
                 detected_session=detected_session,
-                expected_today=expected_today,
+                expected_today=freshness_session,
                 limit=limit,
             )
             if recovered is not None:
@@ -2227,14 +2233,12 @@ async def get_screener(
             row["is_stale"] = stale
     else:
         # Detector inconclusive (bellwether missing, DB empty, no close
-        # match). Stamp with the freshness resolver's wall-clock
-        # session so the row carries something — downstream tagging
-        # still works, just without staleness assertion.
-        wall = (expected_today or ohlcv_latest)
-        if wall is not None:
-            for row in result:
-                row["actual_session"] = wall.isoformat()
-                row["is_stale"] = None
+        # match). Stamp with the freshness resolver's session so the
+        # row carries something — downstream tagging still works, just
+        # without staleness assertion.
+        for row in result:
+            row["actual_session"] = freshness_session.isoformat()
+            row["is_stale"] = None
 
     # Don't cache an empty screener for 10 min — mirrors the US service so
     # a transient TWSE OpenAPI failure doesn't lock the page into "no

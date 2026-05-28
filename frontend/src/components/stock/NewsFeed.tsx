@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import api from "@/lib/api";
+import { formatTaipei } from "@/lib/timeFormat";
 
 interface NewsItem {
   title: string;
@@ -56,11 +57,7 @@ export function NewsFeed({ symbol, market }: { symbol: string; market: "US" | "T
             <p className="text-sm font-medium leading-snug line-clamp-2">{item.title}</p>
             <p className="text-xs text-muted-foreground">
               {item.publisher} ·{" "}
-              {new Date(item.published_at).toLocaleDateString(undefined, {
-                month: "short",
-                day: "numeric",
-                year: "numeric",
-              })}
+              {formatTaipei(item.published_at, "date")}
             </p>
           </div>
         </a>

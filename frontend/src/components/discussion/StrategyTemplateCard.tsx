@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { formatTaipei } from "@/lib/timeFormat";
 import {
   createStrategy,
   deleteStrategy,
@@ -552,7 +553,7 @@ function StrategyRow({
         {strategy.weights_updated_at ? (
           <span className="text-muted-foreground" title={strategy.weights_updated_at}>
             {t("strategy.last_learned", "上次學習")}：
-            {new Date(strategy.weights_updated_at).toLocaleDateString()}
+            {formatTaipei(strategy.weights_updated_at, "date")}
           </span>
         ) : null}
       </div>

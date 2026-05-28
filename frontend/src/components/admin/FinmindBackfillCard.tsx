@@ -8,6 +8,7 @@ import {
   type PerDatasetProgress,
 } from "@/hooks/useFinmindChain";
 import { errorDetail } from "@/lib/api";
+import { formatTaipei } from "@/lib/timeFormat";
 
 /**
  * AdminPage card surfacing FinMind 全量回填 chain control + live
@@ -56,7 +57,7 @@ function StatusBanner({ state }: { state: FinmindChainState | undefined }) {
       )}
       {state.last_chunk_at && (
         <div className="mt-0.5 text-xs text-muted-foreground">
-          最後一批: {new Date(state.last_chunk_at).toLocaleString()}
+          最後一批: {formatTaipei(state.last_chunk_at)}
         </div>
       )}
     </div>

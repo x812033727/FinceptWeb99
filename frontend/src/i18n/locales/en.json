@@ -854,6 +854,7 @@
     "context_prior": "Prior calls",
     "context_show_json": "▸ Show JSON",
     "context_hide_json": "▾ Hide JSON",
+    "context_json_timezone_note": "Times shown in Asia/Taipei (UTC+8)",
     "scoreboard_title": "Scoreboard (D1-D5)",
     "scoreboard_subtitle": "For each recommended symbol, the % change of each of the next 5 trading days' close vs the day-1 open. Refreshed daily at 09:30 UTC.",
     "scoreboard_count": "{{n}} symbols",

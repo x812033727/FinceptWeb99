@@ -62,7 +62,7 @@ async def fetch_screener(
             # Taipei refresh) or `ohlcv_daily` clamped to `<= as_of`
             # in backtest. Either way the row is a SESSION CLOSE, not
             # intraday — `is_intraday=False` always for this block.
-            sess = (
+            sess_default = (
                 as_of.isoformat() if as_of is not None
                 else tw_quote_session()
             )
@@ -72,14 +72,40 @@ async def fetch_screener(
                 and not _is_speculative_etf(r.get("symbol"))
             ]
             scored.sort(key=lambda r: r["change_pct"], reverse=True)
+            # Live TW screener now stamps each row with the actual
+            # session detected from the upstream response (when
+            # STOCK_DAY_ALL lags post-close). Prefer the row-level
+            # value over the wall-clock default so a row dated
+            # 2026-05-27 doesn't get re-anchored to 2026-05-28.
             ctx["top_gainers"] = [
-                _compact_screener_row(r, as_of_session=sess, is_intraday=False)
+                _compact_screener_row(
+                    r,
+                    as_of_session=r.get("actual_session") or sess_default,
+                    is_intraday=False,
+                )
                 for r in scored[:top_n]
             ]
             ctx["top_losers"] = [
-                _compact_screener_row(r, as_of_session=sess, is_intraday=False)
+                _compact_screener_row(
+                    r,
+                    as_of_session=r.get("actual_session") or sess_default,
+                    is_intraday=False,
+                )
                 for r in scored[-top_n:][::-1]
             ]
+            # Surface the worst row-level session so the builder can
+            # downgrade `captured_session.phase` when screener data is
+            # provably older than wall-clock expectation.
+            row_sessions = [
+                r.get("actual_session") for r in scored
+                if isinstance(r.get("actual_session"), str)
+            ]
+            if row_sessions:
+                ctx["screener_actual_session"] = min(row_sessions)
+                ctx["screener_data_source"] = (
+                    (rows[0].get("data_source") if rows else None)
+                    or "twse"
+                )
         elif market == "US":
             from services import us_market_service
             rows = await us_market_service.get_screener(

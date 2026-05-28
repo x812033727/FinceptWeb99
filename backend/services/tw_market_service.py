@@ -1680,6 +1680,150 @@ async def _get_all_valuations_cached() -> dict[str, dict[str, float | None]]:
     return data
 
 
+# ── Screener staleness detection ──────────────────────────────────
+#
+# `STOCK_DAY_ALL` is supposed to refresh ~14:30 Taipei but in practice
+# can lag — discussions fired hours after close occasionally still see
+# yesterday's row. `ingest_ohlcv_tw` writes today's bars into
+# `ohlcv_daily` at 06:30 UTC (= 14:30 Taipei) and finishes within ~40
+# min, so `ohlcv_daily` is a more reliable "today's close" source than
+# live TWSE for any discussion run post-15:10 Taipei.
+#
+# Two helpers below let `get_screener` (a) prefer DB when it has today,
+# and (b) detect when TWSE's live response actually carries an older
+# session so the row's `actual_session` stamp reflects reality.
+
+# Bellwether for STOCK_DAY_ALL staleness checks: 2330 (TSMC). Always
+# traded, never halted in practice. If 2330's close in the TWSE
+# response equals yesterday's close in ohlcv_daily, the entire
+# response is one trading day behind.
+_STALENESS_BELLWETHER = "2330"
+
+
+def _expected_today_session() -> date | None:
+    """Taipei-local today's session date when the post-close
+    STOCK_DAY_ALL window has opened (>= 14:30 Taipei on a weekday).
+    Returns None otherwise — the live screener path is the right
+    behaviour pre-14:30 / weekends since `ohlcv_daily` won't have a
+    newer bar than yesterday."""
+    from services.discussion.freshness import _tw_latest_complete_session
+    now_tw = datetime.now(UTC).astimezone(_TW)
+    sess, phase = _tw_latest_complete_session(now_tw)
+    if phase == "today_close_published":
+        return sess
+    return None
+
+# Per-pod cache for ohlcv_daily latest-session lookups. The daily
+# ingest cron writes once at 06:30 UTC and a stale read up to 60s old
+# is harmless (it just means the screener may stay on the slow path
+# 60s past the cron finishing). Value is (cache_expires_at_epoch,
+# session_date | None).
+_ohlcv_latest_cache: tuple[float, date | None] | None = None
+_OHLCV_LATEST_TTL_SECONDS = 60
+
+
+async def get_latest_ohlcv_session() -> date | None:
+    """Latest TW session present in `ohlcv_daily` (excluding the
+    synthetic `_TAIEX` index symbol). 60s in-process cache — the daily
+    ingest cron writes once per day so a stale read is harmless and
+    saves a DB hit per discussion round."""
+    global _ohlcv_latest_cache
+    import time as _time
+    now = _time.time()
+    if _ohlcv_latest_cache is not None and _ohlcv_latest_cache[0] > now:
+        return _ohlcv_latest_cache[1]
+
+    from sqlalchemy import func, select
+
+    from db.session import AsyncSessionLocal
+    from models.ohlcv_daily import OhlcvDaily
+    try:
+        async with AsyncSessionLocal() as db:
+            stmt = select(func.max(OhlcvDaily.ts)).where(
+                OhlcvDaily.market == "TW",
+                ~OhlcvDaily.symbol.startswith("_"),
+            )
+            value = (await db.execute(stmt)).scalar()
+    except Exception as exc:
+        log.warning("tw.screener.ohlcv_latest_lookup_failed",
+                    extra={"error": str(exc)})
+        value = None
+
+    _ohlcv_latest_cache = (now + _OHLCV_LATEST_TTL_SECONDS, value)
+    return value
+
+
+async def _bellwether_ohlcv_closes(
+    *, symbol: str, lookback_days: int = 10,
+) -> list[tuple[date, float]]:
+    """Last `lookback_days` of `(ts, close)` for `symbol` in
+    `ohlcv_daily`, sorted ascending. Used by the screener staleness
+    detector to compare the TWSE bellwether close against recent DB
+    closes."""
+    from sqlalchemy import select
+
+    from db.session import AsyncSessionLocal
+    from models.ohlcv_daily import OhlcvDaily
+    try:
+        async with AsyncSessionLocal() as db:
+            stmt = (
+                select(OhlcvDaily.ts, OhlcvDaily.close)
+                .where(
+                    OhlcvDaily.market == "TW",
+                    OhlcvDaily.symbol == symbol,
+                )
+                .order_by(OhlcvDaily.ts.desc())
+                .limit(lookback_days)
+            )
+            rows = list((await db.execute(stmt)).all())
+    except Exception as exc:
+        log.warning("tw.screener.bellwether_lookup_failed",
+                    extra={"symbol": symbol, "error": str(exc)})
+        return []
+    return sorted(
+        ((r[0], float(r[1])) for r in rows if r[1] is not None),
+        key=lambda x: x[0],
+    )
+
+
+async def _detect_stock_day_all_session(
+    raw_rows: list[dict[str, Any]],
+) -> date | None:
+    """Compare the bellwether row in a fresh `STOCK_DAY_ALL` response
+    against recent `ohlcv_daily` closes for the same symbol. Return
+    the matched session date, or `None` when the data store can't
+    confirm (bellwether missing, no DB rows, or no close match within
+    a small epsilon).
+
+    Match epsilon is 0.01 TWD (TWSE quotes 2 decimals max for
+    sub-100 stocks, so any larger gap is a different day's close, not
+    a rounding artifact).
+    """
+    bell_row = next(
+        (
+            r for r in raw_rows
+            if (r.get("Code") or r.get("證券代號") or "").strip()
+            == _STALENESS_BELLWETHER
+        ),
+        None,
+    )
+    if not bell_row:
+        return None
+    bell_close = twse._tw_num(
+        bell_row.get("收盤價") or bell_row.get("ClosingPrice"),
+    )
+    if bell_close is None:
+        return None
+
+    recent = await _bellwether_ohlcv_closes(
+        symbol=_STALENESS_BELLWETHER, lookback_days=5,
+    )
+    for ts, db_close in reversed(recent):
+        if abs(db_close - bell_close) < 0.01:
+            return ts
+    return None
+
+
 def _passes_fundamental_filters(
     v: dict[str, float | None],
     *,
@@ -1743,6 +1887,38 @@ async def get_screener(
     cached = await cache_get(key)
     if cached:
         return json.loads(cached)
+
+    # Staleness fast-path: if `ohlcv_daily` already holds today's
+    # session, prefer it. The daily TW ingest cron writes at 06:30 UTC
+    # and finishes within ~40 min, so any discussion run post-15:10
+    # Taipei should hit this branch and get today's verified close
+    # instead of relying on STOCK_DAY_ALL's refresh cadence.
+    needs_valuations_early = any(
+        v is not None for v in (min_pe, max_pe, min_pb, max_pb, min_dividend_yield)
+    )
+    ohlcv_latest = await get_latest_ohlcv_session()
+    expected_today = _expected_today_session()
+    if (
+        not needs_valuations_early
+        and ohlcv_latest is not None
+        and expected_today is not None
+        and ohlcv_latest >= expected_today
+    ):
+        result = await _get_screener_backtest(
+            as_of=ohlcv_latest,
+            exchange=exchange,
+            min_volume=min_volume,
+            include_etf=include_etf,
+            etf_only=etf_only,
+            limit=limit,
+        )
+        for row in result:
+            row["actual_session"] = ohlcv_latest.isoformat()
+            row["data_source"] = "ohlcv_daily_today"
+            row["is_stale"] = False
+        if result:
+            await cache_set(key, json.dumps(result), TTL_SCREENER)
+        return result
 
     try:
         all_stocks = await twse.get_all_twse_symbols()
@@ -1818,6 +1994,54 @@ async def get_screener(
         })
         if len(result) >= limit:
             break
+
+    # Sentinel-based staleness check: compare 2330's STOCK_DAY_ALL
+    # close to recent `ohlcv_daily` closes. When TWSE's live endpoint
+    # is lagging (still serving yesterday's row hours after close), the
+    # detector returns yesterday's date and rows get stamped
+    # accordingly so downstream callers don't treat the snapshot as
+    # today. When `ohlcv_daily` already holds a newer bar than the
+    # detected session, recompute via the backtest path so the actual
+    # close gets returned instead of a stale TWSE row.
+    detected_session = await _detect_stock_day_all_session(all_stocks)
+    if detected_session is not None:
+        if (
+            ohlcv_latest is not None
+            and ohlcv_latest > detected_session
+            and not needs_valuations
+        ):
+            recovered = await _get_screener_backtest(
+                as_of=ohlcv_latest,
+                exchange=exchange,
+                min_volume=min_volume,
+                include_etf=include_etf,
+                etf_only=etf_only,
+                limit=limit,
+            )
+            for row in recovered:
+                row["actual_session"] = ohlcv_latest.isoformat()
+                row["data_source"] = "ohlcv_daily_recovered"
+                row["is_stale"] = False
+            if recovered:
+                await cache_set(key, json.dumps(recovered), TTL_SCREENER)
+            return recovered
+        stale = (
+            expected_today is not None
+            and detected_session < expected_today
+        )
+        for row in result:
+            row["actual_session"] = detected_session.isoformat()
+            row["is_stale"] = stale
+    else:
+        # Detector inconclusive (bellwether missing, DB empty, no close
+        # match). Stamp with the freshness resolver's wall-clock
+        # session so the row carries something — downstream tagging
+        # still works, just without staleness assertion.
+        wall = (expected_today or ohlcv_latest)
+        if wall is not None:
+            for row in result:
+                row["actual_session"] = wall.isoformat()
+                row["is_stale"] = None
 
     # Don't cache an empty screener for 10 min — mirrors the US service so
     # a transient TWSE OpenAPI failure doesn't lock the page into "no

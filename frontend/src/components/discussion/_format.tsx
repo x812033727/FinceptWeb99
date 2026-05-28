@@ -9,6 +9,7 @@
  * fragment the discussion presentation logic without a clear seam.
  */
 import { useTranslation } from "react-i18next";
+import { formatTaipei } from "@/lib/timeFormat";
 import type {
   AgentInfo,
   Conclusion,
@@ -50,22 +51,18 @@ export function usePersonaShort() {
 
 export function formatDateShort(iso: string | undefined): string {
   if (!iso) return "";
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return "";
-  return d.toLocaleDateString(undefined, { month: "numeric", day: "numeric" });
+  // Render in Asia/Taipei regardless of browser TZ. `date` variant
+  // returns `2026/05/28`; slice off the year so the short form
+  // matches the prior `month/day` shape callers expect.
+  const full = formatTaipei(iso, "date");
+  if (!full) return "";
+  const parts = full.split("/");
+  return parts.length === 3 ? `${parts[1]}/${parts[2]}` : full;
 }
 
 export function formatDateLong(iso: string | undefined): string {
   if (!iso) return "";
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return "";
-  return d.toLocaleString(undefined, {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return formatTaipei(iso, "datetime");
 }
 
 // ── dynamic discussion title ──────────────────────────────────────

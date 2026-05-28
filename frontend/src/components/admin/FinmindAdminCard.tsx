@@ -5,6 +5,7 @@ import type { AxiosError } from "axios";
 import { CollapsibleHeader } from "@/components/Collapsible";
 import { useCollapsible } from "@/hooks/useCollapsible";
 import api, { errorDetail } from "@/lib/api";
+import { formatTaipei } from "@/lib/timeFormat";
 
 /**
  * AdminPage card for the FinMind clone subsystem (`backend/finmind/`).
@@ -783,7 +784,7 @@ export default function FinmindAdminCard() {
                       </td>
                       <td className="py-1.5 pr-2 text-muted-foreground">
                         {d.last_ingest_at
-                          ? new Date(d.last_ingest_at).toLocaleString()
+                          ? formatTaipei(d.last_ingest_at)
                           : "—"}
                         {d.last_error && (
                           <span
@@ -880,7 +881,7 @@ export default function FinmindAdminCard() {
                         {e.symbol ? ` ${e.symbol}` : ""}
                       </span>
                       <span className="text-muted-foreground">
-                        {e.ts ? new Date(e.ts).toLocaleString() : "—"}
+                        {e.ts ? formatTaipei(e.ts) : "—"}
                       </span>
                     </div>
                     <div className="mt-1 break-all text-destructive">

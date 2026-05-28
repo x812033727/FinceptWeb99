@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import type { CapturedSession, RoundContextSnapshot } from "@/types/discussion";
+import { convertJsonTimestampsToTaipei, formatTaipei } from "@/lib/timeFormat";
 import { CapturedSessionInline } from "./CapturedSessionBadge";
 import {
   fetchRoundContexts,
@@ -21,9 +22,16 @@ import {
 // primary reading on every visit.
 
 function RoundContextRow({ snap }: { snap: RoundContextSnapshot }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const [showJson, setShowJson] = useState(false);
   const summary = useMemo(() => summarizeContext(snap.context), [snap.context]);
+  // Walk the ctx once when the JSON view is toggled so every embedded
+  // ISO-8601 timestamp shows as Taipei wall-clock. Memoised so toggling
+  // the view doesn't re-walk a ~25KB blob.
+  const taipeiContext = useMemo(
+    () => (showJson ? convertJsonTimestampsToTaipei(snap.context) : null),
+    [showJson, snap.context],
+  );
   // `captured_session` is injected into every ctx since the freshness
   // phase; older snapshots (pre-Phase-1) lack it, so the inline badge
   // simply renders nothing for those rows (drops back to wall-clock
@@ -88,10 +96,7 @@ function RoundContextRow({ snap }: { snap: RoundContextSnapshot }) {
         <div className="flex items-center gap-1.5 flex-wrap">
           <CapturedSessionInline session={capturedSession} />
           <span className="text-[10px] text-muted-foreground">
-            {new Date(snap.captured_at).toLocaleString(i18n.language, {
-              month: "2-digit", day: "2-digit",
-              hour: "2-digit", minute: "2-digit",
-            })}
+            {formatTaipei(snap.captured_at, "datetime")}
           </span>
         </div>
       </div>
@@ -119,9 +124,14 @@ function RoundContextRow({ snap }: { snap: RoundContextSnapshot }) {
           : t("discussion.context_show_json")}
       </button>
       {showJson && (
-        <pre className="mt-1 text-[10px] bg-card/40 border border-border rounded p-2 overflow-x-auto max-h-64 leading-tight">
-          {JSON.stringify(snap.context, null, 2)}
-        </pre>
+        <>
+          <div className="mt-1 text-[10px] text-muted-foreground">
+            {t("discussion.context_json_timezone_note")}
+          </div>
+          <pre className="mt-1 text-[10px] bg-card/40 border border-border rounded p-2 overflow-x-auto max-h-64 leading-tight">
+            {JSON.stringify(taipeiContext, null, 2)}
+          </pre>
+        </>
       )}
     </div>
   );

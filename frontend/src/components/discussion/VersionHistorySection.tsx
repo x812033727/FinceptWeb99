@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
+import { formatTaipei } from "@/lib/timeFormat";
 import type { StrategyVersionRow } from "./_helpers";
 
 /**
@@ -108,7 +109,7 @@ export function VersionHistorySection({ strategyId }: { strategyId: string }) {
                 {versions.map((v) => {
                   const isActive = v.status === "active";
                   const fitAt = v.fit_at
-                    ? new Date(v.fit_at).toLocaleDateString()
+                    ? formatTaipei(v.fit_at, "date")
                     : "—";
                   return (
                     <tr key={v.id} className="border-b border-border/40">

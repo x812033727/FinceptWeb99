@@ -247,6 +247,14 @@ async def build_market_context(
         ),
     )
 
+    # Phase downgrade when the TW screener provably returned data older
+    # than wall-clock expectation. `resolve_captured_session` only knows
+    # the time of day, not whether STOCK_DAY_ALL actually refreshed —
+    # the screener's bellwether check is the ground-truth source for
+    # "did today's data really land yet?".
+    if market == "TW" and as_of is None:
+        _maybe_downgrade_captured_session(ctx)
+
     # ── DB-bound blocks (sequential on shared session) ─────────────
     # SQLAlchemy AsyncSession is not safe to share across concurrent
     # awaits. Each read is fast (~5-10ms) so total DB-bound cost is
@@ -393,3 +401,47 @@ async def build_market_context(
 
     await _progress("ctx_ready")
     return ctx
+
+
+def _maybe_downgrade_captured_session(ctx: dict[str, Any]) -> None:
+    """When the TW screener detected stale upstream data (rows stamped
+    `actual_session` earlier than `captured_session.session_date`),
+    rewrite `captured_session` so personas and the JSON view show the
+    true session of the numeric blocks instead of optimistic wall-clock.
+
+    Idempotent: the phase mutation only fires once because after
+    downgrade `session_date` matches `screener_actual_session`.
+    """
+    actual = ctx.get("screener_actual_session")
+    sess = ctx.get("captured_session") or {}
+    expected = sess.get("session_date")
+    if not actual or not expected or actual >= expected:
+        return
+
+    from datetime import date as _date
+    try:
+        actual_date = _date.fromisoformat(actual)
+    except ValueError:
+        return
+
+    today_str = expected
+    ctx["captured_session"] = {
+        "session_date": actual,
+        "phase": "between_close_and_publish",
+        "is_intraday": False,
+        "hint_zh": (
+            f"TWSE 今日 ({today_str}) 已過 14:30 但 STOCK_DAY_ALL 仍回應"
+            f" {actual} 之收盤,系統已自動切回最新確定之交易日 ({actual})。"
+            "報價、漲跌幅、技術指標皆以該日為錨。"
+        ),
+        "phase_downgrade_reason": "stock_day_all_lag_detected",
+        "wall_clock_session_date": today_str,
+    }
+    log.info(
+        "discussion.ctx.captured_session_downgraded",
+        extra={
+            "expected": today_str,
+            "actual": actual_date.isoformat(),
+            "reason": "stock_day_all_lag_detected",
+        },
+    )

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { CollapsibleHeader } from "@/components/Collapsible";
 import { useCollapsible } from "@/hooks/useCollapsible";
 import api, { errorDetail } from "@/lib/api";
+import { formatTaipei } from "@/lib/timeFormat";
 
 // Plaintext key auto-clear delay. Long enough for the operator to
 // copy + send to the customer; short enough that walking away from
@@ -565,11 +566,11 @@ export default function FinmindKeysCard() {
                       </td>
                       <td className="py-1.5 pr-2 text-muted-foreground">
                         {k.last_used_at
-                          ? new Date(k.last_used_at).toLocaleString()
+                          ? formatTaipei(k.last_used_at)
                           : "never"}
                       </td>
                       <td className="py-1.5 pr-2 text-muted-foreground">
-                        {new Date(k.created_at).toLocaleDateString()}
+                        {formatTaipei(k.created_at, "date")}
                       </td>
                       <td className="py-1.5 pr-2">
                         {k.enabled && (

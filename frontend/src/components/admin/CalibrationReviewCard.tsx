@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { CollapsibleHeader } from "@/components/Collapsible";
 import { useCollapsible } from "@/hooks/useCollapsible";
 import api from "@/lib/api";
+import { formatTaipei } from "@/lib/timeFormat";
 
 interface PendingCalibration {
   strategy_id: string;
@@ -153,7 +154,7 @@ function PendingRow({
           </div>
           {payload.pending_at && (
             <div className="text-[10px] text-muted-foreground">
-              Queued: {new Date(payload.pending_at).toLocaleString()}
+              Queued: {formatTaipei(payload.pending_at)}
             </div>
           )}
         </div>

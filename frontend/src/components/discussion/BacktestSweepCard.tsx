@@ -2,6 +2,7 @@ import { useState } from "react";
 import { SweepAggregateCard } from "./SweepAggregateCard";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { formatTaipei } from "@/lib/timeFormat";
 import {
   cancelSweep,
   createSweep,
@@ -321,12 +322,12 @@ function SweepProgressRow({
         </span>
         <span>
           {sweep.cancelled_at
-            ? `${t("sweep.cancelled_at")}: ${new Date(sweep.cancelled_at).toLocaleString()}`
+            ? `${t("sweep.cancelled_at")}: ${formatTaipei(sweep.cancelled_at)}`
             : sweep.completed_at
-            ? `${t("sweep.completed_at")}: ${new Date(sweep.completed_at).toLocaleString()}`
+            ? `${t("sweep.completed_at")}: ${formatTaipei(sweep.completed_at)}`
             : sweep.started_at
-            ? `${t("sweep.started_at")}: ${new Date(sweep.started_at).toLocaleString()}`
-            : new Date(sweep.created_at).toLocaleString()}
+            ? `${t("sweep.started_at")}: ${formatTaipei(sweep.started_at)}`
+            : formatTaipei(sweep.created_at)}
         </span>
       </div>
 

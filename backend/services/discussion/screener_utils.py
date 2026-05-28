@@ -79,6 +79,11 @@ def _compact_screener_row(
         "yield": r.get("dividend_yield"),
         "as_of_session": as_of_session,
         "is_intraday": is_intraday,
+        # Diagnostic: which tier produced this row — twse |
+        # ohlcv_daily_today | ohlcv_daily_recovered | yfinance_recovery.
+        # Lets the JSON audit view + persona prompt tell at a glance
+        # whether the recovery path fired.
+        "data_source": r.get("data_source"),
     }
 
 
@@ -103,6 +108,9 @@ def _compact_us_screener_row(
         "volume":     r.get("volume"),
         "as_of_session": as_of_session,
         "is_intraday": is_intraday,
+        # Diagnostic tag — polygon | yfinance | stooq | finnhub etc.
+        # Same shape as `_compact_screener_row` for TW.
+        "data_source": r.get("data_source"),
     }
 
 

@@ -39,6 +39,10 @@ if "data.us.yfinance_connector" not in _sys.modules:
 
 from services import tw_market_service as svc
 from services.discussion.context.builder import _maybe_downgrade_captured_session
+from services.discussion.screener_utils import (
+    _compact_screener_row,
+    _compact_us_screener_row,
+)
 
 
 _TW = pytz.timezone("Asia/Taipei")
@@ -568,3 +572,66 @@ async def test_cache_key_includes_ohlcv_latest_to_invalidate_on_advance():
         r["data_source"] == "ohlcv_daily_today" and not r["is_stale"]
         for r in round_2
     )
+
+
+# ── data_source projection (Part D) ───────────────────────────────
+
+
+def test_compact_screener_row_passes_data_source_through():
+    """`_compact_screener_row` is the projection used for the
+    `top_gainers` / `top_losers` ctx blocks the user sees in the JSON
+    view. Without this passthrough, the recovery layer's source tag
+    is invisible — a yfinance_recovery hit looks identical to a stale
+    twse miss on the rendered row."""
+    for source in (
+        "twse",
+        "ohlcv_daily_today",
+        "ohlcv_daily_recovered",
+        "yfinance_recovery",
+    ):
+        raw = {
+            "symbol": "8110",
+            "name_zh": "華東",
+            "price": 62.0,
+            "change_pct": 2.31,
+            "volume": 70_000_000,
+            "pe_ratio": None,
+            "dividend_yield": None,
+            "data_source": source,
+        }
+        compact = _compact_screener_row(
+            raw, as_of_session="2026-05-28", is_intraday=False,
+        )
+        assert compact["data_source"] == source, (
+            f"Expected `data_source={source}` to pass through projection"
+        )
+
+
+def test_compact_us_screener_row_passes_data_source_through():
+    """US sibling projection — same passthrough so polygon vs yfinance
+    vs stooq vs finnhub is observable in the US ctx JSON view too."""
+    for source in ("polygon", "yfinance", "stooq", "finnhub"):
+        raw = {
+            "symbol": "NVDA",
+            "name": "NVIDIA Corp",
+            "sector": "Technology",
+            "price": 145.0,
+            "change_pct": 1.2,
+            "volume": 200_000_000,
+            "data_source": source,
+        }
+        compact = _compact_us_screener_row(
+            raw, as_of_session="2026-05-28", is_intraday=False,
+        )
+        assert compact["data_source"] == source
+
+
+def test_compact_screener_row_data_source_is_none_when_missing():
+    """Rows from pre-Part-B discussions (or test fixtures that didn't
+    set the field) just get `None` rather than KeyError-ing or
+    raising — the projection is forgiving."""
+    raw = {"symbol": "8110", "price": 62.0}
+    compact = _compact_screener_row(
+        raw, as_of_session="2026-05-28", is_intraday=False,
+    )
+    assert compact["data_source"] is None

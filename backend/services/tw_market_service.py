@@ -1841,7 +1841,8 @@ async def get_index(
 
     if history_days > 0:
         from services.ingest.repository import read_ohlcv_range_autosession
-        end = date.today()
+        from services.tw_trading_calendar import utcnow_tw_date
+        end = utcnow_tw_date()  # Taipei-local; date.today() is UTC → off-by-one pre-09:00 Taipei
         start = end - timedelta(days=history_days * 2)  # widen for weekends
         bars = await read_ohlcv_range_autosession(
             "TW", "_TAIEX", start, end,

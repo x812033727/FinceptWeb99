@@ -90,6 +90,21 @@ def add_trading_days_estimate(start: date, n: int) -> date:
     return cur
 
 
+def prev_trading_day_estimate(start: date) -> date:
+    """Walk *back* `n=1` weekday from `start` (exclusive) and return the
+    resulting date — the most recent likely-trading day before `start`.
+
+    Best-effort, mirrors `add_trading_days_estimate`: weekends are
+    skipped but weekday national holidays are not (the downstream
+    consumer that reads `ohlcv_daily` simply finds the last available
+    bar, so a holiday landing on the estimate is benign — clamping by
+    `ts <= as_of` still returns the prior real session)."""
+    cur = start - timedelta(days=1)
+    while cur.weekday() >= 5:
+        cur = cur - timedelta(days=1)
+    return cur
+
+
 def utcnow_tw_date() -> date:
     """Convert `datetime.now(UTC)` to the TW-local date. Used to
     interpret `created_at` for the verifier — the discussion's

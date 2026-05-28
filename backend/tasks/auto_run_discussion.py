@@ -46,6 +46,7 @@ from services.ingest.repository import (
 )
 from services.tw_trading_calendar import (
     is_today_likely_trading_day,
+    prev_trading_day_estimate,
     tw_day_utc_bounds,
     utcnow_tw_date,
 )
@@ -191,6 +192,14 @@ async def _run_for_user(
         )
         return False
 
+    # Anchor the run to the last completed TW trading day (Taipei-local).
+    # The cron fires at 20:00 UTC = 04:00 Taipei *next* day — pre-market,
+    # so the freshest settled session is the prior trading day. Passing
+    # `as_of_date` routes context gathering through the deterministic
+    # `ohlcv_daily` read path (clamped `ts <= as_of`) instead of the live
+    # pre-market TWSE feed, whose recency depends on end-of-day
+    # publication lag. Without it the personas saw stale quotes.
+    anchor = prev_trading_day_estimate(utcnow_tw_date())
     discussion = await discussion_service.create_discussion(
         db,
         owner_id=user_id,
@@ -198,6 +207,7 @@ async def _run_for_user(
         rules=cfg.rules,
         persona_ids=list(cfg.persona_ids or []),
         market=cfg.market,
+        as_of_date=anchor,
     )
     # Flag this row as scheduler-produced so the verifier task picks
     # it up and the manual UI can render it differently if we ever

@@ -331,6 +331,10 @@ _PERSONA_CONTEXT_PROFILES: dict[str, frozenset[str]] = {
     # Contrarian
     "marks":    _CONTRARIAN_PROFILE,
     "klarman":  _CONTRARIAN_PROFILE,
+    # Kostolany trades on liquidity + crowd psychology: macro money flow
+    # ("資金") + contrarian panic signals (margin balance = weak hands,
+    # VIX = fear, news sentiment = crowd "心理").
+    "kostolany": _MACRO_PROFILE | _CONTRARIAN_PROFILE,
 
     # Macro
     "dalio":    _MACRO_PROFILE,

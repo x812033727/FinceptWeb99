@@ -176,6 +176,14 @@ async def test_creates_discussion_with_auto_run_flag(
     assert d.persona_ids == ["buffett", "lynch", "soros"]
     assert d.topic == "my topic"
     assert d.rules == "my rules"
+    # Anchored to the last completed TW trading day (Taipei-local) so the
+    # 04:00-Taipei pre-market run reads settled `ohlcv_daily` data instead
+    # of the stale live feed.
+    from services.tw_trading_calendar import (
+        prev_trading_day_estimate,
+        utcnow_tw_date,
+    )
+    assert d.as_of_date == prev_trading_day_estimate(utcnow_tw_date())
     # `verify_after_date` is now seeded inside `synthesize_conclusion`
     # (PR #218) — the auto-run task no longer sets it explicitly
     # (PR #222). This test mocks `synthesize_conclusion` so the real
@@ -516,6 +524,23 @@ async def test_one_user_failure_doesnt_block_others(
     assert last.kwargs["ok"] is True
     assert last.kwargs["row_count"] == 1
     assert "boom" in (last.kwargs.get("error") or "")
+
+
+# ── prev_trading_day_estimate helper ──────────────────────────────
+
+
+def test_prev_trading_day_estimate_walks_back_over_weekend():
+    """Mon → prior Fri (skip Sun/Sat); Wed → Tue; Sun → Fri."""
+    from datetime import date as _date
+
+    from services.tw_trading_calendar import prev_trading_day_estimate
+
+    # 2026-05-25 is a Monday → previous trading day is Fri 2026-05-22.
+    assert prev_trading_day_estimate(_date(2026, 5, 25)) == _date(2026, 5, 22)
+    # 2026-05-27 is a Wednesday → Tue 2026-05-26.
+    assert prev_trading_day_estimate(_date(2026, 5, 27)) == _date(2026, 5, 26)
+    # 2026-05-24 is a Sunday → Fri 2026-05-22.
+    assert prev_trading_day_estimate(_date(2026, 5, 24)) == _date(2026, 5, 22)
 
 
 # ── Email report (send_email opt-in) ──────────────────────────────

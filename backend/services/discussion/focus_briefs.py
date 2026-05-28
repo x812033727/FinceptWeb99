@@ -160,10 +160,12 @@ async def _build_tw_focus_brief(
     }
 
     # Quote — cached behind Redis 15s, safe to call even mid-round.
-    # Stamp `as_of_session` so personas can see whether the quote is
-    # today's close (post-14:30 Taipei) or yesterday's (intraday /
-    # pre-open). Without this stamp the persona has no way to tell
-    # `quote.price` is stale and will reference it as "today's price".
+    # `get_quote` returns its own `as_of_session` + `is_intraday`
+    # stamped from the waterfall tier that actually served the read
+    # (MIS intraday / STOCK_DAY_ALL EOD / FinMind fallback / DB
+    # snapshot). Forward both through so the persona can see whether
+    # the price is true intraday (`is_intraday=True`) or a session
+    # close anchored to a date in the past.
     try:
         from services.discussion.freshness import tw_quote_session
         q = await tw_market_service.get_quote(symbol)
@@ -172,10 +174,8 @@ async def _build_tw_focus_brief(
             "change_pct": q.get("change_pct"),
             "volume":     q.get("volume"),
             "prev_close": q.get("prev_close"),
-            # STOCK_DAY_ALL serves a session-close even during
-            # intraday — `is_intraday=False` here is correct.
-            "as_of_session": tw_quote_session(),
-            "is_intraday": False,
+            "as_of_session": q.get("as_of_session") or tw_quote_session(),
+            "is_intraday": bool(q.get("is_intraday")),
         }
     except Exception as exc:
         log.warning("focus_brief.quote.failed",

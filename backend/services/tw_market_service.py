@@ -21,6 +21,7 @@ import pytz
 import data.tw.finmind_connector as finmind
 import data.tw.mops_connector as mops
 import data.tw.twse_connector as twse
+import data.tw.twse_mis_connector as twse_mis
 from cache.redis_cache import (
     cache_get,
     cache_set,
@@ -655,22 +656,49 @@ async def _resolve_prev_close(
 
 
 async def fetch_quote_waterfall(symbol: str) -> tuple[dict | None, str]:
-    """Run the TWSE realtime → FinMind 7-day fallback waterfall.
+    """Run the TWSE MIS intraday → TWSE STOCK_DAY_ALL → FinMind 7-day
+    fallback waterfall.
 
     Returns (raw, source). Pulled out of get_quote() so the background
     WS-publish task can reuse the same fallback chain — without this the
     polling task only tried TWSE and gave up, freezing every subscriber's
     live price whenever TWSE OpenAPI hiccupped.
+
+    Tier 0 (MIS intraday) only fires during TWSE regular session
+    (09:00-13:30 Taipei) — the endpoint returns stale ticks pre-open /
+    weekend and we'd burn an HTTP RTT for nothing. Outside the session
+    the next tier (STOCK_DAY_ALL) serves the previous session's close,
+    which is the correct anchor for pre-open / post-close discussions.
     """
     raw = None
     source = "unavailable"
-    try:
-        raw = await twse.get_realtime_quote(symbol)
-        if raw:
-            source = "twse"
-    except Exception as exc:
-        log.warning("tw.quote.twse_failed",
-                    extra={"symbol": symbol, "error": str(exc)})
+    # ── Tier 0: TWSE MIS intraday (only during regular session) ──
+    # Delayed real-time (~20s lag). Skipped outside 09:00-13:30 Taipei
+    # because MIS returns yesterday's last value pre-open and the
+    # existing tiers cover that case more cleanly. Defensive: any
+    # failure (network, 403 from missing JSESSIONID cookie warm-up,
+    # non-zero rtcode) falls through silently to Tier 1.
+    if _is_tw_market_open():
+        try:
+            mis_raw = await twse_mis.get_realtime_quote(
+                symbol, exchange=get_exchange(symbol),
+            )
+            if mis_raw and mis_raw.get("close") is not None:
+                raw = mis_raw
+                source = "twse_mis"
+        except Exception as exc:
+            log.warning("tw.quote.mis_failed",
+                        extra={"symbol": symbol, "error": str(exc)})
+
+    # ── Tier 1: TWSE STOCK_DAY_ALL (EOD cross-section) ──
+    if not raw:
+        try:
+            raw = await twse.get_realtime_quote(symbol)
+            if raw:
+                source = "twse"
+        except Exception as exc:
+            log.warning("tw.quote.twse_failed",
+                        extra={"symbol": symbol, "error": str(exc)})
 
     if not raw:
         # FinMind fallback: latest close from last 5 days. This is end-of-day
@@ -774,6 +802,12 @@ async def get_quote(
         })
         result["data_source"] = "ohlcv_daily"
         result["as_of"] = last["time"]
+        # Backtest: the read is clamped to `ts <= as_of`, so the actual
+        # session is the last bar's date. Surfaced under both names so
+        # the freshness convention matches live mode + downstream
+        # focus_briefs.quote stamping reads the same key.
+        result["as_of_session"] = str(last["time"])[:10]
+        result["is_intraday"] = False
         return result
 
     key = key_quote("tw", symbol)
@@ -805,16 +839,66 @@ async def get_quote(
             result["change_pct"] = _sanitize_change_pct(
                 symbol, snap.get("change_pct"),
             )
+            # Snapshot rows are written by the WS pump / refresh tasks
+            # at whatever cadence they ran; we don't know if the tick
+            # came from MIS or STOCK_DAY_ALL. Use the conservative
+            # STOCK_DAY_ALL anchor so personas don't over-trust a
+            # potentially stale 5-min-old reading as "intraday".
+            _stamp_quote_freshness(result, "db", None)
             log.info("tw.quote.served_db_snapshot", extra={"symbol": symbol})
             return result
 
     result = _normalize_quote(symbol, raw or {})
     result["data_source"] = source
+    _stamp_quote_freshness(result, source, raw)
     # Don't cache the zero-state (TWSE + FinMind both failed) — keeps the
     # next request retrying instead of locking a 60-second blank quote.
     if result.get("price"):
         await cache_set(key, json.dumps(result), TTL_QUOTE)
     return result
+
+
+def _stamp_quote_freshness(
+    result: dict, source: str, raw: dict | None,
+) -> None:
+    """Attach `is_intraday` + `as_of_session` to a live-mode quote
+    dict so downstream callers (focus_briefs, watchlist, UI) can
+    surface the actual session anchor instead of relying on
+    wall-clock NOW.
+
+    Per source:
+      - `twse_mis`: true-intraday during TWSE regular session.
+        `as_of_session = today` (Taipei).
+      - `twse` (STOCK_DAY_ALL): EOD cross-section. `as_of_session =
+        tw_quote_session()` — yesterday's close during intraday /
+        pre-publish, today's close after 14:30.
+      - `finmind`: 7-day bar fallback. Use bars[-1]["time"] if
+        present on the raw dict, else `tw_quote_session()`.
+      - `db` / `unavailable`: 5-min DB snapshot or full outage —
+        fall back to the `STOCK_DAY_ALL` semantic since that's the
+        closest in-practice anchor; the data_source field still
+        tells the caller about the degraded tier.
+    """
+    from services.discussion.freshness import tw_quote_session
+    if source == "twse_mis":
+        result["is_intraday"] = True
+        result["as_of_session"] = _today_str_tw()
+    elif source == "finmind" and raw:
+        ts = raw.get("time") or raw.get("date")
+        result["is_intraday"] = False
+        result["as_of_session"] = (
+            str(ts)[:10] if ts else tw_quote_session()
+        )
+    else:
+        result["is_intraday"] = False
+        result["as_of_session"] = tw_quote_session()
+
+
+def _today_str_tw() -> str:
+    """Today's date in Taipei (so a discussion fired 00:30 UTC = 08:30
+    Taipei sees the right calendar day for intraday stamping).
+    """
+    return datetime.now(_TW).date().isoformat()
 
 
 # Sanity bound moved to `services._quote_helpers` so US can share it

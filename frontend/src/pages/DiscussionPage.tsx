@@ -771,8 +771,14 @@ export default function DiscussionPage() {
       for (let i = 0; i < total; i++) {
         if (cancelRequestedRef.current) break;
         setLoopProgress({ current: i + 1, total });
-        const { ok } = await runOneRound();
-        if (!ok) break;
+        // The user explicitly opted into N rounds — always attempt all of
+        // them. Per-round failures (per-persona LLM error / timeout,
+        // transient HTTP error, network blip) still surface via
+        // `streamError`, and the cancel button still halts the loop
+        // between iterations. The previous `if (!ok) break;` was too
+        // aggressive: it stopped the multi-round driver on a single soft
+        // failure even though the user explicitly asked for N rounds.
+        await runOneRound();
       }
     } finally {
       setLoopProgress(null);

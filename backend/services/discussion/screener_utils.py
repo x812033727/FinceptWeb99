@@ -84,6 +84,11 @@ def _compact_screener_row(
         # Lets the JSON audit view + persona prompt tell at a glance
         # whether the recovery path fired.
         "data_source": r.get("data_source"),
+        # True when the source returned a session older than
+        # `freshness_session` (TWSE lagging post-close and no
+        # recovery could substitute fresher data). None when the
+        # staleness detector was inconclusive (bellwether missing).
+        "is_stale": r.get("is_stale"),
     }
 
 
@@ -111,6 +116,7 @@ def _compact_us_screener_row(
         # Diagnostic tag — polygon | yfinance | stooq | finnhub etc.
         # Same shape as `_compact_screener_row` for TW.
         "data_source": r.get("data_source"),
+        "is_stale": r.get("is_stale"),
     }
 
 

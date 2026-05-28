@@ -959,14 +959,47 @@ def _normalize_quote(symbol: str, raw: dict) -> dict[str, Any]:
 
 # ── History ───────────────────────────────────────────────────────
 
-# Bars from the DB read tier are considered "fresh enough" if their most
-# recent ts is within this many calendar days of today. 5 days tolerates
-# weekends + a typical TW national holiday without falling through to
-# upstream unnecessarily.
-_DB_HISTORY_FRESHNESS_DAYS = 5
+
+def _expected_history_session() -> date:
+    """Most recent TW trading session whose bar SHOULD be in
+    `ohlcv_daily` by now. After TWSE's 14:30 Taipei publish (and
+    after `ingest_ohlcv_tw` 06:30 UTC = 14:30 Taipei runs), today's
+    bar is expected; before, the freshest expected bar is the
+    previous trading day.
+
+    Distinct from `tw_quote_session()` in `discussion/freshness`
+    semantically — that helper anchors `STOCK_DAY_ALL`-served quotes,
+    this one anchors `ohlcv_daily` archive completeness. They happen
+    to coincide because both pivot on the 14:30 Taipei publish, but
+    the intent is different.
+    """
+    from services.discussion.freshness import tw_quote_session
+    return date.fromisoformat(tw_quote_session())
 
 
-def _db_bars_are_fresh(bars: list[dict[str, Any]], today: date) -> bool:
+def _db_bars_are_fresh(
+    bars: list[dict[str, Any]], today: date,
+) -> bool:
+    """True iff `bars[-1]` covers the most recent expected trading
+    session.
+
+    Pre-Phase-3 this allowed up to `_DB_HISTORY_FRESHNESS_DAYS=5`
+    of staleness — which silently masked the bug where a delayed
+    `ingest_ohlcv_tw` cron made today's discussion run against
+    yesterday's close. The tightened rule forces a fall-through to
+    the TWSE month-by-month tier whenever the archive is missing
+    the expected session, so today's bar lands within one extra
+    TWSE call instead of waiting for the next cron tick.
+
+    Weekends + holidays still pass cleanly: `_expected_history_
+    session()` already walks back to the previous weekday on
+    non-trading days, so the archive's "freshest weekday close"
+    matches.
+
+    `today` is accepted for backwards compatibility with the
+    existing call signature — the actual freshness check uses the
+    derived expected session, not `today` directly.
+    """
     if not bars:
         return False
     last = bars[-1].get("time")
@@ -976,7 +1009,8 @@ def _db_bars_are_fresh(bars: list[dict[str, Any]], today: date) -> bool:
         last_date = date.fromisoformat(str(last)[:10])
     except ValueError:
         return False
-    return (today - last_date).days <= _DB_HISTORY_FRESHNESS_DAYS
+    expected = _expected_history_session()
+    return last_date >= expected
 
 
 async def get_history(symbol: str, months: int = 12) -> list[dict[str, Any]]:
@@ -1935,6 +1969,30 @@ async def get_index(
             {"time": b["time"], "close": b["close"]}
             for b in bars[-history_days:]
         ]
+        # Phase 3: if the archive is missing today's TAIEX bar but
+        # `MI_5MINS` (already in `result.value`) carries an intraday
+        # or just-closed value for today, splice a synthetic today
+        # entry onto the tail. This bridges the window between TWSE
+        # publish (~13:30 Taipei) and `ingest_taiex_history` cron
+        # (07:10 UTC = 15:10 Taipei) where personas would otherwise
+        # see a 30-day line ending YESTERDAY despite today's value
+        # sitting right there in `result["value"]`.
+        # Weekend guard: `MI_5MINS` returns cached Friday's last value
+        # on Sat/Sun — splicing a "Saturday bar = Friday's close"
+        # would mis-label the timeline. Only augment on weekdays
+        # where today is an actual (or just-finished) session.
+        last_bar_date = (
+            date.fromisoformat(str(history[-1]["time"])[:10])
+            if history else None
+        )
+        live_value = result.get("value") if isinstance(result, dict) else None
+        if (
+            isinstance(live_value, (int, float))
+            and last_bar_date is not None
+            and last_bar_date < end
+            and end.weekday() < 5
+        ):
+            history.append({"time": end.isoformat(), "close": live_value})
         result = {**result, "history": history}
     return result
 

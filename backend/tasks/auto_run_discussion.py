@@ -8,13 +8,14 @@ persona roster. The resulting Discussion row is owned by the user
 themselves so it shows up in their own DiscussionPage sidebar without
 any cross-user permission changes.
 
-Per-user idempotency: keyed on the Taipei calendar day (not the UTC
-date) so 20:00 UTC Sunday and 03:59 UTC Monday — both Monday in
-Taipei — count as the same tick. The filter uses a half-open UTC
-range covering Taipei 00:00→24:00 on the resolved Taipei date.
-Health record's `row_count` is the number of users we successfully
-ran for in this tick (not the total enabled — failures and same-day
-duplicates don't count).
+No same-day skip: every tick runs a fresh discussion for each enabled
+user, even when one already exists for the current Taipei day. The
+previous per-user idempotency guard (keyed on the Taipei calendar day)
+was removed so that a half-finished draft left behind by an earlier
+failed run — or any second invocation — can no longer block the user
+from getting their daily discussion. Health record's `row_count` is the
+number of users we successfully ran for in this tick (not the total
+enabled — failures still don't count).
 
 Failure mode: if any user's run crashes, we log + record_failure +
 move on to the next user. The current user's discussion row stays
@@ -44,11 +45,7 @@ from services.ingest.repository import (
     record_failure,
     record_health,
 )
-from services.tw_trading_calendar import (
-    is_today_likely_trading_day,
-    tw_day_utc_bounds,
-    utcnow_tw_date,
-)
+from services.tw_trading_calendar import is_today_likely_trading_day
 
 log = logging.getLogger(__name__)
 
@@ -127,8 +124,8 @@ async def _do_run() -> tuple[int, list[str]]:
     """Drive one auto-run cycle across every enabled user.
 
     Returns (success_count, per_user_errors). `success_count` is the
-    number of users we ran a fresh discussion for in this tick — same-
-    day duplicates and failures don't bump it.
+    number of users we ran a fresh discussion for in this tick — only
+    failures don't bump it (there is no same-day skip anymore).
     """
     async with AsyncSessionLocal() as db:
         # Trading-day gate. Weekends always skip with health=ok and
@@ -163,33 +160,13 @@ async def _run_for_user(
 ) -> bool:
     """Run one auto-run discussion for a single enabled user.
 
-    Returns True on a fresh successful run, False on a same-day skip.
-    Raises on any other failure so the caller can record it and move on
-    to the next user without aborting the whole tick.
+    Always returns True on a successful run — there is no same-day skip
+    anymore (a fresh discussion is created on every tick regardless of
+    whether the user already has one for the current Taipei day). Raises
+    on any failure so the caller can record it and move on to the next
+    user without aborting the whole tick.
     """
     user_id = cfg.user_id
-
-    # Per-user idempotency: once per Taipei calendar day. Filter via a
-    # half-open UTC range covering 00:00→24:00 Taipei on the resolved
-    # Taipei date — `created_at` is timestamptz, so a plain
-    # `func.date(...)` extracts the UTC date and would be off-by-one
-    # against a Taipei-localised today.
-    today_tw = utcnow_tw_date()
-    tw_start, tw_end = tw_day_utc_bounds(today_tw)
-    existing = await db.scalar(
-        select(Discussion.id).where(
-            Discussion.owner_id == user_id,
-            Discussion.auto_run.is_(True),
-            Discussion.created_at >= tw_start,
-            Discussion.created_at < tw_end,
-        ).limit(1)
-    )
-    if existing is not None:
-        log.info(
-            "auto_run_discussion.skipped_already_ran_today",
-            extra={"user_id": str(user_id), "existing_id": str(existing)},
-        )
-        return False
 
     # Live mode (no `as_of_date`): this is a forward-looking daily call,
     # not a backtest — so it must NOT carry the backtest anchor (which

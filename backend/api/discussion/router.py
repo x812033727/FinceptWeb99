@@ -36,6 +36,18 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.discussion import lessons as lessons_router
+from api.discussion._helpers import (  # noqa: F401  — re-exports kept for back-compat
+    CurrentUser,
+    _BG_ROUND_TASKS,
+    _check_quota,
+    _coerce_owner_uuid,
+    _daily_limit,
+    _refund,
+    _sweep_to_response,
+    _template_to_response,
+    _to_response,
+)
 from api.discussion.schemas import (
     PersonaWeightLearnResponse,
     StrategyTemplateCreate,
@@ -50,7 +62,6 @@ from api.discussion.schemas import (
     DiscussionResponse,
     InjectUserMessageRequest,
     BacktestSweepCreate,
-    BacktestSweepFailedDate,
     BacktestSweepResponse,
     PostMortemDailyGainersOut,
     PostMortemDayPerformanceOut,
@@ -68,124 +79,14 @@ from api.discussion.schemas import (
     TurnResponse,
     UpdateDiscussionRequest,
 )
-from auth.permissions import require_viewer
-from cache.redis_cache import cache_decr, cache_incr, key_ai_counter
 from config import settings
 from db.session import get_db, get_db_session_factory
-from models.discussion import Discussion
 from services import discussion_auto_run_config_service, discussion_service
 from services.discussion.symbol_names import enrich_conclusion_with_names
 
 log = logging.getLogger(__name__)
 router = APIRouter()
-CurrentUser = Annotated[dict, Depends(require_viewer)]
-
-# Detached background tasks for in-flight rounds. Kept module-level so
-# tasks aren't garbage-collected when the originating request returns
-# its StreamingResponse — the SSE consumer might disconnect long before
-# the round actually completes, and we want the task to live until
-# `run_round` finishes persisting turns + status reset + refund.
-_BG_ROUND_TASKS: dict[uuid.UUID, asyncio.Task] = {}
-
-
-# ── quota ──────────────────────────────────────────────────────────
-
-
-async def _daily_limit(db: AsyncSession, role: str) -> int:
-    """Resolve the user's daily quota via runtime_config_service so an
-    admin can retune AI_REQUESTS_VIEWER_DAILY / ANALYST_DAILY from the
-    UI without redeploying. Falls back to the compiled default on any
-    resolver failure."""
-    key = "AI_REQUESTS_ANALYST_DAILY" if role in ("analyst", "admin") \
-        else "AI_REQUESTS_VIEWER_DAILY"
-    try:
-        from services.runtime_config_service import get_int as _get_int
-        return await _get_int(db, key)
-    except Exception:
-        return getattr(settings, key)
-
-
-async def _check_quota(user: dict, db: AsyncSession, *, cost: int) -> None:
-    """Reserve `cost` requests against the daily counter atomically.
-
-    Done as a sequential INCR loop so two concurrent rounds can't both
-    squeak under the limit (the final new_count check rejects whichever
-    one crosses). If the post-increment count exceeds the cap we refund
-    and reject.
-    """
-    limit = await _daily_limit(db, user.get("role", "viewer"))
-    new_count = 0
-    for _ in range(cost):
-        new_count = await cache_incr(key_ai_counter(user["id"]), ttl_seconds=86400)
-    if new_count > limit:
-        for _ in range(cost):
-            await cache_decr(key_ai_counter(user["id"]))
-        raise HTTPException(
-            status_code=429,
-            detail=(
-                f"Daily AI quota exceeded ({limit} requests/day). "
-                "Resets at midnight UTC."
-            ),
-        )
-
-
-async def _refund(user: dict, *, count: int) -> None:
-    for _ in range(count):
-        try:
-            await cache_decr(key_ai_counter(user["id"]))
-        except Exception as exc:
-            log.error(
-                "discussion.quota.refund_failed",
-                extra={"user_id": user.get("id"), "error": str(exc)},
-            )
-            return
-
-
-def _coerce_owner_uuid(user: dict) -> uuid.UUID:
-    raw = user.get("id")
-    if isinstance(raw, uuid.UUID):
-        return raw
-    return uuid.UUID(str(raw))
-
-
-def _to_response(d: Discussion) -> DiscussionResponse:
-    # Inject company-name lookups into both conclusion shapes at
-    # serialization time so historical rows benefit without
-    # rewriting `discussions.conclusion` JSONB. Dicts are mutated in
-    # place via a shallow copy to avoid leaking the enrichment back
-    # onto the ORM instance (which SQLAlchemy would then dirty-track
-    # and try to flush on the next commit).
-    primary = enrich_conclusion_with_names(
-        d.market, dict(d.conclusion) if isinstance(d.conclusion, dict) else d.conclusion,
-    )
-    post_mortem = enrich_conclusion_with_names(
-        d.market,
-        dict(d.post_mortem_conclusion)
-        if isinstance(d.post_mortem_conclusion, dict)
-        else d.post_mortem_conclusion,
-    )
-    return DiscussionResponse(
-        id=d.id,
-        topic=d.topic,
-        rules=d.rules,
-        persona_ids=list(d.persona_ids or []),
-        market=d.market,
-        status=d.status,
-        current_round=d.current_round,
-        conclusion=primary,
-        post_mortem_conclusion=post_mortem,
-        post_mortem_diff=d.post_mortem_diff,
-        verdict=d.verdict,
-        verdict_reason=d.verdict_reason,
-        verified_at=d.verified_at,
-        auto_run=d.auto_run,
-        day1_open_prices=d.day1_open_prices,
-        day5_close_prices=d.day5_close_prices,
-        daily_close_prices=d.daily_close_prices,
-        as_of_date=d.as_of_date.isoformat() if d.as_of_date else None,
-        created_at=d.created_at,
-        updated_at=d.updated_at,
-    )
+router.include_router(lessons_router.router)
 
 
 # ── routes ─────────────────────────────────────────────────────────
@@ -890,110 +791,7 @@ async def run_post_mortem(
 # ── Lessons CRUD (learning loop, PR #learning-mechanism) ─────────
 
 
-@router.get("/lessons")
-async def list_lessons(
-    user: CurrentUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    market: str | None = None,
-    limit: int = 50,
-):
-    """Return the caller's most-recent post-mortem lessons. Owner-
-    scoped — admin gets their own bucket only. Drives the
-    DiscussionLessonsCard in AdminPage and the per-discussion
-    "本次學到的事" collapsible."""
-    from services import discussion_lesson_service as svc
-    rows = await svc.list_recent_lessons(
-        db,
-        owner_user_id=_coerce_owner_uuid(user),
-        market=market,
-        limit=limit,
-    )
-    return [svc.lesson_to_dict(r) for r in rows]
-
-
-@router.delete("/lessons/{lesson_id}", status_code=204)
-async def delete_lesson(
-    lesson_id: int,
-    user: CurrentUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    """Owner-scoped hard delete. 404 when the row doesn't exist
-    or belongs to another user — silent rejection prevents
-    enumeration via the timing channel."""
-    from services import discussion_lesson_service as svc
-    deleted = await svc.delete_lesson(
-        db, lesson_id=lesson_id,
-        owner_user_id=_coerce_owner_uuid(user),
-    )
-    if not deleted:
-        raise HTTPException(status_code=404, detail="lesson not found")
-
-
 # ── Backtest sweep (PR #274) ─────────────────────────────────────
-
-
-def _sweep_to_response(s) -> BacktestSweepResponse:
-    return BacktestSweepResponse(
-        id=s.id,
-        status=s.status,
-        topic=s.topic,
-        rules=s.rules,
-        market=s.market,
-        persona_ids=list(s.persona_ids or []),
-        anchor_date=s.anchor_date.isoformat(),
-        trading_days_count=s.trading_days_count,
-        rounds_per_discussion=s.rounds_per_discussion,
-        concurrency=s.concurrency,
-        auto_post_mortem=bool(s.auto_post_mortem),
-        strategy_id=s.strategy_id,
-        resolved_dates=list(s.resolved_dates or []),
-        completed_dates=list(s.completed_dates or []),
-        failed_dates=[
-            BacktestSweepFailedDate(**fd)
-            for fd in (s.failed_dates or [])
-        ],
-        error_message=s.error_message,
-        created_at=s.created_at,
-        started_at=s.started_at,
-        completed_at=s.completed_at,
-        cancelled_at=s.cancelled_at,
-    )
-
-
-def _template_to_response(t) -> StrategyTemplateResponse:
-    return StrategyTemplateResponse(
-        id=t.id,
-        name=t.name,
-        description=t.description,
-        topic=t.topic,
-        rules=t.rules,
-        market=t.market,
-        persona_ids=list(t.persona_ids or []),
-        default_rounds=t.default_rounds,
-        default_concurrency=t.default_concurrency,
-        default_auto_post_mortem=bool(t.default_auto_post_mortem),
-        persona_weights=dict(t.persona_weights or {}),
-        weights_updated_at=t.weights_updated_at,
-        auto_schedule_enabled=bool(t.auto_schedule_enabled),
-        auto_schedule_cadence_hours=t.auto_schedule_cadence_hours,
-        auto_schedule_anchor_offset_days=t.auto_schedule_anchor_offset_days,
-        auto_schedule_trading_days_count=t.auto_schedule_trading_days_count,
-        auto_schedule_last_run_at=t.auto_schedule_last_run_at,
-        maturity_tier=getattr(t, "maturity_tier", "cold_start") or "cold_start",
-        maturity_computed_at=getattr(t, "maturity_computed_at", None),
-        auto_promote_enabled=bool(getattr(t, "auto_promote_enabled", False)),
-        auto_promote_min_oos_brier_improvement=float(
-            getattr(t, "auto_promote_min_oos_brier_improvement", 0.0) or 0.0,
-        ),
-        auto_promote_min_oos_hit_rate=float(
-            getattr(t, "auto_promote_min_oos_hit_rate", 0.5) or 0.5,
-        ),
-        persona_status=dict(getattr(t, "persona_status", None) or {}),
-        persona_status_updated_at=getattr(t, "persona_status_updated_at", None),
-        created_at=t.created_at,
-        updated_at=t.updated_at,
-        deleted_at=t.deleted_at,
-    )
 
 
 @router.get("/sweeps", response_model=list[BacktestSweepResponse])
@@ -1682,98 +1480,6 @@ async def get_persona_leaderboard(
         "days": days,
         "items": rows,
     }
-
-
-@router.get("/lessons/library")
-async def get_lesson_library(
-    user: CurrentUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    market: str | None = None,
-    tier: str | None = None,
-    archived: bool = False,
-    sort: str = "hit_rate",
-    search: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
-):
-    """PR-5b: filterable lesson browser for the LessonLibraryPage.
-    Owner-scoped. Returns paginated results so the UI can drive
-    next/prev without re-fetching the full set.
-
-    `sort` ∈ {hit_rate, usage, recent, created}. Default
-    `hit_rate` puts the highest-recent-rate lessons first
-    (NULLs sorted last so newly-created unused rows don't pollute
-    the top).
-    """
-    from services import discussion_lesson_service as svc
-    payload = await svc.list_lessons_with_metrics(
-        db,
-        owner_user_id=_coerce_owner_uuid(user),
-        market=market, tier=tier, archived=archived,
-        sort=sort, search=search, limit=limit, offset=offset,
-    )
-    return payload
-
-
-@router.get("/lessons/archived")
-async def list_archived_lessons(
-    user: CurrentUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    market: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
-):
-    """PR-4c: admin surface for the soft-deleted lessons.
-    Owner-scoped — operators only see their own learning archive's
-    discards. Newest-archived first."""
-    from sqlalchemy import select
-    from models.discussion_lesson import DiscussionLesson
-    from services.discussion_lesson_service import lesson_to_dict
-    stmt = (
-        select(DiscussionLesson)
-        .where(
-            DiscussionLesson.owner_user_id == _coerce_owner_uuid(user),
-            DiscussionLesson.archived_at.is_not(None),
-        )
-        .order_by(DiscussionLesson.archived_at.desc())
-        .limit(min(max(int(limit), 1), 200))
-        .offset(max(int(offset), 0))
-    )
-    if market:
-        stmt = stmt.where(DiscussionLesson.market == market)
-    rows = list((await db.scalars(stmt)).all())
-    return {
-        "items": [lesson_to_dict(r) for r in rows],
-        "limit": limit,
-        "offset": offset,
-    }
-
-
-@router.post(
-    "/lessons/{lesson_id}/unarchive",
-)
-async def unarchive_lesson(
-    lesson_id: int,
-    user: CurrentUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    """PR-4c: restore a previously soft-deleted lesson. Idempotent
-    on already-active rows."""
-    from sqlalchemy import select
-    from models.discussion_lesson import DiscussionLesson
-    row = await db.scalar(
-        select(DiscussionLesson).where(
-            DiscussionLesson.id == lesson_id,
-            DiscussionLesson.owner_user_id == _coerce_owner_uuid(user),
-        )
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="Lesson not found")
-    if row.archived_at is None:
-        return {"unarchived": False, "lesson_id": lesson_id}
-    row.archived_at = None
-    await db.commit()
-    return {"unarchived": True, "lesson_id": lesson_id}
 
 
 # ── PR-4b: health metrics + auto-promote settings ────────────────

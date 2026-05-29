@@ -18,6 +18,16 @@ import pytest
 from services import tw_market_service as svc
 
 
+@pytest.fixture(autouse=True)
+def _default_finmind_not_preferred():
+    """Pin FinMind-not-preferred (no token) by default so the EOD waterfall
+    keeps its historical TWSE-first order — and so closed-market / MIS-fail
+    tests never reach an unpatched live FinMind call. Tests that exercise
+    the FinMind-first path override this with their own patch."""
+    with patch.object(svc, "_finmind_preferred", AsyncMock(return_value=False)):
+        yield
+
+
 # ── get_quote ─────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -148,6 +158,181 @@ async def test_get_quote_real_price_is_cached():
     assert "as_of_session" in result
     assert "is_intraday" in result
     assert result["is_intraday"] is False  # STOCK_DAY_ALL = EOD
+
+
+# ── get_quote closed-market ohlcv_daily self-heal ─────────────────
+#
+# When TW is not trading and `ohlcv_daily` already holds the latest
+# complete session, get_quote serves the settled close deterministically
+# (mirrors the screener fast-path) instead of leaning on the live
+# STOCK_DAY_ALL feed's publication lag. This is what lets the daily
+# auto-run discussion read the prior session pre-market WITHOUT a
+# backtest anchor.
+
+@pytest.mark.asyncio
+async def test_get_quote_closed_market_serves_settled_ohlcv():
+    """Market closed + ohlcv has the latest complete session ⇒ read the
+    settled bar from `ohlcv_daily`, NOT the live waterfall."""
+    from datetime import date
+
+    sess = date(2026, 5, 28)
+    bars = [
+        {"time": "2026-05-27", "open": 1000, "high": 1010, "low": 995,
+         "close": 1005.0, "volume": 9_000},
+        {"time": "2026-05-28", "open": 1006, "high": 1020, "low": 1004,
+         "close": 1018.0, "volume": 11_000},
+    ]
+    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
+         patch.object(svc, "_is_tw_market_open", lambda: False), \
+         patch.object(svc, "get_latest_ohlcv_session",
+                      AsyncMock(return_value=sess)), \
+         patch.object(svc, "_latest_complete_session", lambda: sess), \
+         patch("services.ingest.repository.read_ohlcv_range_autosession",
+               AsyncMock(return_value=bars)), \
+         patch.object(svc, "fetch_quote_waterfall",
+                      AsyncMock(side_effect=AssertionError(
+                          "live waterfall must not run"))) as waterfall:
+        result = await svc.get_quote("2330")
+
+    waterfall.assert_not_awaited()
+    assert result["price"] == 1018.0
+    assert result["change"] == 13.0  # derived from prev close 1005 (bars[-2])
+    assert result["data_source"] == "ohlcv_daily_today"
+    assert result["as_of_session"] == "2026-05-28"
+    assert result["is_intraday"] is False
+    mock_set.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_quote_closed_market_falls_back_when_ohlcv_lagging():
+    """Market closed but `ohlcv_daily` hasn't caught up to the latest
+    complete session (ingest lag) ⇒ skip the fast-path, fall through to
+    the live waterfall. This is the genuine 'missing today's data →
+    fall back to live' path."""
+    from datetime import date
+
+    twse_raw = {
+        "symbol": "2330", "name_zh": "台積電",
+        "close": 1018.0, "prev_close": 1005.0, "change": 13.0,
+        "open": 1006.0, "high": 1020.0, "low": 1004.0, "volume": 11_000,
+    }
+    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "_is_tw_market_open", lambda: False), \
+         patch.object(svc, "get_latest_ohlcv_session",
+                      AsyncMock(return_value=date(2026, 5, 26))), \
+         patch.object(svc, "_latest_complete_session",
+                      lambda: date(2026, 5, 28)), \
+         patch("services.ingest.repository.read_ohlcv_range_autosession",
+               AsyncMock(return_value=[])) as db_read, \
+         patch.object(svc.twse_mis, "get_realtime_quote",
+                      AsyncMock(return_value=None)), \
+         patch.object(svc.twse, "get_realtime_quote",
+                      AsyncMock(return_value=twse_raw)):
+        result = await svc.get_quote("2330")
+
+    db_read.assert_not_awaited()  # gate fails before the bar read
+    assert result["price"] == 1018.0
+    assert result["data_source"] == "twse"
+
+
+@pytest.mark.asyncio
+async def test_get_quote_market_open_skips_settled_fast_path():
+    """During the regular session the fast-path must NOT fire — intraday
+    callers still go through the live waterfall (MIS Tier 0)."""
+    from datetime import date
+
+    mis_raw = {
+        "symbol": "2330", "name_zh": "台積電",
+        "close": 1095.0, "prev_close": 1090.0,
+        "open": 1100.0, "high": 1105.0, "low": 1095.0,
+        "volume": 12_345_600, "tlong": "1716797400000",
+    }
+    ohlcv_probe = AsyncMock(return_value=date(2026, 5, 28))
+    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "_is_tw_market_open", lambda: True), \
+         patch.object(svc, "get_latest_ohlcv_session", ohlcv_probe), \
+         patch.object(svc.twse_mis, "get_realtime_quote",
+                      AsyncMock(return_value=mis_raw)):
+        result = await svc.get_quote("2330")
+
+    ohlcv_probe.assert_not_awaited()  # fast-path gated out when open
+    assert result["price"] == 1095.0
+    assert result["data_source"] == "twse_mis"
+
+
+# ── fetch_quote_waterfall: FinMind-first ordering (token-gated) ───
+
+@pytest.mark.asyncio
+async def test_quote_waterfall_finmind_first_when_token_present():
+    """Token configured + market closed ⇒ FinMind EOD is tried BEFORE
+    TWSE STOCK_DAY_ALL."""
+    fm_bars = [
+        {"time": "2026-05-27", "open": 1000, "high": 1010, "low": 995,
+         "close": 1005.0, "volume": 9_000},
+        {"time": "2026-05-28", "open": 1006, "high": 1020, "low": 1004,
+         "close": 1018.0, "volume": 11_000},
+    ]
+    twse_poison = AsyncMock(return_value={"close": 999, "prev_close": 999})
+    with patch.object(svc, "_is_tw_market_open", lambda: False), \
+         patch.object(svc, "_finmind_preferred", AsyncMock(return_value=True)), \
+         patch.object(svc.finmind, "get_daily_ohlcv",
+                      AsyncMock(return_value=fm_bars)), \
+         patch.object(svc.twse, "get_realtime_quote", twse_poison):
+        raw, source = await svc.fetch_quote_waterfall("2330")
+
+    twse_poison.assert_not_awaited()  # FinMind won; TWSE not consulted
+    assert source == "finmind"
+    assert raw["close"] == 1018.0
+    assert raw["prev_close"] == 1005.0
+
+
+@pytest.mark.asyncio
+async def test_quote_waterfall_twse_first_when_no_token():
+    """No FinMind token ⇒ keep TWSE-first; FinMind not consulted once TWSE
+    returns data."""
+    twse_raw = {
+        "symbol": "2330", "close": 1090.0, "prev_close": 1085.0,
+        "open": 1088.0, "high": 1092.0, "low": 1085.0, "volume": 8_000_000,
+    }
+    fm = AsyncMock(return_value=[{"time": "2026-05-28", "close": 1.0,
+                                  "open": 1, "high": 1, "low": 1, "volume": 1}])
+    with patch.object(svc, "_is_tw_market_open", lambda: False), \
+         patch.object(svc, "_finmind_preferred", AsyncMock(return_value=False)), \
+         patch.object(svc.twse, "get_realtime_quote",
+                      AsyncMock(return_value=twse_raw)), \
+         patch.object(svc.finmind, "get_daily_ohlcv", fm):
+        raw, source = await svc.fetch_quote_waterfall("2330")
+
+    fm.assert_not_awaited()
+    assert source == "twse"
+    assert raw["close"] == 1090.0
+
+
+@pytest.mark.asyncio
+async def test_quote_waterfall_keeps_mis_intraday_priority():
+    """During the regular session MIS Tier 0 wins regardless of FinMind
+    preference — the EOD tiers (and the preference check) aren't reached."""
+    mis_raw = {
+        "symbol": "2330", "close": 1095.0, "prev_close": 1090.0,
+        "open": 1100.0, "high": 1105.0, "low": 1095.0,
+        "volume": 12_345_600, "tlong": "1716797400000",
+    }
+    prefer = AsyncMock(return_value=True)
+    fm = AsyncMock(return_value=[])
+    with patch.object(svc, "_is_tw_market_open", lambda: True), \
+         patch.object(svc, "_finmind_preferred", prefer), \
+         patch.object(svc.twse_mis, "get_realtime_quote",
+                      AsyncMock(return_value=mis_raw)), \
+         patch.object(svc.finmind, "get_daily_ohlcv", fm):
+        raw, source = await svc.fetch_quote_waterfall("2330")
+
+    prefer.assert_not_awaited()  # gate never reached — MIS filled raw
+    fm.assert_not_awaited()
+    assert source == "twse_mis"
+    assert raw["close"] == 1095.0
 
 
 # ── get_history ───────────────────────────────────────────────────

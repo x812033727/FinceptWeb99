@@ -429,14 +429,15 @@ FinceptWeb/
 - **Daily auto-run** (`tasks/auto_run_discussion.py`, cron 20:00 UTC =
   04:00 Asia/Taipei next day — 5h before TW market open):
   per-user opt-in via `discussion_auto_run_configs` (migration `0020`).
-  Each user with `enabled=True` gets one `auto_run=True` discussion per
-  Taipei calendar day, owned by themselves so it surfaces in their own
+  Each user with `enabled=True` gets a fresh `auto_run=True` discussion
+  on every tick, owned by themselves so it surfaces in their own
   owner-scoped sidebar. Topic / rules / persona roster are user-
-  supplied (no fallback default). Per-user idempotency keyed on the
-  Taipei calendar day (half-open UTC range via
-  `tw_trading_calendar.tw_day_utc_bounds`): a second tick on the same
-  Taipei date sees the existing row and skips. One user's failure
-  doesn't block others — partial runs report `ok=true
+  supplied (no fallback default). **No same-day skip**: the previous
+  per-Taipei-day idempotency guard was removed so a half-finished draft
+  left by an earlier failed run — or any second invocation — can't block
+  the user from getting their daily discussion (a new row is created
+  regardless of whether one already exists for the day). One user's
+  failure doesn't block others — partial runs report `ok=true
   row_count=<successes>` with the per-user error in the health row's
   error column.
   Config UI: `AutoRunConfigCard` at the top of `DiscussionPage`'s

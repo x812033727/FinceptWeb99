@@ -1,10 +1,11 @@
 """Tests for tasks.auto_run_discussion — daily 5-round system task.
 
 The auto-run task drives off `discussion_auto_run_configs` rows: every
-user with `enabled=True` gets one discussion per UTC day, owned by
-themselves. Tests cover the multi-user iteration, per-user
-idempotency, weekend skip, no-enabled-user no-op, and the system-task
-LLM override forwarding.
+user with `enabled=True` gets a discussion on every tick, owned by
+themselves (no same-day skip — a fresh row is created even when one
+already exists for the day). Tests cover the multi-user iteration,
+same-day re-run, weekend skip, no-enabled-user no-op, and the
+system-task LLM override forwarding.
 """
 from __future__ import annotations
 
@@ -27,8 +28,8 @@ from services import discussion_service
 async def _isolate_db(db_session: AsyncSession):
     """The shared StaticPool keeps the in-memory SQLite DB alive across
     tests, so leftover rows from a previous case can leak into the next
-    (e.g. an earlier test's auto-run row trips the idempotency short-
-    circuit). Wipe the relevant tables between cases."""
+    and inflate the per-test auto-run row counts. Wipe the relevant
+    tables between cases."""
     await db_session.execute(delete(DiscussionTurn))
     await db_session.execute(delete(Discussion))
     await db_session.execute(delete(DiscussionAutoRunConfig))
@@ -234,11 +235,12 @@ async def test_iterates_multiple_enabled_users(
 
 
 @pytest.mark.asyncio
-async def test_idempotent_same_day(
+async def test_runs_again_same_day(
     patch_session, db_session: AsyncSession,
 ):
-    """A second tick on the same UTC date must NOT create another
-    discussion for a user who already has one today."""
+    """No same-day skip: a tick must create a fresh discussion even when
+    the user already has an auto-run row for the current Taipei day
+    (e.g. a half-finished draft left by an earlier failed run)."""
     from tasks import auto_run_discussion
 
     user = await _make_user(db_session)
@@ -254,11 +256,23 @@ async def test_idempotent_same_day(
     db_session.add(pre)
     await db_session.commit()
 
-    stream_chat = AsyncMock()
+    async def _fake_run_round(*_a, **_kw):
+        return
+        yield  # pragma: no cover
+
+    synth = AsyncMock(return_value={
+        "recommended_symbols": ["2330"],
+        "reasoning": "x",
+        "risks": [],
+        "time_horizon": "short_term",
+        "consensus_score": 0.7,
+    })
+
     patches = _stub_lock_helpers() + [
         patch("tasks.auto_run_discussion.is_today_likely_trading_day",
               AsyncMock(return_value=True)),
-        patch("services.discussion_service.stream_chat", new=stream_chat),
+        patch.object(discussion_service, "run_round", _fake_run_round),
+        patch.object(discussion_service, "synthesize_conclusion", synth),
     ]
     _enter_all(patches)
     try:
@@ -269,8 +283,8 @@ async def test_idempotent_same_day(
     rows = (await db_session.scalars(
         select(Discussion).where(Discussion.auto_run.is_(True))
     )).all()
-    assert len(rows) == 1
-    stream_chat.assert_not_called()
+    assert len(rows) == 2
+    synth.assert_awaited()
 
 
 @pytest.mark.asyncio

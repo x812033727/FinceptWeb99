@@ -526,7 +526,7 @@ async def get_state() -> dict:
 
 
 async def start_chain(
-    datasets: list[str], days: int = 1095, reset_stuck_first: bool = True,
+    datasets: list[str], days: int = 365, reset_stuck_first: bool = True,
 ) -> dict:
     """Start the chain. Returns the new state dict.
 

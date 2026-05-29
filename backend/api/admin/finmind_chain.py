@@ -78,10 +78,10 @@ class StartRequest(BaseModel):
         ),
     )
     days: int = Field(
-        default=1095,
+        default=365,
         ge=1,
         le=3650 * 2,
-        description="Days back from today to backfill. Default 3 years.",
+        description="Days back from today to backfill. Default 1 year.",
     )
     reset_stuck_first: bool = Field(
         default=True,

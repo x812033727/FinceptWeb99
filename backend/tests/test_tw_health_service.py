@@ -63,8 +63,8 @@ async def test_get_health_pivots_and_scores_lights():
         _cash_flow_rows("2023-12-31", 34)
     )
 
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.finmind, "get_financials", new_callable=AsyncMock, return_value=income), \
          patch.object(svc.finmind, "get_balance_sheet", new_callable=AsyncMock, return_value=bs), \
          patch.object(svc.finmind, "get_cash_flow", new_callable=AsyncMock, return_value=cf), \
@@ -127,8 +127,8 @@ async def test_get_health_red_lights_when_metrics_weak():
         _cash_flow_rows("2023-12-31", -15)
     )
 
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.finmind, "get_financials", new_callable=AsyncMock, return_value=income), \
          patch.object(svc.finmind, "get_balance_sheet", new_callable=AsyncMock, return_value=bs), \
          patch.object(svc.finmind, "get_cash_flow", new_callable=AsyncMock, return_value=cf), \
@@ -151,8 +151,8 @@ async def test_get_health_red_lights_when_metrics_weak():
 @pytest.mark.asyncio
 async def test_get_health_returns_gray_when_data_missing():
     """All connectors empty → no periods, gray lights, no crash."""
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.finmind, "get_financials", new_callable=AsyncMock, return_value=[]), \
          patch.object(svc.finmind, "get_balance_sheet", new_callable=AsyncMock, return_value=[]), \
          patch.object(svc.finmind, "get_cash_flow", new_callable=AsyncMock, return_value=[]), \
@@ -260,8 +260,8 @@ async def test_get_valuation_band_pe_basic():
         {"date": "2023-09-30", "type": "EPS", "value": 2.0},
         {"date": "2023-12-31", "type": "EPS", "value": 2.0},
     ]
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc, "get_history", new_callable=AsyncMock, return_value=bars), \
          patch.object(svc.finmind, "get_financials", new_callable=AsyncMock, return_value=income), \
          patch.object(svc.finmind, "get_balance_sheet", new_callable=AsyncMock, return_value=[]):
@@ -289,8 +289,8 @@ async def test_get_valuation_band_pe_skips_negative_eps():
         {"date": "2023-09-30", "type": "EPS", "value": 1.5},
         {"date": "2023-12-31", "type": "EPS", "value": 2.5},
     ]
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc, "get_history", new_callable=AsyncMock, return_value=bars), \
          patch.object(svc.finmind, "get_financials", new_callable=AsyncMock, return_value=income), \
          patch.object(svc.finmind, "get_balance_sheet", new_callable=AsyncMock, return_value=[]):
@@ -314,8 +314,8 @@ async def test_get_valuation_band_pb_uses_balance_sheet():
     bs = [
         {"date": "2023-12-31", "type": "Equity", "value": 5000.0},
     ]
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc, "get_history", new_callable=AsyncMock, return_value=bars), \
          patch.object(svc.finmind, "get_financials", new_callable=AsyncMock, return_value=income), \
          patch.object(svc.finmind, "get_balance_sheet", new_callable=AsyncMock, return_value=bs):
@@ -370,8 +370,8 @@ async def test_get_dividends_normalizes_and_sorts():
         {"date": "2021-01-01", "CashEarningsDistribution": 0,
          "StockEarningsDistribution": 0},
     ]
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.finmind, "get_dividends", new_callable=AsyncMock, return_value=raw):
         result = await svc.get_dividends("2330")
 
@@ -403,8 +403,8 @@ async def test_get_etf_holdings_picks_latest_snapshot_and_sorts():
         # Older snapshot — should be ignored.
         {"date": "2023-12-31", "stock_id": "2330", "stock_name": "台積電", "weight": 22.0},
     ]
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.finmind, "get_etf_holdings", new_callable=AsyncMock, return_value=raw):
         result = await svc.get_etf_holdings("0050")
 
@@ -417,7 +417,7 @@ async def test_get_etf_holdings_picks_latest_snapshot_and_sorts():
 
 @pytest.mark.asyncio
 async def test_get_etf_holdings_empty_when_finmind_returns_nothing():
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
          patch.object(svc.finmind, "get_etf_holdings", new_callable=AsyncMock, return_value=[]):
         result = await svc.get_etf_holdings("00713")
 
@@ -455,8 +455,8 @@ async def test_screener_sorts_by_volume_desc():
         _stock_row("00713", vol=5_000_000, name="高息低波"),
         _stock_row("2317", vol=20_000_000, name="鴻海"),
     ]
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.twse, "get_all_twse_symbols", new_callable=AsyncMock, return_value=stocks):
         result = await svc.get_screener(limit=10)
 
@@ -472,8 +472,8 @@ async def test_screener_excludes_etf_when_include_etf_false():
         _stock_row("00713", vol=5_000_000, name="高息低波"),
         _stock_row("1101", vol=3_000_000, name="台泥"),
     ]
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.twse, "get_all_twse_symbols", new_callable=AsyncMock, return_value=stocks):
         result = await svc.get_screener(include_etf=False, limit=10)
 
@@ -493,8 +493,8 @@ async def test_screener_etf_only_keeps_only_etfs():
         _stock_row("00713", vol=5_000_000, name="高息低波"),
         _stock_row("1101", vol=3_000_000, name="台泥"),
     ]
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.twse, "get_all_twse_symbols", new_callable=AsyncMock, return_value=stocks):
         result = await svc.get_screener(etf_only=True, limit=10)
 
@@ -511,8 +511,8 @@ async def test_screener_volume_sort_lifts_regular_stock_above_etf_glut():
     ] + [
         _stock_row("2330", vol=50_000_000, name="台積電"),
     ]
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.twse, "get_all_twse_symbols", new_callable=AsyncMock, return_value=stocks):
         result = await svc.get_screener(limit=2)
 
@@ -530,8 +530,8 @@ async def test_get_news_uses_google_when_yfinance_empty():
          "link": "https://news.google.com/articles/abc",
          "published_at": "2026-04-26T10:00:00+00:00", "thumbnail": None},
     ]
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc, "_google_news_rss", new_callable=AsyncMock, return_value=google_items) as gmock, \
          patch.object(svc, "_yfinance_news_fallback", new_callable=AsyncMock, return_value=[]) as yf_mock:
         result = await svc.get_news("2330", limit=5)
@@ -547,8 +547,8 @@ async def test_get_news_falls_back_to_yfinance_when_google_empty():
     yf_items = [{"title": "via yfinance", "publisher": "yf",
                  "link": "https://example.com", "published_at": "",
                  "thumbnail": None}]
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc, "_google_news_rss", new_callable=AsyncMock, return_value=[]), \
          patch.object(svc, "_yfinance_news_fallback", new_callable=AsyncMock, return_value=yf_items):
         result = await svc.get_news("2330", limit=5)
@@ -559,17 +559,16 @@ async def test_get_news_falls_back_to_yfinance_when_google_empty():
 @pytest.mark.asyncio
 async def test_get_news_uses_cached_name_in_query():
     """When a recent quote is cached, the news query includes the Chinese name."""
-    import json as _json
-    quote_cached = _json.dumps({"name_zh": "台積電", "price": 2185.0})
+    quote_cached = {"name_zh": "台積電", "price": 2185.0}
     captured: dict = {}
 
     async def _spy(query: str, limit: int = 10):
         captured["query"] = query
         return []
 
-    with patch.object(svc, "cache_get", new_callable=AsyncMock,
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock,
                       side_effect=[None, quote_cached]), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc, "_google_news_rss", new=_spy), \
          patch.object(svc, "_yfinance_news_fallback", new_callable=AsyncMock, return_value=[]):
         await svc.get_news("2330", limit=5)

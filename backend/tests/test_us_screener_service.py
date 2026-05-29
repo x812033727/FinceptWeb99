@@ -104,8 +104,8 @@ async def test_get_screener_forces_yfinance_when_fundamental_filter_set():
     falls back to yfinance whenever a fundamental filter is in play."""
     polygon_called = AsyncMock()
 
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc, "_use_polygon", return_value=True), \
          patch.object(svc.polygon, "get_snapshot_all", new=polygon_called), \
          patch.object(svc, "_get_sp500_tickers", new_callable=AsyncMock, return_value=[]), \
@@ -124,8 +124,8 @@ async def test_get_screener_uses_polygon_when_no_fundamental_filter():
          "todaysChangePerc": 0.5, "details": {"name": "Apple Inc."}},
     ]
 
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc, "_use_polygon", return_value=True), \
          patch.object(svc.polygon, "get_snapshot_all", new_callable=AsyncMock, return_value=snaps), \
          patch.object(svc, "_screener_yfinance", new_callable=AsyncMock) as yf_mock:
@@ -141,8 +141,8 @@ async def test_get_screener_falls_through_to_yfinance_when_polygon_returns_empty
     yf_result = [{"symbol": "AAPL", "market": "US", "name": "Apple Inc.",
                   "price": 175.0, "change_pct": 0, "volume": 1_000_000}]
 
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc, "_use_polygon", return_value=True), \
          patch.object(svc.polygon, "get_snapshot_all", new_callable=AsyncMock, return_value=[]), \
          patch.object(svc, "_get_sp500_tickers", new_callable=AsyncMock, return_value=["AAPL"]), \
@@ -159,8 +159,8 @@ async def test_get_screener_falls_through_when_polygon_raises():
     yf_result = [{"symbol": "AAPL", "market": "US", "name": "Apple Inc.",
                   "price": 175.0, "change_pct": 0, "volume": 1_000_000}]
 
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc, "_use_polygon", return_value=True), \
          patch.object(svc.polygon, "get_snapshot_all", new_callable=AsyncMock,
                       side_effect=RuntimeError("polygon down")), \
@@ -178,8 +178,8 @@ async def test_get_screener_does_not_cache_empty_result():
     cache_set = AsyncMock()
     # Filter active so static fallback won't engage and we can verify the
     # no-cache-on-empty branch directly.
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new=cache_set), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new=cache_set), \
          patch.object(svc, "_use_polygon", return_value=False), \
          patch.object(svc, "_get_sp500_tickers", new_callable=AsyncMock, return_value=[]), \
          patch.object(svc, "_screener_yfinance", new_callable=AsyncMock, return_value=[]):
@@ -204,8 +204,8 @@ async def test_get_screener_emits_static_fallback_when_yfinance_dead():
     Stooq — Stooq in particular started returning real data in CI after
     PR #34 fixed its field set.
     """
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc, "_use_polygon", return_value=False), \
          patch.object(svc, "_get_sp500_tickers", new_callable=AsyncMock, return_value=["AAPL"]), \
          patch.object(svc, "_screener_yfinance", new_callable=AsyncMock, return_value=[]), \
@@ -230,8 +230,8 @@ async def test_get_screener_emits_static_fallback_when_yfinance_dead():
 async def test_static_fallback_skipped_when_fundamental_filter_active():
     """If user set min_dividend_yield=3 we can't honour it without info,
     so don't pretend by returning the static list."""
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc, "_use_polygon", return_value=False), \
          patch.object(svc, "_get_sp500_tickers", new_callable=AsyncMock, return_value=["AAPL"]), \
          patch.object(svc, "_screener_yfinance", new_callable=AsyncMock, return_value=[]):

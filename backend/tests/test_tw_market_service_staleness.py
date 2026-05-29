@@ -136,8 +136,8 @@ async def test_get_screener_uses_ohlcv_when_today_in_db():
          "data_source": "ohlcv_daily", "as_of": today.isoformat()},
     ]
     twse_mock = AsyncMock()
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(
              svc, "get_latest_ohlcv_session",
              AsyncMock(return_value=today),
@@ -189,8 +189,8 @@ async def test_get_screener_recovers_from_stale_twse_via_ohlcv():
          "pb_ratio": None, "dividend_yield": None,
          "data_source": "ohlcv_daily", "as_of": today.isoformat()},
     ]
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(
              svc, "get_latest_ohlcv_session",
              AsyncMock(return_value=today),
@@ -239,8 +239,8 @@ async def test_get_screener_stamps_stale_when_db_cant_recover():
         {"Code": "8110", "Name": "華東", "成交股數": "2000000",
          "收盤價": "60.6", "漲跌價差": "5.5"},
     ]
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(
              svc, "get_latest_ohlcv_session",
              AsyncMock(return_value=yesterday),  # DB behind too
@@ -382,8 +382,8 @@ async def test_yfinance_recovers_when_twse_and_ohlcv_both_stuck():
         "2330.TW": {"price": 1100.0, "change_pct": 1.85, "volume": 5_000_000},
         "8110.TW": {"price": 62.0, "change_pct": 2.31, "volume": 70_000_000},
     }
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()) as cache_set_mock, \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()) as cache_set_mock, \
          patch.object(
              svc, "get_latest_ohlcv_session",
              AsyncMock(return_value=yesterday),
@@ -432,8 +432,8 @@ async def test_yfinance_skipped_when_also_lagging():
         "2330.TW": {"price": 1080.0, "change_pct": 0.5, "volume": 5_000_000},
         "8110.TW": {"price": 60.6, "change_pct": 9.98, "volume": 70_000_000},
     }
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()) as cache_set_mock, \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()) as cache_set_mock, \
          patch.object(
              svc, "get_latest_ohlcv_session",
              AsyncMock(return_value=yesterday),
@@ -478,8 +478,8 @@ async def test_yfinance_recovery_skipped_when_batch_empty():
         {"Code": "8110", "Name": "華東", "成交股數": "2000000",
          "收盤價": "60.6", "漲跌價差": "5.5"},
     ]
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()) as cache_set_mock, \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()) as cache_set_mock, \
          patch.object(
              svc, "get_latest_ohlcv_session",
              AsyncMock(return_value=yesterday),
@@ -531,8 +531,8 @@ async def test_cache_key_includes_ohlcv_latest_to_invalidate_on_advance():
     async def _cache_set(k: str, v: str, ttl: int) -> None:
         cache[k] = v
 
-    with patch.object(svc, "cache_get", AsyncMock(side_effect=_cache_get)), \
-         patch.object(svc, "cache_set", AsyncMock(side_effect=_cache_set)), \
+    with patch.object(svc, "cache_get_json", AsyncMock(side_effect=_cache_get)), \
+         patch.object(svc, "cache_set_json", AsyncMock(side_effect=_cache_set)), \
          patch.object(
              svc, "get_latest_ohlcv_session",
              AsyncMock(return_value=yesterday),
@@ -566,8 +566,8 @@ async def test_cache_key_includes_ohlcv_latest_to_invalidate_on_advance():
          "pb_ratio": None, "dividend_yield": None,
          "data_source": "ohlcv_daily", "as_of": today.isoformat()},
     ]
-    with patch.object(svc, "cache_get", AsyncMock(side_effect=_cache_get)), \
-         patch.object(svc, "cache_set", AsyncMock(side_effect=_cache_set)), \
+    with patch.object(svc, "cache_get_json", AsyncMock(side_effect=_cache_get)), \
+         patch.object(svc, "cache_set_json", AsyncMock(side_effect=_cache_set)), \
          patch.object(
              svc, "get_latest_ohlcv_session",
              AsyncMock(return_value=today),
@@ -707,8 +707,8 @@ async def test_yfinance_recovery_fires_pre_open_when_twse_is_a_day_behind():
         "2330.TW": {"price": 1100.0, "change_pct": 1.85, "volume": 5_000_000},
         "8110.TW": {"price": 62.0, "change_pct": 2.31, "volume": 70_000_000},
     }
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(
              svc, "get_latest_ohlcv_session",
              AsyncMock(return_value=wednesday),
@@ -749,8 +749,8 @@ async def test_intraday_with_matched_twse_does_not_attempt_recovery():
          "收盤價": "1100.0", "漲跌價差": "5.0"},
     ]
     yf_mock = AsyncMock(return_value={})
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(
              svc, "get_latest_ohlcv_session",
              AsyncMock(return_value=thursday),
@@ -803,8 +803,8 @@ async def test_finmind_recovery_succeeds_before_yfinance_is_tried():
     ]
     yf_mock = AsyncMock(return_value={})
     diagnostic: dict = {}
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(
              svc, "get_latest_ohlcv_session",
              AsyncMock(return_value=wednesday),
@@ -876,8 +876,8 @@ async def test_finmind_also_stale_falls_through_to_yfinance():
         "8110.TW": {"price": 62.0, "change_pct": 2.31, "volume": 70_000_000},
     }
     diagnostic: dict = {}
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(
              svc, "get_latest_ohlcv_session",
              AsyncMock(return_value=wednesday),
@@ -926,8 +926,8 @@ async def test_finmind_empty_response_falls_through_to_yfinance():
         "2330.TW": {"price": 1100.0, "change_pct": 1.85, "volume": 5_000_000},
     }
     diagnostic: dict = {}
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(
              svc, "get_latest_ohlcv_session",
              AsyncMock(return_value=wednesday),
@@ -975,8 +975,8 @@ async def test_diagnostic_captures_all_recovery_tiers_bailing():
          "close": 1080.0, "volume": 5_000_000},  # matches Wed → stale
     ]
     diagnostic: dict = {}
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(
              svc, "get_latest_ohlcv_session",
              AsyncMock(return_value=wednesday),

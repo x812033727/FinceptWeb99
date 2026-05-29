@@ -12,8 +12,8 @@ import services.tw_market_service as tw
 
 @pytest.fixture
 def patch_io():
-    with patch.object(tw, "cache_get", AsyncMock(return_value=None)) as cache_get, \
-         patch.object(tw, "cache_set", AsyncMock()) as cache_set, \
+    with patch.object(tw, "cache_get_json", AsyncMock(return_value=None)) as cache_get, \
+         patch.object(tw, "cache_set_json", AsyncMock()) as cache_set, \
          patch("services.ingest.repository.read_latest_fundamentals_autosession",
                AsyncMock(return_value=None)) as db_read, \
          patch("services.ingest.repository.upsert_fundamentals_snapshots_autosession",
@@ -21,16 +21,15 @@ def patch_io():
          patch.object(tw.twse, "get_valuation_ratios",
                       AsyncMock(return_value={})) as upstream:
         yield {
-            "cache_get": cache_get, "cache_set": cache_set,
+            "cache_get_json": cache_get, "cache_set_json": cache_set,
             "db_read": db_read, "db_write": db_write, "upstream": upstream,
         }
 
 
 @pytest.mark.asyncio
 async def test_redis_hit_skips_db_and_upstream(patch_io):
-    import json
     cached = {"symbol": "2330", "market": "TW", "pe_ratio": 15.0}
-    patch_io["cache_get"].return_value = json.dumps(cached)
+    patch_io["cache_get_json"].return_value = cached
 
     out = await tw.get_fundamentals("2330")
 
@@ -54,7 +53,7 @@ async def test_db_fresh_hit_skips_upstream(patch_io):
     assert out["data_source"] == "twse"
     assert out["fetched_at"] == "2026-04-27"
     patch_io["upstream"].assert_not_awaited()
-    patch_io["cache_set"].assert_awaited_once()
+    patch_io["cache_set_json"].assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -70,7 +69,7 @@ async def test_db_miss_falls_through_to_upstream(patch_io):
     assert out["pe_ratio"] == 18.0
     patch_io["upstream"].assert_awaited()
     patch_io["db_write"].assert_awaited_once()
-    patch_io["cache_set"].assert_awaited_once()
+    patch_io["cache_set_json"].assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -103,4 +102,4 @@ async def test_total_blank_returns_base_only(patch_io):
     # No ratios populated.
     assert "pe_ratio" not in out or out.get("pe_ratio") is None
     patch_io["db_write"].assert_not_awaited()
-    patch_io["cache_set"].assert_not_awaited()
+    patch_io["cache_set_json"].assert_not_awaited()

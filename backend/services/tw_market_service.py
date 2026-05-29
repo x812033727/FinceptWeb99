@@ -17,7 +17,6 @@ first to protect the limited free hourly quota.
 Timezone: Taiwan is UTC+8, no DST. All API responses are tagged with
 tz="Asia/Taipei" so the frontend can display correct local labels.
 """
-import json
 import logging
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -29,8 +28,8 @@ import data.tw.mops_connector as mops
 import data.tw.twse_connector as twse
 import data.tw.twse_mis_connector as twse_mis
 from cache.redis_cache import (
-    cache_get,
-    cache_set,
+    cache_get_json,
+    cache_set_json,
     key_history,
     key_institutional,
     key_margin,
@@ -307,9 +306,9 @@ async def get_quote(
 
     key = key_quote("tw", symbol)
     if not bypass_cache:
-        cached = await cache_get(key)
-        if cached:
-            return json.loads(cached)
+        cached = await cache_get_json(key)
+        if cached is not None:
+            return cached
 
     # Closed-market settled-session self-heal (mirrors the screener
     # fast-path at `get_screener`): when TW is not trading and
@@ -340,7 +339,7 @@ async def get_quote(
                 result["as_of_session"] = str(last["time"])[:10]
                 result["is_intraday"] = False
                 if result.get("price"):
-                    await cache_set(key, json.dumps(result), TTL_QUOTE)
+                    await cache_set_json(key, result, TTL_QUOTE)
                 return result
 
     raw, source = await fetch_quote_waterfall(symbol)
@@ -381,7 +380,7 @@ async def get_quote(
     # Don't cache the zero-state (TWSE + FinMind both failed) — keeps the
     # next request retrying instead of locking a 60-second blank quote.
     if result.get("price"):
-        await cache_set(key, json.dumps(result), TTL_QUOTE)
+        await cache_set_json(key, result, TTL_QUOTE)
     return result
 
 
@@ -548,9 +547,9 @@ async def get_history(symbol: str, months: int = 12) -> list[dict[str, Any]]:
     )
 
     key = key_history("tw", symbol, "1d", range_token=f"{months}mo")
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
 
     today = date.today()
     start = today - timedelta(days=months * 30)
@@ -565,13 +564,13 @@ async def get_history(symbol: str, months: int = 12) -> list[dict[str, Any]]:
     if symbol.startswith("_"):
         index_bars = await read_ohlcv_range_autosession("TW", symbol, start, today)
         if index_bars:
-            await cache_set(key, json.dumps(index_bars), TTL_HISTORY)
+            await cache_set_json(key, index_bars, TTL_HISTORY)
         return index_bars
 
     # ── Tier 2: Postgres archive ────────────────────────────────
     db_bars = await read_ohlcv_range_autosession("TW", symbol, start, today)
     if _db_bars_are_fresh(db_bars, today):
-        await cache_set(key, json.dumps(db_bars), TTL_HISTORY)
+        await cache_set_json(key, db_bars, TTL_HISTORY)
         return db_bars
 
     # ── Tier 3: upstream waterfall ──
@@ -607,7 +606,7 @@ async def get_history(symbol: str, months: int = 12) -> list[dict[str, Any]]:
             break
 
     if bars:
-        await cache_set(key, json.dumps(bars), TTL_HISTORY)
+        await cache_set_json(key, bars, TTL_HISTORY)
         # Best-effort write-back into the archive so subsequent cache
         # misses serve from DB and reduce upstream load.
         ohlcv_bars = [
@@ -655,9 +654,9 @@ async def get_institutional(
 
     if as_of is None:
         key = key_institutional(symbol)
-        cached = await cache_get(key)
-        if cached:
-            return json.loads(cached)
+        cached = await cache_get_json(key)
+        if cached is not None:
+            return cached
 
     end = as_of or date.today()
     start = end - timedelta(days=days)
@@ -671,9 +670,9 @@ async def get_institutional(
             )
         if db_rows:
             if as_of is None:
-                await cache_set(
+                await cache_set_json(
                     key_institutional(symbol),
-                    json.dumps(db_rows),
+                    db_rows,
                     TTL_INSTITUTIONAL,
                 )
             return db_rows
@@ -706,8 +705,8 @@ async def get_institutional(
             pass
 
     if result:
-        await cache_set(
-            key_institutional(symbol), json.dumps(result), TTL_INSTITUTIONAL,
+        await cache_set_json(
+            key_institutional(symbol), result, TTL_INSTITUTIONAL,
         )
     return result
 
@@ -728,9 +727,9 @@ async def get_margin(
 
     if as_of is None:
         key = key_margin(symbol)
-        cached = await cache_get(key)
-        if cached:
-            return json.loads(cached)
+        cached = await cache_get_json(key)
+        if cached is not None:
+            return cached
 
     end = as_of or date.today()
     start = end - timedelta(days=days)
@@ -741,8 +740,8 @@ async def get_margin(
             db_rows = await read_margin_range(db, "TW", symbol, start, end)
         if db_rows:
             if as_of is None:
-                await cache_set(
-                    key_margin(symbol), json.dumps(db_rows), TTL_MARGIN,
+                await cache_set_json(
+                    key_margin(symbol), db_rows, TTL_MARGIN,
                 )
             return db_rows
     except Exception:
@@ -765,7 +764,7 @@ async def get_margin(
             pass
 
     if result:
-        await cache_set(key_margin(symbol), json.dumps(result), TTL_MARGIN)
+        await cache_set_json(key_margin(symbol), result, TTL_MARGIN)
     return result
 
 
@@ -784,9 +783,9 @@ async def get_revenue(symbol: str, months: int = 12) -> list[dict[str, Any]]:
     from services.ingest.repository import read_revenue_range
 
     key = key_revenue(symbol)
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
 
     today = date.today()
     start = today - timedelta(days=months * 31)
@@ -797,7 +796,7 @@ async def get_revenue(symbol: str, months: int = 12) -> list[dict[str, Any]]:
         async with AsyncSessionLocal() as db:
             db_rows = await read_revenue_range(db, "TW", symbol, start, today)
         if db_rows:
-            await cache_set(key, json.dumps(db_rows), TTL_REVENUE)
+            await cache_set_json(key, db_rows, TTL_REVENUE)
             return db_rows
     except Exception:
         pass
@@ -828,7 +827,7 @@ async def get_revenue(symbol: str, months: int = 12) -> list[dict[str, Any]]:
         row.setdefault("revenue_mom", None)
 
     if result:
-        await cache_set(key, json.dumps(result), TTL_REVENUE)
+        await cache_set_json(key, result, TTL_REVENUE)
     return result
 
 
@@ -848,9 +847,9 @@ async def get_fundamentals(symbol: str) -> dict[str, Any]:
     )
 
     key = f"tw:fundamentals:{symbol}"
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
 
     base = {
         "symbol": symbol,
@@ -870,7 +869,7 @@ async def get_fundamentals(symbol: str) -> dict[str, Any]:
             "fetched_at":     db_snap.get("as_of"),
             "data_source":    db_snap.get("data_source") or "db",
         }}
-        await cache_set(key, json.dumps(result), TTL_FUNDAMENTALS)
+        await cache_set_json(key, result, TTL_FUNDAMENTALS)
         return result
 
     # ── Tier 3: TWSE upstream ──────────────────────────────────────
@@ -884,7 +883,7 @@ async def get_fundamentals(symbol: str) -> dict[str, Any]:
         pass
 
     if have_ratios:
-        await cache_set(key, json.dumps(base), TTL_FUNDAMENTALS)
+        await cache_set_json(key, base, TTL_FUNDAMENTALS)
         # Best-effort write-back so the next request serves from DB.
         await upsert_fundamentals_snapshots_autosession([
             FundamentalsSnapshotRow(
@@ -928,11 +927,11 @@ async def get_financials(
     """
     if as_of is None:
         key = f"tw:financials:{symbol}"
-        cached = await cache_get(key)
-        if cached:
-            return json.loads(cached)
+        cached = await cache_get_json(key)
+        if cached is not None:
+            return cached
         result = await finmind.get_financials(symbol)
-        await cache_set(key, json.dumps(result), TTL_FUNDAMENTALS)
+        await cache_set_json(key, result, TTL_FUNDAMENTALS)
         return result
 
     # Backtest mode — direct FinMind call, filter by row date.
@@ -973,13 +972,9 @@ async def _get_etf_yields_cached() -> dict[str, float]:
     transient FinMind quota / TWSE outages instead of silently dropping
     every high-yield ETF from results."""
     for key in ("tw:etf_yields_all", "tw:etf_yields_all:last_known"):
-        cached = await cache_get(key)
-        if not cached:
-            continue
-        try:
-            return json.loads(cached)
-        except (TypeError, ValueError):
-            continue
+        cached = await cache_get_json(key)
+        if cached:
+            return cached
     return {}
 
 
@@ -992,16 +987,16 @@ async def _get_all_valuations_cached() -> dict[str, dict[str, float | None]]:
     `min_dividend_yield` filter applies uniformly across stocks and ETFs.
     """
     key = "tw:valuations:all"
-    cached = await cache_get(key)
+    cached = await cache_get_json(key)
     if cached:
-        data = json.loads(cached)
+        data = cached
     else:
         try:
             data = await twse.get_all_valuation_ratios()
         except Exception:
             data = {}
         if data:
-            await cache_set(key, json.dumps(data), TTL_FUNDAMENTALS)
+            await cache_set_json(key, data, TTL_FUNDAMENTALS)
 
     etf_yields = await _get_etf_yields_cached()
     if etf_yields:
@@ -1291,10 +1286,10 @@ async def get_screener(
         f"{min_pe}:{max_pe}:{min_pb}:{max_pb}:{min_dividend_yield}:"
         f"{include_etf}:{etf_only}:{limit}:{ohlcv_tag}"
     )
-    cached = await cache_get(key)
+    cached = await cache_get_json(key)
     if cached:
         _set_final_data_source(diagnostic, "cache_hit")
-        return json.loads(cached)
+        return cached
 
     # Staleness fast-path: if `ohlcv_daily` already holds the latest
     # complete session per the freshness resolver, prefer it. Fires
@@ -1322,7 +1317,7 @@ async def get_screener(
         _record_attempt(diagnostic, "ohlcv_fast_path", "fired")
         _set_final_data_source(diagnostic, "ohlcv_daily_today")
         if result:
-            await cache_set(key, json.dumps(result), TTL_SCREENER)
+            await cache_set_json(key, result, TTL_SCREENER)
         return result
     _record_attempt(diagnostic, "ohlcv_fast_path", "skipped")
 
@@ -1434,7 +1429,7 @@ async def get_screener(
             _record_attempt(diagnostic, "ohlcv_recovery", "recovered")
             _set_final_data_source(diagnostic, "ohlcv_daily_recovered")
             if recovered:
-                await cache_set(key, json.dumps(recovered), TTL_SCREENER)
+                await cache_set_json(key, recovered, TTL_SCREENER)
             return recovered
         # Compare against the freshness resolver's session so stale
         # is recognised at any hour of the day — the previous
@@ -1456,7 +1451,7 @@ async def get_screener(
             )
             if recovered is not None:
                 _set_final_data_source(diagnostic, "finmind_recovery")
-                await cache_set(key, json.dumps(recovered), TTL_SCREENER)
+                await cache_set_json(key, recovered, TTL_SCREENER)
                 return recovered
             recovered = await _recover_screener_via_yfinance(
                 candidates=result,
@@ -1467,7 +1462,7 @@ async def get_screener(
             )
             if recovered is not None:
                 _set_final_data_source(diagnostic, "yfinance_recovery")
-                await cache_set(key, json.dumps(recovered), TTL_SCREENER)
+                await cache_set_json(key, recovered, TTL_SCREENER)
                 return recovered
         is_stale_unrecoverable = stale
         for row in result:
@@ -1495,7 +1490,7 @@ async def get_screener(
     # recovery — a full 10-min lock would shadow a TWSE refresh.
     if result:
         ttl = _TTL_SCREENER_STALE if is_stale_unrecoverable else TTL_SCREENER
-        await cache_set(key, json.dumps(result), ttl)
+        await cache_set_json(key, result, ttl)
     else:
         log.warning("tw.screener.empty_result")
     return result
@@ -1622,12 +1617,12 @@ async def get_index(
         )
 
     key = "tw:index:taiex"
-    cached = await cache_get(key)
+    cached = await cache_get_json(key)
     if cached:
-        result = json.loads(cached)
+        result = cached
     else:
         result = await twse.get_taiex()
-        await cache_set(key, json.dumps(result), TTL_QUOTE)
+        await cache_set_json(key, result, TTL_QUOTE)
 
     if history_days > 0:
         from services.ingest.repository import read_ohlcv_range_autosession
@@ -1814,24 +1809,24 @@ async def get_news(symbol: str, limit: int = 10) -> list[dict[str, Any]]:
     from services.ingest.repository import read_recent_news_autosession
 
     key = f"tw:news:{symbol.upper()}"
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
 
     # ── Tier 2: Postgres archive ────────────────────────────────
     db_items = await read_recent_news_autosession(
         "TW", symbol=symbol.upper(), limit=limit, max_age_days=14,
     )
     if db_items:
-        await cache_set(key, json.dumps(db_items), TTL_NEWS)
+        await cache_set_json(key, db_items, TTL_NEWS)
         return db_items
 
     # ── Tier 3: live Google News RSS ────────────────────────────
     name = ""
     try:
-        q_cached = await cache_get(key_quote("tw", symbol))
+        q_cached = await cache_get_json(key_quote("tw", symbol))
         if q_cached:
-            name = json.loads(q_cached).get("name_zh", "") or ""
+            name = q_cached.get("name_zh", "") or ""
     except Exception:
         pass
 
@@ -1850,7 +1845,7 @@ async def get_news(symbol: str, limit: int = 10) -> list[dict[str, Any]]:
             items = []
 
     if items:
-        await cache_set(key, json.dumps(items), TTL_NEWS)
+        await cache_set_json(key, items, TTL_NEWS)
     return items
 
 
@@ -1927,9 +1922,9 @@ async def get_valuation_band(
         raise ValueError(f"metric must be 'pe' or 'pb', got {metric!r}")
 
     key = f"tw:valuation_band:{symbol}:{metric}:{years}"
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
 
     # ── Inputs ──────────────────────────────────────────────────
     bars = await get_history(symbol, months=years * 12)
@@ -2008,7 +2003,7 @@ async def get_valuation_band(
         "stats":   {**stats, "current": current, "current_z": current_z},
     }
     if values:
-        await cache_set(key, json.dumps(result), TTL_VALUATION_BAND)
+        await cache_set_json(key, result, TTL_VALUATION_BAND)
     return result
 
 
@@ -2045,9 +2040,9 @@ def _normalize_dividend(r: dict) -> dict[str, Any]:
 async def get_dividends(symbol: str) -> list[dict[str, Any]]:
     """Cash + stock dividend history, normalized and oldest-first."""
     key = f"tw:dividends:{symbol}"
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
 
     rows: list[dict] = []
     try:
@@ -2059,7 +2054,7 @@ async def get_dividends(symbol: str) -> list[dict[str, Any]]:
     out = [r for r in out if r["date"] and (r["cash_dividend"] or r["stock_dividend"])]
     out.sort(key=lambda r: r["date"])
 
-    await cache_set(key, json.dumps(out), TTL_DIVIDENDS)
+    await cache_set_json(key, out, TTL_DIVIDENDS)
     return out
 
 
@@ -2075,9 +2070,9 @@ async def get_etf_holdings(symbol: str) -> dict[str, Any]:
         return empty
 
     key = f"tw:etf_holdings:{symbol}"
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
 
     rows: list[dict] = []
     try:
@@ -2116,5 +2111,5 @@ async def get_etf_holdings(symbol: str) -> dict[str, Any]:
 
     out.sort(key=lambda r: r["weight"], reverse=True)
     result = {"as_of": latest_date, "holdings": out}
-    await cache_set(key, json.dumps(result), TTL_ETF_HOLDINGS)
+    await cache_set_json(key, result, TTL_ETF_HOLDINGS)
     return result

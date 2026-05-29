@@ -170,15 +170,15 @@ async def test_valuations_merge_etf_yields_into_bulk_dict():
     }
     etf_yields = {"0050": 3.5, "00713": 4.7}
 
-    async def _cache_get(key):
+    async def _cache_get_json(key):
         if key == "tw:valuations:all":
-            return json.dumps(bwibbu)
+            return bwibbu
         if key == "tw:etf_yields_all":
-            return json.dumps(etf_yields)
+            return etf_yields
         return None
 
-    with patch.object(svc, "cache_get", new=_cache_get), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock):
+    with patch.object(svc, "cache_get_json", new=_cache_get_json), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock):
         merged = await svc._get_all_valuations_cached()
 
     assert merged["2330"]["pe_ratio"] == pytest.approx(22.0)
@@ -192,11 +192,11 @@ async def test_valuations_merge_handles_empty_etf_cache():
     """Cold ETF cache → BWIBBU returned unmodified."""
     bwibbu = {"2330": {"pe_ratio": 22.0, "pb_ratio": 6.0, "dividend_yield": 1.6}}
 
-    async def _cache_get(key):
-        return json.dumps(bwibbu) if key == "tw:valuations:all" else None
+    async def _cache_get_json(key):
+        return bwibbu if key == "tw:valuations:all" else None
 
-    with patch.object(svc, "cache_get", new=_cache_get), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock):
+    with patch.object(svc, "cache_get_json", new=_cache_get_json), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock):
         merged = await svc._get_all_valuations_cached()
 
     assert merged == bwibbu

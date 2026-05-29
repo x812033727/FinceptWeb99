@@ -37,8 +37,8 @@ def _margin_db_rows() -> list[dict]:
 async def test_institutional_db_hit_short_circuits_upstream():
     """When the DB archive has rows for the requested range, neither
     FinMind nor TWSE should be called."""
-    with patch.object(tw, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(tw, "cache_set", AsyncMock()), \
+    with patch.object(tw, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(tw, "cache_set_json", AsyncMock()), \
          patch("services.ingest.repository.read_institutional_range",
                AsyncMock(return_value=_institutional_db_rows())) as db_read, \
          patch.object(tw.finmind, "get_institutional",
@@ -58,8 +58,8 @@ async def test_institutional_db_miss_falls_through_to_finmind():
     """Empty DB → FinMind. TWSE only fires if FinMind also returned
     nothing."""
     finmind_rows = [{"date": "2026-04-29", "symbol": "2330", "fini_buy": 1}]
-    with patch.object(tw, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(tw, "cache_set", AsyncMock()), \
+    with patch.object(tw, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(tw, "cache_set_json", AsyncMock()), \
          patch("services.ingest.repository.read_institutional_range",
                AsyncMock(return_value=[])), \
          patch.object(tw.finmind, "get_institutional",
@@ -75,8 +75,8 @@ async def test_institutional_db_miss_falls_through_to_finmind():
 
 @pytest.mark.asyncio
 async def test_margin_db_hit_short_circuits_upstream():
-    with patch.object(tw, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(tw, "cache_set", AsyncMock()), \
+    with patch.object(tw, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(tw, "cache_set_json", AsyncMock()), \
          patch("services.ingest.repository.read_margin_range",
                AsyncMock(return_value=_margin_db_rows())) as db_read, \
          patch.object(tw.finmind, "get_margin",
@@ -96,8 +96,8 @@ async def test_margin_db_outage_does_not_hide_upstream():
     """Repository raises (e.g. transient DB outage) → fall through to
     upstream rather than returning empty. Resilience contract."""
     finmind_rows = [{"date": "2026-04-29", "symbol": "2330", "margin_balance": 1}]
-    with patch.object(tw, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(tw, "cache_set", AsyncMock()), \
+    with patch.object(tw, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(tw, "cache_set_json", AsyncMock()), \
          patch("services.ingest.repository.read_margin_range",
                AsyncMock(side_effect=RuntimeError("db down"))), \
          patch.object(tw.finmind, "get_margin",

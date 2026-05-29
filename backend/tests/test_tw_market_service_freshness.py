@@ -142,8 +142,8 @@ async def test_get_history_falls_through_to_twse_when_db_stale():
         {"time": "2026-05-27", "open": 1095, "high": 1110, "low": 1090,
          "close": 1105, "volume": 2000},  # Today
     ]
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch(
              "services.ingest.repository.read_ohlcv_range_autosession",
              AsyncMock(return_value=stale_db),
@@ -178,8 +178,8 @@ async def test_get_history_uses_db_when_archive_is_fresh():
          "close": 1105, "volume": 2000},
     ]
     twse_called = AsyncMock(return_value=[])  # poison — must NOT fire
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch(
              "services.ingest.repository.read_ohlcv_range_autosession",
              AsyncMock(return_value=fresh_db),
@@ -212,8 +212,8 @@ async def test_get_index_splices_today_when_archive_missing_today_bar():
         "index": "TAIEX", "value": 22150.5,
         "change": 80.0, "time": "13:30:00",
     }
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc.twse, "get_taiex", AsyncMock(return_value=taiex_live)), \
          patch(
              "services.ingest.repository.read_ohlcv_range_autosession",
@@ -241,8 +241,8 @@ async def test_get_index_does_not_splice_on_weekend():
         "index": "TAIEX", "value": 22100,  # MI_5MINS reuses Fri close
         "change": 0, "time": "13:30:00",
     }
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc.twse, "get_taiex", AsyncMock(return_value=taiex_live)), \
          patch(
              "services.ingest.repository.read_ohlcv_range_autosession",
@@ -272,8 +272,8 @@ async def test_get_index_does_not_splice_when_archive_already_has_today():
         "index": "TAIEX", "value": 22150,
         "change": 150, "time": "13:30:00",
     }
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc.twse, "get_taiex", AsyncMock(return_value=taiex_live)), \
          patch(
              "services.ingest.repository.read_ohlcv_range_autosession",

@@ -12,13 +12,13 @@ import services.tw_market_service as tw
 
 @pytest.fixture
 def patch_io():
-    with patch.object(tw, "cache_get", AsyncMock(return_value=None)) as cache_get, \
-         patch.object(tw, "cache_set", AsyncMock()) as cache_set, \
+    with patch.object(tw, "cache_get_json", AsyncMock(return_value=None)) as cache_get, \
+         patch.object(tw, "cache_set_json", AsyncMock()) as cache_set, \
          patch.object(tw, "fetch_quote_waterfall", AsyncMock(return_value=(None, "unavailable"))) as upstream, \
          patch("services.ingest.repository.read_latest_quote_autosession",
                AsyncMock(return_value=None)) as db_read:
         yield {
-            "cache_get": cache_get, "cache_set": cache_set,
+            "cache_get_json": cache_get, "cache_set_json": cache_set,
             "upstream": upstream, "db_read": db_read,
         }
 
@@ -46,7 +46,7 @@ async def test_upstream_fail_db_miss_returns_blank(patch_io):
     out = await tw.get_quote("ZZZZ")
     assert out["data_source"] == "unavailable"
     assert out["price"] == 0
-    patch_io["cache_set"].assert_not_awaited()
+    patch_io["cache_set_json"].assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -61,14 +61,13 @@ async def test_upstream_success_skips_db_read(patch_io):
     assert out["price"] == 605.0
     assert out["data_source"] == "twse"
     patch_io["db_read"].assert_not_awaited()
-    patch_io["cache_set"].assert_awaited_once()
+    patch_io["cache_set_json"].assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_redis_hit_skips_upstream_and_db(patch_io):
-    import json
     cached = {"symbol": "2330", "market": "TW", "price": 600.0, "data_source": "twse"}
-    patch_io["cache_get"].return_value = json.dumps(cached)
+    patch_io["cache_get_json"].return_value = cached
 
     out = await tw.get_quote("2330")
 

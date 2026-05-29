@@ -16,8 +16,8 @@ async def test_get_news_uses_google_when_yfinance_empty():
          "link": "https://news.google.com/articles/x",
          "published_at": "2026-04-26T10:00:00+00:00", "thumbnail": None},
     ]
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc, "_google_news_rss", new_callable=AsyncMock, return_value=google_items) as g, \
          patch.object(svc, "_yfinance_news_fallback", new_callable=AsyncMock, return_value=[]) as yf:
         result = await svc.get_news("AAPL", limit=5)
@@ -32,8 +32,8 @@ async def test_get_news_falls_back_to_yfinance_when_google_empty():
     yf_items = [{"title": "via yfinance", "publisher": "yf",
                  "link": "https://example.com", "published_at": "",
                  "thumbnail": None}]
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc, "_google_news_rss", new_callable=AsyncMock, return_value=[]), \
          patch.object(svc, "_yfinance_news_fallback", new_callable=AsyncMock, return_value=yf_items):
         result = await svc.get_news("AAPL", limit=5)
@@ -44,8 +44,7 @@ async def test_get_news_falls_back_to_yfinance_when_google_empty():
 @pytest.mark.asyncio
 async def test_get_news_uses_cached_quote_name_in_query():
     """When quote cache has a name, it's appended to the search query."""
-    import json as _json
-    quote_payload = _json.dumps({"name": "Apple Inc.", "price": 175.0})
+    quote_payload = {"name": "Apple Inc.", "price": 175.0}
     captured: dict = {}
 
     async def _spy(query: str, limit: int = 10):
@@ -56,8 +55,8 @@ async def test_get_news_uses_cached_quote_name_in_query():
         # cache hit on quote, miss on news
         return quote_payload if key.startswith("us:quote") or "quote" in key else None
 
-    with patch.object(svc, "cache_get", new=_cache_get), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=_cache_get), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc, "_google_news_rss", new=_spy), \
          patch.object(svc, "_yfinance_news_fallback", new_callable=AsyncMock, return_value=[]):
         await svc.get_news("AAPL", limit=5)
@@ -75,8 +74,8 @@ async def test_get_news_falls_back_to_fallback_universe_name():
         captured["query"] = query
         return []
 
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc, "_google_news_rss", new=_spy), \
          patch.object(svc, "_yfinance_news_fallback", new_callable=AsyncMock, return_value=[]):
         await svc.get_news("NVDA", limit=5)
@@ -95,8 +94,8 @@ async def test_get_news_uses_stock_keyword_for_unknown_ticker():
         captured["query"] = query
         return []
 
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc, "_google_news_rss", new=_spy), \
          patch.object(svc, "_yfinance_news_fallback", new_callable=AsyncMock, return_value=[]):
         await svc.get_news("ZZZZ", limit=5)

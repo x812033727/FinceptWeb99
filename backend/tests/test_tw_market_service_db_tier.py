@@ -22,8 +22,8 @@ def _bars(start: str, end: str) -> list[dict]:
 @pytest.fixture
 def patch_io():
     """Stub out everything tw.get_history touches: cache, DB, upstream."""
-    with patch.object(tw, "cache_get", AsyncMock(return_value=None)) as cache_get, \
-         patch.object(tw, "cache_set", AsyncMock()) as cache_set, \
+    with patch.object(tw, "cache_get_json", AsyncMock(return_value=None)) as cache_get, \
+         patch.object(tw, "cache_set_json", AsyncMock()) as cache_set, \
          patch("services.ingest.repository.read_ohlcv_range_autosession",
                AsyncMock(return_value=[])) as db_read, \
          patch("services.ingest.repository.upsert_ohlcv_bars_autosession",
@@ -33,7 +33,7 @@ def patch_io():
          patch.object(tw.twse, "get_daily_ohlcv", AsyncMock(return_value=[])) as twse_hist, \
          patch.object(tw.finmind, "get_daily_ohlcv", AsyncMock(return_value=[])) as finmind_hist:
         yield {
-            "cache_get": cache_get, "cache_set": cache_set,
+            "cache_get_json": cache_get, "cache_set_json": cache_set,
             "db_read": db_read, "db_write": db_write, "prefer": prefer,
             "twse_hist": twse_hist, "finmind_hist": finmind_hist,
         }
@@ -41,9 +41,8 @@ def patch_io():
 
 @pytest.mark.asyncio
 async def test_redis_hit_skips_db_and_upstream(patch_io):
-    import json
     cached_bars = _bars("2026-04-01", "2026-04-02")
-    patch_io["cache_get"].return_value = json.dumps(cached_bars)
+    patch_io["cache_get_json"].return_value = cached_bars
 
     out = await tw.get_history("2330", months=1)
 
@@ -76,7 +75,7 @@ async def test_db_fresh_skips_upstream(patch_io):
     assert out == fresh_bars
     patch_io["twse_hist"].assert_not_awaited()
     patch_io["finmind_hist"].assert_not_awaited()
-    patch_io["cache_set"].assert_awaited_once()
+    patch_io["cache_set_json"].assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -100,7 +99,7 @@ async def test_db_stale_falls_through_to_upstream(patch_io):
     assert out == fresh_upstream
     patch_io["twse_hist"].assert_awaited()
     patch_io["db_write"].assert_awaited_once()
-    patch_io["cache_set"].assert_awaited()
+    patch_io["cache_set_json"].assert_awaited()
 
 
 @pytest.mark.asyncio
@@ -127,7 +126,7 @@ async def test_db_empty_and_upstream_empty_returns_empty(patch_io):
     out = await tw.get_history("UNKNOWN", months=1)
     assert out == []
     patch_io["db_write"].assert_not_awaited()
-    patch_io["cache_set"].assert_not_awaited()
+    patch_io["cache_set_json"].assert_not_awaited()
 
 
 @pytest.mark.asyncio

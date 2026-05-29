@@ -154,9 +154,9 @@ def test_normalize_quote_marks_etf_correctly():
 
 @pytest.mark.asyncio
 async def test_get_quote_short_circuits_on_cache_hit():
-    cached = '{"symbol":"2330","price":785,"market":"TW"}'
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=cached)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock) as cache_set, \
+    cached = {"symbol": "2330", "price": 785, "market": "TW"}
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=cached)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock) as cache_set, \
          patch.object(svc.twse, "get_realtime_quote", new_callable=AsyncMock) as twse_mock, \
          patch.object(svc.finmind, "get_daily_ohlcv", new_callable=AsyncMock) as finmind_mock:
         out = await svc.get_quote("2330")
@@ -179,8 +179,8 @@ async def test_get_quote_uses_twse_realtime_when_available():
         {"date": (date.today() - timedelta(days=1)).isoformat(),
          "open": 780, "high": 790, "low": 775, "close": 780, "volume": 1000},
     ]
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.twse, "get_realtime_quote", new=AsyncMock(return_value=twse_payload)), \
          patch.object(svc.finmind, "get_daily_ohlcv",
                       new=AsyncMock(return_value=finmind_bars)):
@@ -199,8 +199,8 @@ async def test_get_quote_falls_back_to_finmind_when_twse_returns_none():
         {"time": "2024-04-01", "open": 780, "high": 790, "low": 775,
          "close": 785, "volume": 1000},
     ]
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.twse, "get_realtime_quote", new=AsyncMock(return_value=None)), \
          patch.object(svc.finmind, "get_daily_ohlcv", new=AsyncMock(return_value=finmind_bars)):
         out = await svc.get_quote("2330")
@@ -213,8 +213,8 @@ async def test_get_quote_falls_back_to_finmind_when_twse_returns_none():
 async def test_get_quote_falls_back_to_finmind_when_twse_raises():
     finmind_bars = [{"time": "2024-04-01", "open": 1, "high": 2, "low": 0,
                      "close": 1.5, "volume": 100}]
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.twse, "get_realtime_quote", new=AsyncMock(side_effect=RuntimeError("twse"))), \
          patch.object(svc.finmind, "get_daily_ohlcv", new=AsyncMock(return_value=finmind_bars)):
         out = await svc.get_quote("2330")
@@ -233,8 +233,8 @@ async def test_finmind_fallback_computes_change_pct_from_prev_bar():
         {"time": "2024-04-02", "open": 781, "high": 790, "low": 779,
          "close": 785, "volume": 1000},
     ]
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.twse, "get_realtime_quote",
                       new=AsyncMock(return_value=None)), \
          patch.object(svc.finmind, "get_daily_ohlcv",
@@ -254,8 +254,8 @@ async def test_finmind_fallback_skips_change_pct_with_only_one_bar():
         {"time": "2024-04-02", "open": 781, "high": 790, "low": 779,
          "close": 785, "volume": 1000},
     ]
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.twse, "get_realtime_quote",
                       new=AsyncMock(return_value=None)), \
          patch.object(svc.finmind, "get_daily_ohlcv",
@@ -271,8 +271,8 @@ async def test_finmind_fallback_skips_change_pct_with_only_one_bar():
 async def test_get_quote_returns_zero_dict_when_both_tiers_fail_and_does_not_cache():
     """TWSE + FinMind both blow up → connector still returns a
     structurally-valid dict with price=0, but MUST NOT cache it."""
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock) as cache_set, \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock) as cache_set, \
          patch.object(svc.twse, "get_realtime_quote", new=AsyncMock(side_effect=RuntimeError("t"))), \
          patch.object(svc.finmind, "get_daily_ohlcv", new=AsyncMock(side_effect=RuntimeError("f"))):
         out = await svc.get_quote("2330")
@@ -287,8 +287,8 @@ async def test_get_quote_returns_zero_dict_when_both_tiers_fail_and_does_not_cac
 async def test_get_quote_marks_data_source_twse_when_realtime_serves():
     twse_payload = {"symbol": "2330", "name_zh": "台積電", "close": 785,
                     "open": 780, "high": 790, "low": 775, "volume": 1000}
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.twse, "get_realtime_quote", new=AsyncMock(return_value=twse_payload)):
         out = await svc.get_quote("2330")
     assert out["data_source"] == "twse"
@@ -298,8 +298,8 @@ async def test_get_quote_marks_data_source_twse_when_realtime_serves():
 async def test_get_quote_marks_data_source_finmind_when_finmind_serves():
     finmind_bars = [{"time": "2024-04-01", "open": 1, "high": 2, "low": 0,
                      "close": 1.5, "volume": 100}]
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.twse, "get_realtime_quote", new=AsyncMock(return_value=None)), \
          patch.object(svc.finmind, "get_daily_ohlcv", new=AsyncMock(return_value=finmind_bars)):
         out = await svc.get_quote("2330")
@@ -314,8 +314,8 @@ async def test_get_history_uses_twse_when_available():
     """TWSE returns one month at a time; service walks back N months
     and concatenates. Test with months=2 so the loop iterates twice."""
     month_bars = [{"time": "2024-04-01", "open": 1, "high": 2, "low": 0, "close": 1.5, "volume": 100}]
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.twse, "get_daily_ohlcv", new=AsyncMock(return_value=month_bars)) as twse_mock, \
          patch.object(svc.finmind, "get_daily_ohlcv", new_callable=AsyncMock) as finmind_mock:
         out = await svc.get_history("2330", months=2)
@@ -328,8 +328,8 @@ async def test_get_history_uses_twse_when_available():
 @pytest.mark.asyncio
 async def test_get_history_falls_back_to_finmind_when_twse_raises():
     finmind_bars = [{"time": "2024-04-01", "open": 1, "high": 2, "low": 0, "close": 1.5, "volume": 100}]
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.twse, "get_daily_ohlcv", new=AsyncMock(side_effect=RuntimeError("twse"))), \
          patch.object(svc.finmind, "get_daily_ohlcv", new=AsyncMock(return_value=finmind_bars)):
         out = await svc.get_history("2330")
@@ -338,8 +338,8 @@ async def test_get_history_falls_back_to_finmind_when_twse_raises():
 
 @pytest.mark.asyncio
 async def test_get_history_does_not_cache_when_both_tiers_empty():
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock) as cache_set, \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock) as cache_set, \
          patch.object(svc.twse, "get_daily_ohlcv", new=AsyncMock(return_value=[])), \
          patch.object(svc.finmind, "get_daily_ohlcv", new=AsyncMock(return_value=[])):
         out = await svc.get_history("2330")
@@ -355,8 +355,8 @@ async def test_get_institutional_uses_finmind_first_with_date_range():
     """FinMind goes first because it returns per-symbol range; TWSE
     would require N day-by-day calls."""
     finmind_rows = [{"date": "2024-04-01", "fini_buy": 1000, "fini_sell": 500}]
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.finmind, "get_institutional", new=AsyncMock(return_value=finmind_rows)), \
          patch.object(svc.twse, "get_institutional", new_callable=AsyncMock) as twse_mock:
         out = await svc.get_institutional("2330")
@@ -373,8 +373,8 @@ async def test_get_institutional_falls_back_to_twse_today_when_finmind_empty():
         {"symbol": "2330", "fini_buy": 1000},
         {"symbol": "2317", "fini_buy": 500},
     ]
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.finmind, "get_institutional", new=AsyncMock(return_value=[])), \
          patch.object(svc.twse, "get_institutional", new=AsyncMock(return_value=twse_rows)):
         out = await svc.get_institutional("2330")
@@ -392,8 +392,8 @@ async def test_get_margin_falls_back_to_twse_filtered_by_symbol():
         {"symbol": "2330", "margin_purchase": 1000},
         {"symbol": "2317", "margin_purchase": 200},
     ]
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.finmind, "get_margin", new=AsyncMock(return_value=[])), \
          patch.object(svc.twse, "get_margin", new=AsyncMock(return_value=twse_rows)):
         out = await svc.get_margin("2330")
@@ -407,8 +407,8 @@ async def test_get_margin_falls_back_to_twse_filtered_by_symbol():
 @pytest.mark.asyncio
 async def test_get_revenue_uses_finmind_when_available():
     finmind_rows = [{"date": "2024-04-01", "revenue": 100_000_000}]
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.finmind, "get_monthly_revenue", new=AsyncMock(return_value=finmind_rows)), \
          patch.object(svc.mops, "get_monthly_revenue_recent", new_callable=AsyncMock) as mops_mock:
         out = await svc.get_revenue("2330")
@@ -420,8 +420,8 @@ async def test_get_revenue_uses_finmind_when_available():
 @pytest.mark.asyncio
 async def test_get_revenue_falls_back_to_mops_html_scrape_when_finmind_fails():
     mops_rows = [{"symbol": "2330", "date": "2024-04-01", "revenue": 100_000_000, "source": "mops"}]
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.finmind, "get_monthly_revenue", new=AsyncMock(side_effect=RuntimeError("quota"))), \
          patch.object(svc.mops, "get_monthly_revenue_recent", new=AsyncMock(return_value=mops_rows)):
         out = await svc.get_revenue("2330")
@@ -436,8 +436,8 @@ async def test_get_fundamentals_returns_minimal_shell_when_twse_empty():
     (symbol/market/exchange) so the frontend can render the page,
     but does NOT cache (next request retries instead of locking
     blanks for 24h)."""
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock) as cache_set, \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock) as cache_set, \
          patch.object(svc.twse, "get_valuation_ratios", new=AsyncMock(return_value={})):
         out = await svc.get_fundamentals("2330")
 
@@ -451,8 +451,8 @@ async def test_get_fundamentals_returns_minimal_shell_when_twse_empty():
 async def test_get_fundamentals_caches_when_ratios_present():
     ratios = {"pe_ratio": 21.0, "pb_ratio": 5.3, "dividend_yield": 2.6,
               "fetched_at": "2024-04-01"}
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock) as cache_set, \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock) as cache_set, \
          patch.object(svc.twse, "get_valuation_ratios", new=AsyncMock(return_value=ratios)):
         out = await svc.get_fundamentals("2330")
 
@@ -478,8 +478,8 @@ async def test_db_snapshot_tier_drops_stale_implausible_change_pct():
         "data_source": "twse",
         "change_pct": 996.84,   # legacy junk
     }
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.twse, "get_realtime_quote",
                       new=AsyncMock(return_value=None)), \
          patch.object(svc.finmind, "get_daily_ohlcv",
@@ -506,8 +506,8 @@ async def test_db_snapshot_tier_keeps_plausible_change_pct():
         "data_source": "twse",
         "change_pct": 5.0,
     }
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.twse, "get_realtime_quote",
                       new=AsyncMock(return_value=None)), \
          patch.object(svc.finmind, "get_daily_ohlcv",
@@ -540,9 +540,9 @@ async def test_fetch_quote_waterfall_backfills_prev_close_from_archive():
         "volume": 24_628_405,
     }
     yesterday = (date.today() - timedelta(days=1)).isoformat()
-    with patch.object(svc, "cache_get",
+    with patch.object(svc, "cache_get_json",
                       new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set",
+         patch.object(svc, "cache_set_json",
                       new_callable=AsyncMock), \
          patch.object(svc.twse, "get_realtime_quote",
                       new=AsyncMock(return_value=twse_payload)), \
@@ -578,8 +578,8 @@ async def test_get_quote_uses_archive_baseline_for_change_pct():
         {"time": yesterday, "open": 320, "high": 322,
          "low": 318, "close": 321.5, "volume": 1_000_000},
     ]
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.twse, "get_realtime_quote",
                       new=AsyncMock(return_value=twse_payload)), \
          patch(
@@ -600,8 +600,8 @@ async def test_get_quote_uses_archive_baseline_for_change_pct():
 async def test_resolve_prev_close_returns_none_for_unknown_symbol():
     """No bars in archive → None → caller falls back to upstream's
     own `change` field. Doesn't crash, doesn't leak stale cache."""
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch(
              "services.ingest.repository.read_ohlcv_range_autosession",
              new=AsyncMock(return_value=[]),
@@ -628,8 +628,8 @@ async def test_resolve_prev_close_weekend_skips_back_one_session():
         {"time": today_iso, "open": 576, "high": 582,
          "low": 575, "close": 580, "volume": 1_200_000},
     ]
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch(
              "services.ingest.repository.read_ohlcv_range_autosession",
              new=AsyncMock(return_value=archive_bars),
@@ -655,8 +655,8 @@ async def test_resolve_prev_close_intraday_uses_archive_latest():
         {"time": today_iso, "open": 576, "high": 582,
          "low": 575, "close": 580, "volume": 1_200_000},
     ]
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch(
              "services.ingest.repository.read_ohlcv_range_autosession",
              new=AsyncMock(return_value=archive_bars),
@@ -686,8 +686,8 @@ async def test_get_quote_does_not_show_zero_pct_on_weekend():
         {"time": today_iso, "open": 576, "high": 582,
          "low": 575, "close": 580, "volume": 1_200_000},
     ]
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.twse, "get_realtime_quote",
                       new=AsyncMock(return_value=twse_payload)), \
          patch(
@@ -724,8 +724,8 @@ async def test_resolve_prev_close_rejects_stale_archive_then_falls_through_to_fi
         {"date": yesterday, "open": 52.5, "high": 53.2,
          "low": 52.0, "close": 53.10, "volume": 800_000},
     ]
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.finmind, "get_daily_ohlcv",
                       new=AsyncMock(return_value=finmind_bars)), \
          patch(
@@ -749,8 +749,8 @@ async def test_resolve_prev_close_finmind_fallback_when_archive_empty():
         {"date": yesterday, "open": 320, "high": 322,
          "low": 318, "close": 321.5, "volume": 1_000_000},
     ]
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.finmind, "get_daily_ohlcv",
                       new=AsyncMock(return_value=finmind_bars)), \
          patch(
@@ -770,8 +770,8 @@ async def test_resolve_prev_close_accepts_fresh_archive():
         {"time": fresh_date, "open": 575, "high": 582,
          "low": 573, "close": 580, "volume": 1_200_000},
     ]
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch(
              "services.ingest.repository.read_ohlcv_range_autosession",
              new=AsyncMock(return_value=archive_bars),

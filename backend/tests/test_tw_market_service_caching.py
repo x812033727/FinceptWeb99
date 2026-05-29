@@ -41,8 +41,8 @@ async def test_get_quote_zero_price_not_cached():
     mis.twse.com.tw and either hang or randomly succeed depending
     on the test host.
     """
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()) as mock_set, \
          patch.object(svc.twse_mis, "get_realtime_quote", AsyncMock(return_value=None)), \
          patch.object(svc.twse, "get_realtime_quote", AsyncMock(side_effect=RuntimeError)), \
          patch.object(svc.finmind, "get_daily_ohlcv", AsyncMock(return_value=[])):
@@ -69,8 +69,8 @@ async def test_get_quote_serves_mis_intraday_when_market_open():
     twse_called = AsyncMock(return_value={
         "close": 999, "prev_close": 999,  # poison value — must NOT win
     })
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc, "_is_tw_market_open", lambda: True), \
          patch.object(svc.twse_mis, "get_realtime_quote",
                       AsyncMock(return_value=mis_raw)), \
@@ -99,8 +99,8 @@ async def test_get_quote_skips_mis_outside_session():
         "open": 1088.0, "high": 1092.0, "low": 1085.0,
         "volume": 8_000_000,
     }
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc, "_is_tw_market_open", lambda: False), \
          patch.object(svc.twse_mis, "get_realtime_quote", mis_called), \
          patch.object(svc.twse, "get_realtime_quote", AsyncMock(return_value=twse_raw)):
@@ -124,8 +124,8 @@ async def test_get_quote_mis_failure_falls_through_to_twse():
         "open": 1088.0, "high": 1092.0, "low": 1085.0,
         "volume": 8_000_000,
     }
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc, "_is_tw_market_open", lambda: True), \
          patch.object(svc.twse_mis, "get_realtime_quote",
                       AsyncMock(side_effect=RuntimeError("boom"))), \
@@ -144,8 +144,8 @@ async def test_get_quote_real_price_is_cached():
         "close": 820.0, "prev_close": 815.0, "change": 5.0,
         "open": 818.0, "high": 825.0, "low": 815.0, "volume": 25_000_000,
     }
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()) as mock_set, \
          patch.object(svc.twse_mis, "get_realtime_quote", AsyncMock(return_value=None)), \
          patch.object(svc.twse, "get_realtime_quote", AsyncMock(return_value=raw)):
         result = await svc.get_quote("2330")
@@ -182,8 +182,8 @@ async def test_get_quote_closed_market_serves_settled_ohlcv():
         {"time": "2026-05-28", "open": 1006, "high": 1020, "low": 1004,
          "close": 1018.0, "volume": 11_000},
     ]
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()) as mock_set, \
          patch.object(svc, "_is_tw_market_open", lambda: False), \
          patch.object(svc, "get_latest_ohlcv_session",
                       AsyncMock(return_value=sess)), \
@@ -217,8 +217,8 @@ async def test_get_quote_closed_market_falls_back_when_ohlcv_lagging():
         "close": 1018.0, "prev_close": 1005.0, "change": 13.0,
         "open": 1006.0, "high": 1020.0, "low": 1004.0, "volume": 11_000,
     }
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc, "_is_tw_market_open", lambda: False), \
          patch.object(svc, "get_latest_ohlcv_session",
                       AsyncMock(return_value=date(2026, 5, 26))), \
@@ -250,8 +250,8 @@ async def test_get_quote_market_open_skips_settled_fast_path():
         "volume": 12_345_600, "tlong": "1716797400000",
     }
     ohlcv_probe = AsyncMock(return_value=date(2026, 5, 28))
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc, "_is_tw_market_open", lambda: True), \
          patch.object(svc, "get_latest_ohlcv_session", ohlcv_probe), \
          patch.object(svc.twse_mis, "get_realtime_quote",
@@ -339,8 +339,8 @@ async def test_quote_waterfall_keeps_mis_intraday_priority():
 
 @pytest.mark.asyncio
 async def test_get_history_empty_not_cached():
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()) as mock_set, \
          patch.object(svc.twse, "get_daily_ohlcv", AsyncMock(side_effect=RuntimeError)), \
          patch.object(svc.finmind, "get_daily_ohlcv", AsyncMock(return_value=[])):
         result = await svc.get_history("2330", months=1)
@@ -353,8 +353,8 @@ async def test_get_history_empty_not_cached():
 
 @pytest.mark.asyncio
 async def test_get_institutional_empty_not_cached():
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()) as mock_set, \
          patch.object(svc.finmind, "get_institutional", AsyncMock(return_value=[])), \
          patch.object(svc.twse, "get_institutional", AsyncMock(return_value=[])):
         result = await svc.get_institutional("2330")
@@ -367,8 +367,8 @@ async def test_get_institutional_empty_not_cached():
 
 @pytest.mark.asyncio
 async def test_get_margin_empty_not_cached():
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()) as mock_set, \
          patch.object(svc.finmind, "get_margin", AsyncMock(return_value=[])), \
          patch.object(svc.twse, "get_margin", AsyncMock(return_value=[])):
         result = await svc.get_margin("2330")
@@ -381,8 +381,8 @@ async def test_get_margin_empty_not_cached():
 
 @pytest.mark.asyncio
 async def test_get_revenue_empty_not_cached():
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()) as mock_set, \
          patch.object(svc.finmind, "get_monthly_revenue", AsyncMock(return_value=[])), \
          patch.object(svc.mops, "get_monthly_revenue_recent", AsyncMock(return_value=[])):
         result = await svc.get_revenue("2330")
@@ -405,12 +405,12 @@ async def test_get_institutional_as_of_skips_cache_and_live_tiers():
 
     finmind_mock = AsyncMock(return_value=[{"foreign_buy": 9999}])
     twse_mock = AsyncMock(return_value=[{"foreign_buy": 9999}])
-    cache_get_mock = AsyncMock(return_value='[{"cached":"row"}]')
+    cache_get_mock = AsyncMock(return_value=[{"cached": "row"}])
     db_rows = [{"date": "2026-04-15", "foreign_buy": 1000}]
 
     # Patch the lazy import inside the function: services.ingest.repository.read_institutional_range
-    with patch.object(svc, "cache_get", cache_get_mock), \
-         patch.object(svc, "cache_set", AsyncMock()) as cache_set_mock, \
+    with patch.object(svc, "cache_get_json", cache_get_mock), \
+         patch.object(svc, "cache_set_json", AsyncMock()) as cache_set_mock, \
          patch.object(svc.finmind, "get_institutional", finmind_mock), \
          patch.object(svc.twse, "get_institutional", twse_mock), \
          patch("services.ingest.repository.read_institutional_range",
@@ -439,8 +439,8 @@ async def test_get_institutional_as_of_returns_empty_on_db_miss():
     finmind_mock = AsyncMock(return_value=[{"foreign_buy": 9999}])
     twse_mock = AsyncMock(return_value=[{"foreign_buy": 9999}])
 
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc.finmind, "get_institutional", finmind_mock), \
          patch.object(svc.twse, "get_institutional", twse_mock), \
          patch("services.ingest.repository.read_institutional_range",
@@ -461,11 +461,11 @@ async def test_get_margin_as_of_skips_cache_and_live_tiers():
     from unittest.mock import MagicMock
 
     finmind_mock = AsyncMock(return_value=[{"margin_purchase_balance": 9999}])
-    cache_get_mock = AsyncMock(return_value='[{"cached":"row"}]')
+    cache_get_mock = AsyncMock(return_value=[{"cached": "row"}])
     db_rows = [{"date": "2026-04-15", "margin_purchase_balance": 1000}]
 
-    with patch.object(svc, "cache_get", cache_get_mock), \
-         patch.object(svc, "cache_set", AsyncMock()) as cache_set_mock, \
+    with patch.object(svc, "cache_get_json", cache_get_mock), \
+         patch.object(svc, "cache_set_json", AsyncMock()) as cache_set_mock, \
          patch.object(svc.finmind, "get_margin", finmind_mock), \
          patch("services.ingest.repository.read_margin_range",
                new=AsyncMock(return_value=db_rows)), \
@@ -494,11 +494,11 @@ async def test_get_financials_as_of_filters_by_period_end_date():
         {"date": "2025-03-31", "type": "EPS", "value": 14.0},   # Q1 2025 — drop
         {"date": "2025-06-30", "type": "EPS", "value": 15.2},   # Q2 2025 — drop
     ]
-    cache_get_mock = AsyncMock(return_value='[{"cached":"row"}]')
+    cache_get_mock = AsyncMock(return_value=[{"cached": "row"}])
     finmind_mock = AsyncMock(return_value=rows)
 
-    with patch.object(svc, "cache_get", cache_get_mock), \
-         patch.object(svc, "cache_set", AsyncMock()) as cache_set_mock, \
+    with patch.object(svc, "cache_get_json", cache_get_mock), \
+         patch.object(svc, "cache_set_json", AsyncMock()) as cache_set_mock, \
          patch.object(svc.finmind, "get_financials", finmind_mock):
         result = await svc.get_financials("2330", as_of=date(2025, 1, 31))
 
@@ -513,10 +513,10 @@ async def test_get_financials_as_of_filters_by_period_end_date():
 async def test_get_financials_live_mode_uses_redis_cache():
     """Sanity: live mode (no as_of) keeps the existing cache-first
     path so we don't regress hot-path latency."""
-    cache_get_mock = AsyncMock(return_value='[{"cached":"row"}]')
+    cache_get_mock = AsyncMock(return_value=[{"cached": "row"}])
 
-    with patch.object(svc, "cache_get", cache_get_mock), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", cache_get_mock), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc.finmind, "get_financials",
                       AsyncMock(return_value=[])) as finmind_mock:
         result = await svc.get_financials("2330")
@@ -530,8 +530,8 @@ async def test_get_financials_live_mode_uses_redis_cache():
 
 @pytest.mark.asyncio
 async def test_get_fundamentals_no_ratios_not_cached():
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()) as mock_set, \
          patch.object(svc.twse, "get_valuation_ratios", AsyncMock(side_effect=RuntimeError)):
         result = await svc.get_fundamentals("2330")
 
@@ -541,8 +541,8 @@ async def test_get_fundamentals_no_ratios_not_cached():
 
 @pytest.mark.asyncio
 async def test_get_fundamentals_with_ratios_is_cached():
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()) as mock_set, \
          patch.object(svc.twse, "get_valuation_ratios", AsyncMock(return_value={"pe": 18.5, "pb": 5.2})):
         result = await svc.get_fundamentals("2330")
 

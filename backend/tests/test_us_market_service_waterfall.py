@@ -126,8 +126,8 @@ def _patch_quote_chain(*, polygon_quote=None, yfinance_quote=None, stooq_quote=N
         return AsyncMock(return_value=value if value is not None else {})
 
     patches = [
-        patch.object(svc, "cache_get", new=AsyncMock(return_value=cache_value)),
-        patch.object(svc, "cache_set", new_callable=AsyncMock),
+        patch.object(svc, "cache_get_json", new=AsyncMock(return_value=cache_value)),
+        patch.object(svc, "cache_set_json", new_callable=AsyncMock),
         patch.object(svc.settings, "POLYGON_API_KEY", polygon_key),
         patch.object(svc.polygon, "get_quote", new=_async_or_raise(polygon_quote)),
         patch.object(svc.yfinance, "get_quote", new=_async_or_raise(yfinance_quote)),
@@ -138,15 +138,15 @@ def _patch_quote_chain(*, polygon_quote=None, yfinance_quote=None, stooq_quote=N
 
 @pytest.mark.asyncio
 async def test_get_quote_short_circuits_on_cache_hit_without_calling_connectors():
-    cached = '{"symbol":"AAPL","price":200,"market":"US","currency":"USD"}'
+    cached = {"symbol": "AAPL", "price": 200, "market": "US", "currency": "USD"}
     patches = _patch_quote_chain(cache_value=cached, polygon_quote={"price": 999})
     with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5] as stooq_mock:
         # Need to inspect Polygon mock too — re-grab via context.
         pass
 
     # Cleaner: open the patches in a single with-block.
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=cached)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock) as cache_set, \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=cached)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock) as cache_set, \
          patch.object(svc.settings, "POLYGON_API_KEY", "key"), \
          patch.object(svc.polygon, "get_quote", new_callable=AsyncMock) as polygon_mock, \
          patch.object(svc.yfinance, "get_quote", new_callable=AsyncMock) as yf_mock, \
@@ -162,8 +162,8 @@ async def test_get_quote_short_circuits_on_cache_hit_without_calling_connectors(
 
 @pytest.mark.asyncio
 async def test_get_quote_uses_polygon_when_key_set():
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.settings, "POLYGON_API_KEY", "key"), \
          patch.object(svc.polygon, "get_quote", new=AsyncMock(return_value={"price": 204.5})), \
          patch.object(svc.yfinance, "get_quote", new_callable=AsyncMock) as yf_mock, \
@@ -177,8 +177,8 @@ async def test_get_quote_uses_polygon_when_key_set():
 
 @pytest.mark.asyncio
 async def test_get_quote_uses_yfinance_when_polygon_key_missing():
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.settings, "POLYGON_API_KEY", ""), \
          patch.object(svc.polygon, "get_quote", new_callable=AsyncMock) as polygon_mock, \
          patch.object(svc.yfinance, "get_quote", new=AsyncMock(return_value={"price": 200})), \
@@ -191,8 +191,8 @@ async def test_get_quote_uses_yfinance_when_polygon_key_missing():
 
 @pytest.mark.asyncio
 async def test_get_quote_falls_back_to_yfinance_when_polygon_raises():
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.settings, "POLYGON_API_KEY", "key"), \
          patch.object(svc.polygon, "get_quote", new=AsyncMock(side_effect=RuntimeError("polygon down"))), \
          patch.object(svc.yfinance, "get_quote", new=AsyncMock(return_value={"price": 200})), \
@@ -204,8 +204,8 @@ async def test_get_quote_falls_back_to_yfinance_when_polygon_raises():
 @pytest.mark.asyncio
 async def test_get_quote_falls_back_to_stooq_when_polygon_and_yfinance_yield_no_price():
     """raw.get('price') is falsy (0 or missing) → Stooq tier triggers."""
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.settings, "POLYGON_API_KEY", "key"), \
          patch.object(svc.polygon, "get_quote", new=AsyncMock(return_value={"price": 0})), \
          patch.object(svc.yfinance, "get_quote", new_callable=AsyncMock), \
@@ -220,8 +220,8 @@ async def test_get_quote_returns_zero_dict_when_every_tier_fails():
     """All three tiers down → connector returns a zero-price dict that
     is *deliberately not cached* (would otherwise lock in the failure
     for TTL_QUOTE seconds)."""
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock) as cache_set, \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock) as cache_set, \
          patch.object(svc.settings, "POLYGON_API_KEY", "key"), \
          patch.object(svc.polygon, "get_quote", new=AsyncMock(side_effect=RuntimeError("p"))), \
          patch.object(svc.yfinance, "get_quote", new=AsyncMock(side_effect=RuntimeError("y"))), \
@@ -235,8 +235,8 @@ async def test_get_quote_returns_zero_dict_when_every_tier_fails():
 
 @pytest.mark.asyncio
 async def test_get_quote_caches_only_when_price_is_nonzero():
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock) as cache_set, \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock) as cache_set, \
          patch.object(svc.settings, "POLYGON_API_KEY", "key"), \
          patch.object(svc.polygon, "get_quote", new=AsyncMock(return_value={"price": 100})), \
          patch.object(svc.yfinance, "get_quote", new_callable=AsyncMock), \
@@ -254,8 +254,8 @@ async def test_get_quote_caches_only_when_price_is_nonzero():
 
 @pytest.mark.asyncio
 async def test_get_history_uses_polygon_with_date_range_when_key_set():
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.settings, "POLYGON_API_KEY", "key"), \
          patch.object(svc.polygon, "get_aggs", new=AsyncMock(return_value=[
              {"time": 1700000000000, "open": 1, "high": 2, "low": 0, "close": 1.5, "volume": 1000}
@@ -271,8 +271,8 @@ async def test_get_history_uses_polygon_with_date_range_when_key_set():
 
 @pytest.mark.asyncio
 async def test_get_history_falls_back_to_yfinance_when_polygon_raises():
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.settings, "POLYGON_API_KEY", "key"), \
          patch.object(svc.polygon, "get_aggs", new=AsyncMock(side_effect=RuntimeError("polygon"))), \
          patch.object(svc.yfinance, "get_history", new=AsyncMock(return_value=[
@@ -285,8 +285,8 @@ async def test_get_history_falls_back_to_yfinance_when_polygon_raises():
 
 @pytest.mark.asyncio
 async def test_get_history_uses_yfinance_directly_when_no_polygon_key():
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.settings, "POLYGON_API_KEY", ""), \
          patch.object(svc.polygon, "get_aggs", new_callable=AsyncMock) as polygon_mock, \
          patch.object(svc.yfinance, "get_history", new=AsyncMock(return_value=[])):
@@ -296,9 +296,9 @@ async def test_get_history_uses_yfinance_directly_when_no_polygon_key():
 
 @pytest.mark.asyncio
 async def test_get_history_short_circuits_on_cache_hit():
-    cached = '[{"time":"2024-01-01","open":1,"high":2,"low":0,"close":1,"volume":100}]'
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=cached)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock) as cache_set, \
+    cached = [{"time": "2024-01-01", "open": 1, "high": 2, "low": 0, "close": 1, "volume": 100}]
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=cached)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock) as cache_set, \
          patch.object(svc.polygon, "get_aggs", new_callable=AsyncMock) as polygon_mock, \
          patch.object(svc.yfinance, "get_history", new_callable=AsyncMock) as yf_mock:
         out = await svc.get_history("AAPL")
@@ -317,8 +317,8 @@ async def test_get_fundamentals_uses_polygon_when_key_set():
         "name": "Apple Inc.", "sic_description": "Tech",
         "market_cap": 3.2e12, "description": "iPhone maker",
     }
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.settings, "POLYGON_API_KEY", "key"), \
          patch.object(svc.polygon, "get_ticker_details", new=AsyncMock(return_value=polygon_payload)), \
          patch.object(svc.yfinance, "get_info", new_callable=AsyncMock) as yf_mock:
@@ -333,8 +333,8 @@ async def test_get_fundamentals_uses_polygon_when_key_set():
 
 @pytest.mark.asyncio
 async def test_get_fundamentals_falls_back_to_yfinance_when_no_polygon_key():
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.settings, "POLYGON_API_KEY", ""), \
          patch.object(svc.polygon, "get_ticker_details", new_callable=AsyncMock) as polygon_mock, \
          patch.object(svc.yfinance, "get_info", new=AsyncMock(return_value={
@@ -351,8 +351,8 @@ async def test_get_fundamentals_falls_back_to_yfinance_when_no_polygon_key():
 @pytest.mark.asyncio
 async def test_get_fundamentals_falls_back_to_yfinance_when_polygon_raises():
     """Polygon outage / 429 / network error → yfinance."""
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
          patch.object(svc.settings, "POLYGON_API_KEY", "key"), \
          patch.object(svc.polygon, "get_ticker_details", new=AsyncMock(side_effect=RuntimeError("429"))), \
          patch.object(svc.yfinance, "get_info", new=AsyncMock(return_value={
@@ -364,9 +364,9 @@ async def test_get_fundamentals_falls_back_to_yfinance_when_polygon_raises():
 
 @pytest.mark.asyncio
 async def test_get_fundamentals_short_circuits_on_cache_hit():
-    cached = '{"symbol":"AAPL","market":"US","name":"Apple Inc.","fetched_at":"2024-01-01"}'
-    with patch.object(svc, "cache_get", new=AsyncMock(return_value=cached)), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock) as cache_set, \
+    cached = {"symbol": "AAPL", "market": "US", "name": "Apple Inc.", "fetched_at": "2024-01-01"}
+    with patch.object(svc, "cache_get_json", new=AsyncMock(return_value=cached)), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock) as cache_set, \
          patch.object(svc.polygon, "get_ticker_details", new_callable=AsyncMock) as polygon_mock, \
          patch.object(svc.yfinance, "get_info", new_callable=AsyncMock) as yf_mock:
         out = await svc.get_fundamentals("AAPL")

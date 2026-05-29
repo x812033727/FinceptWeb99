@@ -816,6 +816,38 @@ async def get_quote(
         if cached:
             return json.loads(cached)
 
+    # Closed-market settled-session self-heal (mirrors the screener
+    # fast-path at `get_screener`): when TW is not trading and
+    # `ohlcv_daily` already holds the latest complete session, serve
+    # that settled close instead of leaning on the live STOCK_DAY_ALL
+    # feed, whose recency depends on end-of-day publication lag. This
+    # makes pre-market / after-hours / weekend quotes deterministic
+    # (the value matches the live close anyway, just guaranteed) so a
+    # 04:00-Taipei discussion run reads the prior session without a
+    # backtest anchor. Falls through to the live waterfall when the
+    # archive hasn't caught up yet (ingest lag) — that's the genuine
+    # "missing today's data → fall back to live" path.
+    if not _is_tw_market_open():
+        ohlcv_latest = await get_latest_ohlcv_session()
+        if ohlcv_latest is not None and ohlcv_latest >= _latest_complete_session():
+            bars = await read_ohlcv_range_autosession(
+                "TW", symbol, ohlcv_latest - timedelta(days=10), ohlcv_latest,
+            )
+            if bars:
+                last = bars[-1]
+                prev = bars[-2]["close"] if len(bars) >= 2 else None
+                result = _normalize_quote(symbol, {
+                    "close":      last.get("close"),
+                    "volume":     last.get("volume", 0),
+                    "prev_close": prev,
+                })
+                result["data_source"] = "ohlcv_daily_today"
+                result["as_of_session"] = str(last["time"])[:10]
+                result["is_intraday"] = False
+                if result.get("price"):
+                    await cache_set(key, json.dumps(result), TTL_QUOTE)
+                return result
+
     raw, source = await fetch_quote_waterfall(symbol)
     if not raw:
         # ── Tier 3: recent DB snapshot when upstream is fully down ──

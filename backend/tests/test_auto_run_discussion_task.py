@@ -176,14 +176,12 @@ async def test_creates_discussion_with_auto_run_flag(
     assert d.persona_ids == ["buffett", "lynch", "soros"]
     assert d.topic == "my topic"
     assert d.rules == "my rules"
-    # Anchored to the last completed TW trading day (Taipei-local) so the
-    # 04:00-Taipei pre-market run reads settled `ohlcv_daily` data instead
-    # of the stale live feed.
-    from services.tw_trading_calendar import (
-        prev_trading_day_estimate,
-        utcnow_tw_date,
-    )
-    assert d.as_of_date == prev_trading_day_estimate(utcnow_tw_date())
+    # Live mode (no backtest anchor): the daily auto-run is a
+    # forward-looking call, so `as_of_date` stays NULL — it must not be
+    # flagged / rendered as a 「回測」 row. Pre-market settled-close
+    # determinism is provided by `tw_market_service.get_quote`'s
+    # closed-market `ohlcv_daily` self-heal, not by an as_of anchor.
+    assert d.as_of_date is None
     # `verify_after_date` is now seeded inside `synthesize_conclusion`
     # (PR #218) — the auto-run task no longer sets it explicitly
     # (PR #222). This test mocks `synthesize_conclusion` so the real

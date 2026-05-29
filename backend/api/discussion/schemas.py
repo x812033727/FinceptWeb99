@@ -302,7 +302,7 @@ class StrategyTemplateCreate(BaseModel):
     # PR-D: optional auto-schedule fields. Disabled by default.
     auto_schedule_enabled: bool = False
     auto_schedule_cadence_hours: int = Field(default=24, ge=1, le=720)
-    auto_schedule_anchor_offset_days: int = Field(default=-1, ge=-30, le=0)
+    auto_schedule_anchor_offset_days: int = Field(default=0, ge=-30, le=0)
     auto_schedule_trading_days_count: int = Field(default=1, ge=1, le=30)
 
 

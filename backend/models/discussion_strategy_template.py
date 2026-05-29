@@ -169,7 +169,7 @@ class DiscussionStrategyTemplate(Base):
         Integer, nullable=False, default=24, server_default="24",
     )
     auto_schedule_anchor_offset_days: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=-1, server_default="-1",
+        Integer, nullable=False, default=0, server_default="0",
     )
     auto_schedule_trading_days_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1",

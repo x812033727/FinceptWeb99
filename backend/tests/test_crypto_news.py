@@ -19,8 +19,8 @@ async def test_get_news_uses_full_name_in_query():
         captured["query"] = query
         return []
 
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json_unless_empty", new_callable=AsyncMock), \
          patch.object(svc, "_google_news_rss", new=_spy):
         await svc.get_news("AVAX", limit=5)
 
@@ -36,8 +36,8 @@ async def test_get_news_unknown_symbol_uses_cryptocurrency_keyword():
         captured["query"] = query
         return []
 
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json_unless_empty", new_callable=AsyncMock), \
          patch.object(svc, "_google_news_rss", new=_spy):
         await svc.get_news("ZZZZ", limit=5)
 
@@ -51,8 +51,8 @@ async def test_get_news_returns_parsed_items():
          "link": "https://news.google.com/articles/x",
          "published_at": "2026-04-26T10:00:00+00:00", "thumbnail": None},
     ]
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock) as cache_set, \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json_unless_empty", new_callable=AsyncMock) as cache_set, \
          patch.object(svc, "_google_news_rss", new_callable=AsyncMock, return_value=items):
         result = await svc.get_news("AVAX", limit=5)
 
@@ -64,8 +64,8 @@ async def test_get_news_returns_parsed_items():
 async def test_get_news_swallows_rss_failure():
     """RSS request blowing up returns [] instead of bubbling — empty page
     is better than a 502 to the user."""
-    with patch.object(svc, "cache_get", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set", new_callable=AsyncMock), \
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json_unless_empty", new_callable=AsyncMock), \
          patch.object(svc, "_google_news_rss", new_callable=AsyncMock,
                       side_effect=RuntimeError("rss down")):
         result = await svc.get_news("BTC", limit=5)

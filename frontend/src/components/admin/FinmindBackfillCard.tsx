@@ -8,6 +8,7 @@ import {
   type PerDatasetProgress,
 } from "@/hooks/useFinmindChain";
 import { errorDetail } from "@/lib/api";
+import { formatProgressPct } from "@/lib/formatters";
 import { formatTaipei } from "@/lib/timeFormat";
 
 /**
@@ -20,11 +21,6 @@ import { formatTaipei } from "@/lib/timeFormat";
  *
  * Backed by `/api/admin/finmind/chain*` (see api/admin/finmind_chain.py).
  */
-
-function formatPct(num: number, denom: number): string {
-  if (denom <= 0) return "0%";
-  return `${Math.round((num / denom) * 100)}%`;
-}
 
 function StatusBanner({ state }: { state: FinmindChainState | undefined }) {
   if (!state) {
@@ -93,7 +89,7 @@ function PerDatasetTable({
           </thead>
           <tbody>
             {rows.map((r) => {
-              const pct = formatPct(r.chunks_done, r.chunks_total);
+              const pct = formatProgressPct(r.chunks_done, r.chunks_total);
               const isCurrent = r.dataset === currentDataset;
               const fullyDone =
                 r.chunks_total > 0 && r.chunks_done >= r.chunks_total;
@@ -190,7 +186,7 @@ function QuotaGauge({
           FinMind 每小時 quota(chain 預算)
         </span>
         <span className="font-mono">
-          {u.toLocaleString()} / {limit.toLocaleString()} ({formatPct(u, limit)})
+          {u.toLocaleString()} / {limit.toLocaleString()} ({formatProgressPct(u, limit)})
         </span>
       </div>
       <div className="h-2 w-full overflow-hidden rounded bg-muted">
@@ -206,7 +202,7 @@ function QuotaGauge({
               全域 cap(含預留 {reserved.toLocaleString()}/hr 給討論等)
             </span>
             <span className="font-mono">
-              {u.toLocaleString()} / {globalLimit.toLocaleString()} ({formatPct(u, globalLimit)})
+              {u.toLocaleString()} / {globalLimit.toLocaleString()} ({formatProgressPct(u, globalLimit)})
             </span>
           </div>
           <div className="relative h-2 w-full overflow-hidden rounded bg-muted">
@@ -287,7 +283,7 @@ export default function FinmindBackfillCard() {
         title="FinMind 全量回填監控"
         subtitle={
           s
-            ? `${s.status === "running" ? "正在抓取" : s.status === "stopping" ? "正在停止" : "閒置中"} · ${s.total_chunks_done.toLocaleString()}/${s.total_chunks_total.toLocaleString()} chunks (${formatPct(s.total_chunks_done, s.total_chunks_total)})`
+            ? `${s.status === "running" ? "正在抓取" : s.status === "stopping" ? "正在停止" : "閒置中"} · ${s.total_chunks_done.toLocaleString()}/${s.total_chunks_total.toLocaleString()} chunks (${formatProgressPct(s.total_chunks_done, s.total_chunks_total)})`
             : "click to expand"
         }
         open={open}
@@ -328,7 +324,7 @@ export default function FinmindBackfillCard() {
                 <span className="font-mono">
                   {s.total_chunks_done.toLocaleString()} /{" "}
                   {s.total_chunks_total.toLocaleString()} (
-                  {formatPct(s.total_chunks_done, s.total_chunks_total)})
+                  {formatProgressPct(s.total_chunks_done, s.total_chunks_total)})
                 </span>
               </div>
               <ProgressBar
@@ -358,7 +354,7 @@ export default function FinmindBackfillCard() {
                   目前 dataset 進度
                 </span>
                 <span className="font-mono">
-                  {s.chunks_done}/{s.chunks_total} ({formatPct(s.chunks_done, s.chunks_total)})
+                  {s.chunks_done}/{s.chunks_total} ({formatProgressPct(s.chunks_done, s.chunks_total)})
                   {s.chunks_failed > 0 && (
                     <span className="ml-2 text-destructive">
                       失敗 {s.chunks_failed}

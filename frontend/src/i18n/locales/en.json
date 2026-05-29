@@ -635,6 +635,8 @@
     "show_menu": "Show menu",
     "run_n_rounds": "Run {{n}} rounds",
     "rounds_per_click_label": "Rounds per click",
+    "quota_preflight_warn": "Today's AI quota only covers about {{affordable}} of the {{requested}} rounds requested. Reduce rounds or personas, or the run will stop when the quota runs out.",
+    "quota_stopped": "Stopped after {{completed}} of {{total}} rounds — today's AI quota is exhausted. Resets at midnight UTC.",
     "round_progress": "Round {{current}} of {{total}}",
     "cancel_multi_round": "Cancel",
     "cancelling": "Cancelling…",

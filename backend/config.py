@@ -140,8 +140,8 @@ class Settings(BaseSettings):
     # / interactive paths (e.g. discussions) so a saturating backfill
     # doesn't lock them out.
     FINMIND_CHAIN_HOURLY_BUDGET: int = 550
-    AI_REQUESTS_ANALYST_DAILY: int = 20
-    AI_REQUESTS_VIEWER_DAILY: int = 5
+    AI_REQUESTS_ANALYST_DAILY: int = 200
+    AI_REQUESTS_VIEWER_DAILY: int = 50
 
     # News sentiment scorer: hard cap on LLM calls per UTC day to bound cost.
     # One call scores up to _BATCH_SIZE (20) headlines, so at the default

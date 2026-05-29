@@ -42,7 +42,7 @@ log = logging.getLogger("api.admin.finmind_proxy")
 router = APIRouter()
 
 
-Admin = Annotated[User, Depends(require_admin)]
+AdminUser = Annotated[User, Depends(require_admin)]
 FmDb = Annotated[AsyncSession, Depends(get_finmind_db)]
 
 _VALID_SOURCES = {"finmind", "twse", "tpex", "taifex", "mops", "tdcc"}
@@ -122,7 +122,7 @@ class FinmindDatasetUpdate(BaseModel):
     response_model=list[FinmindDatasetItem],
     summary="AdminPage: list every FinMind dataset",
 )
-async def list_finmind_datasets(_: Admin, db: FmDb) -> list[FinmindDatasetItem]:
+async def list_finmind_datasets(_: AdminUser, db: FmDb) -> list[FinmindDatasetItem]:
     await _ensure_finmind_db_reachable(db)
     rows = (
         await db.execute(
@@ -160,7 +160,7 @@ async def list_finmind_datasets(_: Admin, db: FmDb) -> list[FinmindDatasetItem]:
 async def update_finmind_dataset(
     dataset_code: str,
     body: FinmindDatasetUpdate,
-    _: Admin,
+    _: AdminUser,
     db: FmDb,
 ) -> FinmindDatasetItem:
     row = await db.get(DatasetSource, dataset_code)
@@ -265,7 +265,7 @@ class FinmindConfigResponse(BaseModel):
     response_model=FinmindConfigResponse,
     summary="AdminPage: resolved FinMind env-var settings (no DB query)",
 )
-async def finmind_config(_: Admin) -> FinmindConfigResponse:
+async def finmind_config(_: AdminUser) -> FinmindConfigResponse:
     """Mirrors the startup log line. Operator opens AdminPage → sees
     exactly which mode is active without needing to read backend logs."""
     from finmind.config import finmind_settings
@@ -291,7 +291,7 @@ async def finmind_config(_: Admin) -> FinmindConfigResponse:
     "/status",
     summary="AdminPage: catalog + Phase 1 coverage + backfill summary",
 )
-async def finmind_status(_: Admin, db: FmDb) -> dict[str, Any]:
+async def finmind_status(_: AdminUser, db: FmDb) -> dict[str, Any]:
     """Calls into the existing `finmind.scripts.status.collect_status`
     so the AdminPage card and the CLI report show the same numbers.
     Same dataclass, JSON-serialized.
@@ -363,7 +363,7 @@ def _plan_to_item(p) -> PlanItem:
     response_model=list[PlanItem],
     summary="AdminPage: list every pricing plan",
 )
-async def list_plans(_: Admin, db: FmDb) -> list[PlanItem]:
+async def list_plans(_: AdminUser, db: FmDb) -> list[PlanItem]:
     await _ensure_finmind_db_reachable(db)
     from finmind.models.billing import Plan
 
@@ -379,7 +379,7 @@ async def list_plans(_: Admin, db: FmDb) -> list[PlanItem]:
     summary="AdminPage: create-or-update a plan (UPSERT on code)",
 )
 async def upsert_plan(
-    code: str, body: PlanUpsert, _: Admin, db: FmDb,
+    code: str, body: PlanUpsert, _: AdminUser, db: FmDb,
 ) -> PlanItem:
     """Idempotent UPSERT — same endpoint creates a new plan AND updates
     an existing one. Path `code` is the source of truth."""
@@ -419,7 +419,7 @@ async def upsert_plan(
     response_model=None,
     summary="AdminPage: disable a plan (soft — keeps subscriptions valid)",
 )
-async def disable_plan(code: str, _: Admin, db: FmDb) -> None:
+async def disable_plan(code: str, _: AdminUser, db: FmDb) -> None:
     """Soft disable — flips `enabled=false`. Existing subscriptions
     on this plan keep working (the resolve-plan-limits path falls
     back to free-tier defaults when the plan is disabled, so cust-
@@ -486,7 +486,7 @@ class ApiKeyItem(BaseModel):
     summary="AdminPage: issue a new fck_live_ key (with optional plan)",
 )
 async def issue_finmind_key(
-    body: IssueKeyRequest, _: Admin, db: FmDb,
+    body: IssueKeyRequest, _: AdminUser, db: FmDb,
 ) -> IssuedKeyResponse:
     """Generates a fresh `fck_live_<prefix><suffix>` key, persists
     sha256 + prefix only, and returns the plaintext for one-time
@@ -565,7 +565,7 @@ async def issue_finmind_key(
     response_model=list[ApiKeyItem],
     summary="AdminPage: list every issued key (no plaintext / hash)",
 )
-async def list_finmind_keys(_: Admin, db: FmDb) -> list[ApiKeyItem]:
+async def list_finmind_keys(_: AdminUser, db: FmDb) -> list[ApiKeyItem]:
     """Joins api_keys → subscriptions to surface plan_code per row.
     Free-tier keys (no subscription) show plan_code=None — frontend
     renders these with a muted "free" badge."""
@@ -607,7 +607,7 @@ async def list_finmind_keys(_: Admin, db: FmDb) -> list[ApiKeyItem]:
     response_model=None,
     summary="AdminPage: disable a key (soft-revoke; keeps audit trail)",
 )
-async def revoke_finmind_key(key_id: int, _: Admin, db: FmDb) -> None:
+async def revoke_finmind_key(key_id: int, _: AdminUser, db: FmDb) -> None:
     """Soft-revoke — sets enabled=false rather than DELETE so:
       - api_usage_events FK references stay valid
       - audit history (when, who issued / who revoked) survives
@@ -661,7 +661,7 @@ class RunDatasetResult(BaseModel):
 async def run_dataset(
     dataset_code: str,
     body: RunDatasetRequest,
-    _: Admin,
+    _: AdminUser,
     db: FmDb,
 ) -> RunDatasetResult:
     """Manual one-shot ingest for a single dataset. Synchronous —
@@ -761,7 +761,7 @@ class RunDueResponse(BaseModel):
         "last_ingest_at is stale, fanned across tw_stock_info universe)"
     ),
 )
-async def run_due(_: Admin, db: FmDb) -> RunDueResponse:
+async def run_due(_: AdminUser, db: FmDb) -> RunDueResponse:
     """Manual "refresh now" button — same logic as the cron auto-runner.
 
     Walks every enabled dataset whose last_ingest_at is stale relative
@@ -826,7 +826,7 @@ async def run_due(_: Admin, db: FmDb) -> RunDueResponse:
     summary="AdminPage: per-day / per-dataset / per-key usage rollup",
 )
 async def finmind_usage(
-    _: Admin,
+    _: AdminUser,
     db: FmDb,
     days: int = 7,
 ) -> dict[str, Any]:
@@ -915,7 +915,7 @@ class TestConnectionResponse(BaseModel):
     response_model=TestConnectionResponse,
     summary="AdminPage: probe FinMind with the current token",
 )
-async def test_finmind_connection(_: Admin) -> TestConnectionResponse:
+async def test_finmind_connection(_: AdminUser) -> TestConnectionResponse:
     """One-shot self-test against FinMind. Hits a small free-tier
     dataset (TaiwanStockInfo, no symbol → tiny payload) so the test
     works regardless of subscription tier.
@@ -1031,7 +1031,7 @@ class SetupStatusResponse(BaseModel):
         "AdminPage: 4-step setup checklist for the first-time operator"
     ),
 )
-async def setup_status(_: Admin, db: FmDb) -> SetupStatusResponse:
+async def setup_status(_: AdminUser, db: FmDb) -> SetupStatusResponse:
     """Aggregates the four onboarding checkpoints:
 
       1. db_reachable      — finmind_clone DB responds to a SELECT
@@ -1271,7 +1271,7 @@ class QuickStartResponse(BaseModel):
         "AdminPage: bulk-enable a curated set of headline datasets"
     ),
 )
-async def quick_start(_: Admin, db: FmDb) -> QuickStartResponse:
+async def quick_start(_: AdminUser, db: FmDb) -> QuickStartResponse:
     """Enables the curated default set in one click. Each dataset is
     only flipped when:
       - it exists in dataset_sources (catalog seeded)

@@ -18,12 +18,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from dependencies import get_current_user
 
 router = APIRouter()
-Auth = Annotated[dict, Depends(get_current_user)]
+CurrentUser = Annotated[dict, Depends(get_current_user)]
 
 
 @router.get("/recent")
 async def announcements_recent(
-    _: Auth,
+    _: CurrentUser,
     market: Literal["TW", "US"] = Query(
         ...,
         description=(

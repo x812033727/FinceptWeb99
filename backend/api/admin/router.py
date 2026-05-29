@@ -66,7 +66,7 @@ from .schemas import (
 )
 
 router = APIRouter()
-Admin = Annotated[dict, Depends(require_admin)]
+AdminUser = Annotated[dict, Depends(require_admin)]
 DB = Annotated[AsyncSession, Depends(get_db)]
 
 # AdminPage proxy to the FinMind clone subsystem — separate sub-router
@@ -112,7 +112,7 @@ RETRYABLE_INGEST_JOBS = {
 
 
 @router.get("/stats", response_model=SystemStats)
-async def stats(_: Admin, db: DB):
+async def stats(_: AdminUser, db: DB):
     total_users = await db.scalar(select(func.count(User.id)))
     active_users = await db.scalar(
         select(func.count(User.id)).where(User.is_active.is_(True))
@@ -136,7 +136,7 @@ async def stats(_: Admin, db: DB):
 
 @router.get("/users", response_model=list[AdminUserItem])
 async def list_users(
-    _: Admin,
+    _: AdminUser,
     db: DB,
     offset: int = 0,
     limit: int = 50,
@@ -148,7 +148,7 @@ async def list_users(
 
 
 @router.patch("/users/{user_id}/role", status_code=204)
-async def update_role(user_id: uuid.UUID, body: RoleUpdate, _: Admin, db: DB):
+async def update_role(user_id: uuid.UUID, body: RoleUpdate, _: AdminUser, db: DB):
     if body.role not in VALID_ROLES:
         raise HTTPException(400, f"Invalid role. Must be one of: {VALID_ROLES}")
     user = await db.get(User, user_id)
@@ -159,7 +159,7 @@ async def update_role(user_id: uuid.UUID, body: RoleUpdate, _: Admin, db: DB):
 
 
 @router.patch("/users/{user_id}/active", status_code=204)
-async def update_active(user_id: uuid.UUID, body: ActiveUpdate, _: Admin, db: DB):
+async def update_active(user_id: uuid.UUID, body: ActiveUpdate, _: AdminUser, db: DB):
     user = await db.get(User, user_id)
     if not user:
         raise HTTPException(404, "User not found")
@@ -168,13 +168,13 @@ async def update_active(user_id: uuid.UUID, body: ActiveUpdate, _: Admin, db: DB
 
 
 @router.post("/update", response_model=UpdateResult)
-async def trigger_system_update(_: Admin) -> UpdateResult:
+async def trigger_system_update(_: AdminUser) -> UpdateResult:
     result = await trigger_update()
     return UpdateResult(**result)
 
 
 @router.post("/deploy", response_model=DeployTriggerOut)
-async def trigger_full_deploy(user: Admin) -> DeployTriggerOut:
+async def trigger_full_deploy(user: AdminUser) -> DeployTriggerOut:
     """Touch the host trigger file; the host's finceptweb-deploy.path
     systemd unit picks up the mtime change and runs the deploy script
     asynchronously. Returns immediately with a `trigger_id` the
@@ -185,7 +185,7 @@ async def trigger_full_deploy(user: Admin) -> DeployTriggerOut:
 
 
 @router.get("/deploy/status", response_model=DeployStatusOut)
-async def get_deploy_status(_: Admin) -> DeployStatusOut:
+async def get_deploy_status(_: AdminUser) -> DeployStatusOut:
     """Return the current deploy phase + metadata.
 
     Polled every 2s by the frontend RedeployCard. Tolerates the host
@@ -197,7 +197,7 @@ async def get_deploy_status(_: Admin) -> DeployStatusOut:
 
 
 @router.post("/version/check", response_model=VersionStatus)
-async def check_for_updates(_: Admin) -> VersionStatus:
+async def check_for_updates(_: AdminUser) -> VersionStatus:
     """Force a fresh GitHub lookup, bypassing the Redis cache.
 
     Same payload shape as `GET /api/system/version` so the frontend can drop
@@ -223,7 +223,7 @@ def _info_to_schema(info: keys.KeyInfo) -> LLMKeyInfo:
 
 
 @router.get("/llm-keys", response_model=list[LLMKeyInfo])
-async def list_llm_keys(_: Admin, db: DB) -> list[LLMKeyInfo]:
+async def list_llm_keys(_: AdminUser, db: DB) -> list[LLMKeyInfo]:
     """List the current key state for every supported LLM provider.
 
     Each row reports whether a DB-stored key exists, an .env fallback is in
@@ -235,7 +235,7 @@ async def list_llm_keys(_: Admin, db: DB) -> list[LLMKeyInfo]:
 
 @router.put("/llm-keys/{provider}", response_model=LLMKeyInfo)
 async def upsert_llm_key(
-    provider: str, body: LLMKeyUpsert, user: Admin, db: DB,
+    provider: str, body: LLMKeyUpsert, user: AdminUser, db: DB,
 ) -> LLMKeyInfo:
     if provider not in keys.SUPPORTED_PROVIDERS:
         raise HTTPException(400, f"unsupported provider: {provider}")
@@ -247,7 +247,7 @@ async def upsert_llm_key(
 
 
 @router.delete("/llm-keys/{provider}", status_code=204)
-async def delete_llm_key(provider: str, _: Admin, db: DB) -> None:
+async def delete_llm_key(provider: str, _: AdminUser, db: DB) -> None:
     if provider not in keys.SUPPORTED_PROVIDERS:
         raise HTTPException(400, f"unsupported provider: {provider}")
     await keys.delete_key(db, provider)
@@ -269,14 +269,14 @@ def _persona_config_to_schema(p: personas.PersonaConfig) -> PersonaConfigOut:
 
 
 @router.get("/personas", response_model=list[PersonaConfigOut])
-async def list_personas(_: Admin, db: DB) -> list[PersonaConfigOut]:
+async def list_personas(_: AdminUser, db: DB) -> list[PersonaConfigOut]:
     """List every persona with its compiled-default + currently-effective provider/model."""
     return [_persona_config_to_schema(p) for p in await personas.list_personas(db)]
 
 
 @router.put("/personas/{persona_id}", response_model=PersonaConfigOut)
 async def upsert_persona_override(
-    persona_id: str, body: PersonaOverrideIn, user: Admin, db: DB,
+    persona_id: str, body: PersonaOverrideIn, user: AdminUser, db: DB,
 ) -> PersonaConfigOut:
     try:
         cfg = await personas.upsert_override(
@@ -288,7 +288,7 @@ async def upsert_persona_override(
 
 
 @router.delete("/personas/{persona_id}", status_code=204)
-async def delete_persona_override(persona_id: str, _: Admin, db: DB) -> None:
+async def delete_persona_override(persona_id: str, _: AdminUser, db: DB) -> None:
     await personas.delete_override(db, persona_id)
 
 
@@ -310,7 +310,7 @@ def _system_task_to_schema(t: system_tasks.TaskConfig) -> SystemTaskConfigOut:
 
 
 @router.get("/system-tasks", response_model=list[SystemTaskConfigOut])
-async def list_system_tasks(_: Admin, db: DB) -> list[SystemTaskConfigOut]:
+async def list_system_tasks(_: AdminUser, db: DB) -> list[SystemTaskConfigOut]:
     """List every background task that supports admin LLM routing, with
     its compiled default and currently effective provider/model."""
     return [_system_task_to_schema(t) for t in await system_tasks.list_tasks(db)]
@@ -318,7 +318,7 @@ async def list_system_tasks(_: Admin, db: DB) -> list[SystemTaskConfigOut]:
 
 @router.put("/system-tasks/{task_id}", response_model=SystemTaskConfigOut)
 async def upsert_system_task_override(
-    task_id: str, body: SystemTaskOverrideIn, user: Admin, db: DB,
+    task_id: str, body: SystemTaskOverrideIn, user: AdminUser, db: DB,
 ) -> SystemTaskConfigOut:
     try:
         cfg = await system_tasks.upsert_override(
@@ -330,7 +330,7 @@ async def upsert_system_task_override(
 
 
 @router.delete("/system-tasks/{task_id}", status_code=204)
-async def delete_system_task_override(task_id: str, _: Admin, db: DB) -> None:
+async def delete_system_task_override(task_id: str, _: AdminUser, db: DB) -> None:
     try:
         await system_tasks.delete_override(db, task_id)
     except ValueError as exc:
@@ -341,7 +341,7 @@ async def delete_system_task_override(task_id: str, _: Admin, db: DB) -> None:
     "/system-tasks/{task_id}/test", response_model=SystemTaskTestResult,
 )
 async def test_system_task(
-    task_id: str, _: Admin, db: DB,
+    task_id: str, _: AdminUser, db: DB,
 ) -> SystemTaskTestResult:
     """Smoke-test the task's resolved provider/model with a 1-token ping.
 
@@ -375,7 +375,7 @@ def _runtime_setting_to_schema(s: runtime_config.SettingInfo) -> RuntimeSettingO
 
 
 @router.get("/runtime-settings", response_model=list[RuntimeSettingOut])
-async def list_runtime_settings(_: Admin, db: DB) -> list[RuntimeSettingOut]:
+async def list_runtime_settings(_: AdminUser, db: DB) -> list[RuntimeSettingOut]:
     """List every admin-tunable env-var override with its compiled
     default + currently effective value + audit info."""
     return [_runtime_setting_to_schema(s) for s in await runtime_config.list_settings(db)]
@@ -383,7 +383,7 @@ async def list_runtime_settings(_: Admin, db: DB) -> list[RuntimeSettingOut]:
 
 @router.put("/runtime-settings/{key}", response_model=RuntimeSettingOut)
 async def upsert_runtime_setting(
-    key: str, body: RuntimeSettingIn, user: Admin, db: DB,
+    key: str, body: RuntimeSettingIn, user: AdminUser, db: DB,
 ) -> RuntimeSettingOut:
     try:
         cfg = await runtime_config.upsert(
@@ -395,7 +395,7 @@ async def upsert_runtime_setting(
 
 
 @router.delete("/runtime-settings/{key}", status_code=204)
-async def delete_runtime_setting(key: str, _: Admin, db: DB) -> None:
+async def delete_runtime_setting(key: str, _: AdminUser, db: DB) -> None:
     try:
         await runtime_config.delete_override(db, key)
     except ValueError as exc:
@@ -424,7 +424,7 @@ def _summary_to_schema(s: usage.UsageSummary) -> UsageSummaryOut:
 
 @router.get("/llm-usage", response_model=UsageSummaryOut)
 async def admin_llm_usage(
-    _: Admin, db: DB, range_days: int = 30,
+    _: AdminUser, db: DB, range_days: int = 30,
 ) -> UsageSummaryOut:
     """System-wide LLM usage aggregate for the last `range_days` days."""
     range_days = max(1, min(range_days, 365))
@@ -435,7 +435,7 @@ async def admin_llm_usage(
 # ── Scheduled ingest health ──────────────────────────────────────
 
 @router.get("/ingest/health", response_model=list[IngestHealthOut])
-async def ingest_health(_: Admin) -> list[IngestHealthOut]:
+async def ingest_health(_: AdminUser) -> list[IngestHealthOut]:
     """Per-job snapshot for every scheduled ingest task.
 
     State lives in Redis with a 7-day TTL; entries disappear after a
@@ -462,7 +462,7 @@ async def ingest_health(_: Admin) -> list[IngestHealthOut]:
 
 
 @router.get("/scheduler/health", response_model=SchedulerHeartbeatOut)
-async def scheduler_heartbeat(_: Admin) -> SchedulerHeartbeatOut:
+async def scheduler_heartbeat(_: AdminUser) -> SchedulerHeartbeatOut:
     """APScheduler liveness probe — has the scheduler process beat
     its 30s-cadence heartbeat recently?
 
@@ -551,7 +551,7 @@ async def _run_ingest_job_once(job_id: str) -> None:
     response_model=IngestHealthHistoryOut,
 )
 async def ingest_health_history(
-    job_id: str, _: Admin, days: int = 7,
+    job_id: str, _: AdminUser, days: int = 7,
 ) -> IngestHealthHistoryOut:
     """Daily outcome roll-up for `job_id` over the last `days` UTC
     calendar days. Powers the IngestHealthCard's per-row sparkline.
@@ -580,7 +580,7 @@ async def ingest_health_history(
 
 @router.post("/ingest/{job_id}/retry", response_model=IngestRetryResult)
 async def retry_ingest_job(
-    job_id: str, background_tasks: BackgroundTasks, _: Admin,
+    job_id: str, background_tasks: BackgroundTasks, _: AdminUser,
 ) -> IngestRetryResult:
     """Clear a job's Redis backoff and queue one immediate run.
 
@@ -610,7 +610,7 @@ async def retry_ingest_job(
 
 
 @router.post("/llm-keys/{provider}/test", response_model=LLMKeyValidation)
-async def test_llm_key(provider: str, _: Admin, db: DB) -> LLMKeyValidation:
+async def test_llm_key(provider: str, _: AdminUser, db: DB) -> LLMKeyValidation:
     """Make a tiny live call to the provider to verify the saved key works.
 
     Resolves the active key (DB → .env fallback) and returns ok/false plus
@@ -643,7 +643,7 @@ def _market_info_to_schema(info: market_keys.KeyInfo) -> MarketKeyInfo:
 
 
 @router.get("/market-keys", response_model=list[MarketKeyInfo])
-async def list_market_keys(_: Admin, db: DB) -> list[MarketKeyInfo]:
+async def list_market_keys(_: AdminUser, db: DB) -> list[MarketKeyInfo]:
     """List the current key state for every supported market-data provider.
 
     Mirrors /llm-keys: each row reports DB / env / none, and only the
@@ -654,7 +654,7 @@ async def list_market_keys(_: Admin, db: DB) -> list[MarketKeyInfo]:
 
 @router.put("/market-keys/{provider}", response_model=MarketKeyInfo)
 async def upsert_market_key(
-    provider: str, body: MarketKeyUpsert, user: Admin, db: DB,
+    provider: str, body: MarketKeyUpsert, user: AdminUser, db: DB,
 ) -> MarketKeyInfo:
     if provider not in market_keys.SUPPORTED_PROVIDERS:
         raise HTTPException(400, f"unsupported provider: {provider}")
@@ -668,14 +668,14 @@ async def upsert_market_key(
 
 
 @router.delete("/market-keys/{provider}", status_code=204)
-async def delete_market_key(provider: str, _: Admin, db: DB) -> None:
+async def delete_market_key(provider: str, _: AdminUser, db: DB) -> None:
     if provider not in market_keys.SUPPORTED_PROVIDERS:
         raise HTTPException(400, f"unsupported provider: {provider}")
     await market_keys.delete_key(db, provider)
 
 
 @router.post("/market-keys/{provider}/test", response_model=MarketKeyValidation)
-async def test_market_key(provider: str, _: Admin, db: DB) -> MarketKeyValidation:
+async def test_market_key(provider: str, _: AdminUser, db: DB) -> MarketKeyValidation:
     """Resolve the active key (DB → env) and ping the provider.
 
     For Finnhub this hits /quote?symbol=AAPL — the same endpoint the
@@ -699,7 +699,7 @@ _SIGNAL_AUDIT_RECENT_MAX = 200
 
 @router.get("/signal-audit", response_model=SignalAuditOut)
 async def signal_audit(
-    _: Admin, db: DB,
+    _: AdminUser, db: DB,
     recent: int = 30,
     market: str | None = None,
 ) -> SignalAuditOut:
@@ -809,7 +809,7 @@ _SIGNAL_AUDIT_HISTORY_DAYS_MAX = 365
     response_model=SignalAuditHistoryOut,
 )
 async def signal_audit_history(
-    _: Admin, db: DB,
+    _: AdminUser, db: DB,
     signal: str,
     market: str | None = None,
     days: int = 30,
@@ -853,7 +853,7 @@ _POST_MORTEM_GAPS_RECENT_MAX = 200
 
 @router.get("/post-mortem-gaps", response_model=PostMortemGapsOut)
 async def post_mortem_gaps(
-    _: Admin, db: DB,
+    _: AdminUser, db: DB,
     recent: int = 30,
     market: str | None = None,
 ) -> PostMortemGapsOut:
@@ -909,7 +909,7 @@ _SIGNAL_QUALITY_LOOKBACK_MAX = 365
 
 @router.get("/signal-quality", response_model=SignalQualityOut)
 async def signal_quality(
-    _: Admin, db: DB,
+    _: AdminUser, db: DB,
     lookback: int = 60,
     market: str | None = None,
 ) -> SignalQualityOut:
@@ -987,7 +987,7 @@ async def signal_quality(
 )
 async def promote_lesson_to_structural(
     lesson_id: int,
-    admin: Admin,
+    admin: AdminUser,
     db: DB,
 ) -> LessonPromoteOut:
     """PR-B2 follow-up — admin manual promotion of a lesson into the

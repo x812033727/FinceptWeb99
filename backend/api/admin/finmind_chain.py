@@ -22,7 +22,7 @@ from services import finmind_chain_service as chain
 log = logging.getLogger("api.admin.finmind_chain")
 
 router = APIRouter()
-Admin = Annotated[User, Depends(require_admin)]
+AdminUser = Annotated[User, Depends(require_admin)]
 
 
 class PerDatasetProgress(BaseModel):
@@ -101,7 +101,7 @@ class ResetStuckResponse(BaseModel):
     response_model=ChainStatePayload,
     summary="AdminPage: live chain state + quota gauge",
 )
-async def get_chain(_: Admin) -> ChainStatePayload:
+async def get_chain(_: AdminUser) -> ChainStatePayload:
     return ChainStatePayload(**(await chain.get_state()))
 
 
@@ -110,7 +110,7 @@ async def get_chain(_: Admin) -> ChainStatePayload:
     response_model=ChainStatePayload,
     summary="AdminPage: start the 12-dataset 10-year backfill chain",
 )
-async def post_start(body: StartRequest, _: Admin) -> ChainStatePayload:
+async def post_start(body: StartRequest, _: AdminUser) -> ChainStatePayload:
     try:
         state = await chain.start_chain(
             datasets=body.datasets,
@@ -133,7 +133,7 @@ async def post_start(body: StartRequest, _: Admin) -> ChainStatePayload:
     response_model=ChainStatePayload,
     summary="AdminPage: soft-stop (current chunk finishes, then exit)",
 )
-async def post_stop(_: Admin) -> ChainStatePayload:
+async def post_stop(_: AdminUser) -> ChainStatePayload:
     return ChainStatePayload(**(await chain.stop_chain()))
 
 
@@ -142,6 +142,6 @@ async def post_stop(_: Admin) -> ChainStatePayload:
     response_model=ResetStuckResponse,
     summary="AdminPage: flip stale running chunks back to pending",
 )
-async def post_reset_stuck(_: Admin) -> ResetStuckResponse:
+async def post_reset_stuck(_: AdminUser) -> ResetStuckResponse:
     n = await chain.reset_stuck()
     return ResetStuckResponse(reset=n)

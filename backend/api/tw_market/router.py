@@ -11,11 +11,11 @@ from dependencies import get_current_user
 import services.tw_market_service as svc
 
 router = APIRouter()
-Auth = Annotated[dict, Depends(get_current_user)]
+CurrentUser = Annotated[dict, Depends(get_current_user)]
 
 
 @router.get("/fundamentals/{symbol}")
-async def fundamentals(symbol: str, _: Auth):
+async def fundamentals(symbol: str, _: CurrentUser):
     """本益比、股價淨值比、殖利率 from TWSE BWIBBU_d."""
     try:
         return await svc.get_fundamentals(symbol)
@@ -24,7 +24,7 @@ async def fundamentals(symbol: str, _: Auth):
 
 
 @router.get("/quote/{symbol}", response_model=TWQuoteResponse)
-async def quote(symbol: str, _: Auth):
+async def quote(symbol: str, _: CurrentUser):
     try:
         return await svc.get_quote(symbol)
     except Exception as e:
@@ -34,7 +34,7 @@ async def quote(symbol: str, _: Auth):
 @router.get("/history/{symbol}", response_model=list[TWOHLCVBar])
 async def history(
     symbol: str,
-    _: Auth,
+    _: CurrentUser,
     months: int = Query(12, ge=1, le=60, description="Number of months of history"),
 ):
     try:
@@ -46,7 +46,7 @@ async def history(
 @router.get("/institutional/{symbol}", response_model=list[dict])
 async def institutional(
     symbol: str,
-    _: Auth,
+    _: CurrentUser,
     days: int = Query(30, ge=1, le=365),
 ):
     """法人買賣超 — foreign investors, investment trusts, dealers."""
@@ -59,7 +59,7 @@ async def institutional(
 @router.get("/margin/{symbol}", response_model=list[dict])
 async def margin(
     symbol: str,
-    _: Auth,
+    _: CurrentUser,
     days: int = Query(30, ge=1, le=365),
 ):
     """融資融券 — margin purchase and short sale balances."""
@@ -72,7 +72,7 @@ async def margin(
 @router.get("/revenue/{symbol}", response_model=list[dict])
 async def revenue(
     symbol: str,
-    _: Auth,
+    _: CurrentUser,
     months: int = Query(12, ge=1, le=36),
 ):
     """月營收 — monthly revenue with MoM and YoY growth rates."""
@@ -83,7 +83,7 @@ async def revenue(
 
 
 @router.get("/financials/{symbol}", response_model=list[dict])
-async def financials(symbol: str, _: Auth):
+async def financials(symbol: str, _: CurrentUser):
     """財報 (XBRL) via FinMind."""
     try:
         return await svc.get_financials(symbol)
@@ -92,7 +92,7 @@ async def financials(symbol: str, _: Auth):
 
 
 @router.get("/health/{symbol}")
-async def health(symbol: str, _: Auth, periods: int = Query(8, ge=1, le=20)):
+async def health(symbol: str, _: CurrentUser, periods: int = Query(8, ge=1, le=20)):
     """財務體質 — derived margins, leverage, liquidity ratios with red/yellow/green lights."""
     try:
         return await svc.get_health(symbol, periods=periods)
@@ -103,7 +103,7 @@ async def health(symbol: str, _: Auth, periods: int = Query(8, ge=1, le=20)):
 @router.get("/valuation-band/{symbol}")
 async def valuation_band(
     symbol: str,
-    _: Auth,
+    _: CurrentUser,
     metric: str = Query("pe", pattern="^(pe|pb)$"),
     years: int = Query(5, ge=1, le=10),
 ):
@@ -117,7 +117,7 @@ async def valuation_band(
 
 
 @router.get("/dividends/{symbol}", response_model=list[dict])
-async def dividends(symbol: str, _: Auth):
+async def dividends(symbol: str, _: CurrentUser):
     """配息歷史 — works for both ordinary stocks and ETFs."""
     try:
         return await svc.get_dividends(symbol)
@@ -126,7 +126,7 @@ async def dividends(symbol: str, _: Auth):
 
 
 @router.get("/etf/{symbol}/holdings")
-async def etf_holdings(symbol: str, _: Auth):
+async def etf_holdings(symbol: str, _: CurrentUser):
     """ETF 持股明細 — latest snapshot of constituents and weights."""
     try:
         return await svc.get_etf_holdings(symbol)
@@ -136,7 +136,7 @@ async def etf_holdings(symbol: str, _: Auth):
 
 @router.get("/screener", response_model=list[TWScreenerItem])
 async def screener(
-    _: Auth,
+    _: CurrentUser,
     exchange: str | None = Query(None, description="TWSE | TPEx"),
     min_volume: int | None = Query(None, description="Minimum trading volume (shares)"),
     min_pe: float | None = Query(None, description="Minimum P/E ratio (本益比)"),
@@ -168,7 +168,7 @@ async def screener(
 
 
 @router.get("/indices", response_model=TWIndexResponse)
-async def indices(_: Auth):
+async def indices(_: CurrentUser):
     """TAIEX 加權股價指數."""
     try:
         return await svc.get_index()
@@ -177,7 +177,7 @@ async def indices(_: Auth):
 
 
 @router.get("/industry/{symbol}")
-async def industry(symbol: str, _: Auth):
+async def industry(symbol: str, _: CurrentUser):
     """Return cached industry + name for a TW symbol.
 
     Backed by the in-memory `_industry_map` / `_name_map` populated
@@ -195,7 +195,7 @@ async def industry(symbol: str, _: Auth):
 
 
 @router.get("/news/recent")
-async def news_recent(_: Auth, limit: int = Query(20, ge=1, le=50)):
+async def news_recent(_: CurrentUser, limit: int = Query(20, ge=1, le=50)):
     """Market-wide TW news from the ingest archive — DB only, no live
     upstream fallback. Returns articles with `symbol IS NULL` (so per-
     symbol headlines don't crowd out broader market commentary) plus
@@ -210,14 +210,14 @@ async def news_recent(_: Auth, limit: int = Query(20, ge=1, le=50)):
 
 
 @router.get("/news/{symbol}")
-async def news(symbol: str, _: Auth, limit: int = Query(10, le=30)):
+async def news(symbol: str, _: CurrentUser, limit: int = Query(10, le=30)):
     """Recent news headlines for a TW stock (via yfinance .TW suffix)."""
     return await svc.get_news(symbol.upper(), limit=limit)
 
 
 @router.get("/search")
 async def search(
-    _: Auth,
+    _: CurrentUser,
     q: str = Query(..., min_length=1, max_length=20),
     limit: int = Query(10, ge=1, le=30),
 ):

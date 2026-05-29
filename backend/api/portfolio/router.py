@@ -25,25 +25,25 @@ import services.portfolio_service as svc
 log = logging.getLogger(__name__)
 
 router = APIRouter()
-Auth = Annotated[dict, Depends(get_current_user)]
+CurrentUser = Annotated[dict, Depends(get_current_user)]
 DB   = Annotated[AsyncSession, Depends(get_db)]
 
 
 @router.get("", response_model=list[PortfolioListItem])
-async def list_portfolios(user: Auth, db: DB):
+async def list_portfolios(user: CurrentUser, db: DB):
     portfolios = await svc.list_portfolios(user["id"], db)
     return [PortfolioListItem(id=p.id, name=p.name, currency=p.currency) for p in portfolios]
 
 
 @router.post("", response_model=PortfolioListItem, status_code=status.HTTP_201_CREATED)
 @limiter.limit("20/minute")
-async def create_portfolio(request: Request, body: PortfolioCreate, user: Auth, db: DB):
+async def create_portfolio(request: Request, body: PortfolioCreate, user: CurrentUser, db: DB):
     p = await svc.create_portfolio(user["id"], body.name, body.currency, db)
     return PortfolioListItem(id=p.id, name=p.name, currency=p.currency)
 
 
 @router.get("/{portfolio_id}", response_model=PortfolioSummary)
-async def get_portfolio(portfolio_id: str, user: Auth, db: DB):
+async def get_portfolio(portfolio_id: str, user: CurrentUser, db: DB):
     try:
         return await svc.get_portfolio_detail(portfolio_id, user["id"], db)
     except ValueError as e:
@@ -67,7 +67,7 @@ async def get_portfolio(portfolio_id: str, user: Auth, db: DB):
 
 @router.delete("/{portfolio_id}", status_code=status.HTTP_204_NO_CONTENT)
 @limiter.limit("20/minute")
-async def delete_portfolio(request: Request, portfolio_id: str, user: Auth, db: DB):
+async def delete_portfolio(request: Request, portfolio_id: str, user: CurrentUser, db: DB):
     deleted = await svc.delete_portfolio(portfolio_id, user["id"], db)
     if not deleted:
         raise HTTPException(status_code=404, detail="Portfolio not found")
@@ -76,7 +76,7 @@ async def delete_portfolio(request: Request, portfolio_id: str, user: Auth, db: 
 @router.patch("/{portfolio_id}", response_model=PortfolioListItem)
 @limiter.limit("30/minute")
 async def update_portfolio(
-    request: Request, portfolio_id: str, body: PortfolioUpdate, user: Auth, db: DB,
+    request: Request, portfolio_id: str, body: PortfolioUpdate, user: CurrentUser, db: DB,
 ):
     """Rename a portfolio and/or change its base currency."""
     p = await svc.update_portfolio(
@@ -90,7 +90,7 @@ async def update_portfolio(
 
 @router.post("/{portfolio_id}/transaction", status_code=status.HTTP_201_CREATED)
 @limiter.limit("60/minute")
-async def add_transaction(request: Request, portfolio_id: str, body: TransactionCreate, user: Auth, db: DB):
+async def add_transaction(request: Request, portfolio_id: str, body: TransactionCreate, user: CurrentUser, db: DB):
     try:
         tx = await svc.add_transaction(
             portfolio_id=portfolio_id,
@@ -112,7 +112,7 @@ async def add_transaction(request: Request, portfolio_id: str, body: Transaction
 
 @router.post("/{portfolio_id}/optimise", response_model=OptimiseResponse)
 @limiter.limit("5/minute")
-async def optimise(request: Request, portfolio_id: str, body: OptimiseRequest, user: Auth, db: DB):
+async def optimise(request: Request, portfolio_id: str, body: OptimiseRequest, user: CurrentUser, db: DB):
     """
     Runs mean-variance portfolio optimisation on current holdings.
     Returns suggested weights — does NOT auto-execute any trades.
@@ -133,7 +133,7 @@ async def optimise(request: Request, portfolio_id: str, body: OptimiseRequest, u
 
 
 @router.get("/{portfolio_id}/performance", response_model=list[PerformancePoint])
-async def performance(portfolio_id: str, user: Auth, db: DB, days: int = 90):
+async def performance(portfolio_id: str, user: CurrentUser, db: DB, days: int = 90):
     """Daily portfolio value snapshots for the last N days."""
     try:
         return await svc.get_performance(portfolio_id, user["id"], db, days=days)
@@ -142,7 +142,7 @@ async def performance(portfolio_id: str, user: Auth, db: DB, days: int = 90):
 
 
 @router.get("/{portfolio_id}/transactions", response_model=list[TransactionResponse])
-async def list_transactions(portfolio_id: str, user: Auth, db: DB, limit: int = 200):
+async def list_transactions(portfolio_id: str, user: CurrentUser, db: DB, limit: int = 200):
     """All transactions for a portfolio, newest first."""
     try:
         return await svc.get_transactions(portfolio_id, user["id"], db, limit=limit)
@@ -153,7 +153,7 @@ async def list_transactions(portfolio_id: str, user: Auth, db: DB, limit: int = 
 @router.patch("/{portfolio_id}/transactions/{tx_id}", response_model=TransactionResponse)
 @limiter.limit("60/minute")
 async def update_transaction(
-    request: Request, portfolio_id: str, tx_id: str, body: TransactionUpdate, user: Auth, db: DB,
+    request: Request, portfolio_id: str, tx_id: str, body: TransactionUpdate, user: CurrentUser, db: DB,
 ):
     """Edit fields on an existing transaction. Re-derives the affected
     holding(s); if symbol/market changed, both old and new holdings rebuild."""
@@ -175,7 +175,7 @@ async def update_transaction(
 
 @router.delete("/{portfolio_id}/transactions/{tx_id}", status_code=status.HTTP_204_NO_CONTENT)
 @limiter.limit("60/minute")
-async def delete_transaction(request: Request, portfolio_id: str, tx_id: str, user: Auth, db: DB):
+async def delete_transaction(request: Request, portfolio_id: str, tx_id: str, user: CurrentUser, db: DB):
     """Remove one transaction; rebuilds the affected holding from remaining txs."""
     deleted = await svc.delete_transaction(portfolio_id, tx_id, user["id"], db)
     if not deleted:
@@ -185,7 +185,7 @@ async def delete_transaction(request: Request, portfolio_id: str, tx_id: str, us
 @router.get("/{portfolio_id}/fx-rate")
 async def fx_rate_for_transaction(
     portfolio_id: str,
-    user: Auth,
+    user: CurrentUser,
     db: DB,
     market: str = Query(..., pattern=r"^(US|TW|CRYPTO|us|tw|crypto)$"),
     tx_date: _date = Query(..., description="Trade date (YYYY-MM-DD)"),

@@ -13,7 +13,7 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
-import { errorDetail, notifyRateLimited } from "@/lib/api";
+import api, { errorDetail, notifyRateLimited } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 import { useToastStore } from "@/store/toastStore";
 import { cn } from "@/lib/utils";
@@ -569,8 +569,8 @@ export default function DiscussionPage() {
     });
   }
 
-  async function runOneRound(): Promise<{ ok: boolean }> {
-    if (!selectedId) return { ok: false };
+  async function runOneRound(): Promise<{ ok: boolean; rateLimited: boolean }> {
+    if (!selectedId) return { ok: false, rateLimited: false };
     setIsStreaming(true);
     setStreamError(null);
     setStreamingTurns([]);
@@ -582,6 +582,7 @@ export default function DiscussionPage() {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     let roundOk = true;
+    let rateLimited = false;
 
     try {
       const resp = await fetch(`/api/discussion/sessions/${selectedId}/round`, {
@@ -595,6 +596,10 @@ export default function DiscussionPage() {
         if (resp.status === 429) {
           const retryAfter = Number(resp.headers.get("retry-after")) || undefined;
           notifyRateLimited(data.detail, retryAfter);
+          // Quota exhausted is a hard, round-fatal condition — flag it so
+          // the multi-round driver stops cleanly instead of hammering the
+          // remaining rounds with requests that will all 429.
+          rateLimited = true;
         }
         throw new Error(data.detail ?? `HTTP ${resp.status}`);
       }
@@ -758,7 +763,7 @@ export default function DiscussionPage() {
       queryClient.refetchQueries({ queryKey: ["discussion-sessions"] });
       setStreamingTurns([]);
     }
-    return { ok: roundOk };
+    return { ok: roundOk, rateLimited };
   }
 
   async function runRounds() {
@@ -766,19 +771,59 @@ export default function DiscussionPage() {
     cancelRequestedRef.current = false;
     setCancelling(false);
     const total = roundsPerClick;
+
+    // Pre-flight: each round costs len(persona_ids) AI requests, so a
+    // multi-round run needs `total × personaCount` quota. Surface the
+    // ceiling up front (with a fresh /auth/me read) so the user can
+    // reduce rounds / personas instead of watching the loop die part-way
+    // through with a 429. Soft warning only — we still let them proceed
+    // and the in-loop rateLimited break stops cleanly when quota runs out.
+    const personaCount = personaIds.length;
+    if (personaCount > 0) {
+      try {
+        const { data } = await api.get<{ ai_requests_remaining: number | null }>(
+          "/auth/me",
+        );
+        const remaining = data.ai_requests_remaining;
+        if (typeof remaining === "number" && total * personaCount > remaining) {
+          const affordable = Math.floor(remaining / personaCount);
+          pushToast({
+            severity: "warning",
+            title: t("discussion.quota_preflight_warn", {
+              affordable,
+              requested: total,
+            }),
+          });
+        }
+      } catch {
+        /* /auth/me unavailable — skip the pre-flight, the in-loop
+           rateLimited break still protects against runaway requests. */
+      }
+    }
+
     setLoopProgress({ current: 0, total });
     try {
       for (let i = 0; i < total; i++) {
         if (cancelRequestedRef.current) break;
         setLoopProgress({ current: i + 1, total });
         // The user explicitly opted into N rounds — always attempt all of
-        // them. Per-round failures (per-persona LLM error / timeout,
+        // them. Per-round soft failures (per-persona LLM error / timeout,
         // transient HTTP error, network blip) still surface via
-        // `streamError`, and the cancel button still halts the loop
-        // between iterations. The previous `if (!ok) break;` was too
-        // aggressive: it stopped the multi-round driver on a single soft
-        // failure even though the user explicitly asked for N rounds.
-        await runOneRound();
+        // `streamError` but DON'T abort the loop. The one exception is a
+        // 429 quota exhaustion: continuing would just hammer the remaining
+        // rounds with requests that all 429, so we stop cleanly and tell
+        // the user how many rounds actually completed.
+        const { rateLimited } = await runOneRound();
+        if (rateLimited) {
+          pushToast({
+            severity: "error",
+            title: t("discussion.quota_stopped", {
+              completed: i,
+              total,
+            }),
+          });
+          break;
+        }
       }
     } finally {
       setLoopProgress(null);

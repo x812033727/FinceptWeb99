@@ -635,6 +635,8 @@
     "show_menu": "顯示主選單",
     "run_n_rounds": "進行 {{n}} 輪",
     "rounds_per_click_label": "每次點擊跑幾輪",
+    "quota_preflight_warn": "今日 AI 額度約只夠跑 {{affordable}} 輪（你選了 {{requested}} 輪）。請減少輪數或 persona 數，否則額度用盡時會中途停止。",
+    "quota_stopped": "已完成 {{total}} 輪中的 {{completed}} 輪 —— 今日 AI 額度已用盡，將於 UTC 午夜重置。",
     "round_progress": "第 {{current}} / {{total}} 輪",
     "cancel_multi_round": "取消連續執行",
     "cancelling": "取消中…",

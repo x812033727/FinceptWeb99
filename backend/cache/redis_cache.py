@@ -1,6 +1,7 @@
+import json
 import time
 import redis.asyncio as aioredis
-from typing import Optional
+from typing import Any, Optional
 from config import settings
 
 _redis: Optional[aioredis.Redis] = None
@@ -26,6 +27,47 @@ async def cache_get(key: str) -> Optional[str]:
 async def cache_set(key: str, value: str, ttl_seconds: int) -> None:
     r = await get_redis()
     await r.set(key, value, ex=ttl_seconds)
+
+
+async def cache_get_json(key: str) -> Any | None:
+    """Read cached JSON. Returns the parsed value on hit, None on miss
+    OR on malformed cache entry (decode error). The decode-error path
+    is intentional: one corrupted Redis value should make the call site
+    refetch upstream rather than 500 the request — services call this
+    in the hot path of every quote / history / fundamentals read.
+    """
+    cached = await cache_get(key)
+    if cached is None:
+        return None
+    try:
+        return json.loads(cached)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+async def cache_set_json(key: str, value: Any, ttl_seconds: int) -> None:
+    """Serialize `value` and store it under `key` with the given TTL.
+    Folds the `json.dumps + cache_set` pair that's repeated across
+    every service's get_quote / get_history / get_X path."""
+    await cache_set(key, json.dumps(value), ttl_seconds)
+
+
+async def cache_set_json_unless_empty(
+    key: str, value: Any, ttl_seconds: int,
+) -> None:
+    """Same as `cache_set_json`, but skip the write when `value` is
+    falsy (None, empty list / dict / str / 0). Mirrors the
+    "don't cache empty" guard that tw / us / portfolio services
+    repeat by hand so a transient upstream failure can't lock the
+    next request into 15 s of an empty payload.
+
+    For the "permanent empty" case (this symbol genuinely has no
+    broker breakdown), wrap the sentinel in a single-key dict so
+    truthiness still flags it as cacheable.
+    """
+    if not value:
+        return
+    await cache_set_json(key, value, ttl_seconds)
 
 
 async def cache_set_unless_empty(

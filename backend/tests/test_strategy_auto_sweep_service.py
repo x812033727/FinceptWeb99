@@ -49,17 +49,94 @@ def _make_template(
     )
 
 
-# ── _resolve_anchor (pure) ─────────────────────────────────────
+# ── _resolve_anchor (DB-backed: snaps to latest ohlcv_daily) ────
 
 
-def test_resolve_anchor_applies_calendar_offset():
-    today = date(2026, 5, 5)
-    assert svc._resolve_anchor(
-        base_today=today, offset_days=-1, market="TW",
-    ) == date(2026, 5, 4)
-    assert svc._resolve_anchor(
-        base_today=today, offset_days=0, market="US",
-    ) == today
+@pytest.mark.asyncio
+async def test_resolve_anchor_snaps_to_latest_ohlcv_bar(
+    db_session: AsyncSession,
+):
+    from models.ohlcv_daily import OhlcvDaily
+    db_session.add_all([
+        OhlcvDaily(
+            market="TW", symbol="2330", ts=date(2026, 5, 28),
+            open=1000, high=1010, low=990, close=1005, volume=1000,
+            source="test",
+        ),
+        OhlcvDaily(
+            market="TW", symbol="2330", ts=date(2026, 5, 29),
+            open=1005, high=1015, low=1000, close=1010, volume=1000,
+            source="test",
+        ),
+    ])
+    await db_session.commit()
+
+    # offset=0 + today's bar present → uses today
+    assert await svc._resolve_anchor(
+        db_session, base_today=date(2026, 5, 29), offset_days=0,
+        market="TW",
+    ) == date(2026, 5, 29)
+    # offset=-1 → snaps to bar at-or-before yesterday
+    assert await svc._resolve_anchor(
+        db_session, base_today=date(2026, 5, 29), offset_days=-1,
+        market="TW",
+    ) == date(2026, 5, 28)
+
+
+@pytest.mark.asyncio
+async def test_resolve_anchor_snaps_back_when_today_not_ingested(
+    db_session: AsyncSession,
+):
+    """offset=0 candidate is today, but only yesterday's bar is in
+    the archive yet (EOD ingest hasn't completed) → snap back to
+    yesterday rather than letting the sweep walk-forward to empty."""
+    from models.ohlcv_daily import OhlcvDaily
+    db_session.add(OhlcvDaily(
+        market="TW", symbol="2330", ts=date(2026, 5, 28),
+        open=1000, high=1010, low=990, close=1005, volume=1000,
+        source="test",
+    ))
+    await db_session.commit()
+    assert await svc._resolve_anchor(
+        db_session, base_today=date(2026, 5, 29), offset_days=0,
+        market="TW",
+    ) == date(2026, 5, 28)
+
+
+@pytest.mark.asyncio
+async def test_resolve_anchor_falls_through_when_archive_empty(
+    db_session: AsyncSession,
+):
+    """No rows in `ohlcv_daily` for the market → returns the raw
+    candidate. Caller's `_resolve_trading_days` then bails cleanly."""
+    assert await svc._resolve_anchor(
+        db_session, base_today=date(2026, 5, 29), offset_days=-1,
+        market="TW",
+    ) == date(2026, 5, 28)
+    assert await svc._resolve_anchor(
+        db_session, base_today=date(2026, 5, 29), offset_days=0,
+        market="US",
+    ) == date(2026, 5, 29)
+
+
+@pytest.mark.asyncio
+async def test_resolve_anchor_ignores_synthetic_index_rows(
+    db_session: AsyncSession,
+):
+    """`_TAIEX` and other underscore-prefixed synthetic bars are
+    skipped — they're updated by the TAIEX history cron and would
+    otherwise mask a stale per-stock archive."""
+    from models.ohlcv_daily import OhlcvDaily
+    db_session.add(OhlcvDaily(
+        market="TW", symbol="_TAIEX", ts=date(2026, 5, 29),
+        open=18000, high=18100, low=17900, close=18050, volume=0,
+        source="test",
+    ))
+    await db_session.commit()
+    assert await svc._resolve_anchor(
+        db_session, base_today=date(2026, 5, 29), offset_days=0,
+        market="TW",
+    ) == date(2026, 5, 29)  # falls through to raw candidate
 
 
 # ── _fetch_due_templates ───────────────────────────────────────

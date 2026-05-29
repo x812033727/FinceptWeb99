@@ -96,7 +96,7 @@ async def create_template(
     default_auto_post_mortem: bool = True,
     auto_schedule_enabled: bool = False,
     auto_schedule_cadence_hours: int = 24,
-    auto_schedule_anchor_offset_days: int = -1,
+    auto_schedule_anchor_offset_days: int = 0,
     auto_schedule_trading_days_count: int = 1,
 ) -> DiscussionStrategyTemplate:
     _validate_common(

@@ -25,7 +25,7 @@ import logging
 from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.session import AsyncSessionLocal
@@ -71,7 +71,8 @@ async def process_due_strategies() -> list[UUID]:
                     await db.commit()
                     continue
 
-                anchor = _resolve_anchor(
+                anchor = await _resolve_anchor(
+                    db,
                     base_today=now.date(),
                     offset_days=tmpl.auto_schedule_anchor_offset_days,
                     market=tmpl.market,
@@ -176,19 +177,44 @@ async def _has_active_sweep(db: AsyncSession, strategy_id: UUID) -> bool:
     return (await db.scalar(stmt)) is not None
 
 
-def _resolve_anchor(
-    *, base_today: date, offset_days: int, market: str,  # noqa: ARG001
+async def _resolve_anchor(
+    db: AsyncSession,
+    *, base_today: date, offset_days: int, market: str,
 ) -> date:
     """Pick the anchor date.
 
-    Currently a calendar-day offset — the sweep worker's own
-    `_resolve_trading_days` walks `ohlcv_daily` and snaps to the
-    nearest available trading bar, so a Sunday anchor lands on
-    Friday's data without needing a separate trading-calendar
-    pass here. The `market` arg is kept in the signature for a
-    future precise-snap upgrade; absent today.
+    Computes a calendar-day candidate (`base_today + offset_days`),
+    then snaps to the latest `ohlcv_daily` bar at-or-before that
+    candidate. Two scenarios this handles:
+      - Candidate is a weekend / holiday → snaps to last trading bar.
+      - `offset_days=0` candidate (today) when the EOD ingest hasn't
+        completed yet → snaps to yesterday (or last available bar).
+
+    Falls through to the raw candidate when the archive has no
+    in-range rows — sweep worker's `_resolve_trading_days` then
+    bails cleanly with an empty list.
     """
-    return base_today + timedelta(days=offset_days)
+    candidate = base_today + timedelta(days=offset_days)
+    from models.ohlcv_daily import OhlcvDaily
+    stmt = (
+        select(func.max(OhlcvDaily.ts))
+        .where(
+            OhlcvDaily.market == market,
+            OhlcvDaily.ts <= candidate,
+            # autoescape=True — `_` is a LIKE wildcard, without it the
+            # NOT-startswith silently rejects every row.
+            ~OhlcvDaily.symbol.startswith("_", autoescape=True),
+        )
+    )
+    try:
+        latest = await db.scalar(stmt)
+    except Exception as exc:
+        log.warning(
+            "strategy_auto_sweep.anchor_snap_failed",
+            extra={"market": market, "error": str(exc)},
+        )
+        return candidate
+    return latest or candidate
 
 
 __all__ = [

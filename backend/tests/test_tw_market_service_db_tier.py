@@ -55,11 +55,20 @@ async def test_redis_hit_skips_db_and_upstream(patch_io):
 
 @pytest.mark.asyncio
 async def test_db_fresh_skips_upstream(patch_io):
-    """Last DB bar within freshness window → return DB bars, never call TWSE."""
-    from datetime import date, timedelta
-    today = date.today()
-    yesterday = today - timedelta(days=1)
-    fresh_bars = _bars((today - timedelta(days=10)).isoformat(), yesterday.isoformat())
+    """Last DB bar covers the expected session → return DB bars, never
+    call TWSE. Anchored on `_expected_history_session()` rather than
+    a hardcoded `yesterday`: after the Phase-3 tighten of
+    `_db_bars_are_fresh` (PR #240, no more 5-day tolerance), a run
+    that crossed the 14:30 Taipei STOCK_DAY_ALL publish boundary
+    would treat yesterday's bar as stale and fall through to the
+    upstream tier. Pegging the seeded last-bar to the helper's own
+    output keeps the test deterministic across every Taipei wall-
+    clock phase (pre-open / intraday / between-close-and-publish /
+    post-publish / weekend).
+    """
+    from datetime import timedelta
+    expected = tw._expected_history_session()
+    fresh_bars = _bars((expected - timedelta(days=10)).isoformat(), expected.isoformat())
     patch_io["db_read"].return_value = fresh_bars
 
     out = await tw.get_history("2330", months=1)

@@ -315,11 +315,18 @@ FinceptWeb/
   set `f=sd2t2ohlcvp` returns `Prev` (previous close) so we get change%
   without a separate history call. The history endpoint (`q/d/l/`) is
   captcha-gated behind an apikey and not used.
-- TW: TWSE OpenAPI → FinMind → MOPS; BWIBBU_d for PE/PB/yield. Empty
+- TW: TWSE OpenAPI ↔ FinMind → MOPS; BWIBBU_d for PE/PB/yield. Empty
   results (both upstream sources failed) are NOT cached — mirrors the US
   service so a transient TWSE+FinMind failure doesn't lock 60 s of zero
   state. Applies to quote / history / institutional / margin / revenue /
-  fundamentals.
+  fundamentals. **Quote / history upstream order is FinMind-first when a
+  FinMind token is configured** (`_finmind_preferred` in
+  `tw_market_service.py` — paid sponsor key → cleaner EOD data, no
+  STOCK_DAY_ALL publication lag; tokenless deploys keep TWSE-first to
+  protect the free hourly quota). Intraday TWSE MIS stays Tier 0 (FinMind
+  is EOD-only). institutional / margin / revenue are already FinMind-first
+  upstream. All paths still read Redis + the local `ohlcv_daily` /
+  `tw_*_daily` archive before any live upstream call.
 - Crypto: Kraken public REST (`get_quote`/`get_history`); Top 20 universe in
   `data/crypto/symbols.py`. USDT/USDC/DAI normalized to USD for FX
   (`_normalize_currency` in `portfolio_service.py`)

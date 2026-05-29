@@ -28,11 +28,13 @@ def patch_io():
                AsyncMock(return_value=[])) as db_read, \
          patch("services.ingest.repository.upsert_ohlcv_bars_autosession",
                AsyncMock(return_value=0)) as db_write, \
+         patch.object(tw, "_finmind_preferred",
+                      AsyncMock(return_value=False)) as prefer, \
          patch.object(tw.twse, "get_daily_ohlcv", AsyncMock(return_value=[])) as twse_hist, \
          patch.object(tw.finmind, "get_daily_ohlcv", AsyncMock(return_value=[])) as finmind_hist:
         yield {
             "cache_get": cache_get, "cache_set": cache_set,
-            "db_read": db_read, "db_write": db_write,
+            "db_read": db_read, "db_write": db_write, "prefer": prefer,
             "twse_hist": twse_hist, "finmind_hist": finmind_hist,
         }
 
@@ -135,6 +137,49 @@ async def test_twse_empty_falls_through_to_finmind(patch_io):
     assert out == finmind_bars
     patch_io["finmind_hist"].assert_awaited()
     patch_io["db_write"].assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_history_finmind_first_when_token_present(patch_io):
+    """With a FinMind token configured the upstream order flips: FinMind's
+    single range call is tried before the TWSE month-by-month loop."""
+    from datetime import date, timedelta
+    patch_io["prefer"].return_value = True
+    today = date.today()
+    finmind_bars = _bars(
+        (today - timedelta(days=2)).isoformat(),
+        (today - timedelta(days=1)).isoformat(),
+    )
+    poison = _bars("2000-01-01", "2000-01-02")  # must NOT be chosen
+    patch_io["finmind_hist"].return_value = finmind_bars
+    patch_io["twse_hist"].return_value = poison
+
+    out = await tw.get_history("2330", months=1)
+
+    assert out == finmind_bars
+    patch_io["finmind_hist"].assert_awaited()
+    patch_io["twse_hist"].assert_not_awaited()  # FinMind won; TWSE not tried
+    patch_io["db_write"].assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_history_finmind_failure_falls_back_to_twse_when_preferred(patch_io):
+    """FinMind preferred but its range call fails ⇒ fall back to the TWSE
+    month-by-month loop rather than returning empty."""
+    from datetime import date, timedelta
+    patch_io["prefer"].return_value = True
+    today = date.today()
+    twse_bars = _bars(
+        (today - timedelta(days=2)).isoformat(),
+        (today - timedelta(days=1)).isoformat(),
+    )
+    patch_io["finmind_hist"].side_effect = RuntimeError("finmind blocked")
+    patch_io["twse_hist"].return_value = twse_bars
+
+    out = await tw.get_history("2330", months=1)
+
+    assert out == twse_bars
+    patch_io["twse_hist"].assert_awaited()
 
 
 @pytest.mark.asyncio

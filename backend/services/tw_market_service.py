@@ -1,11 +1,18 @@
 """
 Taiwan market service — owns all caching and waterfall fallback logic.
-Data source priority:
-  quote/OHLCV    : TWSE OpenAPI → FinMind
-  institutional  : TWSE OpenAPI → FinMind
-  margin         : TWSE OpenAPI → FinMind
+Data source priority (all preceded by Redis + the local ohlcv_daily /
+tw_*_daily archive; the orders below are for the live upstream tiers):
+  quote/OHLCV    : token set → FinMind → TWSE ; else TWSE → FinMind
+                   (intraday TWSE MIS stays Tier 0 — FinMind is EOD-only)
+  institutional  : FinMind → TWSE today-only
+  margin         : FinMind → TWSE today-only
   monthly revenue: FinMind → MOPS scraper
   financials     : FinMind only
+
+FinMind-first for quote/OHLCV is gated on a configured FinMind token
+(`_finmind_preferred`): a paid sponsor key serves cleaner EOD data (no
+STOCK_DAY_ALL publication lag), while tokenless / free deploys keep TWSE
+first to protect the limited free hourly quota.
 
 Timezone: Taiwan is UTC+8, no DST. All API responses are tagged with
 tz="Asia/Taipei" so the frontend can display correct local labels.
@@ -655,6 +662,20 @@ async def _resolve_prev_close(
     return await _finmind_prev_close(symbol, upstream_close)
 
 
+async def _finmind_preferred() -> bool:
+    """True when a FinMind token is configured (= paid sponsor key) — the
+    operator wants FinMind as the preferred upstream for quote / history
+    because the sponsor EOD data is cleaner than TWSE STOCK_DAY_ALL (no
+    14:30 publication lag, no KY-stock Change-field +992% quirk). Tokenless
+    / free deploys return False and keep the TWSE-first order so they don't
+    burn the limited free hourly quota on every read. All-error → False so
+    a transient resolver outage can't flip the order unexpectedly."""
+    try:
+        return bool(await finmind._get_token())
+    except Exception:
+        return False
+
+
 async def fetch_quote_waterfall(symbol: str) -> tuple[dict | None, str]:
     """Run the TWSE MIS intraday → TWSE STOCK_DAY_ALL → FinMind 7-day
     fallback waterfall.
@@ -690,30 +711,32 @@ async def fetch_quote_waterfall(symbol: str) -> tuple[dict | None, str]:
             log.warning("tw.quote.mis_failed",
                         extra={"symbol": symbol, "error": str(exc)})
 
-    # ── Tier 1: TWSE STOCK_DAY_ALL (EOD cross-section) ──
-    if not raw:
+    # ── EOD upstream tiers: TWSE STOCK_DAY_ALL + FinMind 7-day bar ──
+    # Order flips on FinMind token presence (`_finmind_preferred`): a paid
+    # sponsor key makes FinMind the preferred upstream (cleaner EOD data,
+    # no STOCK_DAY_ALL publication lag / KY-stock Change-field quirk);
+    # tokenless / free deploys keep TWSE first to protect the limited free
+    # hourly quota. Each tier is a soft-fail attempt returning (raw, source).
+    async def _try_twse_eod() -> tuple[dict | None, str]:
         try:
-            raw = await twse.get_realtime_quote(symbol)
-            if raw:
-                source = "twse"
+            r = await twse.get_realtime_quote(symbol)
+            if r:
+                return r, "twse"
         except Exception as exc:
             log.warning("tw.quote.twse_failed",
                         extra={"symbol": symbol, "error": str(exc)})
+        return None, "unavailable"
 
-    if not raw:
-        # FinMind fallback: latest close from last 5 days. This is end-of-day
-        # data, not realtime — the UI flags it via data_source="finmind" so
-        # the user knows they're looking at yesterday's close during market
-        # hours.
+    async def _try_finmind_eod() -> tuple[dict | None, str]:
+        # Latest close from the last few days. End-of-day data, not
+        # realtime — the UI flags it via data_source="finmind". Pull the
+        # prior-day close so change / change_pct can be computed downstream
+        # (without it the watchlist UI shows a blank 漲跌 column).
         try:
             start = (date.today() - timedelta(days=7)).isoformat()
             bars = await finmind.get_daily_ohlcv(symbol, start)
             if bars:
                 latest = bars[-1]
-                # Pull the prior-day close so change / change_pct can be
-                # computed downstream — without this the watchlist UI
-                # silently shows a blank 漲跌 column whenever TWSE
-                # realtime is unreachable and we fall through to FinMind.
                 prev_close = bars[-2]["close"] if len(bars) >= 2 else None
                 latest_close = latest["close"]
                 change = (
@@ -721,18 +744,30 @@ async def fetch_quote_waterfall(symbol: str) -> tuple[dict | None, str]:
                     if (latest_close is not None and prev_close is not None)
                     else None
                 )
-                raw = {
+                return {
                     "symbol": symbol, "name_zh": "",
                     "close": latest_close,
                     "prev_close": prev_close,
                     "change": change,
                     "volume": latest["volume"],
-                    "open": latest["open"], "high": latest["high"], "low": latest["low"],
-                }
-                source = "finmind"
+                    "open": latest["open"], "high": latest["high"],
+                    "low": latest["low"],
+                }, "finmind"
         except Exception as exc:
             log.warning("tw.quote.finmind_failed",
                         extra={"symbol": symbol, "error": str(exc)})
+        return None, "unavailable"
+
+    if not raw:
+        order = (
+            [_try_finmind_eod, _try_twse_eod]
+            if await _finmind_preferred()
+            else [_try_twse_eod, _try_finmind_eod]
+        )
+        for _attempt in order:
+            raw, source = await _attempt()
+            if raw:
+                break
 
     if not raw:
         log.warning("tw.quote.all_sources_failed", extra={"symbol": symbol})
@@ -1079,23 +1114,37 @@ async def get_history(symbol: str, months: int = 12) -> list[dict[str, Any]]:
         await cache_set(key, json.dumps(db_bars), TTL_HISTORY)
         return db_bars
 
-    # ── Tier 3: upstream waterfall (TWSE month-by-month → FinMind) ──
-    bars: list[dict] = []
-    try:
+    # ── Tier 3: upstream waterfall ──
+    # Order flips on FinMind token presence (`_finmind_preferred`): with a
+    # paid sponsor key FinMind goes first — one range call returns the whole
+    # window vs TWSE's month-by-month loop (up to 12 calls), so it's both the
+    # cleaner source and the cheaper one. Tokenless / free deploys keep TWSE
+    # first to protect the limited free hourly quota.
+    async def _twse_months() -> tuple[list[dict], str]:
+        out: list[dict] = []
         for i in range(months):
             d = today.replace(day=1) - timedelta(days=i * 30)
             month_bars = await twse.get_daily_ohlcv(symbol, d)
-            bars = month_bars + bars
-    except Exception:
-        bars = []
+            out = month_bars + out
+        return out, "twse"
 
+    async def _finmind_range() -> tuple[list[dict], str]:
+        return await finmind.get_daily_ohlcv(symbol, start.isoformat()), "finmind"
+
+    order = (
+        [_finmind_range, _twse_months]
+        if await _finmind_preferred()
+        else [_twse_months, _finmind_range]
+    )
+    bars: list[dict] = []
     upstream_source = "twse"
-    if not bars:
+    for _fetch in order:
         try:
-            bars = await finmind.get_daily_ohlcv(symbol, start.isoformat())
-            upstream_source = "finmind"
+            bars, upstream_source = await _fetch()
         except Exception:
-            pass
+            bars = []
+        if bars:
+            break
 
     if bars:
         await cache_set(key, json.dumps(bars), TTL_HISTORY)

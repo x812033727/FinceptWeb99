@@ -11,11 +11,11 @@ from dependencies import get_current_user
 import services.crypto_market_service as svc
 
 router = APIRouter()
-Auth = Annotated[dict, Depends(get_current_user)]
+CurrentUser = Annotated[dict, Depends(get_current_user)]
 
 
 @router.get("/quote/{symbol}")
-async def quote(symbol: str, _: Auth) -> dict[str, Any]:
+async def quote(symbol: str, _: CurrentUser) -> dict[str, Any]:
     data = await svc.get_quote(symbol.upper())
     if data.get("price") is None:
         raise HTTPException(status_code=404, detail=data.get("error", "symbol not found"))
@@ -25,7 +25,7 @@ async def quote(symbol: str, _: Auth) -> dict[str, Any]:
 @router.get("/history/{symbol}")
 async def history(
     symbol: str,
-    _: Auth,
+    _: CurrentUser,
     interval: str = Query("1d", description="1m 5m 15m 30m 1h 4h 1d 1w"),
     limit: int = Query(365, ge=1, le=720),
 ) -> list[dict[str, Any]]:
@@ -34,7 +34,7 @@ async def history(
 
 @router.get("/screener")
 async def screener(
-    _: Auth,
+    _: CurrentUser,
     limit: int = Query(20, ge=1, le=20),
 ) -> list[dict[str, Any]]:
     return await svc.get_screener(limit=limit)
@@ -42,7 +42,7 @@ async def screener(
 
 @router.get("/search")
 async def search(
-    _: Auth,
+    _: CurrentUser,
     q: str = Query(..., min_length=1, max_length=20),
     limit: int = Query(10, ge=1, le=20),
 ) -> list[dict[str, Any]]:
@@ -52,7 +52,7 @@ async def search(
 @router.get("/news/{symbol}")
 async def news(
     symbol: str,
-    _: Auth,
+    _: CurrentUser,
     limit: int = Query(10, ge=1, le=30),
 ) -> list[dict[str, Any]]:
     """Crypto headlines for a Top 20 symbol via Google News RSS."""

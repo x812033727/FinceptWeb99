@@ -76,3 +76,13 @@ export function formatCompact(n: number | null | undefined): string {
   if (n >= 1e3) return `${(n / 1e3).toFixed(0)}K`;
   return String(n);
 }
+
+/**
+ * Format `num / denom` as a rounded integer percent. Used for progress
+ * gauges (e.g. "built 7 of 12 datasets → 58%"). `denom <= 0` returns
+ * `"0%"` so an empty ledger renders cleanly instead of `NaN%`.
+ */
+export function formatProgressPct(num: number, denom: number): string {
+  if (denom <= 0) return "0%";
+  return `${Math.round((num / denom) * 100)}%`;
+}

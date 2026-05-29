@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import api from "@/lib/api";
+import { formatPct } from "@/lib/formatters";
 import { CollapsibleHeader } from "@/components/Collapsible";
 import { useCollapsible } from "@/hooks/useCollapsible";
 
@@ -80,11 +81,6 @@ export function categoricalSpread(row: CategoricalRow): number {
   if (row.buckets.length < 2) return 0;
   const means = row.buckets.map((b) => b.mean_d5_return);
   return Math.max(...means) - Math.min(...means);
-}
-
-function fmtPct(v: number): string {
-  const sign = v >= 0 ? "+" : "";
-  return `${sign}${v.toFixed(2)}%`;
 }
 
 function fmtNum(v: number, digits = 2): string {
@@ -216,7 +212,7 @@ export function SignalQualityCard() {
                               ? "n/a"
                               : `${row.sign_match_pct.toFixed(1)}%`}
                           </td>
-                          <td className="py-1 text-right tabular-nums">{fmtPct(row.mean_d5_return)}</td>
+                          <td className="py-1 text-right tabular-nums">{formatPct(row.mean_d5_return)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -254,10 +250,10 @@ export function SignalQualityCard() {
                                     n={b.n}
                                   </td>
                                   <td className="py-0.5 text-right tabular-nums w-20">
-                                    {fmtPct(b.mean_d5_return)}
+                                    {formatPct(b.mean_d5_return)}
                                   </td>
                                   <td className="py-0.5 text-right tabular-nums text-muted-foreground w-20">
-                                    {t("signal_quality.median_label")} {fmtPct(b.median_d5_return)}
+                                    {t("signal_quality.median_label")} {formatPct(b.median_d5_return)}
                                   </td>
                                 </tr>
                               ))}

@@ -14,11 +14,11 @@ from fastapi import APIRouter, Depends, Query
 from dependencies import get_current_user
 
 router = APIRouter()
-Auth = Annotated[dict, Depends(get_current_user)]
+CurrentUser = Annotated[dict, Depends(get_current_user)]
 
 
 @router.get("/news/recent")
-async def news_recent(_: Auth, limit: int = Query(20, ge=1, le=50)):
+async def news_recent(_: CurrentUser, limit: int = Query(20, ge=1, le=50)):
     """Market-wide international news from the ingest archive. Returns
     `symbol IS NULL` rows under `market='GLOBAL'` plus sentiment_score /
     sentiment_label so the frontend can render coloured 利多/利空/中性
@@ -31,7 +31,7 @@ async def news_recent(_: Auth, limit: int = Query(20, ge=1, le=50)):
 
 
 @router.get("/overseas-indicators")
-async def overseas_indicators(_: Auth):
+async def overseas_indicators(_: CurrentUser):
     """Live snapshot of the curated overseas index universe (PR #270).
 
     Same data the discussion context uses (PR #269 ctx block), exposed

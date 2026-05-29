@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { formatCompact, formatNumber, formatPct } from "./formatters";
+import {
+  formatCompact,
+  formatNumber,
+  formatPct,
+  formatProgressPct,
+} from "./formatters";
 
 describe("formatPct", () => {
   it("prefixes positive values with + by default", () => {
@@ -73,5 +78,21 @@ describe("formatCompact", () => {
 
   it("returns em-dash for null", () => {
     expect(formatCompact(null)).toBe("—");
+  });
+});
+
+describe("formatProgressPct", () => {
+  it("rounds num/denom to an integer percent", () => {
+    expect(formatProgressPct(7, 12)).toBe("58%");
+    expect(formatProgressPct(1, 4)).toBe("25%");
+  });
+
+  it("returns 0% when denom is non-positive — guards NaN%", () => {
+    expect(formatProgressPct(0, 0)).toBe("0%");
+    expect(formatProgressPct(5, -1)).toBe("0%");
+  });
+
+  it("renders complete progress as 100%", () => {
+    expect(formatProgressPct(10, 10)).toBe("100%");
   });
 });

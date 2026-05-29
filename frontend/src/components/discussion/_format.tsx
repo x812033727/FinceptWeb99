@@ -9,6 +9,7 @@
  * fragment the discussion presentation logic without a clear seam.
  */
 import { useTranslation } from "react-i18next";
+import { formatPct } from "@/lib/formatters";
 import { formatTaipei } from "@/lib/timeFormat";
 import type {
   AgentInfo,
@@ -101,14 +102,11 @@ export function toFixedSmart(n: number): string {
 }
 
 export function signedPct(n: number): string {
-  const sign = n >= 0 ? "+" : "";
-  return `${sign}${(n * 100).toFixed(1)}%`;
+  return formatPct(n, { alreadyPct: false, decimals: 1 });
 }
 
 export function signedPctSafe(n: number | null | undefined): string {
-  if (n === null || n === undefined) return "—";
-  const sign = n >= 0 ? "+" : "";
-  return `${sign}${(n * 100).toFixed(2)}%`;
+  return formatPct(n, { alreadyPct: false });
 }
 
 export function pctClass(n: number | null | undefined): string {

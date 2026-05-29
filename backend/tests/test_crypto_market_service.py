@@ -9,7 +9,6 @@ We mock the connector and the redis cache helpers to verify:
 """
 from __future__ import annotations
 
-import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -21,8 +20,8 @@ from services import crypto_market_service as svc
 
 @pytest.mark.asyncio
 async def test_get_quote_cache_hit_skips_kraken():
-    cached_payload = json.dumps({"symbol": "BTC", "price": 100.0, "currency": "USD"})
-    with patch.object(svc, "cache_get", AsyncMock(return_value=cached_payload)), \
+    cached_payload = {"symbol": "BTC", "price": 100.0, "currency": "USD"}
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=cached_payload)), \
          patch.object(svc, "_k_quote", AsyncMock()) as mock_quote:
         result = await svc.get_quote("BTC")
 
@@ -34,8 +33,8 @@ async def test_get_quote_cache_hit_skips_kraken():
 async def test_get_quote_cache_miss_calls_kraken_and_caches():
     fresh = {"symbol": "BTC", "market": "CRYPTO", "price": 99000.0,
              "change_pct": 1.5, "volume": 100, "currency": "USD"}
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()) as mock_set, \
          patch.object(svc, "_k_quote", AsyncMock(return_value=fresh)):
         result = await svc.get_quote("BTC")
 
@@ -45,7 +44,7 @@ async def test_get_quote_cache_miss_calls_kraken_and_caches():
 
 @pytest.mark.asyncio
 async def test_get_quote_unsupported_symbol_returns_stub_not_exception():
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
          patch.object(svc, "_k_quote", AsyncMock(return_value=None)):
         result = await svc.get_quote("FAKECOIN")
     assert result["price"] is None
@@ -58,8 +57,8 @@ async def test_get_quote_unsupported_symbol_returns_stub_not_exception():
 async def test_get_quote_cache_miss_tags_data_source_kraken():
     fresh = {"symbol": "BTC", "market": "CRYPTO", "price": 99000.0,
              "change_pct": 1.5, "volume": 100, "currency": "USD"}
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc, "_k_quote", AsyncMock(return_value=fresh)):
         result = await svc.get_quote("BTC")
     assert result["data_source"] == "kraken"
@@ -70,8 +69,8 @@ async def test_get_quote_cache_miss_tags_data_source_kraken():
 @pytest.mark.asyncio
 async def test_get_history_cache_hit_skips_kraken():
     # Bar shape mirrors yfinance/twse: {time: <unix_ms>, open, high, low, close, volume}
-    cached_bars = json.dumps([{"time": 1714003600000, "close": 90000}])
-    with patch.object(svc, "cache_get", AsyncMock(return_value=cached_bars)), \
+    cached_bars = [{"time": 1714003600000, "close": 90000}]
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=cached_bars)), \
          patch.object(svc, "_k_history", AsyncMock()) as mock_hist:
         result = await svc.get_history("BTC")
 
@@ -83,13 +82,28 @@ async def test_get_history_cache_hit_skips_kraken():
 @pytest.mark.asyncio
 async def test_get_history_cache_miss_calls_kraken_and_caches():
     bars = [{"time": 1714003600000, "close": 95000}]
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json_unless_empty", AsyncMock()) as mock_set, \
          patch.object(svc, "_k_history", AsyncMock(return_value=bars)):
         result = await svc.get_history("BTC", interval="1h", limit=100)
 
     mock_set.assert_awaited_once()
     assert result == bars
+
+
+@pytest.mark.asyncio
+async def test_get_history_empty_result_not_cached():
+    """A Kraken outage shouldn't lock the next 5 min into an empty chart."""
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json_unless_empty", AsyncMock()) as mock_set, \
+         patch.object(svc, "_k_history", AsyncMock(return_value=[])):
+        result = await svc.get_history("BTC")
+    # Helper is called but skips the write when value is falsy. Verifying
+    # the call shape catches a future refactor that swaps in cache_set_json.
+    mock_set.assert_awaited_once()
+    args = mock_set.call_args.args
+    assert args[1] == []  # the empty list reaches the unless_empty guard
+    assert result == []
 
 
 # ── get_screener ──────────────────────────────────────────────────
@@ -108,8 +122,8 @@ async def test_get_screener_sorts_by_volume_desc():
         return quotes_by_symbol.get(sym, {"symbol": sym, "price": 1,
                                           "change_pct": 0, "volume": 1})
 
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json_unless_empty", AsyncMock()), \
          patch.object(svc, "get_quote", new=fake_get_quote):
         rows = await svc.get_screener(limit=20)
 
@@ -127,8 +141,8 @@ async def test_get_screener_skips_quotes_with_no_price():
             return {"symbol": sym, "price": 100, "change_pct": 0, "volume": 1}
         return {"symbol": sym, "price": None, "change_pct": None, "volume": None}
 
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json_unless_empty", AsyncMock()), \
          patch.object(svc, "get_quote", new=fake_get_quote):
         rows = await svc.get_screener(limit=20)
 
@@ -137,8 +151,8 @@ async def test_get_screener_skips_quotes_with_no_price():
 
 @pytest.mark.asyncio
 async def test_get_screener_cache_hit_returns_cached():
-    cached = json.dumps([{"symbol": "BTC", "price": 100, "volume": 1000}])
-    with patch.object(svc, "cache_get", AsyncMock(return_value=cached)), \
+    cached = [{"symbol": "BTC", "price": 100, "volume": 1000}]
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=cached)), \
          patch.object(svc, "get_quote", AsyncMock()) as mock_quote:
         rows = await svc.get_screener()
     mock_quote.assert_not_awaited()

@@ -5,6 +5,7 @@ import type { AxiosError } from "axios";
 import { CollapsibleHeader } from "@/components/Collapsible";
 import { useCollapsible } from "@/hooks/useCollapsible";
 import api, { errorDetail } from "@/lib/api";
+import { formatProgressPct } from "@/lib/formatters";
 import { formatTaipei } from "@/lib/timeFormat";
 
 /**
@@ -112,11 +113,6 @@ interface SetupCheck {
 interface SetupStatusResponse {
   checks: SetupCheck[];
   next_action: string | null;
-}
-
-function formatPct(built: number, total: number): string {
-  if (total === 0) return "0%";
-  return `${Math.round((built / total) * 100)}%`;
 }
 
 function ProgressBar({ built, total }: { built: number; total: number }) {
@@ -460,7 +456,7 @@ export default function FinmindAdminCard() {
                         <div className="mb-0.5 flex justify-between">
                           <span>{cat}</span>
                           <span className="text-muted-foreground">
-                            {c.built}/{c.total} ({formatPct(c.built, c.total)})
+                            {c.built}/{c.total} ({formatProgressPct(c.built, c.total)})
                           </span>
                         </div>
                         <ProgressBar built={c.built} total={c.total} />

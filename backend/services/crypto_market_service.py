@@ -13,11 +13,16 @@ Cache TTLs are tighter than equities because crypto moves faster:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import Any
 
-from cache.redis_cache import cache_get, cache_set, key_history, key_quote
+from cache.redis_cache import (
+    cache_get_json,
+    cache_set_json,
+    cache_set_json_unless_empty,
+    key_history,
+    key_quote,
+)
 from data.crypto.kraken_connector import get_history as _k_history
 from data.crypto.kraken_connector import get_quote as _k_quote
 from data.crypto.symbols import TOP20
@@ -39,9 +44,9 @@ async def get_quote(symbol: str, *, bypass_cache: bool = False) -> dict[str, Any
     sym = symbol.upper()
     key = key_quote("crypto", sym)
     if not bypass_cache:
-        cached = await cache_get(key)
-        if cached:
-            return json.loads(cached)
+        cached = await cache_get_json(key)
+        if cached is not None:
+            return cached
 
     quote = await _k_quote(sym)
     if quote is None:
@@ -52,7 +57,7 @@ async def get_quote(symbol: str, *, bypass_cache: bool = False) -> dict[str, Any
                 "data_source": "unavailable"}
 
     quote["data_source"] = "kraken"
-    await cache_set(key, json.dumps(quote), TTL_QUOTE)
+    await cache_set_json(key, quote, TTL_QUOTE)
     return quote
 
 
@@ -61,21 +66,23 @@ async def get_history(
 ) -> list[dict[str, Any]]:
     sym = symbol.upper()
     key = key_history("crypto", sym, interval, range_token=str(limit))
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
 
     bars = await _k_history(sym, interval=interval, limit=limit)
-    await cache_set(key, json.dumps(bars), TTL_HISTORY)
+    # Don't cache empty — a Kraken outage shouldn't lock the next 5 min
+    # of requests into an empty chart.
+    await cache_set_json_unless_empty(key, bars, TTL_HISTORY)
     return bars
 
 
 async def get_screener(limit: int = 20) -> list[dict[str, Any]]:
     """Return Top 20 with their latest quote — small enough to fan out."""
     key = "screener:crypto:top20"
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)[:limit]
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached[:limit]
 
     quotes = await asyncio.gather(*(get_quote(s) for s in TOP20))
     rows = [
@@ -95,10 +102,9 @@ async def get_screener(limit: int = 20) -> list[dict[str, Any]]:
     rows.sort(key=lambda r: r["volume"], reverse=True)
     # Don't cache when every Kraken call failed — otherwise a transient
     # outage locks the user into 60 s of an empty grid.
-    if rows:
-        await cache_set(key, json.dumps(rows), TTL_SCREENER)
-    else:
+    if not rows:
         log.warning("crypto.screener.all_quotes_failed")
+    await cache_set_json_unless_empty(key, rows, TTL_SCREENER)
     return rows[:limit]
 
 
@@ -162,9 +168,9 @@ async def get_news(symbol: str, limit: int = 10) -> list[dict[str, Any]]:
     """
     sym = symbol.upper()
     key = f"crypto:news:{sym}"
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
 
     from data.crypto.symbols import NAMES
     name = NAMES.get(sym, "")
@@ -176,6 +182,5 @@ async def get_news(symbol: str, limit: int = 10) -> list[dict[str, Any]]:
         log.warning("crypto.news.rss_failed", extra={"symbol": sym, "error": str(exc)})
         items = []
 
-    if items:
-        await cache_set(key, json.dumps(items), TTL_NEWS)
+    await cache_set_json_unless_empty(key, items, TTL_NEWS)
     return items

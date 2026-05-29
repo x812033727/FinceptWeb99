@@ -12,12 +12,12 @@ from limiter import limiter
 import services.analytics_service as svc
 
 router = APIRouter()
-Analyst = Annotated[dict, Depends(require_analyst)]
+AnalystUser = Annotated[dict, Depends(require_analyst)]
 
 
 @router.post("/dcf", response_model=DCFResponse)
 @limiter.limit("10/minute")
-async def dcf(request: Request, body: DCFRequest, _: Analyst):
+async def dcf(request: Request, body: DCFRequest, _: AnalystUser):
     """
     DCF valuation. Fetches FCF from market data automatically;
     supply 'overrides' to customise any input (wacc, growth_rate_1, etc.).
@@ -52,7 +52,7 @@ async def dcf(request: Request, body: DCFRequest, _: Analyst):
 
 @router.post("/var", response_model=VaRResponse)
 @limiter.limit("5/minute")
-async def var(request: Request, body: VaRRequest, _: Analyst):
+async def var(request: Request, body: VaRRequest, _: AnalystUser):
     """
     Portfolio VaR via historical simulation, parametric, or Monte Carlo.
     Use method='all' to get all three in one call.
@@ -85,7 +85,7 @@ async def var(request: Request, body: VaRRequest, _: Analyst):
 
 @router.post("/backtest", response_model=BacktestResponse)
 @limiter.limit("5/minute")
-async def backtest(request: Request, body: BacktestRequest, _: Analyst):
+async def backtest(request: Request, body: BacktestRequest, _: AnalystUser):
     """
     Event-driven backtest engine.
     Built-in strategies: 'sma_crossover' (params: fast, slow),

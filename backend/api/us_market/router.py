@@ -14,11 +14,11 @@ from limiter import limiter
 import services.us_market_service as svc
 
 router = APIRouter()
-Auth = Annotated[dict, Depends(get_current_user)]
+CurrentUser = Annotated[dict, Depends(get_current_user)]
 
 
 @router.get("/quote/{ticker}", response_model=QuoteResponse)
-async def quote(ticker: str, _: Auth):
+async def quote(ticker: str, _: CurrentUser):
     try:
         return await svc.get_quote(ticker.upper())
     except Exception as e:
@@ -28,7 +28,7 @@ async def quote(ticker: str, _: Auth):
 @router.get("/history/{ticker}", response_model=list[OHLCVBar])
 async def history(
     ticker: str,
-    _: Auth,
+    _: CurrentUser,
     period: str = Query("1y", description="1d 5d 1mo 3mo 6mo 1y 2y 5y 10y"),
     interval: str = Query("1d", description="1m 5m 15m 1h 1d 1wk 1mo"),
 ):
@@ -39,7 +39,7 @@ async def history(
 
 
 @router.get("/fundamentals/{ticker}", response_model=FundamentalsResponse)
-async def fundamentals(ticker: str, _: Auth):
+async def fundamentals(ticker: str, _: CurrentUser):
     try:
         data = await svc.get_fundamentals(ticker.upper())
         return FundamentalsResponse(
@@ -64,7 +64,7 @@ async def fundamentals(ticker: str, _: Auth):
 
 
 @router.get("/financials/{ticker}", response_model=FinancialsResponse)
-async def financials(ticker: str, _: Auth):
+async def financials(ticker: str, _: CurrentUser):
     try:
         data = await svc.get_financials(ticker.upper())
         return FinancialsResponse(symbol=ticker.upper(), **data)
@@ -75,7 +75,7 @@ async def financials(ticker: str, _: Auth):
 @router.get("/options/{ticker}", response_model=list[dict])
 async def options(
     ticker: str,
-    _: Auth,
+    _: CurrentUser,
     expiration_date: str | None = Query(None, description="YYYY-MM-DD"),
 ):
     try:
@@ -88,7 +88,7 @@ async def options(
 @limiter.limit("30/minute")
 async def screener(
     request: Request,
-    _: Auth,
+    _: CurrentUser,
     min_market_cap: float | None = Query(None, description="Minimum market cap in USD"),
     min_pe: float | None = Query(None, description="Minimum P/E ratio"),
     max_pe: float | None = Query(None, description="Maximum P/E ratio"),
@@ -116,7 +116,7 @@ async def screener(
 
 
 @router.get("/macro/{indicator}", response_model=list[MacroDataPoint])
-async def macro(indicator: str, _: Auth):
+async def macro(indicator: str, _: CurrentUser):
     """
     Available indicators: fed_funds_rate, unemployment, cpi, gdp,
     10y_yield, 2y_yield, 10y_minus_2y, usd_index, twd_usd
@@ -128,20 +128,20 @@ async def macro(indicator: str, _: Auth):
 
 
 @router.get("/news/{ticker}")
-async def news(ticker: str, _: Auth, limit: int = Query(10, le=30)):
+async def news(ticker: str, _: CurrentUser, limit: int = Query(10, le=30)):
     """Recent news headlines for a US stock (via yfinance)."""
     return await svc.get_news(ticker.upper(), limit=limit)
 
 
 @router.get("/earnings/{ticker}")
-async def earnings(ticker: str, _: Auth):
+async def earnings(ticker: str, _: CurrentUser):
     """Next earnings date and EPS/revenue consensus estimate for a US stock."""
     return await svc.get_earnings(ticker.upper())
 
 
 @router.get("/search")
 async def search(
-    _: Auth,
+    _: CurrentUser,
     q: str = Query(..., min_length=1, max_length=20),
     limit: int = Query(10, ge=1, le=30),
 ):

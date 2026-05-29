@@ -6,7 +6,6 @@ serves option chains.
 """
 from __future__ import annotations
 
-import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -33,8 +32,8 @@ def _yf_chain_row(strike: float = 200.0, ctype: str = "call") -> dict:
 
 @pytest.mark.asyncio
 async def test_get_options_cache_hit_skips_providers():
-    cached = json.dumps([_yf_chain_row()])
-    with patch.object(svc, "cache_get", AsyncMock(return_value=cached)), \
+    cached = [_yf_chain_row()]
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=cached)), \
          patch.object(svc.polygon, "get_options_chain", AsyncMock()) as mp, \
          patch.object(svc.yfinance, "get_options", AsyncMock()) as my:
         result = await svc.get_options("AAPL")
@@ -48,8 +47,8 @@ async def test_get_options_yfinance_fallback_when_no_polygon_key():
     """No Polygon key set ⇒ go straight to yfinance."""
     fallback_rows = [_yf_chain_row(200.0), _yf_chain_row(210.0, "put")]
     with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
-         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
+         patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()) as mock_set, \
          patch.object(svc.polygon, "get_options_chain", AsyncMock()) as mp, \
          patch.object(svc.yfinance, "get_options", AsyncMock(return_value=fallback_rows)) as my:
         result = await svc.get_options("AAPL")
@@ -65,8 +64,8 @@ async def test_get_options_yfinance_fallback_when_polygon_raises():
     """Polygon configured but raised ⇒ fall through to yfinance."""
     fallback_rows = [_yf_chain_row()]
     with patch.object(svc.settings, "POLYGON_API_KEY", "test-key"), \
-         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc.polygon, "get_options_chain", AsyncMock(side_effect=RuntimeError("rate limited"))) as mp, \
          patch.object(svc.yfinance, "get_options", AsyncMock(return_value=fallback_rows)) as my:
         result = await svc.get_options("AAPL")
@@ -80,8 +79,8 @@ async def test_get_options_yfinance_fallback_when_polygon_raises():
 async def test_get_options_empty_result_not_cached():
     """Both providers returned [] — caching that would lock TTL_OPTIONS of empty."""
     with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
-         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
+         patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()) as mock_set, \
          patch.object(svc.yfinance, "get_options", AsyncMock(return_value=[])):
         result = await svc.get_options("FAKE")
 
@@ -93,8 +92,8 @@ async def test_get_options_empty_result_not_cached():
 async def test_get_options_passes_expiration_date_through():
     fallback_rows = [_yf_chain_row()]
     with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
-         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc.yfinance, "get_options", AsyncMock(return_value=fallback_rows)) as my:
         await svc.get_options("AAPL", "2025-06-20")
     my.assert_awaited_once_with("AAPL", "2025-06-20")
@@ -107,8 +106,8 @@ async def test_get_options_tags_data_source_yfinance_when_no_polygon():
     the bid/ask-spreads-unavailable hint."""
     rows = [_yf_chain_row(200.0), _yf_chain_row(210.0, "put")]
     with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
-         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc.yfinance, "get_options", AsyncMock(return_value=rows)):
         result = await svc.get_options("AAPL")
     assert all(r["data_source"] == "yfinance" for r in result)
@@ -122,8 +121,8 @@ async def test_get_options_tags_data_source_polygon_when_polygon_serves():
                      "contract_type": "call", "expiration_date": "2025-06-20",
                      "strike_price": 200.0}]
     with patch.object(svc.settings, "POLYGON_API_KEY", "test-key"), \
-         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc.polygon, "get_options_chain",
                       AsyncMock(return_value=polygon_rows)), \
          patch.object(svc.yfinance, "get_options", AsyncMock()) as my:
@@ -155,8 +154,8 @@ async def test_get_screener_caps_stooq_batch_in_sync_path():
         return {s: {"price": 10.0, "change_pct": 0.5, "volume": 1000} for s in syms}
 
     with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
-         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc, "_screener_yfinance", AsyncMock(return_value=[])), \
          patch.object(svc, "_get_sp500_tickers", AsyncMock(return_value=[s for s, _ in universe])), \
          patch("data.us.sp500_universe.get_fallback_universe", lambda: universe), \
@@ -184,8 +183,8 @@ async def test_get_screener_full_stooq_batch_for_warm_task():
         return {s: {"price": 10.0, "change_pct": 0.5, "volume": 1000} for s in syms}
 
     with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
-         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc, "_screener_yfinance", AsyncMock(return_value=[])), \
          patch.object(svc, "_get_sp500_tickers", AsyncMock(return_value=[s for s, _ in universe])), \
          patch("data.us.sp500_universe.get_fallback_universe", lambda: universe), \
@@ -211,8 +210,8 @@ async def test_get_screener_skips_screener_yfinance_when_no_polygon_and_no_filte
         return []
 
     with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
-         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc, "_screener_yfinance", new=fake_screener_yfinance), \
          patch.object(svc, "_get_sp500_tickers", AsyncMock(return_value=[s for s, _ in universe])), \
          patch("data.us.sp500_universe.get_fallback_universe", lambda: universe), \
@@ -241,8 +240,8 @@ async def test_get_screener_still_uses_yfinance_when_filter_active():
                  "dividend_yield": 0.5, "sector": "Tech"}]
 
     with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
-         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc, "_screener_yfinance", new=fake_screener_yfinance), \
          patch.object(svc, "_get_sp500_tickers", AsyncMock(return_value=["AAPL"])):
         rows = await svc.get_screener(min_pe=10)
@@ -267,8 +266,8 @@ async def test_get_screener_min_volume_falls_through_to_batch():
     }
 
     with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
-         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc, "_screener_yfinance", AsyncMock(return_value=[])), \
          patch.object(svc, "_get_sp500_tickers", AsyncMock(return_value=[s for s, _ in universe])), \
          patch("data.us.sp500_universe.get_fallback_universe", lambda: universe), \
@@ -291,8 +290,8 @@ async def test_get_quote_records_data_source():
         "ts": 1700000000000,
     }
     with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
-         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc.yfinance, "get_quote", AsyncMock(return_value=yf_quote)):
         result = await svc.get_quote("AAPL")
     assert result["data_source"] == "yfinance"
@@ -302,8 +301,8 @@ async def test_get_quote_records_data_source():
 @pytest.mark.asyncio
 async def test_get_quote_data_source_unavailable_when_all_fail():
     with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
-         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
+         patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()) as mock_set, \
          patch.object(svc.yfinance, "get_quote", AsyncMock(side_effect=RuntimeError("blocked"))), \
          patch.object(svc.stooq, "get_quote", AsyncMock(side_effect=RuntimeError("blocked"))), \
          patch.object(svc.finnhub, "get_quote", AsyncMock(return_value={})):
@@ -323,8 +322,8 @@ async def test_get_quote_falls_through_to_finnhub_when_others_blank():
         "prev_close": 199.0, "market_cap": None,
     }
     with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
-         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc.yfinance, "get_quote", AsyncMock(return_value={})), \
          patch.object(svc.stooq, "get_quote", AsyncMock(return_value={})), \
          patch.object(svc.finnhub, "get_quote", AsyncMock(return_value=finnhub_quote)):
@@ -344,8 +343,8 @@ async def test_get_screener_falls_through_to_finnhub_batch():
     }
 
     with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
-         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc, "_screener_yfinance", AsyncMock(return_value=[])), \
          patch.object(svc, "_get_sp500_tickers", AsyncMock(return_value=[s for s, _ in universe])), \
          patch("data.us.sp500_universe.get_fallback_universe", lambda: universe), \
@@ -372,8 +371,8 @@ async def test_get_screener_marks_data_source_yfinance_when_batch_serves():
     }
 
     with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
-         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc, "_screener_yfinance", AsyncMock(return_value=[])), \
          patch.object(svc, "_get_sp500_tickers", AsyncMock(return_value=[s for s, _ in universe])), \
          patch("data.us.sp500_universe.get_fallback_universe", lambda: universe), \
@@ -399,8 +398,8 @@ async def test_get_screener_marks_data_source_stooq_when_yfinance_blank():
     }
 
     with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
-         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc, "_screener_yfinance", AsyncMock(return_value=[])), \
          patch.object(svc, "_get_sp500_tickers", AsyncMock(return_value=[s for s, _ in universe])), \
          patch("data.us.sp500_universe.get_fallback_universe", lambda: universe), \
@@ -418,8 +417,8 @@ async def test_get_fundamentals_marks_data_source_yfinance():
     info = {"longName": "Apple", "sector": "Tech", "marketCap": 3e12,
             "trailingPE": 30, "priceToBook": 40}
     with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
-         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+         patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc.yfinance, "get_info", AsyncMock(return_value=info)):
         result = await svc.get_fundamentals("AAPL")
     assert result["data_source"] == "yfinance"
@@ -430,8 +429,8 @@ async def test_get_fundamentals_marks_data_source_yfinance():
 async def test_get_fundamentals_marks_data_source_unavailable_when_both_fail():
     """yfinance.get_info raised on top of no Polygon key ⇒ unavailable."""
     with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
-         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()) as mock_set, \
+         patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()) as mock_set, \
          patch.object(svc.yfinance, "get_info",
                       AsyncMock(side_effect=RuntimeError("blocked"))):
         result = await svc.get_fundamentals("AAPL")
@@ -462,8 +461,8 @@ async def test_screener_yfinance_concurrency_capped():
                 "regularMarketPrice": 100, "regularMarketChangePercent": 0.5,
                 "longName": "X", "sector": "Tech", "volume": 1_000_000}
 
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc.yfinance, "get_info", new=slow_info), \
          patch.object(svc, "_get_sp500_tickers",
                       AsyncMock(return_value=[f"T{i:02d}" for i in range(20)])):
@@ -484,8 +483,8 @@ async def test_get_screener_caches_zero_price_rows_briefly():
         set_calls.append(args)
 
     with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
-         patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", new=capture_set), \
+         patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", new=capture_set), \
          patch.object(svc, "_screener_yfinance", AsyncMock(return_value=[])), \
          patch.object(svc, "_get_sp500_tickers", AsyncMock(return_value=[s for s, _ in universe])), \
          patch("data.us.sp500_universe.get_fallback_universe", lambda: universe), \

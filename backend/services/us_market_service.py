@@ -7,13 +7,18 @@ Rules:
   - Market-hours helper uses America/New_York tz
 """
 import asyncio
-import json
 import logging
 from datetime import datetime, timezone, date, timedelta
 from typing import Any
 import pytz
 
-from cache.redis_cache import cache_get, cache_set, key_quote, key_history, key_fundamentals
+from cache.redis_cache import (
+    cache_get_json,
+    cache_set_json,
+    key_fundamentals,
+    key_history,
+    key_quote,
+)
 from config import settings
 from services._quote_helpers import sanitize_change_pct
 import data.us.finnhub_connector as finnhub
@@ -177,9 +182,9 @@ async def get_quote(
 
     key = key_quote("us", ticker)
     if not bypass_cache:
-        cached = await cache_get(key)
-        if cached:
-            return json.loads(cached)
+        cached = await cache_get_json(key)
+        if cached is not None:
+            return cached
 
     raw, source = await fetch_quote_waterfall(ticker)
     result = _normalize_quote(ticker, raw)
@@ -187,7 +192,7 @@ async def get_quote(
     # Don't cache the zero-state — keeps the next request retrying instead
     # of locking in a failure for TTL_QUOTE seconds.
     if result.get("price"):
-        await cache_set(key, json.dumps(result), TTL_QUOTE)
+        await cache_set_json(key, result, TTL_QUOTE)
     return result
 
 
@@ -225,9 +230,9 @@ def _normalize_quote(ticker: str, raw: dict) -> dict[str, Any]:
 
 async def get_history(ticker: str, period: str = "1y", interval: str = "1d") -> list[dict[str, Any]]:
     key = key_history("us", ticker, interval, range_token=period)
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
 
     try:
         if _use_polygon():
@@ -251,7 +256,7 @@ async def get_history(ticker: str, period: str = "1y", interval: str = "1d") -> 
     # Skip cache when empty — avoids locking in 4h of nothing on transient
     # upstream failure (matches the get_quote pattern).
     if result:
-        await cache_set(key, json.dumps(result), TTL_HISTORY)
+        await cache_set_json(key, result, TTL_HISTORY)
     return result
 
 
@@ -280,9 +285,9 @@ def _interval_to_timespan(interval: str) -> str:
 
 async def get_fundamentals(ticker: str) -> dict[str, Any]:
     key = key_fundamentals("us", ticker)
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
 
     info: dict[str, Any] = {}
     source = "unavailable"
@@ -312,7 +317,7 @@ async def get_fundamentals(ticker: str) -> dict[str, Any]:
     has_payload = bool(info) or result.get("market_cap") or result.get("pe_ratio")
     result["data_source"] = source
     if has_payload:
-        await cache_set(key, json.dumps(result), TTL_FUNDAMENTALS)
+        await cache_set_json(key, result, TTL_FUNDAMENTALS)
     return result
 
 
@@ -350,9 +355,9 @@ def _normalize_fundamentals_yf(ticker: str, info: dict) -> dict[str, Any]:
 
 async def get_financials(ticker: str) -> dict[str, Any]:
     key = f"us:financials:{ticker}:annual"
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
 
     try:
         if _use_polygon():
@@ -376,7 +381,7 @@ async def get_financials(ticker: str) -> dict[str, Any]:
         result.get(k) for k in ("income_statement", "balance_sheet", "cash_flow")
     )
     if payload:
-        await cache_set(key, json.dumps(result), TTL_FUNDAMENTALS)
+        await cache_set_json(key, result, TTL_FUNDAMENTALS)
     return result
 
 
@@ -384,9 +389,9 @@ async def get_financials(ticker: str) -> dict[str, Any]:
 
 async def get_options(ticker: str, expiration_date: str | None = None) -> list[dict[str, Any]]:
     key = f"us:options:{ticker}:{expiration_date or 'all'}"
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
 
     data: list[dict[str, Any]] = []
     source = "unavailable"
@@ -421,7 +426,7 @@ async def get_options(ticker: str, expiration_date: str | None = None) -> list[d
         row.setdefault("data_source", source)
 
     if data:
-        await cache_set(key, json.dumps(data), TTL_OPTIONS)
+        await cache_set_json(key, data, TTL_OPTIONS)
     else:
         log.info("us.options.empty", extra={"ticker": ticker, "expiry": expiration_date})
     return data
@@ -466,9 +471,9 @@ async def get_screener(
         f"us:screener:{min_market_cap}:{min_pe}:{max_pe}:{min_pb}:{max_pb}:"
         f"{min_dividend_yield}:{min_volume}:{sector}:{limit}"
     )
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
 
     # Polygon's bulk snapshot endpoint doesn't expose PE/PB/yield/sector,
     # so any fundamental filter forces the yfinance path.
@@ -591,7 +596,7 @@ async def get_screener(
     #   - empty results ⇒ never cache.
     if results:
         ttl = TTL_SCREENER if any(r.get("price") for r in results) else 60
-        await cache_set(key, json.dumps(results), ttl)
+        await cache_set_json(key, results, ttl)
     return results
 
 
@@ -781,9 +786,9 @@ async def get_macro_indicator(
         key = f"us:macro:{name}:asof={as_of.isoformat()}"
     else:
         key = f"us:macro:{name}"
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
     data = await get_series(
         series_id,
         end_date=as_of.isoformat() if as_of is not None else None,
@@ -793,7 +798,7 @@ async def get_macro_indicator(
     # while the FRED key is unset) locks the user out of macro data for
     # the rest of the TTL window.
     if data:
-        await cache_set(key, json.dumps(data), TTL_HISTORY)
+        await cache_set_json(key, data, TTL_HISTORY)
     else:
         log.warning("us.macro.empty_series", extra={"name": name, "series_id": series_id})
     return data
@@ -886,16 +891,15 @@ async def get_news(ticker: str, limit: int = 10) -> list[dict[str, Any]]:
     fall back to `{ticker} stock`.
     """
     key = f"us:news:{ticker.upper()}"
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
 
     name = ""
     try:
-        q_cached = await cache_get(key_quote("us", ticker))
-        if q_cached:
-            payload = json.loads(q_cached)
-            name = payload.get("name", "") or ""
+        q_cached = await cache_get_json(key_quote("us", ticker))
+        if q_cached is not None:
+            name = q_cached.get("name", "") or ""
     except Exception:
         pass
     if not name:
@@ -919,16 +923,16 @@ async def get_news(ticker: str, limit: int = 10) -> list[dict[str, Any]]:
             items = []
 
     if items:
-        await cache_set(key, json.dumps(items), TTL_NEWS)
+        await cache_set_json(key, items, TTL_NEWS)
     return items
 
 
 async def get_earnings(ticker: str) -> dict[str, Any]:
     """Next earnings date and consensus EPS/revenue estimates from yfinance."""
     key = f"us:earnings:{ticker.upper()}"
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
 
     loop = asyncio.get_running_loop()
 
@@ -958,5 +962,5 @@ async def get_earnings(ticker: str) -> dict[str, Any]:
         return {"earnings_date": None, "eps_estimate": None, "revenue_estimate": None}
 
     result = await loop.run_in_executor(None, _fetch)
-    await cache_set(key, json.dumps(result), TTL_EARNINGS)
+    await cache_set_json(key, result, TTL_EARNINGS)
     return result

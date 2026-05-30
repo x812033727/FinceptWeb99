@@ -39,6 +39,7 @@ from uuid import UUID
 
 from db.session import AsyncSessionLocal
 from services.discussion.freshness import resolve_captured_session
+from services.tw_trading_calendar import prev_trading_day_estimate
 
 from .blocks import (
     announcements,
@@ -73,7 +74,9 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def _initial_ctx(*, market: str, as_of: date | None) -> dict[str, Any]:
+def _initial_ctx(
+    *, market: str, as_of: date | None, info_cutoff: date | None = None,
+) -> dict[str, Any]:
     """Default empty-shape ctx. Every key is always present so the
     prompt template doesn't have to handle missing keys; values
     populate during the gather/serial passes below."""
@@ -90,10 +93,18 @@ def _initial_ctx(*, market: str, as_of: date | None) -> dict[str, Any]:
         # top so personas can't confuse "now" with "the close we're
         # actually looking at".
         "captured_session": resolve_captured_session(
-            market=market, as_of=as_of,
+            market=market, as_of=as_of, info_cutoff=info_cutoff,
         ),
         "backtest": as_of is not None,
+        # `as_of` is the decision / entry / grading date (matches the
+        # stored `discussion.as_of_date`). `info_cutoff` is the latest
+        # session the personas are actually allowed to see — the
+        # previous trading day — so a backtest "predicting" `as_of`
+        # never peeks at `as_of`'s own session.
         "as_of": as_of.isoformat() if as_of is not None else None,
+        "info_cutoff": (
+            info_cutoff.isoformat() if info_cutoff is not None else None
+        ),
         "top_gainers": [],
         "top_losers": [],
         "index": None,
@@ -235,7 +246,16 @@ async def build_market_context(
     progress_cb: ProgressCb | None = None,
     topic: str | None = None,
 ) -> dict[str, Any]:
-    ctx = _initial_ctx(market=market, as_of=as_of)
+    # Backtest look-ahead guard: personas may only see data through the
+    # trading day *before* `as_of`. `as_of` is the decision / entry /
+    # grading day (you decide pre-open on 4/1 using 3/31's close), so
+    # every persona-visible block clamps to `info_cutoff`. The stored
+    # `discussion.as_of_date` + scoreboard / verifier are untouched —
+    # they read the row directly and still grade forward from `as_of`.
+    info_cutoff = (
+        prev_trading_day_estimate(as_of) if as_of is not None else None
+    )
+    ctx = _initial_ctx(market=market, as_of=as_of, info_cutoff=info_cutoff)
     record_error = _make_error_recorder(ctx)
 
     async def _progress(
@@ -272,17 +292,17 @@ async def build_market_context(
     await asyncio.gather(
         http.fetch_screener(
             ctx, market=market, top_n=top_n,
-            as_of=as_of, record_error=record_error,
+            as_of=info_cutoff, record_error=record_error,
         ),
         http.fetch_index(
-            ctx, market=market, as_of=as_of, record_error=record_error,
+            ctx, market=market, as_of=info_cutoff, record_error=record_error,
         ),
         http.fetch_macro(
-            ctx, as_of=as_of, record_error=record_error,
+            ctx, as_of=info_cutoff, record_error=record_error,
         ),
         http.fetch_focus_briefs(
             ctx, market=market, focus_symbols=focus_symbols,
-            as_of=as_of, record_error=record_error,
+            as_of=info_cutoff, record_error=record_error,
         ),
     )
 
@@ -305,7 +325,7 @@ async def build_market_context(
     # gate below.
     await technical.fetch_short_term_signals(
         ctx, db, market=market, focus_symbols=focus_symbols,
-        as_of=as_of, record_error=record_error,
+        as_of=info_cutoff, record_error=record_error,
         max_focus_symbols=max_focus_symbols,
     )
 
@@ -314,7 +334,7 @@ async def build_market_context(
     # vs risk-off); US personas get it for free with the same
     # one-call cost.
     await overseas.fetch_overseas_indicators(
-        ctx, as_of=as_of, record_error=record_error,
+        ctx, as_of=info_cutoff, record_error=record_error,
     )
 
     if market == "TW":
@@ -322,39 +342,39 @@ async def build_market_context(
         # a market-wide directional signal personas use even on
         # symbol-less topics ("外資台指期淨空 → 短線偏空").
         await derivatives.fetch_taifex_positioning(
-            ctx, as_of=as_of, record_error=record_error,
+            ctx, as_of=info_cutoff, record_error=record_error,
         )
         await chip.fetch_top_foreign_buyers(
-            ctx, db, as_of=as_of, record_error=record_error,
+            ctx, db, as_of=info_cutoff, record_error=record_error,
         )
         # PR #282: 個股期貨 三大法人未平倉 — futures-side
         # complement to top_foreign_buyers. TW only.
         await chip.fetch_top_stock_futures_buyers(
-            ctx, db, as_of=as_of, record_error=record_error,
+            ctx, db, as_of=info_cutoff, record_error=record_error,
         )
         # PR #283: TAIWAN VIX (臺指選擇權波動率指數). TW only —
         # different volatility regime from US `^VIX` in
         # overseas_indicators, useful side-by-side.
         await chip.fetch_taiwan_vix(
-            ctx, db, as_of=as_of, record_error=record_error,
+            ctx, db, as_of=info_cutoff, record_error=record_error,
         )
         await chip.fetch_margin_balance_trend(
-            ctx, db, as_of=as_of, record_error=record_error,
+            ctx, db, as_of=info_cutoff, record_error=record_error,
         )
         await chip.fetch_top_revenue_growers(
-            ctx, db, as_of=as_of, record_error=record_error,
+            ctx, db, as_of=info_cutoff, record_error=record_error,
         )
         await chip.fetch_active_buybacks(
-            ctx, db, as_of=as_of, record_error=record_error,
+            ctx, db, as_of=info_cutoff, record_error=record_error,
         )
         await chip.fetch_govt_bank_flow(
-            ctx, db, as_of=as_of, record_error=record_error,
+            ctx, db, as_of=info_cutoff, record_error=record_error,
         )
         await risk.fetch_risk_warnings(
-            ctx, db, as_of=as_of, record_error=record_error,
+            ctx, db, as_of=info_cutoff, record_error=record_error,
         )
         await chip.fetch_market_institutional(
-            ctx, db, as_of=as_of, record_error=record_error,
+            ctx, db, as_of=info_cutoff, record_error=record_error,
         )
         # PR #284: market-wide 法說會 / 除息 calendar. Must fire
         # AFTER top_foreign_buyers / top_revenue_growers /
@@ -367,7 +387,7 @@ async def build_market_context(
         await chip.fetch_upcoming_events_calendar(
             ctx, market=market,
             focus_symbols=focus_symbols,
-            as_of=as_of, record_error=record_error,
+            as_of=info_cutoff, record_error=record_error,
         )
         # PR #285: per-focus-symbol 主力分點. Live FinMind +
         # cache, no DB. focus_symbols-only fan-out keeps quota
@@ -375,16 +395,17 @@ async def build_market_context(
         await chip.fetch_broker_concentration(
             ctx,
             focus_symbols=focus_symbols,
-            as_of=as_of, record_error=record_error,
+            as_of=info_cutoff, record_error=record_error,
         )
 
-    # Backtest mode: convert `as_of` (date) → datetime anchor at
-    # end-of-day so `published_at <= as_of_dt` covers everything
-    # posted on that day. News readers operate on datetime; chip
-    # readers above operate on date.
+    # Backtest mode: convert `info_cutoff` (the previous-trading-day
+    # cutoff) → datetime anchor at end-of-day so `published_at <=
+    # as_of_dt` covers everything posted up to and including the cutoff
+    # session — and nothing from `as_of` itself. News readers operate
+    # on datetime; chip readers above operate on date.
     as_of_dt = (
-        datetime.combine(as_of, datetime.max.time(), tzinfo=UTC)
-        if as_of is not None else None
+        datetime.combine(info_cutoff, datetime.max.time(), tzinfo=UTC)
+        if info_cutoff is not None else None
     )
 
     # News sentiment is the single slowest block (~15-30 s when
@@ -456,7 +477,7 @@ async def build_market_context(
         # back to the pre-J2 time/symbol-only ranking gracefully.
         await lessons.fetch_recent_lessons(
             ctx, db, owner_id=owner_id, market=market,
-            focus_symbols=focus_symbols, as_of=as_of,
+            focus_symbols=focus_symbols, as_of=info_cutoff,
             record_error=record_error,
             topic=topic,
         )

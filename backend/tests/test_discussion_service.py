@@ -2508,11 +2508,12 @@ async def test_gather_market_context_backtest_drops_empty_news_blocks(
 async def test_gather_market_context_backtest_threads_as_of_into_chip_blocks(
     db_session: AsyncSession,
 ):
-    """Backtest mode (PR #226): chip metric reads must respect `as_of`
-    so a discussion anchored at 2025-01-15 doesn't see foreign-flow /
-    margin / revenue / govt-bank rows from 2025-04-30. Insert rows
-    on both dates, run with as_of=2025-01-15, assert only the older
-    rows come back."""
+    """Backtest mode (PR #226 + look-ahead fix): chip metric reads are
+    clamped to the trading day *before* `as_of` — a discussion anchored
+    at 2025-01-15 may only see data through 2025-01-14, never 2025-01-15
+    itself nor future rows from 2025-04-30. Seed rows on the prior day
+    (visible), the anchor day (a same-day sentinel that must be hidden),
+    and a far-future day (hidden); run with as_of=2025-01-15."""
     from datetime import date as _date
     import services.tw_market_service as _tw   # noqa: F401
     from services.ingest.repository import (
@@ -2526,14 +2527,23 @@ async def test_gather_market_context_backtest_threads_as_of_into_chip_blocks(
         upsert_market_institutional_daily,
     )
 
-    backtest_day = _date(2025, 1, 15)
+    backtest_day = _date(2025, 1, 15)   # as_of (decision / entry day)
+    prev_day = _date(2025, 1, 14)       # info cutoff — latest visible session
     later_day = _date(2025, 4, 30)
 
-    # Foreign buyers — 2330 leads on backtest_day, 2454 leads on later_day.
+    # Foreign buyers — 2330 leads on prev_day (the info cutoff, visible).
+    # 2999 is a same-day sentinel on backtest_day (= as_of) that the
+    # look-ahead clamp must hide; 2454 sits in the future (hidden).
     await upsert_institutional_daily(db_session, [
         InstitutionalDailyRow(
-            market="TW", symbol="2330", ts=backtest_day,
+            market="TW", symbol="2330", ts=prev_day,
             fini_buy=100_000, fini_sell=20_000,
+            sitc_buy=0, sitc_sell=0, dealer_buy=0, dealer_sell=0,
+            source="twse",
+        ),
+        InstitutionalDailyRow(
+            market="TW", symbol="2999", ts=backtest_day,
+            fini_buy=888_888, fini_sell=0,
             sitc_buy=0, sitc_sell=0, dealer_buy=0, dealer_sell=0,
             source="twse",
         ),
@@ -2544,10 +2554,10 @@ async def test_gather_market_context_backtest_threads_as_of_into_chip_blocks(
             source="twse",
         ),
     ])
-    # Margin — different totals on each day.
+    # Margin — visible total on prev_day, a hidden future total on later_day.
     await upsert_margin_daily(db_session, [
         MarginDailyRow(
-            market="TW", symbol="2330", ts=backtest_day,
+            market="TW", symbol="2330", ts=prev_day,
             margin_purchase=0, margin_balance=11_111,
             short_sale=0, short_balance=2_222, source="twse",
         ),
@@ -2557,10 +2567,10 @@ async def test_gather_market_context_backtest_threads_as_of_into_chip_blocks(
             short_sale=0, short_balance=8_888, source="twse",
         ),
     ])
-    # Govt bank flow — different net on each day.
+    # Govt bank flow — visible net on prev_day, hidden future net.
     await upsert_govt_bank_flows(db_session, [
         GovtBankFlowRow(
-            market="TW", ts=backtest_day, bank_name="bank1",
+            market="TW", ts=prev_day, bank_name="bank1",
             buy_amount=10_000, sell_amount=5_000, source="twse",
         ),
         GovtBankFlowRow(
@@ -2571,7 +2581,7 @@ async def test_gather_market_context_backtest_threads_as_of_into_chip_blocks(
     # Market-wide institutional — same pattern.
     await upsert_market_institutional_daily(db_session, [
         MarketInstitutionalRow(
-            market="TW", ts=backtest_day,
+            market="TW", ts=prev_day,
             foreign_buy=1_000, foreign_sell=500,
             sitc_buy=0, sitc_sell=0, dealer_buy=0, dealer_sell=0,
             source="twse",
@@ -2598,26 +2608,28 @@ async def test_gather_market_context_backtest_threads_as_of_into_chip_blocks(
             db_session, market="TW", as_of=backtest_day,
         )
 
-    # foreign_buyers must only contain 2330 (backtest_day row);
-    # 2454's later_day row must NOT bleed through.
+    # foreign_buyers must only contain 2330 (the prev_day row). The
+    # same-day sentinel 2999 (on as_of itself) and the future 2454 row
+    # must both be clamped out by the look-ahead guard.
     syms = [row["symbol"] for row in ctx["top_foreign_buyers"]]
     assert "2330" in syms
-    assert "2454" not in syms
+    assert "2999" not in syms   # as_of's own session is invisible
+    assert "2454" not in syms   # the future is invisible
 
-    # Margin trend reflects the 2025-01-15 row, not 2025-04-30.
+    # Margin trend reflects the prev_day row, not later_day.
     assert ctx["margin_balance_trend"]["total_margin_balance"] == 11_111
     assert ctx["margin_balance_trend"]["total_short_balance"] == 2_222
 
-    # Govt bank flow's only entry is the backtest_day row.
+    # Govt bank flow's only entry is the prev_day row.
     flow = ctx["govt_bank_flow_5d"]
     assert len(flow) == 1
-    assert flow[0]["date"] == backtest_day.isoformat()
+    assert flow[0]["date"] == prev_day.isoformat()
     assert flow[0]["net"] == 5_000
 
-    # Market-wide institutional reflects the 2025-01-15 numbers.
+    # Market-wide institutional reflects the prev_day numbers.
     inst = ctx["market_institutional_5d"]
     assert len(inst) == 1
-    assert inst[0]["date"] == backtest_day.isoformat()
+    assert inst[0]["date"] == prev_day.isoformat()
     assert inst[0]["foreign_net"] == 500
 
 
@@ -2625,13 +2637,15 @@ async def test_gather_market_context_backtest_threads_as_of_into_chip_blocks(
 async def test_gather_market_context_backtest_passes_as_of_to_market_services(
     db_session: AsyncSession,
 ):
-    """Backtest mode (PR #226): the screener / index / macro fetchers
-    receive `as_of` as a kwarg so they can route to the historical
-    data path instead of returning live data."""
+    """Backtest mode (PR #226 + look-ahead fix): the screener / index /
+    macro fetchers receive the *previous trading day* as `as_of` (the
+    info cutoff), so they route to the historical data path AND never
+    expose the anchor day's own session."""
     from datetime import date as _date
     import services.tw_market_service as _tw   # noqa: F401
 
     backtest_day = _date(2025, 1, 15)
+    prev_day = _date(2025, 1, 14)   # info cutoff personas are clamped to
 
     screener_mock = AsyncMock(return_value=[])
     index_mock = AsyncMock(return_value={})
@@ -2652,9 +2666,75 @@ async def test_gather_market_context_backtest_passes_as_of_to_market_services(
             db_session, market="TW", as_of=backtest_day,
         )
 
-    assert screener_mock.call_args.kwargs.get("as_of") == backtest_day
-    assert index_mock.call_args.kwargs.get("as_of") == backtest_day
-    assert macro_mock.call_args.kwargs.get("as_of") == backtest_day
+    assert screener_mock.call_args.kwargs.get("as_of") == prev_day
+    assert index_mock.call_args.kwargs.get("as_of") == prev_day
+    assert macro_mock.call_args.kwargs.get("as_of") == prev_day
+
+
+@pytest.mark.asyncio
+async def test_gather_market_context_backtest_clamps_context_to_previous_trading_day(
+    db_session: AsyncSession,
+):
+    """Look-ahead guard (user-reported): a backtest "predicting" `as_of`
+    may only see data through the *previous trading day*. The personas
+    must NOT see `as_of`'s own session — that day's close is revealed
+    only later at scoreboard / post-mortem time.
+
+    Asserts both the metadata (`info_cutoff` + `captured_session`) and
+    the actual price a persona sees: seed 3 daily bars (D-2, D-1, D) and
+    confirm the focus brief's quote is D-1's close, never D's."""
+    from datetime import date as _date
+    import services.tw_market_service as _tw   # noqa: F401
+    from services.ingest.repository import OhlcvBar, upsert_ohlcv_bars
+
+    as_of = _date(2025, 1, 15)        # Wed — the decision / entry day
+    prev_day = _date(2025, 1, 14)     # Tue — the info cutoff
+    d_minus_2 = _date(2025, 1, 13)    # Mon
+
+    # 2330: close 100 (Mon) → 110 (Tue) → 999 (Wed = as_of). The Wed
+    # bar is the "future" the persona must not peek at.
+    await upsert_ohlcv_bars(db_session, [
+        OhlcvBar(market="TW", symbol="2330", ts=d_minus_2,
+                 open=99, high=101, low=98, close=100, volume=1000,
+                 source="test"),
+        OhlcvBar(market="TW", symbol="2330", ts=prev_day,
+                 open=105, high=111, low=104, close=110, volume=1000,
+                 source="test"),
+        OhlcvBar(market="TW", symbol="2330", ts=as_of,
+                 open=900, high=1000, low=900, close=999, volume=1000,
+                 source="test"),
+    ])
+    await db_session.commit()
+
+    # Mock the live HTTP fetchers (screener / index / macro) but leave
+    # the real focus-brief backtest path so it reads the seeded archive.
+    with patch.object(_tw, "get_screener", new=AsyncMock(return_value=[])), \
+         patch.object(_tw, "get_index", new=AsyncMock(return_value={})), \
+         patch(
+            "services.discussion_service._assemble_macro_block",
+            new=AsyncMock(return_value={}),
+         ):
+        ctx = await discussion_service.gather_market_context(
+            db_session, market="TW", as_of=as_of, focus_symbols=["2330"],
+        )
+
+    # Metadata: `as_of` stays the decision day; the personas' cutoff is
+    # the previous trading day.
+    assert ctx["as_of"] == "2025-01-15"
+    assert ctx["info_cutoff"] == "2025-01-14"
+    sess = ctx["captured_session"]
+    assert sess["session_date"] == "2025-01-14"
+    assert sess["decision_date"] == "2025-01-15"
+    assert sess["phase"] == "backtest"
+
+    # The price a persona actually sees is Tue's close (110), NOT the
+    # as_of day's 999 — the one-day look-ahead is gone.
+    briefs = {b["symbol"]: b for b in ctx["focus_briefs"]}
+    assert "2330" in briefs
+    quote = briefs["2330"]["quote"]
+    assert quote is not None
+    assert quote["price"] == 110.0
+    assert quote["as_of_session"] == "2025-01-14"
 
 
 @pytest.mark.asyncio

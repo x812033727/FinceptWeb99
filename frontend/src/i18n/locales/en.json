@@ -685,6 +685,7 @@
     "conclusion_parse_error": "Conclusion parse failed, please re-synthesize",
     "captured_session_label": "Data as of",
     "captured_session_intraday": "intraday live",
+    "captured_session_entry": "entry",
     "captured_session_phase": {
       "backtest": "backtest",
       "intraday": "intraday",

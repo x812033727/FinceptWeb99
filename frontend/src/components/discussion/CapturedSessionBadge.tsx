@@ -32,7 +32,7 @@ export function CapturedSessionBadge({
 }) {
   const { t } = useTranslation();
   if (!session) return null;
-  const { session_date, phase, is_intraday, hint_zh } = session;
+  const { session_date, decision_date, phase, is_intraday, hint_zh } = session;
   const tone = pickTone(phase);
   // Show phase label translated when we have one; otherwise fall
   // back to the raw key so a new backend phase still renders
@@ -50,6 +50,11 @@ export function CapturedSessionBadge({
       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-medium">
         <span>📅 {t("discussion.captured_session_label")}</span>
         {session_date && <span className="font-mono">{session_date}</span>}
+        {decision_date && decision_date !== session_date && (
+          <span className="font-mono opacity-90">
+            → {t("discussion.captured_session_entry")} {decision_date}
+          </span>
+        )}
         <span className="text-[10px] uppercase opacity-80">{phaseLabel}</span>
         {is_intraday && (
           <span className="text-[10px] uppercase opacity-80">
@@ -95,7 +100,7 @@ export function CapturedSessionInline({
 }) {
   const { t } = useTranslation();
   if (!session) return null;
-  const { session_date, phase, is_intraday } = session;
+  const { session_date, decision_date, phase, is_intraday } = session;
   const tone = pickTone(phase);
   const phaseLabel = t(
     `discussion.captured_session_phase.${phase}`,
@@ -107,6 +112,11 @@ export function CapturedSessionInline({
     >
       <span>📅</span>
       {session_date && <span className="font-mono">{session_date}</span>}
+      {decision_date && decision_date !== session_date && (
+        <span className="font-mono opacity-90">
+          → {t("discussion.captured_session_entry")} {decision_date}
+        </span>
+      )}
       <span className="uppercase opacity-80">{phaseLabel}</span>
       {is_intraday && (
         <span className="uppercase opacity-80">

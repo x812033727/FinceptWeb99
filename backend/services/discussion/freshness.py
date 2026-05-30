@@ -113,14 +113,17 @@ def resolve_captured_session(
     *,
     market: str,
     as_of: date | None,
+    info_cutoff: date | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Build the `captured_session` block injected into every discussion
     ctx. Three modes:
 
-      - **Backtest** (`as_of` set) — session_date = as_of, phase =
-        `backtest`. The hint tells personas the entire ctx is clamped
-        to a historical anchor.
+      - **Backtest** (`as_of` set) — session_date = `info_cutoff` (the
+        previous trading day = the latest session personas may see);
+        `decision_date` = `as_of` (the entry / grading day). The hint
+        spells out that the ctx stops at the prior session, so a
+        prediction *for* `as_of` never peeks at `as_of`'s own bars.
       - **TW live** (`market == 'TW'`, `as_of=None`) — derive from the
         Taipei calendar via `_tw_latest_complete_session`. The hint
         spells out exactly what's stale during each phase so personas
@@ -140,14 +143,18 @@ def resolve_captured_session(
       ```
     """
     if as_of is not None:
+        cutoff = info_cutoff or as_of
         return {
-            "session_date": as_of.isoformat(),
+            "session_date": cutoff.isoformat(),
+            "decision_date": as_of.isoformat(),
             "phase": "backtest",
             "is_intraday": False,
             "hint_zh": (
                 f"回測模式。本次 ctx 內所有報價、技術指標、籌碼、"
-                f"新聞情緒皆以 {as_of.isoformat()} 為錨點（`ts <= as_of`），"
-                "不含該日之後的任何資料。"
+                f"新聞情緒皆截止至前一交易日 {cutoff.isoformat()}"
+                f"（`ts <= 前一交易日`），不含決策／進場基準日 "
+                f"{as_of.isoformat()} 當日及之後的任何資料。"
+                f"對答案／進場以 {as_of.isoformat()} 開盤為基準。"
             ),
         }
 

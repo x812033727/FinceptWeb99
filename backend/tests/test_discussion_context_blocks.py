@@ -596,6 +596,7 @@ async def test_build_market_context_initialises_default_shape(
         "market", "captured_at",
         "captured_session",          # PR for expert-quote freshness
         "backtest", "as_of",
+        "info_cutoff",               # backtest look-ahead guard (prev trading day)
         "top_gainers", "top_losers", "index",
         "news_sentiment", "news_backfill", "per_symbol_news_sentiment",
         "short_term_signals",

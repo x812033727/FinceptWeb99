@@ -26,6 +26,7 @@ from cache.redis_cache import (
     key_screener_us,
 )
 from config import settings
+from middleware.metrics import WATERFALL_TIER_FAILED_TOTAL
 from services._quote_helpers import sanitize_change_pct
 import data.us.finnhub_connector as finnhub
 import data.us.polygon_connector as polygon
@@ -98,6 +99,9 @@ async def fetch_quote_waterfall(ticker: str) -> tuple[dict[str, Any], str]:
         if raw.get("price"):
             source = primary
     except Exception as exc:
+        WATERFALL_TIER_FAILED_TOTAL.labels(
+            market="us", datatype="quote", tier=primary,
+        ).inc()
         log.warning("us.quote.primary_failed",
                     extra={"ticker": ticker, "source": primary, "error": str(exc)})
         try:
@@ -105,6 +109,9 @@ async def fetch_quote_waterfall(ticker: str) -> tuple[dict[str, Any], str]:
             if raw.get("price"):
                 source = "yfinance"
         except Exception as exc2:
+            WATERFALL_TIER_FAILED_TOTAL.labels(
+                market="us", datatype="quote", tier="yfinance",
+            ).inc()
             log.warning("us.quote.yfinance_fallback_failed",
                         extra={"ticker": ticker, "error": str(exc2)})
             raw = {}
@@ -120,6 +127,9 @@ async def fetch_quote_waterfall(ticker: str) -> tuple[dict[str, Any], str]:
                 raw = stooq_raw
                 source = "stooq"
         except Exception as exc:
+            WATERFALL_TIER_FAILED_TOTAL.labels(
+                market="us", datatype="quote", tier="stooq",
+            ).inc()
             log.warning("us.quote.stooq_fallback_failed",
                         extra={"ticker": ticker, "error": str(exc)})
 
@@ -136,10 +146,16 @@ async def fetch_quote_waterfall(ticker: str) -> tuple[dict[str, Any], str]:
                 raw = finnhub_raw
                 source = "finnhub"
         except Exception as exc:
+            WATERFALL_TIER_FAILED_TOTAL.labels(
+                market="us", datatype="quote", tier="finnhub",
+            ).inc()
             log.warning("us.quote.finnhub_fallback_failed",
                         extra={"ticker": ticker, "error": str(exc)})
 
     if not raw.get("price"):
+        WATERFALL_TIER_FAILED_TOTAL.labels(
+            market="us", datatype="quote", tier="all",
+        ).inc()
         log.warning("us.quote.all_sources_failed", extra={"ticker": ticker})
 
     return raw, source
@@ -248,11 +264,18 @@ async def get_history(ticker: str, period: str = "1y", interval: str = "1d") -> 
         else:
             bars = await yfinance.get_history(ticker, period=period, interval=interval)
     except Exception as exc:
+        WATERFALL_TIER_FAILED_TOTAL.labels(
+            market="us", datatype="history",
+            tier="polygon" if _use_polygon() else "yfinance",
+        ).inc()
         log.warning("us.history.primary_failed",
                     extra={"ticker": ticker, "period": period, "interval": interval, "error": str(exc)})
         try:
             bars = await yfinance.get_history(ticker, period=period, interval=interval)
         except Exception as exc2:
+            WATERFALL_TIER_FAILED_TOTAL.labels(
+                market="us", datatype="history", tier="yfinance",
+            ).inc()
             log.warning("us.history.yfinance_fallback_failed",
                         extra={"ticker": ticker, "error": str(exc2)})
             bars = []
@@ -306,11 +329,17 @@ async def get_fundamentals(ticker: str) -> dict[str, Any]:
             raise RuntimeError("no polygon key")
     except Exception as exc:
         if _use_polygon():
+            WATERFALL_TIER_FAILED_TOTAL.labels(
+                market="us", datatype="fundamentals", tier="polygon",
+            ).inc()
             log.warning("us.fundamentals.polygon_failed",
                         extra={"ticker": ticker, "error": str(exc)})
         try:
             info = await yfinance.get_info(ticker)
         except Exception as exc2:
+            WATERFALL_TIER_FAILED_TOTAL.labels(
+                market="us", datatype="fundamentals", tier="yfinance",
+            ).inc()
             log.warning("us.fundamentals.yfinance_failed",
                         extra={"ticker": ticker, "error": str(exc2)})
             info = {}
@@ -373,11 +402,17 @@ async def get_financials(ticker: str) -> dict[str, Any]:
             raise RuntimeError("no polygon key")
     except Exception as exc:
         if _use_polygon():
+            WATERFALL_TIER_FAILED_TOTAL.labels(
+                market="us", datatype="financials", tier="polygon",
+            ).inc()
             log.warning("us.financials.polygon_failed",
                         extra={"ticker": ticker, "error": str(exc)})
         try:
             data = await yfinance.get_financials(ticker)
         except Exception as exc2:
+            WATERFALL_TIER_FAILED_TOTAL.labels(
+                market="us", datatype="financials", tier="yfinance",
+            ).inc()
             log.warning("us.financials.yfinance_failed",
                         extra={"ticker": ticker, "error": str(exc2)})
             data = {"income_statement": [], "balance_sheet": [], "cash_flow": []}
@@ -407,6 +442,9 @@ async def get_options(ticker: str, expiration_date: str | None = None) -> list[d
             if data:
                 source = "polygon"
         except Exception as exc:
+            WATERFALL_TIER_FAILED_TOTAL.labels(
+                market="us", datatype="options", tier="polygon",
+            ).inc()
             log.warning("us.options.polygon_failed",
                         extra={"ticker": ticker, "expiry": expiration_date, "error": str(exc)})
             data = []
@@ -421,6 +459,9 @@ async def get_options(ticker: str, expiration_date: str | None = None) -> list[d
             if data:
                 source = "yfinance"
         except Exception as exc:
+            WATERFALL_TIER_FAILED_TOTAL.labels(
+                market="us", datatype="options", tier="yfinance",
+            ).inc()
             log.warning("us.options.yfinance_failed",
                         extra={"ticker": ticker, "expiry": expiration_date, "error": str(exc)})
             data = []
@@ -499,6 +540,9 @@ async def get_screener(
         try:
             snapshots = await polygon.get_snapshot_all()
         except Exception as exc:
+            WATERFALL_TIER_FAILED_TOTAL.labels(
+                market="us", datatype="screener", tier="polygon",
+            ).inc()
             log.warning("us.screener.polygon_snapshot_failed", extra={"error": str(exc)})
             snapshots = []
         results = _filter_polygon_snapshots(snapshots, min_market_cap, min_volume, limit)
@@ -551,6 +595,9 @@ async def get_screener(
         batch_source = "yfinance"
         quotes = await yfinance.get_batch_quotes(symbols)
         if not quotes:
+            WATERFALL_TIER_FAILED_TOTAL.labels(
+                market="us", datatype="screener", tier="yfinance",
+            ).inc()
             log.warning("us.screener.batch_yfinance_empty",
                         extra={"symbol_count": len(symbols)})
             # Cap the Stooq sync batch unless the caller is the background
@@ -561,6 +608,9 @@ async def get_screener(
             quotes = await stooq.get_batch_quotes(stooq_targets)
             batch_source = "stooq"
             if not quotes:
+                WATERFALL_TIER_FAILED_TOTAL.labels(
+                    market="us", datatype="screener", tier="stooq",
+                ).inc()
                 log.warning("us.screener.batch_stooq_empty",
                             extra={"symbol_count": len(stooq_targets)})
                 # Final tier: Finnhub. Only triggers when both yfinance
@@ -575,6 +625,9 @@ async def get_screener(
                 quotes = await finnhub.get_batch_quotes(finnhub_targets)
                 batch_source = "finnhub"
                 if not quotes:
+                    WATERFALL_TIER_FAILED_TOTAL.labels(
+                        market="us", datatype="screener", tier="finnhub",
+                    ).inc()
                     log.warning("us.screener.batch_finnhub_empty",
                                 extra={"symbol_count": len(finnhub_targets)})
         if min_market_cap is not None:
@@ -767,6 +820,9 @@ async def _screener_yfinance(
                     "data_source": "yfinance",
                 })
             except Exception as exc:
+                WATERFALL_TIER_FAILED_TOTAL.labels(
+                    market="us", datatype="screener", tier="yfinance",
+                ).inc()
                 log.warning("us.screener.yfinance_info_failed",
                             extra={"ticker": t, "error": str(exc)})
 

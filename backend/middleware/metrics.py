@@ -94,6 +94,28 @@ CACHE_MISSES_TOTAL = Counter(
     ["endpoint"],
 )
 
+# ── Market-data waterfall tier failures (C1-2) ─────────────────────
+# Bumped at every upstream-tier failure site in the market services
+# (tw_market_service, us_market_service) so operators can see the
+# per-tier failure rate alongside the existing `log.warning("X.tier_
+# failed", ...)` lines. Lets alerting distinguish a Polygon outage
+# from a yfinance one without grepping logs, and surfaces the
+# leading edge of an outage before the all-sources-failed event
+# (which fires only after every tier in the chain has tripped).
+#
+# `tier="all"` is reserved for the terminal "every tier in the
+# waterfall exhausted" log line — useful as its own alert so the
+# operator sees a one-line summary of "no data shipped at all" as
+# distinct from "one tier degraded, fallback took over".
+WATERFALL_TIER_FAILED_TOTAL = Counter(
+    "waterfall_tier_failed_total",
+    "Market-data upstream tier failures. `datatype` ∈ "
+    "{quote, history, fundamentals, financials, options, screener}; "
+    "`tier` ∈ {polygon, yfinance, stooq, finnhub, twse, finmind, "
+    "mis, all}.",
+    ["market", "datatype", "tier"],
+)
+
 # ── Walk-forward orchestrator (PR-A1 + post-merge audit) ──────────
 
 WALK_FORWARD_RUNS_TOTAL = Counter(

@@ -43,6 +43,7 @@ from cache.redis_cache import (
     key_screener_tw,
     key_valuation_band_tw,
 )
+from middleware.metrics import WATERFALL_TIER_FAILED_TOTAL
 
 log = logging.getLogger(__name__)
 
@@ -174,6 +175,9 @@ async def fetch_quote_waterfall(symbol: str) -> tuple[dict | None, str]:
                 raw = mis_raw
                 source = "twse_mis"
         except Exception as exc:
+            WATERFALL_TIER_FAILED_TOTAL.labels(
+                market="tw", datatype="quote", tier="mis",
+            ).inc()
             log.warning("tw.quote.mis_failed",
                         extra={"symbol": symbol, "error": str(exc)})
 
@@ -189,6 +193,9 @@ async def fetch_quote_waterfall(symbol: str) -> tuple[dict | None, str]:
             if r:
                 return r, "twse"
         except Exception as exc:
+            WATERFALL_TIER_FAILED_TOTAL.labels(
+                market="tw", datatype="quote", tier="twse",
+            ).inc()
             log.warning("tw.quote.twse_failed",
                         extra={"symbol": symbol, "error": str(exc)})
         return None, "unavailable"
@@ -220,6 +227,9 @@ async def fetch_quote_waterfall(symbol: str) -> tuple[dict | None, str]:
                     "low": latest["low"],
                 }, "finmind"
         except Exception as exc:
+            WATERFALL_TIER_FAILED_TOTAL.labels(
+                market="tw", datatype="quote", tier="finmind",
+            ).inc()
             log.warning("tw.quote.finmind_failed",
                         extra={"symbol": symbol, "error": str(exc)})
         return None, "unavailable"
@@ -236,6 +246,9 @@ async def fetch_quote_waterfall(symbol: str) -> tuple[dict | None, str]:
                 break
 
     if not raw:
+        WATERFALL_TIER_FAILED_TOTAL.labels(
+            market="tw", datatype="quote", tier="all",
+        ).inc()
         log.warning("tw.quote.all_sources_failed", extra={"symbol": symbol})
         return raw, source
 

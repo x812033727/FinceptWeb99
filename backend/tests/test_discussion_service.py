@@ -189,6 +189,36 @@ def test_parse_turn_response_strips_think_block_before_json_parse():
     assert content == "看好台積電"
 
 
+def test_parse_turn_response_strips_think_block_embedded_inside_content_field():
+    """C2-3 pin (`misty-mixing-harbor.md`): reasoning models occasionally
+    embed `<think>...</think>` INSIDE the JSON `content` string itself,
+    not just before the JSON wrapper — typically when the model treats
+    its scratch work as part of the persona's answer. The persisted
+    `DiscussionTurn.content` must not retain the tag (storage cost +
+    "scratch work" leaks into the transcript). Pins that the
+    `strip_think_blocks` pass at the top of `_parse_turn_response`
+    fires before JSON parse so the content field is already clean by
+    the time `data["content"]` is extracted.
+
+    Edge case not previously covered by
+    `test_parse_turn_response_strips_think_block_before_json_parse`,
+    which only had `<think>` BEFORE the JSON wrapper. The strip-then-
+    parse ordering is what makes this case work — flipping to parse-
+    then-strip would leave the `<think>` text inside the content
+    string until the very end.
+    """
+    raw = (
+        '{"stance": "supplement", '
+        '"content": "<think>scratch work to ignore</think>'
+        '台積電的護城河在於先進製程的良率優勢。"}'
+    )
+    stance, content = discussion_service._parse_turn_response(raw)
+    assert stance == "supplement"
+    assert "<think>" not in content
+    assert "scratch work" not in content
+    assert content == "台積電的護城河在於先進製程的良率優勢。"
+
+
 def test_parse_turn_response_handles_literal_newlines_in_content():
     """LLMs (especially zh-TW reasoning models) frequently emit JSON
     where the `content` string contains literal newline / tab characters

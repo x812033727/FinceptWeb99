@@ -29,20 +29,54 @@ async def cache_set(key: str, value: str, ttl_seconds: int) -> None:
     await r.set(key, value, ex=ttl_seconds)
 
 
+def _endpoint_label(key: str) -> str:
+    """Derive a `{market}.{datatype}` Prometheus label from the cache
+    key's first two colon-delimited segments — keeps the label-set
+    bounded (one per cache-key shape) instead of exploding with one
+    per symbol. Empty key falls back to `"unknown"`, and a key with
+    only one segment (e.g. a top-level helper key) collapses to that
+    segment alone so it still shows up on the scrape rather than
+    being dropped.
+    """
+    if not key:
+        return "unknown"
+    parts = key.split(":", 2)
+    if len(parts) >= 2 and parts[0] and parts[1]:
+        return f"{parts[0]}.{parts[1]}"
+    return parts[0] or "unknown"
+
+
 async def cache_get_json(key: str) -> Any | None:
     """Read cached JSON. Returns the parsed value on hit, None on miss
     OR on malformed cache entry (decode error). The decode-error path
     is intentional: one corrupted Redis value should make the call site
     refetch upstream rather than 500 the request — services call this
     in the hot path of every quote / history / fundamentals read.
+
+    Emits `cache_hits_total{endpoint=...}` / `cache_misses_total{...}`
+    via the Prometheus registry so operators can see hit-rate per
+    cache-key shape on the existing `/metrics` scrape.
     """
+    # Lazy-import so a cold pytest collection that only touches the
+    # cache helper doesn't pull starlette / prometheus_client until it
+    # actually needs to record a counter.
+    from middleware.metrics import CACHE_HITS_TOTAL, CACHE_MISSES_TOTAL
+
     cached = await cache_get(key)
+    endpoint = _endpoint_label(key)
     if cached is None:
+        CACHE_MISSES_TOTAL.labels(endpoint=endpoint).inc()
         return None
     try:
-        return json.loads(cached)
+        result = json.loads(cached)
     except (json.JSONDecodeError, TypeError):
+        # A poisoned cache entry surfaces as a miss to the caller; mirror
+        # that semantic in the metric so "miss rate" reflects the
+        # operator's "how often did we refetch upstream" mental model.
+        CACHE_MISSES_TOTAL.labels(endpoint=endpoint).inc()
         return None
+    CACHE_HITS_TOTAL.labels(endpoint=endpoint).inc()
+    return result
 
 
 async def cache_set_json(key: str, value: Any, ttl_seconds: int) -> None:

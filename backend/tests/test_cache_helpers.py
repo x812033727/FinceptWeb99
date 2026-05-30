@@ -68,3 +68,79 @@ async def test_cache_set_json_unless_empty_writes_truthy():
     with patch.object(rc, "cache_set", mock_set):
         await rc.cache_set_json_unless_empty("k", [{"x": 1}], ttl_seconds=60)
     mock_set.assert_awaited_once()
+
+
+# ── Prometheus instrumentation ─────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "key,expected",
+    [
+        ("tw:quote:2330:realtime",        "tw.quote"),
+        ("us:financials:AAPL:annual",     "us.financials"),
+        ("crypto:news:BTC",               "crypto.news"),
+        ("tw:screener:TWSE:1000:None:…",  "tw.screener"),
+        ("tw:fundamentals:2330",          "tw.fundamentals"),
+        # 1-segment fallbacks
+        ("github:release:latest",         "github.release"),
+        ("standalone_key",                "standalone_key"),
+        # Defensive
+        ("",                              "unknown"),
+        (":leading_colon",                "unknown"),
+    ],
+)
+def test_endpoint_label_pulls_market_and_datatype(key, expected):
+    """The label collapses to the first two colon-segments so every
+    new builder adds at most one new endpoint to the Prometheus
+    label-set."""
+    assert rc._endpoint_label(key) == expected
+
+
+@pytest.mark.asyncio
+async def test_cache_get_json_increments_hit_counter():
+    from middleware.metrics import CACHE_HITS_TOTAL
+    from prometheus_client import REGISTRY
+
+    label = "tw.quote"
+    before = REGISTRY.get_sample_value("cache_hits_total", {"endpoint": label}) or 0
+    with patch.object(rc, "cache_get", AsyncMock(return_value='{"price": 100}')):
+        result = await rc.cache_get_json("tw:quote:2330:realtime")
+    after = REGISTRY.get_sample_value("cache_hits_total", {"endpoint": label}) or 0
+
+    assert result == {"price": 100}
+    assert after == before + 1
+    # Sanity: the counter handle exposes the same value via the
+    # public Counter API (guards against the registry helper being
+    # patched or the metric being re-registered under a different ns).
+    assert CACHE_HITS_TOTAL.labels(endpoint=label)._value.get() == after
+
+
+@pytest.mark.asyncio
+async def test_cache_get_json_increments_miss_counter_on_empty():
+    from prometheus_client import REGISTRY
+
+    label = "tw.history"
+    before = REGISTRY.get_sample_value("cache_misses_total", {"endpoint": label}) or 0
+    with patch.object(rc, "cache_get", AsyncMock(return_value=None)):
+        result = await rc.cache_get_json("tw:history:2330:1d:1y")
+    after = REGISTRY.get_sample_value("cache_misses_total", {"endpoint": label}) or 0
+
+    assert result is None
+    assert after == before + 1
+
+
+@pytest.mark.asyncio
+async def test_cache_get_json_increments_miss_counter_on_decode_error():
+    """Poisoned cache surfaces as None to the caller; the metric should
+    reflect the same — operators reasoning about "how often did we
+    refetch upstream" don't want to distinguish empty from corrupt."""
+    from prometheus_client import REGISTRY
+
+    label = "us.options"
+    before = REGISTRY.get_sample_value("cache_misses_total", {"endpoint": label}) or 0
+    with patch.object(rc, "cache_get", AsyncMock(return_value="{garbage")):
+        result = await rc.cache_get_json("us:options:AAPL:2026-06-20")
+    after = REGISTRY.get_sample_value("cache_misses_total", {"endpoint": label}) or 0
+
+    assert result is None
+    assert after == before + 1

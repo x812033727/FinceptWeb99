@@ -71,6 +71,29 @@ LESSON_EMBEDDINGS_TOTAL = Counter(
     ["outcome"],
 )
 
+# ── Service-layer Redis cache (instrumented in cache.redis_cache) ──
+# `endpoint` is the `{market}.{datatype}` label derived from the cache
+# key's first two colon-delimited segments (e.g. `tw.quote`,
+# `us.financials`, `crypto.news`). Keeps the label-set bounded — every
+# new builder adds at most one new `endpoint` value rather than one
+# per symbol, so cardinality stays in the low tens regardless of the
+# universe size. Useful for resourcing TTL decisions: an endpoint
+# with miss_rate ~ 0 % can probably shorten its TTL; one near 100 %
+# is wasting Redis traffic.
+CACHE_HITS_TOTAL = Counter(
+    "cache_hits_total",
+    "Redis cache_get_json hits, labelled by `{market}.{datatype}`.",
+    ["endpoint"],
+)
+CACHE_MISSES_TOTAL = Counter(
+    "cache_misses_total",
+    "Redis cache_get_json misses. Counts the empty-key case AND a "
+    "malformed JSON payload — both surface as `None` to the caller "
+    "and trigger an upstream refetch, so the operator's view of "
+    '"how often did we refetch" should treat them identically.',
+    ["endpoint"],
+)
+
 # ── Walk-forward orchestrator (PR-A1 + post-merge audit) ──────────
 
 WALK_FORWARD_RUNS_TOTAL = Counter(

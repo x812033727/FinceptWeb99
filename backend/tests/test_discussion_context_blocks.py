@@ -741,6 +741,93 @@ async def test_build_market_context_invokes_progress_callback_at_milestones(
 
 
 @pytest.mark.asyncio
+async def test_per_symbol_sentiment_emits_progress_counter_per_symbol(
+    db_session: AsyncSession,
+):
+    """C1-3 from `misty-mixing-harbor.md`: each per-symbol
+    read fires `progress_cb("scoring_news_sentiment", done=k, total=N)`
+    so the preparing card can show `"Scoring news sentiment 3/5"`
+    during the longest single sub-block window. Older frontends that
+    only read `stage` keep working — the parent milestone label is
+    preserved verbatim.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    events: list[tuple[str, int | None, int | None]] = []
+
+    async def _cb(
+        stage: str, *, done: int | None = None, total: int | None = None,
+    ) -> None:
+        events.append((stage, done, total))
+
+    ctx = _new_ctx()
+    focus = ["2330", "2454", "2412"]
+
+    with patch(
+        "services.news_sentiment_service.read_symbol_sentiment",
+        new=AsyncMock(return_value={"bullish": 1, "bearish": 0,
+                                     "neutral": 0, "headlines": []}),
+    ):
+        await news.fetch_per_symbol_sentiment(
+            ctx, db_session,
+            market="TW",
+            focus_symbols=focus,
+            as_of_dt=None,
+            record_error=_record(ctx),
+            max_focus_symbols=5,
+            progress_cb=_cb,
+        )
+
+    # One event per symbol, all with the same stage label and the
+    # `done` field tracking cumulative progress against `total=3`.
+    assert len(events) == 3
+    for stage, _done, total in events:
+        assert stage == "scoring_news_sentiment"
+        assert total == 3
+    # asyncio.gather doesn't guarantee completion order across the
+    # parametrized reads, but the cumulative count must reach the
+    # total exactly once at the end.
+    done_values = sorted(d for _, d, _ in events)
+    assert done_values == [1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_per_symbol_sentiment_progress_cb_failure_does_not_blank_ctx(
+    db_session: AsyncSession,
+):
+    """An SSE pipe failure in the progress callback shouldn't blank
+    the ctx — the round still has useful data even without the
+    progress event. Per-symbol reads must continue and persist
+    their results."""
+    from unittest.mock import AsyncMock, patch
+
+    async def _broken_cb(
+        stage: str, *, done: int | None = None, total: int | None = None,
+    ) -> None:
+        raise RuntimeError("sse pipe closed")
+
+    ctx = _new_ctx()
+    focus = ["2330"]
+
+    with patch(
+        "services.news_sentiment_service.read_symbol_sentiment",
+        new=AsyncMock(return_value={"bullish": 1, "bearish": 0,
+                                     "neutral": 0, "headlines": []}),
+    ):
+        await news.fetch_per_symbol_sentiment(
+            ctx, db_session,
+            market="TW",
+            focus_symbols=focus,
+            as_of_dt=None,
+            record_error=_record(ctx),
+            max_focus_symbols=5,
+            progress_cb=_broken_cb,
+        )
+
+    assert "2330" in ctx["per_symbol_news_sentiment"]
+
+
+@pytest.mark.asyncio
 async def test_build_market_context_progress_cb_optional(
     db_session: AsyncSession,
 ):

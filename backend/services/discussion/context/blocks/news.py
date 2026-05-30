@@ -127,6 +127,7 @@ async def fetch_per_symbol_sentiment(
     as_of_dt: datetime | None,
     record_error: ErrorRecorder,
     max_focus_symbols: int,
+    progress_cb: Callable[..., Any] | None = None,
 ) -> None:
     """Per-symbol news sentiment for each focus symbol, 7-day window.
 
@@ -143,25 +144,50 @@ async def fetch_per_symbol_sentiment(
     the passed `db` is kept for signature compat with the caller
     (existing tests in `test_discussion_context_blocks.py`) but
     intentionally unused.
+
+    `progress_cb` (C1-3) is called as each symbol's read completes
+    with the cumulative `done / total` so the SSE preparing card
+    can render `"Scoring news sentiment 3/5"` instead of waiting
+    silently for the full window. Stage label is held at
+    `scoring_news_sentiment` (the builder's parent milestone) so an
+    older frontend that ignores `done` / `total` still sees the
+    same stage transition it always did.
     """
     if not focus_symbols:
         return
     from services.news_sentiment_service import read_symbol_sentiment
 
+    targets = focus_symbols[:max_focus_symbols]
+    total = len(targets)
+    # Mutable counter shared by all coroutines. asyncio is single-
+    # threaded so `done[0] += 1` is atomic at the bytecode level;
+    # no lock needed.
+    done = [0]
+
     async def _one(sym: str) -> tuple[str, Any]:
         try:
             async with AsyncSessionLocal() as own_db:
-                return sym, await read_symbol_sentiment(
+                result: Any = await read_symbol_sentiment(
                     own_db, market=market, symbol=sym,
                     limit=10, max_age_hours=168, as_of=as_of_dt,
                 )
         except Exception:
-            return sym, None
+            result = None
+        done[0] += 1
+        if progress_cb is not None:
+            try:
+                await progress_cb(
+                    "scoring_news_sentiment", done=done[0], total=total,
+                )
+            except Exception:
+                # Caller's SSE pipe being broken shouldn't blank the
+                # ctx — the round still has useful data even without
+                # the progress event.
+                pass
+        return sym, result
 
     try:
-        results = await asyncio.gather(
-            *(_one(s) for s in focus_symbols[:max_focus_symbols]),
-        )
+        results = await asyncio.gather(*(_one(s) for s in targets))
     except Exception as exc:
         record_error("per_symbol_sentiment", exc)
         return

@@ -241,6 +241,13 @@ export default function DiscussionPage() {
   // happening during the silent 15-30 s window. Null when no
   // progress event has arrived yet (early startup).
   const [streamingStage, setStreamingStage] = useState<string | null>(null);
+  // C1-3: when the per-symbol news fan-out reports a counter,
+  // surface it as "Scoring news sentiment 3/5" in the preparing
+  // card. Null when the current stage doesn't ship done/total
+  // (every other phase, or a backend that pre-dates C1-3).
+  const [streamingProgress, setStreamingProgress] = useState<
+    { done: number; total: number } | null
+  >(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
   // Live tool-use log for the persona currently streaming. Cleared on
@@ -300,6 +307,7 @@ export default function DiscussionPage() {
     setStreamingPersona(null);
     setStreamingRound(null);
     setStreamingStage(null);
+    setStreamingProgress(null);
     setStreamError(null);
     setStreamingToolEvents([]);
   }, [selectedId]);
@@ -578,6 +586,7 @@ export default function DiscussionPage() {
     setStreamingPersona(null);
     setStreamingRound(null);
     setStreamingStage(null);
+    setStreamingProgress(null);
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -661,6 +670,19 @@ export default function DiscussionPage() {
                 // older frontends.
                 if (typeof obj.stage === "string") {
                   setStreamingStage(obj.stage);
+                }
+                // C1-3: optional `done` / `total` sub-counter from
+                // the per-symbol news fan-out. Both present →
+                // render `(X/Y)`; either missing → clear so a
+                // later stage without a counter doesn't keep a
+                // stale fraction on screen.
+                if (
+                  typeof obj.done === "number" &&
+                  typeof obj.total === "number"
+                ) {
+                  setStreamingProgress({ done: obj.done, total: obj.total });
+                } else {
+                  setStreamingProgress(null);
                 }
                 break;
               case "turn_start":
@@ -753,6 +775,7 @@ export default function DiscussionPage() {
       setIsStreaming(false);
       setStreamingRound(null);
       setStreamingStage(null);
+      setStreamingProgress(null);
       // Refresh persisted turns from the server so the streaming overlay
       // can be cleared without losing state on the next render. Use
       // refetchQueries (not invalidateQueries) so the round counter +
@@ -1734,14 +1757,28 @@ export default function DiscussionPage() {
                         fall back to `loading_context` so the user
                         never sees a raw key. */}
                     {(() => {
+                      let base: string;
                       if (streamingStage) {
                         const i18nKey = `discussion.loading_stage_${streamingStage}`;
                         const translated = t(i18nKey);
-                        if (translated !== i18nKey) return translated;
+                        base = translated !== i18nKey
+                          ? translated
+                          : (streamingRound === null
+                              ? t("discussion.loading_context_initial")
+                              : t("discussion.loading_context"));
+                      } else {
+                        base = streamingRound === null
+                          ? t("discussion.loading_context_initial")
+                          : t("discussion.loading_context");
                       }
-                      return streamingRound === null
-                        ? t("discussion.loading_context_initial")
-                        : t("discussion.loading_context");
+                      // C1-3: append `(done/total)` when the backend
+                      // ships a sub-counter — currently the per-symbol
+                      // news fan-out. Older backends omit the fields
+                      // so the suffix never appears.
+                      if (streamingProgress) {
+                        return `${base} (${streamingProgress.done}/${streamingProgress.total})`;
+                      }
+                      return base;
                     })()}
                   </span>
                 </div>

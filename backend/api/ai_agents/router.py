@@ -52,9 +52,13 @@ _OPENAI_COMPAT_PROVIDERS = {
 
 async def _check_quota(user: dict, db: AsyncSession) -> None:
     role = user.get("role", "viewer")
+    # Admins are exempt from the daily AI quota (operator role). Skip the
+    # counter so admin chat usage never hits a 429.
+    if role == "admin":
+        return
     limit_key = (
         "AI_REQUESTS_ANALYST_DAILY"
-        if role in ("analyst", "admin")
+        if role == "analyst"
         else "AI_REQUESTS_VIEWER_DAILY"
     )
     # Runtime-tunable via AdminPage; falls back to .env default on resolver failure.
@@ -80,6 +84,10 @@ async def _refund_quota(user: dict) -> None:
     got nothing back. We log at error level so this surfaces in alerts and
     operators can manually decrement if needed.
     """
+    # Mirror `_check_quota`: admins never incremented, so there's nothing to
+    # refund — return early to keep their counter from drifting negative.
+    if user.get("role") == "admin":
+        return
     try:
         await cache_decr(key_ai_counter(user["id"]))
     except Exception as exc:

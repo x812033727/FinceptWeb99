@@ -75,6 +75,11 @@ async def _check_quota(user: dict, db: AsyncSession, *, cost: int) -> None:
     one crosses). If the post-increment count exceeds the cap we refund
     and reject.
     """
+    # Admins are exempt from the daily AI quota — they're the operator, and
+    # the quota exists to cap viewer / analyst spend. Skip the counter
+    # entirely so admin multi-round runs / sweeps never hit a 429.
+    if user.get("role") == "admin":
+        return
     limit = await _daily_limit(db, user.get("role", "viewer"))
     new_count = 0
     for _ in range(cost):
@@ -92,6 +97,11 @@ async def _check_quota(user: dict, db: AsyncSession, *, cost: int) -> None:
 
 
 async def _refund(user: dict, *, count: int) -> None:
+    # Mirror `_check_quota`: admins never incremented the counter, so there's
+    # nothing to refund. Returning early keeps the admin counter from drifting
+    # negative on an early-aborted round.
+    if user.get("role") == "admin":
+        return
     for _ in range(count):
         try:
             await cache_decr(key_ai_counter(user["id"]))

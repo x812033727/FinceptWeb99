@@ -76,12 +76,18 @@ async def _set_refresh_cookie(response: Response, user_id: str) -> str:
     return token
 
 
-async def _get_ai_remaining(user_id: str, role: str) -> int:
+async def _get_ai_remaining(user_id: str, role: str) -> int | None:
+    # Admins are exempt from the daily AI quota (see `_check_quota` in the
+    # discussion / ai_agents routers). Return None ("unlimited") so the
+    # frontend treats admin as uncapped and skips the multi-round pre-flight
+    # quota warning instead of showing a misleading count.
+    if role == "admin":
+        return None
     r = await get_redis()
     used = await r.get(key_ai_counter(user_id))
     limit = (
         settings.AI_REQUESTS_ANALYST_DAILY
-        if role in ("analyst", "admin")
+        if role == "analyst"
         else settings.AI_REQUESTS_VIEWER_DAILY
     )
     return limit - int(used or 0)

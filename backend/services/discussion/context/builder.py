@@ -57,7 +57,15 @@ from .blocks import (
 # the long ctx-gathering window (~15-30 s when news sentiment scoring
 # fires inline) can surface intermediate "in progress" events to the
 # user instead of going silent. None disables progress emission.
-ProgressCb = Callable[[str], Awaitable[None]]
+#
+# `stage` is the milestone name (`fetching_market_data`,
+# `scoring_news_sentiment`, `ctx_ready`); `done` / `total` (C1-3) are
+# optional sub-step counters for the per_symbol news fan-out so the
+# preparing card can render `"Scoring news sentiment 3/5"` during
+# the longest single sub-block instead of a static label for the
+# full window. Both default to `None` for callers that don't have
+# a meaningful sub-count to report.
+ProgressCb = Callable[..., Awaitable[None]]
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -230,16 +238,29 @@ async def build_market_context(
     ctx = _initial_ctx(market=market, as_of=as_of)
     record_error = _make_error_recorder(ctx)
 
-    async def _progress(stage: str) -> None:
+    async def _progress(
+        stage: str,
+        *,
+        done: int | None = None,
+        total: int | None = None,
+    ) -> None:
         """Emit a progress milestone if the caller wired a callback,
         else no-op. Wrapped so the body of build_market_context stays
         readable — `await _progress("X")` reads as a one-liner instead
         of `if progress_cb: await progress_cb("X")` everywhere.
+        `done` / `total` (C1-3) are forwarded as-is so the SSE
+        emitter can render a counter when the sub-block reports one.
         Callback failure is intentionally allowed to bubble up — if
         the caller's queue/SSE pipe is broken there's no point
         continuing the gather."""
         if progress_cb is not None:
-            await progress_cb(stage)
+            # Only forward `done` / `total` when present so an older
+            # callback whose signature is just `(stage)` doesn't break
+            # on the new kwargs.
+            if done is None and total is None:
+                await progress_cb(stage)
+            else:
+                await progress_cb(stage, done=done, total=total)
 
     # ── concurrent HTTP-bound blocks ───────────────────────────────
     # Each block goes through `*_autosession` service helpers (or
@@ -400,6 +421,7 @@ async def build_market_context(
             ctx, d, market=market, focus_symbols=focus_symbols,
             as_of_dt=as_of_dt, record_error=record_error,
             max_focus_symbols=max_focus_symbols,
+            progress_cb=_progress,
         )
 
     await asyncio.gather(

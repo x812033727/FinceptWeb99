@@ -1147,10 +1147,26 @@ async def run_round(
         # sentinel pattern: gather runs as a task; we drain the queue
         # in this generator and yield ctx_progress events; gather's
         # finally puts None as a "done" marker so we exit the loop.
-        progress_q: asyncio.Queue[str | None] = asyncio.Queue()
+        #
+        # Queue payload is `dict | None`: each progress milestone
+        # gets wrapped in `{stage, done?, total?}` so the per-symbol
+        # news fan-out (C1-3) can carry a counter, while the simpler
+        # "phase started" events stay as `{stage}` only. `None` is
+        # the sentinel marking gather completion.
+        progress_q: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
 
-        async def _emit_progress(stage: str) -> None:
-            await progress_q.put(stage)
+        async def _emit_progress(
+            stage: str,
+            *,
+            done: int | None = None,
+            total: int | None = None,
+        ) -> None:
+            payload: dict[str, Any] = {"stage": stage}
+            if done is not None:
+                payload["done"] = done
+            if total is not None:
+                payload["total"] = total
+            await progress_q.put(payload)
 
         async def _gather_then_signal() -> dict[str, Any]:
             try:
@@ -1173,10 +1189,14 @@ async def run_round(
 
         ctx_task = asyncio.create_task(_gather_then_signal())
         while True:
-            stage = await progress_q.get()
-            if stage is None:
+            payload = await progress_q.get()
+            if payload is None:
                 break
-            yield TurnEvent("ctx_progress", {"stage": stage})
+            # `payload` already carries `{stage, done?, total?}` —
+            # forward verbatim so an older frontend that only reads
+            # `stage` keeps working while newer ones can render
+            # `done / total` when present.
+            yield TurnEvent("ctx_progress", payload)
         # Re-raise any exception the gather hit. The sentinel was
         # still fired by the finally block above, so we got here
         # cleanly.

@@ -32,13 +32,12 @@ pattern the prev_close chain uses for ``read_ohlcv_range_autosession``.
 """
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
 import data.tw.finmind_connector as finmind
 from cache.cache_ttls import TTL_FUNDAMENTALS
-from cache.redis_cache import cache_get, cache_set
+from cache.redis_cache import cache_get_json, cache_set_json, key_health_tw
 
 log = logging.getLogger(__name__)
 
@@ -141,10 +140,10 @@ async def get_health(symbol: str, periods: int = 8) -> dict[str, Any]:
         "lights":   {"profitability", "safety", "growth", "cash_flow"}
       }
     """
-    key = f"tw:health:{symbol}"
-    cached = await cache_get(key)
-    if cached:
-        return json.loads(cached)
+    key = key_health_tw(symbol)
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
 
     try:
         income_rows = await finmind.get_financials(symbol)
@@ -268,5 +267,5 @@ async def get_health(symbol: str, periods: int = 8) -> dict[str, Any]:
         "summary": summary,
         "lights":  lights,
     }
-    await cache_set(key, json.dumps(result), TTL_FUNDAMENTALS)
+    await cache_set_json(key, result, TTL_FUNDAMENTALS)
     return result

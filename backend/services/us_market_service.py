@@ -15,9 +15,15 @@ import pytz
 from cache.redis_cache import (
     cache_get_json,
     cache_set_json,
+    key_earnings_us,
+    key_financials_us,
     key_fundamentals,
     key_history,
+    key_macro_us,
+    key_news_us,
+    key_options_us,
     key_quote,
+    key_screener_us,
 )
 from config import settings
 from services._quote_helpers import sanitize_change_pct
@@ -354,7 +360,7 @@ def _normalize_fundamentals_yf(ticker: str, info: dict) -> dict[str, Any]:
 # ── Financials ────────────────────────────────────────────────────
 
 async def get_financials(ticker: str) -> dict[str, Any]:
-    key = f"us:financials:{ticker}:annual"
+    key = key_financials_us(ticker)
     cached = await cache_get_json(key)
     if cached is not None:
         return cached
@@ -388,7 +394,7 @@ async def get_financials(ticker: str) -> dict[str, Any]:
 # ── Options chain ─────────────────────────────────────────────────
 
 async def get_options(ticker: str, expiration_date: str | None = None) -> list[dict[str, Any]]:
-    key = f"us:options:{ticker}:{expiration_date or 'all'}"
+    key = key_options_us(ticker, expiration_date)
     cached = await cache_get_json(key)
     if cached is not None:
         return cached
@@ -467,9 +473,16 @@ async def get_screener(
             limit=limit,
         )
 
-    key = (
-        f"us:screener:{min_market_cap}:{min_pe}:{max_pe}:{min_pb}:{max_pb}:"
-        f"{min_dividend_yield}:{min_volume}:{sector}:{limit}"
+    key = key_screener_us(
+        min_market_cap=min_market_cap,
+        min_pe=min_pe,
+        max_pe=max_pe,
+        min_pb=min_pb,
+        max_pb=max_pb,
+        min_dividend_yield=min_dividend_yield,
+        min_volume=min_volume,
+        sector=sector,
+        limit=limit,
     )
     cached = await cache_get_json(key)
     if cached is not None:
@@ -782,10 +795,7 @@ async def get_macro_indicator(
     series_id = SERIES.get(name)
     if not series_id:
         return []
-    if as_of is not None:
-        key = f"us:macro:{name}:asof={as_of.isoformat()}"
-    else:
-        key = f"us:macro:{name}"
+    key = key_macro_us(name, as_of.isoformat() if as_of is not None else None)
     cached = await cache_get_json(key)
     if cached is not None:
         return cached
@@ -890,7 +900,7 @@ async def get_news(ticker: str, limit: int = 10) -> list[dict[str, Any]]:
     when the ticker matches the curated fallback universe; otherwise we
     fall back to `{ticker} stock`.
     """
-    key = f"us:news:{ticker.upper()}"
+    key = key_news_us(ticker)
     cached = await cache_get_json(key)
     if cached is not None:
         return cached
@@ -929,7 +939,7 @@ async def get_news(ticker: str, limit: int = 10) -> list[dict[str, Any]]:
 
 async def get_earnings(ticker: str) -> dict[str, Any]:
     """Next earnings date and consensus EPS/revenue estimates from yfinance."""
-    key = f"us:earnings:{ticker.upper()}"
+    key = key_earnings_us(ticker)
     cached = await cache_get_json(key)
     if cached is not None:
         return cached

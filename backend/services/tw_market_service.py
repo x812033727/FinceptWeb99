@@ -30,11 +30,18 @@ import data.tw.twse_mis_connector as twse_mis
 from cache.redis_cache import (
     cache_get_json,
     cache_set_json,
+    key_dividends_tw,
+    key_etf_holdings_tw,
+    key_financials_tw,
+    key_fundamentals_tw,
     key_history,
     key_institutional,
     key_margin,
+    key_news_tw,
     key_quote,
     key_revenue,
+    key_screener_tw,
+    key_valuation_band_tw,
 )
 
 log = logging.getLogger(__name__)
@@ -846,7 +853,7 @@ async def get_fundamentals(symbol: str) -> dict[str, Any]:
         upsert_fundamentals_snapshots_autosession,
     )
 
-    key = f"tw:fundamentals:{symbol}"
+    key = key_fundamentals_tw(symbol)
     cached = await cache_get_json(key)
     if cached is not None:
         return cached
@@ -926,7 +933,7 @@ async def get_financials(
     correctly includes Q3 2024 (filed mid-October) and excludes Q4.
     """
     if as_of is None:
-        key = f"tw:financials:{symbol}"
+        key = key_financials_tw(symbol)
         cached = await cache_get_json(key)
         if cached is not None:
             return cached
@@ -1281,10 +1288,18 @@ async def get_screener(
         ohlcv_latest=ohlcv_latest,
     )
     ohlcv_tag = ohlcv_latest.isoformat() if ohlcv_latest else "none"
-    key = (
-        f"tw:screener:{exchange}:{min_volume}:"
-        f"{min_pe}:{max_pe}:{min_pb}:{max_pb}:{min_dividend_yield}:"
-        f"{include_etf}:{etf_only}:{limit}:{ohlcv_tag}"
+    key = key_screener_tw(
+        exchange=exchange,
+        min_volume=min_volume,
+        min_pe=min_pe,
+        max_pe=max_pe,
+        min_pb=min_pb,
+        max_pb=max_pb,
+        min_dividend_yield=min_dividend_yield,
+        include_etf=include_etf,
+        etf_only=etf_only,
+        limit=limit,
+        ohlcv_tag=ohlcv_tag,
     )
     cached = await cache_get_json(key)
     if cached:
@@ -1808,7 +1823,7 @@ async def get_news(symbol: str, limit: int = 10) -> list[dict[str, Any]]:
     """
     from services.ingest.repository import read_recent_news_autosession
 
-    key = f"tw:news:{symbol.upper()}"
+    key = key_news_tw(symbol)
     cached = await cache_get_json(key)
     if cached is not None:
         return cached
@@ -1921,7 +1936,7 @@ async def get_valuation_band(
     if metric not in ("pe", "pb"):
         raise ValueError(f"metric must be 'pe' or 'pb', got {metric!r}")
 
-    key = f"tw:valuation_band:{symbol}:{metric}:{years}"
+    key = key_valuation_band_tw(symbol, metric, years)
     cached = await cache_get_json(key)
     if cached is not None:
         return cached
@@ -2039,7 +2054,7 @@ def _normalize_dividend(r: dict) -> dict[str, Any]:
 
 async def get_dividends(symbol: str) -> list[dict[str, Any]]:
     """Cash + stock dividend history, normalized and oldest-first."""
-    key = f"tw:dividends:{symbol}"
+    key = key_dividends_tw(symbol)
     cached = await cache_get_json(key)
     if cached is not None:
         return cached
@@ -2069,7 +2084,7 @@ async def get_etf_holdings(symbol: str) -> dict[str, Any]:
     if not is_etf(symbol):
         return empty
 
-    key = f"tw:etf_holdings:{symbol}"
+    key = key_etf_holdings_tw(symbol)
     cached = await cache_get_json(key)
     if cached is not None:
         return cached

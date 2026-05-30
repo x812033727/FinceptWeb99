@@ -282,3 +282,131 @@ def key_user_sessions(user_id: str) -> str:
 
 def key_github_release() -> str:
     return "github:release:latest"
+
+
+# ── US-specific cache key builders ─────────────────────────────────
+# Moved out of `us_market_service` so `grep "f\"us:"` finds zero hits
+# and every key prefix is auditable in one file.
+
+def key_financials_us(ticker: str) -> str:
+    """Annual income / balance / cash-flow statements (Polygon → yfinance)."""
+    return f"us:financials:{ticker}:annual"
+
+
+def key_options_us(ticker: str, expiration_date: str | None = None) -> str:
+    """Option chain. `expiration_date=None` means "all expirations bundled"."""
+    return f"us:options:{ticker}:{expiration_date or 'all'}"
+
+
+def key_news_us(ticker: str) -> str:
+    """Google News RSS (en-US) fallback to yfinance.news."""
+    return f"us:news:{ticker.upper()}"
+
+
+def key_earnings_us(ticker: str) -> str:
+    """Next earnings date + EPS / revenue consensus (yfinance.calendar)."""
+    return f"us:earnings:{ticker.upper()}"
+
+
+def key_macro_us(name: str, as_of: str | None = None) -> str:
+    """FRED macro series (fed_funds_rate / cpi / gdp / yield_curve / …).
+    `as_of` (ISO date) namespaces backtest reads so they don't poison
+    the live cache."""
+    if as_of is not None:
+        return f"us:macro:{name}:asof={as_of}"
+    return f"us:macro:{name}"
+
+
+def key_screener_us(
+    *,
+    min_market_cap: float | None,
+    min_pe: float | None,
+    max_pe: float | None,
+    min_pb: float | None,
+    max_pb: float | None,
+    min_dividend_yield: float | None,
+    min_volume: int | None,
+    sector: str | None,
+    limit: int,
+) -> str:
+    """Composite filter key for the live US screener path. Backtest
+    (`as_of`) shape is a separate concern handled inside the service."""
+    return (
+        f"us:screener:{min_market_cap}:{min_pe}:{max_pe}:{min_pb}:{max_pb}:"
+        f"{min_dividend_yield}:{min_volume}:{sector}:{limit}"
+    )
+
+
+# ── TW-specific cache key builders ─────────────────────────────────
+
+def key_fundamentals_tw(symbol: str) -> str:
+    """TW fundamentals — distinct from the generic ``key_fundamentals``
+    (which suffixes ``:snapshot`` for US). The TW path landed earlier
+    without the suffix and we preserve that shape so this PR is a
+    pure refactor (no cache invalidation)."""
+    return f"tw:fundamentals:{symbol}"
+
+
+def key_financials_tw(symbol: str) -> str:
+    """TW income / balance / cash-flow statements (FinMind)."""
+    return f"tw:financials:{symbol}"
+
+
+def key_news_tw(symbol: str) -> str:
+    """Google News RSS (zh-TW) backed TW symbol news."""
+    return f"tw:news:{symbol.upper()}"
+
+
+def key_valuation_band_tw(symbol: str, metric: str, years: int) -> str:
+    """本益比 / 股價淨值比 河流圖 — metric ∈ {pe, pb}."""
+    return f"tw:valuation_band:{symbol}:{metric}:{years}"
+
+
+def key_dividends_tw(symbol: str) -> str:
+    """Historical dividends (FinMind)."""
+    return f"tw:dividends:{symbol}"
+
+
+def key_etf_holdings_tw(symbol: str) -> str:
+    """ETF underlying holdings (FinMind / TWSE)."""
+    return f"tw:etf_holdings:{symbol}"
+
+
+def key_health_tw(symbol: str) -> str:
+    """StatementDog-style 4-light financial health snapshot."""
+    return f"tw:health:{symbol}"
+
+
+def key_archive_last2_tw(symbol: str) -> str:
+    """Last 2 (date, close) pairs from the ohlcv_daily archive — feeds
+    the prev_close resolver. See `tw_prev_close`."""
+    return f"tw:archive_last2:{symbol}"
+
+
+def key_prev_close_finmind_tw(symbol: str) -> str:
+    """FinMind-tier prev_close fallback (10-day window). See `tw_prev_close`."""
+    return f"tw:prev_close_finmind:{symbol}"
+
+
+def key_screener_tw(
+    *,
+    exchange: str | None,
+    min_volume: int | None,
+    min_pe: float | None,
+    max_pe: float | None,
+    min_pb: float | None,
+    max_pb: float | None,
+    min_dividend_yield: float | None,
+    include_etf: bool,
+    etf_only: bool,
+    limit: int,
+    ohlcv_tag: str,
+) -> str:
+    """Composite filter key for the live TW screener path. `ohlcv_tag`
+    is the latest archived session ISO date (or `"none"`) so backtest
+    and live results don't collide."""
+    return (
+        f"tw:screener:{exchange}:{min_volume}:"
+        f"{min_pe}:{max_pe}:{min_pb}:{max_pb}:{min_dividend_yield}:"
+        f"{include_etf}:{etf_only}:{limit}:{ohlcv_tag}"
+    )

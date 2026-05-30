@@ -36,12 +36,16 @@ Kept distinct from ``fetch_quote_waterfall`` (which still lives in
 """
 from __future__ import annotations
 
-import json
 import logging
 from datetime import date, timedelta
 
 import data.tw.finmind_connector as finmind
-from cache.redis_cache import cache_get, cache_set
+from cache.redis_cache import (
+    cache_get_json,
+    cache_set_json,
+    key_archive_last2_tw,
+    key_prev_close_finmind_tw,
+)
 
 log = logging.getLogger(__name__)
 
@@ -54,13 +58,12 @@ async def _archive_last2_closes(symbol: str) -> list[tuple[str, float]]:
     Caller decides which one is "prev_close" by comparing the
     upstream's currently-reported close — see `_resolve_prev_close`.
     """
-    cache_key = f"tw:archive_last2:{symbol}"
-    cached = await cache_get(cache_key)
+    cache_key = key_archive_last2_tw(symbol)
+    cached = await cache_get_json(cache_key)
     if cached is not None:
         try:
-            data = json.loads(cached)
-            return [(d, float(c)) for d, c in data]
-        except (TypeError, ValueError, json.JSONDecodeError):
+            return [(d, float(c)) for d, c in cached]
+        except (TypeError, ValueError):
             pass
     try:
         from services.ingest.repository import read_ohlcv_range_autosession
@@ -86,9 +89,9 @@ async def _archive_last2_closes(symbol: str) -> list[tuple[str, float]]:
     if not cleaned:
         return []
     last2 = cleaned[-2:]
-    await cache_set(
+    await cache_set_json(
         cache_key,
-        json.dumps([[d, c] for d, c in last2]),
+        [[d, c] for d, c in last2],
         4 * 3600,
     )
     return last2
@@ -131,13 +134,12 @@ async def _finmind_prev_close(
     missing because the cron either hasn't ingested them yet or
     stopped early on a TWSE 429) silently leave 昨收 blank — and the
     UI can only show the un-bounded upstream change as +996%."""
-    cache_key = f"tw:prev_close_finmind:{symbol}"
-    cached = await cache_get(cache_key)
+    cache_key = key_prev_close_finmind_tw(symbol)
+    cached = await cache_get_json(cache_key)
     if cached is not None:
         try:
-            data = json.loads(cached)
-            pairs = [(str(d), float(c)) for d, c in data]
-        except (TypeError, ValueError, json.JSONDecodeError):
+            pairs = [(str(d), float(c)) for d, c in cached]
+        except (TypeError, ValueError):
             pairs = []
         if pairs:
             return _pick_prev_from_pairs(pairs, upstream_close)
@@ -163,8 +165,8 @@ async def _finmind_prev_close(
     if not pairs:
         return None
     last2 = pairs[-2:]
-    await cache_set(
-        cache_key, json.dumps([[d, c] for d, c in last2]), 4 * 3600,
+    await cache_set_json(
+        cache_key, [[d, c] for d, c in last2], 4 * 3600,
     )
     return _pick_prev_from_pairs(last2, upstream_close)
 

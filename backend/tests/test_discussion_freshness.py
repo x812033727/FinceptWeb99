@@ -73,6 +73,28 @@ def test_backtest_mode_anchors_on_as_of_ignoring_wall_clock():
     assert "2025-06-01" in sess["hint_zh"]
 
 
+def test_backtest_mode_session_date_uses_info_cutoff_decision_date_is_as_of():
+    """When the builder passes `info_cutoff` (the previous trading day),
+    `session_date` reflects the cutoff — the latest session the personas
+    may see — while `decision_date` stays `as_of` (the entry / grading
+    day). The hint must name both so a persona predicting `as_of` knows
+    it's looking at the prior session and entering at as_of's open. This
+    is the look-ahead guard: a backtest for 4/1 may only see ≤ 3/31."""
+    sess = resolve_captured_session(
+        market="TW",
+        as_of=date(2026, 4, 1),
+        info_cutoff=date(2026, 3, 31),
+        now=_at_tw(2026, 5, 28, 11),
+    )
+    assert sess["session_date"] == "2026-03-31"
+    assert sess["decision_date"] == "2026-04-01"
+    assert sess["phase"] == "backtest"
+    hint = sess["hint_zh"]
+    assert "2026-03-31" in hint, "hint must name the info cutoff (prior session)"
+    assert "2026-04-01" in hint, "hint must name the decision / entry day"
+    assert "前一交易日" in hint
+
+
 # ── resolve_captured_session: TW live mode phase classification ────
 
 
@@ -241,9 +263,12 @@ def test_resolve_captured_session_always_returns_complete_shape():
     ]
     for market, as_of, now in cases:
         sess = resolve_captured_session(market=market, as_of=as_of, now=now)
-        assert set(sess.keys()) == {
+        assert {
             "session_date", "phase", "is_intraday", "hint_zh",
-        }, f"market={market} as_of={as_of} missing keys: {sess}"
+        } <= set(sess.keys()), f"market={market} as_of={as_of} missing keys: {sess}"
         assert isinstance(sess["is_intraday"], bool)
         assert isinstance(sess["hint_zh"], str)
         assert sess["hint_zh"]  # non-empty
+        # Backtest mode adds `decision_date` (the entry / grading day)
+        # alongside `session_date` (the info cutoff); live modes omit it.
+        assert ("decision_date" in sess) == (as_of is not None)

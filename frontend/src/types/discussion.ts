@@ -163,6 +163,11 @@ export interface Conclusion {
  * prompt also surfaces. */
 export interface CapturedSession {
   session_date: string | null;
+  // Backtest only: the decision / entry / grading day. `session_date`
+  // is the info cutoff (previous trading day — what the personas could
+  // see), `decision_date` is the day you'd act on (enter at its open).
+  // Absent in live modes.
+  decision_date?: string | null;
   phase: string;
   is_intraday: boolean;
   hint_zh: string;

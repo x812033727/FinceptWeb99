@@ -18,9 +18,12 @@ counts (operators read zero as "cron hasn't run yet").
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
+
+from db.session import AsyncSessionLocal
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -130,17 +133,38 @@ async def fetch_per_symbol_sentiment(
     7-day (vs 48h for market-wide): per-symbol news is sparse — 72h
     often returned None for mid-caps with one mention every few days.
     Aggregate counts reflect the full 7-day population; `headlines`
-    cap stays at 10 per symbol."""
+    cap stays at 10 per symbol.
+
+    Per-symbol reads fan out via `asyncio.gather` (C2-2 from
+    `misty-mixing-harbor.md`) so a 5-symbol focus list trims this
+    block's wall time from ~5 × DB query to ~max(DB queries). Each
+    coroutine opens its own `AsyncSessionLocal` since SQLAlchemy
+    `AsyncSession` is not safe to share across concurrent awaits —
+    the passed `db` is kept for signature compat with the caller
+    (existing tests in `test_discussion_context_blocks.py`) but
+    intentionally unused.
+    """
     if not focus_symbols:
         return
+    from services.news_sentiment_service import read_symbol_sentiment
+
+    async def _one(sym: str) -> tuple[str, Any]:
+        try:
+            async with AsyncSessionLocal() as own_db:
+                return sym, await read_symbol_sentiment(
+                    own_db, market=market, symbol=sym,
+                    limit=10, max_age_hours=168, as_of=as_of_dt,
+                )
+        except Exception:
+            return sym, None
+
     try:
-        from services.news_sentiment_service import read_symbol_sentiment
-        for sym in focus_symbols[:max_focus_symbols]:
-            rows = await read_symbol_sentiment(
-                db, market=market, symbol=sym,
-                limit=10, max_age_hours=168, as_of=as_of_dt,
-            )
-            if rows:
-                ctx["per_symbol_news_sentiment"][sym] = rows
+        results = await asyncio.gather(
+            *(_one(s) for s in focus_symbols[:max_focus_symbols]),
+        )
     except Exception as exc:
         record_error("per_symbol_sentiment", exc)
+        return
+    for sym, rows in results:
+        if rows:
+            ctx["per_symbol_news_sentiment"][sym] = rows

@@ -37,6 +37,7 @@ from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from db.session import AsyncSessionLocal
 from services.discussion.freshness import resolve_captured_session
 
 from .blocks import (
@@ -196,6 +197,23 @@ def _make_error_recorder(ctx: dict[str, Any]):
     return _record
 
 
+async def _with_own_session(
+    coro_factory: Callable[["AsyncSession"], Awaitable[None]],
+) -> None:
+    """Run `coro_factory` against a fresh `AsyncSessionLocal` context
+    so independent ctx blocks can fan out via `asyncio.gather` without
+    sharing the caller's `db` session (SQLAlchemy `AsyncSession` is
+    not safe across concurrent awaits).
+
+    Each block writes its result into the shared `ctx` dict but
+    targets a distinct top-level key, so concurrent dict mutations
+    don't collide on the same value — Python's GIL handles the
+    per-key write as a single bytecode step.
+    """
+    async with AsyncSessionLocal() as own_db:
+        await coro_factory(own_db)
+
+
 async def build_market_context(
     db: "AsyncSession",
     *,
@@ -353,19 +371,41 @@ async def build_market_context(
     # progress event so the UI's preparing card can switch to
     # "scoring news sentiment..." and the user knows why this
     # phase is taking longer than the others.
+    #
+    # C2-1 from `misty-mixing-harbor.md`: the three news sub-blocks
+    # (market / international / per-symbol) are independent — each
+    # writes a distinct top-level ctx key. Fan them out via
+    # `asyncio.gather`, each in its own short-lived `AsyncSessionLocal`
+    # since SQLAlchemy `AsyncSession` is not safe to share across
+    # concurrent awaits. The market block's `ensure_news_archive_covers`
+    # is the dominant cost in backtest mode (~5-15 s upstream); the
+    # parallel layout lets the international + per-symbol reads run
+    # under that umbrella instead of stacking after it.
     await _progress("scoring_news_sentiment")
-    await news.fetch_market_sentiment(
-        ctx, db, market=market, as_of_dt=as_of_dt,
-        record_error=record_error,
-        focus_symbols=focus_symbols,
-    )
-    await news.fetch_international_sentiment(
-        ctx, db, as_of_dt=as_of_dt, record_error=record_error,
-    )
-    await news.fetch_per_symbol_sentiment(
-        ctx, db, market=market, focus_symbols=focus_symbols,
-        as_of_dt=as_of_dt, record_error=record_error,
-        max_focus_symbols=max_focus_symbols,
+
+    async def _news_market(d: "AsyncSession") -> None:
+        await news.fetch_market_sentiment(
+            ctx, d, market=market, as_of_dt=as_of_dt,
+            record_error=record_error,
+            focus_symbols=focus_symbols,
+        )
+
+    async def _news_international(d: "AsyncSession") -> None:
+        await news.fetch_international_sentiment(
+            ctx, d, as_of_dt=as_of_dt, record_error=record_error,
+        )
+
+    async def _news_per_symbol(d: "AsyncSession") -> None:
+        await news.fetch_per_symbol_sentiment(
+            ctx, d, market=market, focus_symbols=focus_symbols,
+            as_of_dt=as_of_dt, record_error=record_error,
+            max_focus_symbols=max_focus_symbols,
+        )
+
+    await asyncio.gather(
+        _with_own_session(_news_market),
+        _with_own_session(_news_international),
+        _with_own_session(_news_per_symbol),
     )
 
     # PR-D1: TW MOPS 重大訊息. DB-bound, no LLM call, fast.

@@ -21,6 +21,30 @@ import {
 // Initially collapsed — the section is opt-in audit material, not
 // primary reading on every visit.
 
+// Map the classified `news_backfill_reason` (set by `summarizeContext`
+// from the backend's auto-backfill diagnostic) to a specific i18n key,
+// so a backtest with no contemporaneous news explains the actual cause
+// (paywall / empty date / transient lock / non-TW / upstream error)
+// rather than the generic "archive predates our data" line — which is
+// misleading for a paid Sponsor whose only gap is the market-wide news
+// tier. Falls back to the generic key for pre-diagnostic snapshots.
+function backtestNewsKey(reason: string | undefined): string {
+  switch (reason) {
+    case "paywall":
+      return "discussion.context_news_backfill_paywall";
+    case "empty":
+      return "discussion.context_news_backfill_empty";
+    case "lock":
+      return "discussion.context_news_backfill_lock";
+    case "non_tw":
+      return "discussion.context_news_backfill_non_tw";
+    case "error":
+      return "discussion.context_news_backfill_error";
+    default:
+      return "discussion.context_backtest_news_unavailable";
+  }
+}
+
 function RoundContextRow({ snap }: { snap: RoundContextSnapshot }) {
   const { t } = useTranslation();
   const [showJson, setShowJson] = useState(false);
@@ -52,7 +76,10 @@ function RoundContextRow({ snap }: { snap: RoundContextSnapshot }) {
       `${t("discussion.context_bullish")} ${summary.news_bullish ?? 0} / ` +
       `${t("discussion.context_bearish")} ${summary.news_bearish ?? 0}`
     : summary.backtest_news_unavailable
-      ? `${t("discussion.context_news_label")}：${t("discussion.context_backtest_news_unavailable")}`
+      ? `${t("discussion.context_news_label")}：${t(
+          backtestNewsKey(summary.news_backfill_reason),
+          { detail: summary.news_backfill_detail ?? "" },
+        )}`
       : null;
 
   const buyerLine = summary.top_foreign_buyer

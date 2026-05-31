@@ -306,6 +306,19 @@ export interface RoundCtxSummary {
    * news archive didn't reach `as_of`. Lets the row renderer show
    * "新聞 archive 不及" instead of pretending sentiment was 0/0/0. */
   backtest_news_unavailable?: boolean;
+
+  /** When `backtest_news_unavailable`, the classified cause derived
+   * from `ctx.news_backfill` (the auto-backfill diagnostic the backend
+   * stamps onto the same ctx) so the renderer can explain WHY the
+   * archive is empty — paywall / no news on that date / transient
+   * lock / non-TW market / upstream error — instead of the generic
+   * "archive predates our data" line, which is misleading for a paid
+   * Sponsor whose only gap is the market-wide news tier. Absent on
+   * snapshots captured before the diagnostic was wired. */
+  news_backfill_reason?: "paywall" | "empty" | "lock" | "non_tw" | "error";
+  /** Sanitised upstream error string for the `"error"` reason (the
+   * FinMind token is already redacted server-side). */
+  news_backfill_detail?: string;
 }
 
 export function summarizeContext(ctx: Record<string, unknown>): RoundCtxSummary {
@@ -334,6 +347,26 @@ export function summarizeContext(ctx: Record<string, unknown>): RoundCtxSummary 
     // mode when the archive doesn't reach `as_of`. Surface that as
     // its own state so the renderer doesn't fall back to "0 / 0".
     out.backtest_news_unavailable = true;
+    // Classify WHY using the auto-backfill diagnostic the backend
+    // stamped onto the same ctx, so the renderer can explain a
+    // paywall / lock / empty-date instead of the generic archive line.
+    const backfill = ctx.news_backfill as Record<string, unknown> | null | undefined;
+    if (backfill && typeof backfill === "object") {
+      const err = typeof backfill.error === "string" ? backfill.error : "";
+      const skipped = typeof backfill.skipped === "string" ? backfill.skipped : "";
+      if (err && /paywall|sponsor|requires paid|your level|update your user level/i.test(err)) {
+        out.news_backfill_reason = "paywall";
+      } else if (err) {
+        out.news_backfill_reason = "error";
+        out.news_backfill_detail = err;
+      } else if (skipped === "lock") {
+        out.news_backfill_reason = "lock";
+      } else if (skipped === "non-tw") {
+        out.news_backfill_reason = "non_tw";
+      } else if (backfill.covered === false) {
+        out.news_backfill_reason = "empty";
+      }
+    }
   }
   const intl = ctx.international_sentiment as Record<string, unknown> | null | undefined;
   if (intl && typeof intl === "object") {

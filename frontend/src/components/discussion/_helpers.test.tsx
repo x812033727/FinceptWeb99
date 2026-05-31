@@ -421,6 +421,77 @@ describe("summarizeContext", () => {
     expect(out.intl_bearish).toBe(5);
   });
 
+  // ── backtest news-unavailable cause classification ──────────────
+  // (derived from the backend's news_backfill auto-backfill diagnostic)
+
+  it("flags backtest_news_unavailable when backtest + news_sentiment null", () => {
+    const out = summarizeContext({ backtest: true, news_sentiment: null });
+    expect(out.backtest_news_unavailable).toBe(true);
+    expect(out.news_backfill_reason).toBeUndefined();
+  });
+
+  it("classifies a FinMind paywall backfill diagnostic as 'paywall' (no raw detail)", () => {
+    const out = summarizeContext({
+      backtest: true,
+      news_sentiment: null,
+      news_backfill: {
+        covered: false,
+        backfilled: 0,
+        error: "FinMind paywall — TaiwanStockNews requires a paid sponsor tier.",
+      },
+    });
+    expect(out.backtest_news_unavailable).toBe(true);
+    expect(out.news_backfill_reason).toBe("paywall");
+    expect(out.news_backfill_detail).toBeUndefined();
+  });
+
+  it("classifies a generic backfill error as 'error' and carries the detail", () => {
+    const out = summarizeContext({
+      backtest: true,
+      news_sentiment: null,
+      news_backfill: { covered: false, backfilled: 0, error: "count: boom" },
+    });
+    expect(out.news_backfill_reason).toBe("error");
+    expect(out.news_backfill_detail).toBe("count: boom");
+  });
+
+  it("classifies a held Redis lock as 'lock' and a non-TW skip as 'non_tw'", () => {
+    expect(
+      summarizeContext({
+        backtest: true,
+        news_sentiment: null,
+        news_backfill: { covered: false, backfilled: 0, skipped: "lock" },
+      }).news_backfill_reason,
+    ).toBe("lock");
+    expect(
+      summarizeContext({
+        backtest: true,
+        news_sentiment: null,
+        news_backfill: { covered: false, backfilled: 0, skipped: "non-tw" },
+      }).news_backfill_reason,
+    ).toBe("non_tw");
+  });
+
+  it("classifies an uncovered empty date (no error/skip) as 'empty'", () => {
+    const out = summarizeContext({
+      backtest: true,
+      news_sentiment: null,
+      news_backfill: { covered: false, backfilled: 0 },
+    });
+    expect(out.news_backfill_reason).toBe("empty");
+  });
+
+  it("leaves the warning + reason unset when backtest news actually has data", () => {
+    const out = summarizeContext({
+      backtest: true,
+      news_sentiment: { bullish: 4, bearish: 1 },
+      news_backfill: { covered: true, backfilled: 12 },
+    });
+    expect(out.backtest_news_unavailable).toBeUndefined();
+    expect(out.news_backfill_reason).toBeUndefined();
+    expect(out.news_bullish).toBe(4);
+  });
+
   it("picks the first foreign buyer + revenue grower (already pre-sorted upstream)", () => {
     const out = summarizeContext({
       top_foreign_buyers: [

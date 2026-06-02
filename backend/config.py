@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     # MiniMax (OpenAI-compatible chat completions + tool-use). Empty key disables the provider.
     MINIMAX_API_KEY: str = ""
     MINIMAX_HOST: str = "https://api.minimax.io"  # international; mainland: https://api.minimax.chat
-    MINIMAX_MODEL: str = "MiniMax-M2.7"  # alts: MiniMax-M2.7-highspeed, abab6.5s-chat, abab6.5-chat, MiniMax-Text-01
+    MINIMAX_MODEL: str = "MiniMax-M3"  # alts: MiniMax-M2.7, MiniMax-M2.7-highspeed, abab6.5s-chat, abab6.5-chat, MiniMax-Text-01
     MINIMAX_MAX_TURNS: int = 6  # tool-loop ceiling so a misbehaving model can't burn the quota
 
     # Groq (OpenAI-compatible; very fast inference). Empty key disables.
@@ -242,7 +242,7 @@ class Settings(BaseSettings):
 
     # Per-call LLM `max_tokens` budgets. 8192 is generous for non-thinking
     # models (their actual output is far smaller — the cap only ceilings
-    # them) and gives reasoning models like MiniMax-M2.7 / DeepSeek-R1
+    # them) and gives reasoning models like MiniMax-M3 / DeepSeek-R1
     # ~6-7K headroom for chain-of-thought before the visible JSON / Chinese
     # content lands. Bump via RuntimeTunablesCard if a particularly verbose
     # reasoning model still hits `finish_reason=length` before output.

@@ -16,7 +16,7 @@ export const PROVIDER_MODELS: Record<string, string[]> = {
   // Ollama models depend on what the operator has `ollama pull`-ed locally;
   // these are popular community defaults.
   ollama:    ["llama3.2", "llama3.3:70b", "qwen2.5:14b", "qwen2.5:72b", "mistral-nemo", "deepseek-r1:32b", "phi3"],
-  minimax:   ["MiniMax-M2.7", "MiniMax-M2.7-highspeed", "abab6.5s-chat", "abab6.5-chat", "MiniMax-Text-01"],
+  minimax:   ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "abab6.5s-chat", "abab6.5-chat", "MiniMax-Text-01"],
   groq:      ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
   deepseek:  ["deepseek-chat", "deepseek-reasoner"],
   // OpenRouter has 100+ models; pick a curated set covering the major

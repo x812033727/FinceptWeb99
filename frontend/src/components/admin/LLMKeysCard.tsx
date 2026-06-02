@@ -40,7 +40,7 @@ const LLM_PROVIDER_LABELS: Record<string, { name: string; tagline: string; place
   },
   minimax: {
     name: "MiniMax",
-    tagline: "MiniMax-M2.7, abab6.5",
+    tagline: "MiniMax-M3, M2.7, abab6.5",
     placeholder: "eyJhbG…",
   },
   groq: {

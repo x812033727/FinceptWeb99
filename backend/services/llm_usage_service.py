@@ -45,6 +45,7 @@ RATE_TABLE: dict[tuple[str, str], tuple[float, float]] = {
     ("gemini", "gemini-1.5-flash"): (0.00007, 0.0003),
     ("gemini", "gemini-1.5-pro"):   (0.00125, 0.005),
     # MiniMax
+    ("minimax", "MiniMax-M3"):      (0.0007,  0.0028),
     ("minimax", "MiniMax-M2.7"):    (0.001,   0.005),
     ("minimax", "abab6.5s"):        (0.00007, 0.00007),
     ("minimax", "abab6.5"):         (0.0004,  0.0004),

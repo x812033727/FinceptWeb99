@@ -22,6 +22,7 @@ import type {
   Discussion,
   DiscussionDetail,
   DiscussionMarket,
+  PersonaUsageDetail,
   Turn,
 } from "@/types/discussion";
 import { AutoRunConfigCard } from "@/components/discussion/AutoRunConfigCard";
@@ -66,6 +67,7 @@ import {
   fetchSession,
   fetchSessions,
   fetchRoundUsage,
+  fetchRoundUsageDetail,
   BAND_LABELS,
   formatDateLong,
   formatDateShort,
@@ -257,6 +259,13 @@ export default function DiscussionPage() {
   const [liveRoundUsage, setLiveRoundUsage] = useState<
     Record<number, { prompt: number; completion: number; total: number }>
   >({});
+  // Per-round, per-persona usage + prompt-composition breakdown for the
+  // "ctx 用量明細" panel. Populated live from `turn_end` (tokens +
+  // breakdown; cost arrives via the persisted query refetch). Keyed by
+  // round number → list of persona rows.
+  const [liveRoundUsageDetail, setLiveRoundUsageDetail] = useState<
+    Record<number, PersonaUsageDetail[]>
+  >({});
   // Live tool-use log for the persona currently streaming. Cleared on
   // every turn_start so each persona's bubble shows only its own
   // tool calls. Not persisted — once turn_end fires we drop them; the
@@ -310,6 +319,16 @@ export default function DiscussionPage() {
     enabled: !!selectedId,
   });
 
+  // Persisted finer per-round usage (per persona + prompt-composition
+  // breakdown) for the "ctx 用量明細" panel. Live `turn_end` rows take
+  // precedence for the in-progress round; this seeds reopened
+  // discussions and back-fills exact cost after a round completes.
+  const { data: persistedRoundUsageDetail = [] } = useQuery({
+    queryKey: ["discussion-round-usage-detail", selectedId],
+    queryFn: () => fetchRoundUsageDetail(selectedId!),
+    enabled: !!selectedId,
+  });
+
   const personaName = usePersonaName(agents);
   const personaShort = usePersonaShort();
 
@@ -327,6 +346,7 @@ export default function DiscussionPage() {
     setStreamError(null);
     setStreamingToolEvents([]);
     setLiveRoundUsage({});
+    setLiveRoundUsageDetail({});
   }, [selectedId]);
 
   // Hydrate the editable form fields from the active session's detail
@@ -764,6 +784,32 @@ export default function DiscussionPage() {
                     created_at: new Date().toISOString(),
                   },
                 ]);
+                // Live per-persona usage + prompt-composition breakdown
+                // for the "ctx 用量明細" panel. Cost isn't computed
+                // client-side; the persisted query refetch back-fills it
+                // after the round completes.
+                if (typeof obj.round === "number") {
+                  const rn = obj.round as number;
+                  const pd: PersonaUsageDetail = {
+                    round: rn,
+                    persona_id: String(obj.persona_id),
+                    prompt_tokens: Number(obj.prompt_tokens ?? 0),
+                    completion_tokens: Number(obj.completion_tokens ?? 0),
+                    total_tokens:
+                      Number(obj.prompt_tokens ?? 0) +
+                      Number(obj.completion_tokens ?? 0),
+                    cost_usd: 0,
+                    tool_call_count: Number(obj.tool_call_count ?? 0),
+                    breakdown:
+                      (obj.breakdown as PersonaUsageDetail["breakdown"]) ?? null,
+                  };
+                  setLiveRoundUsageDetail((prev) => {
+                    const list = (prev[rn] ?? []).filter(
+                      (d) => d.persona_id !== pd.persona_id,
+                    );
+                    return { ...prev, [rn]: [...list, pd] };
+                  });
+                }
                 setStreamBuffer("");
                 setStreamingPersona(null);
                 setStreamingToolEvents([]);
@@ -817,6 +863,14 @@ export default function DiscussionPage() {
       // the user clicks elsewhere.
       queryClient.refetchQueries({ queryKey: ["discussion-session", selectedId] });
       queryClient.refetchQueries({ queryKey: ["discussion-sessions"] });
+      // Back-fill exact per-persona cost (+ the persisted breakdown) for
+      // the "ctx 用量明細" panel now the round's usage rows are committed.
+      queryClient.refetchQueries({
+        queryKey: ["discussion-round-usage-detail", selectedId],
+      });
+      queryClient.refetchQueries({
+        queryKey: ["discussion-round-usage", selectedId],
+      });
       setStreamingTurns([]);
     }
     return { ok: roundOk, rateLimited };
@@ -1755,6 +1809,14 @@ export default function DiscussionPage() {
               };
             }
             Object.assign(usageMap, liveRoundUsage);
+            // Per-round usage detail (per-persona + breakdown). Group
+            // persisted rows by round, then let live turn_end rows win
+            // for the in-progress round.
+            const detailMap: Record<number, PersonaUsageDetail[]> = {};
+            for (const d of persistedRoundUsageDetail) {
+              (detailMap[d.round] ??= []).push(d);
+            }
+            Object.assign(detailMap, liveRoundUsageDetail);
             return orderedRounds.map((rn) => (
               <RoundSection
                 key={rn}
@@ -1765,6 +1827,7 @@ export default function DiscussionPage() {
                 personaInitial={personaShort}
                 defaultExpanded={rn === latestRound}
                 tokens={usageMap[rn]}
+                usageDetail={detailMap[rn]}
               />
             ));
           })()}

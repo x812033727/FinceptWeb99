@@ -209,6 +209,12 @@ class DiscussionTurn(Base):
         Text, nullable=False, default="", server_default="",
     )
     citations: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Per-section + per-block prompt-size breakdown for the round's "ctx
+    # 用量明細" view (char counts per prompt section + per context block).
+    # NULL for error/timeout placeholder turns + rows from before 0063.
+    input_breakdown: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
     )

@@ -340,3 +340,55 @@ async def discussion_round_usage(
         }
         for r in rows
     ]
+
+
+async def discussion_round_persona_usage(
+    db: AsyncSession,
+    *,
+    discussion_id: uuid.UUID,
+) -> list[dict[str, Any]]:
+    """Per-(round, persona) exact token / cost / tool counts for a whole
+    discussion, ordered by (round, persona).
+
+    Backs GET /sessions/{id}/round-usage/detail — the finer breakdown
+    sitting under each round's total. Synthesizer rows (round IS NULL)
+    are excluded. The per-section / per-block prompt composition lives on
+    `discussion_turns.input_breakdown` and is joined in by the router."""
+    stmt = (
+        select(
+            LLMUsageEvent.round,
+            LLMUsageEvent.persona_id,
+            LLMUsageEvent.provider,
+            LLMUsageEvent.model,
+            func.coalesce(func.sum(LLMUsageEvent.prompt_tokens), 0),
+            func.coalesce(func.sum(LLMUsageEvent.completion_tokens), 0),
+            func.coalesce(func.sum(LLMUsageEvent.cost_usd), 0),
+            func.coalesce(func.sum(LLMUsageEvent.tool_call_count), 0),
+        )
+        .where(
+            LLMUsageEvent.discussion_id == discussion_id,
+            LLMUsageEvent.round.isnot(None),
+        )
+        .group_by(
+            LLMUsageEvent.round,
+            LLMUsageEvent.persona_id,
+            LLMUsageEvent.provider,
+            LLMUsageEvent.model,
+        )
+        .order_by(LLMUsageEvent.round, LLMUsageEvent.persona_id)
+    )
+    rows = (await db.execute(stmt)).all()
+    return [
+        {
+            "round": int(r[0]),
+            "persona_id": r[1],
+            "provider": r[2],
+            "model": r[3],
+            "prompt_tokens": int(r[4]),
+            "completion_tokens": int(r[5]),
+            "total_tokens": int(r[4]) + int(r[5]),
+            "cost_usd": float(r[6]),
+            "tool_call_count": int(r[7]),
+        }
+        for r in rows
+    ]

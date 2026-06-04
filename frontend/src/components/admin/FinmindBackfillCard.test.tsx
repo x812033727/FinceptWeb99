@@ -205,7 +205,7 @@ describe("FinmindBackfillCard — actions", () => {
             "TaiwanStockPriceAdj",
             "TaiwanStockMonthRevenue",
           ]),
-          days: 1095,
+          days: 365,
           reset_stuck_first: true,
         }),
       );

@@ -274,8 +274,15 @@ class Settings(BaseSettings):
     # content lands. Bump via RuntimeTunablesCard if a particularly verbose
     # reasoning model still hits `finish_reason=length` before output.
     SENTIMENT_LLM_MAX_TOKENS: int = 8192
-    DISCUSSION_TURN_MAX_TOKENS: int = 8192
-    DISCUSSION_SYNTHESIZER_MAX_TOKENS: int = 8192
+    # Interleaved-thinking models (e.g. MiniMax-M2.7) stream their
+    # <think> content into the SAME output budget, so a small ceiling
+    # makes them burn the whole budget on reasoning and truncate the
+    # JSON reply — the persona then comes back empty and the round
+    # runner skips it. 32K leaves ample room for thinking + the
+    # structured answer. It's only a ceiling (models that finish early
+    # don't pay more); tune per deployment via RuntimeTunablesCard.
+    DISCUSSION_TURN_MAX_TOKENS: int = 32768
+    DISCUSSION_SYNTHESIZER_MAX_TOKENS: int = 32768
 
     # `resolve_key(user_id=None)` (the system-task path used by every
     # background cron) normally consults: system row → .env. For solo /

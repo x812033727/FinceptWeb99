@@ -60,6 +60,16 @@ from models.discussion_lesson import DiscussionLesson
 
 log = logging.getLogger(__name__)
 
+
+def shared_owner_ids(owner: uuid.UUID) -> list[uuid.UUID]:
+    """Owner IDs that share `owner`'s lesson pool — `owner` plus every
+    other member of its configured shared group (`LESSON_SHARED_OWNER_
+    GROUPS`). Returns `[owner]` when sharing is unconfigured or `owner`
+    is in no group, so the default behavior is unchanged. Always non-
+    empty, so callers can pass it straight to `.in_()`."""
+    return settings.lesson_shared_owner_map.get(owner, [owner])
+
+
 # Lesson categories used by the post-mortem extraction pipeline.
 # Anything outside this set is coerced to "other" at write time, so
 # every category referenced in a post-mortem prompt MUST appear here
@@ -302,7 +312,9 @@ async def extract_and_persist_lessons(
         try:
             existing = await db.scalar(
                 select(DiscussionLesson.id).where(
-                    DiscussionLesson.owner_user_id == owner_user_id,
+                    DiscussionLesson.owner_user_id.in_(
+                        shared_owner_ids(owner_user_id)
+                    ),
                     DiscussionLesson.lesson_text_hash == h,
                     DiscussionLesson.created_at >= dedup_threshold,
                 ).limit(1)
@@ -598,7 +610,7 @@ async def fetch_relevant_lessons(
     candidate_window = max(limit * 20, 50)
 
     conditions = [
-        DiscussionLesson.owner_user_id == owner_user_id,
+        DiscussionLesson.owner_user_id.in_(shared_owner_ids(owner_user_id)),
         DiscussionLesson.market == market,
         # PR-4c: archived lessons are soft-deleted from the fetch
         # ranking. The row is preserved (audit / unarchive surface)
@@ -669,7 +681,7 @@ async def list_recent_lessons(
     to the requesting owner; admin sees their own bucket only (a
     future enhancement could expose an `all_users` toggle when role
     == admin). Most-recent first."""
-    conditions = [DiscussionLesson.owner_user_id == owner_user_id]
+    conditions = [DiscussionLesson.owner_user_id.in_(shared_owner_ids(owner_user_id))]
     if market:
         conditions.append(DiscussionLesson.market == market)
     stmt = (
@@ -730,7 +742,7 @@ async def list_lessons_with_metrics(
     Returns `{items: [...], total: int, limit, offset}` so the UI
     can render page navigation.
     """
-    conditions = [DiscussionLesson.owner_user_id == owner_user_id]
+    conditions = [DiscussionLesson.owner_user_id.in_(shared_owner_ids(owner_user_id))]
     if archived:
         conditions.append(DiscussionLesson.archived_at.is_not(None))
     else:
@@ -789,7 +801,7 @@ async def delete_lesson(
         select(DiscussionLesson).where(
             and_(
                 DiscussionLesson.id == lesson_id,
-                DiscussionLesson.owner_user_id == owner_user_id,
+                DiscussionLesson.owner_user_id.in_(shared_owner_ids(owner_user_id)),
             )
         )
     )

@@ -102,11 +102,16 @@ async def list_archived_lessons(
     discards. Newest-archived first."""
     from sqlalchemy import select
     from models.discussion_lesson import DiscussionLesson
-    from services.discussion_lesson_service import lesson_to_dict
+    from services.discussion_lesson_service import (
+        lesson_to_dict,
+        shared_owner_ids,
+    )
     stmt = (
         select(DiscussionLesson)
         .where(
-            DiscussionLesson.owner_user_id == _coerce_owner_uuid(user),
+            DiscussionLesson.owner_user_id.in_(
+                shared_owner_ids(_coerce_owner_uuid(user))
+            ),
             DiscussionLesson.archived_at.is_not(None),
         )
         .order_by(DiscussionLesson.archived_at.desc())
@@ -135,10 +140,13 @@ async def unarchive_lesson(
     on already-active rows."""
     from sqlalchemy import select
     from models.discussion_lesson import DiscussionLesson
+    from services.discussion_lesson_service import shared_owner_ids
     row = await db.scalar(
         select(DiscussionLesson).where(
             DiscussionLesson.id == lesson_id,
-            DiscussionLesson.owner_user_id == _coerce_owner_uuid(user),
+            DiscussionLesson.owner_user_id.in_(
+                shared_owner_ids(_coerce_owner_uuid(user))
+            ),
         )
     )
     if row is None:

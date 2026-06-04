@@ -42,6 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from models.discussion import Discussion, DiscussionTurn
+from services.discussion.ctx_minify import _minify_for_prompt
 from services.discussion.persona_config import (
     _build_persona_tool_kwargs,
     _filter_context_for_persona,
@@ -55,6 +56,7 @@ from services.discussion.prompts import (
 from services.discussion.symbols import extract_focus_symbols
 from services.discussion.transcript_format import _format_history
 from services.discussion.turn_parsing import _parse_turn_response
+from services.discussion.usage_breakdown import measure_prompt_breakdown
 
 if TYPE_CHECKING:
     from ai.agents import AgentSpec
@@ -235,25 +237,52 @@ async def _ask_persona(
     # Filter context down to blocks this persona actually uses — saves
     # tokens and stops weak models from mixing irrelevant blocks (e.g.
     # macro_analyst citing risk_warnings dispositions in a Fed thesis).
-    filtered_ctx = _filter_context_for_persona(context, persona_id)
-    # Build the schema annotation from what the persona actually sees,
-    # not the full block list — otherwise the prompt advertises blocks
-    # the LLM can't find in `## 市場現況` and forces it to either
-    # hallucinate values or apologise about missing data.
+    # Filter to the persona's blocks, then losslessly minify (drop null
+    # leaves + collapse float noise) before serialization. The ctx JSON
+    # is re-sent on every tool-loop iteration, so this trims every
+    # iteration with zero semantic change. Annotation is built from the
+    # minified ctx so it only advertises blocks that survived.
+    filtered_ctx = _minify_for_prompt(
+        _filter_context_for_persona(context, persona_id)
+    )
     annotation = _persona_schema_annotation(filtered_ctx)
-    user_prompt = _TURN_PROMPT_TEMPLATE.format(
+    freshness = _format_freshness_preamble(context)
+    # Compact separators (no indent/whitespace) — see the tool-loop
+    # re-send note above.
+    context_json = json.dumps(
+        filtered_ctx, ensure_ascii=False, separators=(",", ":"),
+    )
+    history = _format_history(prior_turns)
+    base_user_prompt = _TURN_PROMPT_TEMPLATE.format(
         topic=topic,
         rules=rules,
         annotation=annotation,
-        freshness_preamble=_format_freshness_preamble(context),
-        # Compact separators (no indent/whitespace) — the ctx JSON is
-        # re-sent on every tool-loop iteration, so dropping pretty-print
-        # whitespace cuts per-call input tokens with zero semantic change.
-        context=json.dumps(filtered_ctx, ensure_ascii=False, separators=(",", ":")),
-        history=_format_history(prior_turns),
+        freshness_preamble=freshness,
+        context=context_json,
+        history=history,
     )
-    if tool_kwargs:
-        user_prompt += _PERSONA_TOOL_USAGE_HINT
+    tool_hint = _PERSONA_TOOL_USAGE_HINT if tool_kwargs else ""
+    user_prompt = base_user_prompt + tool_hint
+    # Per-section + per-block input-size breakdown for the "ctx 用量明細"
+    # view. Yielded as a synthetic event the round runner captures (folds
+    # into turn_end + persists on the turn). Char-based + provider-
+    # agnostic; the UI scales it to est tokens using the persona's real
+    # prompt_tokens.
+    yield {
+        "type": "input_breakdown",
+        "breakdown": measure_prompt_breakdown(
+            system_prompt=spec.system_prompt,
+            base_user_prompt=base_user_prompt,
+            topic=topic,
+            rules=rules,
+            freshness=freshness,
+            annotation=annotation,
+            context_json=context_json,
+            history=history,
+            tool_hint=tool_hint,
+            context_obj=filtered_ctx,
+        ),
+    }
     messages = [
         {"role": "system", "content": spec.system_prompt},
         {"role": "user", "content": user_prompt},
@@ -550,6 +579,7 @@ async def run_round(
 
             assembled = ""
             usage_seen: dict[str, int] | None = None
+            breakdown: dict[str, Any] | None = None
             tool_call_total = 0
             tool_call_breakdown: dict[str, int] = {}
             # Wrap the persona's turn in asyncio.timeout so a single stuck
@@ -589,6 +619,11 @@ async def run_round(
                                     "persona_id": persona_id,
                                     "text": visible,
                                 })
+                        elif etype == "input_breakdown":
+                            # Captured (not forwarded as its own SSE
+                            # event) — folded into turn_end + persisted
+                            # on the DiscussionTurn below.
+                            breakdown = event.get("breakdown")
                         elif etype == "tool_call":
                             # Forward through so the SSE consumer can
                             # show "buffett 正在執行 run_dcf" inline, AND
@@ -687,6 +722,7 @@ async def run_round(
                 stance=stance,
                 content=content,
                 citations=None,
+                input_breakdown=breakdown,
             )
             db.add(turn_row)
             await db.commit()
@@ -722,6 +758,13 @@ async def run_round(
                 "persona_name": spec.name,
                 "stance": stance,
                 "content": content,
+                # Per-persona exact usage (folded in so the UI's "用量明細"
+                # updates live, not just at round_end). 0 when the
+                # provider emitted no usage event.
+                "prompt_tokens": (usage_seen or {}).get("prompt_tokens", 0),
+                "completion_tokens": (usage_seen or {}).get("completion_tokens", 0),
+                "tool_call_count": tool_call_total,
+                "breakdown": breakdown,
             })
 
         # Settle this round's token usage (input + output) for the live

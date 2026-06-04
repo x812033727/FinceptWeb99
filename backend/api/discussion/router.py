@@ -253,6 +253,40 @@ async def get_round_usage(
     return await llm_usage_service.discussion_round_usage(db, discussion_id=row.id)
 
 
+@router.get("/sessions/{discussion_id}/round-usage/detail")
+async def get_round_usage_detail(
+    discussion_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Finer per-round ctx usage: exact per-persona token / cost / tool
+    counts (from llm_usage_events) joined with each turn's prompt
+    composition (`discussion_turns.input_breakdown` — char size per
+    prompt section + per context block). Owner-scoped. Returns
+    `[{round, persona_id, provider, model, prompt_tokens,
+    completion_tokens, total_tokens, cost_usd, tool_call_count,
+    breakdown}, ...]` ordered by (round, persona). `breakdown` is null
+    for placeholder turns and rows recorded before the column existed."""
+    row = await discussion_service.get_discussion(
+        db, discussion_id=discussion_id, owner_id=_coerce_owner_uuid(user),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Discussion not found")
+    from services import llm_usage_service
+    usage = await llm_usage_service.discussion_round_persona_usage(
+        db, discussion_id=row.id,
+    )
+    turns = await discussion_service.get_turns(db, discussion_id=row.id)
+    bd_by_key = {
+        (t.round, t.persona_id): t.input_breakdown
+        for t in turns
+        if getattr(t, "input_breakdown", None) is not None
+    }
+    for u in usage:
+        u["breakdown"] = bd_by_key.get((u["round"], u["persona_id"]))
+    return usage
+
+
 @router.get(
     "/sessions/{discussion_id}/scoreboard",
     response_model=ScoreboardResponse,

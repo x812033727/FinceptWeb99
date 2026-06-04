@@ -643,6 +643,28 @@
     "round_label": "第 {{round}} 輪",
     "round_summary": "第 {{round}} 輪 · {{count}} 位發言",
     "round_tokens": "輸入 {{prompt}} + 輸出 {{completion}} = {{total}} tokens",
+    "usage_detail": {
+      "title": "ctx 用量明細",
+      "per_persona": "每位專家",
+      "persona": "專家",
+      "input": "輸入",
+      "output": "輸出",
+      "tools": "工具",
+      "cost": "成本",
+      "by_section": "依 prompt 段落",
+      "by_block": "依 context 區塊",
+      "est": "（估算 tokens · 字元）",
+      "section": {
+        "system": "系統提示",
+        "instructions": "指令樣板",
+        "annotation": "區塊說明",
+        "freshness": "資料時效",
+        "topic_rules": "主題與規則",
+        "context_json": "市場現況 JSON",
+        "history": "先前發言",
+        "tool_hint": "工具提示"
+      }
+    },
     "turn_count": "{{count}} 位專家",
     "thinking_chip": "思考中",
     "stance": {

@@ -33,6 +33,16 @@ class LLMUsageEvent(Base):
     cost_usd: Mapped[float] = mapped_column(Numeric(10, 6), default=0, nullable=False)
     tool_call_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     tool_call_breakdown: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Discussion attribution (PR: per-round token tally). Nullable so the
+    # non-discussion callers (news-sentiment scorer, direct chat) and all
+    # rows written before this column existed stay valid. `round` is NULL
+    # for the synthesizer/conclusion call (not part of any single round).
+    discussion_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("discussions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    round: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True,
     )
@@ -42,4 +52,5 @@ class LLMUsageEvent(Base):
     __table_args__ = (
         Index("ix_llm_usage_user_time", "user_id", "created_at"),
         Index("ix_llm_usage_provider_time", "provider", "created_at"),
+        Index("ix_llm_usage_discussion_round", "discussion_id", "round"),
     )

@@ -92,6 +92,15 @@ class Settings(BaseSettings):
     OPENROUTER_TITLE: str = ""    # optional X-Title for OpenRouter analytics
     OPENROUTER_MAX_TURNS: int = 6
 
+    # Tool-loop result cap (OpenAI-compat providers: MiniMax/Groq/DeepSeek/
+    # OpenRouter). Tool results are appended to `convo` and re-sent on every
+    # subsequent tool iteration, so one large result inflates the prompt N
+    # times over. Results whose serialized length exceeds this many chars are
+    # shrunk before being fed back (large top-level list fields kept as
+    # head+tail + original count; everything else preserved). Generous by
+    # design so small/medium results pass untouched. Set very high to disable.
+    TOOL_RESULT_MAX_CHARS: int = 12_000
+
     # Encryption key for at-rest LLM provider keys stored in the DB. Empty
     # means "derive from JWT_SECRET_KEY" — see auth/llm_key_crypto.py.
     LLM_KEY_ENCRYPTION_KEY: str = ""

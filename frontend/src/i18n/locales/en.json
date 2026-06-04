@@ -642,6 +642,7 @@
     "cancelling": "Cancelling…",
     "round_label": "Round {{round}}",
     "round_summary": "Round {{round}} · {{count}} turns",
+    "round_tokens": "in {{prompt}} + out {{completion}} = {{total}} tokens",
     "turn_count": "{{count}} experts",
     "thinking_chip": "thinking",
     "stance": {

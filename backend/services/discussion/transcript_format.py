@@ -31,9 +31,17 @@ from models.discussion import DiscussionTurn
 # tokens per verbatim turn; 8 verbatim + 22 summarised lands at ~10K
 # input tokens before the actual `## 你的角色` block, which is the
 # remaining budget cap).
-_MAX_HISTORY_TURNS = 30
-_FULL_HISTORY_TURNS = 8
-_HISTORY_SUMMARY_CHARS = 120
+_MAX_HISTORY_TURNS = 24
+_FULL_HISTORY_TURNS = 6
+_HISTORY_SUMMARY_CHARS = 90
+# Per-turn cap on the *verbatim* recent-history turns. A persona's full
+# turn runs ~2,000 chars; the conclusion + main reasons sit up top, the
+# long elaboration trails. Capping each verbatim turn keeps every recent
+# speaker's position visible (breadth) while cutting the trailing bulk —
+# the biggest "tokens saved / debate-quality kept" lever, since this
+# block is re-sent on every LLM call. Turns at/under the cap are
+# untouched.
+_FULL_TURN_MAX_CHARS = 900
 
 
 def _summarize_turn_content(content: str) -> str:
@@ -101,6 +109,8 @@ def _format_history(prior_turns: list[DiscussionTurn]) -> str:
         sections.append("（最近發言全文）")
     for t in recent:
         body = t.content.strip() or "（同意，無補充）"
+        if len(body) > _FULL_TURN_MAX_CHARS:
+            body = body[:_FULL_TURN_MAX_CHARS] + "…"
         sections.append(_render(t, body))
     return "\n".join(sections)
 

@@ -65,6 +65,7 @@ import {
   fetchScoreboard,
   fetchSession,
   fetchSessions,
+  fetchRoundUsage,
   BAND_LABELS,
   formatDateLong,
   formatDateShort,
@@ -250,6 +251,12 @@ export default function DiscussionPage() {
   >(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
+  // Per-round token tally (input + output) fed to the AI. Populated live
+  // from `round_end` SSE events; the historical query below seeds it for
+  // reopened discussions. Keyed by round number.
+  const [liveRoundUsage, setLiveRoundUsage] = useState<
+    Record<number, { prompt: number; completion: number; total: number }>
+  >({});
   // Live tool-use log for the persona currently streaming. Cleared on
   // every turn_start so each persona's bubble shows only its own
   // tool calls. Not persisted — once turn_end fires we drop them; the
@@ -294,6 +301,15 @@ export default function DiscussionPage() {
     enabled: !!selectedId,
   });
 
+  // Persisted per-round token tally for the selected discussion, so a
+  // reopened discussion shows each round's "fed to AI" tokens. Live
+  // `round_end` events (liveRoundUsage) take precedence over this.
+  const { data: persistedRoundUsage = [] } = useQuery({
+    queryKey: ["discussion-round-usage", selectedId],
+    queryFn: () => fetchRoundUsage(selectedId!),
+    enabled: !!selectedId,
+  });
+
   const personaName = usePersonaName(agents);
   const personaShort = usePersonaShort();
 
@@ -310,6 +326,7 @@ export default function DiscussionPage() {
     setStreamingProgress(null);
     setStreamError(null);
     setStreamingToolEvents([]);
+    setLiveRoundUsage({});
   }, [selectedId]);
 
   // Hydrate the editable form fields from the active session's detail
@@ -751,6 +768,22 @@ export default function DiscussionPage() {
                 setStreamingPersona(null);
                 setStreamingToolEvents([]);
                 currentBuffer = "";
+                break;
+              case "round_end":
+                // Per-round token settlement (input + output) for the
+                // "每輪結算給 AI 的 token" display. Backend sums the
+                // round's llm_usage_events before emitting this.
+                if (typeof obj.round === "number") {
+                  const rn = obj.round as number;
+                  setLiveRoundUsage((prev) => ({
+                    ...prev,
+                    [rn]: {
+                      prompt: Number(obj.prompt_tokens ?? 0),
+                      completion: Number(obj.completion_tokens ?? 0),
+                      total: Number(obj.total_tokens ?? 0),
+                    },
+                  }));
+                }
                 break;
               case "error":
                 setStreamError(obj.message ?? "未知錯誤");
@@ -1707,6 +1740,21 @@ export default function DiscussionPage() {
             const orderedRounds = Array.from(byRound.keys()).sort(
               (a, b) => a - b,
             );
+            // Merge persisted per-round token tallies (reopened
+            // discussions) with live round_end events (current run).
+            // Live wins — it's the freshest settlement for that round.
+            const usageMap: Record<
+              number,
+              { prompt: number; completion: number; total: number }
+            > = {};
+            for (const u of persistedRoundUsage) {
+              usageMap[u.round] = {
+                prompt: u.prompt_tokens,
+                completion: u.completion_tokens,
+                total: u.total_tokens,
+              };
+            }
+            Object.assign(usageMap, liveRoundUsage);
             return orderedRounds.map((rn) => (
               <RoundSection
                 key={rn}
@@ -1716,6 +1764,7 @@ export default function DiscussionPage() {
                 personaName={personaName}
                 personaInitial={personaShort}
                 defaultExpanded={rn === latestRound}
+                tokens={usageMap[rn]}
               />
             ));
           })()}

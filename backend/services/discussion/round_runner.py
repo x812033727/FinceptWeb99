@@ -246,7 +246,10 @@ async def _ask_persona(
         rules=rules,
         annotation=annotation,
         freshness_preamble=_format_freshness_preamble(context),
-        context=json.dumps(filtered_ctx, ensure_ascii=False, indent=2),
+        # Compact separators (no indent/whitespace) — the ctx JSON is
+        # re-sent on every tool-loop iteration, so dropping pretty-print
+        # whitespace cuts per-call input tokens with zero semantic change.
+        context=json.dumps(filtered_ctx, ensure_ascii=False, separators=(",", ":")),
         history=_format_history(prior_turns),
     )
     if tool_kwargs:
@@ -708,6 +711,8 @@ async def run_round(
                     completion_tokens=usage_seen["completion_tokens"],
                     tool_call_count=tool_call_total,
                     tool_call_breakdown=dict(tool_call_breakdown) or None,
+                    discussion_id=discussion.id,
+                    round=round_number,
                 )
 
             yield TurnEvent("turn_end", {
@@ -719,9 +724,28 @@ async def run_round(
                 "content": content,
             })
 
+        # Settle this round's token usage (input + output) for the live
+        # per-round tally. All persona rows above were committed per-turn,
+        # so the SUM is accurate here. Best-effort: a failure must not
+        # break round completion.
+        round_tokens: dict[str, int] = {}
+        try:
+            from services.llm_usage_service import round_usage_totals
+            round_tokens = await round_usage_totals(
+                db, discussion_id=discussion.id, round=round_number,
+            )
+        except Exception:
+            log.warning(
+                "discussion.round.usage_tally_failed",
+                extra={"discussion_id": str(discussion.id), "round": round_number},
+            )
+
         yield TurnEvent("round_end", {
             "round": round_number,
             "turn_count": len(discussion.persona_ids),
+            "prompt_tokens": round_tokens.get("prompt_tokens", 0),
+            "completion_tokens": round_tokens.get("completion_tokens", 0),
+            "total_tokens": round_tokens.get("total_tokens", 0),
         })
     finally:
         # Always reset to DRAFT so the next round attempt isn't blocked

@@ -232,6 +232,27 @@ async def get_round_contexts(
     ]
 
 
+@router.get("/sessions/{discussion_id}/round-usage")
+async def get_round_usage(
+    discussion_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Per-round token tally (input + output) for a discussion. Owner-
+    scoped, same access rule as the rest of the discussion endpoints.
+    Returns `[{round, prompt_tokens, completion_tokens, total_tokens,
+    cost_usd}, ...]` ordered by round. Empty for discussions that ran
+    before per-round usage attribution was wired in (their usage rows
+    carry NULL discussion_id/round)."""
+    row = await discussion_service.get_discussion(
+        db, discussion_id=discussion_id, owner_id=_coerce_owner_uuid(user),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Discussion not found")
+    from services import llm_usage_service
+    return await llm_usage_service.discussion_round_usage(db, discussion_id=row.id)
+
+
 @router.get(
     "/sessions/{discussion_id}/scoreboard",
     response_model=ScoreboardResponse,

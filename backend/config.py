@@ -1,3 +1,6 @@
+import json
+import uuid
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 
@@ -219,6 +222,21 @@ class Settings(BaseSettings):
     LESSONS_PER_MARKET_LIMIT: int = 5
     LESSONS_PER_SYMBOL_LIMIT: int = 3
 
+    # Shared lesson pools — let several accounts share one lesson
+    # library. Lessons stay owned by whoever wrote them (no ownership
+    # rewrite), but every lesson READ path (library browse, archive,
+    # delete/unarchive, and the per-discussion injection that feeds
+    # persona prompts) and the write-time dedup widen their
+    # `owner_user_id` filter from `== caller` to `IN (group)`. The
+    # net effect: any member of a group sees + can curate the union
+    # of the group's lessons, and a new post-mortem lesson from one
+    # member shows up for all members. JSON list-of-groups, each
+    # group a list of user-id UUID strings, e.g.
+    #   [["uuid-a","uuid-b"]]
+    # Empty (default) = legacy single-owner behavior, no sharing.
+    # Parsed leniently via `lesson_shared_owner_map`.
+    LESSON_SHARED_OWNER_GROUPS: str = ""
+
     # PR-J1: lesson semantic embedding. The fetch ranking will (in J2)
     # fold cosine similarity between a query embedding and per-lesson
     # embedding into the score so "半導體高估值風險" surfaces for a
@@ -342,6 +360,27 @@ class Settings(BaseSettings):
 
     # Environment
     DEBUG: bool = False
+
+    @property
+    def lesson_shared_owner_map(self) -> dict[uuid.UUID, list[uuid.UUID]]:
+        """Parse `LESSON_SHARED_OWNER_GROUPS` into `{member: [all group
+        members…]}`. Each member maps to its whole group (sorted, so the
+        `.in_()` filter is deterministic). Malformed config degrades to
+        `{}` (no sharing) rather than crashing the app — a sharing
+        misconfig should never take the service down."""
+        raw = (self.LESSON_SHARED_OWNER_GROUPS or "").strip()
+        if not raw:
+            return {}
+        try:
+            groups = json.loads(raw)
+            out: dict[uuid.UUID, list[uuid.UUID]] = {}
+            for group in groups:
+                members = sorted(uuid.UUID(str(m)) for m in group)
+                for m in members:
+                    out[m] = members
+            return out
+        except (ValueError, TypeError):
+            return {}
 
 
 settings = Settings()

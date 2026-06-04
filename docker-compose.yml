@@ -119,6 +119,11 @@ services:
       SMTP_USE_TLS:           ${SMTP_USE_TLS:-true}
       SMTP_USE_SSL:           ${SMTP_USE_SSL:-false}
       SMTP_TIMEOUT_SECONDS:   ${SMTP_TIMEOUT_SECONDS:-20}
+      # Shared lesson pools — JSON list-of-groups of user-id UUIDs that
+      # share one lesson library (read union + cross-account dedup).
+      # Same .env passthrough pattern as the vars above (no env_file on
+      # this service). Empty = legacy single-owner behavior.
+      LESSON_SHARED_OWNER_GROUPS: ${LESSON_SHARED_OWNER_GROUPS:-}
     volumes:
       # Bidirectional channel for the admin one-click redeploy button.
       # Backend touches /host-trigger/deploy-trigger to fire the host's

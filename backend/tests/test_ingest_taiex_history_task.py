@@ -196,8 +196,8 @@ async def test_get_index_with_history_reads_from_db(
         ))
     await upsert_ohlcv_bars(db_session, bars)
 
-    with patch.object(tw, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(tw, "cache_set", AsyncMock()), \
+    with patch.object(tw, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(tw, "cache_set_json", AsyncMock()), \
          patch.object(tw.twse, "get_taiex",
                       AsyncMock(return_value={"index": "TAIEX", "value": 17500.0})):
         result = await tw.get_index(history_days=30)
@@ -215,8 +215,8 @@ async def test_get_index_default_omits_history():
     change downstream serialization unexpectedly."""
     import services.tw_market_service as tw
 
-    with patch.object(tw, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(tw, "cache_set", AsyncMock()), \
+    with patch.object(tw, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(tw, "cache_set_json", AsyncMock()), \
          patch.object(tw.twse, "get_taiex",
                       AsyncMock(return_value={"index": "TAIEX", "value": 17500.0})):
         result = await tw.get_index()

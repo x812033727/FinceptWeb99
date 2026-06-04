@@ -1,7 +1,8 @@
 import { useTranslation } from "react-i18next";
 import { useCollapsible } from "@/hooks/useCollapsible";
-import type { Turn } from "@/types/discussion";
+import type { PersonaUsageDetail, Turn } from "@/types/discussion";
 import { RoundDivider } from "./RoundDivider";
+import { RoundUsageDetail } from "./RoundUsageDetail";
 import { TurnBubble } from "./TurnBubble";
 
 export interface RoundSectionProps {
@@ -24,6 +25,10 @@ export interface RoundSectionProps {
    *  round divider chip. Omitted for rounds with no recorded usage
    *  (e.g. discussions that ran before per-round attribution). */
   tokens?: { prompt: number; completion: number; total: number };
+  /** Per-persona usage + prompt-composition breakdown for this round,
+   *  rendered as a collapsible "ctx 用量明細" panel inside the expanded
+   *  body. Empty / omitted hides the panel. */
+  usageDetail?: PersonaUsageDetail[];
 }
 
 /**
@@ -45,6 +50,7 @@ export interface RoundSectionProps {
  */
 export function RoundSection({
   discussionId, round, turns, personaName, personaInitial, defaultExpanded, tokens,
+  usageDetail,
 }: RoundSectionProps) {
   const { t } = useTranslation();
   const postMortemTurn = turns.find(
@@ -94,6 +100,14 @@ export function RoundSection({
           id={`round-${discussionId}-${round}`}
           className="space-y-3 mt-2"
         >
+          {usageDetail && usageDetail.length > 0 && (
+            <RoundUsageDetail
+              discussionId={discussionId}
+              round={round}
+              details={usageDetail}
+              personaName={personaName}
+            />
+          )}
           {turns.map((tn, i) => (
             <TurnBubble
               key={`${tn.round}-${tn.turn_index}-${i}`}

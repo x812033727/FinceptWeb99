@@ -12,6 +12,7 @@ import type {
   Discussion,
   DiscussionDetail,
   DiscussionMarket,
+  PersonaUsageDetail,
   RoundContextSnapshot,
   ScoreboardResponse,
   Turn,
@@ -47,6 +48,18 @@ export interface RoundUsage {
 
 export async function fetchRoundUsage(id: string): Promise<RoundUsage[]> {
   const res = await api.get<RoundUsage[]>(`/discussion/sessions/${id}/round-usage`);
+  return res.data;
+}
+
+/** Finer per-round usage: exact per-persona tokens / cost / tool counts
+ * joined with each turn's prompt-composition breakdown. Backs the round
+ * "ctx 用量明細" panel. */
+export async function fetchRoundUsageDetail(
+  id: string,
+): Promise<PersonaUsageDetail[]> {
+  const res = await api.get<PersonaUsageDetail[]>(
+    `/discussion/sessions/${id}/round-usage/detail`,
+  );
   return res.data;
 }
 

@@ -643,6 +643,28 @@
     "round_label": "Round {{round}}",
     "round_summary": "Round {{round}} · {{count}} turns",
     "round_tokens": "in {{prompt}} + out {{completion}} = {{total}} tokens",
+    "usage_detail": {
+      "title": "ctx usage breakdown",
+      "per_persona": "Per expert",
+      "persona": "Expert",
+      "input": "Input",
+      "output": "Output",
+      "tools": "Tools",
+      "cost": "Cost",
+      "by_section": "By prompt section",
+      "by_block": "By context block",
+      "est": "(est. tokens · chars)",
+      "section": {
+        "system": "System prompt",
+        "instructions": "Instructions",
+        "annotation": "Block notes",
+        "freshness": "Data freshness",
+        "topic_rules": "Topic + rules",
+        "context_json": "Market context JSON",
+        "history": "Prior turns",
+        "tool_hint": "Tool hint"
+      }
+    },
     "turn_count": "{{count}} experts",
     "thinking_chip": "thinking",
     "stance": {

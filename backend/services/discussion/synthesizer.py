@@ -40,6 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from models.discussion import Discussion, DiscussionTurn
+from services.discussion.ctx_minify import _minify_for_prompt
 from services.discussion.conclusion_parsing import (
     _safe_conclusion,
     compute_conclusion_diff,
@@ -463,7 +464,9 @@ async def synthesize_conclusion(
         freshness_preamble=_format_freshness_preamble(context),
         # Compact separators (no indent) to cut prompt input tokens;
         # JSON semantics are unchanged.
-        context=json.dumps(context, ensure_ascii=False, separators=(",", ":")),
+        context=json.dumps(
+            _minify_for_prompt(context), ensure_ascii=False, separators=(",", ":"),
+        ),
         transcript=_format_transcript(turns),
     )
 

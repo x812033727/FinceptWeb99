@@ -27,6 +27,35 @@ export interface Turn {
   created_at: string;
 }
 
+/** Per-prompt-section + per-context-block char sizes for one persona's
+ * turn — backs the round "ctx 用量明細" view. `sections` keys: system /
+ * instructions / annotation / freshness / topic_rules / context_json /
+ * history / tool_hint. `blocks` keys are ctx block names (focus_briefs /
+ * news_sentiment / ...). Char counts are objective; the UI scales them
+ * to estimated tokens using the persona's real prompt_tokens (labelled
+ * "估"). NULL for placeholder turns / rows from before the column. */
+export interface InputBreakdown {
+  sections: Record<string, number>;
+  blocks: Record<string, number>;
+  total_chars: number;
+}
+
+/** One persona's exact usage in a round (from `llm_usage_events`) joined
+ * with that turn's prompt-composition breakdown. Exact tokens / cost
+ * come from the provider; `breakdown` is the local char measurement. */
+export interface PersonaUsageDetail {
+  round: number;
+  persona_id: string;
+  provider?: string;
+  model?: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  tool_call_count: number;
+  breakdown?: InputBreakdown | null;
+}
+
 export type TimeHorizon = "short_term" | "medium_term" | "long_term";
 
 export interface Recommendation {

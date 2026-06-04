@@ -1416,6 +1416,34 @@ def test_format_history_long_window_summarises_older_keeps_recent_full():
     assert "x" * 200 not in older_band
 
 
+def test_format_history_caps_long_verbatim_turn():
+    """A recent (verbatim-band) turn longer than `_FULL_TURN_MAX_CHARS`
+    is truncated with an ellipsis so the re-sent history block stays
+    bounded; the speaker's opening (conclusion + main reasons) survives.
+    Turns at/under the cap are untouched."""
+    cap = discussion_service._FULL_TURN_MAX_CHARS
+    long_turn = DiscussionTurn()
+    long_turn.round = 1
+    long_turn.turn_index = 0
+    long_turn.persona_id = "buffett"
+    long_turn.stance = "supplement"
+    long_turn.content = "結論在開頭。" + "贅" * (cap + 500)
+    out = discussion_service._format_history([long_turn])
+    assert "結論在開頭。" in out          # head preserved
+    assert "…" in out                      # ellipsis appended
+    assert "贅" * (cap + 1) not in out     # tail trimmed below the cap
+
+    short_turn = DiscussionTurn()
+    short_turn.round = 1
+    short_turn.turn_index = 0
+    short_turn.persona_id = "graham"
+    short_turn.stance = "supplement"
+    short_turn.content = "短發言不該被截。"
+    out_short = discussion_service._format_history([short_turn])
+    assert "短發言不該被截。" in out_short
+    assert "…" not in out_short
+
+
 def test_format_history_empty_returns_first_speaker_marker():
     assert "第一位" in discussion_service._format_history([])
 

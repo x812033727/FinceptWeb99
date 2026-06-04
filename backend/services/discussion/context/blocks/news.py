@@ -87,7 +87,7 @@ async def fetch_market_sentiment(
     try:
         from services.news_sentiment_service import read_recent_market_sentiment
         ns = await read_recent_market_sentiment(
-            db, market=market, limit=50, max_age_hours=48, as_of=as_of_dt,
+            db, market=market, limit=30, max_age_hours=48, as_of=as_of_dt,
         )
         if as_of_dt is not None and not (ns or {}).get("headlines"):
             ctx["news_sentiment"] = None
@@ -108,7 +108,7 @@ async def fetch_international_sentiment(
     try:
         from services.news_sentiment_service import read_recent_market_sentiment
         intl = await read_recent_market_sentiment(
-            db, market="GLOBAL", limit=50, max_age_hours=48, as_of=as_of_dt,
+            db, market="GLOBAL", limit=30, max_age_hours=48, as_of=as_of_dt,
         )
         if as_of_dt is not None and not (intl or {}).get("headlines"):
             ctx["international_sentiment"] = None
@@ -169,7 +169,7 @@ async def fetch_per_symbol_sentiment(
             async with AsyncSessionLocal() as own_db:
                 result: Any = await read_symbol_sentiment(
                     own_db, market=market, symbol=sym,
-                    limit=10, max_age_hours=168, as_of=as_of_dt,
+                    limit=5, max_age_hours=168, as_of=as_of_dt,
                 )
         except Exception:
             result = None

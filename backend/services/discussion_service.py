@@ -793,6 +793,7 @@ from services.discussion.technicals import (  # noqa: E402,F401
 # (still in this file).
 from services.discussion.transcript_format import (  # noqa: E402,F401
     _FULL_HISTORY_TURNS,
+    _FULL_TURN_MAX_CHARS,
     _HISTORY_SUMMARY_CHARS,
     _MAX_HISTORY_TURNS,
     _format_history,

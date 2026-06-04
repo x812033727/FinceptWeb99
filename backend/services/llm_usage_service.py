@@ -91,6 +91,8 @@ async def record_usage(
     completion_tokens: int,
     tool_call_count: int = 0,
     tool_call_breakdown: dict[str, int] | None = None,
+    discussion_id: uuid.UUID | None = None,
+    round: int | None = None,
 ) -> None:
     """Insert one usage row. Failures are logged, never raised — usage
     accounting must not fail a successful chat response.
@@ -98,6 +100,11 @@ async def record_usage(
     `tool_call_count` / `tool_call_breakdown` are optional — pre-tool-loop
     callers (Anthropic / Gemini direct chat, news_sentiment scorer) pass
     nothing and the row records 0 / NULL, matching pre-PR behaviour.
+
+    `discussion_id` / `round` tag the row for per-round token tallies
+    (the discussion orchestrator passes both for persona turns; the
+    synthesizer passes `discussion_id` with `round=None`). Non-discussion
+    callers pass neither and the row records NULL / NULL.
     """
     try:
         cost = estimate_cost_usd(provider, model, prompt_tokens, completion_tokens)
@@ -112,6 +119,8 @@ async def record_usage(
             cost_usd=Decimal(f"{cost:.6f}"),
             tool_call_count=tool_call_count,
             tool_call_breakdown=dict(tool_call_breakdown) if tool_call_breakdown else None,
+            discussion_id=discussion_id,
+            round=round,
         )
         db.add(evt)
         await db.commit()
@@ -264,3 +273,70 @@ async def usage_summary(
         total_tool_calls=int(totals_row[4]),
         top_tools=top_tools,
     )
+
+
+# ── Per-round token tally (每輪結算給 AI 的 token) ──────────────────
+
+async def round_usage_totals(
+    db: AsyncSession,
+    *,
+    discussion_id: uuid.UUID,
+    round: int,
+) -> dict[str, int]:
+    """Sum input + output tokens recorded for one discussion round.
+
+    Called at `round_end` (all persona rows for the round are already
+    committed). Excludes the synthesizer row (round IS NULL). Returns
+    zeros when no rows match (e.g. provider emitted no usage)."""
+    stmt = select(
+        func.coalesce(func.sum(LLMUsageEvent.prompt_tokens), 0),
+        func.coalesce(func.sum(LLMUsageEvent.completion_tokens), 0),
+        func.coalesce(func.sum(LLMUsageEvent.cost_usd), 0),
+    ).where(
+        LLMUsageEvent.discussion_id == discussion_id,
+        LLMUsageEvent.round == round,
+    )
+    row = (await db.execute(stmt)).one()
+    prompt, completion = int(row[0]), int(row[1])
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": prompt + completion,
+        "cost_usd": float(row[2]),
+    }
+
+
+async def discussion_round_usage(
+    db: AsyncSession,
+    *,
+    discussion_id: uuid.UUID,
+) -> list[dict[str, int]]:
+    """Per-round token totals for a whole discussion, ordered by round.
+
+    Backs GET /sessions/{id}/round-usage so a reopened discussion shows
+    each round's tally. Synthesizer rows (round IS NULL) are excluded."""
+    stmt = (
+        select(
+            LLMUsageEvent.round,
+            func.coalesce(func.sum(LLMUsageEvent.prompt_tokens), 0),
+            func.coalesce(func.sum(LLMUsageEvent.completion_tokens), 0),
+            func.coalesce(func.sum(LLMUsageEvent.cost_usd), 0),
+        )
+        .where(
+            LLMUsageEvent.discussion_id == discussion_id,
+            LLMUsageEvent.round.isnot(None),
+        )
+        .group_by(LLMUsageEvent.round)
+        .order_by(LLMUsageEvent.round)
+    )
+    rows = (await db.execute(stmt)).all()
+    return [
+        {
+            "round": int(r[0]),
+            "prompt_tokens": int(r[1]),
+            "completion_tokens": int(r[2]),
+            "total_tokens": int(r[1]) + int(r[2]),
+            "cost_usd": float(r[3]),
+        }
+        for r in rows
+    ]

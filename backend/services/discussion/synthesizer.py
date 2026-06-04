@@ -461,7 +461,9 @@ async def synthesize_conclusion(
         topic=discussion.topic,
         rules=discussion.rules,
         freshness_preamble=_format_freshness_preamble(context),
-        context=json.dumps(context, ensure_ascii=False, indent=2),
+        # Compact separators (no indent) to cut prompt input tokens;
+        # JSON semantics are unchanged.
+        context=json.dumps(context, ensure_ascii=False, separators=(",", ":")),
         transcript=_format_transcript(turns),
     )
 
@@ -604,6 +606,10 @@ async def synthesize_conclusion(
             persona_id="_system:discussion_synthesizer",
             prompt_tokens=usage_seen["prompt_tokens"],
             completion_tokens=usage_seen["completion_tokens"],
+            # Attribute to the discussion but not to any single round
+            # (synthesis runs after the rounds) so per-round tallies stay clean.
+            discussion_id=discussion.id,
+            round=None,
         )
 
     conclusion = _safe_conclusion(assembled)

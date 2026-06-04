@@ -406,6 +406,67 @@ def _format_empty_stream_diagnostic(
     return "; ".join(parts)
 
 
+_TOOL_RESULT_LIST_KEYS = (
+    "rows", "quotes", "items", "contracts", "peers",
+    "top_buyers", "top_sellers", "headlines",
+)
+
+
+def _cap_tool_result(name: str, result_str: str, limit: int) -> str:
+    """Shrink an oversized tool result before it is appended to `convo`
+    and re-sent on every subsequent tool iteration.
+
+    Only fires when `result_str` exceeds `limit` chars — small / medium
+    results pass through untouched (the great majority: most tools
+    already cap their own output). For the few large, unbounded shapes
+    (`get_institutional_history` / `get_margin_history` 90-day series,
+    `compare_quotes`) the result is a JSON object with a big top-level
+    list; that list is reduced to head + tail with the original count
+    recorded under `_truncated`, mirroring the head/tail pattern
+    `run_backtest` already uses. All scalar / summary fields (count,
+    avg, …) are preserved so the model keeps the aggregate signal plus
+    the most-recent and earliest data points — enough to cite a trend.
+    Falls back to a head+tail char slice for non-JSON / still-oversized
+    payloads so the snippet stays readable rather than cut mid-structure.
+    Caller skips this for error payloads (kept full for diagnostics).
+    """
+    if len(result_str) <= limit:
+        return result_str
+
+    head_n, tail_n = 15, 5
+    try:
+        data = json.loads(result_str)
+    except (json.JSONDecodeError, ValueError):
+        data = None
+
+    if isinstance(data, dict):
+        trimmed: dict[str, int] = {}
+        for k, v in list(data.items()):
+            if k in _TOOL_RESULT_LIST_KEYS and isinstance(v, list) and len(v) > head_n + tail_n:
+                data[k] = v[:head_n] + v[-tail_n:]
+                trimmed[k] = len(v)
+        if trimmed:
+            data["_truncated"] = {
+                "reason": f"result exceeded {limit} chars; large lists kept as "
+                          f"head{head_n}+tail{tail_n}",
+                "original_counts": trimmed,
+            }
+            capped = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+            if len(capped) <= limit:
+                return capped
+            result_str = capped  # smaller now; char-slice the remainder below
+
+    # Fallback: keep a parseable-looking head + tail char slice.
+    keep = max(limit - 200, limit // 2)
+    cut_head = keep * 3 // 4
+    cut_tail = keep - cut_head
+    return (
+        result_str[:cut_head]
+        + f" …[{len(result_str) - keep} chars truncated by tool-result cap] "
+        + result_str[-cut_tail:]
+    )
+
+
 async def _openai_compat_tool_loop(
     *,
     base_url: str,
@@ -635,7 +696,11 @@ async def _openai_compat_tool_loop(
                 "role": "tool",
                 "tool_call_id": tool_id,
                 "name": name,
-                "content": result_str,
+                # Cap oversized results before they accumulate in `convo`
+                # (re-sent on every later tool turn). Errors stay full for
+                # diagnostics. See _cap_tool_result.
+                "content": result_str if is_error
+                else _cap_tool_result(name, result_str, settings.TOOL_RESULT_MAX_CHARS),
             })
 
     yield {

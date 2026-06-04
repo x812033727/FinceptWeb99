@@ -34,6 +34,22 @@ export async function fetchSession(id: string): Promise<DiscussionDetail> {
   return res.data;
 }
 
+/** Per-round token tally (input + output) fed to the AI, persisted in
+ * `llm_usage_events`. Empty for discussions that ran before per-round
+ * attribution was wired in. */
+export interface RoundUsage {
+  round: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+}
+
+export async function fetchRoundUsage(id: string): Promise<RoundUsage[]> {
+  const res = await api.get<RoundUsage[]>(`/discussion/sessions/${id}/round-usage`);
+  return res.data;
+}
+
 export async function createSession(body: {
   topic: string;
   rules: string;

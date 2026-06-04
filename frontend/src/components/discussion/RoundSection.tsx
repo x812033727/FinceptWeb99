@@ -20,6 +20,10 @@ export interface RoundSectionProps {
    * user can manually collapse and that decision sticks.
    */
   defaultExpanded?: boolean;
+  /** Per-round token tally (input + output) fed to the AI, shown in the
+   *  round divider chip. Omitted for rounds with no recorded usage
+   *  (e.g. discussions that ran before per-round attribution). */
+  tokens?: { prompt: number; completion: number; total: number };
 }
 
 /**
@@ -40,7 +44,7 @@ export interface RoundSectionProps {
  * reload preserves manual expand / collapse.
  */
 export function RoundSection({
-  discussionId, round, turns, personaName, personaInitial, defaultExpanded,
+  discussionId, round, turns, personaName, personaInitial, defaultExpanded, tokens,
 }: RoundSectionProps) {
   const { t } = useTranslation();
   const postMortemTurn = turns.find(
@@ -68,7 +72,7 @@ export function RoundSection({
         aria-controls={`round-${discussionId}-${round}`}
         className="w-full text-left group"
       >
-        <RoundDivider round={round} turnCount={turns.length} />
+        <RoundDivider round={round} turnCount={turns.length} tokens={tokens} />
       </button>
       {(postMortemTurn || hasUserInjection) && (
         <div className="-mt-3 mb-3 flex justify-center">

@@ -642,6 +642,7 @@
     "cancelling": "取消中…",
     "round_label": "第 {{round}} 輪",
     "round_summary": "第 {{round}} 輪 · {{count}} 位發言",
+    "round_tokens": "輸入 {{prompt}} + 輸出 {{completion}} = {{total}} tokens",
     "turn_count": "{{count}} 位專家",
     "thinking_chip": "思考中",
     "stance": {

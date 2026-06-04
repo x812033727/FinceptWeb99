@@ -159,15 +159,15 @@ async def test_get_history_short_circuits_for_synthetic_symbols(
     from services.ingest.repository import OhlcvBar, upsert_ohlcv_bars
     await upsert_ohlcv_bars(db_session, [
         OhlcvBar(market="TW", symbol="_TAIEX_TR",
-                 ts=date(2026, 4, 30),
+                 ts=date.fromordinal(date.today().toordinal() - 2),
                  open=35000, high=35000, low=35000, close=35000,
                  volume=0, source="finmind"),
     ])
 
     twse_mock = AsyncMock(return_value=[])
     finmind_mock = AsyncMock(return_value=[])
-    with patch.object(svc, "cache_get", AsyncMock(return_value=None)), \
-         patch.object(svc, "cache_set", AsyncMock()), \
+    with patch.object(svc, "cache_get_json", AsyncMock(return_value=None)), \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
          patch.object(svc.twse, "get_daily_ohlcv", twse_mock), \
          patch.object(svc.finmind, "get_daily_ohlcv", finmind_mock):
         bars = await svc.get_history("_TAIEX_TR", months=1)

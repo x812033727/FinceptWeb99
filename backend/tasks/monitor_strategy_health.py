@@ -2,10 +2,12 @@
 
 Once per UTC day (02:00) iterate every non-stale strategy template,
 compute its rolling-30 metrics via `strategy_health_service`, and
-persist a snapshot. Any snapshot with non-empty `status_flags`
-fires an admin notification through the existing
-`notification_service` so the operator sees drift / collapse
-signals without watching dashboards.
+persist a snapshot. A snapshot whose non-empty `status_flags`
+represent a healthy→degraded TRANSITION (the previous snapshot had
+no flags) fires an owner notification through the existing
+`notification_service` AND an `alert_events` history row (PR-D4)
+so degradation surfaces in the AlertsPage / daily digest without
+re-alerting every day for a still-degraded strategy.
 
 Multi-pod safe via the same Redis SET-NX lock pattern as
 `score_news_sentiment` — without it, every pod would race to write
@@ -26,7 +28,9 @@ from sqlalchemy import select
 
 from cache.redis_cache import acquire_lock, release_lock
 from db.session import AsyncSessionLocal
+from models.alert import AlertEvent
 from models.discussion_strategy_template import DiscussionStrategyTemplate
+from models.strategy_health_metric import StrategyHealthMetric
 from services import strategy_health_service as hsvc
 from services import strategy_maturity_service as msvc
 from services.ingest.repository import record_health
@@ -72,6 +76,47 @@ async def _alert_owner(
         )
 
 
+async def _record_alert_event(
+    *,
+    owner_id: UUID,
+    strategy_id: UUID,
+    strategy_name: str,
+    market: str,
+    flags: list[str],
+) -> None:
+    """Persist one `alert_events` history row (PR-D4) so strategy-
+    health degradations show up in the AlertsPage 歷史 list and the
+    daily digest alongside price alerts. Best-effort, same rationale
+    as `_alert_owner`."""
+    try:
+        async with AsyncSessionLocal() as db:
+            db.add(AlertEvent(
+                user_id=owner_id,
+                alert_id=None,
+                symbol=strategy_name[:64],
+                market=market,
+                kind="strategy_health",
+                message=(
+                    f"策略「{strategy_name}」健康度劣化:"
+                    f"{', '.join(flags)}"
+                ),
+                payload={
+                    "strategy_id": str(strategy_id),
+                    "status_flags": flags,
+                },
+            ))
+            await db.commit()
+    except Exception as exc:
+        log.warning(
+            "monitor_strategy_health.alert_event_failed",
+            extra={
+                "strategy_id": str(strategy_id),
+                "owner_id": str(owner_id),
+                "error": str(exc),
+            },
+        )
+
+
 async def run_health_monitor() -> dict:
     """Returns a counters dict for the IngestHealthCard."""
     counters = {
@@ -107,6 +152,21 @@ async def run_health_monitor() -> dict:
                 if tier == "stale":
                     continue
 
+                # Last-known state BEFORE today's upsert — the newest
+                # existing snapshot row (yesterday's on a normal daily
+                # tick, today's own row on a same-day re-run). Non-empty
+                # flags there mean "already degraded", so we only alert
+                # on the healthy→degraded TRANSITION instead of
+                # re-alerting every run for a still-degraded strategy.
+                async with AsyncSessionLocal() as db:
+                    prev_flags = await db.scalar(
+                        select(StrategyHealthMetric.status_flags)
+                        .where(StrategyHealthMetric.strategy_id == tmpl.id)
+                        .order_by(StrategyHealthMetric.snapshot_date.desc())
+                        .limit(1)
+                    )
+                was_degraded = bool(prev_flags)
+
                 async with AsyncSessionLocal() as db:
                     row = await hsvc.record_snapshot(
                         db, strategy_id=tmpl.id,
@@ -114,7 +174,14 @@ async def run_health_monitor() -> dict:
                 counters["snapshots_written"] += 1
 
                 flags = list(row.status_flags or [])
-                if flags:
+                if flags and not was_degraded:
+                    await _record_alert_event(
+                        owner_id=tmpl.owner_id,
+                        strategy_id=tmpl.id,
+                        strategy_name=tmpl.name,
+                        market=tmpl.market,
+                        flags=flags,
+                    )
                     await _alert_owner(
                         owner_id=tmpl.owner_id,
                         strategy_id=tmpl.id,

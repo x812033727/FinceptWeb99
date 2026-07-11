@@ -29,3 +29,19 @@ class AlertOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class AlertEventOut(BaseModel):
+    """One fired-alert history row (PR-D5). `kind` is 'price' for
+    price-alert firings, 'strategy_health' for strategy degradation
+    alerts (PR-D4)."""
+    id: uuid.UUID
+    alert_id: uuid.UUID | None
+    symbol: str
+    market: str
+    kind: str
+    message: str
+    fired_at: datetime
+    payload: dict | None
+
+    model_config = {"from_attributes": True}

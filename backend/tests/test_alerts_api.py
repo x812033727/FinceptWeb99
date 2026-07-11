@@ -88,3 +88,78 @@ async def test_delete_nonexistent_alert(client: AsyncClient):
 async def test_alert_requires_auth(client: AsyncClient):
     r = await client.get("/api/alerts")
     assert r.status_code == 401
+
+
+# ── /api/alerts/history (PR-D5) ──────────────────────────────────────
+
+async def _seed_events(db_session, email: str, symbols: list[str]):
+    """Insert alert_events rows (one per symbol, 1 min apart) for the
+    registered user with this email."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select
+
+    from models.alert import AlertEvent
+    from models.user import User
+
+    user = await db_session.scalar(select(User).where(User.email == email))
+    base = datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc)
+    for i, sym in enumerate(symbols):
+        db_session.add(AlertEvent(
+            user_id=user.id, symbol=sym, market="US", kind="price",
+            message=f"{sym} fired", fired_at=base + timedelta(minutes=i),
+        ))
+    await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_history_empty(client: AsyncClient):
+    h = await _auth_headers(client, "hist_empty@example.com")
+    r = await client.get("/api/alerts/history", headers=h)
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+@pytest.mark.asyncio
+async def test_history_requires_auth(client: AsyncClient):
+    r = await client.get("/api/alerts/history")
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_history_newest_first_and_paginated(client: AsyncClient, db_session):
+    h = await _auth_headers(client, "hist_page@example.com")
+    await _seed_events(db_session, "hist_page@example.com", ["A1", "A2", "A3"])
+
+    r = await client.get("/api/alerts/history?limit=2", headers=h)
+    assert r.status_code == 200
+    page1 = r.json()
+    assert [e["symbol"] for e in page1] == ["A3", "A2"]
+
+    r = await client.get(
+        f"/api/alerts/history?limit=2&before={page1[-1]['fired_at']}",
+        headers=h,
+    )
+    page2 = r.json()
+    assert [e["symbol"] for e in page2] == ["A1"]
+
+
+@pytest.mark.asyncio
+async def test_history_no_cross_user_leak(client: AsyncClient, db_session):
+    h1 = await _auth_headers(client, "hist_u1@example.com")
+    h2 = await _auth_headers(client, "hist_u2@example.com")
+    await _seed_events(db_session, "hist_u1@example.com", ["OWN1"])
+
+    r1 = (await client.get("/api/alerts/history", headers=h1)).json()
+    r2 = (await client.get("/api/alerts/history", headers=h2)).json()
+    assert [e["symbol"] for e in r1] == ["OWN1"]
+    assert r2 == []
+
+
+@pytest.mark.asyncio
+async def test_history_limit_validation(client: AsyncClient):
+    h = await _auth_headers(client, "hist_lim@example.com")
+    r = await client.get("/api/alerts/history?limit=0", headers=h)
+    assert r.status_code == 422
+    r = await client.get("/api/alerts/history?limit=500", headers=h)
+    assert r.status_code == 422

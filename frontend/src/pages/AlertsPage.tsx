@@ -21,6 +21,17 @@ interface AlertCreate {
   target_price: number;
 }
 
+interface AlertEvent {
+  id: string;
+  alert_id: string | null;
+  symbol: string;
+  market: string;
+  kind: "price" | "strategy_health" | string;
+  message: string;
+  fired_at: string;
+  payload: Record<string, unknown> | null;
+}
+
 const EMPTY: AlertCreate = { symbol: "", market: "US", condition: "above", target_price: 0 };
 
 export default function AlertsPage() {
@@ -32,6 +43,11 @@ export default function AlertsPage() {
   const { data: alerts = [], isLoading } = useQuery<Alert[]>({
     queryKey: ["alerts"],
     queryFn: () => api.get("/alerts").then((r) => r.data),
+  });
+
+  const { data: history = [], isLoading: historyLoading } = useQuery<AlertEvent[]>({
+    queryKey: ["alerts", "history"],
+    queryFn: () => api.get("/alerts/history?limit=50").then((r) => r.data),
   });
 
   const createMut = useMutation({
@@ -153,6 +169,43 @@ export default function AlertsPage() {
           ))}
         </section>
       )}
+
+      {/* Fired-alert history (D5) */}
+      <section className="space-y-2">
+        <h2 className="text-sm font-medium">
+          {t("alerts.history")} <span className="text-muted-foreground">({history.length})</span>
+        </h2>
+        {historyLoading && <p className="text-xs text-muted-foreground">{t("common.loading")}</p>}
+        {!historyLoading && history.length === 0 && (
+          <p className="text-xs text-muted-foreground">{t("alerts.no_history")}</p>
+        )}
+        {history.map((ev) => (
+          <HistoryRow key={ev.id} event={ev} />
+        ))}
+      </section>
+    </div>
+  );
+}
+
+function HistoryRow({ event: ev }: { event: AlertEvent }) {
+  const { t } = useTranslation();
+  const isStrategyHealth = ev.kind === "strategy_health";
+  return (
+    <div className="flex items-center gap-3 px-4 py-2.5 rounded border border-border bg-card text-sm">
+      <span className="text-xs text-muted-foreground whitespace-nowrap">
+        {new Date(ev.fired_at).toLocaleString()}
+      </span>
+      {isStrategyHealth ? (
+        <span className="text-xs text-warning border border-warning/30 px-1.5 py-0.5 rounded whitespace-nowrap">
+          {t("alerts.kind_strategy_health")}
+        </span>
+      ) : (
+        <span className="text-xs text-muted-foreground bg-accent/20 px-1.5 py-0.5 rounded whitespace-nowrap">
+          {t("alerts.kind_price")}
+        </span>
+      )}
+      <span className="font-medium">{ev.symbol}</span>
+      <span className="text-muted-foreground truncate">{ev.message}</span>
     </div>
   );
 }

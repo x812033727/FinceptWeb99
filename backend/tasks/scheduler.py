@@ -573,3 +573,19 @@ def setup_jobs() -> None:
         max_instances=1,
         coalesce=True,
     )
+
+    # ── PR-D5: daily alert digest email ──────────────────────────
+    # 21:00 UTC = 05:00 Asia/Taipei — after both US close (20:00/21:00
+    # UTC) and the TW post-close ingest cluster, so the digest covers
+    # a full trading day of alert_events. Skips silently when SMTP
+    # isn't configured; Redis SET-NX lock inside the job for
+    # multi-pod safety.
+    from tasks.daily_alert_digest import daily_alert_digest_job
+    scheduler.add_job(
+        daily_alert_digest_job,
+        trigger=CronTrigger(hour=21, minute=0, timezone="UTC"),
+        id="daily_alert_digest",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )

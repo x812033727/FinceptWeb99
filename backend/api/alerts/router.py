@@ -1,13 +1,14 @@
 import uuid
+from datetime import datetime
 from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth.permissions import require_viewer
 from db.session import get_db
 from limiter import limiter
 from services.alert_service import AlertService
-from .schemas import AlertCreate, AlertOut
+from .schemas import AlertCreate, AlertEventOut, AlertOut
 
 router = APIRouter()
 CurrentUser = Annotated[dict, Depends(require_viewer)]
@@ -17,6 +18,20 @@ DB = Annotated[AsyncSession, Depends(get_db)]
 @router.get("", response_model=list[AlertOut])
 async def list_alerts(user: CurrentUser, db: DB):
     return await AlertService.list(db, uuid.UUID(user["id"]))
+
+
+@router.get("/history", response_model=list[AlertEventOut])
+async def alert_history(
+    user: CurrentUser,
+    db: DB,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    before: Annotated[datetime | None, Query()] = None,
+):
+    """Fired-alert history, newest first. Cursor pagination: pass the
+    last row's `fired_at` as `before` to fetch the next (older) page."""
+    return await AlertService.history(
+        db, uuid.UUID(user["id"]), limit=limit, before=before,
+    )
 
 
 @router.post("", response_model=AlertOut, status_code=201)

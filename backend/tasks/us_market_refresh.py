@@ -37,6 +37,13 @@ async def refresh_us_quotes() -> None:
     Only runs during US market hours to avoid unnecessary API calls.
     Falls back to 5-minute interval outside market hours by early-returning
     (APScheduler still calls every 10s but we skip work).
+
+    Deliberately NOT cross-worker locked: the symbol set comes from
+    this worker's own `_subscriptions`, so a lock would starve every
+    client whose socket landed on the losing worker. Upstream cost is
+    only duplicated for symbols subscribed on BOTH workers. The real
+    fix is moving subscription state to Redis so a single scheduler
+    can serve all workers — see docs/redesign/01-backend-perf.md §2.1.
     """
     market_open = _is_market_open()
     symbols = _subscribed_us_symbols()
@@ -125,8 +132,18 @@ async def refresh_us_screener() -> None:
     fills in the entire universe even when Stooq is the only working
     source. Errors are swallowed — a missed tick just means the next
     user-driven request triggers the (capped) sync fallback.
+
+    Cross-worker dedup: the warm result lands in the shared Redis
+    cache, so with N uvicorn workers each running its own scheduler,
+    N-1 of the runs are pure upstream waste (the Stooq walk alone is
+    ~20 s of it). A lock held for just under the 5-min interval lets
+    exactly one worker do the walk per window. No release on purpose —
+    expiry IS the schedule.
     """
+    from cache.redis_cache import acquire_lock
     from services.us_market_service import get_screener
+    if not await acquire_lock("lock:us_screener_warm", ttl_seconds=270):
+        return
     try:
         await get_screener(limit=100, full_stooq_batch=True)
     except Exception as exc:

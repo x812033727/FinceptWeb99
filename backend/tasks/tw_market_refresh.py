@@ -42,6 +42,9 @@ async def refresh_tw_quotes(*, force: bool = False) -> None:
     refresh task (`refresh_tw_quotes_eod`) which fires once at 16:30
     Asia/Taipei (3 h after close) so the cached quotes reflect the
     final EOD prices instead of whatever was last seen at 13:30.
+
+    Deliberately NOT cross-worker locked — symbol set is this worker's
+    own `_subscriptions`; see refresh_us_quotes for the full rationale.
     """
     if not force and not _is_tw_market_open():
         return

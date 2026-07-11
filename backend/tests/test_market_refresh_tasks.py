@@ -53,7 +53,7 @@ async def test_us_refresh_falls_through_to_yfinance_when_polygon_raises():
     async def fake_publish(sym: str, market: str, payload: dict):
         published.append((sym, market, payload))
 
-    with patch.object(us_task, "_subscribed_us_symbols", return_value={"AAPL"}), \
+    with patch.object(us_task, "_subscribed_us_symbols", new=AsyncMock(return_value={"AAPL"})), \
          patch.object(us_task, "_is_market_open", return_value=True), \
          patch.object(us_task, "publish_update", new=fake_publish), \
          patch.object(us_task, "cache_set", new=AsyncMock()), \
@@ -84,7 +84,7 @@ async def test_us_refresh_marks_unavailable_when_all_sources_fail():
     async def fake_publish(sym: str, market: str, payload: dict):
         published.append((sym, market, payload))
 
-    with patch.object(us_task, "_subscribed_us_symbols", return_value={"AAPL"}), \
+    with patch.object(us_task, "_subscribed_us_symbols", new=AsyncMock(return_value={"AAPL"})), \
          patch.object(us_task, "_is_market_open", return_value=True), \
          patch.object(us_task, "publish_update", new=fake_publish), \
          patch.object(us_task, "cache_set", new=AsyncMock()), \
@@ -120,7 +120,7 @@ async def test_tw_refresh_falls_through_to_finmind_when_twse_returns_none():
     async def fake_publish(sym: str, market: str, payload: dict):
         published.append((sym, market, payload))
 
-    with patch.object(tw_task, "_subscribed_tw_symbols", return_value={"2330"}), \
+    with patch.object(tw_task, "_subscribed_tw_symbols", new=AsyncMock(return_value={"2330"})), \
          patch.object(tw_task, "_is_tw_market_open", return_value=True), \
          patch.object(tw_task, "publish_update", new=fake_publish), \
          patch.object(tw_task, "cache_set", new=AsyncMock()), \

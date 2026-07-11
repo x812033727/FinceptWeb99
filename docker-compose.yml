@@ -88,7 +88,7 @@ services:
   backend:
     build: ./backend
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2
-    environment:
+    environment: &app-env
       DATABASE_URL:      postgresql+asyncpg://${POSTGRES_USER:-fincept}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-finceptweb}
       REDIS_URL:         redis://${REDIS_PASSWORD:+:${REDIS_PASSWORD}@}redis:6379
       POLYGON_API_KEY:   ${POLYGON_API_KEY:-}
@@ -137,6 +137,10 @@ services:
       # Same .env passthrough pattern as the vars above (no env_file on
       # this service). Empty = legacy single-owner behavior.
       LESSON_SHARED_OWNER_GROUPS: ${LESSON_SHARED_OWNER_GROUPS:-}
+      # Web workers do NOT host APScheduler/Kraken pump — the dedicated
+      # `scheduler` service below does. Leaving this on would run every
+      # job once per uvicorn worker (upstream quota burns N×).
+      SCHEDULER_ENABLED: "false"
     volumes:
       # Bidirectional channel for the admin one-click redeploy button.
       # Backend touches /host-trigger/deploy-trigger to fire the host's
@@ -144,6 +148,26 @@ services:
       # JSON the deploy script writes alongside it. Mount path is
       # /opt/finceptweb/var on the host (must exist with uid 1001).
       - ./var:/host-trigger
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Dedicated scheduler process (blueprint P2): hosts APScheduler +
+  # KrakenTickerPump exactly once per deployment. Same image and env
+  # as the backend (YAML merge of &app-env), different entrypoint.
+  # Quote pollers read the cross-worker subscription registry in Redis,
+  # so this process covers every web worker's WebSocket clients.
+  scheduler:
+    build: ./backend
+    command: python worker.py
+    environment:
+      <<: *app-env
+      SCHEDULER_ENABLED: "true"
     depends_on:
       postgres:
         condition: service_healthy

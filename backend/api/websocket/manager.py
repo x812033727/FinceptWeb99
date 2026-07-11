@@ -20,6 +20,7 @@ Auth flow:
 import asyncio
 import json
 import time
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -49,8 +50,79 @@ _user_ws: dict[str, set[WebSocket]] = {}
 _ws_token_exp: dict[WebSocket, float] = {}
 
 _listener_task: asyncio.Task | None = None
+_subs_mirror_task: asyncio.Task | None = None
 AUTH_TIMEOUT = 5.0       # seconds to send auth message after connect
 HEARTBEAT_INTERVAL = 30  # seconds
+
+# ── Cross-process subscription registry ──────────────────────────
+# Each web worker mirrors the union of its clients' subscriptions to
+# its own Redis key (`ws:subs:<worker_id>`, TTL'd). A dedicated
+# scheduler process — which holds zero WebSocket connections — reads
+# the union of all workers' keys to decide which symbols to poll.
+# The TTL is the liveness contract: a worker that dies simply stops
+# refreshing its key and its symbols age out within SUBS_TTL seconds.
+_WORKER_ID = uuid.uuid4().hex[:12]
+SUBS_KEY_PREFIX = "ws:subs:"
+SUBS_TTL = 90            # seconds; refreshed every SUBS_MIRROR_INTERVAL
+SUBS_MIRROR_INTERVAL = 30
+
+
+async def _mirror_subs() -> None:
+    """Write this worker's current subscription union to Redis.
+    Best-effort: a Redis hiccup here only delays symbol visibility to
+    the scheduler by one mirror interval."""
+    union: set[str] = set()
+    for subs in _subscriptions.values():
+        union |= subs
+    try:
+        r = await get_redis()
+        await r.set(
+            f"{SUBS_KEY_PREFIX}{_WORKER_ID}",
+            json.dumps(sorted(union)),
+            ex=SUBS_TTL,
+        )
+    except Exception:
+        pass
+
+
+async def _subs_mirror_loop() -> None:
+    """Keep this worker's registry key alive even when subscriptions
+    aren't changing (the TTL must outlive quiet periods)."""
+    while True:
+        await asyncio.sleep(SUBS_MIRROR_INTERVAL)
+        await _mirror_subs()
+
+
+async def get_global_subscribed(market: str) -> set[str]:
+    """Union of symbols subscribed for `market` across ALL workers.
+
+    Falls back to this process's local view when Redis is unreachable —
+    degraded (single-worker visibility) beats an empty poll list.
+    """
+    suffix = f":{market.upper()}"
+    try:
+        r = await get_redis()
+        keys = [k async for k in r.scan_iter(match=f"{SUBS_KEY_PREFIX}*")]
+        symbols: set[str] = set()
+        if keys:
+            for raw in await r.mget(keys):
+                if not raw:
+                    continue
+                try:
+                    entries = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                symbols |= {
+                    e.rsplit(":", 1)[0]
+                    for e in entries
+                    if isinstance(e, str) and e.endswith(suffix)
+                }
+        return symbols
+    except Exception:
+        local: set[str] = set()
+        for subs in _subscriptions.values():
+            local |= {e.rsplit(":", 1)[0] for e in subs if e.endswith(suffix)}
+        return local
 
 
 async def _authenticate(ws: WebSocket) -> dict | None:
@@ -130,11 +202,13 @@ async def handle_market_ws(ws: WebSocket) -> None:
                     for mkt in (markets or ["US"]):
                         new_subs.add(f"{sym.upper()}:{mkt.upper()}")
                 _subscriptions[ws] = new_subs
+                await _mirror_subs()
                 # Send snapshot
                 await _send_snapshot(ws, new_subs)
 
             elif action == "unsubscribe":
                 _subscriptions[ws].clear()
+                await _mirror_subs()
 
             elif action == "pong":
                 pass  # heartbeat acknowledged
@@ -152,6 +226,7 @@ async def handle_market_ws(ws: WebSocket) -> None:
             _user_ws[uid].discard(ws)
             if not _user_ws[uid]:
                 del _user_ws[uid]
+        await _mirror_subs()
 
 
 async def _send_snapshot(ws: WebSocket, subs: set[str]) -> None:
@@ -203,15 +278,20 @@ async def _safe_send(ws: WebSocket, data: dict) -> bool:
 # ── Redis Pub/Sub listener ────────────────────────────────────────
 
 PUBSUB_CHANNEL = "market:updates"
+ALERTS_CHANNEL = "user:alerts"
 
 
 async def start_pubsub_listener() -> None:
     """
     Runs as a long-lived background task.
-    Subscribes to Redis channel and dispatches updates to connected WebSockets.
+    Subscribes to Redis channels and dispatches market deltas + user
+    alerts to connected WebSockets. Also starts the subscription-mirror
+    refresher so this worker's symbols stay visible to the scheduler
+    process.
     """
-    global _listener_task
+    global _listener_task, _subs_mirror_task
     _listener_task = asyncio.create_task(_listen_loop())
+    _subs_mirror_task = asyncio.create_task(_subs_mirror_loop())
 
 
 async def _listen_loop() -> None:
@@ -227,7 +307,7 @@ async def _listen_loop() -> None:
         try:
             r = await get_redis()
             pubsub = r.pubsub()
-            await pubsub.subscribe(PUBSUB_CHANNEL)
+            await pubsub.subscribe(PUBSUB_CHANNEL, ALERTS_CHANNEL)
             try:
                 backoff = 1.0  # healthy subscribe → reset the ladder
                 async for message in pubsub.listen():
@@ -235,12 +315,18 @@ async def _listen_loop() -> None:
                         continue
                     try:
                         payload: dict = json.loads(message["data"])
-                        await _dispatch(payload)
+                        if message.get("channel") == ALERTS_CHANNEL:
+                            await _deliver_alert_local(
+                                payload.get("user_id", ""),
+                                payload.get("data", {}),
+                            )
+                        else:
+                            await _dispatch(payload)
                     except Exception:
                         continue
             finally:
                 try:
-                    await pubsub.unsubscribe(PUBSUB_CHANNEL)
+                    await pubsub.unsubscribe(PUBSUB_CHANNEL, ALERTS_CHANNEL)
                 except Exception:
                     pass  # connection already gone — nothing to leave behind
         except asyncio.CancelledError:
@@ -297,8 +383,25 @@ async def publish_update(symbol: str, market: str, data: dict) -> None:
     await r.publish(PUBSUB_CHANNEL, json.dumps(payload))
 
 
-async def push_alert_to_user(user_id: str, data: dict) -> None:
-    """Push a fired alert directly to all WebSocket connections owned by user_id."""
+async def publish_alert_to_user(user_id: str, data: dict) -> None:
+    """Publish a fired alert onto the shared alerts channel.
+
+    This is the impl registered with notification_service in EVERY
+    process (web workers and the dedicated scheduler): the fire site
+    publishes once, and each web worker's pubsub listener delivers to
+    whatever sockets that worker holds. Fixes the pre-existing gap
+    where an alert fired on worker A never reached a user whose tab
+    was connected to worker B.
+    """
+    r = await get_redis()
+    await r.publish(ALERTS_CHANNEL, json.dumps({"user_id": user_id, "data": data}))
+
+
+# Kept under its historical name for callers/tests that push directly
+# to this process's sockets; the pubsub listener is the only
+# production call site.
+async def _deliver_alert_local(user_id: str, data: dict) -> None:
+    """Send an alert to all WebSocket connections THIS process owns for user_id."""
     connections = list(_user_ws.get(user_id, set()))
     dead: list[WebSocket] = []
     now_epoch = datetime.now(timezone.utc).timestamp()

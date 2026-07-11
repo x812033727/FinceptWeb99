@@ -7,7 +7,7 @@ import json
 import logging
 from datetime import UTC, datetime
 
-from api.websocket.manager import _subscriptions, publish_update
+from api.websocket.manager import get_global_subscribed, publish_update
 from cache.redis_cache import cache_set, key_quote
 from services.ingest.repository import (
     QuoteSnapshotRow,
@@ -24,14 +24,9 @@ from services.tw_market_service import (
 logger = logging.getLogger(__name__)
 
 
-def _subscribed_tw_symbols() -> set[str]:
-    symbols: set[str] = set()
-    for subs in _subscriptions.values():
-        for key in subs:
-            parts = key.split(":", 1)
-            if len(parts) == 2 and parts[1] == "TW":
-                symbols.add(parts[0])
-    return symbols
+async def _subscribed_tw_symbols() -> set[str]:
+    """Global (all-worker) TW subscription union — see the US variant."""
+    return await get_global_subscribed("TW")
 
 
 async def refresh_tw_quotes(*, force: bool = False) -> None:
@@ -43,13 +38,13 @@ async def refresh_tw_quotes(*, force: bool = False) -> None:
     Asia/Taipei (3 h after close) so the cached quotes reflect the
     final EOD prices instead of whatever was last seen at 13:30.
 
-    Deliberately NOT cross-worker locked — symbol set is this worker's
-    own `_subscriptions`; see refresh_us_quotes for the full rationale.
+    Single poller under the compose topology (scheduler process);
+    reads the global subscription registry — see refresh_us_quotes.
     """
     if not force and not _is_tw_market_open():
         return
 
-    symbols = _subscribed_tw_symbols()
+    symbols = await _subscribed_tw_symbols()
     if not symbols:
         return
 

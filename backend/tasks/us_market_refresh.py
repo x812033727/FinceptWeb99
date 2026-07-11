@@ -8,7 +8,7 @@ import json
 import logging
 from datetime import datetime
 
-from api.websocket.manager import publish_update, _subscriptions
+from api.websocket.manager import get_global_subscribed, publish_update
 from cache.redis_cache import cache_set, key_quote
 from services.us_market_service import (
     TTL_QUOTE,
@@ -20,15 +20,12 @@ from services.us_market_service import (
 logger = logging.getLogger(__name__)
 
 
-def _subscribed_us_symbols() -> set[str]:
-    """Return all US symbols currently subscribed by any WebSocket client."""
-    symbols: set[str] = set()
-    for subs in _subscriptions.values():
-        for key in subs:
-            parts = key.split(":", 1)
-            if len(parts) == 2 and parts[1] == "US":
-                symbols.add(parts[0])
-    return symbols
+async def _subscribed_us_symbols() -> set[str]:
+    """All US symbols subscribed by any client on ANY worker (Redis
+    registry union; falls back to this process's local view when Redis
+    is down). Lets a dedicated scheduler process — which holds zero
+    WebSocket connections itself — poll for every worker's clients."""
+    return await get_global_subscribed("US")
 
 
 async def refresh_us_quotes() -> None:
@@ -38,15 +35,13 @@ async def refresh_us_quotes() -> None:
     Falls back to 5-minute interval outside market hours by early-returning
     (APScheduler still calls every 10s but we skip work).
 
-    Deliberately NOT cross-worker locked: the symbol set comes from
-    this worker's own `_subscriptions`, so a lock would starve every
-    client whose socket landed on the losing worker. Upstream cost is
-    only duplicated for symbols subscribed on BOTH workers. The real
-    fix is moving subscription state to Redis so a single scheduler
-    can serve all workers — see docs/redesign/01-backend-perf.md §2.1.
+    Runs in the dedicated scheduler process under the compose topology
+    (SCHEDULER_ENABLED=false on web workers), so no cross-worker lock
+    is needed — there is exactly one poller, and it reads the global
+    subscription registry to cover every worker's clients.
     """
     market_open = _is_market_open()
-    symbols = _subscribed_us_symbols()
+    symbols = await _subscribed_us_symbols()
 
     if not symbols:
         return

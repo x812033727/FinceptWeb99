@@ -72,7 +72,16 @@
       "theme_light_desc": "明亮環境用淺色模式",
       "switch_to_dark": "切換深色",
       "switch_to_light": "切換淺色",
-      "language": "語言"
+      "language": "語言",
+      "market_colors": "市場漲跌色慣例",
+      "market_colors_desc": "漲跌顏色的顯示慣例",
+      "market_colors_auto": "自動",
+      "market_colors_tw": "台股（紅漲綠跌）",
+      "market_colors_intl": "國際（綠漲紅跌）",
+      "density": "密度",
+      "density_desc": "表格與列表的行高密度",
+      "density_comfortable": "舒適",
+      "density_compact": "緊湊"
     },
     "admin_link": "開啟系統管理"
   },

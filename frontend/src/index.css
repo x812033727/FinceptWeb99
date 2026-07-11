@@ -45,6 +45,10 @@
     --down: var(--mkt-down);
     --flat: 215 20% 55%;
 
+    /* Density — row height for tables / list rows. Flipped by the
+       [data-density] attribute stamped by themeStore.applyDensity. */
+    --row-h: 36px;
+
     /* Categorical chart series (Recharts / canvas libs) */
     --chart-1: 199 89% 55%;
     --chart-2: 38 92% 55%;
@@ -53,6 +57,12 @@
     --chart-5: 330 70% 60%;
     --chart-6: 215 20% 60%;
   }
+}
+
+/* Density convention — stamped on <html data-density> by
+   themeStore.applyDensity ("comfortable" keeps the :root default). */
+[data-density="compact"] {
+  --row-h: 28px;
 }
 
 /* Market direction convention — stamped on <html data-market-colors>
@@ -145,5 +155,14 @@
     input[type="number"], input[type="search"], textarea, select {
       font-size: 16px;
     }
+  }
+}
+
+@layer utilities {
+  /* Numeric cells: fixed-width digits so columns align and values
+     don't jitter as they tick. Lighter-weight than the <Num> atom for
+     spots that only need the digit metrics, not the mono face. */
+  .num {
+    font-variant-numeric: tabular-nums;
   }
 }

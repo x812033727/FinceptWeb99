@@ -4,7 +4,7 @@ export function StatRow({ label, value }: { label: string; value: string | numbe
   return (
     <div className="flex justify-between items-center py-1.5 border-b border-border/50 last:border-0">
       <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="text-xs text-foreground font-medium">{value ?? "—"}</span>
+      <span className="text-xs text-foreground font-medium num">{value ?? "—"}</span>
     </div>
   );
 }

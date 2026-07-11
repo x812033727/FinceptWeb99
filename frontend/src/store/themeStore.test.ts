@@ -11,9 +11,13 @@ describe("themeStore", () => {
     if (useThemeStore.getState().marketColorMode !== "auto") {
       useThemeStore.getState().setMarketColorMode("auto");
     }
+    if (useThemeStore.getState().density !== "comfortable") {
+      useThemeStore.getState().setDensity("comfortable");
+    }
     localStorage.clear();
     document.documentElement.removeAttribute("data-light");
     document.documentElement.removeAttribute("data-market-colors");
+    document.documentElement.removeAttribute("data-density");
   });
 
   it("initial theme is 'dark' when no localStorage value exists", () => {
@@ -60,6 +64,29 @@ describe("themeStore", () => {
     expect(localStorage.getItem("marketColorMode")).toBe("tw");
     useThemeStore.getState().setMarketColorMode("auto");
     expect(localStorage.getItem("marketColorMode")).toBe("auto");
+  });
+
+  it("initial density is 'comfortable' when no localStorage value exists", () => {
+    expect(useThemeStore.getState().density).toBe("comfortable");
+  });
+
+  it("setDensity('compact') stamps data-density='compact' on <html>", () => {
+    useThemeStore.getState().setDensity("compact");
+    expect(useThemeStore.getState().density).toBe("compact");
+    expect(document.documentElement.getAttribute("data-density")).toBe("compact");
+  });
+
+  it("setDensity('comfortable') stamps data-density='comfortable'", () => {
+    useThemeStore.getState().setDensity("compact");
+    useThemeStore.getState().setDensity("comfortable");
+    expect(document.documentElement.getAttribute("data-density")).toBe("comfortable");
+  });
+
+  it("setDensity persists to localStorage", () => {
+    useThemeStore.getState().setDensity("compact");
+    expect(localStorage.getItem("density")).toBe("compact");
+    useThemeStore.getState().setDensity("comfortable");
+    expect(localStorage.getItem("density")).toBe("comfortable");
   });
 
   it("'auto' resolves 'tw' for zh-* locales and 'intl' otherwise", () => {

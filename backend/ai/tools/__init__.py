@@ -11,6 +11,7 @@ from datetime import date
 from claude_agent_sdk import McpSdkServerConfig, create_sdk_mcp_server
 
 from .financial import make_financial_tools
+from .screener import make_screener_tools
 from .sql import make_sql_tools
 from .web import make_web_tools
 from .python_exec import make_python_tools
@@ -37,6 +38,7 @@ def build_toolset(
     """
     tools: list = [
         *make_financial_tools(as_of_date=as_of_date),
+        *make_screener_tools(),
         *make_web_tools(),
         *make_python_tools(),
     ]
@@ -68,6 +70,7 @@ def tool_names(*, include_user_data: bool = True) -> list[str]:
         "mcp__fincept__get_margin_history",
         "mcp__fincept__get_top_brokers",
         "mcp__fincept__get_taifex_positioning",
+        "mcp__fincept__run_screener",
         "mcp__fincept__web_fetch",
         "mcp__fincept__python_exec",
     ]

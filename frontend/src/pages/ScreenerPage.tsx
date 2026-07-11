@@ -8,6 +8,8 @@ import {
   fetchUSScreener,
 } from "@/components/screener/_shared";
 import { FilterBar } from "@/components/screener/FilterBar";
+import type { NLScreenerResult } from "@/components/screener/NLQueryBar";
+import { NLQueryBar } from "@/components/screener/NLQueryBar";
 import { ResultsTable } from "@/components/screener/ResultsTable";
 
 // ── main page ──────────────────────────────────────────────────────
@@ -16,6 +18,9 @@ export default function ScreenerPage() {
   const { t } = useTranslation();
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [applied, setApplied] = useState<Filters>(DEFAULT_FILTERS);
+  // 功能 B2 — natural-language screening result. When set, the table
+  // shows the AI-screened rows instead of the manual-filter query.
+  const [nlResult, setNlResult] = useState<NLScreenerResult | null>(null);
 
   function setFilter<K extends keyof Filters>(key: K, value: Filters[K]) {
     setFilters((prev) => ({ ...prev, [key]: value, strategy: "" }));
@@ -87,6 +92,8 @@ export default function ScreenerPage() {
         </p>
       </div>
 
+      <NLQueryBar onResult={setNlResult} />
+
       <FilterBar
         filters={filters}
         setFilter={setFilter}
@@ -94,10 +101,14 @@ export default function ScreenerPage() {
         applyFilters={applyFilters}
         resetFilters={resetFilters}
         isFetching={isFetching}
-        resultsCount={rows.length}
+        resultsCount={nlResult ? nlResult.rows.length : rows.length}
       />
 
-      <ResultsTable rows={rows} applied={applied} isLoading={isLoading} />
+      <ResultsTable
+        rows={nlResult ? nlResult.rows : rows}
+        applied={nlResult ? { ...applied, market: nlResult.market } : applied}
+        isLoading={!nlResult && isLoading}
+      />
     </div>
   );
 }

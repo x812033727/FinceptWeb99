@@ -218,6 +218,43 @@ SENTIMENT_PROVIDER_COOLDOWN_TOTAL = Counter(
     ["provider", "lane"],
 )
 
+# ── WebSocket market-data pipeline ────────────────────────────────
+# Connection gauge counts *authenticated* sockets only (pre-auth
+# sockets are closed within AUTH_TIMEOUT and never register). The
+# dispatch histogram times one pubsub message's full fan-out across
+# all subscribed connections — the number to watch when connection
+# count grows, since dispatch is currently O(connections) per tick.
+WS_CONNECTIONS = Gauge(
+    "ws_connections",
+    "Currently connected, authenticated market WebSocket clients.",
+)
+WS_PUBSUB_DISPATCH_SECONDS = Histogram(
+    "ws_pubsub_dispatch_seconds",
+    "Wall time to fan one Redis pubsub market update out to every "
+    "subscribed WebSocket connection.",
+    buckets=[0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 1.0],
+)
+
+# ── APScheduler job runtimes ──────────────────────────────────────
+# Wired via listener in tasks.scheduler_metrics (no per-job changes).
+# Duration is measured submitted→executed; with max_instances=1 on
+# every job the job_id keying is unambiguous. Jobs sharing the event
+# loop with request serving means a fat bucket here (us_screener_warm
+# regularly walks Stooq for ~20 s) directly explains p95 latency
+# jitter on the same worker.
+SCHEDULER_JOB_DURATION_SECONDS = Histogram(
+    "scheduler_job_duration_seconds",
+    "APScheduler job wall time from submission to completion.",
+    ["job_id"],
+    buckets=[0.05, 0.25, 1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0],
+)
+SCHEDULER_JOB_RUNS_TOTAL = Counter(
+    "scheduler_job_runs_total",
+    "APScheduler job executions by terminal outcome "
+    "(ok / error / missed).",
+    ["job_id", "outcome"],
+)
+
 # ── Core Web Vitals (reported by the frontend) ────────────────────
 # LCP / INP / FCP / TTFB are time metrics in seconds; bucket
 # boundaries are tuned around Google's "Good / Needs improvement /

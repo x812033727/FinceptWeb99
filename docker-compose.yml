@@ -1,6 +1,12 @@
 services:
   postgres:
     image: timescale/timescaledb:latest-pg15
+    # pg_stat_statements alongside timescaledb (the image's default only
+    # preloads timescaledb) — powers the P4 index-audit workflow: rank
+    # queries by mean_exec_time × calls, then EXPLAIN the top offenders.
+    # Existing volumes need a one-time `CREATE EXTENSION pg_stat_statements;`
+    # (init.sql only runs on a fresh data dir).
+    command: postgres -c shared_preload_libraries=timescaledb,pg_stat_statements
     environment:
       POSTGRES_DB:       ${POSTGRES_DB:-finceptweb}
       POSTGRES_USER:     ${POSTGRES_USER:-fincept}
@@ -167,7 +173,9 @@ services:
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=15d"
     ports:
-      - "127.0.0.1:9090:9090"
+      # Parameterized so a host running several deployments can move each
+      # stack's Prometheus off the default (same pattern as GRAFANA_PORT).
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
     depends_on:
       - backend
     restart: unless-stopped

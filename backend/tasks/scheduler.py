@@ -12,12 +12,16 @@ scheduler = AsyncIOScheduler(timezone="UTC")
 def setup_jobs() -> None:
     from tasks.crypto_market_refresh import refresh_crypto_quotes
     from tasks.scheduler_heartbeat import write_heartbeat
+    from tasks.scheduler_metrics import attach_metrics
     from tasks.tw_market_refresh import refresh_tw_quotes, refresh_tw_symbol_map
     from tasks.us_market_refresh import (
         refresh_sp500_universe,
         refresh_us_quotes,
         refresh_us_screener,
     )
+
+    # Prometheus job-duration/outcome listeners — one attach per process.
+    attach_metrics(scheduler)
 
     # ── Scheduler liveness heartbeat ──────────────────────────────
     # Every 30s — writes a Redis key with a TTL so the AdminPage can

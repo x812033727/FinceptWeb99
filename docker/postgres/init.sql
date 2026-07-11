@@ -3,6 +3,9 @@
 
 CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- Query-level timing stats for the index-audit workflow (needs
+-- shared_preload_libraries=pg_stat_statements, set in docker-compose.yml).
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 
 -- OHLCV hypertable (shared US + TW)
 CREATE TABLE IF NOT EXISTS ohlcv (

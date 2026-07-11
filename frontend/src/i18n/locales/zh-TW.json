@@ -1269,6 +1269,13 @@
   "screener": {
     "title": "篩選器",
     "subtitle": "依條件篩選個股",
+    "nl": {
+      "placeholder": "以自然語言描述選股條件,例如:近月外資買超且本益比低於 20 的電子股",
+      "submit": "AI 選股",
+      "loading": "AI 解析中…",
+      "clear": "清除結果",
+      "no_result": "AI 未回傳篩選結果,請換個說法再試一次(需 analyst 以上權限才能使用工具)"
+    },
     "filters": "篩選條件",
     "all_sectors": "所有產業",
     "min_market_cap": "最低市值",

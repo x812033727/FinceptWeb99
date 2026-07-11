@@ -1269,6 +1269,13 @@
   "screener": {
     "title": "Screener",
     "subtitle": "Filter stocks by any metric",
+    "nl": {
+      "placeholder": "Describe a screen in natural language, e.g. TW electronics with foreign net buying and P/E below 20",
+      "submit": "AI Screen",
+      "loading": "Thinking…",
+      "clear": "Clear result",
+      "no_result": "The AI returned no screener result — try rephrasing (tool use requires analyst role or above)"
+    },
     "filters": "Filters",
     "all_sectors": "All Sectors",
     "min_market_cap": "Min Market Cap",

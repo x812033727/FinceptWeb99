@@ -411,6 +411,22 @@ _TOOL_RESULT_LIST_KEYS = (
     "top_buyers", "top_sellers", "headlines",
 )
 
+# SSE-facing tool_result summary caps. The summary frame is display /
+# client-side data only (the model's own context is capped separately
+# via `_cap_tool_result`), so tools whose result the frontend must
+# parse in full (run_screener → ScreenerPage NLQueryBar renders the
+# rows) get a higher cap; everything else keeps the 2000-char default.
+_TOOL_SUMMARY_DEFAULT_LIMIT = 2000
+_TOOL_SUMMARY_LIMITS = {"run_screener": 24000}
+
+
+def _tool_summary_limit(name: str) -> int:
+    """Per-tool SSE summary cap. Strips the `mcp__fincept__` prefix so
+    the Claude Agent path ("mcp__fincept__run_screener") and the
+    OpenAI-compat path ("run_screener") share one table."""
+    short = (name or "").rsplit("__", 1)[-1]
+    return _TOOL_SUMMARY_LIMITS.get(short, _TOOL_SUMMARY_DEFAULT_LIMIT)
+
 
 def _cap_tool_result(name: str, result_str: str, limit: int) -> str:
     """Shrink an oversized tool result before it is appended to `convo`
@@ -686,10 +702,11 @@ async def _openai_compat_tool_loop(
                     result_str = json.dumps({"error": str(exc)})
                     is_error = True
 
+            _sum_cap = _tool_summary_limit(name)
             yield {
                 "type": "tool_result",
                 "id": tool_id, "name": name,
-                "summary": result_str if len(result_str) <= 2000 else result_str[:2000] + " …[truncated]",
+                "summary": result_str if len(result_str) <= _sum_cap else result_str[:_sum_cap] + " …[truncated]",
                 "is_error": is_error,
             }
             convo.append({
@@ -925,11 +942,12 @@ async def _claude_agent_stream(
                                         b.get("text", "") if isinstance(b, dict) else str(b)
                                         for b in raw
                                     )
+                                _tname = pending.get(tool_use_id, "")
                                 yield {
                                     "type": "tool_result",
                                     "id": tool_use_id,
-                                    "name": pending.get(tool_use_id, ""),
-                                    "summary": _truncate(raw),
+                                    "name": _tname,
+                                    "summary": _truncate(raw, _tool_summary_limit(_tname)),
                                     "is_error": bool(getattr(block, "is_error", False)),
                                 }
                 elif isinstance(msg, ResultMessage):

@@ -26,6 +26,7 @@ from typing import Any, Awaitable, Callable
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from ai.tools.screener import RUN_SCREENER_OPENAI_SCHEMA, run_screener_query
 from db.session import AsyncSessionLocal
 from models.alert import PriceAlert
 from models.portfolio import Holding, Portfolio, Transaction
@@ -526,6 +527,15 @@ def build_openai_compat_toolset(
             )
             return _dump({"error": str(exc)})
 
+    async def run_screener(args: dict[str, Any]) -> str:
+        # 功能 B2 — natural-language screening. Shared read-only core in
+        # ai/tools/screener.py (whitelisted filters, limit clamp ≤ 50).
+        try:
+            return _dump(await run_screener_query(args))
+        except Exception as exc:
+            logger.warning("openai_compat.run_screener failed: %s", exc)
+            return _dump({"error": str(exc)})
+
     async def get_taifex_positioning(args: dict[str, Any]) -> str:
         # Index-futures three-investor net OI snapshot + 5-day delta.
         # Default contract TX (大盤). Backtest as_of plumbed via closure.
@@ -894,6 +904,7 @@ def build_openai_compat_toolset(
                 },
             },
         },
+        RUN_SCREENER_OPENAI_SCHEMA,
     ]
 
     dispatch: dict[str, ToolHandler] = {
@@ -912,6 +923,7 @@ def build_openai_compat_toolset(
         "get_top_brokers": get_top_brokers,
         "get_taifex_positioning": get_taifex_positioning,
         "compare_quotes": compare_quotes,
+        "run_screener": run_screener,
     }
     if not include_user_data:
         # Drop both the schema entry AND the dispatch handler so an LLM

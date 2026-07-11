@@ -46,6 +46,10 @@ class TurnResponse(BaseModel):
     content: str
     citations: dict[str, Any] | None = None
     created_at: datetime
+    # B4: true for turns that exist because the owner interjected —
+    # the owner's question turn AND the persona answer turn generated
+    # in response to a mid-round interject / post-conclusion 追問.
+    injected_by_user: bool = False
 
 
 class DiscussionResponse(BaseModel):
@@ -130,6 +134,31 @@ class AutoRunConfigResponse(BaseModel):
 
 class InjectUserMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=2000)
+
+
+class InterjectRequest(BaseModel):
+    """B4 mid-round interjection / post-conclusion 追問 body.
+
+    `target_persona` optionally names which roster persona should
+    answer; when omitted (or unknown) the moderator default applies —
+    the first persona of the runtime roster."""
+    question: str = Field(min_length=1, max_length=2000)
+    target_persona: str | None = None
+
+
+class InterjectResponse(BaseModel):
+    """Response for POST /sessions/{id}/interject.
+
+    `status="queued"` (discussion running): the question was enqueued
+    for the round loop to answer at the next turn boundary — the
+    question + answer turns arrive over the round's SSE stream.
+    `status="answered"` (discussion concluded, 追問 path): the single
+    follow-up turn ran synchronously; both turns are returned inline.
+    """
+    status: str  # "queued" | "answered"
+    target_persona: str | None = None
+    question_turn: TurnResponse | None = None
+    answer_turn: TurnResponse | None = None
 
 
 class ScoreboardRow(BaseModel):

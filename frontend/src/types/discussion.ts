@@ -25,6 +25,12 @@ export interface Turn {
   stance: "agree" | "dissent" | "supplement" | "user_input";
   content: string;
   created_at: string;
+  /** B4: true for turns that exist because the owner interjected —
+   * the owner's question turn AND the persona answer turn generated
+   * in response to a mid-round interject / post-conclusion 追問.
+   * Drives the 使用者提問 / 插話回覆 badges in TurnBubble. Optional
+   * for turns from before migration 0069 / older payloads. */
+  injected_by_user?: boolean;
 }
 
 /** Per-prompt-section + per-context-block char sizes for one persona's

@@ -1149,3 +1149,179 @@ async def test_walk_forward_validates_bounds(
         },
     )
     assert r.status_code == 422
+
+
+# ── B4: interject endpoint (mid-round 插話 + 追問) ─────────────────
+
+
+async def _create_discussion(client: AsyncClient, headers: dict) -> str:
+    create = await client.post(
+        "/api/discussion/sessions",
+        headers=headers,
+        json={"topic": "t", "rules": "r", "persona_ids": ["buffett", "lynch"]},
+    )
+    assert create.status_code == 201
+    return create.json()["id"]
+
+
+@pytest.mark.asyncio
+async def test_interject_queued_while_running(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """While a round is streaming, POST /interject enqueues the
+    question for the round loop and reports `queued` — the actual
+    question/answer turns arrive over the round's SSE stream."""
+    from services import discussion_service
+
+    h = await _register(client, "disc_interject_run@example.com")
+    discussion_id = await _create_discussion(client, h)
+    row = await db_session.scalar(
+        select(Discussion).where(Discussion.id == uuid.UUID(discussion_id))
+    )
+    row.status = "running"
+    row.current_round = 1
+    await db_session.commit()
+
+    try:
+        r = await client.post(
+            f"/api/discussion/sessions/{discussion_id}/interject",
+            headers=h,
+            json={"question": "2330 目前的評價?", "target_persona": "lynch"},
+        )
+        assert r.status_code == 200
+        assert r.json()["status"] == "queued"
+        assert r.json()["target_persona"] == "lynch"
+
+        pending = discussion_service.drain_interjections(
+            uuid.UUID(discussion_id),
+        )
+        assert pending == [
+            {"question": "2330 目前的評價?", "target_persona": "lynch"},
+        ]
+    finally:
+        discussion_service.drain_interjections(uuid.UUID(discussion_id))
+
+
+@pytest.mark.asyncio
+async def test_interject_409_when_not_running_nor_concluded(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """Draft (between rounds) is the classic /inject territory — the
+    interject endpoint rejects it with 409 so the two flows stay
+    distinct."""
+    h = await _register(client, "disc_interject_draft@example.com")
+    discussion_id = await _create_discussion(client, h)
+    row = await db_session.scalar(
+        select(Discussion).where(Discussion.id == uuid.UUID(discussion_id))
+    )
+    row.current_round = 1  # status stays "draft"
+    await db_session.commit()
+
+    r = await client.post(
+        f"/api/discussion/sessions/{discussion_id}/interject",
+        headers=h,
+        json={"question": "x"},
+    )
+    assert r.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_interject_404_for_non_owner(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    h_a = await _register(client, "disc_interject_a@example.com")
+    h_b = await _register(client, "disc_interject_b@example.com")
+    discussion_id = await _create_discussion(client, h_a)
+    row = await db_session.scalar(
+        select(Discussion).where(Discussion.id == uuid.UUID(discussion_id))
+    )
+    row.status = "running"
+    row.current_round = 1
+    await db_session.commit()
+
+    r = await client.post(
+        f"/api/discussion/sessions/{discussion_id}/interject",
+        headers=h_b,
+        json={"question": "x"},
+    )
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_interject_400_for_unknown_target_persona(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    h = await _register(client, "disc_interject_badp@example.com")
+    discussion_id = await _create_discussion(client, h)
+    row = await db_session.scalar(
+        select(Discussion).where(Discussion.id == uuid.UUID(discussion_id))
+    )
+    row.status = "running"
+    row.current_round = 1
+    await db_session.commit()
+
+    r = await client.post(
+        f"/api/discussion/sessions/{discussion_id}/interject",
+        headers=h,
+        json={"question": "x", "target_persona": "not_on_roster"},
+    )
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_interject_followup_on_concluded_returns_answer_turn(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """追問 path: on a concluded discussion, /interject runs ONE
+    synchronous follow-up turn — question + answer both persisted,
+    both marked injected_by_user, and surfaced through the session
+    detail read."""
+    h = await _register(client, "disc_interject_done@example.com")
+    discussion_id = await _create_discussion(client, h)
+    row = await db_session.scalar(
+        select(Discussion).where(Discussion.id == uuid.UUID(discussion_id))
+    )
+    row.status = "done"
+    row.current_round = 1
+    row.conclusion = {
+        "recommended_symbols": ["2330"], "reasoning": "x", "risks": [],
+        "time_horizon": "short_term", "consensus_score": 0.5,
+    }
+    await db_session.commit()
+
+    reply = '{"stance": "supplement", "content": "追問回覆：2330 評價仍具吸引力"}'
+    with patch(
+        "services.discussion_service.stream_chat",
+        side_effect=_stream_events_sequence([reply]),
+    ):
+        r = await client.post(
+            f"/api/discussion/sessions/{discussion_id}/interject",
+            headers=h,
+            json={"question": "為什麼看好 2330?"},
+        )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "answered"
+
+    q = body["question_turn"]
+    assert q["persona_id"] == "_user"
+    assert q["stance"] == "user_input"
+    assert q["injected_by_user"] is True
+    assert "2330" in q["content"]
+
+    a = body["answer_turn"]
+    # No target named → moderator default = first roster persona.
+    assert a["persona_id"] == "buffett"
+    assert body["target_persona"] == "buffett"
+    assert a["injected_by_user"] is True
+    assert a["turn_index"] == q["turn_index"] + 1
+    assert "追問回覆" in a["content"]
+
+    # Round-trips through the detail read with the flag intact.
+    detail = await client.get(
+        f"/api/discussion/sessions/{discussion_id}", headers=h,
+    )
+    turns = detail.json()["turns"]
+    assert [(t["persona_id"], t["injected_by_user"]) for t in turns] == [
+        ("_user", True), ("buffett", True),
+    ]

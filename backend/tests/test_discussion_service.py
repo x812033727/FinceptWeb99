@@ -4402,3 +4402,271 @@ async def test_assemble_focus_briefs_fan_out_collects_per_symbol():
         )
     syms = [b["symbol"] for b in out]
     assert "2330" in syms and "2454" in syms and "BAD" not in syms
+
+
+# ── B4: mid-round interjections ───────────────────────────────────
+
+
+def test_queue_interjection_validates_and_caps():
+    """The per-discussion in-memory queue enforces text bounds and a
+    max-pending cap so a round can't be flooded into an unbounded Q&A
+    session. drain empties the queue FIFO."""
+    did = uuid.uuid4()
+    try:
+        for i in range(discussion_service._MAX_PENDING_INTERJECTIONS):
+            discussion_service.queue_interjection(did, question=f"q{i}")
+        with pytest.raises(ValueError):
+            discussion_service.queue_interjection(did, question="overflow")
+        assert discussion_service.pending_interjection_count(did) == (
+            discussion_service._MAX_PENDING_INTERJECTIONS
+        )
+        drained = discussion_service.drain_interjections(did)
+        assert [d["question"] for d in drained] == ["q0", "q1", "q2"]
+        assert discussion_service.pending_interjection_count(did) == 0
+        with pytest.raises(ValueError):
+            discussion_service.queue_interjection(did, question="   ")
+    finally:
+        discussion_service.drain_interjections(did)
+
+
+@pytest.mark.asyncio
+async def test_run_round_answers_queued_interjection(
+    db_session: AsyncSession, owner: User,
+):
+    """A queued interjection is picked up at the first turn boundary:
+    the owner's question is persisted + emitted as a `user_input`
+    turn_end, then the moderator-default persona (first of the roster)
+    answers it as an extra turn — both marked `injected_by_user`, both
+    in DB and in the SSE payloads. Roster personas then run normally
+    with shifted turn_index values."""
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="本週短線績優股", rules="≤200字",
+        persona_ids=["buffett", "lynch"],
+    )
+    discussion_service.queue_interjection(
+        row.id, question="請評估 2330 的近期風險",
+    )
+
+    replies = [
+        '{"stance": "supplement", "content": "回覆插話：2330 短期風險在庫存"}',
+        '{"stance": "supplement", "content": "我看好台積電"}',
+        '{"stance": "dissent", "content": "我反對，看好聯發科"}',
+    ]
+    try:
+        with patch(
+            "services.discussion_service.stream_chat",
+            side_effect=_stream_events_sequence(replies),
+        ), patch(
+            "services.discussion_service.gather_market_context",
+            new=AsyncMock(return_value={"market": "TW"}),
+        ):
+            events = []
+            async for ev in discussion_service.run_round(
+                db_session, row, user_id=str(owner.id),
+            ):
+                events.append((ev.type, ev.payload))
+    finally:
+        discussion_service.drain_interjections(row.id)
+
+    turn_ends = [p for t, p in events if t == "turn_end"]
+    assert len(turn_ends) == 4  # question + answer + 2 roster turns
+
+    # SSE shape: the question turn is a normal-looking turn_end with
+    # the distinguishing flag; the answer turn carries it too.
+    question_ev = turn_ends[0]
+    assert question_ev["persona_id"] == discussion_service.USER_PERSONA_ID
+    assert question_ev["stance"] == discussion_service.USER_INJECTION_STANCE
+    assert question_ev["injected_by_user"] is True
+    assert question_ev["turn_index"] == 0
+    assert "2330" in question_ev["content"]
+
+    answer_ev = turn_ends[1]
+    assert answer_ev["persona_id"] == "buffett"  # moderator default
+    assert answer_ev["injected_by_user"] is True
+    assert answer_ev["turn_index"] == 1
+    assert "插話" in answer_ev["content"]
+
+    # Roster turns keep injected_by_user False and follow sequentially.
+    assert [e["injected_by_user"] for e in turn_ends[2:]] == [False, False]
+    assert [e["turn_index"] for e in turn_ends] == [0, 1, 2, 3]
+
+    # turn_start for the answer turn also carries the flag.
+    starts = [p for t, p in events if t == "turn_start"]
+    assert [s["injected_by_user"] for s in starts] == [True, False, False]
+
+    # round_end reflects the actual turn count, not the roster size.
+    round_end = next(p for t, p in events if t == "round_end")
+    assert round_end["turn_count"] == 4
+
+    # Persistence: 4 rows, flags + order match the SSE story.
+    turns = (await db_session.scalars(
+        select(DiscussionTurn)
+        .where(DiscussionTurn.discussion_id == row.id)
+        .order_by(DiscussionTurn.turn_index)
+    )).all()
+    assert [t.persona_id for t in turns] == [
+        "_user", "buffett", "buffett", "lynch",
+    ]
+    assert [t.injected_by_user for t in turns] == [True, True, False, False]
+    assert turns[0].stance == "user_input"
+
+
+@pytest.mark.asyncio
+async def test_run_round_interjection_honours_target_persona(
+    db_session: AsyncSession, owner: User,
+):
+    """When the owner names a roster persona, that persona answers the
+    interjection (instead of the moderator-default first persona)."""
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+    discussion_service.queue_interjection(
+        row.id, question="lynch 怎麼看?", target_persona="lynch",
+    )
+    replies = ['{"stance": "supplement", "content": "回覆"}'] * 3
+    try:
+        with patch(
+            "services.discussion_service.stream_chat",
+            side_effect=_stream_events_sequence(replies),
+        ), patch(
+            "services.discussion_service.gather_market_context",
+            new=AsyncMock(return_value={"market": "TW"}),
+        ):
+            events = []
+            async for ev in discussion_service.run_round(
+                db_session, row, user_id=str(owner.id),
+            ):
+                events.append((ev.type, ev.payload))
+    finally:
+        discussion_service.drain_interjections(row.id)
+
+    turn_ends = [p for t, p in events if t == "turn_end"]
+    assert turn_ends[1]["persona_id"] == "lynch"
+    assert turn_ends[1]["injected_by_user"] is True
+    # Roster order afterwards unchanged.
+    assert [e["persona_id"] for e in turn_ends[2:]] == ["buffett", "lynch"]
+
+
+@pytest.mark.asyncio
+async def test_run_round_interjection_prompt_carries_question(
+    db_session: AsyncSession, owner: User,
+):
+    """The answering persona's LLM prompt must contain the dedicated
+    使用者插話 section with the question text so the model answers it
+    directly instead of producing another generic stance statement."""
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+    discussion_service.queue_interjection(row.id, question="獨特的插話問題XYZ")
+
+    seen_prompts: list[str] = []
+
+    def _capturing_stream(*_a, **kw):
+        async def _gen() -> AsyncIterator[dict]:
+            messages = kw.get("messages") or []
+            seen_prompts.append(messages[-1]["content"] if messages else "")
+            yield {"type": "delta",
+                   "text": '{"stance": "supplement", "content": "ok"}'}
+        return _gen()
+
+    try:
+        with patch(
+            "services.discussion_service.stream_chat",
+            side_effect=_capturing_stream,
+        ), patch(
+            "services.discussion_service.gather_market_context",
+            new=AsyncMock(return_value={"market": "TW"}),
+        ):
+            async for _ev in discussion_service.run_round(
+                db_session, row, user_id=str(owner.id),
+            ):
+                pass
+    finally:
+        discussion_service.drain_interjections(row.id)
+
+    assert len(seen_prompts) == 3
+    # Only the FIRST call (the interjection answer) gets the section.
+    assert "## 使用者插話" in seen_prompts[0]
+    assert "獨特的插話問題XYZ" in seen_prompts[0]
+    assert "## 使用者插話" not in seen_prompts[1]
+    assert "## 使用者插話" not in seen_prompts[2]
+
+
+# ── B4: post-conclusion 追問 (interject_followup) ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_interject_followup_appends_one_answer_turn(
+    db_session: AsyncSession, owner: User,
+):
+    """On a concluded discussion, interject_followup persists the
+    question as a user_input turn and exactly ONE persona answer turn
+    (both injected_by_user), without opening a new round or touching
+    the conclusion."""
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+    row.status = discussion_service.STATUS_DONE
+    row.current_round = 2
+    row.conclusion = {"recommended_symbols": ["2330"], "reasoning": "x"}
+    await db_session.commit()
+
+    with patch(
+        "services.discussion_service.stream_chat",
+        side_effect=_stream_events_sequence(
+            ['{"stance": "supplement", "content": "追問回覆：評價仍合理"}'],
+        ),
+    ):
+        q_turn, a_turn = await discussion_service.interject_followup(
+            db_session, row,
+            question="為什麼看好 2330?",
+            target_persona="lynch",
+            user_id=str(owner.id),
+        )
+
+    assert q_turn.persona_id == "_user"
+    assert q_turn.stance == "user_input"
+    assert q_turn.injected_by_user is True
+    assert q_turn.round == 2
+
+    assert a_turn.persona_id == "lynch"
+    assert a_turn.injected_by_user is True
+    assert a_turn.round == 2  # appended to the current round — no new round
+    assert a_turn.turn_index == q_turn.turn_index + 1
+    assert "追問回覆" in a_turn.content
+
+    refreshed = await db_session.get(Discussion, row.id)
+    assert refreshed.current_round == 2
+    assert refreshed.status == discussion_service.STATUS_DONE
+    assert refreshed.conclusion == {
+        "recommended_symbols": ["2330"], "reasoning": "x",
+    }
+
+
+@pytest.mark.asyncio
+async def test_interject_followup_rejects_non_concluded(
+    db_session: AsyncSession, owner: User,
+):
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+    row.current_round = 1  # draft — between rounds, not concluded
+    await db_session.commit()
+    with pytest.raises(ValueError):
+        await discussion_service.interject_followup(
+            db_session, row, question="q",
+        )

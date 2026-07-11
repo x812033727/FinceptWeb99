@@ -472,6 +472,9 @@ async def inject_user_message(
             stance=USER_INJECTION_STANCE,
             content=text,
             citations=None,
+            # B4: every user-authored turn is by definition injected —
+            # the flag lets the UI badge it without sniffing stance.
+            injected_by_user=True,
         )
         db.add(row)
         discussion.updated_at = datetime.now(UTC)
@@ -487,6 +490,63 @@ async def inject_user_message(
         f"inject_user_message: turn_index collision retried 5x without success "
         f"(last error: {last_exc})"
     )
+
+
+# ── mid-round user interjections (B4) ──────────────────────────────
+#
+# While a round is streaming, the owner can interject a question via
+# `POST /sessions/{id}/interject`. The router validates + enqueues it
+# here; `run_round` drains the queue at every turn boundary, persists
+# the question as a `user_input` turn and has the assigned persona
+# answer it as an extra turn (both marked `injected_by_user=True`).
+#
+# In-memory + per-process by design — the round loop runs as an
+# asyncio task in the SAME process that accepted the interject request
+# (identical single-process assumption as `_BG_ROUND_TASKS` in
+# `api/discussion/_helpers.py`, which keeps the SSE stream and its
+# background round task co-located). Entries that arrive in the tiny
+# window after the loop's final drain simply stay queued and get
+# answered at the start of the next round.
+
+_PENDING_INTERJECTIONS: dict[uuid.UUID, list[dict[str, Any]]] = {}
+_MAX_PENDING_INTERJECTIONS = 3
+
+
+def queue_interjection(
+    discussion_id: uuid.UUID,
+    *,
+    question: str,
+    target_persona: str | None = None,
+) -> dict[str, Any]:
+    """Enqueue a mid-round user interjection for `run_round` to pick
+    up at the next turn boundary. Raises ValueError on empty/oversized
+    questions or when the discussion already has
+    `_MAX_PENDING_INTERJECTIONS` unanswered interjections (protects
+    the round from being flooded into an unbounded Q&A session)."""
+    text = _validate_text(
+        question, field="question", max_chars=_MAX_USER_INJECTION_CHARS,
+    )
+    pending = _PENDING_INTERJECTIONS.setdefault(discussion_id, [])
+    if len(pending) >= _MAX_PENDING_INTERJECTIONS:
+        raise ValueError(
+            f"Too many pending interjections "
+            f"(max {_MAX_PENDING_INTERJECTIONS}) — wait for the current "
+            "ones to be answered",
+        )
+    entry = {"question": text, "target_persona": target_persona}
+    pending.append(entry)
+    return entry
+
+
+def drain_interjections(discussion_id: uuid.UUID) -> list[dict[str, Any]]:
+    """Pop-and-return every pending interjection for the discussion
+    (FIFO order). Called by `run_round` at each turn boundary."""
+    pending = _PENDING_INTERJECTIONS.pop(discussion_id, None)
+    return pending or []
+
+
+def pending_interjection_count(discussion_id: uuid.UUID) -> int:
+    return len(_PENDING_INTERJECTIONS.get(discussion_id) or [])
 
 
 async def prune_old_round_contexts(
@@ -735,6 +795,7 @@ from services.discussion.round_runner import (  # noqa: E402,F401
     TurnEvent,
     _ask_persona,
     _ThinkBlockFilter,
+    interject_followup,
     run_round,
 )
 from services.discussion.screener_utils import (  # noqa: E402,F401

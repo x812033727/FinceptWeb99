@@ -14,6 +14,7 @@ import {
   createSession,
   deleteSession,
   injectUserMessage,
+  interjectSession,
   runPostMortem,
   runPostMortemFlowSteps,
   readPostMortemResult,
@@ -177,6 +178,26 @@ export function useDiscussionMutations({
     },
   });
 
+  // B4: mid-round interjection / post-conclusion 追問. While a round
+  // streams, the backend queues the question and answers it at the
+  // next turn boundary (the turns then arrive over the round's SSE
+  // stream); on a concluded discussion the single follow-up turn runs
+  // synchronously and we refetch the session to surface it.
+  const [interjectTarget, setInterjectTarget] = useState("");
+  const interjectMut = useMutation({
+    mutationFn: (args: { question: string; target_persona?: string }) =>
+      interjectSession(selectedId!, args),
+    onSuccess: (data) => {
+      setInjectDraft("");
+      if (data.status === "answered") {
+        queryClient.invalidateQueries({
+          queryKey: ["discussion-session", selectedId],
+        });
+      }
+    },
+    onError: (err) => setStreamError(errorDetail(err)),
+  });
+
   return {
     createMut,
     updateMut,
@@ -188,5 +209,8 @@ export function useDiscussionMutations({
     injectDraft,
     setInjectDraft,
     injectMut,
+    interjectTarget,
+    setInterjectTarget,
+    interjectMut,
   };
 }

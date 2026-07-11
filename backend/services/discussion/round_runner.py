@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import deque
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -202,9 +203,18 @@ async def _ask_persona(
     user_id: str | None,
     user_role: str | None = None,
     as_of_date: date | None = None,
+    interject_question: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Yield raw stream events from one persona's turn. Caller assembles
     the deltas + parses the final JSON.
+
+    `interject_question` (B4): when the owner interjected a question and
+    the moderator assigned THIS persona to answer it, the question is
+    appended as a dedicated prompt section so the persona answers it
+    directly instead of producing another generic stance statement. The
+    question itself is also already in `prior_turns` (persisted as a
+    `user_input` turn before this call), so later personas see it in
+    their history either way.
 
     Takes a pre-resolved `AgentSpec` so callers can batch-load the
     persona roster's overrides up-front (avoiding an N+1 round trip
@@ -262,7 +272,19 @@ async def _ask_persona(
         history=history,
     )
     tool_hint = _PERSONA_TOOL_USAGE_HINT if tool_kwargs else ""
-    user_prompt = base_user_prompt + tool_hint
+    interject_block = (
+        (
+            "\n\n## 使用者插話\n"
+            "討論發起人剛剛插話提問，主持人指定由你回答。"
+            "請以你的角色直接、具體地回答這個問題（可引用 ## 市場現況 "
+            "或工具數據），不需要重複完整的立場論述，"
+            "輸出格式仍維持原本要求的 JSON：\n"
+            f"{interject_question}"
+        )
+        if interject_question
+        else ""
+    )
+    user_prompt = base_user_prompt + tool_hint + interject_block
     # Per-section + per-block input-size breakdown for the "ctx 用量明細"
     # view. Yielded as a synthetic event the round runner captures (folds
     # into turn_end + persists on the turn). Char-based + provider-
@@ -346,7 +368,10 @@ async def run_round(
     from services.discussion_service import (
         STATUS_DRAFT,
         STATUS_RUNNING,
+        USER_INJECTION_STANCE,
+        USER_PERSONA_ID,
         _upsert_round_context,
+        drain_interjections,
         gather_market_context,
         get_turns,
     )
@@ -559,7 +584,40 @@ async def run_round(
         # already dropped above) so the round runner doesn't waste
         # a turn slot on someone who's been benched. Existing
         # `specs_by_id` keys match this filtered list 1:1.
-        for idx, persona_id in enumerate(runtime_persona_ids):
+        #
+        # B4: the roster runs as a work QUEUE (not a plain enumerate)
+        # so mid-round user interjections can be spliced in at turn
+        # boundaries. Before each turn we drain the discussion's
+        # pending-interjection queue (fed by POST /interject while
+        # status=running); each interjection becomes (a) the owner's
+        # question persisted as a `user_input` turn and (b) an extra
+        # answer turn by the assigned persona — the named
+        # `target_persona` when valid, else the moderator default
+        # (first persona of the runtime roster). Both turns carry
+        # `injected_by_user=True` in the DB and in their SSE events.
+        # `turn_index` is a running counter (== enumerate index when
+        # nothing is interjected).
+        work: deque[tuple[str, dict[str, Any] | None]] = deque(
+            (pid, None) for pid in runtime_persona_ids
+        )
+        turn_idx = 0
+        while True:
+            # Drain at every turn boundary — including once more after
+            # the last roster persona, so a question asked during the
+            # final turn still gets answered within this round.
+            for inj in reversed(drain_interjections(discussion.id)):
+                target = inj.get("target_persona")
+                if target not in specs_by_id:
+                    target = (
+                        runtime_persona_ids[0] if runtime_persona_ids else None
+                    )
+                if target is None:
+                    continue
+                work.appendleft((target, inj))
+            if not work:
+                break
+            persona_id, interjection = work.popleft()
+            injected = interjection is not None
             spec = specs_by_id.get(persona_id)
             if spec is None:
                 # persona_id no longer recognised by ai.agents (shouldn't
@@ -570,11 +628,46 @@ async def run_round(
                 })
                 continue
 
+            if injected:
+                # Persist + emit the owner's question first so it sits
+                # immediately before the answer in the transcript and
+                # in `prior_turns` for every later persona. Emitted as
+                # a normal `turn_end` (no streaming — the text already
+                # exists) so SSE consumers append it like any turn.
+                question_turn = DiscussionTurn(
+                    discussion_id=discussion.id,
+                    round=round_number,
+                    turn_index=turn_idx,
+                    persona_id=USER_PERSONA_ID,
+                    stance=USER_INJECTION_STANCE,
+                    content=interjection["question"],
+                    citations=None,
+                    injected_by_user=True,
+                )
+                db.add(question_turn)
+                await db.commit()
+                prior_turns.append(question_turn)
+                yield TurnEvent("turn_end", {
+                    "round": round_number,
+                    "turn_index": turn_idx,
+                    "persona_id": USER_PERSONA_ID,
+                    "persona_name": "使用者",
+                    "stance": USER_INJECTION_STANCE,
+                    "content": interjection["question"],
+                    "injected_by_user": True,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "tool_call_count": 0,
+                    "breakdown": None,
+                })
+                turn_idx += 1
+
             yield TurnEvent("turn_start", {
                 "round": round_number,
-                "turn_index": idx,
+                "turn_index": turn_idx,
                 "persona_id": persona_id,
                 "persona_name": spec.name,
+                "injected_by_user": injected,
             })
 
             assembled = ""
@@ -606,6 +699,9 @@ async def run_round(
                         user_id=user_id,
                         user_role=user_role,
                         as_of_date=discussion.as_of_date,
+                        interject_question=(
+                            interjection["question"] if injected else None
+                        ),
                     ):
                         etype = event.get("type")
                         if etype == "delta":
@@ -615,7 +711,7 @@ async def run_round(
                             if visible:
                                 yield TurnEvent("delta", {
                                     "round": round_number,
-                                    "turn_index": idx,
+                                    "turn_index": turn_idx,
                                     "persona_id": persona_id,
                                     "text": visible,
                                 })
@@ -638,7 +734,7 @@ async def run_round(
                             )
                             yield TurnEvent("tool_call", {
                                 "round": round_number,
-                                "turn_index": idx,
+                                "turn_index": turn_idx,
                                 "persona_id": persona_id,
                                 "id":   event.get("id"),
                                 "name": event.get("name"),
@@ -647,7 +743,7 @@ async def run_round(
                         elif etype == "tool_result":
                             yield TurnEvent("tool_result", {
                                 "round": round_number,
-                                "turn_index": idx,
+                                "turn_index": turn_idx,
                                 "persona_id": persona_id,
                                 "id":       event.get("id"),
                                 "name":     event.get("name"),
@@ -708,7 +804,7 @@ async def run_round(
             if tail:
                 yield TurnEvent("delta", {
                     "round": round_number,
-                    "turn_index": idx,
+                    "turn_index": turn_idx,
                     "persona_id": persona_id,
                     "text": tail,
                 })
@@ -717,12 +813,13 @@ async def run_round(
             turn_row = DiscussionTurn(
                 discussion_id=discussion.id,
                 round=round_number,
-                turn_index=idx,
+                turn_index=turn_idx,
                 persona_id=persona_id,
                 stance=stance,
                 content=content,
                 citations=None,
                 input_breakdown=breakdown,
+                injected_by_user=injected,
             )
             db.add(turn_row)
             await db.commit()
@@ -753,7 +850,7 @@ async def run_round(
 
             yield TurnEvent("turn_end", {
                 "round": round_number,
-                "turn_index": idx,
+                "turn_index": turn_idx,
                 "persona_id": persona_id,
                 "persona_name": spec.name,
                 "stance": stance,
@@ -765,7 +862,12 @@ async def run_round(
                 "completion_tokens": (usage_seen or {}).get("completion_tokens", 0),
                 "tool_call_count": tool_call_total,
                 "breakdown": breakdown,
+                # B4: lets the SSE consumer badge interjection answers
+                # AND lets the router's quota accounting skip injected
+                # turns (they're charged separately at enqueue time).
+                "injected_by_user": injected,
             })
+            turn_idx += 1
 
         # Settle this round's token usage (input + output) for the live
         # per-round tally. All persona rows above were committed per-turn,
@@ -785,7 +887,10 @@ async def run_round(
 
         yield TurnEvent("round_end", {
             "round": round_number,
-            "turn_count": len(discussion.persona_ids),
+            # Actual number of turns persisted this round (roster turns
+            # + any interjected question/answer pairs), not the roster
+            # size — the two only differ when B4 interjections fired.
+            "turn_count": turn_idx,
             "prompt_tokens": round_tokens.get("prompt_tokens", 0),
             "completion_tokens": round_tokens.get("completion_tokens", 0),
             "total_tokens": round_tokens.get("total_tokens", 0),
@@ -819,3 +924,191 @@ async def run_round(
                 "discussion.run_round.status_reset_failed",
                 extra={"discussion_id": str(discussion.id)},
             )
+
+
+# ── post-conclusion 追問 (B4 follow-up) ─────────────────────────────
+
+
+async def interject_followup(
+    db: AsyncSession,
+    discussion: Discussion,
+    *,
+    question: str,
+    target_persona: str | None = None,
+    user_id: str | None = None,
+    user_role: str | None = None,
+) -> tuple[DiscussionTurn, DiscussionTurn]:
+    """One bounded follow-up Q&A on a CONCLUDED discussion.
+
+    Persists the owner's question as a `user_input` turn, then has a
+    single persona (the named `target_persona` when it's on the roster,
+    else the first roster persona — the moderator default) answer it as
+    ONE extra turn appended to the current round. No new round is
+    opened, no market context is re-gathered (the latest persisted
+    round-context snapshot is reused — the follow-up is about the
+    existing conclusion, not fresh data), and the conclusion is left
+    untouched. Returns `(question_turn, answer_turn)`.
+
+    Raises ValueError for state/validation problems (not concluded,
+    empty/oversized question, no usable persona); RuntimeError for
+    LLM-side failures (timeout, provider error) so the caller can
+    refund the quota charge.
+    """
+    # Lazy imports from `discussion_service` for the same
+    # patch-compatibility reasons `run_round` documents above.
+    from services.discussion_service import (
+        STATUS_DONE,
+        get_round_contexts,
+        get_turns,
+        inject_user_message,
+    )
+
+    if discussion.status != STATUS_DONE or not discussion.conclusion:
+        raise ValueError(
+            "Follow-up interjection requires a concluded discussion",
+        )
+
+    roster = list(discussion.persona_ids or [])
+    specs_by_id = await _resolve_persona_specs(db, roster)
+    persona_id = (
+        target_persona
+        if target_persona in specs_by_id
+        else next((pid for pid in roster if pid in specs_by_id), None)
+    )
+    if persona_id is None:
+        raise ValueError("No persona available to answer the follow-up")
+    spec = specs_by_id[persona_id]
+
+    # Persist the question first — it belongs in the transcript, and
+    # `inject_user_message` re-validates text bounds + non-running
+    # status and handles turn_index races.
+    question_turn = await inject_user_message(db, discussion, content=question)
+
+    context: dict[str, Any] = {}
+    try:
+        ctx_rows = await get_round_contexts(db, discussion_id=discussion.id)
+        if ctx_rows:
+            context = ctx_rows[-1].context or {}
+    except Exception as exc:
+        log.warning(
+            "discussion.followup.context_snapshot_read_failed",
+            extra={"discussion_id": str(discussion.id), "error": str(exc)},
+        )
+
+    prior_turns = await get_turns(db, discussion_id=discussion.id)
+
+    try:
+        from services.runtime_config_service import get_int as _get_int
+        persona_timeout = await _get_int(
+            db, "DISCUSSION_PERSONA_TIMEOUT_SECONDS",
+        )
+    except Exception:
+        persona_timeout = settings.DISCUSSION_PERSONA_TIMEOUT_SECONDS
+
+    assembled = ""
+    usage_seen: dict[str, int] | None = None
+    breakdown: dict[str, Any] | None = None
+    tool_call_total = 0
+    try:
+        async with asyncio.timeout(persona_timeout):
+            async for event in _ask_persona(
+                db,
+                spec=spec,
+                persona_id=persona_id,
+                topic=discussion.topic,
+                rules=discussion.rules,
+                context=context,
+                prior_turns=prior_turns,
+                user_id=user_id,
+                user_role=user_role,
+                as_of_date=discussion.as_of_date,
+                interject_question=question_turn.content,
+            ):
+                etype = event.get("type")
+                if etype == "delta":
+                    assembled += event.get("text", "")
+                elif etype == "input_breakdown":
+                    breakdown = event.get("breakdown")
+                elif etype == "tool_call":
+                    tool_call_total += 1
+                elif etype == "usage":
+                    if usage_seen is None:
+                        usage_seen = {"prompt_tokens": 0, "completion_tokens": 0}
+                    usage_seen["prompt_tokens"] += int(
+                        event.get("prompt_tokens", 0)
+                    )
+                    usage_seen["completion_tokens"] += int(
+                        event.get("completion_tokens", 0)
+                    )
+                elif etype == "error":
+                    raise RuntimeError(
+                        event.get("message", "LLM error during follow-up"),
+                    )
+    except TimeoutError:
+        raise RuntimeError(
+            f"persona timeout after {persona_timeout}s during follow-up",
+        )
+
+    stance, content = _parse_turn_response(assembled)
+
+    # Same bounded turn_index-collision retry as `inject_user_message`
+    # (unique (discussion_id, round, turn_index) gate from PR #218).
+    from sqlalchemy.exc import IntegrityError
+
+    answer_turn: DiscussionTurn | None = None
+    last_exc: Exception | None = None
+    for _attempt in range(5):
+        max_idx = await db.scalar(
+            select(DiscussionTurn.turn_index)
+            .where(
+                DiscussionTurn.discussion_id == discussion.id,
+                DiscussionTurn.round == discussion.current_round,
+            )
+            .order_by(DiscussionTurn.turn_index.desc())
+            .limit(1)
+        )
+        next_idx = (int(max_idx) + 1) if max_idx is not None else 0
+        row = DiscussionTurn(
+            discussion_id=discussion.id,
+            round=discussion.current_round,
+            turn_index=next_idx,
+            persona_id=persona_id,
+            stance=stance,
+            content=content,
+            citations=None,
+            input_breakdown=breakdown,
+            injected_by_user=True,
+        )
+        db.add(row)
+        try:
+            await db.commit()
+        except IntegrityError as exc:
+            await db.rollback()
+            last_exc = exc
+            continue
+        await db.refresh(row)
+        answer_turn = row
+        break
+    if answer_turn is None:
+        raise RuntimeError(
+            f"interject_followup: turn_index collision retried 5x without "
+            f"success (last error: {last_exc})"
+        )
+
+    if usage_seen is not None:
+        from services.llm_usage_service import record_usage
+        await record_usage(
+            db,
+            user_id=user_id,
+            provider=spec.default_provider,
+            model=spec.default_model,
+            persona_id=persona_id,
+            prompt_tokens=usage_seen["prompt_tokens"],
+            completion_tokens=usage_seen["completion_tokens"],
+            tool_call_count=tool_call_total,
+            tool_call_breakdown=None,
+            discussion_id=discussion.id,
+            round=discussion.current_round,
+        )
+
+    return question_turn, answer_turn

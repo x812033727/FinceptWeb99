@@ -103,3 +103,111 @@ describe("AlertsPage history section", () => {
     expect(badge.className).toContain("text-warning");
   });
 });
+
+// ── rule summaries (PR-D1) ─────────────────────────────────────
+
+function baseAlert(over: Record<string, unknown>) {
+  return {
+    id: `al-${Math.random().toString(36).slice(2)}`,
+    symbol: "AAPL",
+    market: "US",
+    condition: null,
+    target_price: null,
+    params: null,
+    cooldown_seconds: 0,
+    repeat: false,
+    last_fired_at: null,
+    triggered: false,
+    triggered_at: null,
+    created_at: "2026-07-10T00:00:00Z",
+    ...over,
+  };
+}
+
+function mockApiAlerts(alerts: unknown[]) {
+  apiGetMock.mockImplementation((url: string) => {
+    if (url.startsWith("/alerts/history")) return Promise.resolve({ data: [] });
+    if (url.startsWith("/alerts")) return Promise.resolve({ data: alerts });
+    return Promise.resolve({ data: [] });
+  });
+}
+
+describe("AlertsPage rule summaries", () => {
+  it("renders legacy price rule with target price", async () => {
+    mockApiAlerts([
+      baseAlert({
+        condition: "above",
+        condition_type: "price_above",
+        target_price: 200,
+      }),
+    ]);
+    renderPage();
+    expect(await screen.findByText("alerts.above")).toBeTruthy();
+    expect(screen.getByText("$200.00")).toBeTruthy();
+  });
+
+  it("renders pct-change summary", async () => {
+    mockApiAlerts([
+      baseAlert({ condition_type: "pct_change_above", params: { pct: 5 } }),
+    ]);
+    renderPage();
+    expect(await screen.findByText("alerts.summary_pct_above")).toBeTruthy();
+  });
+
+  it("renders breakout summary", async () => {
+    mockApiAlerts([
+      baseAlert({
+        symbol: "2330",
+        market: "TW",
+        condition_type: "breakout_high",
+        params: { lookback_days: 60 },
+      }),
+    ]);
+    renderPage();
+    expect(await screen.findByText("alerts.summary_breakout_high")).toBeTruthy();
+  });
+
+  it("renders volume-surge and streak summaries", async () => {
+    mockApiAlerts([
+      baseAlert({
+        condition_type: "volume_surge",
+        params: { multiple: 2, lookback_days: 20 },
+      }),
+      baseAlert({
+        symbol: "2330",
+        market: "TW",
+        condition_type: "foreign_net_buy_streak",
+        params: { days: 3 },
+      }),
+    ]);
+    renderPage();
+    expect(await screen.findByText("alerts.summary_volume_surge")).toBeTruthy();
+    expect(screen.getByText("alerts.summary_streak")).toBeTruthy();
+  });
+
+  it("shows a repeat badge with cooldown label for repeat alerts", async () => {
+    mockApiAlerts([
+      baseAlert({
+        condition_type: "pct_change_above",
+        params: { pct: 5 },
+        repeat: true,
+        cooldown_seconds: 3600,
+      }),
+    ]);
+    renderPage();
+    expect((await screen.findByText(/alerts\.repeat_badge/)).textContent).toContain("1h");
+  });
+
+  it("does not show a repeat badge for once-only alerts", async () => {
+    mockApiAlerts([
+      baseAlert({
+        condition: "above",
+        condition_type: "price_above",
+        target_price: 100,
+      }),
+    ]);
+    renderPage();
+    await screen.findByText("alerts.above");
+    expect(screen.queryByText(/alerts\.repeat_badge/)).toBeNull();
+  });
+});

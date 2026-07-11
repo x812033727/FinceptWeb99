@@ -1,12 +1,23 @@
 import enum
 import uuid
-from datetime import datetime, timezone
-from typing import Any, TYPE_CHECKING
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
+
 from sqlalchemy import (
-    JSON, Boolean, DateTime, Enum, Float, ForeignKey, Index, String, Text,
+    JSON,
+    Boolean,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from db.base import Base
 
 if TYPE_CHECKING:
@@ -19,6 +30,19 @@ class AlertCondition(str, enum.Enum):
 
 
 class PriceAlert(Base):
+    """One alert rule (PR-D1 規則引擎).
+
+    `condition_type` + `params` drive the evaluator registry in
+    `services/alert_rules.py`. The legacy `condition` enum +
+    `target_price` columns are kept for backward compat: they stay
+    populated for `price_above` / `price_below` rules (existing rows
+    were data-migrated above→price_above, below→price_below in 0065)
+    and are NULL for the newer rule types.
+
+    Firing semantics: `repeat=False` → fire once, flip `triggered`
+    (original behavior). `repeat=True` → `triggered` never flips;
+    re-fires are gated by `last_fired_at + cooldown_seconds`.
+    """
     __tablename__ = "price_alerts"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -28,8 +52,24 @@ class PriceAlert(Base):
     )
     symbol: Mapped[str] = mapped_column(String(20), nullable=False)
     market: Mapped[str] = mapped_column(String(8), nullable=False)
-    condition: Mapped[AlertCondition] = mapped_column(Enum(AlertCondition), nullable=False)
-    target_price: Mapped[float] = mapped_column(Float, nullable=False)
+    condition: Mapped[AlertCondition | None] = mapped_column(
+        Enum(AlertCondition), nullable=True,
+    )
+    target_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    condition_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="price_above",
+        server_default="price_above",
+    )
+    params: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    cooldown_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    repeat: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false",
+    )
+    last_fired_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
     triggered: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
@@ -69,6 +109,6 @@ class AlertEvent(Base):
     message: Mapped[str] = mapped_column(Text, nullable=False)
     fired_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False,
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
     )
     payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

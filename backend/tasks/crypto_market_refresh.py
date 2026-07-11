@@ -61,7 +61,9 @@ async def refresh_crypto_quotes() -> None:
             from db.session import AsyncSessionLocal
             from services.alert_service import AlertService
             async with AsyncSessionLocal() as db:
-                await AlertService.check_and_fire(db, sym, "CRYPTO", quote["price"])
+                await AlertService.check_and_fire(
+                    db, sym, "CRYPTO", quote["price"], quote=quote,
+                )
         except Exception as exc:
             logger.warning("crypto quote refresh failed for %s: %s", sym, exc)
 

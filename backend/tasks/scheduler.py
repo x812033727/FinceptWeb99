@@ -245,6 +245,19 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # 外資連 N 日買超 alerts (PR-D1). Daily rule — evaluated once
+    # per day against tw_institutional_daily, 30 min after the
+    # institutional ingest above has landed the day's rows.
+    from tasks.alert_streaks_tw import run as run_alert_streaks_tw
+    scheduler.add_job(
+        run_alert_streaks_tw,
+        trigger=CronTrigger(hour=7, minute=20, timezone="UTC"),
+        id="alert_streaks_tw",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # TAIEX 大盤加權指數 daily history. One FMTQIK call per day
     # returns the full month's index OHLC; idempotent UPSERT into
     # ohlcv_daily under symbol='_TAIEX' so the existing read tier

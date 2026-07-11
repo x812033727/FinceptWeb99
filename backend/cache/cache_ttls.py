@@ -51,3 +51,8 @@ TTL_FX = 4 * 3600
 TTL_FX_LAST_KNOWN = 30 * 86400       # 30 days — used as a fallback floor
 TTL_FX_HISTORICAL = 90 * 86400       # 90 days — historical rates are immutable;
                                      # long TTL lets old portfolios reload fast
+
+# ── alerts (PR-D1 規則引擎) ──────────────────────────────────────
+TTL_ALERT_THRESHOLD = 24 * 3600      # N-day high/low/均量 threshold per
+                                     # symbol — keyed by date so it rolls
+                                     # daily; TTL is just the janitor

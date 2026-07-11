@@ -89,7 +89,9 @@ async def refresh_tw_quotes(*, force: bool = False) -> None:
             from db.session import AsyncSessionLocal
             from services.alert_service import AlertService
             async with AsyncSessionLocal() as db:
-                await AlertService.check_and_fire(db, sym, "TW", result["price"])
+                await AlertService.check_and_fire(
+                    db, sym, "TW", result["price"], quote=result,
+                )
         except Exception as exc:
             logger.warning("TW quote refresh failed for %s: %s", sym, exc)
 

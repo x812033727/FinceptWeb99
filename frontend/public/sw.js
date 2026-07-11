@@ -43,13 +43,19 @@ self.addEventListener("install", (event) => {
   self.skipWaiting();
 });
 
-// ── Activate: purge old caches ────────────────────────────────────
+// ── Activate: purge old caches + enable navigation preload ───────
 self.addEventListener("activate", (event) => {
   const current = new Set([SHELL_CACHE, API_CACHE, STATIC_CACHE]);
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => !current.has(k)).map((k) => caches.delete(k)))
-    )
+    Promise.all([
+      caches.keys().then((keys) =>
+        Promise.all(keys.filter((k) => !current.has(k)).map((k) => caches.delete(k)))
+      ),
+      // Let the browser start the navigation request in parallel with
+      // SW boot — on a cold SW this shaves the startup latency off
+      // every hard navigation. Guarded: not all engines support it.
+      self.registration.navigationPreload?.enable().catch(() => {}),
+    ])
   );
   self.clients.claim();
 });
@@ -64,6 +70,23 @@ const HASHED_ASSET_RE = /^\/assets\/.+-[A-Za-z0-9_-]{8,}\.(js|css)$/;
 // Quotes / screener / fundamentals all rotate within minutes; serving
 // older data without indication would be worse than failing.
 const API_MAX_STALE_MS = 5 * 60 * 1000;
+
+// Cap the API cache so a long session browsing many symbols can't grow
+// it unboundedly. Cache API keys() returns insertion order, so trimming
+// from the front is FIFO — close enough to LRU for a freshness-gated
+// fallback cache (entries older than API_MAX_STALE_MS are dead weight
+// anyway).
+const API_CACHE_MAX_ENTRIES = 100;
+
+async function trimCache(cacheName, maxEntries) {
+  try {
+    const cache = await caches.open(cacheName);
+    const keys = await cache.keys();
+    for (let i = 0; i < keys.length - maxEntries; i++) {
+      await cache.delete(keys[i]);
+    }
+  } catch { /* trim is best-effort */ }
+}
 
 // ── Fetch ─────────────────────────────────────────────────────────
 self.addEventListener("fetch", (event) => {
@@ -110,7 +133,7 @@ self.addEventListener("fetch", (event) => {
   }
 
   // HTML (SPA routes): network-first, fallback to cached /
-  event.respondWith(spaFallback(request));
+  event.respondWith(spaFallback(request, event));
 });
 
 // ── Strategies ────────────────────────────────────────────────────
@@ -154,6 +177,8 @@ async function networkFirstWithCache(request, cacheName, timeoutMs) {
         headers: appendDateHeader(response.headers),
       });
       cache.put(request, stamped);
+      // Fire-and-forget: bound the cache without delaying the response.
+      trimCache(cacheName, API_CACHE_MAX_ENTRIES);
     }
     return response;
   } catch {
@@ -180,9 +205,12 @@ function isStale(response, maxAgeMs) {
   return Number.isFinite(age) && age > maxAgeMs;
 }
 
-async function spaFallback(request) {
+async function spaFallback(request, event) {
   try {
-    const response = await fetch(request);
+    // Use the browser's preloaded navigation response when available
+    // (started in parallel with SW boot — see the activate handler).
+    const preloaded = event && (await event.preloadResponse);
+    const response = preloaded || (await fetch(request));
     if (response.ok) {
       const cache = await caches.open(SHELL_CACHE);
       cache.put(request, response.clone());

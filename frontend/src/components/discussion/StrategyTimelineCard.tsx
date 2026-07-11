@@ -38,13 +38,15 @@ import type {
 } from "./_helpers";
 
 
-/** Regime → semi-transparent background tint. Stacked when overlap. */
+/** Regime → semi-transparent background tint. Stacked when overlap.
+ * bull/bear encode market direction, so they ride --up/--down and flip
+ * with the 台股紅漲綠跌 convention. */
 function regimeColor(regime: RegimeBand["regime"]): string {
   switch (regime) {
-    case "bull":     return "rgba(16, 185, 129, 0.08)";   // emerald
-    case "bear":     return "rgba(239, 68, 68, 0.10)";    // red
-    case "high_vol": return "rgba(245, 158, 11, 0.10)";   // amber
-    case "low_vol":  return "rgba(59, 130, 246, 0.06)";   // blue
+    case "bull":     return "hsl(var(--up) / 0.08)";
+    case "bear":     return "hsl(var(--down) / 0.10)";
+    case "high_vol": return "hsl(var(--warning) / 0.10)";
+    case "low_vol":  return "hsl(var(--chart-1) / 0.06)";
   }
 }
 
@@ -53,19 +55,19 @@ function regimeColor(regime: RegimeBand["regime"]): string {
  * legend stays meaningful regardless of operator-tuned filters. */
 function eventColor(ev: TimelineEvent): string {
   if (ev.kind === "version_change") {
-    if (ev.trigger === "auto_promote") return "#10b981";   // emerald
-    if (ev.trigger === "rollback") return "#ef4444";       // red
-    if (ev.trigger === "calibration_approved") return "#a855f7"; // purple
-    return "#6366f1";   // indigo (sweep_phase3 / manual_fit fallback)
+    if (ev.trigger === "auto_promote") return "hsl(var(--success))";
+    if (ev.trigger === "rollback") return "hsl(var(--danger))";
+    if (ev.trigger === "calibration_approved") return "hsl(var(--chart-3))";
+    return "hsl(var(--primary))";   // sweep_phase3 / manual_fit fallback
   }
   if (ev.kind === "sweep_completed") {
-    if (ev.fold_kind === "train") return "#94a3b8";  // slate
-    if (ev.fold_kind === "test") return "#0ea5e9";   // sky
-    return "#64748b";   // muted slate (production/other)
+    if (ev.fold_kind === "train") return "hsl(var(--muted-foreground))";
+    if (ev.fold_kind === "test") return "hsl(var(--chart-1))";
+    return "hsl(var(--flat))";   // production/other
   }
-  if (ev.kind === "maturity_change") return "#f59e0b";  // amber
-  if (ev.kind === "persona_status_change") return "#fb7185";  // rose
-  return "#94a3b8";
+  if (ev.kind === "maturity_change") return "hsl(var(--chart-2))";
+  if (ev.kind === "persona_status_change") return "hsl(var(--chart-5))";
+  return "hsl(var(--muted-foreground))";
 }
 
 
@@ -223,21 +225,21 @@ export function StrategyTimelineCard({
                   />
                   <Line
                     yAxisId="brier" type="monotone" dataKey="brier"
-                    stroke="#f59e0b" strokeWidth={2}
+                    stroke="hsl(var(--chart-2))" strokeWidth={2}
                     dot={<FlaggedDot />} activeDot={{ r: 4 }}
                     connectNulls={false}
                     name={t("discussion.timeline.brier") as string}
                   />
                   <Line
                     yAxisId="brier" type="monotone" dataKey="calibratedBrier"
-                    stroke="#10b981" strokeWidth={1.5} strokeDasharray="3 3"
+                    stroke="hsl(var(--chart-4))" strokeWidth={1.5} strokeDasharray="3 3"
                     dot={false} activeDot={{ r: 4 }}
                     connectNulls={false}
                     name={t("discussion.timeline.calibrated_brier") as string}
                   />
                   <Line
                     yAxisId="hit" type="monotone" dataKey="hitRate"
-                    stroke="#3b82f6" strokeWidth={1.5}
+                    stroke="hsl(var(--chart-1))" strokeWidth={1.5}
                     dot={false} activeDot={{ r: 4 }}
                     connectNulls={false}
                     name={t("discussion.timeline.hit_rate") as string}

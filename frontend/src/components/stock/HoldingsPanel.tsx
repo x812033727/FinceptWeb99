@@ -5,8 +5,8 @@ import { Loading } from "./_atoms";
 import { fetchETFHoldings } from "./_shared";
 
 const PIE_COLORS = [
-  "#3b82f6", "#8b5cf6", "#ec4899", "#f59e0b", "#10b981",
-  "#06b6d4", "#6366f1", "#f43f5e", "#84cc16", "#eab308",
+  "hsl(var(--chart-1))", "hsl(var(--chart-2))", "hsl(var(--chart-3))",
+  "hsl(var(--chart-4))", "hsl(var(--chart-5))", "hsl(var(--chart-6))",
 ];
 
 export function HoldingsPanel({ symbol }: { symbol: string }) {

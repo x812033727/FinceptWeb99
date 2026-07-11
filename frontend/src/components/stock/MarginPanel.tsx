@@ -28,8 +28,8 @@ export function MarginPanel({ symbol }: { symbol: string }) {
             <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} interval="preserveStartEnd" />
             <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} width={45} />
             <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }} />
-            <Bar dataKey="margin_balance" name="融資餘額" fill="#3b82f6" radius={[2, 2, 0, 0]} />
-            <Bar dataKey="short_balance" name="融券餘額" fill="#f59e0b" radius={[2, 2, 0, 0]} />
+            <Bar dataKey="margin_balance" name="融資餘額" fill="hsl(var(--chart-1))" radius={[2, 2, 0, 0]} />
+            <Bar dataKey="short_balance" name="融券餘額" fill="hsl(var(--chart-2))" radius={[2, 2, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </div>

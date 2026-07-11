@@ -28,7 +28,10 @@ import { fetchStrategies, type StrategyTemplate } from "@/components/discussion/
 
 // Stable line colours per slot — operator can rely on "the green
 // one is strategy A" while skimming.
-const LINE_COLORS = ["#10b981", "#3b82f6", "#f59e0b", "#a855f7"];
+const LINE_COLORS = [
+  "hsl(var(--chart-1))", "hsl(var(--chart-2))",
+  "hsl(var(--chart-3))", "hsl(var(--chart-4))",
+];
 
 
 export default function StrategyComparisonPage() {

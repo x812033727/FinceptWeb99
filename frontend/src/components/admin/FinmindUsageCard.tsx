@@ -173,19 +173,23 @@ export default function FinmindUsageCard() {
                       />
                       <Tooltip
                         formatter={(value: number) => formatNumber(value)}
-                        labelStyle={{ color: "#000" }}
+                        contentStyle={{
+                          background: "hsl(var(--card))",
+                          border: "1px solid hsl(var(--border))",
+                        }}
+                        labelStyle={{ color: "hsl(var(--foreground))" }}
                       />
                       <Legend wrapperStyle={{ fontSize: 12 }} />
                       <Bar
                         yAxisId="left"
                         dataKey="calls"
-                        fill="#3b82f6"
+                        fill="hsl(var(--chart-1))"
                         name="Calls"
                       />
                       <Bar
                         yAxisId="right"
                         dataKey="rows"
-                        fill="#22c55e"
+                        fill="hsl(var(--chart-4))"
                         name="Rows"
                       />
                     </BarChart>

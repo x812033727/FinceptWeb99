@@ -31,7 +31,7 @@ export function RevenuePanel({ symbol }: { symbol: string }) {
               contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
               formatter={(v: number) => [`${v}M NTD`, "Revenue"]}
             />
-            <Bar dataKey="revenue" name="月營收" fill="#6366f1" radius={[2, 2, 0, 0]} />
+            <Bar dataKey="revenue" name="月營收" fill="hsl(var(--chart-1))" radius={[2, 2, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </div>

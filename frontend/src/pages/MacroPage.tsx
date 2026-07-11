@@ -17,16 +17,19 @@ interface DataPoint {
 
 // ── indicator config ───────────────────────────────────────────────
 
+// Categorical --chart-N tokens, cycled 1→6 (9 indicators > 6 tokens; each
+// detail chart plots a single series, so token reuse never collides
+// inside one chart).
 const INDICATOR_CONFIGS = [
-  { id: "fed_funds_rate", labelKey: "macro.indicators.fed_funds", color: "#6366f1", unit: "%" },
-  { id: "10y_yield",      labelKey: "macro.indicators.yield_10y", color: "#22c55e", unit: "%" },
-  { id: "2y_yield",       labelKey: "macro.indicators.yield_2y",  color: "#86efac", unit: "%" },
-  { id: "10y_minus_2y",   labelKey: "macro.indicators.yield_curve", color: "#f59e0b", unit: "%" },
-  { id: "cpi",            labelKey: "macro.indicators.cpi",      color: "#ef4444", unit: "index" },
-  { id: "unemployment",   labelKey: "macro.indicators.unemployment", color: "#a78bfa", unit: "%" },
-  { id: "gdp",            labelKey: "macro.indicators.gdp",      color: "#34d399", unit: "$B" },
-  { id: "usd_index",      labelKey: "macro.indicators.dxy",      color: "#60a5fa", unit: "" },
-  { id: "twd_usd",        labelKey: "macro.indicators.twd_usd",  color: "#fb923c", unit: "" },
+  { id: "fed_funds_rate", labelKey: "macro.indicators.fed_funds", color: "hsl(var(--chart-1))", unit: "%" },
+  { id: "10y_yield",      labelKey: "macro.indicators.yield_10y", color: "hsl(var(--chart-2))", unit: "%" },
+  { id: "2y_yield",       labelKey: "macro.indicators.yield_2y",  color: "hsl(var(--chart-3))", unit: "%" },
+  { id: "10y_minus_2y",   labelKey: "macro.indicators.yield_curve", color: "hsl(var(--chart-4))", unit: "%" },
+  { id: "cpi",            labelKey: "macro.indicators.cpi",      color: "hsl(var(--chart-5))", unit: "index" },
+  { id: "unemployment",   labelKey: "macro.indicators.unemployment", color: "hsl(var(--chart-6))", unit: "%" },
+  { id: "gdp",            labelKey: "macro.indicators.gdp",      color: "hsl(var(--chart-1))", unit: "$B" },
+  { id: "usd_index",      labelKey: "macro.indicators.dxy",      color: "hsl(var(--chart-2))", unit: "" },
+  { id: "twd_usd",        labelKey: "macro.indicators.twd_usd",  color: "hsl(var(--chart-3))", unit: "" },
 ] as const;
 
 type IndicatorId = typeof INDICATOR_CONFIGS[number]["id"];

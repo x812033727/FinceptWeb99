@@ -95,7 +95,8 @@ function Sparkline({
   const last = points[points.length - 1];
   const first = points[0];
   const trendUp = last.citation_rate > first.citation_rate;
-  const stroke = trendUp ? "#10b981" : last.citation_rate < first.citation_rate ? "#ef4444" : "#a3a3a3";
+  // Trend direction rides the market colour convention (--up/--down).
+  const stroke = trendUp ? "hsl(var(--up))" : last.citation_rate < first.citation_rate ? "hsl(var(--down))" : "hsl(var(--flat))";
   return (
     <svg
       width={width}

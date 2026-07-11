@@ -272,6 +272,8 @@
   },
   "stock": {
     "quoted_at": "資料時間",
+    "fullscreen": "全螢幕看盤",
+    "exit_fullscreen": "離開全螢幕",
     "income_statement": "損益表",
     "balance_sheet": "資產負債表",
     "cash_flow": "現金流量表",

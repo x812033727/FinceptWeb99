@@ -1,7 +1,10 @@
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import type { Holding } from "@/types/portfolio";
 
-const COLORS = ["#38bdf8","#818cf8","#34d399","#fb923c","#f472b6","#a78bfa","#22d3ee","#4ade80"];
+const COLORS = [
+  "hsl(var(--chart-1))", "hsl(var(--chart-2))", "hsl(var(--chart-3))",
+  "hsl(var(--chart-4))", "hsl(var(--chart-5))", "hsl(var(--chart-6))",
+];
 
 interface Props {
   holdings: Holding[];

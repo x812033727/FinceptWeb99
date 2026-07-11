@@ -10,9 +10,13 @@ import {
 } from "lightweight-charts";
 import type { OHLCVBar } from "@/types/market";
 import { useThemeStore } from "@/store/themeStore";
+import { getChartTheme } from "@/lib/chartTheme";
 
 interface Props {
   bars: OHLCVBar[];
+  /** Fixed pixel height. Omit to fill the parent container (the
+   *  ResizeObserver keeps the canvas in sync) — used by the
+   *  StockDetailPage fullscreen mode. */
   height?: number;
 }
 
@@ -21,36 +25,15 @@ function toTime(t: string | number): Time {
   return t as Time;
 }
 
-function hslVarToRgb(raw: string): string {
-  // shadcn-style CSS vars: "215 20% 55%" (H S% L%, no hsl() wrapper).
-  // lightweight-charts v4's color parser does NOT accept hsl(...) — convert to rgb().
-  const parts = raw.split(/\s+/);
-  if (parts.length < 3) return "rgb(128, 128, 128)";
-  const h = parseFloat(parts[0]);
-  const s = parseFloat(parts[1]) / 100;
-  const l = parseFloat(parts[2]) / 100;
-  const k = (n: number) => (n + h / 30) % 12;
-  const a = s * Math.min(l, 1 - l);
-  const f = (n: number) =>
-    l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
-  const r = Math.round(255 * f(0));
-  const g = Math.round(255 * f(8));
-  const b = Math.round(255 * f(4));
-  return `rgb(${r}, ${g}, ${b})`;
+/** "rgb(r, g, b)" → "rgba(r, g, b, a)" — lightweight-charts rejects hsl()
+ *  but accepts rgba(); used for the translucent volume histogram. */
+function withAlpha(rgb: string, alpha: number): string {
+  return rgb.replace(/^rgb\(/, "rgba(").replace(/\)$/, `, ${alpha})`);
 }
 
-function getChartColors() {
-  const style = getComputedStyle(document.documentElement);
-  const v = (name: string) => hslVarToRgb(style.getPropertyValue(name).trim());
-  return {
-    textColor: v("--muted-foreground"),
-    gridColor: v("--border"),
-    borderColor: v("--border"),
-  };
-}
-
-export default function CandlestickChart({ bars, height = 360 }: Props) {
+export default function CandlestickChart({ bars, height }: Props) {
   const theme = useThemeStore((s) => s.theme);
+  const marketColorMode = useThemeStore((s) => s.marketColorMode);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -59,44 +42,45 @@ export default function CandlestickChart({ bars, height = 360 }: Props) {
   useEffect(() => {
     if (!containerRef.current) return;
 
-    const { textColor, gridColor, borderColor } = getChartColors();
+    const t = getChartTheme();
 
     const chart = createChart(containerRef.current, {
       width: containerRef.current.clientWidth,
-      height,
+      height: containerRef.current.clientHeight,
       layout: {
         background: { type: ColorType.Solid, color: "transparent" },
-        textColor,
+        textColor: t.text,
         fontSize: 11,
       },
       grid: {
-        vertLines: { color: gridColor },
-        horzLines: { color: gridColor },
+        vertLines: { color: t.grid },
+        horzLines: { color: t.grid },
       },
       crosshair: { mode: 1 },
-      rightPriceScale: { borderColor },
+      rightPriceScale: { borderColor: t.grid },
       timeScale: {
-        borderColor,
+        borderColor: t.grid,
         timeVisible: true,
         secondsVisible: false,
       },
     });
     chartRef.current = chart;
 
-    // Candlestick series — up/down colors are semantic data colors, not theme-dependent
+    // Candlestick series — up/down come from the --up/--down CSS vars so
+    // candles follow the market colour convention (台股紅漲綠跌 vs intl).
     const candle = chart.addCandlestickSeries({
-      upColor: "#22c55e",
-      downColor: "#ef4444",
-      borderUpColor: "#22c55e",
-      borderDownColor: "#ef4444",
-      wickUpColor: "#22c55e",
-      wickDownColor: "#ef4444",
+      upColor: t.up,
+      downColor: t.down,
+      borderUpColor: t.up,
+      borderDownColor: t.down,
+      wickUpColor: t.up,
+      wickDownColor: t.down,
     });
     candleRef.current = candle;
 
     // Volume histogram (overlay in lower 20% of price scale)
     const vol = chart.addHistogramSeries({
-      color: borderColor,
+      color: t.grid,
       priceFormat: { type: "volume" },
       priceScaleId: "vol",
     });
@@ -106,7 +90,11 @@ export default function CandlestickChart({ bars, height = 360 }: Props) {
     volRef.current = vol;
 
     const ro = new ResizeObserver(() => {
-      chart.applyOptions({ width: containerRef.current!.clientWidth });
+      if (!containerRef.current) return;
+      chart.applyOptions({
+        width: containerRef.current.clientWidth,
+        height: containerRef.current.clientHeight,
+      });
     });
     ro.observe(containerRef.current);
 
@@ -117,25 +105,38 @@ export default function CandlestickChart({ bars, height = 360 }: Props) {
       candleRef.current = null;
       volRef.current = null;
     };
-  }, [height]);
+  }, []);
 
-  // Re-apply theme colours without recreating the chart
+  // Re-apply theme colours without recreating the chart — runs on both the
+  // light/dark toggle and the market colour convention (up/down) switch.
   useEffect(() => {
     if (!chartRef.current) return;
-    const { textColor, gridColor, borderColor } = getChartColors();
+    const t = getChartTheme();
     chartRef.current.applyOptions({
-      layout: { textColor },
+      layout: { textColor: t.text },
       grid: {
-        vertLines: { color: gridColor },
-        horzLines: { color: gridColor },
+        vertLines: { color: t.grid },
+        horzLines: { color: t.grid },
       },
-      rightPriceScale: { borderColor },
-      timeScale: { borderColor },
+      rightPriceScale: { borderColor: t.grid },
+      timeScale: { borderColor: t.grid },
     });
-  }, [theme]);
+    candleRef.current?.applyOptions({
+      upColor: t.up,
+      downColor: t.down,
+      borderUpColor: t.up,
+      borderDownColor: t.down,
+      wickUpColor: t.up,
+      wickDownColor: t.down,
+    });
+  }, [theme, marketColorMode]);
 
   useEffect(() => {
     if (!candleRef.current || !volRef.current || !bars.length) return;
+
+    const t = getChartTheme();
+    const volUp = withAlpha(t.up, 0.33);
+    const volDown = withAlpha(t.down, 0.33);
 
     const sorted = [...bars].sort((a, b) =>
       String(a.time) < String(b.time) ? -1 : 1
@@ -152,16 +153,16 @@ export default function CandlestickChart({ bars, height = 360 }: Props) {
     const volData: HistogramData[] = sorted.map((b) => ({
       time: toTime(b.time),
       value: b.volume,
-      color: b.close >= b.open ? "#16a34a55" : "#dc262655",
+      color: b.close >= b.open ? volUp : volDown,
     }));
 
     candleRef.current.setData(candleData);
     volRef.current.setData(volData);
     chartRef.current?.timeScale().fitContent();
-  }, [bars]);
+  }, [bars, theme, marketColorMode]);
 
   return (
-    <div className="relative w-full" style={{ height }}>
+    <div className="relative w-full" style={{ height: height ?? "100%" }}>
       <div ref={containerRef} className="absolute inset-0" />
       {!bars.length && (
         <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground pointer-events-none">

@@ -137,21 +137,25 @@ describe("AllocationPie — Cell colors", () => {
     expect(container.querySelectorAll('[data-testid="cell"]')).toHaveLength(3);
   });
 
-  it("cycles through the 8-color palette for portfolios with > 8 holdings", () => {
-    const holdings = Array.from({ length: 10 }, (_, i) =>
+  it("cycles through the 6-token --chart-N palette for portfolios with > 6 holdings", () => {
+    const holdings = Array.from({ length: 8 }, (_, i) =>
       makeHolding({ id: `h${i}`, symbol: `S${i}`, weight_pct: 10 })
     );
     const { container } = render(<AllocationPie holdings={holdings} />);
     const cells = container.querySelectorAll('[data-testid="cell"]');
-    expect(cells).toHaveLength(10);
-    // 9th cell wraps back to the first color (i % 8 === 1 → palette[1]).
-    expect(cells[0].getAttribute("data-fill")).toBe(cells[8].getAttribute("data-fill"));
-    expect(cells[1].getAttribute("data-fill")).toBe(cells[9].getAttribute("data-fill"));
-    // Cells 0-7 must all be distinct (no early repeats).
-    const firstEight = Array.from(cells)
-      .slice(0, 8)
+    expect(cells).toHaveLength(8);
+    // 7th cell wraps back to the first token (i % 6 === 0 → palette[0]).
+    expect(cells[0].getAttribute("data-fill")).toBe(cells[6].getAttribute("data-fill"));
+    expect(cells[1].getAttribute("data-fill")).toBe(cells[7].getAttribute("data-fill"));
+    // Cells 0-5 must all be distinct (no early repeats), and every fill
+    // must be a theme token, not a hardcoded hex.
+    const firstSix = Array.from(cells)
+      .slice(0, 6)
       .map((c) => c.getAttribute("data-fill"));
-    expect(new Set(firstEight).size).toBe(8);
+    expect(new Set(firstSix).size).toBe(6);
+    for (const fill of firstSix) {
+      expect(fill).toMatch(/^hsl\(var\(--chart-[1-6]\)\)$/);
+    }
   });
 });
 

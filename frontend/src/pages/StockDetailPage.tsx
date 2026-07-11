@@ -3,12 +3,10 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Maximize2, Minimize2 } from "lucide-react";
-import { formatQuoteFreshness } from "@/lib/freshness";
 import CandlestickChart from "@/components/charts/CandlestickChart";
-import { DataSourceBadge } from "@/components/DataSourceBadge";
-import { useWebSocket } from "@/hooks/useWebSocket";
 import type { Market } from "@/types/market";
 import { PeriodButton, StatRow } from "@/components/stock/_atoms";
+import { LiveQuoteHeader } from "@/components/stock/LiveQuoteHeader";
 import { TabStrip, type TabDef } from "@/components/stock/TabStrip";
 import {
   fetchEarnings,
@@ -16,7 +14,6 @@ import {
   fetchHistory,
   fetchQuote,
   fmt,
-  fmtPct,
   isTWETF,
 } from "@/components/stock/_shared";
 import type { CryptoTab, Period, TWTab, USTab } from "@/components/stock/_shared";
@@ -32,7 +29,7 @@ import { RevenuePanel } from "@/components/stock/RevenuePanel";
 import { ValuationBandPanel } from "@/components/stock/ValuationBandPanel";
 
 export default function StockDetailPage() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const { market = "US", symbol = "" } = useParams<{ market: string; symbol: string }>();
   const navigate = useNavigate();
   const mkt = market.toUpperCase() as Market;
@@ -61,18 +58,11 @@ export default function StockDetailPage() {
     };
   }, [chartFullscreen]);
 
-  const [livePrice, setLivePrice] = useState<number | null>(null);
-  const [liveChange, setLiveChange] = useState<number | null>(null);
-  // Latest data_source from the WS delta — overrides the REST snapshot's
-  // source so the hero badge updates as soon as the upstream changes
-  // mid-session (e.g. Polygon recovers, primary→fallback switch).
-  const [liveSource, setLiveSource] = useState<string | null>(null);
-  // Latest quote timestamp (epoch ms). Lets the header show "資料時間
-  // HH:MM:SS" so users can tell if they're looking at fresh ticks vs
-  // a stale REST snapshot served during the WS connection's first
-  // 5-second auth handshake.
-  const [liveTs, setLiveTs] = useState<number | null>(null);
-
+  // Live tick state (price / change / source / ts) intentionally does
+  // NOT live in this component anymore. WS deltas flow through the
+  // rAF-batched quoteStore and are consumed by <LiveQuoteHeader> via a
+  // per-symbol selector, so a tick re-renders only that header block —
+  // never this page body (K-line container, tabs, panels).
   const { data: quote } = useQuery({
     queryKey: ["quote", mkt, sym],
     queryFn: () => fetchQuote(mkt, sym),
@@ -99,18 +89,6 @@ export default function StockDetailPage() {
     staleTime: 6 * 3_600_000,
     enabled: mkt === "US",
   });
-
-  useWebSocket(`${sym}:${mkt}`, (data: unknown) => {
-    const d = data as Record<string, number | string>;
-    if (typeof d.price === "number" && d.price) setLivePrice(d.price);
-    if (typeof d.change_pct === "number") setLiveChange(d.change_pct);
-    if (typeof d.data_source === "string") setLiveSource(d.data_source);
-    if (typeof d.ts === "number") setLiveTs(d.ts);
-  });
-
-  const displayPrice = livePrice ?? (quote?.price as number | undefined);
-  const displayChange = liveChange ?? (quote?.change_pct as number | undefined);
-  const isPositive = (displayChange ?? 0) >= 0;
 
   const isETF = mkt === "TW" && (Boolean(quote?.is_etf) || isTWETF(sym));
 
@@ -168,60 +146,7 @@ export default function StockDetailPage() {
         <span className="text-foreground font-medium">{sym}</span>
       </div>
 
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-xl sm:text-2xl font-bold text-foreground inline-flex items-center">
-            {sym}
-            <DataSourceBadge source={liveSource ?? (quote?.data_source as string | undefined)} />
-          </h1>
-          {Boolean(quote?.name || quote?.name_zh) && (
-            <p className="text-xs sm:text-sm text-muted-foreground mt-0.5 truncate">
-              {String(quote?.name ?? quote?.name_zh ?? "")}
-              {mkt === "TW" && Boolean(quote?.exchange) && (
-                <span className="ml-2 text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded">
-                  {String(quote?.exchange ?? "")}
-                </span>
-              )}
-              {isETF && (
-                <span className="ml-2 text-xs bg-warning/15 text-warning px-1.5 py-0.5 rounded font-medium">
-                  ETF
-                </span>
-              )}
-            </p>
-          )}
-        </div>
-        <div className="text-right shrink-0">
-          <div className="text-2xl sm:text-3xl font-bold text-foreground tabular-nums">
-            {displayPrice !== undefined ? fmt(displayPrice) : "—"}
-          </div>
-          <div className={`text-xs sm:text-sm font-medium tabular-nums ${isPositive ? "text-up" : "text-down"}`}>
-            {displayChange !== undefined ? fmtPct(displayChange, true) : "—"}
-          </div>
-          <div className="text-[10px] sm:text-xs text-muted-foreground mt-0.5">
-            {mkt === "TW" ? "TWD" : (quote?.currency as string ?? "USD")}
-          </div>
-          {(() => {
-            // Prefer the WS-driven liveTs (sub-second freshness during
-            // an active session); fall back to the REST snapshot's `ts`
-            // (set inside _normalize_quote at fetch time). Hide the
-            // line entirely if neither path produced a number — better
-            // than rendering "—" next to a real-looking price. Date
-            // prefix ("M/D HH:MM:SS") appears only when the quote
-            // isn't from today, so off-hours / weekend views aren't
-            // ambiguous about which day the price belongs to.
-            const tsMs = liveTs ?? (quote?.ts as number | undefined);
-            const localTime = formatQuoteFreshness(
-              tsMs ?? null, i18n.language, { seconds: true },
-            );
-            if (!localTime) return null;
-            return (
-              <div className="text-[10px] text-muted-foreground/70 mt-0.5 tabular-nums">
-                {t("stock.quoted_at")}：{localTime}
-              </div>
-            );
-          })()}
-        </div>
-      </div>
+      <LiveQuoteHeader symbol={sym} market={mkt} quote={quote} isETF={isETF} />
 
       {/* TabStrip collapses tabs 5+ into a "More" dropdown below md
           so 8-tab TW stocks don't force horizontal scroll on phones.

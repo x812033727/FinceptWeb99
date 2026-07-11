@@ -39,6 +39,7 @@ from db.seed import seed_admin
 from db.session import AsyncSessionLocal, engine
 from limiter import limiter
 from logging_config import setup_logging
+from middleware.etag import ETagMiddleware
 from middleware.metrics import PrometheusMiddleware, metrics_endpoint
 
 setup_logging()
@@ -245,6 +246,11 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 app.add_middleware(PrometheusMiddleware)
+
+# Weak ETags on the screener/history allowlist (see middleware/etag.py).
+# Registered before Prometheus in the stack (added after = runs inner)
+# so 304s are still counted per-path by the metrics middleware.
+app.add_middleware(ETagMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

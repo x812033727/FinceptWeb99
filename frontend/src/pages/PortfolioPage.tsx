@@ -15,6 +15,7 @@ import { CreatePortfolioModal } from "@/components/portfolio/CreatePortfolioModa
 import { EditPortfolioModal } from "@/components/portfolio/EditPortfolioModal";
 import { ExpertEvaluationCard } from "@/components/portfolio/ExpertEvaluationCard";
 import { PerformanceChart } from "@/components/portfolio/PerformanceChart";
+import { RiskDashboardPanel } from "@/components/portfolio/RiskDashboardPanel";
 import { TransactionHistory } from "@/components/portfolio/TransactionHistory";
 import { exportCSV } from "@/components/portfolio/_shared";
 
@@ -130,7 +131,7 @@ function PortfolioDetail({
   optimiseResult, optimisePending, onRunOptimise,
 }: any) {
   const { t } = useTranslation();
-  const [detailTab, setDetailTab] = useState<"overview" | "transactions">("overview");
+  const [detailTab, setDetailTab] = useState<"overview" | "risk" | "transactions">("overview");
 
   if (!detail) return <div className="text-muted-foreground text-sm">{isFetching ? t("common.loading") : ""}</div>;
 
@@ -180,7 +181,7 @@ function PortfolioDetail({
 
       {/* Tab selector */}
       <div className="flex gap-1 bg-secondary/30 p-1 rounded-lg w-fit">
-        {(["overview", "transactions"] as const).map((tab) => (
+        {(["overview", "risk", "transactions"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setDetailTab(tab)}
@@ -190,7 +191,11 @@ function PortfolioDetail({
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            {tab === "overview" ? t("portfolio.tabs.holdings") : t("portfolio.tabs.transactions")}
+            {tab === "overview"
+              ? t("portfolio.tabs.holdings")
+              : tab === "risk"
+                ? t("portfolio.tabs.risk")
+                : t("portfolio.tabs.transactions")}
           </button>
         ))}
       </div>
@@ -302,6 +307,10 @@ function PortfolioDetail({
         </button>
       </div>
         </>
+      )}
+
+      {detailTab === "risk" && (
+        <RiskDashboardPanel portfolioId={portfolioId} />
       )}
 
       {detailTab === "transactions" && (

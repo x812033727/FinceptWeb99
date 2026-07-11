@@ -29,6 +29,19 @@ export async function fetchSuggestedFxRate(
   }
 }
 
+/**
+ * Diverging heatmap cell fill for the risk dashboard's correlation
+ * matrix: −1 → hsl(var(--down)), 0 → transparent (neutral midpoint
+ * stays on the surface), +1 → hsl(var(--up)). Alpha scales with |corr|
+ * and caps at 0.85 so cell text stays readable.
+ */
+export function correlationCellStyle(corr: number): { backgroundColor: string } {
+  const clamped = Math.max(-1, Math.min(1, corr));
+  const alpha = Math.min(1, Math.abs(clamped)) * 0.85;
+  const token = clamped >= 0 ? "--up" : "--down";
+  return { backgroundColor: `hsl(var(${token}) / ${alpha.toFixed(3)})` };
+}
+
 export interface TransactionRow {
   id: string;
   symbol: string;

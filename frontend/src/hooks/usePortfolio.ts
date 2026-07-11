@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "@/lib/api";
-import type { Portfolio, Transaction } from "@/types/portfolio";
+import type { Portfolio, PortfolioRisk, Transaction } from "@/types/portfolio";
 
 export function usePortfolios() {
   return useQuery({
@@ -15,6 +15,17 @@ export function usePortfolioDetail(id: string | null) {
     queryFn: () => api.get<Portfolio>(`/portfolio/${id}`).then((r) => r.data),
     enabled: !!id,
     refetchInterval: 60_000,
+  });
+}
+
+export function usePortfolioRisk(id: string | null) {
+  return useQuery({
+    queryKey: ["portfolio-risk", id],
+    queryFn: () => api.get<PortfolioRisk>(`/portfolio/${id}/risk`).then((r) => r.data),
+    enabled: !!id,
+    // Server computes VaR (incl. 10k-sim Monte Carlo) on demand —
+    // hold results 5 min; the panel exposes a manual refresh button.
+    staleTime: 300_000,
   });
 }
 

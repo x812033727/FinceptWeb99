@@ -16,6 +16,7 @@ from api.portfolio.schemas import (
     TransactionUpdate,
     OptimiseRequest,
     OptimiseResponse,
+    PortfolioRiskResponse,
 )
 from dependencies import get_current_user
 from db.session import get_db
@@ -130,6 +131,32 @@ async def optimise(request: Request, portfolio_id: str, body: OptimiseRequest, u
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Optimisation error: {e}")
+
+
+@router.get("/{portfolio_id}/risk", response_model=PortfolioRiskResponse)
+@limiter.limit("10/minute")
+async def portfolio_risk(request: Request, portfolio_id: str, user: CurrentUser, db: DB):
+    """Risk dashboard (feature C1) — three-method VaR (95/99), vol /
+    Sharpe / Sortino / max drawdown / beta vs benchmark, per-holding
+    weight + risk contribution, pairwise correlation matrix, and
+    concentration warnings, computed on demand from the user's actual
+    holdings. Holdings with insufficient history land in `excluded`;
+    an empty portfolio returns `empty: true` with HTTP 200."""
+    from services.portfolio_risk_service import get_portfolio_risk
+    try:
+        result = await get_portfolio_risk(portfolio_id, user["id"], db)
+        return PortfolioRiskResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception:
+        log.exception(
+            "portfolio.risk_failed",
+            extra={"portfolio_id": portfolio_id, "user_id": user["id"]},
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to compute portfolio risk; check server logs.",
+        )
 
 
 @router.get("/{portfolio_id}/performance", response_model=list[PerformancePoint])

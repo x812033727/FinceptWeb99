@@ -43,20 +43,25 @@ class FakeWS:
         raise NotImplementedError("subclasses should override")
 
 
+def _register(ws, keys: set[str]) -> None:
+    """Register a fake socket the way the handler does: forward map AND
+    the reverse index _dispatch fans out through."""
+    mgr._index_replace(ws, mgr._subscriptions.get(ws, set()), keys)
+    mgr._subscriptions[ws] = keys
+
+
 @pytest.fixture(autouse=True)
 def reset_manager_state():
     """Each test starts with clean module-level dicts."""
-    mgr._subscriptions.clear()
-    mgr._last_prices.clear()
-    mgr._ws_user.clear()
-    mgr._user_ws.clear()
-    mgr._ws_token_exp.clear()
+    for d in (mgr._subscriptions, mgr._last_prices, mgr._ws_user,
+              mgr._user_ws, mgr._ws_token_exp, mgr._symbol_subs,
+              mgr._send_queues, mgr._writer_tasks):
+        d.clear()
     yield
-    mgr._subscriptions.clear()
-    mgr._last_prices.clear()
-    mgr._ws_user.clear()
-    mgr._user_ws.clear()
-    mgr._ws_token_exp.clear()
+    for d in (mgr._subscriptions, mgr._last_prices, mgr._ws_user,
+              mgr._user_ws, mgr._ws_token_exp, mgr._symbol_subs,
+              mgr._send_queues, mgr._writer_tasks):
+        d.clear()
 
 
 # ── _authenticate ─────────────────────────────────────────────────
@@ -139,7 +144,7 @@ async def test_authenticate_times_out():
 @pytest.mark.asyncio
 async def test_dispatch_sends_delta_to_subscriber():
     ws = FakeWS()
-    mgr._subscriptions[ws] = {"AAPL:US"}
+    _register(ws, {"AAPL:US"})
     mgr._last_prices[ws] = {}
     mgr._ws_token_exp[ws] = _far_future()
 
@@ -153,7 +158,7 @@ async def test_dispatch_sends_delta_to_subscriber():
 @pytest.mark.asyncio
 async def test_dispatch_skips_non_subscribers():
     ws = FakeWS()
-    mgr._subscriptions[ws] = {"MSFT:US"}
+    _register(ws, {"MSFT:US"})
     mgr._last_prices[ws] = {}
     mgr._ws_token_exp[ws] = _far_future()
 
@@ -166,7 +171,7 @@ async def test_dispatch_skips_non_subscribers():
 async def test_dispatch_suppresses_tiny_change():
     """Changes below 0.01% should be skipped to reduce WS chatter."""
     ws = FakeWS()
-    mgr._subscriptions[ws] = {"AAPL:US"}
+    _register(ws, {"AAPL:US"})
     mgr._last_prices[ws] = {"AAPL:US": 180.0}
     mgr._ws_token_exp[ws] = _far_future()
 
@@ -178,7 +183,7 @@ async def test_dispatch_suppresses_tiny_change():
 @pytest.mark.asyncio
 async def test_dispatch_sends_on_meaningful_change():
     ws = FakeWS()
-    mgr._subscriptions[ws] = {"AAPL:US"}
+    _register(ws, {"AAPL:US"})
     mgr._last_prices[ws] = {"AAPL:US": 180.0}
     mgr._ws_token_exp[ws] = _far_future()
 
@@ -193,8 +198,8 @@ async def test_dispatch_prunes_dead_sockets():
     """A send failure should evict the socket from _subscriptions/_last_prices."""
     ws_ok = FakeWS()
     ws_dead = FakeWS(fail_on_send=True)
-    mgr._subscriptions[ws_ok] = {"AAPL:US"}
-    mgr._subscriptions[ws_dead] = {"AAPL:US"}
+    _register(ws_ok, {"AAPL:US"})
+    _register(ws_dead, {"AAPL:US"})
     mgr._last_prices[ws_ok] = {}
     mgr._last_prices[ws_dead] = {}
     mgr._ws_token_exp[ws_ok] = _far_future()
@@ -213,8 +218,8 @@ async def test_dispatch_skips_expired_token_subscriber():
     even if their subscription is still registered."""
     ws_fresh = FakeWS()
     ws_expired = FakeWS()
-    mgr._subscriptions[ws_fresh] = {"AAPL:US"}
-    mgr._subscriptions[ws_expired] = {"AAPL:US"}
+    _register(ws_fresh, {"AAPL:US"})
+    _register(ws_expired, {"AAPL:US"})
     mgr._last_prices[ws_fresh] = {}
     mgr._last_prices[ws_expired] = {}
     mgr._ws_token_exp[ws_fresh] = _far_future()

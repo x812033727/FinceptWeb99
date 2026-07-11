@@ -39,6 +39,18 @@ PriceCache = dict[str, float]
 
 # websocket → set of "SYMBOL:MARKET" strings
 _subscriptions: dict[WebSocket, set[str]] = {}
+# reverse index: "SYMBOL:MARKET" → websockets subscribed to it. Keeps
+# _dispatch at O(subscribers-of-symbol) instead of scanning every
+# connection per tick. Maintained by _index_replace/_prune_socket —
+# writer failure and handler cleanup both go through those.
+_symbol_subs: dict[str, set[WebSocket]] = {}
+# per-connection outbound queue + writer task. Dispatch never awaits a
+# client's socket directly: a slow consumer only backs up its own
+# bounded queue (oldest delta dropped — stale quotes are worthless),
+# never the fan-out loop.
+_send_queues: dict[WebSocket, asyncio.Queue] = {}
+_writer_tasks: dict[WebSocket, asyncio.Task] = {}
+SEND_QUEUE_MAX = 64
 # websocket → last-price cache
 _last_prices: dict[WebSocket, PriceCache] = {}
 # websocket → user_id string (populated on successful auth)
@@ -125,6 +137,71 @@ async def get_global_subscribed(market: str) -> set[str]:
         return local
 
 
+def _index_replace(ws: WebSocket, old: set[str], new: set[str]) -> None:
+    """Swap ws's reverse-index membership from `old` keys to `new` keys."""
+    for key in old - new:
+        subs = _symbol_subs.get(key)
+        if subs is not None:
+            subs.discard(ws)
+            if not subs:
+                _symbol_subs.pop(key, None)
+    for key in new - old:
+        _symbol_subs.setdefault(key, set()).add(ws)
+
+
+def _prune_socket(ws: WebSocket) -> None:
+    """Remove a dead socket from every registry (idempotent). The
+    handler's finally block does the authoritative cleanup; this exists
+    so the writer task and dispatch can stop routing to a corpse
+    immediately instead of waiting for the receive loop to notice."""
+    _index_replace(ws, _subscriptions.pop(ws, set()), set())
+    _last_prices.pop(ws, None)
+    _ws_token_exp.pop(ws, None)
+    _send_queues.pop(ws, None)
+    task = _writer_tasks.pop(ws, None)
+    if task is not None and task is not asyncio.current_task():
+        task.cancel()   # self-prune from the writer loop just returns
+    uid = _ws_user.pop(ws, None)
+    if uid and uid in _user_ws:
+        _user_ws[uid].discard(ws)
+        if not _user_ws[uid]:
+            del _user_ws[uid]
+
+
+async def _writer_loop(ws: WebSocket, queue: asyncio.Queue) -> None:
+    """Single writer per connection: drains the bounded queue in order.
+    One slow client stalls only its own queue; a send failure prunes
+    the socket from the fan-out registries immediately."""
+    while True:
+        try:
+            item = await queue.get()
+        except asyncio.CancelledError:
+            return              # cancelled by _prune_socket
+        try:
+            await ws.send_text(item)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            _prune_socket(ws)
+            return
+
+
+def _send_text(ws: WebSocket, text: str) -> bool:
+    """Enqueue pre-serialized text for a managed socket. Drops the
+    OLDEST queued message when full — for market data, newest wins.
+    Returns False when the socket has no writer (already pruned)."""
+    queue = _send_queues.get(ws)
+    if queue is None:
+        return False
+    if queue.full():
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+    queue.put_nowait(text)
+    return True
+
+
 async def _authenticate(ws: WebSocket) -> dict | None:
     """Wait up to AUTH_TIMEOUT for a valid auth message. Returns payload or None."""
     try:
@@ -155,6 +232,10 @@ async def handle_market_ws(ws: WebSocket) -> None:
     _user_ws.setdefault(user_id, set()).add(ws)
     _ws_token_exp[ws] = float(payload.get("exp") or 0)
     WS_CONNECTIONS.inc()
+
+    queue: asyncio.Queue = asyncio.Queue(SEND_QUEUE_MAX)
+    _send_queues[ws] = queue
+    _writer_tasks[ws] = asyncio.create_task(_writer_loop(ws, queue))
 
     heartbeat_task = asyncio.create_task(_heartbeat(ws))
 
@@ -201,12 +282,14 @@ async def handle_market_ws(ws: WebSocket) -> None:
                 for sym in symbols:
                     for mkt in (markets or ["US"]):
                         new_subs.add(f"{sym.upper()}:{mkt.upper()}")
+                _index_replace(ws, _subscriptions.get(ws, set()), new_subs)
                 _subscriptions[ws] = new_subs
                 await _mirror_subs()
                 # Send snapshot
                 await _send_snapshot(ws, new_subs)
 
             elif action == "unsubscribe":
+                _index_replace(ws, _subscriptions.get(ws, set()), set())
                 _subscriptions[ws].clear()
                 await _mirror_subs()
 
@@ -218,14 +301,7 @@ async def handle_market_ws(ws: WebSocket) -> None:
     finally:
         WS_CONNECTIONS.dec()
         heartbeat_task.cancel()
-        _subscriptions.pop(ws, None)
-        _last_prices.pop(ws, None)
-        _ws_token_exp.pop(ws, None)
-        uid = _ws_user.pop(ws, None)
-        if uid and uid in _user_ws:
-            _user_ws[uid].discard(ws)
-            if not _user_ws[uid]:
-                del _user_ws[uid]
+        _prune_socket(ws)
         await _mirror_subs()
 
 
@@ -268,8 +344,14 @@ async def _heartbeat(ws: WebSocket) -> None:
 
 
 async def _safe_send(ws: WebSocket, data: dict) -> bool:
+    """Serialize and send. Managed sockets (with a writer task) get the
+    ordered bounded queue; unmanaged ones (pre-auth error frames, unit
+    tests' bare fakes) fall back to a direct awaited send."""
+    text = json.dumps(data)
+    if ws in _send_queues:
+        return _send_text(ws, text)
     try:
-        await ws.send_text(json.dumps(data))
+        await ws.send_text(text)
         return True
     except Exception:
         return False
@@ -346,32 +428,40 @@ async def _dispatch(payload: dict) -> None:
     Only send if price changed by more than 0.01%.
     """
     sub_key = f"{payload['symbol']}:{payload['market']}"
-    dead: list[WebSocket] = []
-    now_epoch = datetime.now(timezone.utc).timestamp()
     dispatch_started = time.monotonic()
 
-    for ws, subs in list(_subscriptions.items()):
-        if sub_key not in subs:
-            continue
-        if now_epoch >= _ws_token_exp.get(ws, 0):
-            # Token expired — stop pushing passive updates. The next
-            # client message will close the socket cleanly.
-            continue
-
-        last = _last_prices[ws].get(sub_key)
+    # Reverse index: O(subscribers-of-symbol), not O(all connections).
+    subscribers = _symbol_subs.get(sub_key)
+    if subscribers:
+        now_epoch = datetime.now(timezone.utc).timestamp()
         price = payload.get("price", 0)
-        if last is not None and abs(price - last) / (last or 1) < 0.0001:
-            continue   # change < 0.01% — skip to reduce noise
+        # One serialization per tick, however many subscribers.
+        delta_text = json.dumps({"type": "delta", "symbol": payload["symbol"],
+                                 "market": payload["market"], "data": payload})
+        dead: list[WebSocket] = []
 
-        _last_prices[ws][sub_key] = price
-        ok = await _safe_send(ws, {"type": "delta", "symbol": payload["symbol"],
-                                    "market": payload["market"], "data": payload})
-        if not ok:
-            dead.append(ws)
+        for ws in list(subscribers):
+            if now_epoch >= _ws_token_exp.get(ws, 0):
+                # Token expired — stop pushing passive updates. The next
+                # client message will close the socket cleanly.
+                continue
 
-    for ws in dead:
-        _subscriptions.pop(ws, None)
-        _last_prices.pop(ws, None)
+            last = _last_prices.get(ws, {}).get(sub_key)
+            if last is not None and abs(price - last) / (last or 1) < 0.0001:
+                continue   # change < 0.01% — skip to reduce noise
+
+            _last_prices.setdefault(ws, {})[sub_key] = price
+            if ws in _send_queues:
+                _send_text(ws, delta_text)   # never blocks the fan-out
+            else:
+                # Unmanaged socket (unit tests) — direct awaited send.
+                try:
+                    await ws.send_text(delta_text)
+                except Exception:
+                    dead.append(ws)
+
+        for ws in dead:
+            _prune_socket(ws)
 
     WS_PUBSUB_DISPATCH_SECONDS.observe(time.monotonic() - dispatch_started)
 
@@ -412,11 +502,4 @@ async def _deliver_alert_local(user_id: str, data: dict) -> None:
         if not ok:
             dead.append(ws)
     for ws in dead:
-        _subscriptions.pop(ws, None)
-        _last_prices.pop(ws, None)
-        _ws_token_exp.pop(ws, None)
-        uid = _ws_user.pop(ws, None)
-        if uid and uid in _user_ws:
-            _user_ws[uid].discard(ws)
-            if not _user_ws[uid]:
-                del _user_ws[uid]
+        _prune_socket(ws)

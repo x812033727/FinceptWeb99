@@ -19,6 +19,7 @@ Auth flow:
 """
 import asyncio
 import json
+import time
 from datetime import datetime, timezone
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -26,6 +27,7 @@ from jose import JWTError
 
 from auth.jwt_handler import decode_access_token
 from cache.redis_cache import get_redis
+from middleware.metrics import WS_CONNECTIONS, WS_PUBSUB_DISPATCH_SECONDS
 
 # symbol+market → last sent price (for delta detection)
 PriceCache = dict[str, float]
@@ -76,6 +78,7 @@ async def handle_market_ws(ws: WebSocket) -> None:
     _ws_user[ws] = user_id
     _user_ws.setdefault(user_id, set()).add(ws)
     _ws_token_exp[ws] = float(payload.get("exp") or 0)
+    WS_CONNECTIONS.inc()
 
     heartbeat_task = asyncio.create_task(_heartbeat(ws))
 
@@ -135,6 +138,7 @@ async def handle_market_ws(ws: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
+        WS_CONNECTIONS.dec()
         heartbeat_task.cancel()
         _subscriptions.pop(ws, None)
         _last_prices.pop(ws, None)
@@ -220,6 +224,7 @@ async def _dispatch(payload: dict) -> None:
     sub_key = f"{payload['symbol']}:{payload['market']}"
     dead: list[WebSocket] = []
     now_epoch = datetime.now(timezone.utc).timestamp()
+    dispatch_started = time.monotonic()
 
     for ws, subs in list(_subscriptions.items()):
         if sub_key not in subs:
@@ -243,6 +248,8 @@ async def _dispatch(payload: dict) -> None:
     for ws in dead:
         _subscriptions.pop(ws, None)
         _last_prices.pop(ws, None)
+
+    WS_PUBSUB_DISPATCH_SECONDS.observe(time.monotonic() - dispatch_started)
 
 
 async def publish_update(symbol: str, market: str, data: dict) -> None:

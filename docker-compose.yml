@@ -61,24 +61,25 @@ services:
     restart: unless-stopped
 
   migrate:
-    # Runs the MAIN app's alembic migrations only. The FinMind clone
-    # subsystem has its own alembic ledger (`alembic_version_finmind`)
-    # which is applied by the backend's lifespan auto-init hook —
-    # see `backend/main.py::_auto_init_finmind_clone`. Both ledgers
-    # share the same Postgres when `FINMIND_USE_MAIN_DB=true` (the
-    # default since PR #313) but in different schemas:
-    #   `public.alembic_version` (this service)
-    #   `finmind.alembic_version_finmind` (lifespan hook)
-    # Single-pod compose: lifespan auto-init handles it.
-    # Multi-pod k8s: set FINMIND_AUTO_INIT=false on the backend
-    # Deployment + run `python -m finmind.scripts.init_db` in a
-    # pre-deploy Job (race-safe — see CLAUDE.md "Multi-pod deploys").
+    # Runs BOTH alembic ledgers before the backend starts:
+    #   `public.alembic_version`            (main app, `alembic upgrade head`)
+    #   `finmind.alembic_version_finmind`   (`python -m finmind.scripts.init_db`,
+    #                                        idempotent: upgrade + catalog UPSERT)
+    # Running the FinMind ledger here (instead of only in the backend's
+    # lifespan auto-init) gives multi-pod deploys a race-free pre-deploy
+    # step for free: set FINMIND_AUTO_INIT=false on the backend pods and
+    # this service is the single writer. Single-pod compose keeps the
+    # lifespan auto-init as a harmless no-op double-check.
     build: ./backend
-    command: alembic upgrade head
+    command: sh -c "alembic upgrade head && python -m finmind.scripts.init_db"
     environment:
       DATABASE_URL:   postgresql+asyncpg://${POSTGRES_USER:-fincept}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-finceptweb}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
       JWT_ALGORITHM:  ${JWT_ALGORITHM:-HS256}
+      # FinMind clone ledger — same passthrough pattern as the backend
+      # service; without these the init_db step can't resolve its DB.
+      FINMIND_USE_MAIN_DB:  ${FINMIND_USE_MAIN_DB:-true}
+      FINMIND_DATABASE_URL: ${FINMIND_DATABASE_URL:-postgresql+asyncpg://finmind:finmind_dev_password@postgres_finmind:5432/finmind_clone}
     depends_on:
       postgres:
         condition: service_healthy

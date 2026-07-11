@@ -27,7 +27,11 @@ from jose import JWTError
 
 from auth.jwt_handler import decode_access_token
 from cache.redis_cache import get_redis
-from middleware.metrics import WS_CONNECTIONS, WS_PUBSUB_DISPATCH_SECONDS
+from middleware.metrics import (
+    WS_CONNECTIONS,
+    WS_PUBSUB_DISPATCH_SECONDS,
+    WS_PUBSUB_RECONNECTS_TOTAL,
+)
 
 # symbol+market → last sent price (for delta detection)
 PriceCache = dict[str, float]
@@ -151,18 +155,30 @@ async def handle_market_ws(ws: WebSocket) -> None:
 
 
 async def _send_snapshot(ws: WebSocket, subs: set[str]) -> None:
-    """Fetch latest cached quote for each subscription and send as snapshot."""
-    from cache.redis_cache import cache_get, key_quote
+    """Fetch latest cached quote for each subscription and send as snapshot.
 
-    snapshot: dict = {}
+    Single MGET round-trip — a 20-symbol watchlist used to pay 20
+    sequential Redis RTTs right at the subscribe moment.
+    """
+    from cache.redis_cache import cache_mget, key_quote
+
+    sub_keys: list[str] = []
+    redis_keys: list[str] = []
     for sub_key in subs:
         parts = sub_key.split(":", 1)
         if len(parts) != 2:
             continue
         symbol, market = parts
-        cached = await cache_get(key_quote(market.lower(), symbol))
+        sub_keys.append(sub_key)
+        redis_keys.append(key_quote(market.lower(), symbol))
+
+    snapshot: dict = {}
+    for sub_key, cached in zip(sub_keys, await cache_mget(redis_keys)):
         if cached:
-            snapshot[sub_key] = json.loads(cached)
+            try:
+                snapshot[sub_key] = json.loads(cached)
+            except json.JSONDecodeError:
+                continue  # one corrupt entry must not sink the snapshot
 
     await _safe_send(ws, {"type": "snapshot", "data": snapshot})
 
@@ -199,20 +215,42 @@ async def start_pubsub_listener() -> None:
 
 
 async def _listen_loop() -> None:
-    r = await get_redis()
-    pubsub = r.pubsub()
-    await pubsub.subscribe(PUBSUB_CHANNEL)
-    try:
-        async for message in pubsub.listen():
-            if message["type"] != "message":
-                continue
+    """Outer supervision loop: `pubsub.listen()` simply ends when the
+    Redis connection drops, which used to kill this task silently and
+    leave every WebSocket client without deltas until a process
+    restart. Reconnect with capped exponential backoff instead — the
+    subscribe happens after every reconnect so no re-registration is
+    needed elsewhere.
+    """
+    backoff = 1.0
+    while True:
+        try:
+            r = await get_redis()
+            pubsub = r.pubsub()
+            await pubsub.subscribe(PUBSUB_CHANNEL)
             try:
-                payload: dict = json.loads(message["data"])
-                await _dispatch(payload)
-            except Exception:
-                continue
-    finally:
-        await pubsub.unsubscribe(PUBSUB_CHANNEL)
+                backoff = 1.0  # healthy subscribe → reset the ladder
+                async for message in pubsub.listen():
+                    if message["type"] != "message":
+                        continue
+                    try:
+                        payload: dict = json.loads(message["data"])
+                        await _dispatch(payload)
+                    except Exception:
+                        continue
+            finally:
+                try:
+                    await pubsub.unsubscribe(PUBSUB_CHANNEL)
+                except Exception:
+                    pass  # connection already gone — nothing to leave behind
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+        # listen() returning OR raising both mean the subscription is dead.
+        WS_PUBSUB_RECONNECTS_TOTAL.inc()
+        await asyncio.sleep(backoff)
+        backoff = min(backoff * 2, 30.0)
 
 
 async def _dispatch(payload: dict) -> None:

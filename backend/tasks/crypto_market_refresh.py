@@ -41,6 +41,9 @@ async def refresh_crypto_quotes() -> None:
 
     No-op when no client is subscribed; otherwise fan out to Kraken in
     parallel and publish each result through the existing WS broadcast.
+
+    Deliberately NOT cross-worker locked — symbol set is this worker's
+    own `_subscriptions`; see refresh_us_quotes for the full rationale.
     """
     symbols = _subscribed_crypto_symbols()
     if not symbols:

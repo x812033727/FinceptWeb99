@@ -24,6 +24,16 @@ async def cache_get(key: str) -> Optional[str]:
     return await r.get(key)
 
 
+async def cache_mget(keys: list[str]) -> list[Optional[str]]:
+    """Batch read — one round-trip for N keys, order-preserving,
+    missing keys come back as None. Used by the WebSocket snapshot
+    path, which previously issued one GET per subscribed symbol."""
+    if not keys:
+        return []
+    r = await get_redis()
+    return await r.mget(keys)
+
+
 async def cache_set(key: str, value: str, ttl_seconds: int) -> None:
     r = await get_redis()
     await r.set(key, value, ex=ttl_seconds)

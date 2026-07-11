@@ -234,6 +234,13 @@ WS_PUBSUB_DISPATCH_SECONDS = Histogram(
     "subscribed WebSocket connection.",
     buckets=[0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 1.0],
 )
+WS_PUBSUB_RECONNECTS_TOTAL = Counter(
+    "ws_pubsub_reconnects_total",
+    "Times the market pubsub listener lost its Redis subscription and "
+    "re-entered the reconnect/backoff loop. A sustained rate means "
+    "Redis is flapping; before this counter existed a single drop "
+    "silently killed all WebSocket deltas until restart.",
+)
 
 # ── APScheduler job runtimes ──────────────────────────────────────
 # Wired via listener in tasks.scheduler_metrics (no per-job changes).

@@ -122,7 +122,8 @@ def make_financial_tools(
 
     @tool(
         "run_backtest",
-        "Backtest a strategy ('sma_crossover' or 'rsi_mean_reversion') over a date range. "
+        "Backtest a strategy ('sma_crossover', 'rsi_mean_reversion', 'breakout_n', "
+        "'momentum', 'bollinger_revert') over a date range. "
         "Returns metrics (sharpe, max_drawdown, total_return) and a compacted equity curve.",
         {
             "symbols": list,

@@ -621,7 +621,8 @@ def build_openai_compat_toolset(
                 "name": "run_backtest",
                 "description": (
                     "Backtest a strategy over a date range. "
-                    "strategy: 'sma_crossover' or 'rsi_mean_reversion'."
+                    "strategy: 'sma_crossover', 'rsi_mean_reversion', "
+                    "'breakout_n', 'momentum' or 'bollinger_revert'."
                 ),
                 "parameters": {
                     "type": "object",
@@ -630,7 +631,10 @@ def build_openai_compat_toolset(
                         "markets": {"type": "array", "items": {"type": "string"}},
                         "strategy": {
                             "type": "string",
-                            "enum": ["sma_crossover", "rsi_mean_reversion"],
+                            "enum": [
+                                "sma_crossover", "rsi_mean_reversion",
+                                "breakout_n", "momentum", "bollinger_revert",
+                            ],
                         },
                         "params": {"type": "object", "additionalProperties": True},
                         "start_date": {"type": "string", "description": "YYYY-MM-DD"},

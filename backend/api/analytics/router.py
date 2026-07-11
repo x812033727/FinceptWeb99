@@ -6,6 +6,7 @@ from api.analytics.schemas import (
     DCFRequest, DCFResponse,
     VaRRequest, VaRResponse,
     BacktestRequest, BacktestResponse,
+    StrategyInfo,
 )
 from auth.permissions import require_analyst
 from limiter import limiter
@@ -83,13 +84,28 @@ async def var(request: Request, body: VaRRequest, _: AnalystUser):
         raise HTTPException(status_code=502, detail=f"Analytics error: {e}")
 
 
+@router.get("/backtest/strategies", response_model=list[StrategyInfo])
+@limiter.limit("30/minute")
+async def backtest_strategies(request: Request, _: AnalystUser):
+    """
+    Registered built-in strategies with their parameter schemas
+    (name / type / default / bounds) — lets the frontend form and any
+    sweep tooling introspect instead of hardcoding.
+    """
+    from analytics.backtest import list_strategies
+    return list_strategies()
+
+
 @router.post("/backtest", response_model=BacktestResponse)
 @limiter.limit("5/minute")
 async def backtest(request: Request, body: BacktestRequest, _: AnalystUser):
     """
     Event-driven backtest engine.
-    Built-in strategies: 'sma_crossover' (params: fast, slow),
-                         'rsi_mean_reversion' (params: period, oversold, overbought)
+    Built-in strategies: see GET /backtest/strategies for the registry
+    and each strategy's parameter schema.
+    Optional risk controls: stop_loss_pct / take_profit_pct /
+    trailing_stop_pct / position_size_pct / slippage_bps /
+    commission_bps / allow_short — all off by default.
     """
     if len(body.symbols) != len(body.markets):
         raise HTTPException(status_code=400, detail="symbols and markets must be same length")
@@ -105,6 +121,13 @@ async def backtest(request: Request, body: BacktestRequest, _: AnalystUser):
             start_date=body.start_date,
             end_date=body.end_date,
             initial_capital=body.initial_capital,
+            stop_loss_pct=body.stop_loss_pct,
+            take_profit_pct=body.take_profit_pct,
+            trailing_stop_pct=body.trailing_stop_pct,
+            position_size_pct=body.position_size_pct,
+            slippage_bps=body.slippage_bps,
+            commission_bps=body.commission_bps,
+            allow_short=body.allow_short,
         )
         return BacktestResponse(**result)
     except HTTPException:

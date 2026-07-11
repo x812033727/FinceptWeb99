@@ -266,6 +266,98 @@ describe("useWsConnected", () => {
   });
 });
 
+// ── quoteStore routing (PR-6 rAF batching) ─────────────────────────
+
+describe("quoteStore routing", () => {
+  let rafQueue: FrameRequestCallback[] = [];
+
+  beforeEach(() => {
+    resetFake();
+    rafQueue = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      rafQueue.push(cb);
+      return rafQueue.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  function runFrame() {
+    const cbs = rafQueue;
+    rafQueue = [];
+    cbs.forEach((cb) => cb(performance.now()));
+  }
+
+  it("routes deltas into the quoteStore, batched per animation frame", async () => {
+    const { useWebSocket } = await freshModule();
+    const store = await import("@/store/quoteStore");
+
+    renderHook(() => useWebSocket("AAPL:US", () => {}));
+    const ws = latestSocket();
+    act(() => ws.triggerOpen());
+
+    act(() => {
+      ws.triggerMessage({ type: "delta", symbol: "AAPL", market: "US", data: { price: 182, change_pct: 1.1, ts: 1720684800000, data_source: "polygon" } });
+    });
+
+    // Not yet flushed — no store write before the frame
+    expect(store.useQuoteStore.getState().quotes["AAPL:US"]).toBeUndefined();
+
+    act(() => runFrame());
+
+    const q = store.useQuoteStore.getState().quotes["AAPL:US"];
+    expect(q.price).toBe(182);
+    expect(q.changePct).toBe(1.1);
+    expect(q.ts).toBe(1720684800000);
+    expect(q.dataSource).toBe("polygon");
+  });
+
+  it("routes snapshot entries into the quoteStore", async () => {
+    const { useWebSocket } = await freshModule();
+    const store = await import("@/store/quoteStore");
+
+    renderHook(() => useWebSocket("AAPL:US", () => {}));
+    const ws = latestSocket();
+    act(() => ws.triggerOpen());
+
+    act(() => {
+      ws.triggerMessage({
+        type: "snapshot",
+        data: {
+          "AAPL:US": { price: 180 },
+          "TSLA:US": { price: 250 },
+        },
+      });
+      runFrame();
+    });
+
+    const { quotes } = store.useQuoteStore.getState();
+    expect(quotes["AAPL:US"].price).toBe(180);
+    expect(quotes["TSLA:US"].price).toBe(250);
+  });
+
+  it("still delivers deltas to legacy per-key callbacks (dual write)", async () => {
+    const { useWebSocket } = await freshModule();
+    const store = await import("@/store/quoteStore");
+
+    const received: unknown[] = [];
+    renderHook(() => useWebSocket("AAPL:US", (d) => received.push(d)));
+    const ws = latestSocket();
+    act(() => ws.triggerOpen());
+
+    act(() => {
+      ws.triggerMessage({ type: "delta", symbol: "AAPL", market: "US", data: { price: 182 } });
+      runFrame();
+    });
+
+    expect(received).toHaveLength(1);                                     // legacy path intact
+    expect(store.useQuoteStore.getState().quotes["AAPL:US"].price).toBe(182); // new path fed
+  });
+});
+
 // ── cleanup / unsubscribe ──────────────────────────────────────────
 
 describe("cleanup", () => {

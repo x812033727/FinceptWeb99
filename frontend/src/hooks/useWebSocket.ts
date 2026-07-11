@@ -10,6 +10,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useAuthStore } from "@/store/authStore";
+import { bufferQuoteUpdate, useQuote, type LiveQuote } from "@/store/quoteStore";
 
 type Callback = (data: unknown) => void;
 
@@ -108,6 +109,10 @@ function connect(token: string): void {
       if (msg.type === "snapshot") {
         authenticated = true;
         for (const [key, data] of Object.entries(msg.data ?? {})) {
+          // Feed the rAF-batched quoteStore in addition to the legacy
+          // per-key callbacks; consumers migrate to useLiveQuote
+          // gradually (blueprint §4.6).
+          bufferQuoteUpdate(key, data);
           subscribers.get(key)?.forEach((cb) => cb(data));
         }
         return;
@@ -115,6 +120,7 @@ function connect(token: string): void {
 
       if (msg.type === "delta") {
         const key = `${msg.symbol}:${msg.market}`;
+        bufferQuoteUpdate(key, msg.data);
         subscribers.get(key)?.forEach((cb) => cb(msg.data));
         return;
       }
@@ -201,6 +207,27 @@ export function useWebSocket(key: string, callback: Callback): void {
       if (subscribers.size === 0) disconnect();
     };
   }, [key, token]);
+}
+
+// Shared no-op: useLiveQuote consumers get their updates through the
+// quoteStore selector, not the legacy callback path.
+const NOOP: Callback = () => {};
+
+/**
+ * Subscribe to one instrument's live quote (blueprint §4.6).
+ *
+ * Registers the `"SYMBOL:MARKET"` WS subscription (so the backend
+ * streams it) and reads the rAF-batched quoteStore via a per-key
+ * selector — the component re-renders only when ITS symbol's record
+ * changes, never on other symbols' ticks.
+ *
+ * Returns `undefined` until the first tick lands; callers fall back to
+ * their REST-fetched quote for initial paint.
+ */
+export function useLiveQuote(symbol: string, market: string): LiveQuote | undefined {
+  const key = `${symbol}:${market}`;
+  useWebSocket(key, NOOP);
+  return useQuote(key);
 }
 
 export function useWsConnected(): boolean {

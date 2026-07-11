@@ -83,6 +83,15 @@ def _use_polygon() -> bool:
 
 # ── Quote ─────────────────────────────────────────────────────────
 
+def _tiered(coro):
+    """Cap one waterfall tier at the configured budget. A hung upstream
+    raises TimeoutError into the tier's existing except-handler (counted
+    as a tier failure) and the next tier gets its chance, so the
+    cold-cache worst case is ~tiers × budget rather than a stack of
+    full HTTP timeouts."""
+    return asyncio.wait_for(coro, timeout=settings.WATERFALL_TIER_TIMEOUT_SECONDS)
+
+
 async def fetch_quote_waterfall(ticker: str) -> tuple[dict[str, Any], str]:
     """Run the Polygon → yfinance → Stooq waterfall and return (raw, source).
 
@@ -95,7 +104,7 @@ async def fetch_quote_waterfall(ticker: str) -> tuple[dict[str, Any], str]:
     source = "unavailable"
     primary = "polygon" if _use_polygon() else "yfinance"
     try:
-        raw = await polygon.get_quote(ticker) if _use_polygon() else await yfinance.get_quote(ticker)
+        raw = await _tiered(polygon.get_quote(ticker) if _use_polygon() else yfinance.get_quote(ticker))
         if raw.get("price"):
             source = primary
     except Exception as exc:
@@ -105,7 +114,7 @@ async def fetch_quote_waterfall(ticker: str) -> tuple[dict[str, Any], str]:
         log.warning("us.quote.primary_failed",
                     extra={"ticker": ticker, "source": primary, "error": str(exc)})
         try:
-            raw = await yfinance.get_quote(ticker)
+            raw = await _tiered(yfinance.get_quote(ticker))
             if raw.get("price"):
                 source = "yfinance"
         except Exception as exc2:
@@ -122,7 +131,7 @@ async def fetch_quote_waterfall(ticker: str) -> tuple[dict[str, Any], str]:
     # bite us in some deployments.
     if not raw.get("price"):
         try:
-            stooq_raw = await stooq.get_quote(ticker)
+            stooq_raw = await _tiered(stooq.get_quote(ticker))
             if stooq_raw.get("price"):
                 raw = stooq_raw
                 source = "stooq"
@@ -141,7 +150,7 @@ async def fetch_quote_waterfall(ticker: str) -> tuple[dict[str, Any], str]:
     # behave identically to the previous 3-tier waterfall.
     if not raw.get("price"):
         try:
-            finnhub_raw = await finnhub.get_quote(ticker)
+            finnhub_raw = await _tiered(finnhub.get_quote(ticker))
             if finnhub_raw.get("price"):
                 raw = finnhub_raw
                 source = "finnhub"

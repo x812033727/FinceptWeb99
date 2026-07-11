@@ -87,7 +87,9 @@ services:
 
   backend:
     build: ./backend
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2
+    # 3 workers now that the scheduler is a separate container (P2) —
+    # there is no longer a per-worker scheduler penalty.
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 3
     environment: &app-env
       DATABASE_URL:      postgresql+asyncpg://${POSTGRES_USER:-fincept}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-finceptweb}
       REDIS_URL:         redis://${REDIS_PASSWORD:+:${REDIS_PASSWORD}@}redis:6379
@@ -141,8 +143,8 @@ services:
       # `scheduler` service below does. Leaving this on would run every
       # job once per uvicorn worker (upstream quota burns N×).
       SCHEDULER_ENABLED: "false"
-      # Per-process SQLAlchemy pool budget: 2 web workers × (10+10)
-      # + scheduler (5+5) = 50 ≤ PG default max_connections 100 − reserve.
+      # Per-process SQLAlchemy pool budget: 3 web workers × (10+10)
+      # + scheduler (5+5) = 70 ≤ PG default max_connections 100 − reserve.
       DB_POOL_SIZE:     ${DB_POOL_SIZE:-10}
       DB_MAX_OVERFLOW:  ${DB_MAX_OVERFLOW:-10}
     volumes:

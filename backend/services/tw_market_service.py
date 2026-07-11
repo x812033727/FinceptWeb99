@@ -17,6 +17,7 @@ first to protect the limited free hourly quota.
 Timezone: Taiwan is UTC+8, no DST. All API responses are tagged with
 tz="Asia/Taipei" so the frontend can display correct local labels.
 """
+import asyncio
 import logging
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -43,9 +44,16 @@ from cache.redis_cache import (
     key_screener_tw,
     key_valuation_band_tw,
 )
+from config import settings
 from middleware.metrics import WATERFALL_TIER_FAILED_TOTAL
 
 log = logging.getLogger(__name__)
+
+
+def _tiered(coro):
+    """Cap one waterfall tier at the configured budget — see the US
+    service's twin helper for the rationale."""
+    return asyncio.wait_for(coro, timeout=settings.WATERFALL_TIER_TIMEOUT_SECONDS)
 
 _TW = pytz.timezone("Asia/Taipei")
 
@@ -168,9 +176,9 @@ async def fetch_quote_waterfall(symbol: str) -> tuple[dict | None, str]:
     # non-zero rtcode) falls through silently to Tier 1.
     if _is_tw_market_open():
         try:
-            mis_raw = await twse_mis.get_realtime_quote(
+            mis_raw = await _tiered(twse_mis.get_realtime_quote(
                 symbol, exchange=get_exchange(symbol),
-            )
+            ))
             if mis_raw and mis_raw.get("close") is not None:
                 raw = mis_raw
                 source = "twse_mis"
@@ -189,7 +197,7 @@ async def fetch_quote_waterfall(symbol: str) -> tuple[dict | None, str]:
     # hourly quota. Each tier is a soft-fail attempt returning (raw, source).
     async def _try_twse_eod() -> tuple[dict | None, str]:
         try:
-            r = await twse.get_realtime_quote(symbol)
+            r = await _tiered(twse.get_realtime_quote(symbol))
             if r:
                 return r, "twse"
         except Exception as exc:
@@ -207,7 +215,7 @@ async def fetch_quote_waterfall(symbol: str) -> tuple[dict | None, str]:
         # (without it the watchlist UI shows a blank 漲跌 column).
         try:
             start = (date.today() - timedelta(days=7)).isoformat()
-            bars = await finmind.get_daily_ohlcv(symbol, start)
+            bars = await _tiered(finmind.get_daily_ohlcv(symbol, start))
             if bars:
                 latest = bars[-1]
                 prev_close = bars[-2]["close"] if len(bars) >= 2 else None

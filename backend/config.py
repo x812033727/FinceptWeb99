@@ -349,6 +349,12 @@ class Settings(BaseSettings):
     DB_POOL_SIZE: int = 10
     DB_MAX_OVERFLOW: int = 10
 
+    # Upper bound for ONE tier of a market-data waterfall (quote fetch).
+    # A hung upstream burns at most this many seconds before the next
+    # tier gets its chance, so a cold-cache request's worst case is
+    # bounded at ~tiers × budget instead of stacking full HTTP timeouts.
+    WATERFALL_TIER_TIMEOUT_SECONDS: float = 8.0
+
     @property
     def metrics_allow_cidrs(self) -> list[str]:
         return [c.strip() for c in self.METRICS_ALLOW_CIDRS.split(",") if c.strip()]

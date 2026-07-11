@@ -12,7 +12,7 @@
  * stable count across ticks proves the page function didn't re-run.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { bufferQuoteUpdate, _resetQuoteStoreForTests } from "@/store/quoteStore";
@@ -41,9 +41,13 @@ vi.mock("@/components/stock/TabStrip", () => ({
   },
 }));
 
-// lightweight-charts needs a real canvas; not under test here.
+// lightweight-charts needs a real canvas; not under test here. The mock
+// exposes the bar count so the keepPreviousData test below can assert
+// the chart keeps its data while a new period loads.
 vi.mock("@/components/charts/CandlestickChart", () => ({
-  default: () => <div data-testid="chart" />,
+  default: ({ bars }: { bars: unknown[] }) => (
+    <div data-testid="chart">{bars.length}</div>
+  ),
 }));
 
 import StockDetailPage from "./StockDetailPage";
@@ -146,5 +150,63 @@ describe("StockDetailPage tick isolation", () => {
     });
     expect(screen.getByText("182.75")).toBeInTheDocument();
     expect(tabStripRenders.count).toBe(bodyRendersBefore);
+  });
+});
+
+// ── PR-9: history keepPreviousData ────────────────────────────────
+
+function makeBars(n: number) {
+  return Array.from({ length: n }, (_, i) => ({
+    time: `2026-01-0${i + 1}`,
+    open: 100 + i,
+    high: 101 + i,
+    low: 99 + i,
+    close: 100.5 + i,
+    volume: 1000,
+  }));
+}
+
+describe("StockDetailPage history keepPreviousData", () => {
+  it("keeps the previous period's bars on screen while the new period loads", async () => {
+    let resolve5d: ((v: { data: unknown }) => void) | undefined;
+    apiGetMock.mockImplementation((url: string) => {
+      if (url.startsWith("/us/quote/")) {
+        return Promise.resolve({
+          data: { price: 180.5, change_pct: 1.0, name: "Apple Inc.", currency: "USD", data_source: "polygon" },
+        });
+      }
+      if (url.startsWith("/us/earnings/")) {
+        return Promise.resolve({
+          data: { earnings_date: null, eps_estimate: null, revenue_estimate: null },
+        });
+      }
+      if (url.includes("/history/")) {
+        // Default period (1y) resolves immediately with 3 bars; the 5d
+        // request stays pending until the test releases it.
+        if (url.includes("period=5d")) {
+          return new Promise((res) => { resolve5d = res; });
+        }
+        return Promise.resolve({ data: makeBars(3) });
+      }
+      return Promise.resolve({ data: {} });
+    });
+
+    renderPage();
+    expect(await screen.findByTestId("chart")).toHaveTextContent("3");
+
+    // Switch period → new queryKey. Without placeholderData the chart
+    // would unmount into the loading state; with keepPreviousData the
+    // old 3 bars must stay on screen.
+    fireEvent.click(screen.getByText("5d"));
+    expect(screen.getByTestId("chart")).toHaveTextContent("3");
+    expect(screen.queryByText("No data available")).toBeNull();
+
+    // Release the 5d response — the chart swaps to the new bars.
+    await act(async () => {
+      resolve5d!({ data: makeBars(7) });
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("chart")).toHaveTextContent("7");
+    });
   });
 });

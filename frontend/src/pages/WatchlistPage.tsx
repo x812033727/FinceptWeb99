@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
@@ -149,6 +150,95 @@ function WatchlistFreshnessFooter({ items }: { items: WatchlistItem[] }) {
 }
 
 
+// Shared grid template for the header row and virtualized item rows —
+// keep the two identical or columns drift out of alignment. Name is
+// hidden <sm (mirrors the old `hidden sm:table-cell` column).
+const WATCHLIST_GRID_COLS =
+  "grid grid-cols-[minmax(0,1fr)_95px_85px_36px] sm:grid-cols-[150px_minmax(0,1fr)_100px_90px_36px]";
+
+/**
+ * Virtualized watchlist rows (PR-9). A list can hold hundreds of
+ * symbols; only the visible window is mounted (ScreenerPage pattern:
+ * header row outside the scroll element so it stays pinned, absolute
+ * rows inside a relative spacer). Short lists render without a
+ * scrollbar — the container is max-height-capped, not fixed.
+ */
+function WatchlistItemRows({
+  items,
+  removeItem,
+}: {
+  items: WatchlistItem[];
+  removeItem: (itemId: string) => void;
+}) {
+  const { t } = useTranslation();
+  const parentRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 44,
+    overscan: 10,
+  });
+
+  return (
+    <div className="text-sm">
+      <div className={`${WATCHLIST_GRID_COLS} gap-x-2 text-xs text-muted-foreground border-b border-border px-3 sm:px-4 py-2`}>
+        <span className="font-medium text-left">{t("market.table.symbol")}</span>
+        <span className="font-medium text-left hidden sm:block">{t("market.table.name")}</span>
+        <span className="font-medium text-right">{t("market.table.price")}</span>
+        <span className="font-medium text-right">{t("market.table.change")}</span>
+        <span />
+      </div>
+      <div ref={parentRef} className="overflow-y-auto max-h-[60vh]" data-testid="watchlist-virtual-scroll">
+        <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }} className="tabular-nums">
+          {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+            const item = items[virtualRow.index];
+            const pos = (item.change_pct ?? 0) >= 0;
+            return (
+              <div
+                key={item.id}
+                data-index={virtualRow.index}
+                ref={rowVirtualizer.measureElement}
+                className={`${WATCHLIST_GRID_COLS} gap-x-2 absolute w-full px-3 sm:px-4 items-center border-b border-border/30 hover:bg-accent/5 group`}
+                style={{ top: virtualRow.start, height: 44 }}
+              >
+                <span className="truncate">
+                  <Link
+                    to={`/stock/${item.market}/${item.symbol}`}
+                    className="font-medium text-primary hover:underline"
+                  >
+                    {item.symbol}
+                  </Link>
+                  <span className="text-xs text-muted-foreground ml-1.5">{item.market}</span>
+                </span>
+                <span className="hidden sm:block text-muted-foreground text-xs truncate">
+                  {item.name ?? "—"}
+                </span>
+                <span className="text-right text-foreground">
+                  {item.price != null
+                    ? item.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                    : "—"}
+                </span>
+                <span className={`text-right text-sm font-medium ${pos ? "text-up" : "text-down"}`}>
+                  {formatPct(item.change_pct)}
+                </span>
+                <span className="text-right">
+                  <button
+                    onClick={() => removeItem(item.id)}
+                    aria-label={t("watchlist.remove") || "Remove"}
+                    className="text-base text-muted-foreground hover:text-danger sm:text-xs sm:opacity-0 sm:group-hover:opacity-100 transition-all"
+                  >
+                    ✕
+                  </button>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function WatchlistCard({ wl }: { wl: Watchlist }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
@@ -189,55 +279,10 @@ function WatchlistCard({ wl }: { wl: Watchlist }) {
           {wl.items.length === 0 ? (
             <div className="px-4 py-3 text-xs text-muted-foreground">{t("common.no_data")}</div>
           ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-xs text-muted-foreground border-b border-border">
-                  <th className="text-left px-3 sm:px-4 py-2 font-medium">{t("market.table.symbol")}</th>
-                  <th className="hidden sm:table-cell text-left px-2 py-2 font-medium">{t("market.table.name")}</th>
-                  <th className="text-right px-3 sm:px-4 py-2 font-medium">{t("market.table.price")}</th>
-                  <th className="text-right px-3 sm:px-4 py-2 font-medium">{t("market.table.change")}</th>
-                  <th className="px-2 py-2" />
-                </tr>
-              </thead>
-              <tbody className="tabular-nums">
-                {wl.items.map((item) => {
-                  const pos = (item.change_pct ?? 0) >= 0;
-                  return (
-                    <tr key={item.id} className="border-b border-border/30 hover:bg-accent/5 group">
-                      <td className="px-3 sm:px-4 py-2.5">
-                        <Link
-                          to={`/stock/${item.market}/${item.symbol}`}
-                          className="font-medium text-primary hover:underline"
-                        >
-                          {item.symbol}
-                        </Link>
-                        <span className="text-xs text-muted-foreground ml-1.5">{item.market}</span>
-                      </td>
-                      <td className="hidden sm:table-cell px-2 py-2.5 text-muted-foreground text-xs max-w-[180px] truncate">
-                        {item.name ?? "—"}
-                      </td>
-                      <td className="text-right px-3 sm:px-4 py-2.5 text-foreground">
-                        {item.price != null
-                          ? item.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                          : "—"}
-                      </td>
-                      <td className={`text-right px-3 sm:px-4 py-2.5 text-sm font-medium ${pos ? "text-up" : "text-down"}`}>
-                        {formatPct(item.change_pct)}
-                      </td>
-                      <td className="px-2 py-2.5 text-right">
-                        <button
-                          onClick={() => removeIt.mutate(item.id)}
-                          aria-label={t("watchlist.remove") || "Remove"}
-                          className="text-base text-muted-foreground hover:text-danger sm:text-xs sm:opacity-0 sm:group-hover:opacity-100 transition-all"
-                        >
-                          ✕
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <WatchlistItemRows
+              items={wl.items}
+              removeItem={(itemId) => removeIt.mutate(itemId)}
+            />
           )}
           {wl.items.length > 0 && (
             <WatchlistFreshnessFooter items={wl.items} />

@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
 import { formatPct } from "@/lib/formatters";
@@ -107,6 +108,11 @@ function IndexCard({ idx, unavailable }: { idx: MarketIndex; unavailable?: boole
   );
 }
 
+// Shared grid template for the header row and virtualized data rows —
+// the two must stay identical or columns drift out of alignment.
+const MARKET_GRID_COLS =
+  "grid grid-cols-[85px_1fr_90px_80px] sm:grid-cols-[95px_1fr_100px_90px_90px] md:grid-cols-[95px_1fr_100px_90px_90px_110px] lg:grid-cols-[95px_1fr_100px_90px_90px_110px_70px_1fr]";
+
 // ── sort indicator ─────────────────────────────────────────────────
 
 type SortKey = "change_pct" | "volume" | "market_cap";
@@ -135,6 +141,7 @@ export default function MarketPage() {
       : mkt === "CRYPTO" ? fetchCryptoScreener
       : fetchTWScreener,
     staleTime: mkt === "CRYPTO" ? 30_000 : 60_000,
+    gcTime: 600_000, // screener tier — keep the list warm while hopping between market tabs
   });
 
   const twIndexLabel = t("market.tw_index");
@@ -160,6 +167,17 @@ export default function MarketPage() {
       const bv = (b[sortKey] ?? 0) as number;
       return sortDir === "desc" ? bv - av : av - bv;
     });
+
+  // Virtual scroll (PR-9) — TW screener returns up to 200 rows; only the
+  // visible window is mounted. Same pattern as ScreenerPage: header row
+  // lives outside the scroll element so it stays pinned.
+  const parentRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: filtered.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 44,
+    overscan: 10,
+  });
 
   return (
     <div className="p-4 sm:p-6 space-y-5 sm:space-y-6">
@@ -227,91 +245,98 @@ export default function MarketPage() {
         {isLoading ? (
           <div className="p-8 text-center text-muted-foreground text-sm animate-pulse">{t("common.loading")}</div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border text-xs text-muted-foreground">
-                  <th className="text-left px-3 sm:px-4 py-2.5 font-medium">{t("market.table.symbol")}</th>
-                  <th className="text-left px-3 sm:px-4 py-2.5 font-medium">{t("market.table.name")}</th>
-                  <th className="text-right px-3 sm:px-4 py-2.5 font-medium">{t("market.table.price")}</th>
-                  <th
-                    className="text-right px-3 sm:px-4 py-2.5 font-medium cursor-pointer select-none hover:text-foreground"
-                    onClick={() => toggleSort("change_pct")}
-                  >
-                    {t("market.table.change")}<SortIndicator k="change_pct" sortKey={sortKey} sortDir={sortDir} />
-                  </th>
-                  <th
-                    className="hidden sm:table-cell text-right px-3 sm:px-4 py-2.5 font-medium cursor-pointer select-none hover:text-foreground"
-                    onClick={() => toggleSort("volume")}
-                  >
-                    {t("market.table.volume")}<SortIndicator k="volume" sortKey={sortKey} sortDir={sortDir} />
-                  </th>
-                  <th
-                    className="hidden md:table-cell text-right px-3 sm:px-4 py-2.5 font-medium cursor-pointer select-none hover:text-foreground"
-                    onClick={() => toggleSort("market_cap")}
-                  >
-                    {t("market.table.market_cap")}<SortIndicator k="market_cap" sortKey={sortKey} sortDir={sortDir} />
-                  </th>
-                  <th className="hidden lg:table-cell text-right px-3 sm:px-4 py-2.5 font-medium">{t("market.table.pe")}</th>
-                  <th className="hidden lg:table-cell text-left px-3 sm:px-4 py-2.5 font-medium">{t("market.table.sector")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((row) => {
-                  const unavailable = row.data_source === "unavailable";
-                  return (
-                  <tr
-                    key={row.symbol}
-                    onClick={() => navigate(`/stock/${mkt}/${row.symbol}`)}
-                    className="border-b border-border/40 hover:bg-accent/5 cursor-pointer transition-colors"
-                  >
-                    <td className="px-3 sm:px-4 py-2.5 font-medium text-primary whitespace-nowrap">
-                      {row.symbol}
-                      <DataSourceBadge source={row.data_source} />
-                    </td>
-                    <td className="px-3 sm:px-4 py-2.5 text-muted-foreground max-w-[120px] sm:max-w-[180px] truncate">{row.name}</td>
-                    <td className="px-3 sm:px-4 py-2.5 text-right text-foreground tabular-nums">
-                      {unavailable
-                        ? <span className="text-muted-foreground">—</span>
-                        : row.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </td>
-                    <td className="px-3 sm:px-4 py-2.5 text-right tabular-nums">
-                      <ChangeCell value={row.change_pct} unavailable={unavailable} />
-                    </td>
-                    <td className="hidden sm:table-cell px-3 sm:px-4 py-2.5 text-right text-muted-foreground tabular-nums">
-                      {unavailable
-                        ? "—"
-                        : row.volume >= 1e6
-                        ? `${(row.volume / 1e6).toFixed(1)}M`
-                        : row.volume >= 1e3
-                        ? `${(row.volume / 1e3).toFixed(0)}K`
-                        : row.volume.toLocaleString()}
-                    </td>
-                    <td className="hidden md:table-cell px-3 sm:px-4 py-2.5 text-right text-muted-foreground tabular-nums">
-                      {row.market_cap
-                        ? row.market_cap >= 1e12
-                          ? `$${(row.market_cap / 1e12).toFixed(2)}T`
-                          : `$${(row.market_cap / 1e9).toFixed(1)}B`
-                        : "—"}
-                    </td>
-                    <td className="hidden lg:table-cell px-3 sm:px-4 py-2.5 text-right text-muted-foreground tabular-nums">
-                      {row.pe_ratio ? row.pe_ratio.toFixed(1) : "—"}
-                    </td>
-                    <td className="hidden lg:table-cell px-3 sm:px-4 py-2.5 text-muted-foreground max-w-[120px] truncate">
-                      {row.sector ?? "—"}
-                    </td>
-                  </tr>
-                  );
-                })}
-                {filtered.length === 0 && (
-                  <tr>
-                    <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground text-sm">
-                      {t("common.no_results")}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+          <div className="text-sm">
+            {/* header row — outside the scroll element so it stays pinned.
+                Column count grows with the viewport (ScreenerPage pattern):
+                <sm symbol/name/price/change; sm adds volume; md adds market
+                cap; lg adds P/E + sector. Hidden cells are removed from the
+                DOM via `hidden sm:block` so grid auto-flow stays aligned. */}
+            <div className={`${MARKET_GRID_COLS} text-xs text-muted-foreground border-b border-border px-3 sm:px-4 py-2.5 gap-x-3`}>
+              <span className="font-medium text-left">{t("market.table.symbol")}</span>
+              <span className="font-medium text-left">{t("market.table.name")}</span>
+              <span className="font-medium text-right">{t("market.table.price")}</span>
+              <span
+                className="font-medium text-right cursor-pointer select-none hover:text-foreground"
+                onClick={() => toggleSort("change_pct")}
+              >
+                {t("market.table.change")}<SortIndicator k="change_pct" sortKey={sortKey} sortDir={sortDir} />
+              </span>
+              <span
+                className="hidden sm:block font-medium text-right cursor-pointer select-none hover:text-foreground"
+                onClick={() => toggleSort("volume")}
+              >
+                {t("market.table.volume")}<SortIndicator k="volume" sortKey={sortKey} sortDir={sortDir} />
+              </span>
+              <span
+                className="hidden md:block font-medium text-right cursor-pointer select-none hover:text-foreground"
+                onClick={() => toggleSort("market_cap")}
+              >
+                {t("market.table.market_cap")}<SortIndicator k="market_cap" sortKey={sortKey} sortDir={sortDir} />
+              </span>
+              <span className="hidden lg:block font-medium text-right">{t("market.table.pe")}</span>
+              <span className="hidden lg:block font-medium text-left pl-4">{t("market.table.sector")}</span>
+            </div>
+
+            {filtered.length === 0 ? (
+              <div className="px-4 py-8 text-center text-muted-foreground text-sm">
+                {t("common.no_results")}
+              </div>
+            ) : (
+              <div ref={parentRef} className="overflow-y-auto max-h-[65vh]" data-testid="market-virtual-scroll">
+                <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
+                  {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                    const row = filtered[virtualRow.index];
+                    const unavailable = row.data_source === "unavailable";
+                    return (
+                      <div
+                        key={row.symbol}
+                        data-index={virtualRow.index}
+                        ref={rowVirtualizer.measureElement}
+                        onClick={() => navigate(`/stock/${mkt}/${row.symbol}`)}
+                        className={`${MARKET_GRID_COLS} absolute w-full px-3 sm:px-4 gap-x-3 items-center border-b border-border/40 hover:bg-accent/5 cursor-pointer transition-colors`}
+                        style={{ top: virtualRow.start, height: 44 }}
+                      >
+                        <span className="font-medium text-primary whitespace-nowrap truncate">
+                          {row.symbol}
+                          <DataSourceBadge source={row.data_source} />
+                        </span>
+                        <span className="text-muted-foreground truncate">{row.name}</span>
+                        <span className="text-right text-foreground tabular-nums">
+                          {unavailable
+                            ? <span className="text-muted-foreground">—</span>
+                            : row.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                        <span className="text-right tabular-nums">
+                          <ChangeCell value={row.change_pct} unavailable={unavailable} />
+                        </span>
+                        <span className="hidden sm:block text-right text-muted-foreground tabular-nums">
+                          {unavailable
+                            ? "—"
+                            : row.volume >= 1e6
+                            ? `${(row.volume / 1e6).toFixed(1)}M`
+                            : row.volume >= 1e3
+                            ? `${(row.volume / 1e3).toFixed(0)}K`
+                            : row.volume.toLocaleString()}
+                        </span>
+                        <span className="hidden md:block text-right text-muted-foreground tabular-nums">
+                          {row.market_cap
+                            ? row.market_cap >= 1e12
+                              ? `$${(row.market_cap / 1e12).toFixed(2)}T`
+                              : `$${(row.market_cap / 1e9).toFixed(1)}B`
+                            : "—"}
+                        </span>
+                        <span className="hidden lg:block text-right text-muted-foreground tabular-nums">
+                          {row.pe_ratio ? row.pe_ratio.toFixed(1) : "—"}
+                        </span>
+                        <span className="hidden lg:block text-muted-foreground truncate pl-4">
+                          {row.sector ?? "—"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

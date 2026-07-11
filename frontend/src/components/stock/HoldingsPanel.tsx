@@ -15,6 +15,7 @@ export function HoldingsPanel({ symbol }: { symbol: string }) {
     queryKey: ["etf-holdings", symbol],
     queryFn: () => fetchETFHoldings(symbol),
     staleTime: 6 * 3_600_000,
+    gcTime: 24 * 3_600_000, // fundamentals tier — ETF constituents, cache for a day
   });
 
   if (isLoading) return <Loading />;

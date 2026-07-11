@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Maximize2, Minimize2 } from "lucide-react";
 import CandlestickChart from "@/components/charts/CandlestickChart";
@@ -73,6 +73,10 @@ export default function StockDetailPage() {
     queryKey: ["history", mkt, sym, period],
     queryFn: () => fetchHistory(mkt, sym, period),
     staleTime: 60_000,
+    // Period is part of the queryKey, so switching 1d/5d/1mo/… used to
+    // blank the chart while the new range loaded. keepPreviousData keeps
+    // the old bars on screen until the new ones arrive.
+    placeholderData: keepPreviousData,
     enabled: mkt === "CRYPTO" ? true
       : mkt === "US" ? usTab === "chart" : twTab === "chart",
   });
@@ -81,12 +85,14 @@ export default function StockDetailPage() {
     queryKey: ["fundamentals", mkt, sym],
     queryFn: () => fetchFundamentals(mkt, sym),
     staleTime: 3_600_000,
+    gcTime: 24 * 3_600_000, // fundamentals tier — cache for a day
   });
 
   const { data: earnings } = useQuery({
     queryKey: ["earnings", sym],
     queryFn: () => fetchEarnings(sym),
     staleTime: 6 * 3_600_000,
+    gcTime: 24 * 3_600_000, // fundamentals tier — cache for a day
     enabled: mkt === "US",
   });
 

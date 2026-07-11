@@ -10,6 +10,7 @@ export function DividendsPanel({ symbol, currentPrice }: { symbol: string; curre
     queryKey: ["dividends", symbol],
     queryFn: () => fetchDividends(symbol),
     staleTime: 6 * 3_600_000,
+    gcTime: 24 * 3_600_000, // dividends tier — annual data, cache for a day
   });
 
   if (isLoading) return <Loading />;

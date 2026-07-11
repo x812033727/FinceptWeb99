@@ -8,6 +8,7 @@ export function RevenuePanel({ symbol }: { symbol: string }) {
     queryKey: ["revenue", symbol],
     queryFn: () => fetchRevenue(symbol),
     staleTime: 3_600_000,
+    gcTime: 24 * 3_600_000, // fundamentals tier — monthly revenue, cache for a day
   });
 
   if (isLoading) return <Loading />;

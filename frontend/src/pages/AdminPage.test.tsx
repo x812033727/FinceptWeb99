@@ -8,8 +8,8 @@
  *   - clicking a TabsTrigger updates the URL
  *   - non-admin users are redirected to /dashboard
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -63,6 +63,7 @@ vi.mock("@/lib/api", () => ({
   },
 }));
 
+import api from "@/lib/api";
 import AdminPage from "./AdminPage";
 
 function renderAt(initialUrl: string) {
@@ -148,5 +149,74 @@ describe("AdminPage tabs", () => {
     renderAt("/admin?tab=quality");
     const tab = screen.getByRole("tab", { name: "Signal Quality", hidden: true });
     expect(tab.getAttribute("aria-selected")).toBe("true");
+  });
+});
+
+describe("AdminPage users tab virtualization (PR-9)", () => {
+  // jsdom has no layout — offsetHeight (which @tanstack/virtual-core
+  // uses for both the scroll rect and measureElement) is always 0, so
+  // the virtualizer would mount nothing. Pin it to the row height
+  // (44px, same as estimateSize).
+  const originalOffsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
+  const originalOffsetWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth");
+  beforeEach(() => {
+    Object.defineProperties(HTMLElement.prototype, {
+      offsetHeight: { get: () => 44, configurable: true },
+      offsetWidth: { get: () => 800, configurable: true },
+    });
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url.startsWith("/admin/users")) {
+        return Promise.resolve({
+          data: Array.from({ length: 200 }, (_, i) => ({
+            id: `u-${i}`,
+            email: `user${i}@example.com`,
+            role: "viewer",
+            is_active: true,
+            created_at: "2026-01-01T00:00:00Z",
+          })),
+        });
+      }
+      if (url.startsWith("/admin/stats")) {
+        return Promise.resolve({
+          data: {
+            total_users: 200,
+            active_users: 200,
+            users_by_role: { viewer: 200 },
+            total_alerts: 0,
+            total_watchlists: 0,
+          },
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+  });
+
+  afterEach(() => {
+    if (originalOffsetHeight) Object.defineProperty(HTMLElement.prototype, "offsetHeight", originalOffsetHeight);
+    if (originalOffsetWidth) Object.defineProperty(HTMLElement.prototype, "offsetWidth", originalOffsetWidth);
+    vi.mocked(api.get).mockReset();
+    vi.mocked(api.get).mockResolvedValue({ data: [] });
+  });
+
+  it("mounts only a window of 200 user rows", async () => {
+    renderAt("/admin?tab=users");
+
+    expect(await screen.findByText("Users (200)")).toBeInTheDocument();
+
+    const scroller = screen.getByTestId("admin-users-virtual-scroll");
+    // The virtualizer measures the scroll element in a layout effect,
+    // so give the resulting re-render a tick to land.
+    const rows = await waitFor(() => {
+      const mounted = scroller.querySelectorAll("[data-index]");
+      expect(mounted.length).toBeGreaterThan(0);
+      return mounted;
+    });
+    expect(rows.length).toBeLessThan(50);
+
+    // Mounted rows carry real cell content.
+    const firstRow = rows[0] as HTMLElement;
+    const idx = Number(firstRow.getAttribute("data-index"));
+    expect(firstRow.textContent).toContain(`user${idx}@example.com`);
+    expect(firstRow.textContent).toContain("active");
   });
 });

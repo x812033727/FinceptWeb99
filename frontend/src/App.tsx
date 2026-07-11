@@ -9,7 +9,7 @@ import { PageSkeleton } from "@/components/Skeleton";
 import Toaster from "@/components/Toaster";
 import { CommandPaletteProvider } from "@/components/CommandPalette";
 import LoginPage from "@/pages/LoginPage";
-import { pageLoaders } from "@/pageLoaders";
+import { pageLoaders, prefetchPage } from "@/pageLoaders";
 
 // Authenticated pages are split into their own chunks so the initial
 // bundle doesn't pay for code paths the user hasn't reached yet. The
@@ -62,6 +62,12 @@ export default function App() {
   const [booting, setBooting] = useState(true);
 
   useEffect(() => {
+    // Preheat the dashboard chunk while silentRefresh() is on the wire:
+    // the boot window is pure network wait, so kicking off the dynamic
+    // import now means the landing page's code is usually already in
+    // the module cache by the time React.lazy asks for it. prefetchPage
+    // dedupes and swallows errors, so this is a pure hint.
+    prefetchPage("/dashboard");
     silentRefresh().finally(() => setBooting(false));
   }, []);
 

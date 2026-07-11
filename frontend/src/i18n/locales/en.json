@@ -196,6 +196,7 @@
     "remaining": "remaining",
     "market_overview": "Market Overview",
     "quick_access": "Quick Access",
+    "intel_feed": "Intel Feed",
     "latest_news": "US News",
     "latest_tw_news": "TW News",
     "latest_global_news": "International",
@@ -230,6 +231,11 @@
       "nasdaq100": "NASDAQ 100",
       "russell2000": "Russell 2000",
       "gold_etf": "Gold ETF"
+    },
+    "sentiment": {
+      "bullish": "Bullish",
+      "bearish": "Bearish",
+      "neutral": "Neutral"
     }
   },
   "market": {

@@ -165,4 +165,29 @@
   .num {
     font-variant-numeric: tabular-nums;
   }
+
+  /* Tick flash — brief background tint when a live price moves.
+     Colors go through the --up/--down tokens so the flash follows the
+     [data-market-colors] convention flip and light-theme overrides.
+     Applied per-tick by components (e.g. DashboardPage IndexCard). */
+  @keyframes flash-up {
+    from { background-color: hsl(var(--up) / 0.18); }
+    to   { background-color: transparent; }
+  }
+  @keyframes flash-down {
+    from { background-color: hsl(var(--down) / 0.18); }
+    to   { background-color: transparent; }
+  }
+  .animate-flash-up {
+    animation: flash-up 300ms ease-out;
+  }
+  .animate-flash-down {
+    animation: flash-down 300ms ease-out;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .animate-flash-up,
+    .animate-flash-down {
+      animation: none;
+    }
+  }
 }

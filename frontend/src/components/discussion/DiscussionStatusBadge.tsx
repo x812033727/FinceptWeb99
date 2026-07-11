@@ -5,8 +5,8 @@ type Status = "draft" | "running" | "done" | string;
 
 const STYLES: Record<string, string> = {
   draft:   "border-muted-foreground/30 text-muted-foreground bg-muted/40",
-  running: "border-amber-700/50 text-amber-300 bg-amber-900/20 animate-pulse",
-  done:    "border-emerald-700/50 text-emerald-300 bg-emerald-900/20",
+  running: "border-warning/30 text-warning bg-warning/10 animate-pulse",
+  done:    "border-success/30 text-success bg-success/10",
 };
 
 // Small status pill on each session button. Maps backend's

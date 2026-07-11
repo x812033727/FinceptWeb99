@@ -55,13 +55,13 @@ export function RevenuePanel({ symbol }: { symbol: string }) {
                 </td>
                 <td className={`text-right py-1.5 px-2 font-medium ${
                   r.revenue_mom == null ? "text-muted-foreground"
-                  : r.revenue_mom >= 0 ? "text-green-400" : "text-red-400"
+                  : r.revenue_mom >= 0 ? "text-up" : "text-down"
                 }`}>
                   {r.revenue_mom == null ? "—" : fmtPct(r.revenue_mom, true)}
                 </td>
                 <td className={`text-right py-1.5 px-2 font-medium ${
                   r.revenue_yoy == null ? "text-muted-foreground"
-                  : r.revenue_yoy >= 0 ? "text-green-400" : "text-red-400"
+                  : r.revenue_yoy >= 0 ? "text-up" : "text-down"
                 }`}>
                   {r.revenue_yoy == null ? "—" : fmtPct(r.revenue_yoy, true)}
                 </td>

@@ -64,7 +64,7 @@ export function AutoPromoteSettings({
             type="checkbox"
             checked={enabled}
             onChange={(e) => setEnabled(e.target.checked)}
-            className="accent-emerald-500"
+            className="accent-success"
           />
           <span className="text-foreground font-medium">
             {t("discussion.auto_promote.title")}
@@ -125,8 +125,8 @@ export function AutoPromoteSettings({
             type="button"
             onClick={() => mut.mutate()}
             disabled={mut.isPending}
-            className="px-2 py-0.5 text-[10px] rounded bg-emerald-700 text-white
-                       hover:bg-emerald-600 disabled:opacity-50"
+            className="px-2 py-0.5 text-[10px] rounded bg-success text-white
+                       hover:bg-success/90 disabled:opacity-50"
           >
             {mut.isPending
               ? t("common.saving")

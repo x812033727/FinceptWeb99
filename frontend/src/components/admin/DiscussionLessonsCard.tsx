@@ -163,7 +163,7 @@ export function DiscussionLessonsCard() {
                     </div>
                     <button
                       onClick={() => handleDelete(row.id)}
-                      className="text-xs px-2 py-0.5 rounded border border-red-800/50 text-red-300 hover:bg-red-900/30"
+                      className="text-xs px-2 py-0.5 rounded border border-danger/30 text-danger hover:bg-danger/10"
                     >
                       {t("discussion_lessons.delete")}
                     </button>

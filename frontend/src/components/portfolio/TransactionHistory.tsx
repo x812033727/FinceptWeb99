@@ -77,8 +77,8 @@ export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
                   <td className="py-1.5 px-2 font-medium text-primary">{tx.symbol}</td>
                   <td className="py-1.5 px-2 text-muted-foreground">{tx.market}</td>
                   <td className={`py-1.5 px-2 font-medium capitalize ${
-                    tx.tx_type === "buy"      ? "text-green-400"
-                    : tx.tx_type === "sell"   ? "text-red-400"
+                    tx.tx_type === "buy"      ? "text-up"
+                    : tx.tx_type === "sell"   ? "text-down"
                     : "text-amber-400"
                   }`}>{tx.tx_type}</td>
                   <td className="py-1.5 px-2 text-right text-foreground">
@@ -107,7 +107,7 @@ export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
                       onClick={() => {
                         if (confirm(t("portfolio.confirm_delete_tx"))) deleteTx.mutate(tx.id);
                       }}
-                      className="text-muted-foreground hover:text-red-400"
+                      className="text-muted-foreground hover:text-danger"
                       title={t("common.delete")}
                     >×</button>
                   </td>

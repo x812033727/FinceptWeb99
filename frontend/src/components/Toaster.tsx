@@ -3,9 +3,9 @@ import { useToastStore, type ToastSeverity } from "@/store/toastStore";
 
 const severityStyles: Record<ToastSeverity, { bar: string; bg: string; icon: string }> = {
   info:    { bar: "bg-blue-500",   bg: "bg-blue-950/40 border-blue-900/50",   icon: "ⓘ" },
-  success: { bar: "bg-green-500",  bg: "bg-green-950/40 border-green-900/50", icon: "✓" },
-  warning: { bar: "bg-amber-500",  bg: "bg-amber-950/40 border-amber-900/50", icon: "!" },
-  error:   { bar: "bg-red-500",    bg: "bg-red-950/40 border-red-900/50",     icon: "×" },
+  success: { bar: "bg-success",  bg: "bg-success/15 border-success/30", icon: "✓" },
+  warning: { bar: "bg-warning",  bg: "bg-warning/15 border-warning/30", icon: "!" },
+  error:   { bar: "bg-danger",    bg: "bg-danger/15 border-danger/30",     icon: "×" },
 };
 
 export default function Toaster() {

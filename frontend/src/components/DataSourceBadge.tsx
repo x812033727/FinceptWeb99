@@ -17,7 +17,7 @@ export function DataSourceBadge({ source }: { source: string | undefined | null 
     return (
       <span
         title={t("market.source_badge.finmind_tooltip")}
-        className="ml-1.5 text-[10px] uppercase font-medium px-1 py-px rounded bg-amber-500/10 text-amber-400 border border-amber-500/30"
+        className="ml-1.5 text-[10px] uppercase font-medium px-1 py-px rounded bg-warning/10 text-warning border border-warning/30"
       >
         {t("market.source_badge.finmind_label")}
       </span>
@@ -27,7 +27,7 @@ export function DataSourceBadge({ source }: { source: string | undefined | null 
     return (
       <span
         title={t("market.source_badge.stooq_tooltip")}
-        className="ml-1.5 text-[10px] uppercase font-medium px-1 py-px rounded bg-amber-500/10 text-amber-400 border border-amber-500/30"
+        className="ml-1.5 text-[10px] uppercase font-medium px-1 py-px rounded bg-warning/10 text-warning border border-warning/30"
       >
         {t("market.source_badge.stooq_label")}
       </span>
@@ -37,7 +37,7 @@ export function DataSourceBadge({ source }: { source: string | undefined | null 
     return (
       <span
         title={t("market.source_badge.unavailable_tooltip")}
-        className="ml-1.5 text-[10px] uppercase font-medium px-1 py-px rounded bg-red-500/10 text-red-400 border border-red-500/30"
+        className="ml-1.5 text-[10px] uppercase font-medium px-1 py-px rounded bg-danger/10 text-danger border border-danger/30"
       >
         {t("market.source_badge.unavailable_label")}
       </span>

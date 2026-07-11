@@ -1183,7 +1183,7 @@ export default function DiscussionPage() {
               </span>
               {t("discussion.topic_label")}
               {topicDirty && (
-                <span className="ml-1 text-[10px] text-amber-400">
+                <span className="ml-1 text-[10px] text-warning">
                   {t("discussion.unsaved")}
                 </span>
               )}
@@ -1229,7 +1229,7 @@ export default function DiscussionPage() {
               </span>
               {t("discussion.rules_label")}
               {rulesDirty && (
-                <span className="ml-1 text-[10px] text-amber-400">
+                <span className="ml-1 text-[10px] text-warning">
                   {t("discussion.unsaved")}
                 </span>
               )}
@@ -1323,7 +1323,7 @@ export default function DiscussionPage() {
             className="bg-card border border-border rounded px-2 py-1 text-foreground focus:outline-none focus:border-primary/50 disabled:opacity-60 min-h-[32px]"
           />
           {asOfDate && (
-            <span className="px-1.5 py-0.5 rounded text-[10px] border border-amber-800/50 bg-amber-900/20 text-amber-300">
+            <span className="px-1.5 py-0.5 rounded text-[10px] border border-warning/30 bg-warning/10 text-warning">
               {t("discussion.backtest_badge")}
             </span>
           )}
@@ -1379,7 +1379,7 @@ export default function DiscussionPage() {
             {isStreaming ? (
               <button
                 onClick={stopStreaming}
-                className="px-3 py-1.5 rounded-md bg-red-900/30 border border-red-800 text-red-400 text-xs hover:bg-red-900/50 transition-colors min-h-[36px]"
+                className="px-3 py-1.5 rounded-md bg-danger/10 border border-danger/40 text-danger text-xs hover:bg-danger/20 transition-colors min-h-[36px]"
               >
                 {t("ai.stop")}
               </button>
@@ -1437,7 +1437,7 @@ export default function DiscussionPage() {
                 concludeMut.isPending ||
                 (detail?.current_round ?? 0) === 0
               }
-              className="px-3 py-1.5 rounded-md border border-amber-800/50 text-amber-300 text-xs hover:bg-amber-900/20 transition-colors disabled:opacity-50 min-h-[36px]"
+              className="px-3 py-1.5 rounded-md border border-warning/30 text-warning text-xs hover:bg-warning/10 transition-colors disabled:opacity-50 min-h-[36px]"
             >
               {concludeMut.isPending ? t("common.computing") : t("discussion.conclude")}
             </button>
@@ -1490,7 +1490,7 @@ export default function DiscussionPage() {
                 <DropdownMenuItem
                   onSelect={() => deleteMut.mutate(selectedId!)}
                   disabled={deleteMut.isPending || isStreaming}
-                  className="text-red-400 focus:text-red-300"
+                  className="text-danger focus:text-danger/80"
                 >
                   <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                   {t("common.delete")}
@@ -1543,13 +1543,13 @@ export default function DiscussionPage() {
               }
             }}
             disabled={!injectDraft.trim() || injectMut.isPending}
-            className="px-2.5 py-1 rounded text-[11px] border border-amber-800/50 text-amber-300 hover:bg-amber-900/20 transition-colors disabled:opacity-40 min-h-[32px]"
+            className="px-2.5 py-1 rounded text-[11px] border border-warning/30 text-warning hover:bg-warning/10 transition-colors disabled:opacity-40 min-h-[32px]"
           >
             {injectMut.isPending ? t("common.saving") : t("discussion.inject_send")}
           </button>
         </div>
         {injectMut.isError && (
-          <p className="text-[10px] text-red-400">
+          <p className="text-[10px] text-danger">
             {(injectMut.error as Error)?.message ?? t("common.error")}
           </p>
         )}
@@ -1681,7 +1681,7 @@ export default function DiscussionPage() {
             opening anything. */}
         <div className="hidden lg:block sticky top-0 z-10 border-b border-border bg-card/95 backdrop-blur px-4 py-2 shrink-0">
           {streamError && (
-            <p className="text-xs text-red-400 bg-red-950/30 border border-red-900/50 rounded px-2 py-1 mb-2">
+            <p className="text-xs text-danger bg-danger/10 border border-danger/30 rounded px-2 py-1 mb-2">
               {streamError}
             </p>
           )}
@@ -1731,7 +1731,7 @@ export default function DiscussionPage() {
               </span>
             )}
             {(topicDirty || rulesDirty) && (
-              <span className="text-[10px] text-amber-400 ml-auto shrink-0">
+              <span className="text-[10px] text-warning ml-auto shrink-0">
                 {t("discussion.unsaved")}
               </span>
             )}
@@ -1980,7 +1980,7 @@ export default function DiscussionPage() {
           style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 0.75rem)" }}
         >
           {streamError && (
-            <p className="text-[11px] text-red-400 bg-red-950/30 border border-red-900/50 rounded px-2 py-1 mb-2">
+            <p className="text-[11px] text-danger bg-danger/10 border border-danger/30 rounded px-2 py-1 mb-2">
               {streamError}
             </p>
           )}

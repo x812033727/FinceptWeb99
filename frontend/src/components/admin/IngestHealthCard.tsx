@@ -69,7 +69,7 @@ export function deriveIngestBadge(r: IngestHealth): { text: string; cls: string 
   if (r.ok) {
     return {
       text: "ok",
-      cls: "bg-green-500/10 text-green-400 border border-green-500/30",
+      cls: "bg-success/10 text-success border border-success/30",
     };
   }
   const errLower = r.error?.toLowerCase() ?? "";
@@ -88,12 +88,12 @@ export function deriveIngestBadge(r: IngestHealth): { text: string; cls: string 
   if (errLower.startsWith("skipped")) {
     return {
       text: "skipped",
-      cls: "bg-amber-500/10 text-amber-400 border border-amber-500/30",
+      cls: "bg-warning/10 text-warning border border-warning/30",
     };
   }
   return {
     text: "error",
-    cls: "bg-red-500/10 text-red-400 border border-red-500/30",
+    cls: "bg-danger/10 text-danger border border-danger/30",
   };
 }
 
@@ -280,7 +280,7 @@ export function deriveSchedulerBadge(
   if (hb.stale && hb.last_beat_at === null) {
     return {
       text: "scheduler dead",
-      cls: "bg-red-500/10 text-red-400 border border-red-500/30",
+      cls: "bg-danger/10 text-danger border border-danger/30",
       tooltip:
         `No heartbeat in Redis. APScheduler may have crashed — ` +
         `check pod logs and confirm the FastAPI lifespan started ` +
@@ -290,7 +290,7 @@ export function deriveSchedulerBadge(
   if (hb.stale) {
     return {
       text: `scheduler stale (${Math.round(hb.age_seconds ?? 0)}s)`,
-      cls: "bg-amber-500/10 text-amber-400 border border-amber-500/30",
+      cls: "bg-warning/10 text-warning border border-warning/30",
       tooltip:
         `Last heartbeat ${Math.round(hb.age_seconds ?? 0)}s ago — ` +
         `expected every 30s. Event loop may be wedged on a slow ` +
@@ -299,7 +299,7 @@ export function deriveSchedulerBadge(
   }
   return {
     text: `scheduler ok (${Math.round(hb.age_seconds ?? 0)}s)`,
-    cls: "bg-green-500/10 text-green-400 border border-green-500/30",
+    cls: "bg-success/10 text-success border border-success/30",
     tooltip:
       `Heartbeat ${Math.round(hb.age_seconds ?? 0)}s ago — within the ` +
       `60s freshness budget. Version: ${hb.version ?? "?"}.`,
@@ -377,10 +377,10 @@ export function IngestHealthCard() {
       />
       {open && (<>
       {retry.isSuccess && (
-        <p className="text-xs text-green-500">{retry.data.message}</p>
+        <p className="text-xs text-success">{retry.data.message}</p>
       )}
       {retry.isError && (
-        <p className="text-xs text-red-500">Retry request failed. Please try again.</p>
+        <p className="text-xs text-danger">Retry request failed. Please try again.</p>
       )}
 
       {isLoading ? (
@@ -439,7 +439,7 @@ export function IngestHealthCard() {
                     {isDataStale(r) && (
                       <span
                         title={`資料新鮮度：寫入的最新 ts 為 ${r.latest_data_ts} — 比 last_run_at 落後超過 2 日`}
-                        className="inline-block mt-0.5 px-1 py-0.5 rounded text-[9px] bg-amber-500/10 text-amber-400 border border-amber-500/30"
+                        className="inline-block mt-0.5 px-1 py-0.5 rounded text-[9px] bg-warning/10 text-warning border border-warning/30"
                       >
                         data stale
                       </span>

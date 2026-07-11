@@ -545,7 +545,7 @@ export default function ScreenerPage() {
                         ? <span className="text-muted-foreground">—</span>
                         : row.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </span>
-                    <span className={`text-right text-sm ${unavailable ? "text-muted-foreground" : pos ? "text-green-400" : "text-red-400"}`}>
+                    <span className={`text-right text-sm ${unavailable ? "text-muted-foreground" : pos ? "text-up" : "text-down"}`}>
                       {unavailable ? "—" : `${pos ? "+" : ""}${row.change_pct.toFixed(2)}%`}
                     </span>
                     <span className="text-right text-sm text-muted-foreground hidden sm:block">

@@ -207,9 +207,9 @@ export default function SettingsPage() {
               />
             </div>
           ))}
-          {pwError && <p className="text-xs text-red-400">{pwError}</p>}
+          {pwError && <p className="text-xs text-danger">{pwError}</p>}
           {pwSuccess && (
-            <p className="text-xs text-green-400">Password changed successfully.</p>
+            <p className="text-xs text-success">Password changed successfully.</p>
           )}
           <button
             type="submit"
@@ -224,8 +224,8 @@ export default function SettingsPage() {
       {/* API Keys */}
       <Section title="API Keys">
         {newKey && (
-          <div className="bg-amber-500/10 border border-amber-500/30 rounded p-3 text-xs space-y-1">
-            <p className="font-medium text-amber-400">
+          <div className="bg-warning/10 border border-warning/30 rounded p-3 text-xs space-y-1">
+            <p className="font-medium text-warning">
               Copy this key now — it will not be shown again.
             </p>
             <code className="block break-all text-foreground">{newKey}</code>
@@ -253,7 +253,7 @@ export default function SettingsPage() {
             {createKey.isPending ? "…" : "Generate"}
           </button>
         </div>
-        {keyError && <p className="text-xs text-red-400">{keyError}</p>}
+        {keyError && <p className="text-xs text-danger">{keyError}</p>}
 
         {apiKeys.length === 0 ? (
           <p className="text-xs text-muted-foreground">No API keys yet.</p>
@@ -276,7 +276,7 @@ export default function SettingsPage() {
                 <button
                   onClick={() => deleteKey.mutate(k.id)}
                   aria-label="Delete API key"
-                  className="text-muted-foreground hover:text-red-400 transition-colors ml-3 min-h-[32px] min-w-[32px] flex items-center justify-center rounded hover:bg-accent/10"
+                  className="text-muted-foreground hover:text-danger transition-colors ml-3 min-h-[32px] min-w-[32px] flex items-center justify-center rounded hover:bg-accent/10"
                 >
                   <X className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>

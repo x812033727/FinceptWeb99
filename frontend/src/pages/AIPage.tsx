@@ -602,7 +602,7 @@ export default function AIPage() {
                 className={cn(
                   "hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] transition-colors min-h-[28px] disabled:opacity-50",
                   useClaudeAgent
-                    ? "border-amber-700/60 bg-amber-900/30 text-amber-300 hover:bg-amber-900/50"
+                    ? "border-warning/30 bg-warning/10 text-warning hover:bg-warning/20"
                     : "border-border text-muted-foreground hover:text-foreground hover:border-primary/40"
                 )}
               >
@@ -615,7 +615,7 @@ export default function AIPage() {
                 turn it off. Distinct from the toggle above. */}
             {effectiveIsClaudeAgent && !claudeAgentToggleVisible && (
               <span
-                className="hidden sm:inline-flex items-center gap-1 text-[11px] text-amber-300"
+                className="hidden sm:inline-flex items-center gap-1 text-[11px] text-warning"
                 title={t("ai.tools_on_hint")}
               >
                 <Wrench className="h-3 w-3" aria-hidden="true" />
@@ -682,7 +682,7 @@ export default function AIPage() {
             <MessageBubble key={i} msg={msg} />
           ))}
           {error && (
-            <div className="text-xs text-red-400 bg-red-950/30 border border-red-900/50 rounded px-3 py-2">
+            <div className="text-xs text-danger bg-danger/10 border border-danger/30 rounded px-3 py-2">
               {error}
             </div>
           )}

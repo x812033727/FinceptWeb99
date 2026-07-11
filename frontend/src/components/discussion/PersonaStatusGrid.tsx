@@ -87,7 +87,7 @@ export function PersonaStatusGrid({
                 })}
                 disabled={setStatus.isPending}
                 className="ml-1 text-[10px] text-muted-foreground
-                           hover:text-emerald-300 disabled:opacity-50"
+                           hover:text-success disabled:opacity-50"
               >
                 {t("discussion.persona_status.thaw")}
               </button>

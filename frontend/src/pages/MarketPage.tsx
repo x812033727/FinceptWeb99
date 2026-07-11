@@ -83,7 +83,7 @@ function ChangeCell({ value, unavailable }: { value: number | null | undefined; 
   }
   const pos = value >= 0;
   return (
-    <span className={pos ? "text-green-400" : "text-red-400"}>
+    <span className={pos ? "text-up" : "text-down"}>
       {formatPct(value)}
     </span>
   );
@@ -100,7 +100,7 @@ function IndexCard({ idx, unavailable }: { idx: MarketIndex; unavailable?: boole
           ? <span className="text-muted-foreground">—</span>
           : idx.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}
       </div>
-      <div className={`text-sm font-medium ${unavailable ? "text-muted-foreground" : pos ? "text-green-400" : "text-red-400"}`}>
+      <div className={`text-sm font-medium ${unavailable ? "text-muted-foreground" : pos ? "text-up" : "text-down"}`}>
         {unavailable ? "—" : formatPct(idx.change_pct)}
       </div>
     </div>
@@ -207,7 +207,7 @@ export default function MarketPage() {
       {/* degraded-source banner — fires for any market where at least one
           row is fully blocked. */}
       {rows.some((r) => r.data_source === "unavailable") && (
-        <div className="bg-amber-500/5 border border-amber-500/30 text-amber-300 rounded-lg px-3 py-2 text-xs sm:text-sm">
+        <div className="bg-warning/5 border border-warning/30 text-warning rounded-lg px-3 py-2 text-xs sm:text-sm">
           {t("market.degraded_banner")}
         </div>
       )}

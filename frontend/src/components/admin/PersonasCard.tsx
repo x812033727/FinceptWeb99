@@ -56,7 +56,7 @@ function PersonaRow({ p }: { p: PersonaConfig }) {
       <div>
         <span className="font-medium text-sm">{p.name}</span>
         {p.is_overridden && (
-          <span className="ml-1.5 text-[9px] border border-amber-400/30 text-amber-400 bg-amber-400/10 px-1 rounded">
+          <span className="ml-1.5 text-[9px] border border-warning/30 text-warning bg-warning/10 px-1 rounded">
             {t("personas.overridden")}
           </span>
         )}

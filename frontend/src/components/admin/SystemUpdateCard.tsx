@@ -24,7 +24,7 @@ export function SystemUpdateCard() {
         {" · "}
         Latest <span className="font-mono">v{version.latest}</span>
         {version.update_available && (
-          <span className="ml-2 text-amber-500">update available</span>
+          <span className="ml-2 text-warning">update available</span>
         )}
       </>
     );
@@ -40,15 +40,15 @@ export function SystemUpdateCard() {
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="space-y-1">
             {checkError && (
-              <p className="text-xs text-red-500">Failed to reach GitHub. Try again.</p>
+              <p className="text-xs text-danger">Failed to reach GitHub. Try again.</p>
             )}
             {status && (
               <p
                 className={`text-xs ${
                   status === "started"
-                    ? "text-green-500"
+                    ? "text-success"
                     : status === "failed"
-                    ? "text-red-500"
+                    ? "text-danger"
                     : "text-muted-foreground"
                 }`}
               >
@@ -67,7 +67,7 @@ export function SystemUpdateCard() {
             <button
               disabled={!version?.update_available || trigger.isPending || check.isPending}
               onClick={() => trigger.mutate()}
-              className="text-xs px-3 py-1.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="text-xs px-3 py-1.5 rounded border border-warning/40 bg-warning/10 text-warning hover:bg-warning/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {trigger.isPending ? "Updating…" : "Update now"}
             </button>

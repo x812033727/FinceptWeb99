@@ -86,8 +86,8 @@ export function ValuationBandPanel({ symbol }: { symbol: string }) {
           <div className="text-xs text-muted-foreground">{t("stock.valuation.z_score")}</div>
           <div className={`text-lg font-semibold ${
             stats.current_z == null ? "text-muted-foreground"
-            : stats.current_z > 1 ? "text-red-400"
-            : stats.current_z < -1 ? "text-green-400"
+            : stats.current_z > 1 ? "text-danger"
+            : stats.current_z < -1 ? "text-success"
             : "text-foreground"
           }`}>
             {stats.current_z == null ? "—" : stats.current_z.toFixed(2)}

@@ -186,7 +186,7 @@ export function ExpertEvaluationCard({ detail }: { portfolioId: string; detail: 
         {streaming ? (
           <button
             onClick={stop}
-            className="px-4 py-1.5 rounded bg-red-900/30 border border-red-800 text-red-400 text-sm hover:bg-red-900/50"
+            className="px-4 py-1.5 rounded bg-danger/10 border border-danger/40 text-danger text-sm hover:bg-danger/20"
           >
             {t("ai.stop")}
           </button>
@@ -213,9 +213,9 @@ export function ExpertEvaluationCard({ detail }: { portfolioId: string; detail: 
                 <details key={tc.id} className="text-xs border border-border/60 rounded bg-muted/20 p-2">
                   <summary className="cursor-pointer flex items-center gap-2 list-none">
                     <span className={`inline-block w-2 h-2 rounded-full ${
-                      tc.status === "running" ? "bg-amber-400 animate-pulse"
-                      : tc.status === "error" ? "bg-red-500"
-                      : "bg-green-500"
+                      tc.status === "running" ? "bg-warning animate-pulse"
+                      : tc.status === "error" ? "bg-danger"
+                      : "bg-success"
                     }`} />
                     <span className="font-mono text-amber-300">{tc.name}</span>
                     <span className="text-muted-foreground">
@@ -240,7 +240,7 @@ export function ExpertEvaluationCard({ detail }: { portfolioId: string; detail: 
           </div>
 
           {error && (
-            <p className="text-xs text-red-400 bg-red-950/20 border border-red-900/40 rounded px-3 py-2">{error}</p>
+            <p className="text-xs text-danger bg-danger/10 border border-danger/30 rounded px-3 py-2">{error}</p>
           )}
 
           <p className="text-[10px] text-muted-foreground">

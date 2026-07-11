@@ -114,7 +114,7 @@ export function AutoRunConfigCard({
           </span>
           {t("discussion.auto_run_title")}
           {cfg?.enabled && (
-            <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-green-900/30 text-green-300 border border-green-800/50">
+            <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-success/10 text-success border border-success/30">
               ON
             </span>
           )}
@@ -132,7 +132,7 @@ export function AutoRunConfigCard({
               …
             </p>
           ) : isError ? (
-            <p className="text-[10px] text-red-400">
+            <p className="text-[10px] text-danger">
               {t("discussion.auto_run_load_failed")}
             </p>
           ) : (
@@ -231,7 +231,7 @@ export function AutoRunConfigCard({
               </div>
 
               {error && (
-                <p className="text-[10px] text-red-400">{error}</p>
+                <p className="text-[10px] text-danger">{error}</p>
               )}
 
               <div className="flex items-center gap-2">
@@ -246,7 +246,7 @@ export function AutoRunConfigCard({
                     : t("discussion.auto_run_save")}
                 </button>
                 {showSaved && (
-                  <span className="text-[10px] text-green-400">
+                  <span className="text-[10px] text-success">
                     ✓ {t("discussion.auto_run_saved")}
                   </span>
                 )}

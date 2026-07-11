@@ -262,7 +262,7 @@ export function StrategyTimelineCard({
                     type="checkbox"
                     checked={regimesOn}
                     onChange={(e) => setRegimesOn(e.target.checked)}
-                    className="accent-emerald-500"
+                    className="accent-success"
                   />
                   {t("discussion.timeline.regime_overlay")}
                 </label>

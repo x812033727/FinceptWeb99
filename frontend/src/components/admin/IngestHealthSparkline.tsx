@@ -63,7 +63,7 @@ export function classifyDay(day: SparklineDay | null): { cls: string; label: str
   }
   if (day.failed > 0) {
     return {
-      cls: "bg-red-500/40 border border-red-500/60",
+      cls: "bg-danger/40 border border-danger/60",
       label: "failed",
     };
   }
@@ -75,13 +75,13 @@ export function classifyDay(day: SparklineDay | null): { cls: string; label: str
   }
   if (day.skipped > 0 && day.ok === 0) {
     return {
-      cls: "bg-amber-500/40 border border-amber-500/60",
+      cls: "bg-warning/40 border border-warning/60",
       label: "skipped",
     };
   }
   if (day.ok > 0) {
     return {
-      cls: "bg-green-500/40 border border-green-500/60",
+      cls: "bg-success/40 border border-success/60",
       label: "ok",
     };
   }

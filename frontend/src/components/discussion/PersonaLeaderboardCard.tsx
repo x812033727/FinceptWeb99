@@ -21,8 +21,8 @@ type SortKey = "win_rate" | "participation" | "weight" | "trend";
 
 function trendIndicator(delta: number | null): { glyph: string; tone: string } {
   if (delta === null) return { glyph: "→", tone: "text-muted-foreground" };
-  if (delta > 0.02) return { glyph: "↑", tone: "text-emerald-300" };
-  if (delta < -0.02) return { glyph: "↓", tone: "text-red-300" };
+  if (delta > 0.02) return { glyph: "↑", tone: "text-success" };
+  if (delta < -0.02) return { glyph: "↓", tone: "text-danger" };
   return { glyph: "→", tone: "text-muted-foreground" };
 }
 
@@ -205,10 +205,10 @@ function Row({
     row.win_attribution_rate === null
       ? "text-muted-foreground"
       : row.win_attribution_rate >= 0.6
-        ? "text-emerald-300"
+        ? "text-success"
         : row.win_attribution_rate >= 0.4
-          ? "text-amber-300"
-          : "text-red-300";
+          ? "text-warning"
+          : "text-danger";
   return (
     <tr className="border-b border-border/40">
       <td className="py-1">

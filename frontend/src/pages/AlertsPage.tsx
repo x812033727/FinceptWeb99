@@ -118,7 +118,7 @@ export default function AlertsPage() {
             />
           </div>
         </div>
-        {error && <p className="text-xs text-red-400">{error}</p>}
+        {error && <p className="text-xs text-danger">{error}</p>}
         <button
           type="submit"
           disabled={createMut.isPending}
@@ -173,7 +173,7 @@ function AlertRow({ alert: a, onDelete }: { alert: Alert; onDelete: () => void }
           {a.market}
         </span>
         <span className="text-muted-foreground">
-          <span className={a.condition === "above" ? "text-green-400" : "text-red-400"}>
+          <span className={a.condition === "above" ? "text-up" : "text-down"}>
             {a.condition === "above" ? t("alerts.above") : t("alerts.below")}
           </span>{" "}
           <span className="text-foreground font-medium">
@@ -183,14 +183,14 @@ function AlertRow({ alert: a, onDelete }: { alert: Alert; onDelete: () => void }
           </span>
         </span>
         {a.triggered && (
-          <span className="text-xs text-amber-400 border border-amber-400/30 px-1.5 py-0.5 rounded">
+          <span className="text-xs text-warning border border-warning/30 px-1.5 py-0.5 rounded">
             {t("alerts.triggered")}
           </span>
         )}
       </div>
       <button
         onClick={onDelete}
-        className="text-muted-foreground hover:text-red-400 transition-colors text-lg leading-none"
+        className="text-muted-foreground hover:text-danger transition-colors text-lg leading-none"
         title={t("alerts.delete")}
       >
         ×

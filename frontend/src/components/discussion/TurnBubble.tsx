@@ -29,12 +29,12 @@ const STANCE_ICON: Record<
 > = {
   agree: {
     Icon: Check,
-    cls: "bg-green-900/30 text-green-300 ring-green-800/50",
+    cls: "bg-success/10 text-success ring-success/30",
     titleKey: "discussion.stance.agree",
   },
   dissent: {
     Icon: X,
-    cls: "bg-red-900/30 text-red-300 ring-red-800/50",
+    cls: "bg-danger/10 text-danger ring-danger/30",
     titleKey: "discussion.stance.dissent",
   },
   supplement: {
@@ -44,7 +44,7 @@ const STANCE_ICON: Record<
   },
   user_input: {
     Icon: Edit3,
-    cls: "bg-amber-900/30 text-amber-300 ring-amber-800/50",
+    cls: "bg-warning/10 text-warning ring-warning/30",
     titleKey: "discussion.stance.user_input",
   },
 };

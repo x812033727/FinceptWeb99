@@ -82,7 +82,7 @@ function SystemTaskRow({ tcfg }: { tcfg: SystemTaskConfig }) {
           {tcfg.description}
         </div>
         {tcfg.is_overridden && (
-          <span className="inline-block mt-1 text-[9px] border border-amber-400/30 text-amber-400 bg-amber-400/10 px-1 rounded">
+          <span className="inline-block mt-1 text-[9px] border border-warning/30 text-warning bg-warning/10 px-1 rounded">
             {t("personas.overridden")}
           </span>
         )}
@@ -109,8 +109,8 @@ function SystemTaskRow({ tcfg }: { tcfg: SystemTaskConfig }) {
           <div
             className={`text-[10px] rounded px-2 py-1 border ${
               testResult.ok
-                ? "border-green-700/50 bg-green-900/20 text-green-300"
-                : "border-red-700/50 bg-red-900/20 text-red-300"
+                ? "border-success/30 bg-success/10 text-success"
+                : "border-danger/30 bg-danger/10 text-danger"
             }`}
           >
             {testResult.ok

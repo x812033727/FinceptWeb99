@@ -41,9 +41,9 @@ export function BaselineDeltaBadge({
     pctChange === null
       ? "bg-muted/40 text-muted-foreground border-border"
       : pctChange >= 5
-        ? "bg-emerald-900/40 text-emerald-200 border-emerald-700/50"
+        ? "bg-success/15 text-success border-success/30"
         : pctChange <= -5
-          ? "bg-amber-900/40 text-amber-200 border-amber-700/50"
+          ? "bg-warning/15 text-warning border-warning/30"
           : "bg-muted/40 text-muted-foreground border-border";
 
   return (

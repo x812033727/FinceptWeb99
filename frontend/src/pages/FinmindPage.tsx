@@ -167,7 +167,7 @@ export default function FinmindPage() {
               <span className="font-mono text-primary">{datasets.length}</span> 個資料集
             </span>
             <span className="rounded border border-border bg-background px-2 py-1">
-              <span className="font-mono text-green-600">{availableCount}</span> 個目前可查
+              <span className="font-mono text-success">{availableCount}</span> 個目前可查
             </span>
             <span className="rounded border border-border bg-background px-2 py-1">
               FinMind 回應格式相容
@@ -215,7 +215,7 @@ export default function FinmindPage() {
               <ul className="mb-5 flex-1 space-y-1.5 text-sm">
                 {tier.features.map((f) => (
                   <li key={f} className="flex gap-2">
-                    <span className="text-green-600">✓</span>
+                    <span className="text-success">✓</span>
                     <span>{f}</span>
                   </li>
                 ))}
@@ -317,7 +317,7 @@ export default function FinmindPage() {
                       {d.dataset_code}
                       {d.sponsor_tier && (
                         <span
-                          className="ml-1 rounded bg-amber-100 px-1 text-[10px] text-amber-800 dark:bg-amber-900 dark:text-amber-200"
+                          className="ml-1 rounded bg-warning/15 px-1 text-[10px] text-warning"
                           title="FinMind Sponsor 級資料集"
                         >
                           sponsor
@@ -336,7 +336,7 @@ export default function FinmindPage() {
                     </td>
                     <td className="px-3 py-2">
                       {d.available ? (
-                        <span className="rounded bg-green-100 px-1.5 py-0.5 text-[10px] text-green-800 dark:bg-green-900 dark:text-green-200">
+                        <span className="rounded bg-success/15 px-1.5 py-0.5 text-[10px] text-success">
                           可查
                         </span>
                       ) : (

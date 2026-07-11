@@ -89,7 +89,7 @@ export function CalibrationReviewCard() {
     : <span>{queue.length} strategy(ies) awaiting review</span>;
 
   return (
-    <div className="bg-card border border-amber-700/40 rounded-lg p-4 space-y-3">
+    <div className="bg-card border border-warning/30 rounded-lg p-4 space-y-3">
       <CollapsibleHeader
         open={open} toggle={toggle}
         title="🛡️ Calibration deployment gate"
@@ -149,7 +149,7 @@ function PendingRow({
               ({strategy.market})
             </span>
           </div>
-          <div className="text-[11px] text-amber-300 truncate">
+          <div className="text-[11px] text-warning truncate">
             {payload.pending_reason ?? "Pending review"}
           </div>
           {payload.pending_at && (
@@ -164,8 +164,8 @@ function PendingRow({
             onClick={onReject}
             disabled={busy}
             className="px-3 py-1 text-xs border border-border rounded
-                       text-muted-foreground hover:text-red-300
-                       hover:border-red-700/60 disabled:opacity-50"
+                       text-muted-foreground hover:text-danger
+                       hover:border-danger/30 disabled:opacity-50"
           >
             Reject
           </button>
@@ -173,8 +173,8 @@ function PendingRow({
             type="button"
             onClick={onApprove}
             disabled={busy}
-            className="px-3 py-1 text-xs bg-emerald-700 text-white rounded
-                       hover:bg-emerald-600 disabled:opacity-50"
+            className="px-3 py-1 text-xs bg-success text-white rounded
+                       hover:bg-success/90 disabled:opacity-50"
           >
             Approve
           </button>
@@ -208,9 +208,9 @@ function PendingRow({
                     delta === null
                       ? "text-muted-foreground"
                       : delta > 0
-                        ? "text-emerald-300"
+                        ? "text-success"
                         : delta < 0
-                          ? "text-red-300"
+                          ? "text-danger"
                           : ""
                   }`}
                 >

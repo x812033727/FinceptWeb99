@@ -86,7 +86,7 @@ export function RoundSection({
             className={
               postMortemTurn
                 ? "px-2 py-0.5 text-[10px] rounded-full border bg-purple-900/30 text-purple-300 border-purple-800/50"
-                : "px-2 py-0.5 text-[10px] rounded-full border bg-amber-900/30 text-amber-300 border-amber-800/50"
+                : "px-2 py-0.5 text-[10px] rounded-full border bg-warning/10 text-warning border-warning/30"
             }
           >
             {postMortemTurn

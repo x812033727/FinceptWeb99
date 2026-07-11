@@ -21,8 +21,8 @@ export function PostMortemSkippedCard({
   const best = v.best_pct;
 
   return (
-    <div className="bg-emerald-950/20 border border-emerald-800/50 rounded-lg p-4 mt-4">
-      <h3 className="text-sm font-semibold text-emerald-300 mb-2">
+    <div className="bg-up/10 border border-up/30 rounded-lg p-4 mt-4">
+      <h3 className="text-sm font-semibold text-up mb-2">
         {t("discussion_post_mortem_skipped.title")}
       </h3>
       <p className="text-xs text-foreground/80 mb-2">
@@ -44,7 +44,7 @@ export function PostMortemSkippedCard({
           <p className="text-muted-foreground">
             {t("discussion_post_mortem_skipped.best_pct")}
           </p>
-          <p className="font-mono tabular-nums text-emerald-300">
+          <p className="font-mono tabular-nums text-up">
             {best != null
               ? `${best >= 0 ? "+" : ""}${best.toFixed(2)}%`
               : "—"}
@@ -62,10 +62,10 @@ export function PostMortemSkippedCard({
                 key={w.symbol}
                 className="flex items-center gap-2 text-xs"
               >
-                <span className="font-mono px-1.5 py-0.5 bg-emerald-900/30 text-emerald-200 rounded">
+                <span className="font-mono px-1.5 py-0.5 bg-up/10 text-up rounded">
                   {w.symbol}
                 </span>
-                <span className="font-mono tabular-nums text-emerald-300">
+                <span className="font-mono tabular-nums text-up">
                   {w.peak_pct >= 0 ? "+" : ""}
                   {w.peak_pct.toFixed(2)}%
                 </span>

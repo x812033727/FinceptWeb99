@@ -65,15 +65,15 @@ describe("ConclusionDiffCard", () => {
       reasoning_overlap: 0.85,
     };
     const { container: hc } = render(<ConclusionDiffCard diff={high} />);
-    expect(hc.querySelector(".text-emerald-300")).toBeTruthy();
+    expect(hc.querySelector(".text-success")).toBeTruthy();
 
     const mid: PostMortemDiff = { ...high, reasoning_overlap: 0.55 };
     const { container: mc } = render(<ConclusionDiffCard diff={mid} />);
-    expect(mc.querySelector(".text-amber-300")).toBeTruthy();
+    expect(mc.querySelector(".text-warning")).toBeTruthy();
 
     const low: PostMortemDiff = { ...high, reasoning_overlap: 0.2 };
     const { container: lc } = render(<ConclusionDiffCard diff={low} />);
-    expect(lc.querySelector(".text-red-300")).toBeTruthy();
+    expect(lc.querySelector(".text-danger")).toBeTruthy();
   });
 
   it("flags horizon change when time_horizon_changed is true", () => {

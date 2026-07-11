@@ -14,6 +14,7 @@ export function ValuationBandPanel({ symbol }: { symbol: string }) {
     queryKey: ["valuation-band", symbol, metric],
     queryFn: () => fetchValuationBand(symbol, metric),
     staleTime: 6 * 3_600_000,
+    gcTime: 24 * 3_600_000, // valuation tier — cache for a day
   });
 
   if (isLoading) return <Loading />;

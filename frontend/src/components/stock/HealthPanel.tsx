@@ -83,6 +83,7 @@ export function HealthPanel({ symbol }: { symbol: string }) {
     queryKey: ["health", symbol],
     queryFn: () => fetchHealth(symbol),
     staleTime: 6 * 3_600_000,    // 6 hours; quarterlies don't change often
+    gcTime: 24 * 3_600_000,      // fundamentals tier — cache for a day
   });
 
   if (isLoading) return <Loading />;

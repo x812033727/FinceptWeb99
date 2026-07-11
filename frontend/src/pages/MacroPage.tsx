@@ -140,6 +140,7 @@ export default function MacroPage() {
       queryKey: ["macro", ind.id],
       queryFn: () => fetchMacro(ind.id),
       staleTime: 3_600_000,
+      gcTime: 24 * 3_600_000, // macro series update daily/monthly — cache for a day
     })
   );
 

@@ -19,25 +19,38 @@ import api from "@/lib/api";
 import { formatQuoteFreshness } from "@/lib/freshness";
 import { DataSourceBadge } from "@/components/DataSourceBadge";
 import { DeltaText, Num } from "@/components/Num";
+import { useLiveQuote, useWsConnected } from "@/hooks/useWebSocket";
 
 // ── Market indices ─────────────────────────────────────────────────
 
 function IndexCard({ symbol, label }: { symbol: string; label: string }) {
   const { i18n } = useTranslation();
+  // WS-aware polling (PR-9): the card subscribes to the symbol's live
+  // WS stream via the rAF-batched quoteStore. While the socket is up
+  // AND a tick has landed for this symbol, the 30 s REST poll is
+  // paused — the WS delta path is fresher and cheaper. If the socket
+  // drops (or never authenticates), polling resumes automatically.
+  const live = useLiveQuote(symbol, "US");
+  const wsConnected = useWsConnected();
+  const wsLive = wsConnected && live?.price != null;
   const { data } = useQuery({
     queryKey: ["quote", "US", symbol],
     queryFn: () => api.get<Record<string, unknown>>(`/us/quote/${symbol}`).then((r) => r.data),
     staleTime: 30_000,
-    refetchInterval: 30_000,
+    refetchInterval: wsLive ? false : 30_000,
   });
 
-  const price = data?.price as number | undefined;
-  const changePct = data?.change_pct as number | undefined;
+  // Live-vs-REST precedence mirrors LiveQuoteHeader: the latest WS
+  // value wins as soon as it exists; the REST snapshot covers the gap
+  // before the first tick and off-hours.
+  const price = live?.price ?? (data?.price as number | undefined);
+  const changePct = live?.changePct ?? (data?.change_pct as number | undefined);
   // Backend returns data_source="unavailable" + price=0 when every
   // upstream fails. Render that as "—" instead of a misleading
   // 0.00 / +0.00% green pill that looks like the asset is at zero.
-  const unavailable = data?.data_source === "unavailable";
-  const tsMs = data?.ts as number | undefined;
+  const dataSource = live?.dataSource ?? (data?.data_source as string | undefined);
+  const unavailable = live?.price == null && data?.data_source === "unavailable";
+  const tsMs = live?.ts ?? (data?.ts as number | undefined);
   // Date-aware: "14:31" today, "4/29 14:31" any earlier day. Stops
   // weekend / off-hours views from looking like live prices.
   const localTime = formatQuoteFreshness(tsMs ?? null, i18n.language);
@@ -80,7 +93,7 @@ function IndexCard({ symbol, label }: { symbol: string; label: string }) {
       </div>
       <div className="text-xs text-muted-foreground mt-1 inline-flex items-center">
         {symbol}
-        <DataSourceBadge source={data?.data_source as string | undefined} />
+        <DataSourceBadge source={dataSource} />
       </div>
       {localTime && (
         <div className="text-[10px] text-muted-foreground/70 mt-0.5 tabular-nums">
@@ -170,6 +183,7 @@ function RecentNewsFeed({ market }: { market: "TW" | "GLOBAL" }) {
         .get(market === "TW" ? "/tw/news/recent?limit=20" : "/global/news/recent?limit=20")
         .then((r) => r.data),
     staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000, // news tier
   });
 
   if (isLoading) {
@@ -218,6 +232,7 @@ function OverseasIndicators() {
     // Same TTL as the backend cache so the UI doesn't poll faster
     // than the data refreshes upstream.
     staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000, // news tier
   });
 
   if (isLoading) {
@@ -355,6 +370,7 @@ function RecentAnnouncements({ market }: { market: "TW" | "US" }) {
         .get(`/announcements/recent?market=${market}&limit=20`)
         .then((r) => r.data),
     staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000, // news tier
   });
 
   if (isLoading) {

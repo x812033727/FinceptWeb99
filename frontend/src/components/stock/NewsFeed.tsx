@@ -18,6 +18,7 @@ export function NewsFeed({ symbol, market }: { symbol: string; market: "US" | "T
     queryKey: ["news", market, symbol],
     queryFn: () => api.get(`/${prefix}/news/${symbol}`).then((r) => r.data),
     staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000, // news tier — short-lived, don't hold old feeds in memory
   });
 
   if (isLoading) {

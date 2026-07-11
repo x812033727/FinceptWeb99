@@ -9,6 +9,7 @@ export function FinancialsPanel({ symbol }: { symbol: string }) {
     queryKey: ["financials", "US", symbol],
     queryFn: () => fetchFinancials(symbol),
     staleTime: 3_600_000,
+    gcTime: 24 * 3_600_000, // fundamentals tier — keep cached across tab/page hops for a day
   });
 
   if (isLoading) return <Loading />;

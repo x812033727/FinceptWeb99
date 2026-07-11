@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useAuthStore } from "@/store/authStore";
@@ -55,6 +56,11 @@ const ROLE_COLORS: Record<string, string> = {
   analyst: "border-blue-400/30 text-blue-400 bg-blue-400/10",
   admin: "border-warning/30 text-warning bg-warning/10",
 };
+
+// Shared grid template for the users header row and virtualized data
+// rows — keep the two identical or columns drift out of alignment.
+const USERS_GRID_COLS =
+  "grid grid-cols-[minmax(0,1fr)_90px_70px_90px_70px]";
 
 const TAB_KEYS = ["ops", "ai", "data", "quality", "users", "usage"] as const;
 type TabKey = (typeof TAB_KEYS)[number];
@@ -235,6 +241,18 @@ function UsersSection({
   toggleActive: ReturnType<typeof useMutation<unknown, Error, { id: string; is_active: boolean }>>;
 }) {
   const { open, toggle } = useCollapsible("admin.users");
+  // Virtualized rows (PR-9) — the endpoint returns up to 200 users;
+  // only the visible window is mounted (ScreenerPage pattern: header
+  // row outside the scroll element, absolute rows in a relative
+  // spacer). Short lists stay scrollbar-free — max-height cap only.
+  const parentRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: users.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 44,
+    overscan: 10,
+  });
+
   return (
     <div className="bg-card border border-border rounded-lg p-4 space-y-3">
       <CollapsibleHeader open={open} toggle={toggle} title={`Users (${users.length})`} />
@@ -243,50 +261,52 @@ function UsersSection({
           {isLoading ? (
             <p className="p-4 text-xs text-muted-foreground animate-pulse">Loading…</p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border">
-                    {["Email", "Role", "Status", "Joined", "Actions"].map((h) => (
-                      <th
-                        key={h}
-                        className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground"
+            <div className="text-sm">
+              <div className={`${USERS_GRID_COLS} gap-x-2 border-b border-border px-4 py-2.5`}>
+                {["Email", "Role", "Status", "Joined", "Actions"].map((h) => (
+                  <span key={h} className="text-left text-xs font-medium text-muted-foreground">
+                    {h}
+                  </span>
+                ))}
+              </div>
+              <div ref={parentRef} className="overflow-y-auto max-h-[60vh]" data-testid="admin-users-virtual-scroll">
+                <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
+                  {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                    const u = users[virtualRow.index];
+                    return (
+                      <div
+                        key={u.id}
+                        data-index={virtualRow.index}
+                        ref={rowVirtualizer.measureElement}
+                        className={`${USERS_GRID_COLS} gap-x-2 absolute w-full px-4 items-center border-b border-border hover:bg-accent/5`}
+                        style={{ top: virtualRow.start, height: 44 }}
                       >
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {users.map((u) => (
-                    <tr key={u.id} className="hover:bg-accent/5">
-                      <td className="px-4 py-2.5 text-xs">{u.email}</td>
-                      <td className="px-4 py-2.5">
-                        {editingId === u.id ? (
-                          <select
-                            defaultValue={u.role}
-                            className="bg-background border border-border rounded px-1.5 py-0.5 text-xs"
-                            onChange={(e) =>
-                              updateRole.mutate({ id: u.id, role: e.target.value })
-                            }
-                            onBlur={() => setEditingId(null)}
-                            autoFocus
-                          >
-                            <option value="viewer">viewer</option>
-                            <option value="analyst">analyst</option>
-                            <option value="admin">admin</option>
-                          </select>
-                        ) : (
-                          <button
-                            onClick={() => setEditingId(u.id)}
-                            className={`text-xs border rounded px-1.5 py-0.5 ${ROLE_COLORS[u.role]}`}
-                            title="Click to change role"
-                          >
-                            {u.role}
-                          </button>
-                        )}
-                      </td>
-                      <td className="px-4 py-2.5">
+                        <span className="text-xs truncate">{u.email}</span>
+                        <span>
+                          {editingId === u.id ? (
+                            <select
+                              defaultValue={u.role}
+                              className="bg-background border border-border rounded px-1.5 py-0.5 text-xs"
+                              onChange={(e) =>
+                                updateRole.mutate({ id: u.id, role: e.target.value })
+                              }
+                              onBlur={() => setEditingId(null)}
+                              autoFocus
+                            >
+                              <option value="viewer">viewer</option>
+                              <option value="analyst">analyst</option>
+                              <option value="admin">admin</option>
+                            </select>
+                          ) : (
+                            <button
+                              onClick={() => setEditingId(u.id)}
+                              className={`text-xs border rounded px-1.5 py-0.5 ${ROLE_COLORS[u.role]}`}
+                              title="Click to change role"
+                            >
+                              {u.role}
+                            </button>
+                          )}
+                        </span>
                         <span
                           className={`text-xs ${
                             u.is_active ? "text-success" : "text-danger"
@@ -294,24 +314,24 @@ function UsersSection({
                         >
                           {u.is_active ? "active" : "disabled"}
                         </span>
-                      </td>
-                      <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                        {new Date(u.created_at).toLocaleDateString()}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <button
-                          onClick={() =>
-                            toggleActive.mutate({ id: u.id, is_active: !u.is_active })
-                          }
-                          className="text-xs text-muted-foreground hover:text-foreground transition-colors min-h-[28px]"
-                        >
-                          {u.is_active ? "Disable" : "Enable"}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                        <span className="text-xs text-muted-foreground">
+                          {new Date(u.created_at).toLocaleDateString()}
+                        </span>
+                        <span>
+                          <button
+                            onClick={() =>
+                              toggleActive.mutate({ id: u.id, is_active: !u.is_active })
+                            }
+                            className="text-xs text-muted-foreground hover:text-foreground transition-colors min-h-[28px]"
+                          >
+                            {u.is_active ? "Disable" : "Enable"}
+                          </button>
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           )}
         </div>

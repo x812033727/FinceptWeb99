@@ -3,6 +3,7 @@ Analytics service — fetches market data then delegates to pure analytics modul
 Long-running tasks (Monte Carlo, backtest) run in ProcessPoolExecutor.
 """
 import asyncio
+import functools
 from concurrent.futures import ProcessPoolExecutor
 from typing import Any
 
@@ -149,6 +150,14 @@ async def run_backtest_analysis(
     start_date: str,
     end_date: str,
     initial_capital: float = 100_000.0,
+    *,
+    stop_loss_pct: float | None = None,
+    take_profit_pct: float | None = None,
+    trailing_stop_pct: float | None = None,
+    position_size_pct: float | None = None,
+    slippage_bps: float = 0.0,
+    commission_bps: float = 0.0,
+    allow_short: bool = False,
 ) -> dict[str, Any]:
     # Fetch price history for all symbols
     prices: dict[str, list] = {}
@@ -186,15 +195,22 @@ async def run_backtest_analysis(
     # Update strategy params with symbol list
     params = {**params, "symbols": list(df.columns)}
 
-    # Run in executor (can be CPU-heavy for 5-year multi-asset). Pass
-    # positional args instead of wrapping in a lambda — lambdas can't be
-    # pickled to the worker process.
+    # Run in executor (can be CPU-heavy for 5-year multi-asset). Use
+    # functools.partial (picklable, unlike a lambda) so the C2 risk-
+    # control keyword args reach the worker process.
+    call = functools.partial(
+        run_backtest, df, strategy, params, initial_capital,
+        stop_loss_pct=stop_loss_pct,
+        take_profit_pct=take_profit_pct,
+        trailing_stop_pct=trailing_stop_pct,
+        position_size_pct=position_size_pct,
+        slippage_bps=slippage_bps,
+        commission_bps=commission_bps,
+        allow_short=allow_short,
+    )
     loop = asyncio.get_running_loop()
     result = await asyncio.wait_for(
-        loop.run_in_executor(
-            _get_executor(),
-            run_backtest, df, strategy, params, initial_capital,
-        ),
+        loop.run_in_executor(_get_executor(), call),
         timeout=_TIMEOUT,
     )
     return result

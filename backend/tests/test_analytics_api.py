@@ -350,3 +350,127 @@ async def test_backtest_equity_curve_present(client: AsyncClient, db_session: As
     if data["equity_curve"]:
         assert "date" in data["equity_curve"][0]
         assert "value" in data["equity_curve"][0]
+
+
+# ── C2: strategies registry endpoint + extended backtest fields ──
+
+@pytest.mark.asyncio
+async def test_backtest_strategies_requires_auth(client: AsyncClient):
+    r = await client.get("/api/analytics/backtest/strategies")
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_backtest_strategies_schema(client: AsyncClient, db_session: AsyncSession):
+    token = await _register_and_login(client, "bt_strats@example.com")
+    token = await _promote(db_session, "bt_strats@example.com", client=client)
+
+    r = await client.get("/api/analytics/backtest/strategies",
+                         headers=_analyst_headers(token))
+    assert r.status_code == 200
+    strategies = {s["name"]: s for s in r.json()}
+    assert set(strategies) == {
+        "sma_crossover", "rsi_mean_reversion",
+        "breakout_n", "momentum", "bollinger_revert",
+    }
+    for s in strategies.values():
+        assert s["label"]
+        for p in s["params"]:
+            assert {"name", "type", "default"} <= set(p)
+            assert p["type"] in ("int", "float")
+    momentum = strategies["momentum"]
+    assert [p["name"] for p in momentum["params"]] == ["lookback", "threshold"]
+
+
+@pytest.mark.asyncio
+async def test_backtest_unknown_strategy_rejected(client: AsyncClient, db_session: AsyncSession):
+    token = await _register_and_login(client, "bt_unknown@example.com")
+    token = await _promote(db_session, "bt_unknown@example.com", client=client)
+
+    r = await client.post("/api/analytics/backtest", json={
+        "symbols": ["AAPL"], "markets": ["US"],
+        "strategy": "not_a_strategy",
+        "start_date": "2023-01-01", "end_date": "2024-12-31",
+    }, headers=_analyst_headers(token))
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_backtest_risk_fields_passed_through(client: AsyncClient, db_session: AsyncSession):
+    """The new optional risk-control fields must reach the service."""
+    token = await _register_and_login(client, "bt_risk@example.com")
+    token = await _promote(db_session, "bt_risk@example.com", client=client)
+
+    fake = {"status": "completed", "equity_curve": [], "trades": [], "metrics": {}}
+    with patch("services.analytics_service.run_backtest_analysis",
+               new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = fake
+        r = await client.post("/api/analytics/backtest", json={
+            "symbols": ["AAPL"], "markets": ["US"],
+            "strategy": "breakout_n", "params": {"entry_n": 10},
+            "start_date": "2023-01-01", "end_date": "2024-12-31",
+            "stop_loss_pct": 0.08, "take_profit_pct": 0.2,
+            "trailing_stop_pct": 0.1, "position_size_pct": 0.5,
+            "slippage_bps": 5, "commission_bps": 10, "allow_short": True,
+        }, headers=_analyst_headers(token))
+
+    assert r.status_code == 200
+    kwargs = mock_run.call_args.kwargs
+    assert kwargs["strategy"] == "breakout_n"
+    assert kwargs["stop_loss_pct"] == 0.08
+    assert kwargs["take_profit_pct"] == 0.2
+    assert kwargs["trailing_stop_pct"] == 0.1
+    assert kwargs["position_size_pct"] == 0.5
+    assert kwargs["slippage_bps"] == 5
+    assert kwargs["commission_bps"] == 10
+    assert kwargs["allow_short"] is True
+
+
+@pytest.mark.asyncio
+async def test_backtest_new_strategy_end_to_end(client: AsyncClient, db_session: AsyncSession):
+    """A new registry strategy + cost model runs through the real
+    service/executor path and reports the cost summary."""
+    token = await _register_and_login(client, "bt_momo@example.com")
+    token = await _promote(db_session, "bt_momo@example.com", client=client)
+
+    bars = _synthetic_bars(300)
+
+    with patch("services.analytics_service.us_history", new_callable=AsyncMock) as mock_hist:
+        mock_hist.return_value = bars
+        r = await client.post("/api/analytics/backtest", json={
+            "symbols": ["AAPL"], "markets": ["US"],
+            "strategy": "momentum",
+            "params": {"lookback": 10, "threshold": 0.02},
+            "start_date": "2023-01-01", "end_date": "2024-12-31",
+            "initial_capital": 100000,
+            "slippage_bps": 5, "commission_bps": 10,
+        }, headers=_analyst_headers(token))
+
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] == "completed"
+    assert "total_commission" in data["metrics"]
+    assert "total_slippage" in data["metrics"]
+
+
+@pytest.mark.asyncio
+async def test_backtest_legacy_request_shape_still_works(client: AsyncClient, db_session: AsyncSession):
+    """A pre-C2 request body (no new fields) must behave exactly as
+    before — completed run, no cost-summary keys in metrics."""
+    token = await _register_and_login(client, "bt_legacy@example.com")
+    token = await _promote(db_session, "bt_legacy@example.com", client=client)
+
+    bars = _synthetic_bars(300)
+
+    with patch("services.analytics_service.us_history", new_callable=AsyncMock) as mock_hist:
+        mock_hist.return_value = bars
+        r = await client.post("/api/analytics/backtest", json={
+            "symbols": ["AAPL"], "markets": ["US"],
+            "strategy": "sma_crossover", "params": {"fast": 5, "slow": 20},
+            "start_date": "2023-01-01", "end_date": "2024-12-31",
+        }, headers=_analyst_headers(token))
+
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] == "completed"
+    assert "total_commission" not in data["metrics"]

@@ -81,11 +81,29 @@ class VaRResponse(BaseModel):
 class BacktestRequest(BaseModel):
     symbols: list[str] = Field(..., min_length=1, max_length=MAX_SYMBOLS)
     markets: list[str] = Field(..., min_length=1, max_length=MAX_SYMBOLS)
-    strategy: str = Field("sma_crossover", pattern="^(sma_crossover|rsi_mean_reversion)$")
+    strategy: str = Field("sma_crossover", pattern=r"^[a-z][a-z0-9_]{0,49}$")
     params: dict[str, Any] = Field(default_factory=dict)
     start_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
     end_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
     initial_capital: float = Field(100_000.0, gt=0, le=1e12)
+    # ── C2 risk controls — all optional / off by default ─────────
+    stop_loss_pct: float | None = Field(None, gt=0, lt=1)
+    take_profit_pct: float | None = Field(None, gt=0, le=10)
+    trailing_stop_pct: float | None = Field(None, gt=0, lt=1)
+    position_size_pct: float | None = Field(None, gt=0, le=1)
+    slippage_bps: float = Field(0.0, ge=0, le=1_000)
+    commission_bps: float = Field(0.0, ge=0, le=1_000)
+    allow_short: bool = False
+
+    @field_validator("strategy")
+    @classmethod
+    def _known_strategy(cls, v: str) -> str:
+        from analytics.backtest import STRATEGIES
+        if v not in STRATEGIES:
+            raise ValueError(
+                f"Unknown strategy {v!r}. Available: {sorted(STRATEGIES)}"
+            )
+        return v
 
     @field_validator("symbols")
     @classmethod
@@ -114,6 +132,26 @@ class BacktestRequest(BaseModel):
 class BacktestResponse(BaseModel):
     status: str
     equity_curve: list[dict] | None = None
+    # Trade dicts gain `exit_reason` (signal | stop | take_profit |
+    # trailing) plus per-fill `commission` / `slippage` when any C2
+    # risk-control field was supplied; `metrics` then also carries
+    # `total_commission` / `total_slippage`.
     trades: list[dict] | None = None
     metrics: dict | None = None
     error: str | None = None
+
+
+class StrategyParamInfo(BaseModel):
+    name: str
+    type: str                    # "int" | "float"
+    default: float
+    min: float | None = None
+    max: float | None = None
+    description: str = ""
+
+
+class StrategyInfo(BaseModel):
+    name: str
+    label: str
+    description: str = ""
+    params: list[StrategyParamInfo] = Field(default_factory=list)

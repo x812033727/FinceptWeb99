@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { Maximize2, Minimize2 } from "lucide-react";
 import { formatQuoteFreshness } from "@/lib/freshness";
 import CandlestickChart from "@/components/charts/CandlestickChart";
 import { DataSourceBadge } from "@/components/DataSourceBadge";
@@ -41,6 +42,25 @@ export default function StockDetailPage() {
   const [usTab, setUsTab] = useState<USTab>("chart");
   const [twTab, setTwTab] = useState<TWTab>("chart");
   const [cryptoTab, setCryptoTab] = useState<CryptoTab>("chart");
+  // A3 fullscreen chart mode. Implemented with CSS (`fixed inset-0 z-50`)
+  // rather than the Fullscreen API — the CSS approach works on iOS Safari
+  // (which lacks requestFullscreen on arbitrary elements) and can't be
+  // rejected by the browser. ESC exits; body scroll is locked while open.
+  const [chartFullscreen, setChartFullscreen] = useState(false);
+  useEffect(() => {
+    if (!chartFullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setChartFullscreen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [chartFullscreen]);
+
   const [livePrice, setLivePrice] = useState<number | null>(null);
   const [liveChange, setLiveChange] = useState<number | null>(null);
   // Latest data_source from the WS delta — overrides the REST snapshot's
@@ -212,8 +232,14 @@ export default function StockDetailPage() {
       {showChart && (
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-5">
           {/* chart */}
-          <div className="lg:col-span-3 bg-card border border-border rounded-lg overflow-hidden">
-            <div className="flex items-center gap-1 px-4 pt-3 pb-2 border-b border-border">
+          <div
+            className={
+              chartFullscreen
+                ? "fixed inset-0 z-50 bg-background flex flex-col"
+                : "lg:col-span-3 bg-card border border-border rounded-lg overflow-hidden"
+            }
+          >
+            <div className="flex items-center gap-1 px-4 pt-3 pb-2 border-b border-border shrink-0">
               {/* TW data is daily-only (no intraday endpoint) — hide
                   `1d` / `5d` so the buttons can't render dead. US +
                   Crypto get the full range. */}
@@ -222,18 +248,30 @@ export default function StockDetailPage() {
                 : ["1d", "5d", "1mo", "3mo", "1y", "5y"]) as Period[]).map((p) => (
                 <PeriodButton key={p} active={p === period} label={p} onClick={() => setPeriod(p)} />
               ))}
+              <button
+                type="button"
+                onClick={() => setChartFullscreen((f) => !f)}
+                className="ml-auto p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors"
+                aria-label={chartFullscreen ? t("stock.exit_fullscreen") : t("stock.fullscreen")}
+                title={chartFullscreen ? t("stock.exit_fullscreen") : t("stock.fullscreen")}
+              >
+                {chartFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+              </button>
             </div>
-            <div className="p-3">
+            <div className={chartFullscreen ? "p-3 flex-1 min-h-0" : "p-3"}>
               {barsLoading ? (
-                <div className="h-[360px] flex items-center justify-center text-muted-foreground text-sm animate-pulse">
+                <div className="h-full min-h-[360px] flex items-center justify-center text-muted-foreground text-sm animate-pulse">
                   {t("common.loading")}
                 </div>
               ) : bars.length === 0 ? (
-                <div className="h-[360px] flex items-center justify-center text-muted-foreground text-sm">
+                <div className="h-full min-h-[360px] flex items-center justify-center text-muted-foreground text-sm">
                   No data available
                 </div>
               ) : (
-                <CandlestickChart bars={bars} height={360} />
+                // Omitting `height` lets the chart's ResizeObserver track the
+                // flex container, so the canvas fills the viewport in
+                // fullscreen and snaps back to 360px on exit.
+                <CandlestickChart bars={bars} height={chartFullscreen ? undefined : 360} />
               )}
             </div>
           </div>

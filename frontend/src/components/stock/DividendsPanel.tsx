@@ -80,8 +80,8 @@ export function DividendsPanel({ symbol, currentPrice }: { symbol: string; curre
             formatter={(v: number) => [v.toFixed(3), "TWD/share"]}
           />
           <Legend wrapperStyle={{ fontSize: 11 }} iconSize={8} />
-          <Bar dataKey="cash" name={t("stock.dividends.cash")} fill="#22c55e" radius={[2, 2, 0, 0]} />
-          <Bar dataKey="stock" name={t("stock.dividends.stock")} fill="#f59e0b" radius={[2, 2, 0, 0]} />
+          <Bar dataKey="cash" name={t("stock.dividends.cash")} fill="hsl(var(--chart-4))" radius={[2, 2, 0, 0]} />
+          <Bar dataKey="stock" name={t("stock.dividends.stock")} fill="hsl(var(--chart-2))" radius={[2, 2, 0, 0]} />
         </BarChart>
       </ResponsiveContainer>
 

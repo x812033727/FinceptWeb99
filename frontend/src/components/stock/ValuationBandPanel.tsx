@@ -33,12 +33,14 @@ export function ValuationBandPanel({ symbol }: { symbol: string }) {
 
   const mean = stats.mean ?? 0;
   const std = stats.std ?? 0;
+  // Band colours are valuation semantics (expensive→cheap), not market
+  // direction — --danger/--warning/--success, not --up/--down.
   const bands = std > 0 ? [
-    { v: mean + 2 * std, label: "+2σ", color: "#ef4444" },
-    { v: mean + std,     label: "+1σ", color: "#f59e0b" },
-    { v: mean,           label: "μ",   color: "#6366f1" },
-    { v: mean - std,     label: "-1σ", color: "#10b981" },
-    { v: mean - 2 * std, label: "-2σ", color: "#22c55e" },
+    { v: mean + 2 * std, label: "+2σ", color: "hsl(var(--danger))" },
+    { v: mean + std,     label: "+1σ", color: "hsl(var(--warning))" },
+    { v: mean,           label: "μ",   color: "hsl(var(--chart-3))" },
+    { v: mean - std,     label: "-1σ", color: "hsl(var(--success))" },
+    { v: mean - 2 * std, label: "-2σ", color: "hsl(var(--chart-4))" },
   ] : [];
 
   // Percentile of `current` against history.
@@ -131,7 +133,7 @@ export function ValuationBandPanel({ symbol }: { symbol: string }) {
           <Line
             type="monotone"
             dataKey="value"
-            stroke="#3b82f6"
+            stroke="hsl(var(--chart-1))"
             strokeWidth={1.5}
             dot={false}
             isAnimationActive={false}

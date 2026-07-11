@@ -334,8 +334,8 @@ function BacktestPanel() {
                 <AreaChart data={r.equity_curve} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                   <defs>
                     <linearGradient id="eq" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%"  stopColor="#38bdf8" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#38bdf8" stopOpacity={0} />
+                      <stop offset="5%"  stopColor="hsl(var(--chart-1))" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="hsl(var(--chart-1))" stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
@@ -349,7 +349,7 @@ function BacktestPanel() {
                     formatter={(v: number) => [`$${v.toLocaleString()}`, "Portfolio"]}
                   />
                   <ReferenceLine y={+capital} stroke="hsl(var(--muted-foreground))" strokeDasharray="4 2" />
-                  <Area type="monotone" dataKey="value" stroke="#38bdf8" fill="url(#eq)" strokeWidth={1.5} dot={false} />
+                  <Area type="monotone" dataKey="value" stroke="hsl(var(--chart-1))" fill="url(#eq)" strokeWidth={1.5} dot={false} />
                 </AreaChart>
               </ResponsiveContainer>
             </Card>

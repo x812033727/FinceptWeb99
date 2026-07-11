@@ -263,6 +263,8 @@
   },
   "stock": {
     "quoted_at": "Quoted at",
+    "fullscreen": "Fullscreen chart",
+    "exit_fullscreen": "Exit fullscreen",
     "income_statement": "Income Statement",
     "balance_sheet": "Balance Sheet",
     "cash_flow": "Cash Flow",

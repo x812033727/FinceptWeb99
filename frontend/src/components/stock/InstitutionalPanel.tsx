@@ -36,7 +36,7 @@ export function InstitutionalPanel({ symbol }: { symbol: string }) {
               <ReferenceLine y={0} stroke="hsl(var(--border))" />
               <Bar dataKey="fini" name="外資" radius={[2, 2, 0, 0]}>
                 {chartData.map((d, i) => (
-                  <Cell key={i} fill={d.fini >= 0 ? "#22c55e" : "#ef4444"} />
+                  <Cell key={i} fill={d.fini >= 0 ? "hsl(var(--up))" : "hsl(var(--down))"} />
                 ))}
               </Bar>
             </BarChart>

@@ -67,7 +67,7 @@ function MetricSparkRow({
                 key={i}
                 fill={d.value == null
                   ? "hsl(var(--muted-foreground) / 0.2)"
-                  : d.value >= 0 ? "#22c55e" : "#ef4444"}
+                  : d.value >= 0 ? "hsl(var(--up))" : "hsl(var(--down))"}
               />
             ))}
           </Bar>

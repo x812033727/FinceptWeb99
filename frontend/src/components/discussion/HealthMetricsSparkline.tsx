@@ -136,7 +136,7 @@ export function HealthMetricsSparkline({
             yAxisId="brier"
             type="monotone"
             dataKey="brier"
-            stroke="#f59e0b"
+            stroke="hsl(var(--chart-2))"
             strokeWidth={2}
             dot={<StatusFlagDot />}
             activeDot={{ r: 4 }}
@@ -147,7 +147,7 @@ export function HealthMetricsSparkline({
             yAxisId="hit"
             type="monotone"
             dataKey="hitRate"
-            stroke="#10b981"
+            stroke="hsl(var(--chart-4))"
             strokeWidth={2}
             dot={false}
             activeDot={{ r: 4 }}
@@ -158,15 +158,15 @@ export function HealthMetricsSparkline({
       </ResponsiveContainer>
       <div className="flex items-center justify-end gap-3 text-[10px] text-muted-foreground mt-0.5">
         <span className="flex items-center gap-1">
-          <span className="inline-block w-2 h-2 rounded-full bg-amber-500" />
+          <span className="inline-block w-2 h-2 rounded-full" style={{ background: "hsl(var(--chart-2))" }} />
           {t("discussion.health.brier")}
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
+          <span className="inline-block w-2 h-2 rounded-full" style={{ background: "hsl(var(--chart-4))" }} />
           {t("discussion.health.hit_rate")}
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block w-2 h-2 rounded-full bg-red-500" />
+          <span className="inline-block w-2 h-2 rounded-full" style={{ background: "hsl(var(--destructive))" }} />
           {t("discussion.health.flagged")}
         </span>
       </div>

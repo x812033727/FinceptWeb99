@@ -159,7 +159,7 @@ export function BrierTrendChart({
               type="monotone"
               dataKey="raw_brier"
               name={t("strategy.brier_raw_legend", "Raw")}
-              stroke="#f59e0b"
+              stroke="hsl(var(--chart-2))"
               strokeWidth={2}
               dot={{ r: 2 }}
               connectNulls
@@ -168,7 +168,7 @@ export function BrierTrendChart({
               type="monotone"
               dataKey="calibrated_brier"
               name={t("strategy.brier_calibrated_legend", "Calibrated")}
-              stroke="#10b981"
+              stroke="hsl(var(--chart-4))"
               strokeWidth={2}
               dot={{ r: 2 }}
               connectNulls

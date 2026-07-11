@@ -130,9 +130,9 @@ const MARKET_OPTIONS: Array<{ value: string | undefined; label: string }> = [
  * (e.g. a sparkline trend view).
  */
 export function rateColor(rate: number): string {
-  if (rate < 0.1) return "bg-red-500/70";
-  if (rate < 0.5) return "bg-yellow-500/70";
-  return "bg-emerald-500/70";
+  if (rate < 0.1) return "bg-danger/70";
+  if (rate < 0.5) return "bg-warning/70";
+  return "bg-success/70";
 }
 
 /**
@@ -233,7 +233,7 @@ export function SignalAuditCard() {
                   })}
                 </span>
                 {data.zero_uptake.length > 0 && (
-                  <span className="text-red-400">
+                  <span className="text-danger">
                     ⚠ {t("signal_audit.zero_uptake_count", {
                       count: data.zero_uptake.length,
                     })}
@@ -249,8 +249,8 @@ export function SignalAuditCard() {
               </div>
 
               {data.zero_uptake.length > 0 && (
-                <div className="bg-red-500/5 border border-red-500/30 rounded p-2 space-y-1">
-                  <p className="text-[11px] font-semibold text-red-400 uppercase tracking-wider">
+                <div className="bg-danger/5 border border-danger/30 rounded p-2 space-y-1">
+                  <p className="text-[11px] font-semibold text-danger uppercase tracking-wider">
                     {t("signal_audit.zero_uptake_title")}
                   </p>
                   <p className="text-[11px] text-muted-foreground">
@@ -258,7 +258,7 @@ export function SignalAuditCard() {
                   </p>
                   <ul className="text-xs font-mono space-y-0.5">
                     {data.zero_uptake.map((sig) => (
-                      <li key={sig} className="text-red-300">
+                      <li key={sig} className="text-danger">
                         {sig}
                       </li>
                     ))}

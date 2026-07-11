@@ -31,7 +31,7 @@ function WsStatus({ compact = false }: { compact?: boolean }) {
     >
       <span
         className={`w-2 h-2 rounded-full shrink-0 ${
-          connected ? "bg-green-500" : "bg-red-500 animate-pulse"
+          connected ? "bg-success" : "bg-danger animate-pulse"
         }`}
       />
       {!compact && (
@@ -97,7 +97,7 @@ function NotificationBell() {
                       : t("topbar.price_below")}{" "}
                     <span
                       className={
-                        a.condition === "above" ? "text-green-400" : "text-red-400"
+                        a.condition === "above" ? "text-up" : "text-down"
                       }
                     >
                       {a.target_price.toFixed(2)}
@@ -207,7 +207,7 @@ function MoreMenu() {
         <div className="px-2 py-1.5 flex items-center gap-2 text-xs">
           <span
             className={`w-2 h-2 rounded-full shrink-0 ${
-              connected ? "bg-green-500" : "bg-red-500"
+              connected ? "bg-success" : "bg-danger"
             }`}
           />
           <span className="text-muted-foreground">

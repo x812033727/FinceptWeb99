@@ -41,7 +41,7 @@ function IndexCard({ symbol, label }: { symbol: string; label: string }) {
           ? price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
           : "—"}
       </div>
-      <div className={`text-sm font-medium mt-0.5 ${unavailable ? "text-muted-foreground" : isPos ? "text-green-400" : "text-red-400"}`}>
+      <div className={`text-sm font-medium mt-0.5 ${unavailable ? "text-muted-foreground" : isPos ? "text-up" : "text-down"}`}>
         {unavailable ? "—" : formatPct(changePct)}
       </div>
       <div className="text-xs text-muted-foreground mt-1 inline-flex items-center">
@@ -75,8 +75,8 @@ const SENTIMENT_BADGE: Record<
   NonNullable<NewsItem["sentiment_label"]>,
   { label: string; cls: string }
 > = {
-  bullish: { label: "利多", cls: "bg-green-900/30 text-green-300 border-green-800/50" },
-  bearish: { label: "利空", cls: "bg-red-900/30 text-red-300 border-red-800/50" },
+  bullish: { label: "利多", cls: "bg-up/10 text-up border-up/30" },
+  bearish: { label: "利空", cls: "bg-down/10 text-down border-down/30" },
   neutral: { label: "中性", cls: "bg-zinc-800/40 text-zinc-300 border-zinc-700/50" },
 };
 
@@ -207,7 +207,7 @@ function OverseasIndicators() {
         <ul className="divide-y divide-border/50">
           {rows.map((idx) => {
             const sign = idx.change_pct >= 0 ? "+" : "";
-            const cls = idx.change_pct >= 0 ? "text-green-400" : "text-red-400";
+            const cls = idx.change_pct >= 0 ? "text-up" : "text-down";
             return (
               <li
                 key={idx.symbol}

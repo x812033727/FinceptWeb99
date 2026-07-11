@@ -105,14 +105,14 @@ function LLMKeyRow({ info }: { info: LLMKeyInfo }) {
     info.source === "env" ? ".env" :
     "—";
   const sourceColor =
-    info.source === "db" ? "text-green-400 bg-green-400/10 border-green-400/30" :
+    info.source === "db" ? "text-success bg-success/10 border-success/30" :
     info.source === "env" ? "text-blue-400 bg-blue-400/10 border-blue-400/30" :
     "text-muted-foreground bg-muted/10 border-border";
 
   const lastValidationBadge = info.last_validation_ok === true
-    ? <span className="text-xs text-green-400">✓ {t("llm_keys.validated")}</span>
+    ? <span className="text-xs text-success">✓ {t("llm_keys.validated")}</span>
     : info.last_validation_ok === false
-    ? <span className="text-xs text-red-400" title={info.last_validation_message ?? ""}>
+    ? <span className="text-xs text-danger" title={info.last_validation_message ?? ""}>
         ✗ {info.last_validation_message ? info.last_validation_message.slice(0, 60) : t("llm_keys.invalid")}
       </span>
     : null;
@@ -154,7 +154,7 @@ function LLMKeyRow({ info }: { info: LLMKeyInfo }) {
           <button
             onClick={() => clear.mutate()}
             disabled={clear.isPending}
-            className="px-3 py-1.5 text-xs border border-border text-muted-foreground rounded hover:text-red-400 disabled:opacity-40"
+            className="px-3 py-1.5 text-xs border border-border text-muted-foreground rounded hover:text-danger disabled:opacity-40"
           >
             {t("llm_keys.clear")}
           </button>
@@ -169,9 +169,9 @@ function LLMKeyRow({ info }: { info: LLMKeyInfo }) {
       </div>
 
       <div className="flex items-center gap-3 min-h-[1.25rem]">
-        {error && <span className="text-xs text-red-400">{error}</span>}
+        {error && <span className="text-xs text-danger">{error}</span>}
         {testResult && (
-          <span className={`text-xs ${testResult.ok ? "text-green-400" : "text-red-400"}`}>
+          <span className={`text-xs ${testResult.ok ? "text-success" : "text-danger"}`}>
             {testResult.ok ? `✓ ${t("llm_keys.validated")}` : `✗ ${testResult.message.slice(0, 80)}`}
           </span>
         )}

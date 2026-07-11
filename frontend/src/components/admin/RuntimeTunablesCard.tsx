@@ -69,7 +69,7 @@ function RuntimeSettingRow({ s }: { s: RuntimeSetting }) {
         <div className="font-medium text-sm">{s.name}</div>
         <div className="text-[10px] text-muted-foreground font-mono mt-0.5">{s.key}</div>
         {s.is_overridden && (
-          <span className="inline-block mt-1 text-[9px] border border-amber-400/30 text-amber-400 bg-amber-400/10 px-1 rounded">
+          <span className="inline-block mt-1 text-[9px] border border-warning/30 text-warning bg-warning/10 px-1 rounded">
             {t("personas.overridden")}
           </span>
         )}

@@ -100,7 +100,7 @@ function AddSymbolRow({ watchlistId }: { watchlistId: string }) {
       >
         {add.isPending ? "…" : `+ ${t("common.add")}`}
       </button>
-      {error && <span className="text-xs text-red-400 self-center">{error}</span>}
+      {error && <span className="text-xs text-danger self-center">{error}</span>}
     </form>
   );
 }
@@ -178,7 +178,7 @@ function WatchlistCard({ wl }: { wl: Watchlist }) {
         </button>
         <button
           onClick={() => { if (confirm(`${t("common.delete")} "${wl.name}"?`)) del.mutate(); }}
-          className="text-xs text-muted-foreground hover:text-red-400 transition-colors"
+          className="text-xs text-muted-foreground hover:text-danger transition-colors"
         >
           {t("common.delete")}
         </button>
@@ -221,14 +221,14 @@ function WatchlistCard({ wl }: { wl: Watchlist }) {
                           ? item.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
                           : "—"}
                       </td>
-                      <td className={`text-right px-3 sm:px-4 py-2.5 text-sm font-medium ${pos ? "text-green-400" : "text-red-400"}`}>
+                      <td className={`text-right px-3 sm:px-4 py-2.5 text-sm font-medium ${pos ? "text-up" : "text-down"}`}>
                         {formatPct(item.change_pct)}
                       </td>
                       <td className="px-2 py-2.5 text-right">
                         <button
                           onClick={() => removeIt.mutate(item.id)}
                           aria-label={t("watchlist.remove") || "Remove"}
-                          className="text-base text-muted-foreground hover:text-red-400 sm:text-xs sm:opacity-0 sm:group-hover:opacity-100 transition-all"
+                          className="text-base text-muted-foreground hover:text-danger sm:text-xs sm:opacity-0 sm:group-hover:opacity-100 transition-all"
                         >
                           ✕
                         </button>

@@ -25,10 +25,10 @@ export const DEFAULT_RULES = [
 export const DEFAULT_PERSONAS = ["market_analyst", "trading_coach", "lynch", "simons"];
 
 export const STANCE_BADGE: Record<Turn["stance"], { label: string; cls: string }> = {
-  agree: { label: "✓ 同意", cls: "bg-green-900/30 text-green-300 border-green-800/50" },
-  dissent: { label: "✗ 異議", cls: "bg-red-900/30 text-red-300 border-red-800/50" },
+  agree: { label: "✓ 同意", cls: "bg-success/10 text-success border-success/30" },
+  dissent: { label: "✗ 異議", cls: "bg-danger/10 text-danger border-danger/30" },
   supplement: { label: "↳ 補充", cls: "bg-blue-900/30 text-blue-300 border-blue-800/50" },
-  user_input: { label: "✎ 插話", cls: "bg-amber-900/30 text-amber-300 border-amber-800/50" },
+  user_input: { label: "✎ 插話", cls: "bg-warning/10 text-warning border-warning/30" },
 };
 
 // ── localStorage: topic / rules / collapse state ──────────────────

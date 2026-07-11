@@ -53,7 +53,7 @@ interface SystemStats {
 const ROLE_COLORS: Record<string, string> = {
   viewer: "border-muted-foreground/30 text-muted-foreground",
   analyst: "border-blue-400/30 text-blue-400 bg-blue-400/10",
-  admin: "border-amber-400/30 text-amber-400 bg-amber-400/10",
+  admin: "border-warning/30 text-warning bg-warning/10",
 };
 
 const TAB_KEYS = ["ops", "ai", "data", "quality", "users", "usage"] as const;
@@ -289,7 +289,7 @@ function UsersSection({
                       <td className="px-4 py-2.5">
                         <span
                           className={`text-xs ${
-                            u.is_active ? "text-green-400" : "text-red-400"
+                            u.is_active ? "text-success" : "text-danger"
                           }`}
                         >
                           {u.is_active ? "active" : "disabled"}

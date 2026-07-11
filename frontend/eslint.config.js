@@ -43,6 +43,57 @@ export default tseslint.config(
     },
   },
 
+  // Market/status colour tokens — PR-2 codemod guard.
+  //
+  // Hardcoded red/green/emerald palette classes are banned: price/value
+  // direction must use text-up/text-down (they flip under the
+  // [data-market-colors] convention) and status must use
+  // success/danger/warning, so a raw green-400 is always a bug waiting
+  // for the TW-convention flip. amber/yellow are not restricted (too
+  // many legitimate decorative uses).
+  //
+  // Exempted files keep palette classes on purpose:
+  //   - HealthMetricsSparkline: legend dots must match recharts hex
+  //     strokes (chart colours migrate in PR-4).
+  //   - SignalQualityCard: emerald/orange/yellow correlation scale.
+  //   - DiscussionLessonsCard / MaturityBadge / CapturedSessionBadge /
+  //     LessonLibraryPage / RoundContextsCard: categorical badge sets
+  //     (green sits alongside purple/blue/slate — not direction/status).
+  //   - UsageCard / AIPage: per-provider brand colours.
+  //   - DividendsPanel: cash-vs-stock dividend column accents.
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: [
+      "src/components/discussion/HealthMetricsSparkline.tsx",
+      "src/components/admin/SignalQualityCard.tsx",
+      "src/components/admin/DiscussionLessonsCard.tsx",
+      "src/components/discussion/MaturityBadge.tsx",
+      "src/components/discussion/CapturedSessionBadge.tsx",
+      "src/components/discussion/RoundContextsCard.tsx",
+      "src/pages/LessonLibraryPage.tsx",
+      "src/components/admin/UsageCard.tsx",
+      "src/pages/AIPage.tsx",
+      "src/components/stock/DividendsPanel.tsx",
+    ],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "Literal[value=/(?:text|bg|border|ring|accent)-(?:red|green|emerald)-[0-9]/]",
+          message:
+            "Hardcoded red/green/emerald Tailwind classes are banned. Use text-up/text-down (market direction, flips with [data-market-colors]) or text-success/text-danger (status).",
+        },
+        {
+          selector:
+            "TemplateElement[value.cooked=/(?:text|bg|border|ring|accent)-(?:red|green|emerald)-[0-9]/]",
+          message:
+            "Hardcoded red/green/emerald Tailwind classes are banned. Use text-up/text-down (market direction, flips with [data-market-colors]) or text-success/text-danger (status).",
+        },
+      ],
+    },
+  },
+
   // Project-wide overrides
   {
     rules: {

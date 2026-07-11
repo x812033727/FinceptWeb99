@@ -55,7 +55,7 @@ export function ChatComposer({
             type="button"
             onClick={onStop}
             aria-label={t("ai.stop")}
-            className="px-4 py-2 rounded-md bg-red-900/30 border border-red-800 text-red-400 text-sm hover:bg-red-900/50 transition-colors self-end min-h-[40px] inline-flex items-center gap-1.5"
+            className="px-4 py-2 rounded-md bg-danger/10 border border-danger/40 text-danger text-sm hover:bg-danger/20 transition-colors self-end min-h-[40px] inline-flex items-center gap-1.5"
           >
             <Square className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
             <span className="hidden sm:inline">{t("ai.stop")}</span>

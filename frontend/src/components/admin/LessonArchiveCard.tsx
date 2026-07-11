@@ -137,7 +137,7 @@ export function LessonArchiveCard() {
                     disabled={unarchiveMut.isPending}
                     className="px-2 py-0.5 text-[10px] border border-border
                                text-muted-foreground rounded
-                               hover:text-emerald-300 hover:border-emerald-700/40
+                               hover:text-success hover:border-success/30
                                disabled:opacity-50 shrink-0"
                   >
                     {t("admin.lesson_archive.unarchive")}

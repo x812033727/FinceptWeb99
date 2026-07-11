@@ -15,9 +15,9 @@ interface ToolCallCardProps {
 export function ToolCallCard({ call, className }: ToolCallCardProps) {
   const { t } = useTranslation();
   const statusColor =
-    call.status === "running" ? "bg-amber-400 animate-pulse" :
-    call.status === "error" ? "bg-red-500" :
-    "bg-green-500";
+    call.status === "running" ? "bg-warning animate-pulse" :
+    call.status === "error" ? "bg-danger" :
+    "bg-success";
   const argsStr = JSON.stringify(call.args, null, 2);
   return (
     <div className={cn("border border-border/60 bg-muted/30 rounded-md p-2 text-xs my-1.5", className)}>
@@ -45,7 +45,7 @@ export function ToolCallCard({ call, className }: ToolCallCardProps) {
           <summary
             className={cn(
               "cursor-pointer hover:text-foreground select-none",
-              call.isError ? "text-red-400" : "text-muted-foreground"
+              call.isError ? "text-danger" : "text-muted-foreground"
             )}
           >
             {t("ai.tool.result")}

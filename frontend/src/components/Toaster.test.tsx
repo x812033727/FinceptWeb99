@@ -98,7 +98,7 @@ describe("Toaster — render shape", () => {
     // render "×" for the error severity, so query by tag to disambiguate.
     const icon = screen.getByRole("alert").querySelector("span")!;
     expect(icon.textContent).toBe("×");
-    expect(icon.className).toContain("bg-red-500");
+    expect(icon.className).toContain("bg-danger");
   });
 });
 

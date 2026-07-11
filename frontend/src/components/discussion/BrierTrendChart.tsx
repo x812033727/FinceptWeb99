@@ -74,7 +74,7 @@ export function BrierTrendChart({
   }
   if (error) {
     return (
-      <p className="text-[11px] text-red-300 px-1 py-0.5">
+      <p className="text-[11px] text-danger px-1 py-0.5">
         {(error as Error).message}
       </p>
     );

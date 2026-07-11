@@ -111,7 +111,7 @@ export function signedPctSafe(n: number | null | undefined): string {
 
 export function pctClass(n: number | null | undefined): string {
   if (n === null || n === undefined) return "text-muted-foreground";
-  return n >= 0 ? "text-green-500" : "text-red-500";
+  return n >= 0 ? "text-up" : "text-down";
 }
 
 export function latestNonNull(arr: (number | null)[] | undefined | null): number | null {
@@ -140,9 +140,9 @@ export const BAND_LABELS: Record<
   string,
   { mark: string; cls: string }
 > = {
-  big_win: { mark: "大勝", cls: "text-emerald-500" },
-  win: { mark: "勝", cls: "text-green-500" },
-  big_loss: { mark: "大敗", cls: "text-red-600" },
+  big_win: { mark: "大勝", cls: "text-up" },
+  win: { mark: "勝", cls: "text-up" },
+  big_loss: { mark: "大敗", cls: "text-down" },
   loss: { mark: "敗", cls: "text-orange-500" },
   unverifiable: { mark: "", cls: "text-muted-foreground" },
 };
@@ -241,9 +241,9 @@ export function colorizeNumbers(text: string, baseKey: string): React.ReactNode[
       const positive = part.startsWith("+");
       const negative = part.startsWith("-");
       const cls = positive
-        ? "text-emerald-400"
+        ? "text-up"
         : negative
-          ? "text-red-400"
+          ? "text-down"
           : "";
       return cls ? (
         <span key={`${baseKey}-pct-${idx}`} className={cls}>

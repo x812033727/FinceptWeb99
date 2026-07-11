@@ -42,9 +42,9 @@ import { useCollapsible } from "@/hooks/useCollapsible";
 const STATUS_COLORS: Record<BacktestSweepStatus, string> = {
   pending: "bg-secondary/30 text-muted-foreground border-border",
   running: "bg-blue-900/30 text-blue-300 border-blue-800/50",
-  completed: "bg-emerald-900/30 text-emerald-300 border-emerald-800/50",
-  cancelled: "bg-amber-900/30 text-amber-300 border-amber-800/50",
-  failed: "bg-red-900/30 text-red-300 border-red-800/50",
+  completed: "bg-success/10 text-success border-success/30",
+  cancelled: "bg-warning/10 text-warning border-warning/30",
+  failed: "bg-danger/10 text-danger border-danger/30",
 };
 
 interface SweepFormProps {
@@ -270,7 +270,7 @@ function SweepProgressRow({
           {isPending && (
             <button
               onClick={() => onStart(sweep.id)}
-              className="px-2 py-0.5 rounded border border-emerald-800/50 text-emerald-300 hover:bg-emerald-900/20"
+              className="px-2 py-0.5 rounded border border-success/30 text-success hover:bg-success/10"
             >
               {t("sweep.start")}
             </button>
@@ -278,7 +278,7 @@ function SweepProgressRow({
           {isRunning && (
             <button
               onClick={() => onCancel(sweep.id)}
-              className="px-2 py-0.5 rounded border border-amber-800/50 text-amber-300 hover:bg-amber-900/20"
+              className="px-2 py-0.5 rounded border border-warning/30 text-warning hover:bg-warning/10"
             >
               {t("sweep.cancel")}
             </button>
@@ -286,7 +286,7 @@ function SweepProgressRow({
           {isTerminal && (
             <button
               onClick={() => onDelete(sweep.id)}
-              className="px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-red-400"
+              className="px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-danger"
             >
               {t("sweep.delete")}
             </button>
@@ -307,7 +307,7 @@ function SweepProgressRow({
         title={`${done}/${total} ${t("sweep.completed_label")}`}
       >
         <div
-          className="h-full bg-emerald-500/70"
+          className="h-full bg-success/70"
           style={{ width: `${pct}%` }}
         />
       </div>
@@ -315,7 +315,7 @@ function SweepProgressRow({
         <span>
           {t("sweep.completed_label")}: {done}/{total}
           {failed > 0 ? (
-            <span className="text-red-400">
+            <span className="text-danger">
               {" "}· {t("sweep.failed_label")}: {failed}
             </span>
           ) : null}
@@ -332,7 +332,7 @@ function SweepProgressRow({
       </div>
 
       {sweep.error_message ? (
-        <p className="text-[10px] text-red-300">
+        <p className="text-[10px] text-danger">
           {t("sweep.error_label")}: {sweep.error_message}
         </p>
       ) : null}
@@ -345,7 +345,7 @@ function SweepProgressRow({
             {sweep.failed_dates.map((fd) => (
               <li key={fd.date} className="font-mono">
                 {fd.date} —{" "}
-                <span className="text-red-300">{fd.error}</span>
+                <span className="text-danger">{fd.error}</span>
               </li>
             ))}
           </ul>
@@ -473,7 +473,7 @@ export function BacktestSweepCard({
           />
 
           {createMut.error ? (
-            <p className="text-[11px] text-red-300">
+            <p className="text-[11px] text-danger">
               {(createMut.error as { response?: { data?: { detail?: string } } })
                 ?.response?.data?.detail ??
                 (createMut.error as Error).message}

@@ -61,7 +61,7 @@ export function SweepAggregateCard({
   }
   if (error) {
     return (
-      <p className="text-[11px] text-red-300 px-1 py-0.5">
+      <p className="text-[11px] text-danger px-1 py-0.5">
         {(error as Error).message}
       </p>
     );
@@ -172,9 +172,9 @@ function Tile({
   labelTip?: string;
 }) {
   const cls = accent === "emerald"
-    ? "text-emerald-300"
+    ? "text-success"
     : accent === "red"
-    ? "text-red-300"
+    ? "text-danger"
     : "text-foreground";
   return (
     <div className="bg-secondary/30 border border-border rounded p-1.5">
@@ -210,9 +210,9 @@ function BrierRow({ agg }: { agg: SweepAggregate }) {
     delta === null
       ? ""
       : delta < -0.001
-      ? "text-emerald-300"
+      ? "text-success"
       : delta > 0.001
-      ? "text-red-300"
+      ? "text-danger"
       : "text-muted-foreground";
   const deltaSign = delta === null ? "" : delta > 0 ? "+" : "";
   return (
@@ -323,8 +323,8 @@ function ReliabilityChart({ buckets }: { buckets: ReliabilityBucket[] }) {
           // (hit < mid) red; neutral grey.
           let color = "bg-muted-foreground/30";
           if (!empty && hit !== null) {
-            if (hit > mid + 0.05) color = "bg-emerald-500/70";
-            else if (hit < mid - 0.05) color = "bg-red-500/70";
+            if (hit > mid + 0.05) color = "bg-success/70";
+            else if (hit < mid - 0.05) color = "bg-danger/70";
             else color = "bg-blue-500/70";
           }
           // Reference line: bucket midpoint as percentage.
@@ -441,7 +441,7 @@ function CompareGrid({
   }
   if (error || !trainAgg) {
     return (
-      <p className="text-[11px] text-red-300">
+      <p className="text-[11px] text-danger">
         {(error as Error | undefined)?.message
           ?? t(
               "aggregate.compare_train_missing",
@@ -528,8 +528,8 @@ function CompareRow({
     const testBetter = lowerIsBetter
       ? test < train - epsilon
       : test > train + epsilon;
-    if (testWorse) testCls = "text-red-300";
-    else if (testBetter) testCls = "text-emerald-300";
+    if (testWorse) testCls = "text-danger";
+    else if (testBetter) testCls = "text-success";
   }
   return (
     <div className="grid grid-cols-3 gap-1 text-[11px] font-mono">
@@ -551,7 +551,7 @@ function PnlRow({ agg }: { agg: SweepAggregate }) {
       <div className="grid grid-cols-5 gap-1">
         {agg.avg_pnl_pct.map((p, i) => {
           const accent =
-            p === null ? "" : p > 0 ? "text-emerald-300" : "text-red-300";
+            p === null ? "" : p > 0 ? "text-up" : "text-down";
           return (
             <div key={i} className="text-center">
               <p className="text-[10px] text-muted-foreground">D{i + 1}</p>
@@ -608,7 +608,7 @@ function PersonaTable({ agg }: { agg: SweepAggregate }) {
               <td className="py-0.5 text-right">
                 {p.hit_rate === null ? "—" : `${(p.hit_rate * 100).toFixed(0)}%`}
               </td>
-              <td className="py-0.5 text-right text-emerald-300">
+              <td className="py-0.5 text-right text-success">
                 {p.win_count}
               </td>
               <td className="py-0.5 text-right">{p.discussions_count}</td>
@@ -634,7 +634,7 @@ function LessonsList({ agg }: { agg: SweepAggregate }) {
       <ul className="mt-1.5 space-y-1">
         {agg.lessons.map((l, i) => (
           <li key={i} className="text-[11px]">
-            <span className="inline-block bg-amber-900/30 text-amber-300 border border-amber-800/50 rounded px-1 py-0.5 mr-1.5 text-[9px] uppercase">
+            <span className="inline-block bg-warning/10 text-warning border border-warning/30 rounded px-1 py-0.5 mr-1.5 text-[9px] uppercase">
               {l.category}
             </span>
             <span className="text-muted-foreground mr-1">{l.as_of_date}</span>

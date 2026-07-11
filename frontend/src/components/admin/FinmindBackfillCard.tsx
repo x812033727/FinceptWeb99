@@ -38,9 +38,9 @@ function StatusBanner({ state }: { state: FinmindChainState | undefined }) {
         : "閒置中";
   const cls =
     state.status === "running"
-      ? "border-green-400 bg-green-50 dark:bg-green-950"
+      ? "border-success/40 bg-success/10"
       : state.status === "stopping"
-        ? "border-amber-400 bg-amber-50 dark:bg-amber-950"
+        ? "border-warning/40 bg-warning/10"
         : "border-border bg-muted/30";
   return (
     <div className={`rounded border p-3 text-sm ${cls}`}>
@@ -114,7 +114,7 @@ function PerDatasetTable({
                   </td>
                   <td
                     className={`px-2 py-1 text-right font-mono ${
-                      fullyDone ? "text-green-600 dark:text-green-400" : ""
+                      fullyDone ? "text-success" : ""
                     }`}
                   >
                     {pct}
@@ -168,7 +168,7 @@ function QuotaGauge({
     pct >= 90
       ? "bg-destructive"
       : pct >= 70
-        ? "bg-amber-500"
+        ? "bg-warning"
         : "bg-primary";
   // Reservation = 全域 cap 跟 chain 預算之間的差額,留給討論 / screener
   // / news 等非 chain 路徑用。當兩者相等時不顯示(沒分離)。
@@ -293,7 +293,7 @@ export default function FinmindBackfillCard() {
       {open && (
         <div className="mt-4 space-y-4">
           {externalActivity && (
-            <div className="rounded border border-amber-400 bg-amber-50 p-3 text-xs dark:bg-amber-950">
+            <div className="rounded border border-warning/40 bg-warning/10 p-3 text-xs">
               <div className="font-semibold">
                 目前有其他 backfill 任務在使用 FinMind quota
               </div>

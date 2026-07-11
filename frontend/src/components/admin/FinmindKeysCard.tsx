@@ -350,7 +350,7 @@ export default function FinmindKeysCard() {
                       </td>
                       <td className="py-1 pr-2">
                         {p.enabled ? (
-                          <span className="text-green-600">enabled</span>
+                          <span className="text-success">enabled</span>
                         ) : (
                           <span className="text-muted-foreground">
                             disabled
@@ -463,8 +463,8 @@ export default function FinmindKeysCard() {
             </form>
 
             {issuedKey && (
-              <div className="mt-3 rounded border border-amber-400 bg-amber-50 p-3 text-xs dark:bg-amber-950">
-                <div className="mb-1 font-semibold text-amber-800 dark:text-amber-200">
+              <div className="mt-3 rounded border border-warning/40 bg-warning/10 p-3 text-xs">
+                <div className="mb-1 font-semibold text-warning">
                   ⚠ Copy this key now — it will not be shown again.
                 </div>
                 <div className="break-all font-mono">
@@ -557,7 +557,7 @@ export default function FinmindKeysCard() {
                       </td>
                       <td className="py-1.5 pr-2">
                         {k.enabled ? (
-                          <span className="text-green-600">enabled</span>
+                          <span className="text-success">enabled</span>
                         ) : (
                           <span className="text-muted-foreground">
                             revoked

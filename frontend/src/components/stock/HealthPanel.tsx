@@ -7,9 +7,9 @@ import { fetchHealth, fmtPct1 } from "./_shared";
 import type { HealthPeriod, Light } from "./_shared";
 
 const LIGHT_CLASS: Record<Light, string> = {
-  green:  "bg-green-500",
-  yellow: "bg-yellow-500",
-  red:    "bg-red-500",
+  green:  "bg-success",
+  yellow: "bg-warning",
+  red:    "bg-danger",
   gray:   "bg-muted-foreground/40",
 };
 
@@ -112,7 +112,7 @@ export function HealthPanel({ symbol }: { symbol: string }) {
           <div className="text-xs text-muted-foreground">{t("stock.health.revenue_yoy")}</div>
           <div className={`text-lg font-semibold ${
             summary.revenue_yoy == null ? "text-muted-foreground"
-            : summary.revenue_yoy >= 0 ? "text-green-400" : "text-red-400"
+            : summary.revenue_yoy >= 0 ? "text-up" : "text-down"
           }`}>
             {fmtPct1(summary.revenue_yoy)}
           </div>
@@ -152,7 +152,7 @@ export function HealthPanel({ symbol }: { symbol: string }) {
             {t("stock.health.revenue_yoy")}:{" "}
             <span className={`font-medium ${
               summary.revenue_yoy == null ? ""
-              : summary.revenue_yoy >= 0 ? "text-green-400" : "text-red-400"
+              : summary.revenue_yoy >= 0 ? "text-up" : "text-down"
             }`}>
               {fmtPct1(summary.revenue_yoy)}
             </span>

@@ -30,7 +30,7 @@ import type { PostMortemResponse } from "./_helpers";
 function PerfCell({ pct }: { pct: number }) {
   const sign = pct >= 0 ? "+" : "";
   const cls =
-    pct >= 0 ? "text-emerald-400" : "text-red-400";
+    pct >= 0 ? "text-up" : "text-down";
   return (
     <span className={`font-mono tabular-nums ${cls}`}>
       {sign}

@@ -77,12 +77,12 @@ export function ConclusionCard({
     ? "bg-gradient-to-br from-purple-950/40 to-purple-950/10 border border-purple-800/50 rounded-lg p-4 mt-6 shadow-sm"
     : "bg-gradient-to-br from-amber-950/40 to-amber-950/10 border border-amber-800/50 rounded-lg p-4 mt-6 shadow-sm";
   const cardClass = hasError
-    ? "bg-red-950/20 border border-red-800/60 rounded-lg p-4 mt-6"
+    ? "bg-danger/10 border border-danger/30 rounded-lg p-4 mt-6"
     : baseClass;
   const okTitleClass = isPostMortem
     ? "text-sm font-semibold text-purple-300"
     : "text-sm font-semibold text-amber-300";
-  const titleClass = hasError ? "text-sm font-semibold text-red-300" : okTitleClass;
+  const titleClass = hasError ? "text-sm font-semibold text-danger" : okTitleClass;
   const titleKey = isPostMortem
     ? "discussion.post_mortem_conclusion_title"
     : "discussion.conclusion_title";
@@ -137,7 +137,7 @@ export function ConclusionCard({
         )}
       </div>
       {open && (hasError ? (
-        <p className="text-xs text-red-300">{t("discussion.conclusion_parse_error")}</p>
+        <p className="text-xs text-danger">{t("discussion.conclusion_parse_error")}</p>
       ) : (
         <>
           <CapturedSessionBadge session={conclusion.captured_session} />

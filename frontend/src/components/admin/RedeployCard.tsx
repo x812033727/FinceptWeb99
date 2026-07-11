@@ -136,11 +136,11 @@ export function RedeployCard() {
                   key={p}
                   className={`px-2 py-0.5 rounded border ${
                     failedHere
-                      ? "border-red-500 bg-red-500/15 text-red-600"
+                      ? "border-danger bg-danger/15 text-danger"
                       : current
-                      ? "border-amber-500 bg-amber-500/15 text-amber-600"
+                      ? "border-warning bg-warning/15 text-warning"
                       : reached
-                      ? "border-green-500/40 bg-green-500/10 text-green-600"
+                      ? "border-success/40 bg-success/10 text-success"
                       : "border-border bg-background text-muted-foreground"
                   }`}
                 >
@@ -192,7 +192,7 @@ export function RedeployCard() {
 
           {/* Failure banner */}
           {phase === "failed" && data?.error && (
-            <div className="rounded border border-red-500/40 bg-red-500/10 p-2 text-xs text-red-600 dark:text-red-400 space-y-1">
+            <div className="rounded border border-danger/40 bg-danger/10 p-2 text-xs text-danger space-y-1">
               <div className="font-medium">
                 {t("admin.redeploy.error_label")}: {data.error}
               </div>
@@ -207,7 +207,7 @@ export function RedeployCard() {
                 </button>
               )}
               {showLog && data.log_tail && (
-                <pre className="mt-1 max-h-48 overflow-auto rounded bg-black/30 p-2 font-mono text-[10px] text-red-100 whitespace-pre-wrap">
+                <pre className="mt-1 max-h-48 overflow-auto rounded bg-black/30 p-2 font-mono text-[10px] text-danger whitespace-pre-wrap">
                   {data.log_tail.join("\n")}
                 </pre>
               )}
@@ -216,7 +216,7 @@ export function RedeployCard() {
 
           {/* Reload toast */}
           {reloadCountdown !== null && (
-            <div className="rounded border border-green-500/40 bg-green-500/10 p-2 text-xs text-green-700 dark:text-green-400 flex items-center justify-between gap-2">
+            <div className="rounded border border-success/40 bg-success/10 p-2 text-xs text-success flex items-center justify-between gap-2">
               <span>
                 {t("admin.redeploy.reload_toast")} ({reloadCountdown}s)
               </span>
@@ -234,7 +234,7 @@ export function RedeployCard() {
             <button
               disabled={running || trigger.isPending}
               onClick={handleClick}
-              className="text-xs px-3 py-1.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="text-xs px-3 py-1.5 rounded border border-warning/40 bg-warning/10 text-warning hover:bg-warning/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {running || trigger.isPending
                 ? t("admin.redeploy.button_running")

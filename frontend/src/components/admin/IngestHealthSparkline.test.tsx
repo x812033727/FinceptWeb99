@@ -16,7 +16,7 @@ describe("classifyDay", () => {
       date: "2026-05-01", ok: 5, silent_deny: 2, failed: 1, skipped: 0,
     });
     expect(out.label).toBe("failed");
-    expect(out.cls).toContain("red-500");
+    expect(out.cls).toContain("danger");
   });
 
   it("flags silent_deny purple when no failures", () => {
@@ -33,7 +33,7 @@ describe("classifyDay", () => {
       date: "2026-05-01", ok: 2, silent_deny: 0, failed: 0, skipped: 3,
     });
     expect(mixed.label).toBe("ok");
-    expect(mixed.cls).toContain("green-500");
+    expect(mixed.cls).toContain("success");
 
     // All-skipped (no ok runs) → amber. Distinguishes "the cron is
     // currently disabled" from "the cron ran fine".
@@ -41,7 +41,7 @@ describe("classifyDay", () => {
       date: "2026-05-01", ok: 0, silent_deny: 0, failed: 0, skipped: 4,
     });
     expect(allSkipped.label).toBe("skipped");
-    expect(allSkipped.cls).toContain("amber-500");
+    expect(allSkipped.cls).toContain("warning");
   });
 
   it("flags ok green when the day has only successful runs", () => {
@@ -49,7 +49,7 @@ describe("classifyDay", () => {
       date: "2026-05-01", ok: 10, silent_deny: 0, failed: 0, skipped: 0,
     });
     expect(out.label).toBe("ok");
-    expect(out.cls).toContain("green-500");
+    expect(out.cls).toContain("success");
   });
 
   it("falls back to 'no data' when every counter is zero", () => {

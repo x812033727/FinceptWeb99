@@ -74,7 +74,7 @@ export function DiscussionToolbar({
             <Bot className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
             {t("discussion.toolbar.auto_run", "自動討論")}
             {autoRunOn && (
-              <span className="text-[10px] px-1 py-0 rounded bg-green-900/30 text-green-300 border border-green-800/50">
+              <span className="text-[10px] px-1 py-0 rounded bg-success/10 text-success border border-success/30">
                 ON
               </span>
             )}

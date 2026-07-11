@@ -325,7 +325,7 @@ export default function FinmindAdminCard() {
               the operator can verify env-var propagation directly in
               the UI. Renders regardless of /status outcome. */}
           {configQuery.isError && (
-            <div className="rounded border border-amber-300 bg-amber-50 p-3 text-xs dark:border-amber-700 dark:bg-amber-950">
+            <div className="rounded border border-warning/40 bg-warning/10 p-3 text-xs">
               <div className="font-semibold">
                 Resolved config unavailable
               </div>
@@ -384,7 +384,7 @@ export default function FinmindAdminCard() {
             // pointer instead of the alarming red banner.
             if (status === 503) {
               return (
-                <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm dark:bg-amber-950">
+                <div className="rounded border border-warning/40 bg-warning/10 p-3 text-sm">
                   <div className="font-semibold">
                     FinMind clone DB unreachable
                   </div>
@@ -414,8 +414,8 @@ export default function FinmindAdminCard() {
                     <span
                       className={
                         statusQuery.data.alembic.at_head
-                          ? "text-green-600"
-                          : "text-amber-600 dark:text-amber-400"
+                          ? "text-success"
+                          : "text-warning"
                       }
                     >
                       {statusQuery.data.alembic.at_head ? "✓" : "✗"}{" "}
@@ -427,8 +427,8 @@ export default function FinmindAdminCard() {
                     <span
                       className={
                         statusQuery.data.catalog.ok
-                          ? "text-green-600"
-                          : "text-amber-600 dark:text-amber-400"
+                          ? "text-success"
+                          : "text-warning"
                       }
                     >
                       {statusQuery.data.catalog.seeded}/
@@ -472,8 +472,8 @@ export default function FinmindAdminCard() {
             <div
               className={`rounded border p-3 ${
                 setupQuery.data.next_action
-                  ? "border-amber-400 bg-amber-50 dark:bg-amber-950"
-                  : "border-green-400 bg-green-50 dark:bg-green-950"
+                  ? "border-warning/40 bg-warning/10"
+                  : "border-success/40 bg-success/10"
               }`}
             >
               <h3 className="mb-2 text-sm font-semibold">
@@ -490,8 +490,8 @@ export default function FinmindAdminCard() {
                     <span
                       className={
                         c.passed
-                          ? "text-green-600"
-                          : "text-amber-600 dark:text-amber-400"
+                          ? "text-success"
+                          : "text-warning"
                       }
                     >
                       {c.passed ? "✓" : "✗"}
@@ -590,8 +590,8 @@ export default function FinmindAdminCard() {
               <div
                 className={`mt-2 rounded border p-2 text-xs ${
                   testConnectionResult.ok
-                    ? "border-green-400 bg-green-50 dark:bg-green-950"
-                    : "border-amber-400 bg-amber-50 dark:bg-amber-950"
+                    ? "border-success/40 bg-success/10"
+                    : "border-warning/40 bg-warning/10"
                 }`}
               >
                 <div className="font-semibold">
@@ -742,7 +742,7 @@ export default function FinmindAdminCard() {
                         {d.dataset_code}
                         {d.sponsor_tier && (
                           <span
-                            className="ml-1 rounded bg-amber-100 px-1 text-[10px] text-amber-800"
+                            className="ml-1 rounded bg-warning/15 px-1 text-[10px] text-warning"
                             title="FinMind sponsor-tier dataset"
                           >
                             sponsor
@@ -754,7 +754,7 @@ export default function FinmindAdminCard() {
                       </td>
                       <td className="py-1.5 pr-2 font-mono text-muted-foreground">
                         {d.local_table || (
-                          <span className="italic text-amber-600">
+                          <span className="italic text-warning">
                             (not built)
                           </span>
                         )}
@@ -835,9 +835,9 @@ export default function FinmindAdminCard() {
                           <span
                             className={`ml-1 text-[10px] ${
                               runResults[d.dataset_code].status === "done"
-                                ? "text-green-600"
+                                ? "text-success"
                                 : runResults[d.dataset_code].status === "skipped"
-                                  ? "text-amber-600"
+                                  ? "text-warning"
                                   : "text-destructive"
                             }`}
                             title={

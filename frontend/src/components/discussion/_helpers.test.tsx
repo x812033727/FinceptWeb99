@@ -85,12 +85,12 @@ describe("pctClass", () => {
   });
 
   it("green for non-negative", () => {
-    expect(pctClass(0)).toBe("text-green-500");
-    expect(pctClass(0.05)).toBe("text-green-500");
+    expect(pctClass(0)).toBe("text-up");
+    expect(pctClass(0.05)).toBe("text-up");
   });
 
   it("red for negative", () => {
-    expect(pctClass(-0.001)).toBe("text-red-500");
+    expect(pctClass(-0.001)).toBe("text-down");
   });
 });
 

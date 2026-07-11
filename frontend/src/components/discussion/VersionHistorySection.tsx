@@ -133,9 +133,9 @@ export function VersionHistorySection({ strategyId }: { strategyId: string }) {
                         <span
                           className={`text-[10px] ${
                             isActive
-                              ? "text-emerald-300"
+                              ? "text-success"
                               : v.status === "rolled_back"
-                                ? "text-red-300"
+                                ? "text-danger"
                                 : "text-muted-foreground"
                           }`}
                         >
@@ -150,7 +150,7 @@ export function VersionHistorySection({ strategyId }: { strategyId: string }) {
                             disabled={rollbackMut.isPending}
                             className="px-2 py-0.5 text-[10px] border border-border
                                        text-muted-foreground rounded
-                                       hover:text-amber-300 hover:border-amber-700/40
+                                       hover:text-warning hover:border-warning/30
                                        disabled:opacity-50"
                           >
                             {t("discussion.versions.rollback")}

@@ -21,10 +21,10 @@ export function ConclusionDiffCard({ diff }: { diff?: PostMortemDiff | null }) {
   // grasps the magnitude at a glance.
   const overlapColor =
     overlapPct >= 70
-      ? "text-emerald-300"
+      ? "text-success"
       : overlapPct >= 40
-        ? "text-amber-300"
-        : "text-red-300";
+        ? "text-warning"
+        : "text-danger";
 
   const consensusDelta = diff.consensus_score_delta ?? 0;
   const hasNoChanges =
@@ -53,14 +53,14 @@ export function ConclusionDiffCard({ diff }: { diff?: PostMortemDiff | null }) {
         <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
           {diff.symbols_added.length > 0 && (
             <span className="flex items-center gap-1">
-              <span className="text-emerald-300 font-medium">
+              <span className="text-success font-medium">
                 + {t("discussion.diff.added")}:
               </span>
               {diff.symbols_added.map((s) => (
                 <span
                   key={s}
-                  className="font-mono px-1 py-0.5 rounded bg-emerald-900/30
-                             text-emerald-200 border border-emerald-800/40"
+                  className="font-mono px-1 py-0.5 rounded bg-success/10
+                             text-success border border-success/30"
                 >
                   {s}
                 </span>
@@ -69,14 +69,14 @@ export function ConclusionDiffCard({ diff }: { diff?: PostMortemDiff | null }) {
           )}
           {diff.symbols_removed.length > 0 && (
             <span className="flex items-center gap-1">
-              <span className="text-red-300 font-medium">
+              <span className="text-danger font-medium">
                 − {t("discussion.diff.removed")}:
               </span>
               {diff.symbols_removed.map((s) => (
                 <span
                   key={s}
-                  className="font-mono px-1 py-0.5 rounded bg-red-950/30
-                             text-red-200 border border-red-900/40"
+                  className="font-mono px-1 py-0.5 rounded bg-danger/10
+                             text-danger border border-danger/30"
                 >
                   {s}
                 </span>
@@ -99,11 +99,11 @@ export function ConclusionDiffCard({ diff }: { diff?: PostMortemDiff | null }) {
                   <span className="font-mono w-12 shrink-0">{sym}</span>
                   <span className="text-muted-foreground">
                     {change.orig.toFixed(2)} →{" "}
-                    <span className={positive ? "text-emerald-300" : "text-red-300"}>
+                    <span className={positive ? "text-success" : "text-danger"}>
                       {change.post.toFixed(2)}
                     </span>
                   </span>
-                  <span className={positive ? "text-emerald-400" : "text-red-400"}>
+                  <span className={positive ? "text-success" : "text-danger"}>
                     ({positive ? "+" : ""}
                     {change.delta.toFixed(2)})
                   </span>
@@ -122,14 +122,14 @@ export function ConclusionDiffCard({ diff }: { diff?: PostMortemDiff | null }) {
         {consensusDelta !== 0 && (
           <span>
             {t("discussion.diff.consensus_delta")}:{" "}
-            <span className={consensusDelta > 0 ? "text-emerald-300" : "text-red-300"}>
+            <span className={consensusDelta > 0 ? "text-success" : "text-danger"}>
               {consensusDelta > 0 ? "+" : ""}
               {consensusDelta.toFixed(2)}
             </span>
           </span>
         )}
         {diff.time_horizon_changed && (
-          <span className="text-amber-300">
+          <span className="text-warning">
             {t("discussion.diff.horizon_changed")}
           </span>
         )}

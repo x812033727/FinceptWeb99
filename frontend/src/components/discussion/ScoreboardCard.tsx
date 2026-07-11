@@ -141,7 +141,7 @@ export function ScoreboardCard({
               …
             </p>
           ) : isError ? (
-            <p className="text-[10px] text-red-400">
+            <p className="text-[10px] text-danger">
               {(error as Error)?.message || t("discussion.scoreboard_error")}
             </p>
           ) : !data || data.rows.length === 0 ? (
@@ -167,7 +167,7 @@ export function ScoreboardCard({
                       loading debug payload…
                     </p>
                   ) : debugQuery.isError ? (
-                    <p className="text-[10px] text-red-400">
+                    <p className="text-[10px] text-danger">
                       {(debugQuery.error as Error)?.message || "debug fetch failed"}
                     </p>
                   ) : debugQuery.data?.debug ? (

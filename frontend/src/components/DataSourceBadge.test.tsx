@@ -41,14 +41,14 @@ describe("DataSourceBadge", () => {
     expect(span!.textContent).toBe("—");
     expect(span!.getAttribute("title")).toContain("blocked");
     // Distinct red styling for the fully-blocked state vs amber for soft fallback.
-    expect(span!.className).toContain("text-red-400");
+    expect(span!.className).toContain("text-danger");
   });
 
   it("uses amber styling for soft-fallback sources (stooq / finmind)", () => {
     for (const source of ["stooq", "finmind"]) {
       const { container } = render(<DataSourceBadge source={source} />);
       const span = container.querySelector("span") as HTMLElement;
-      expect(span.className).toContain("text-amber-400");
+      expect(span.className).toContain("text-warning");
     }
   });
 });

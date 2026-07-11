@@ -133,7 +133,7 @@ export function OptionsPanel({ symbol }: { symbol: string }) {
               onClick={() => setOptionType(tt)}
               className={`px-4 py-1.5 transition-colors ${
                 optionType === tt
-                  ? tt === "call" ? "bg-green-900/40 text-green-400" : "bg-red-900/40 text-red-400"
+                  ? tt === "call" ? "bg-up/15 text-up" : "bg-down/15 text-down"
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >

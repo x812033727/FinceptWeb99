@@ -54,7 +54,7 @@ describe("BaselineDeltaBadge", () => {
       />,
     );
     expect(screen.getByText(/\+25%/)).toBeInTheDocument();
-    expect(container.querySelector(".text-emerald-200")).toBeTruthy();
+    expect(container.querySelector(".text-success")).toBeTruthy();
   });
 
   it("renders pending brier chip when verify_pending is true", () => {
@@ -88,6 +88,6 @@ describe("BaselineDeltaBadge", () => {
         })}
       />,
     );
-    expect(container.querySelector(".text-amber-200")).toBeTruthy();
+    expect(container.querySelector(".text-warning")).toBeTruthy();
   });
 });

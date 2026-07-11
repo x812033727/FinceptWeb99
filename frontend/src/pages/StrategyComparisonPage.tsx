@@ -154,8 +154,8 @@ export default function StrategyComparisonPage() {
             type="button"
             onClick={runCompare}
             disabled={selectedIds.length === 0 || compare.isPending}
-            className="px-2 py-0.5 text-[11px] bg-emerald-700 text-white rounded
-                       hover:bg-emerald-600 disabled:opacity-50"
+            className="px-2 py-0.5 text-[11px] bg-success text-white rounded
+                       hover:bg-success/90 disabled:opacity-50"
           >
             {compare.isPending
               ? t("common.computing")

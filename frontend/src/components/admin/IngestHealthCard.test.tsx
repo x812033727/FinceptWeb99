@@ -23,7 +23,7 @@ describe("deriveIngestBadge", () => {
   it("returns ok when last run succeeded", () => {
     const out = deriveIngestBadge(baseRow);
     expect(out.text).toBe("ok");
-    expect(out.cls).toContain("text-green-400");
+    expect(out.cls).toContain("text-success");
   });
 
   it("returns skipped when error starts with 'skipped:' (FinMind paywall fail-soft case)", () => {
@@ -33,7 +33,7 @@ describe("deriveIngestBadge", () => {
       error: "skipped: FinMind paywalled this dataset (TaiwanStockMonthRevenue ...)",
     });
     expect(out.text).toBe("skipped");
-    expect(out.cls).toContain("text-amber-400");
+    expect(out.cls).toContain("text-warning");
   });
 
   it("treats 'Skipped' (case-insensitive) as skipped", () => {
@@ -81,7 +81,7 @@ describe("deriveIngestBadge", () => {
       error: "HTTP 503 Service Unavailable (failure #1; auto-backoff armed)",
     });
     expect(out.text).toBe("error");
-    expect(out.cls).toContain("text-red-400");
+    expect(out.cls).toContain("text-danger");
   });
 
   it("returns error when error is null but ok is false (defensive)", () => {
@@ -163,7 +163,7 @@ describe("deriveSchedulerBadge", () => {
       ttl_seconds: 180,
     });
     expect(out.text).toBe("scheduler dead");
-    expect(out.cls).toContain("text-red-400");
+    expect(out.cls).toContain("text-danger");
     expect(out.tooltip).toContain("No heartbeat in Redis");
   });
 
@@ -177,7 +177,7 @@ describe("deriveSchedulerBadge", () => {
     });
     expect(out.text).toContain("75");
     expect(out.text).toContain("scheduler stale");
-    expect(out.cls).toContain("text-amber-400");
+    expect(out.cls).toContain("text-warning");
     expect(out.tooltip).toContain("Event loop may be wedged");
   });
 
@@ -191,7 +191,7 @@ describe("deriveSchedulerBadge", () => {
     });
     expect(out.text).toContain("12");
     expect(out.text).toContain("scheduler ok");
-    expect(out.cls).toContain("text-green-400");
+    expect(out.cls).toContain("text-success");
   });
 
   it("rounds the age to the nearest second", () => {

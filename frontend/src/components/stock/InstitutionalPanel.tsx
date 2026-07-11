@@ -51,7 +51,7 @@ export function InstitutionalPanel({ symbol }: { symbol: string }) {
                 <th className="text-left py-2 pr-4 font-medium">日期</th>
                 <th className="text-right py-2 px-2 font-medium">外資買</th>
                 <th className="text-right py-2 px-2 font-medium">外資賣</th>
-                <th className="text-right py-2 px-2 font-medium text-green-400">外資淨</th>
+                <th className="text-right py-2 px-2 font-medium text-up">外資淨</th>
                 <th className="text-right py-2 px-2 font-medium">投信買</th>
                 <th className="text-right py-2 px-2 font-medium">投信賣</th>
                 <th className="text-right py-2 px-2 font-medium text-blue-400">投信淨</th>
@@ -68,15 +68,15 @@ export function InstitutionalPanel({ symbol }: { symbol: string }) {
                     <td className="py-1.5 pr-4 text-muted-foreground">{r.date}</td>
                     <td className="text-right py-1.5 px-2">{fmtK(r.fini_buy)}</td>
                     <td className="text-right py-1.5 px-2">{fmtK(r.fini_sell)}</td>
-                    <td className={`text-right py-1.5 px-2 font-medium ${finiNet >= 0 ? "text-green-400" : "text-red-400"}`}>
+                    <td className={`text-right py-1.5 px-2 font-medium ${finiNet >= 0 ? "text-up" : "text-down"}`}>
                       {finiNet >= 0 ? "+" : ""}{fmtK(Math.abs(finiNet))}
                     </td>
                     <td className="text-right py-1.5 px-2">{fmtK(r.sitc_buy)}</td>
                     <td className="text-right py-1.5 px-2">{fmtK(r.sitc_sell)}</td>
-                    <td className={`text-right py-1.5 px-2 font-medium ${sitcNet >= 0 ? "text-green-400" : "text-red-400"}`}>
+                    <td className={`text-right py-1.5 px-2 font-medium ${sitcNet >= 0 ? "text-up" : "text-down"}`}>
                       {sitcNet >= 0 ? "+" : ""}{fmtK(Math.abs(sitcNet))}
                     </td>
-                    <td className={`text-right py-1.5 px-2 font-medium ${dealerNet >= 0 ? "text-green-400" : "text-red-400"}`}>
+                    <td className={`text-right py-1.5 px-2 font-medium ${dealerNet >= 0 ? "text-up" : "text-down"}`}>
                       {dealerNet >= 0 ? "+" : ""}{fmtK(Math.abs(dealerNet))}
                     </td>
                   </tr>

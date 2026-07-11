@@ -161,7 +161,7 @@ export function PostMortemGapsCard() {
                       aria-label={`${row.mentions} mentions across ${row.discussions_mentioning} discussions`}
                     >
                       <div
-                        className="h-full bg-amber-500/70"
+                        className="h-full bg-warning/70"
                         style={{
                           width: `${Math.max((row.mentions / maxMentions) * 100, 2)}%`,
                         }}

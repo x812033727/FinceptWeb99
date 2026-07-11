@@ -163,7 +163,7 @@ export default function StockDetailPage() {
                 </span>
               )}
               {isETF && (
-                <span className="ml-2 text-xs bg-amber-500/15 text-amber-500 px-1.5 py-0.5 rounded font-medium">
+                <span className="ml-2 text-xs bg-warning/15 text-warning px-1.5 py-0.5 rounded font-medium">
                   ETF
                 </span>
               )}
@@ -174,7 +174,7 @@ export default function StockDetailPage() {
           <div className="text-2xl sm:text-3xl font-bold text-foreground tabular-nums">
             {displayPrice !== undefined ? fmt(displayPrice) : "—"}
           </div>
-          <div className={`text-xs sm:text-sm font-medium tabular-nums ${isPositive ? "text-green-400" : "text-red-400"}`}>
+          <div className={`text-xs sm:text-sm font-medium tabular-nums ${isPositive ? "text-up" : "text-down"}`}>
             {displayChange !== undefined ? fmtPct(displayChange, true) : "—"}
           </div>
           <div className="text-[10px] sm:text-xs text-muted-foreground mt-0.5">

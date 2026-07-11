@@ -406,7 +406,7 @@ function StrategyFormBlock({
         )}
       </fieldset>
       {error ? (
-        <p className="text-[11px] text-red-300">
+        <p className="text-[11px] text-danger">
           {(error as { response?: { data?: { detail?: string } } })
             ?.response?.data?.detail ?? (error as Error).message}
         </p>
@@ -460,7 +460,7 @@ function StrategyRow({
             </span>
             {strategy.auto_schedule_enabled ? (
               <span
-                className="ml-2 text-[10px] bg-emerald-900/40 text-emerald-300 border border-emerald-800/50 rounded px-1 py-0.5"
+                className="ml-2 text-[10px] bg-success/15 text-success border border-success/30 rounded px-1 py-0.5"
                 title={t(
                   "strategy.auto_schedule_active_tip",
                   "每 {{h}}h 自動掃 {{n}} 日（offset {{off}}）",
@@ -495,7 +495,7 @@ function StrategyRow({
           type="button"
           onClick={onDelete}
           disabled={isDeleting}
-          className="text-[11px] text-red-300 hover:text-red-200 disabled:opacity-50 shrink-0"
+          className="text-[11px] text-danger hover:text-danger/80 disabled:opacity-50 shrink-0"
         >
           {t("common.delete", "刪除")}
         </button>
@@ -507,7 +507,7 @@ function StrategyRow({
             .map(([pid, w]) => (
               <span
                 key={pid}
-                className="text-[10px] bg-emerald-900/30 text-emerald-300 border border-emerald-800/50 rounded px-1.5 py-0.5 font-mono"
+                className="text-[10px] bg-success/10 text-success border border-success/30 rounded px-1.5 py-0.5 font-mono"
                 title={t("strategy.weight_tooltip", "PR-C 學到的權重")}
               >
                 {pid}: {w.toFixed(2)}
@@ -528,7 +528,7 @@ function StrategyRow({
         <button
           type="button"
           onClick={() => setShowBrierTrend((v) => !v)}
-          className="text-emerald-300 hover:text-emerald-200"
+          className="text-success hover:text-success/80"
           title={t(
             "strategy.brier_trend_button_tip",
             "每個已完成 sweep 一個點;raw vs calibrated Brier 趨勢線",
@@ -542,7 +542,7 @@ function StrategyRow({
           type="button"
           onClick={() => learnMut.mutate()}
           disabled={learnMut.isPending}
-          className="text-emerald-300 hover:text-emerald-200 disabled:opacity-50"
+          className="text-success hover:text-success/80 disabled:opacity-50"
           title={t("strategy.learn_tooltip",
                    "依過往 sweep 命中率重算 persona 權重")}
         >
@@ -560,8 +560,8 @@ function StrategyRow({
       {learnResult ? (
         <p className={
           learnResult.updated
-            ? "text-[10px] text-emerald-300"
-            : "text-[10px] text-amber-300"
+            ? "text-[10px] text-success"
+            : "text-[10px] text-warning"
         }>
           {learnResult.updated
             ? t("strategy.learn_done",
@@ -572,7 +572,7 @@ function StrategyRow({
         </p>
       ) : null}
       {learnMut.error ? (
-        <p className="text-[10px] text-red-300">
+        <p className="text-[10px] text-danger">
           {(learnMut.error as { response?: { data?: { detail?: string } } })
             ?.response?.data?.detail ?? (learnMut.error as Error).message}
         </p>
@@ -732,7 +732,7 @@ function WalkForwardSection({ strategy }: { strategy: StrategyTemplate }) {
                 : t("strategy.wf_submit", "🚀 啟動 Walk-Forward")}
             </button>
             {wfResult ? (
-              <span className="text-emerald-300">
+              <span className="text-success">
                 {t(
                   "strategy.wf_success",
                   "✔ 已排定 {{n}} 個 fold,最早 train={{first}} → 最後 test 結束={{last}}",
@@ -748,7 +748,7 @@ function WalkForwardSection({ strategy }: { strategy: StrategyTemplate }) {
               </span>
             ) : null}
             {errDetail ? (
-              <span className="text-red-300">⚠ {errDetail}</span>
+              <span className="text-danger">⚠ {errDetail}</span>
             ) : null}
           </div>
         </div>

@@ -66,6 +66,29 @@ async def _resolve_api_key(
     return getattr(settings, attr, "") if attr else ""
 
 
+def default_model_for(provider: str | None) -> str:
+    """Default model id used when a caller doesn't specify one.
+
+    Mirrors the per-provider fallbacks in `stream_chat`'s dispatch
+    below — callers that need to LABEL the model actually used (e.g.
+    the stock-report archive persisting a `model` column) resolve it
+    here instead of duplicating the literals.
+    """
+    prov = (provider or settings.DEFAULT_LLM_PROVIDER).lower()
+    defaults = {
+        "openai": "gpt-4o-mini",
+        "anthropic": "claude-haiku-4-5-20251001",
+        "gemini": "gemini-2.0-flash",
+        "ollama": "llama3.2",
+        "minimax": settings.MINIMAX_MODEL,
+        "groq": settings.GROQ_MODEL,
+        "deepseek": settings.DEEPSEEK_MODEL,
+        "openrouter": settings.OPENROUTER_MODEL,
+        "claude_agent": settings.CLAUDE_AGENT_MODEL,
+    }
+    return defaults.get(prov, "")
+
+
 # ── provider dispatch ──────────────────────────────────────────────
 
 async def stream_chat(

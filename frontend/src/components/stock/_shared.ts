@@ -36,8 +36,8 @@ export const CRYPTO_PERIOD: Record<Period, { interval: string; limit: number }> 
 
 // ── tab unions ────────────────────────────────────────────────────
 
-export type USTab = "chart" | "financials" | "options" | "news";
-export type TWTab = "chart" | "health" | "valuation" | "holdings" | "dividends" | "institutional" | "margin" | "revenue" | "news";
+export type USTab = "chart" | "financials" | "options" | "news" | "ai_report";
+export type TWTab = "chart" | "health" | "valuation" | "holdings" | "dividends" | "institutional" | "margin" | "revenue" | "news" | "ai_report";
 export type CryptoTab = "chart" | "news";
 
 // ── data shapes ───────────────────────────────────────────────────

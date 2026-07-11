@@ -31,6 +31,7 @@ import { MarginPanel } from "@/components/stock/MarginPanel";
 import { NewsFeed } from "@/components/stock/NewsFeed";
 import { OptionsPanel } from "@/components/stock/OptionsPanel";
 import { RevenuePanel } from "@/components/stock/RevenuePanel";
+import { StockAIReportPanel } from "@/components/stock/StockAIReportPanel";
 import { ValuationBandPanel } from "@/components/stock/ValuationBandPanel";
 
 export default function StockDetailPage() {
@@ -165,6 +166,7 @@ export default function StockDetailPage() {
         { key: "financials", label: t("stock.fundamentals"), active: usTab === "financials", onClick: () => setUsTab("financials") },
         { key: "options", label: t("stock.options"), active: usTab === "options", onClick: () => setUsTab("options") },
         { key: "news", label: t("stock.news"), active: usTab === "news", onClick: () => setUsTab("news") },
+        { key: "ai_report", label: t("stock.ai_report.tab"), active: usTab === "ai_report", onClick: () => setUsTab("ai_report") },
       ];
     }
     if (mkt === "CRYPTO") {
@@ -181,6 +183,7 @@ export default function StockDetailPage() {
         { key: "institutional", label: "法人買賣超", active: twTab === "institutional", onClick: () => setTwTab("institutional") },
         { key: "margin", label: "融資融券", active: twTab === "margin", onClick: () => setTwTab("margin") },
         { key: "news", label: t("stock.news"), active: twTab === "news", onClick: () => setTwTab("news") },
+        { key: "ai_report", label: t("stock.ai_report.tab"), active: twTab === "ai_report", onClick: () => setTwTab("ai_report") },
       ];
     }
     return [
@@ -192,6 +195,7 @@ export default function StockDetailPage() {
       { key: "margin", label: "融資融券", active: twTab === "margin", onClick: () => setTwTab("margin") },
       { key: "revenue", label: "月營收", active: twTab === "revenue", onClick: () => setTwTab("revenue") },
       { key: "news", label: t("stock.news"), active: twTab === "news", onClick: () => setTwTab("news") },
+      { key: "ai_report", label: t("stock.ai_report.tab"), active: twTab === "ai_report", onClick: () => setTwTab("ai_report") },
     ];
   })();
 
@@ -352,6 +356,11 @@ export default function StockDetailPage() {
           <OptionsPanel symbol={sym} />
         </div>
       )}
+      {mkt === "US" && usTab === "ai_report" && (
+        <div className="bg-card border border-border rounded-lg overflow-hidden">
+          <StockAIReportPanel symbol={sym} market="US" />
+        </div>
+      )}
 
       {mkt === "TW" ? (
         <>
@@ -391,6 +400,11 @@ export default function StockDetailPage() {
             </div>
           )}
           {twTab === "news" && <NewsFeed symbol={sym} market="TW" />}
+          {twTab === "ai_report" && (
+            <div className="bg-card border border-border rounded-lg overflow-hidden">
+              <StockAIReportPanel symbol={sym} market="TW" />
+            </div>
+          )}
         </>
       ) : mkt === "CRYPTO" ? (
         cryptoTab === "news" ? <NewsFeed symbol={sym} market="CRYPTO" /> : null

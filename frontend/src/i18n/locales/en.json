@@ -1,4 +1,15 @@
 {
+  "chart": {
+    "ind_ma": "MA",
+    "ind_ema": "EMA",
+    "ind_boll": "BOLL",
+    "ind_rsi": "RSI",
+    "ind_macd": "MACD",
+    "ind_kd": "KD",
+    "ind_none": "Off",
+    "ind_main_group": "Overlay indicators",
+    "ind_sub_group": "Sub-pane indicator"
+  },
   "admin": {
     "title": "Admin",
     "tab": {

@@ -1,4 +1,15 @@
 {
+  "chart": {
+    "ind_ma": "MA",
+    "ind_ema": "EMA",
+    "ind_boll": "BOLL",
+    "ind_rsi": "RSI",
+    "ind_macd": "MACD",
+    "ind_kd": "KD",
+    "ind_none": "無",
+    "ind_main_group": "主圖指標",
+    "ind_sub_group": "副圖指標"
+  },
   "admin": {
     "title": "管理後台",
     "tab": {

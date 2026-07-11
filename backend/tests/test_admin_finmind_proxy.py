@@ -995,9 +995,9 @@ async def test_run_dataset_default_window_is_last_7_days(
     assert body["rows_written"] == 5
 
     # Default window: 7 days back from today.
-    from datetime import date, timedelta
-    assert captured["range_end"] == date.today()
-    assert captured["range_start"] == date.today() - timedelta(days=7)
+    from datetime import datetime, timedelta, timezone
+    assert captured["range_end"] == datetime.now(timezone.utc).date()
+    assert captured["range_start"] == datetime.now(timezone.utc).date() - timedelta(days=7)
 
 
 @pytest.mark.asyncio

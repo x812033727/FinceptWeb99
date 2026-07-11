@@ -343,6 +343,12 @@ class Settings(BaseSettings):
     # copy of all ~34 jobs (upstream quota burns N×).
     SCHEDULER_ENABLED: bool = True
 
+    # SQLAlchemy connection-pool budget for THIS process (ignored on
+    # SQLite). Budget rule: sum over all processes must stay under PG
+    # max_connections with reserve — see db/session.py.
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 10
+
     @property
     def metrics_allow_cidrs(self) -> list[str]:
         return [c.strip() for c in self.METRICS_ALLOW_CIDRS.split(",") if c.strip()]

@@ -3,9 +3,17 @@ from config import settings
 
 # SQLite (used by tests) uses StaticPool and rejects server-pool kwargs;
 # every other dialect (postgres in prod) wants the connection-pool tuning.
+# Pool sizes come from env so each process class gets its own budget:
+#   (web_workers × (DB_POOL_SIZE + DB_MAX_OVERFLOW)) + scheduler_pool
+#     ≤ PG max_connections − reserve
+# Compose sets the scheduler container to 5/5; web workers default 10/10.
 _engine_kwargs: dict = {"echo": settings.DEBUG}
 if not settings.DATABASE_URL.startswith("sqlite"):
-    _engine_kwargs.update(pool_pre_ping=True, pool_size=10, max_overflow=20)
+    _engine_kwargs.update(
+        pool_pre_ping=True,
+        pool_size=settings.DB_POOL_SIZE,
+        max_overflow=settings.DB_MAX_OVERFLOW,
+    )
 
 engine = create_async_engine(settings.DATABASE_URL, **_engine_kwargs)
 

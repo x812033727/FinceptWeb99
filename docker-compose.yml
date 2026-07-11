@@ -141,6 +141,10 @@ services:
       # `scheduler` service below does. Leaving this on would run every
       # job once per uvicorn worker (upstream quota burns N×).
       SCHEDULER_ENABLED: "false"
+      # Per-process SQLAlchemy pool budget: 2 web workers × (10+10)
+      # + scheduler (5+5) = 50 ≤ PG default max_connections 100 − reserve.
+      DB_POOL_SIZE:     ${DB_POOL_SIZE:-10}
+      DB_MAX_OVERFLOW:  ${DB_MAX_OVERFLOW:-10}
     volumes:
       # Bidirectional channel for the admin one-click redeploy button.
       # Backend touches /host-trigger/deploy-trigger to fire the host's
@@ -168,6 +172,9 @@ services:
     environment:
       <<: *app-env
       SCHEDULER_ENABLED: "true"
+      # Scheduler runs batch jobs, not request traffic — small pool.
+      DB_POOL_SIZE: "5"
+      DB_MAX_OVERFLOW: "5"
     depends_on:
       postgres:
         condition: service_healthy

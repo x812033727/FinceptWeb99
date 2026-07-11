@@ -1,3 +1,5 @@
+import uuid
+from datetime import datetime
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Any
 
@@ -94,6 +96,9 @@ class BacktestRequest(BaseModel):
     slippage_bps: float = Field(0.0, ge=0, le=1_000)
     commission_bps: float = Field(0.0, ge=0, le=1_000)
     allow_short: bool = False
+    # ── C3 persistence — off by default ───────────────────────────
+    save: bool = False
+    name: str | None = Field(None, max_length=120)
 
     @field_validator("strategy")
     @classmethod
@@ -139,6 +144,9 @@ class BacktestResponse(BaseModel):
     trades: list[dict] | None = None
     metrics: dict | None = None
     error: str | None = None
+    # C3: id of the persisted row when the request carried save=true
+    # and the run completed; otherwise absent.
+    run_id: uuid.UUID | None = None
 
 
 class StrategyParamInfo(BaseModel):
@@ -155,3 +163,44 @@ class StrategyInfo(BaseModel):
     label: str
     description: str = ""
     params: list[StrategyParamInfo] = Field(default_factory=list)
+
+
+# ── C3: persisted backtest runs ───────────────────────────────────
+
+class BacktestRunSummary(BaseModel):
+    """List-view row — metrics only, no heavyweight curve/trades."""
+    id: uuid.UUID
+    name: str | None = None
+    strategy: str
+    created_at: datetime
+    config: dict = Field(default_factory=dict)
+    metrics: dict = Field(default_factory=dict)
+
+
+class BacktestRunDetail(BacktestRunSummary):
+    params: dict = Field(default_factory=dict)
+    equity_curve: list[dict] = Field(default_factory=list)
+    trades: list[dict] | None = None
+
+
+class BacktestRunListResponse(BaseModel):
+    items: list[BacktestRunSummary]
+    total: int
+    limit: int
+    offset: int
+
+
+class BacktestCompareRun(BaseModel):
+    id: uuid.UUID
+    name: str | None = None
+    strategy: str
+    created_at: datetime
+    metrics: dict = Field(default_factory=dict)
+    # Normalised equity (100 at the run's own first bar), aligned to
+    # the response-level `dates`; None where the run has no bar.
+    values: list[float | None]
+
+
+class BacktestCompareResponse(BaseModel):
+    dates: list[str]
+    runs: list[BacktestCompareRun]

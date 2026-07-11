@@ -611,7 +611,20 @@
       "max_drawdown": "最大回檔",
       "win_rate": "勝率",
       "trades": "交易次數",
-      "equity_curve": "權益曲線"
+      "equity_curve": "權益曲線",
+      "save_run": "儲存此次回測",
+      "run_name": "回測名稱",
+      "run_name_placeholder": "回測名稱（選填）",
+      "saved": "已儲存至歷史回測",
+      "history": "歷史回測",
+      "history_empty": "尚無已儲存的回測——執行前勾選「儲存此次回測」即可留存。",
+      "run_date": "日期",
+      "compare": "比較",
+      "compare_hint": "勾選 2–4 筆",
+      "normalized_equity": "標準化權益曲線（各回測起點 = 100）",
+      "metric": "指標",
+      "unnamed": "（未命名）",
+      "delete_confirm": "確定刪除這筆回測紀錄？"
     }
   },
   "ai": {

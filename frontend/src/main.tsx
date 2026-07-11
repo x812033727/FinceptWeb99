@@ -23,6 +23,25 @@ createRoot(document.getElementById("root")!).render(
   </StrictMode>
 );
 
+// ── Deploy-time lazy-chunk self-healing ─────────────────────────────
+// After a release, hashed chunk filenames change; a tab that loaded the
+// old index.html will 404 when it lazily imports a page chunk. Vite
+// surfaces that as a cancellable "vite:preloadError" window event.
+// Recovery: reload once so the browser picks up the new index.html
+// (the service worker's per-version caches make the fresh assets
+// available immediately). A sessionStorage timestamp guards against
+// reload loops — if a reload didn't fix it (e.g. the server is down),
+// we let the error propagate to the nearest ErrorBoundary instead of
+// spinning.
+const PRELOAD_RELOAD_KEY = "fincept:preload-error-reloaded-at";
+window.addEventListener("vite:preloadError", (event) => {
+  const last = Number(sessionStorage.getItem(PRELOAD_RELOAD_KEY) ?? 0);
+  if (Date.now() - last < 30_000) return; // recently reloaded — don't loop
+  sessionStorage.setItem(PRELOAD_RELOAD_KEY, String(Date.now()));
+  event.preventDefault(); // swallow the failed import; the reload supersedes it
+  window.location.reload();
+});
+
 // Register service worker for PWA offline support. The version query string
 // changes on every release, which (a) forces the browser to fetch the new
 // sw.js and (b) is read inside the worker to scope cache names per build,

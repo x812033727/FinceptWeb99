@@ -122,6 +122,55 @@ class OptimiseResponse(BaseModel):
     frontier: list[dict] = []
 
 
+# ── Rebalance plan (feature C5) ───────────────────────────────────
+
+class RebalancePlanRequest(BaseModel):
+    target: str = "optimise"          # "optimise" | "equal_weight" | "custom"
+    target_risk: str = "medium"       # optimise 模式的風險偏好
+    max_weight: float = 1.0
+    custom_weights: dict[str, float] | None = None
+    fee_bps: float = 0.0              # 券商費率(雙向皆計)
+    min_trade_pct: float = 1.0        # 小於總值此 % 的調整視為塵埃、略過
+    allow_odd_lot: bool = False       # TW 允許零股(否則 1000 股整張)
+
+    @field_validator("target")
+    @classmethod
+    def _target_ok(cls, v: str) -> str:
+        if v not in ("optimise", "equal_weight", "custom"):
+            raise ValueError("target must be optimise | equal_weight | custom")
+        return v
+
+
+class RebalanceTrade(BaseModel):
+    symbol: str
+    market: str
+    side: str
+    quantity: float
+    est_price: float
+    price_currency: str
+    est_value: float
+    est_fee: float
+    current_weight_pct: float
+    target_weight_pct: float
+
+
+class RebalanceFrozen(BaseModel):
+    symbol: str
+    market: str
+    current_value: float
+    reason: str
+
+
+class RebalancePlanResponse(BaseModel):
+    portfolio_id: str
+    currency: str
+    total_value: float
+    target: str = "optimise"
+    trades: list[RebalanceTrade] = []
+    frozen: list[RebalanceFrozen] = []
+    summary: dict
+
+
 # ── Risk dashboard (feature C1) ───────────────────────────────────
 
 class RiskVaREntry(BaseModel):

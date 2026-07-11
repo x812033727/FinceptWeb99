@@ -65,6 +65,7 @@ import models.news_article  # noqa: E402,F401
 import models.ohlcv_daily  # noqa: E402,F401
 import models.persona_override  # noqa: E402,F401
 import models.portfolio  # noqa: E402,F401
+import models.push_subscription  # noqa: E402,F401
 import models.quote_snapshot  # noqa: E402,F401
 import models.runtime_setting  # noqa: E402,F401
 import models.signal_audit_history  # noqa: E402,F401

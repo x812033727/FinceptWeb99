@@ -41,10 +41,16 @@ async def main() -> None:
 
     from api.websocket.manager import publish_alert_to_user, publish_update
     from data.crypto.kraken_ws import KrakenTickerPump
-    from services.notification_service import register_push_impl
+    from services.notification_service import register_push_impl, register_transport
+    from services.web_push_service import push_to_user as web_push_to_user
     from tasks.scheduler import scheduler, setup_jobs
 
     register_push_impl(publish_alert_to_user)
+    # Web Push (PR-D3): alerts fire in THIS process, so the browser
+    # push transport must be registered here too (the websocket
+    # transport above only publishes to Redis; web push posts to the
+    # push service directly). No-ops until VAPID keys are configured.
+    register_transport("web_push", web_push_to_user)
     setup_jobs()
     scheduler.start()
 

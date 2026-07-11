@@ -94,6 +94,18 @@
       "density_comfortable": "舒適",
       "density_compact": "緊湊"
     },
+    "notifications": {
+      "title": "通知",
+      "web_push": "瀏覽器推播",
+      "web_push_desc": "即使沒有開啟頁面，也能收到告警通知",
+      "web_push_on_desc": "此瀏覽器已啟用 — 離開網站也會收到告警",
+      "enable": "啟用",
+      "disable": "停用",
+      "denied": "此網站的通知權限已被封鎖 — 請到瀏覽器設定允許通知後重新整理",
+      "unsupported": "此瀏覽器不支援推播通知",
+      "unconfigured": "伺服器尚未設定推播（缺少 VAPID 金鑰）— 請聯絡管理員",
+      "error": "更新推播訂閱失敗，請再試一次"
+    },
     "admin_link": "開啟系統管理"
   },
   "nav": {

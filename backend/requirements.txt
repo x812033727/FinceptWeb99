@@ -56,6 +56,11 @@ websockets==13.1
 # Email (daily auto-run discussion report)
 aiosmtplib==3.0.2
 
+# Web Push (browser alert notifications, PR-D3) — sync `webpush()` is
+# called via asyncio.to_thread; pulls py-vapid + http-ece for VAPID
+# signing / payload encryption.
+pywebpush==2.3.0
+
 # Observability
 prometheus-client==0.21.0
 python-json-logger==2.0.7

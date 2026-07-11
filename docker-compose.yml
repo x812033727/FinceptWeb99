@@ -134,6 +134,12 @@ services:
       SMTP_USE_TLS:           ${SMTP_USE_TLS:-true}
       SMTP_USE_SSL:           ${SMTP_USE_SSL:-false}
       SMTP_TIMEOUT_SECONDS:   ${SMTP_TIMEOUT_SECONDS:-20}
+      # Web Push / VAPID (PR-D3 瀏覽器推播). Leave keys empty to
+      # disable the web_push transport (fail-closed, same shape as
+      # SMTP above). Same enumerated-keys passthrough rule.
+      VAPID_PUBLIC_KEY:       ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY:      ${VAPID_PRIVATE_KEY:-}
+      VAPID_CLAIMS_EMAIL:     ${VAPID_CLAIMS_EMAIL:-}
       # Shared lesson pools — JSON list-of-groups of user-id UUIDs that
       # share one lesson library (read union + cross-account dedup).
       # Same .env passthrough pattern as the vars above (no env_file on

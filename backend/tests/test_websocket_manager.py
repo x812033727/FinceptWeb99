@@ -3,7 +3,7 @@ Unit tests for the WebSocket manager's pure logic:
   - JWT authentication (valid token, timeout, malformed payload)
   - Delta suppression (< 0.01% change skipped)
   - Dead-socket pruning after send failure
-  - push_alert_to_user fan-out to multi-tab user connections
+  - alert local delivery fan-out to multi-tab user connections
   - Subscription state cleanup on disconnect
 
 These tests exercise the manager module directly without a running
@@ -226,7 +226,7 @@ async def test_dispatch_skips_expired_token_subscriber():
     assert ws_expired.sent == []
 
 
-# ── push_alert_to_user ────────────────────────────────────────────
+# ── _deliver_alert_local (was push_alert_to_user) ────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_push_alert_fans_out_to_all_user_tabs():
@@ -237,7 +237,7 @@ async def test_push_alert_fans_out_to_all_user_tabs():
     mgr._ws_token_exp[tab1] = _far_future()
     mgr._ws_token_exp[tab2] = _far_future()
 
-    await mgr.push_alert_to_user("user-1", {"type": "alert", "symbol": "AAPL"})
+    await mgr._deliver_alert_local("user-1", {"type": "alert", "symbol": "AAPL"})
 
     assert len(tab1.sent) == 1
     assert len(tab2.sent) == 1
@@ -254,7 +254,7 @@ async def test_push_alert_skips_expired_token_tabs():
     mgr._ws_token_exp[tab_fresh] = _far_future()
     mgr._ws_token_exp[tab_expired] = time.time() - 1
 
-    await mgr.push_alert_to_user("user-1", {"type": "alert"})
+    await mgr._deliver_alert_local("user-1", {"type": "alert"})
 
     assert len(tab_fresh.sent) == 1
     assert tab_expired.sent == []
@@ -265,7 +265,7 @@ async def test_push_alert_ignores_unknown_user():
     tab = FakeWS()
     mgr._user_ws["user-1"] = {tab}
 
-    await mgr.push_alert_to_user("user-unknown", {"type": "alert"})
+    await mgr._deliver_alert_local("user-unknown", {"type": "alert"})
     assert tab.sent == []
 
 
@@ -281,7 +281,7 @@ async def test_push_alert_prunes_dead_sockets_and_cleans_user_index():
     mgr._ws_token_exp[tab_ok] = _far_future()
     mgr._ws_token_exp[tab_dead] = _far_future()
 
-    await mgr.push_alert_to_user("user-1", {"type": "alert"})
+    await mgr._deliver_alert_local("user-1", {"type": "alert"})
 
     assert tab_dead not in mgr._user_ws["user-1"]
     assert tab_dead not in mgr._ws_user
@@ -297,6 +297,6 @@ async def test_push_alert_deletes_empty_user_bucket():
     mgr._ws_user[only_tab] = "user-1"
     mgr._ws_token_exp[only_tab] = _far_future()
 
-    await mgr.push_alert_to_user("user-1", {"type": "alert"})
+    await mgr._deliver_alert_local("user-1", {"type": "alert"})
 
     assert "user-1" not in mgr._user_ws

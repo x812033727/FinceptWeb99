@@ -334,6 +334,15 @@ class Settings(BaseSettings):
     METRICS_ALLOW_CIDRS: str = "127.0.0.1/32,::1/128"
     METRICS_AUTH_TOKEN: str = ""
 
+    # Whether THIS process hosts APScheduler + the Kraken WS pump.
+    # Default true keeps the single-process dev experience (uvicorn
+    # alone runs everything). The compose topology sets false on web
+    # workers and runs `python worker.py` as a dedicated scheduler
+    # container — see docker-compose.yml `scheduler` service. With N
+    # web workers and the default left on, every worker runs its own
+    # copy of all ~34 jobs (upstream quota burns N×).
+    SCHEDULER_ENABLED: bool = True
+
     @property
     def metrics_allow_cidrs(self) -> list[str]:
         return [c.strip() for c in self.METRICS_ALLOW_CIDRS.split(",") if c.strip()]

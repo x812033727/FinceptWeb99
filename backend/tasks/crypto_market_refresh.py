@@ -17,7 +17,7 @@ import asyncio
 import json
 import logging
 
-from api.websocket.manager import publish_update, _subscriptions
+from api.websocket.manager import get_global_subscribed, publish_update
 from cache.redis_cache import cache_set, key_quote
 from data.crypto.kraken_connector import get_quote as kraken_quote
 from services.crypto_market_service import TTL_QUOTE
@@ -25,15 +25,9 @@ from services.crypto_market_service import TTL_QUOTE
 logger = logging.getLogger(__name__)
 
 
-def _subscribed_crypto_symbols() -> set[str]:
-    """All crypto symbols any client is currently watching."""
-    symbols: set[str] = set()
-    for subs in _subscriptions.values():
-        for key in subs:
-            parts = key.split(":", 1)
-            if len(parts) == 2 and parts[1] == "CRYPTO":
-                symbols.add(parts[0])
-    return symbols
+async def _subscribed_crypto_symbols() -> set[str]:
+    """Global (all-worker) crypto subscription union — see the US variant."""
+    return await get_global_subscribed("CRYPTO")
 
 
 async def refresh_crypto_quotes() -> None:
@@ -42,10 +36,10 @@ async def refresh_crypto_quotes() -> None:
     No-op when no client is subscribed; otherwise fan out to Kraken in
     parallel and publish each result through the existing WS broadcast.
 
-    Deliberately NOT cross-worker locked — symbol set is this worker's
-    own `_subscriptions`; see refresh_us_quotes for the full rationale.
+    Single poller under the compose topology (scheduler process);
+    reads the global subscription registry — see refresh_us_quotes.
     """
-    symbols = _subscribed_crypto_symbols()
+    symbols = await _subscribed_crypto_symbols()
     if not symbols:
         return
 

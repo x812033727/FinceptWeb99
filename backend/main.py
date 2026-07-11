@@ -151,15 +151,40 @@ async def lifespan(app: FastAPI):
         _fm_settings.FINMIND_AUTO_INIT,
     )
 
-    from tasks.scheduler import scheduler, setup_jobs
-    from api.websocket.manager import push_alert_to_user, publish_update, start_pubsub_listener
+    from api.websocket.manager import publish_alert_to_user, publish_update, start_pubsub_listener
     from services.notification_service import register_push_impl
 
-    register_push_impl(push_alert_to_user)
-    setup_jobs()
-    scheduler.start()
+    # Alert push goes through Redis pub/sub in every topology: the fire
+    # site (often the scheduler process) publishes once, and each web
+    # worker's listener delivers to the sockets it owns. This also fixes
+    # the old multi-worker gap where an alert fired on worker A never
+    # reached a tab connected to worker B.
+    register_push_impl(publish_alert_to_user)
     await start_pubsub_listener()
 
+    # ── Scheduler + Kraken pump (per-topology) ───────────────────
+    # Compose runs a dedicated `scheduler` container (`python worker.py`)
+    # and sets SCHEDULER_ENABLED=false here so N web workers don't run
+    # N copies of every job. Default true = single-process dev mode.
+    crypto_pump = None
+    if settings.SCHEDULER_ENABLED:
+        from tasks.scheduler import scheduler, setup_jobs
+        from data.crypto.kraken_ws import KrakenTickerPump
+
+        setup_jobs()
+        scheduler.start()
+
+        # Kraken WebSocket pump — sub-second crypto ticker stream into
+        # the internal pub/sub. Replaces the 30s scheduler poll for
+        # symbols clients are actively subscribed to (the scheduler poll
+        # stays as a safety net in case the pump is disconnected).
+        crypto_pump = KrakenTickerPump(publish_update)
+        crypto_pump.start()
+        app.state.crypto_pump = crypto_pump
+
+    # Warmups stay in EVERY web worker regardless of topology: they
+    # populate per-process module caches (TW symbol map, S&P 500 list)
+    # that request handlers in THIS process read.
     # Kick off the TW symbol-map refresh immediately. The scheduler also
     # runs it daily, but APScheduler's IntervalTrigger only fires after one
     # full interval has elapsed, so without this the search endpoint and
@@ -195,20 +220,14 @@ async def lifespan(app: FastAPI):
     from data.us.sp500_universe import get_sp500_tickers
     asyncio.create_task(get_sp500_tickers())
 
-    # Kraken WebSocket pump — sub-second crypto ticker stream into the
-    # internal pub/sub. Replaces the 30s scheduler poll for symbols clients
-    # are actively subscribed to (the scheduler poll stays as a safety net
-    # in case the pump is disconnected).
-    from data.crypto.kraken_ws import KrakenTickerPump
-    crypto_pump = KrakenTickerPump(publish_update)
-    crypto_pump.start()
-    app.state.crypto_pump = crypto_pump
-
     yield
 
     # ── Shutdown ─────────────────────────────────────────────────
-    await crypto_pump.stop()
-    scheduler.shutdown(wait=False)
+    if crypto_pump is not None:
+        await crypto_pump.stop()
+    if settings.SCHEDULER_ENABLED:
+        from tasks.scheduler import scheduler
+        scheduler.shutdown(wait=False)
     await engine.dispose()
 
 

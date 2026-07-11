@@ -129,6 +129,93 @@ async def test_fires_alert_on_status_flag(
 
 
 @pytest.mark.asyncio
+async def test_transition_alert_writes_alert_event_row(
+    db_session: AsyncSession, owner: User,
+):
+    """PR-D4: a healthy→degraded transition also lands one
+    kind='strategy_health' row in alert_events for the owner."""
+    from sqlalchemy import select
+
+    from models.alert import AlertEvent
+
+    tmpl = await _make_strategy(db_session, owner.id, name="degrading")
+    with patch.object(cron, "acquire_lock", AsyncMock(return_value=True)), \
+         patch.object(cron, "release_lock", AsyncMock()), \
+         patch.object(cron, "notify_user", AsyncMock()):
+        out = await cron.run_health_monitor()
+    assert out["alerts_fired"] == 1
+
+    events = list((await db_session.scalars(
+        select(AlertEvent).where(AlertEvent.user_id == owner.id)
+    )).all())
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.kind == "strategy_health"
+    assert ev.alert_id is None
+    assert ev.symbol == "degrading"
+    assert ev.market == "TW"
+    assert "degrading" in ev.message
+    assert ev.payload["strategy_id"] == str(tmpl.id)
+    assert "low_sample" in ev.payload["status_flags"]
+
+
+@pytest.mark.asyncio
+async def test_no_realert_while_still_degraded(
+    db_session: AsyncSession, owner: User,
+):
+    """Second run with the strategy still degraded must NOT re-alert:
+    only the healthy→degraded transition fires."""
+    from sqlalchemy import select
+
+    from models.alert import AlertEvent
+
+    await _make_strategy(db_session, owner.id, name="sticky")
+    notify = AsyncMock()
+    with patch.object(cron, "acquire_lock", AsyncMock(return_value=True)), \
+         patch.object(cron, "release_lock", AsyncMock()), \
+         patch.object(cron, "notify_user", notify):
+        first = await cron.run_health_monitor()
+        second = await cron.run_health_monitor()
+
+    assert first["alerts_fired"] == 1
+    assert second["alerts_fired"] == 0
+    assert notify.await_count == 1
+    events = list((await db_session.scalars(select(AlertEvent))).all())
+    assert len(events) == 1
+
+
+@pytest.mark.asyncio
+async def test_no_alert_when_previous_snapshot_already_degraded(
+    db_session: AsyncSession, owner: User,
+):
+    """A pre-existing degraded snapshot (yesterday) suppresses the
+    alert even on this pod's first run — state lives in the health
+    table, not in process memory."""
+    from datetime import date
+
+    from models.strategy_health_metric import StrategyHealthMetric
+
+    tmpl = await _make_strategy(db_session, owner.id, name="known-bad")
+    db_session.add(StrategyHealthMetric(
+        strategy_id=tmpl.id,
+        snapshot_date=date.today() - timedelta(days=1),
+        sample_count_30d=0,
+        status_flags=["low_sample"],
+    ))
+    await db_session.commit()
+
+    notify = AsyncMock()
+    with patch.object(cron, "acquire_lock", AsyncMock(return_value=True)), \
+         patch.object(cron, "release_lock", AsyncMock()), \
+         patch.object(cron, "notify_user", notify):
+        out = await cron.run_health_monitor()
+
+    assert out["snapshots_written"] == 1
+    assert out["alerts_fired"] == 0
+    notify.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_per_strategy_failure_isolated(
     db_session: AsyncSession, owner: User,
 ):

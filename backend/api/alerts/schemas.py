@@ -1,3 +1,3 @@
-from schemas.alert import AlertCreate, AlertOut
+from schemas.alert import AlertCreate, AlertEventOut, AlertOut
 
-__all__ = ["AlertCreate", "AlertOut"]
+__all__ = ["AlertCreate", "AlertEventOut", "AlertOut"]

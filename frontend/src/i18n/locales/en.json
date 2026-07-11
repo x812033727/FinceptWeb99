@@ -921,7 +921,11 @@
     "triggered": "Triggered",
     "active": "Active",
     "no_alerts": "No alerts yet",
-    "created_at": "Created"
+    "created_at": "Created",
+    "history": "History",
+    "no_history": "No fired alerts yet",
+    "kind_price": "Price",
+    "kind_strategy_health": "Strategy Health"
   },
   "macro": {
     "title": "Macro",

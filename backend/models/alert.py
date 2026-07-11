@@ -1,8 +1,10 @@
 import enum
 import uuid
-from datetime import datetime
-from typing import TYPE_CHECKING
-from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, String
+from datetime import datetime, timezone
+from typing import Any, TYPE_CHECKING
+from sqlalchemy import (
+    JSON, Boolean, DateTime, Enum, Float, ForeignKey, Index, String, Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from db.base import Base
@@ -33,3 +35,40 @@ class PriceAlert(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
     user: Mapped["User"] = relationship("User")  # type: ignore[name-defined]
+
+
+class AlertEvent(Base):
+    """Immutable fired-alert history row (PR-D5).
+
+    One row per alert firing. `price_alerts.triggered` remains the
+    dedupe flag for the live rule; this table is the append-only
+    audit trail that backs `GET /api/alerts/history` and the daily
+    email digest. `kind` distinguishes price alerts from strategy-
+    health degradation alerts (PR-D4, kind='strategy_health').
+    `alert_id` is nullable: strategy-health events have no backing
+    price_alerts row, and deleting a price alert must not erase its
+    history (ondelete SET NULL).
+    """
+    __tablename__ = "alert_events"
+    __table_args__ = (
+        Index("ix_alert_events_user_id_fired_at", "user_id", "fired_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    alert_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("price_alerts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    symbol: Mapped[str] = mapped_column(String(64), nullable=False)
+    market: Mapped[str] = mapped_column(String(8), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, default="price")
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    fired_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

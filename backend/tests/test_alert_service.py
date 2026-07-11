@@ -8,11 +8,13 @@ infrastructure is needed.
 """
 import uuid
 import pytest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.user import User, UserRole
-from models.alert import AlertCondition
+from models.alert import AlertCondition, AlertEvent
 from api.alerts.schemas import AlertCreate
 from services.alert_service import AlertService
 
@@ -237,6 +239,85 @@ async def test_check_and_fire_no_alerts_returns_without_push(db_session: AsyncSe
         await AlertService.check_and_fire(db_session, "CF_NONEXISTENT", "US", 999.0)
 
     mock_push.assert_not_awaited()
+
+
+# ── alert_events history (PR-D5) ─────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_check_and_fire_writes_alert_event_row(db_session: AsyncSession):
+    """On fire, an alert_events history row lands in the same
+    transaction as the triggered-flag flip."""
+    user = await _make_user(db_session)
+    alert = await AlertService.create(db_session, user.id, _alert_body("CF9", "US", "above", 200.0))
+
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock):
+        await AlertService.check_and_fire(db_session, "CF9", "US", 210.0)
+
+    events = list((await db_session.scalars(
+        select(AlertEvent).where(AlertEvent.user_id == user.id)
+    )).all())
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.alert_id == alert.id
+    assert ev.symbol == "CF9"
+    assert ev.market == "US"
+    assert ev.kind == "price"
+    assert "CF9" in ev.message
+    assert ev.fired_at is not None
+    assert ev.payload["condition"] == "above"
+    assert ev.payload["target_price"] == 200.0
+    assert ev.payload["current_price"] == 210.0
+
+
+@pytest.mark.asyncio
+async def test_check_and_fire_no_event_row_when_not_triggered(db_session: AsyncSession):
+    user = await _make_user(db_session)
+    await AlertService.create(db_session, user.id, _alert_body("CF10", "US", "above", 200.0))
+
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock):
+        await AlertService.check_and_fire(db_session, "CF10", "US", 195.0)
+
+    events = list((await db_session.scalars(
+        select(AlertEvent).where(AlertEvent.user_id == user.id)
+    )).all())
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_history_newest_first_with_cursor(db_session: AsyncSession):
+    """`before` cursor pages strictly-older rows, newest first."""
+    user = await _make_user(db_session)
+    base = datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc)
+    for i in range(5):
+        db_session.add(AlertEvent(
+            user_id=user.id, symbol=f"H{i}", market="US",
+            kind="price", message=f"m{i}",
+            fired_at=base + timedelta(minutes=i),
+        ))
+    await db_session.commit()
+
+    page1 = await AlertService.history(db_session, user.id, limit=2)
+    assert [e.symbol for e in page1] == ["H4", "H3"]
+
+    page2 = await AlertService.history(
+        db_session, user.id, limit=2, before=page1[-1].fired_at,
+    )
+    assert [e.symbol for e in page2] == ["H2", "H1"]
+
+
+@pytest.mark.asyncio
+async def test_history_scoped_to_user(db_session: AsyncSession):
+    """No cross-user leak: each user only sees their own events."""
+    u1 = await _make_user(db_session)
+    u2 = await _make_user(db_session)
+    db_session.add(AlertEvent(
+        user_id=u1.id, symbol="MINE", market="US", kind="price", message="x",
+        fired_at=datetime.now(timezone.utc),
+    ))
+    await db_session.commit()
+
+    assert [e.symbol for e in await AlertService.history(db_session, u1.id)] == ["MINE"]
+    assert await AlertService.history(db_session, u2.id) == []
 
 
 @pytest.mark.asyncio

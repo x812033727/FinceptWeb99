@@ -921,7 +921,11 @@
     "triggered": "已觸發",
     "active": "啟用中",
     "no_alerts": "尚無警示",
-    "created_at": "建立時間"
+    "created_at": "建立時間",
+    "history": "歷史",
+    "no_history": "尚無觸發紀錄",
+    "kind_price": "價格",
+    "kind_strategy_health": "策略健康"
   },
   "macro": {
     "title": "總體經濟",

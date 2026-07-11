@@ -334,3 +334,346 @@ async def test_check_and_fire_wrong_market_not_matched(db_session: AsyncSession)
     await db_session.refresh(alert)
     assert alert.triggered is False
     mock_push.assert_not_awaited()
+
+
+# ── rule engine (PR-D1) ──────────────────────────────────────────
+# check_and_fire with the new condition types, repeat/cooldown
+# semantics, and daily-threshold resolution from seeded ohlcv_daily.
+# Redis is mocked to always miss (conftest), so threshold resolution
+# exercises the DB fallback path every time.
+
+from datetime import date  # noqa: E402
+
+from models.alert import PriceAlert  # noqa: E402
+from models.ohlcv_daily import OhlcvDaily  # noqa: E402
+from schemas.alert import AlertUpdate  # noqa: E402
+from services.alert_service import cooldown_ok  # noqa: E402
+
+
+def _rule_body(
+    symbol: str,
+    condition_type: str,
+    *,
+    market: str = "US",
+    params: dict | None = None,
+    target_price: float | None = None,
+    repeat: bool = False,
+    cooldown_seconds: int = 0,
+) -> AlertCreate:
+    return AlertCreate(
+        symbol=symbol, market=market,
+        condition_type=condition_type, params=params,
+        target_price=target_price,
+        repeat=repeat, cooldown_seconds=cooldown_seconds,
+    )
+
+
+async def _seed_ohlcv(
+    db: AsyncSession, symbol: str, bars: list[tuple[float, float, int]],
+    market: str = "US",
+) -> None:
+    """Seed (high, low, volume) daily bars ending yesterday."""
+    today = date.today()
+    for i, (high, low, vol) in enumerate(bars):
+        db.add(OhlcvDaily(
+            market=market, symbol=symbol,
+            ts=today - timedelta(days=len(bars) - i),
+            open=low, high=high, low=low, close=high,
+            volume=vol, source="test",
+        ))
+    await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_pct_change_above_fires_from_quote(db_session: AsyncSession):
+    user = await _make_user(db_session)
+    alert = await AlertService.create(
+        db_session, user.id,
+        _rule_body("RE1", "pct_change_above", params={"pct": 5.0}),
+    )
+
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
+        # below threshold — no fire
+        await AlertService.check_and_fire(
+            db_session, "RE1", "US", 104.9, quote={"change_pct": 4.9},
+        )
+        mock_push.assert_not_awaited()
+        # at/above threshold — fires
+        await AlertService.check_and_fire(
+            db_session, "RE1", "US", 106.2, quote={"change_pct": 6.2},
+        )
+        mock_push.assert_awaited_once()
+
+    await db_session.refresh(alert)
+    assert alert.triggered is True
+    assert alert.last_fired_at is not None
+    payload = mock_push.call_args[0][1]
+    assert payload["condition_type"] == "pct_change_above"
+    assert payload["change_pct"] == 6.2
+
+
+@pytest.mark.asyncio
+async def test_pct_change_without_quote_payload_abstains(db_session: AsyncSession):
+    """Legacy price-only call signature: quote-dependent rules must
+    not fire (and must not crash)."""
+    user = await _make_user(db_session)
+    await AlertService.create(
+        db_session, user.id,
+        _rule_body("RE2", "pct_change_above", params={"pct": 1.0}),
+    )
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
+        await AlertService.check_and_fire(db_session, "RE2", "US", 999.0)
+    mock_push.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_breakout_high_fires_above_ndays_high(db_session: AsyncSession):
+    user = await _make_user(db_session)
+    await _seed_ohlcv(db_session, "RE3", [(100, 90, 1000), (105, 95, 1000), (103, 93, 1000)])
+    alert = await AlertService.create(
+        db_session, user.id,
+        _rule_body("RE3", "breakout_high", params={"lookback_days": 3}),
+    )
+
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
+        # touching the 3-day high (105) is not a breakout
+        await AlertService.check_and_fire(db_session, "RE3", "US", 105.0)
+        mock_push.assert_not_awaited()
+        await AlertService.check_and_fire(db_session, "RE3", "US", 105.5)
+        mock_push.assert_awaited_once()
+
+    await db_session.refresh(alert)
+    assert alert.triggered is True
+    payload = mock_push.call_args[0][1]
+    assert payload["threshold"] == 105.0
+    assert payload["lookback_days"] == 3
+
+
+@pytest.mark.asyncio
+async def test_breakout_low_fires_below_ndays_low(db_session: AsyncSession):
+    user = await _make_user(db_session)
+    await _seed_ohlcv(db_session, "RE4", [(100, 90, 1000), (105, 88, 1000), (103, 93, 1000)])
+    await AlertService.create(
+        db_session, user.id,
+        _rule_body("RE4", "breakout_low", params={"lookback_days": 3}),
+    )
+
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
+        await AlertService.check_and_fire(db_session, "RE4", "US", 88.0)
+        mock_push.assert_not_awaited()
+        await AlertService.check_and_fire(db_session, "RE4", "US", 87.9)
+        mock_push.assert_awaited_once()
+    assert mock_push.call_args[0][1]["threshold"] == 88.0
+
+
+@pytest.mark.asyncio
+async def test_breakout_without_daily_bars_never_fires(db_session: AsyncSession):
+    user = await _make_user(db_session)
+    await AlertService.create(
+        db_session, user.id,
+        _rule_body("RE5", "breakout_high", params={"lookback_days": 20}),
+    )
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
+        await AlertService.check_and_fire(db_session, "RE5", "US", 99999.0)
+    mock_push.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_volume_surge_fires_on_multiple_of_avg(db_session: AsyncSession):
+    user = await _make_user(db_session)
+    # avg volume = 1000
+    await _seed_ohlcv(db_session, "RE6", [(100, 90, 800), (100, 90, 1200), (100, 90, 1000)])
+    await AlertService.create(
+        db_session, user.id,
+        _rule_body("RE6", "volume_surge", params={"multiple": 2.0, "lookback_days": 3}),
+    )
+
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
+        await AlertService.check_and_fire(
+            db_session, "RE6", "US", 100.0, quote={"volume": 1999},
+        )
+        mock_push.assert_not_awaited()
+        await AlertService.check_and_fire(
+            db_session, "RE6", "US", 100.0, quote={"volume": 2000},
+        )
+        mock_push.assert_awaited_once()
+    payload = mock_push.call_args[0][1]
+    assert payload["avg_volume"] == 1000.0
+    assert payload["current_volume"] == 2000
+
+
+@pytest.mark.asyncio
+async def test_foreign_streak_skipped_on_tick(db_session: AsyncSession):
+    """Daily condition types are never evaluated on the quote tick."""
+    user = await _make_user(db_session)
+    alert = await AlertService.create(
+        db_session, user.id,
+        _rule_body("2330", "foreign_net_buy_streak", market="TW", params={"days": 3}),
+    )
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
+        await AlertService.check_and_fire(db_session, "2330", "TW", 600.0)
+    await db_session.refresh(alert)
+    assert alert.triggered is False
+    mock_push.assert_not_awaited()
+
+
+# ── repeat / cooldown semantics ──────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_repeat_false_fires_once_and_disables(db_session: AsyncSession):
+    """Default (repeat=False) keeps the original fire-once behavior."""
+    user = await _make_user(db_session)
+    alert = await AlertService.create(
+        db_session, user.id,
+        _rule_body("RE7", "price_above", target_price=100.0),
+    )
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
+        await AlertService.check_and_fire(db_session, "RE7", "US", 101.0)
+        await AlertService.check_and_fire(db_session, "RE7", "US", 102.0)
+    assert mock_push.await_count == 1
+    await db_session.refresh(alert)
+    assert alert.triggered is True
+
+
+@pytest.mark.asyncio
+async def test_repeat_true_refires_after_cooldown(db_session: AsyncSession):
+    user = await _make_user(db_session)
+    alert = await AlertService.create(
+        db_session, user.id,
+        _rule_body(
+            "RE8", "price_above", target_price=100.0,
+            repeat=True, cooldown_seconds=600,
+        ),
+    )
+
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
+        await AlertService.check_and_fire(db_session, "RE8", "US", 101.0)
+        assert mock_push.await_count == 1
+        await db_session.refresh(alert)
+        assert alert.triggered is False        # repeat never disables
+        assert alert.last_fired_at is not None
+        first_fired_at = alert.last_fired_at
+
+        # Inside the cooldown window — no re-fire.
+        await AlertService.check_and_fire(db_session, "RE8", "US", 102.0)
+        assert mock_push.await_count == 1
+
+        # Manually age last_fired_at past the cooldown (ts injection).
+        alert.last_fired_at = datetime.now(timezone.utc) - timedelta(seconds=601)
+        await db_session.commit()
+
+        await AlertService.check_and_fire(db_session, "RE8", "US", 103.0)
+        assert mock_push.await_count == 2
+
+    await db_session.refresh(alert)
+    assert alert.triggered is False
+    assert alert.last_fired_at != first_fired_at
+
+    # Both firings left history rows.
+    events = list((await db_session.scalars(
+        select(AlertEvent).where(AlertEvent.alert_id == alert.id)
+    )).all())
+    assert len(events) == 2
+    assert all(ev.payload["condition_type"] == "price_above" for ev in events)
+
+
+@pytest.mark.asyncio
+async def test_repeat_true_cooldown_zero_refires_every_tick(db_session: AsyncSession):
+    user = await _make_user(db_session)
+    await AlertService.create(
+        db_session, user.id,
+        _rule_body("RE9", "price_above", target_price=100.0,
+                   repeat=True, cooldown_seconds=0),
+    )
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
+        await AlertService.check_and_fire(db_session, "RE9", "US", 101.0)
+        await AlertService.check_and_fire(db_session, "RE9", "US", 102.0)
+    assert mock_push.await_count == 2
+
+
+def test_cooldown_ok_pure_semantics():
+    now = datetime(2026, 7, 11, 12, 0, tzinfo=timezone.utc)
+    # once-only: gate is the triggered flag
+    a = PriceAlert(repeat=False, triggered=False, cooldown_seconds=0)
+    assert cooldown_ok(a, now) is True
+    a.triggered = True
+    assert cooldown_ok(a, now) is False
+    # repeat: gate is last_fired_at + cooldown
+    r = PriceAlert(repeat=True, triggered=False, cooldown_seconds=600)
+    assert cooldown_ok(r, now) is True                       # never fired
+    r.last_fired_at = now - timedelta(seconds=599)
+    assert cooldown_ok(r, now) is False                      # inside window
+    r.last_fired_at = now - timedelta(seconds=600)
+    assert cooldown_ok(r, now) is True                       # boundary
+    # naive timestamp (SQLite) treated as UTC
+    r.last_fired_at = (now - timedelta(seconds=601)).replace(tzinfo=None)
+    assert cooldown_ok(r, now) is True
+
+
+# ── update (PR-D1 PATCH) ─────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_update_rule_knobs(db_session: AsyncSession):
+    user = await _make_user(db_session)
+    alert = await AlertService.create(
+        db_session, user.id,
+        _rule_body("RE10", "pct_change_above", params={"pct": 5.0}),
+    )
+    updated = await AlertService.update(
+        db_session, user.id, alert.id,
+        AlertUpdate(params={"pct": 7.5}, repeat=True, cooldown_seconds=3600),
+    )
+    assert updated.params == {"pct": 7.5}
+    assert updated.repeat is True
+    assert updated.cooldown_seconds == 3600
+
+
+@pytest.mark.asyncio
+async def test_update_rejects_params_mismatching_condition_type(db_session: AsyncSession):
+    user = await _make_user(db_session)
+    alert = await AlertService.create(
+        db_session, user.id,
+        _rule_body("RE11", "pct_change_above", params={"pct": 5.0}),
+    )
+    with pytest.raises(ValueError):
+        await AlertService.update(
+            db_session, user.id, alert.id,
+            AlertUpdate(params={"lookback_days": 20}),
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_other_user_returns_none(db_session: AsyncSession):
+    u1 = await _make_user(db_session)
+    u2 = await _make_user(db_session)
+    alert = await AlertService.create(
+        db_session, u1.id, _rule_body("RE12", "price_above", target_price=10.0),
+    )
+    assert await AlertService.update(
+        db_session, u2.id, alert.id, AlertUpdate(repeat=True),
+    ) is None
+
+
+# ── legacy row compatibility ─────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_legacy_condition_row_still_fires(db_session: AsyncSession):
+    """A pre-D1 style row (condition enum + condition_type mapped by
+    the 0065 data migration) fires through the new engine."""
+    user = await _make_user(db_session)
+    legacy = PriceAlert(
+        user_id=user.id, symbol="RE13", market="US",
+        condition=AlertCondition.below, target_price=150.0,
+        condition_type="price_below",   # what migration 0065 writes
+    )
+    db_session.add(legacy)
+    await db_session.commit()
+
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
+        await AlertService.check_and_fire(db_session, "RE13", "US", 148.0)
+
+    await db_session.refresh(legacy)
+    assert legacy.triggered is True
+    payload = mock_push.call_args[0][1]
+    assert payload["condition"] == "below"
+    assert payload["condition_type"] == "price_below"

@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,7 +9,8 @@ from auth.permissions import require_viewer
 from db.session import get_db
 from limiter import limiter
 from services.alert_service import AlertService
-from .schemas import AlertCreate, AlertEventOut, AlertOut
+
+from .schemas import AlertCreate, AlertEventOut, AlertOut, AlertUpdate
 
 router = APIRouter()
 CurrentUser = Annotated[dict, Depends(require_viewer)]
@@ -38,6 +40,27 @@ async def alert_history(
 @limiter.limit("30/minute")
 async def create_alert(request: Request, body: AlertCreate, user: CurrentUser, db: DB):
     return await AlertService.create(db, uuid.UUID(user["id"]), body)
+
+
+@router.patch("/{alert_id}", response_model=AlertOut)
+@limiter.limit("30/minute")
+async def update_alert(
+    request: Request,
+    alert_id: uuid.UUID,
+    body: AlertUpdate,
+    user: CurrentUser,
+    db: DB,
+):
+    """Partial update of rule knobs (params / target_price /
+    cooldown_seconds / repeat). params are re-validated against the
+    alert's condition_type — mismatch → 422."""
+    try:
+        alert = await AlertService.update(db, uuid.UUID(user["id"]), alert_id, body)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    if not alert:
+        raise HTTPException(404, "Alert not found")
+    return alert
 
 
 @router.delete("/{alert_id}", status_code=204)

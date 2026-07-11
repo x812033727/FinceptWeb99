@@ -163,3 +163,184 @@ async def test_history_limit_validation(client: AsyncClient):
     assert r.status_code == 422
     r = await client.get("/api/alerts/history?limit=500", headers=h)
     assert r.status_code == 422
+
+
+# ── rule engine surface (PR-D1) ──────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_create_rule_alert_with_params(client: AsyncClient):
+    h = await _auth_headers(client, "rule_create@example.com")
+    r = await client.post("/api/alerts", json={
+        "symbol": "NVDA",
+        "market": "US",
+        "condition_type": "pct_change_above",
+        "params": {"pct": 5.0},
+        "repeat": True,
+        "cooldown_seconds": 3600,
+    }, headers=h)
+    assert r.status_code == 201
+    data = r.json()
+    assert data["condition_type"] == "pct_change_above"
+    assert data["params"] == {"pct": 5.0}
+    assert data["repeat"] is True
+    assert data["cooldown_seconds"] == 3600
+    assert data["condition"] is None
+    assert data["target_price"] is None
+    assert data["last_fired_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_create_rule_alert_fills_param_defaults(client: AsyncClient):
+    h = await _auth_headers(client, "rule_defaults@example.com")
+    r = await client.post("/api/alerts", json={
+        "symbol": "2330",
+        "market": "TW",
+        "condition_type": "volume_surge",
+    }, headers=h)
+    assert r.status_code == 201
+    assert r.json()["params"] == {"multiple": 2.0, "lookback_days": 20}
+
+
+@pytest.mark.asyncio
+async def test_create_unknown_condition_type_422(client: AsyncClient):
+    h = await _auth_headers(client, "rule_unknown@example.com")
+    r = await client.post("/api/alerts", json={
+        "symbol": "AAPL",
+        "market": "US",
+        "condition_type": "rsi_cross",   # not implemented
+        "params": {"level": 70},
+    }, headers=h)
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_bad_params_422(client: AsyncClient):
+    h = await _auth_headers(client, "rule_badparams@example.com")
+    # missing required pct
+    r = await client.post("/api/alerts", json={
+        "symbol": "AAPL", "market": "US",
+        "condition_type": "pct_change_above", "params": {},
+    }, headers=h)
+    assert r.status_code == 422
+    # unknown param key (extra=forbid)
+    r = await client.post("/api/alerts", json={
+        "symbol": "AAPL", "market": "US",
+        "condition_type": "breakout_high", "params": {"pct": 5},
+    }, headers=h)
+    assert r.status_code == 422
+    # out-of-range lookback
+    r = await client.post("/api/alerts", json={
+        "symbol": "AAPL", "market": "US",
+        "condition_type": "breakout_high", "params": {"lookback_days": 1},
+    }, headers=h)
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_price_rule_requires_target_price(client: AsyncClient):
+    h = await _auth_headers(client, "rule_notarget@example.com")
+    r = await client.post("/api/alerts", json={
+        "symbol": "AAPL", "market": "US", "condition_type": "price_above",
+    }, headers=h)
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_non_price_rule_rejects_target_price(client: AsyncClient):
+    h = await _auth_headers(client, "rule_target_mix@example.com")
+    r = await client.post("/api/alerts", json={
+        "symbol": "AAPL", "market": "US",
+        "condition_type": "pct_change_above",
+        "params": {"pct": 5}, "target_price": 100.0,
+    }, headers=h)
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_streak_alert_tw_only(client: AsyncClient):
+    h = await _auth_headers(client, "rule_twonly@example.com")
+    r = await client.post("/api/alerts", json={
+        "symbol": "AAPL", "market": "US",
+        "condition_type": "foreign_net_buy_streak", "params": {"days": 3},
+    }, headers=h)
+    assert r.status_code == 422
+    r = await client.post("/api/alerts", json={
+        "symbol": "2330", "market": "TW",
+        "condition_type": "foreign_net_buy_streak", "params": {"days": 3},
+    }, headers=h)
+    assert r.status_code == 201
+    assert r.json()["condition_type"] == "foreign_net_buy_streak"
+
+
+@pytest.mark.asyncio
+async def test_legacy_create_maps_to_condition_type(client: AsyncClient):
+    """Pre-D1 payload shape keeps working and lands on price_above."""
+    h = await _auth_headers(client, "rule_legacy@example.com")
+    r = await client.post("/api/alerts", json={
+        "symbol": "AAPL", "market": "US",
+        "condition": "above", "target_price": 200.0,
+    }, headers=h)
+    assert r.status_code == 201
+    data = r.json()
+    assert data["condition_type"] == "price_above"
+    assert data["condition"] == "above"
+    assert data["repeat"] is False
+    assert data["cooldown_seconds"] == 0
+
+
+@pytest.mark.asyncio
+async def test_list_returns_rule_fields(client: AsyncClient):
+    h = await _auth_headers(client, "rule_list@example.com")
+    await client.post("/api/alerts", json={
+        "symbol": "2330", "market": "TW",
+        "condition_type": "breakout_high", "params": {"lookback_days": 60},
+        "repeat": True, "cooldown_seconds": 86400,
+    }, headers=h)
+    r = await client.get("/api/alerts", headers=h)
+    assert r.status_code == 200
+    (row,) = r.json()
+    assert row["condition_type"] == "breakout_high"
+    assert row["params"] == {"lookback_days": 60}
+    assert row["repeat"] is True
+    assert row["cooldown_seconds"] == 86400
+
+
+@pytest.mark.asyncio
+async def test_patch_updates_rule_knobs(client: AsyncClient):
+    h = await _auth_headers(client, "rule_patch@example.com")
+    created = (await client.post("/api/alerts", json={
+        "symbol": "AAPL", "market": "US",
+        "condition_type": "pct_change_above", "params": {"pct": 5.0},
+    }, headers=h)).json()
+
+    r = await client.patch(f"/api/alerts/{created['id']}", json={
+        "params": {"pct": 7.5}, "repeat": True, "cooldown_seconds": 300,
+    }, headers=h)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["params"] == {"pct": 7.5}
+    assert data["repeat"] is True
+    assert data["cooldown_seconds"] == 300
+
+
+@pytest.mark.asyncio
+async def test_patch_bad_params_422(client: AsyncClient):
+    h = await _auth_headers(client, "rule_patch_bad@example.com")
+    created = (await client.post("/api/alerts", json={
+        "symbol": "AAPL", "market": "US",
+        "condition_type": "pct_change_above", "params": {"pct": 5.0},
+    }, headers=h)).json()
+    r = await client.patch(f"/api/alerts/{created['id']}", json={
+        "params": {"lookback_days": 20},
+    }, headers=h)
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_patch_nonexistent_404(client: AsyncClient):
+    import uuid
+    h = await _auth_headers(client, "rule_patch_404@example.com")
+    r = await client.patch(f"/api/alerts/{uuid.uuid4()}", json={
+        "repeat": True,
+    }, headers=h)
+    assert r.status_code == 404

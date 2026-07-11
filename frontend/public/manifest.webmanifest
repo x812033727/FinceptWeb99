@@ -4,8 +4,8 @@
   "description": "Professional financial intelligence platform — US & Taiwan markets",
   "start_url": "/dashboard",
   "display": "standalone",
-  "background_color": "#0f1117",
-  "theme_color": "#6366f1",
+  "background_color": "#0b111e",
+  "theme_color": "#0ea5e9",
   "orientation": "any",
   "icons": [
     {

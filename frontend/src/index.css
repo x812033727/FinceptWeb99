@@ -20,7 +20,52 @@
     --input: 222 47% 14%;
     --ring: 199 89% 48%;
     --radius: 0.5rem;
+
+    /* Surface elevation scale — 0 (page) → 3 (highest raised element) */
+    --surface-0: 222 47% 8%;
+    --surface-1: 222 47% 11%;
+    --surface-2: 222 47% 14%;
+    --surface-3: 222 47% 17%;
+    --border-subtle: 222 47% 15%;
+    --border-strong: 222 47% 22%;
+
+    /* Status semantics — independent of market direction colors */
+    --success: 152 60% 42%;
+    --warning: 38 92% 50%;
+    --danger: 0 72% 51%;
+    --info: 199 89% 48%;
+
+    /* Market direction — indirected through --mkt-up/--mkt-down so the
+       [data-market-colors] attribute can flip the convention (intl: 綠漲紅跌,
+       tw: 紅漲綠跌) without touching consumers. Defaults = intl so the
+       tokens resolve even before the attribute is stamped. */
+    --mkt-up: 152 65% 45%;
+    --mkt-down: 0 75% 55%;
+    --up: var(--mkt-up);
+    --down: var(--mkt-down);
+    --flat: 215 20% 55%;
+
+    /* Categorical chart series (Recharts / canvas libs) */
+    --chart-1: 199 89% 55%;
+    --chart-2: 38 92% 55%;
+    --chart-3: 262 70% 65%;
+    --chart-4: 152 60% 48%;
+    --chart-5: 330 70% 60%;
+    --chart-6: 215 20% 60%;
   }
+}
+
+/* Market direction convention — stamped on <html data-market-colors>
+   by themeStore.applyMarketColors. The [data-light][data-market-colors]
+   combos below outrank these (2 attribute selectors vs 1) so light mode
+   always gets the contrast-adjusted values. */
+[data-market-colors="intl"] {
+  --mkt-up: 152 65% 45%;
+  --mkt-down: 0 75% 55%;
+}
+[data-market-colors="tw"] {
+  --mkt-up: 0 75% 55%;
+  --mkt-down: 152 65% 45%;
 }
 
 /* Light theme overrides — applied when <html data-light> is set */
@@ -40,6 +85,41 @@
   --border: 214 32% 85%;
   --input: 210 20% 92%;
   --ring: 199 89% 38%;
+
+  --surface-0: 210 30% 98%;
+  --surface-1: 0 0% 100%;
+  --surface-2: 210 25% 94%;
+  --surface-3: 210 25% 91%;
+  --border-subtle: 214 25% 88%;
+  --border-strong: 214 25% 78%;
+
+  /* Status + data colors darkened for contrast on white backgrounds */
+  --success: 152 65% 30%;
+  --warning: 35 90% 38%;
+  --danger: 0 70% 44%;
+  --info: 200 95% 38%;
+
+  --mkt-up: 152 65% 30%;
+  --mkt-down: 0 70% 44%;
+  --flat: 215 16% 40%;
+
+  --chart-1: 200 95% 38%;
+  --chart-2: 35 90% 38%;
+  --chart-3: 262 60% 48%;
+  --chart-4: 152 65% 30%;
+  --chart-5: 330 65% 42%;
+  --chart-6: 215 16% 40%;
+}
+
+/* Light + market convention combos — must be spelled out explicitly so
+   they beat both single-attribute blocks regardless of source order. */
+[data-light][data-market-colors="intl"] {
+  --mkt-up: 152 65% 30%;
+  --mkt-down: 0 70% 44%;
+}
+[data-light][data-market-colors="tw"] {
+  --mkt-up: 0 70% 44%;
+  --mkt-down: 152 65% 30%;
 }
 
 @layer base {

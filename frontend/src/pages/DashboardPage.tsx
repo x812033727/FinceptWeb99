@@ -3,9 +3,9 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
-import { formatPct } from "@/lib/formatters";
 import { formatQuoteFreshness } from "@/lib/freshness";
 import { DataSourceBadge } from "@/components/DataSourceBadge";
+import { DeltaText, Num } from "@/components/Num";
 
 // ── Market indices ─────────────────────────────────────────────────
 
@@ -20,7 +20,6 @@ function IndexCard({ symbol, label }: { symbol: string; label: string }) {
 
   const price = data?.price as number | undefined;
   const changePct = data?.change_pct as number | undefined;
-  const isPos = (changePct ?? 0) >= 0;
   // Backend returns data_source="unavailable" + price=0 when every
   // upstream fails. Render that as "—" instead of a misleading
   // 0.00 / +0.00% green pill that looks like the asset is at zero.
@@ -37,12 +36,14 @@ function IndexCard({ symbol, label }: { symbol: string; label: string }) {
     >
       <div className="text-xs text-muted-foreground mb-1">{label}</div>
       <div className="text-lg font-bold text-foreground">
-        {!unavailable && price != null
-          ? price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-          : "—"}
+        {!unavailable && price != null ? <Num value={price} /> : "—"}
       </div>
-      <div className={`text-sm font-medium mt-0.5 ${unavailable ? "text-muted-foreground" : isPos ? "text-up" : "text-down"}`}>
-        {unavailable ? "—" : formatPct(changePct)}
+      <div className="text-sm font-medium mt-0.5">
+        {unavailable ? (
+          <span className="text-muted-foreground">—</span>
+        ) : (
+          <DeltaText value={changePct} percent />
+        )}
       </div>
       <div className="text-xs text-muted-foreground mt-1 inline-flex items-center">
         {symbol}

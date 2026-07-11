@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 type Theme = "dark" | "light";
 export type MarketColorMode = "auto" | "tw" | "intl";
+export type Density = "comfortable" | "compact";
 
 function applyTheme(theme: Theme) {
   if (theme === "light") {
@@ -28,11 +29,17 @@ export function applyMarketColors(mode: MarketColorMode) {
   );
 }
 
+export function applyDensity(density: Density) {
+  document.documentElement.setAttribute("data-density", density);
+}
+
 interface ThemeState {
   theme: Theme;
   marketColorMode: MarketColorMode;
+  density: Density;
   toggle: () => void;
   setMarketColorMode: (mode: MarketColorMode) => void;
+  setDensity: (density: Density) => void;
 }
 
 const stored = (localStorage.getItem("theme") as Theme | null) ?? "dark";
@@ -42,9 +49,14 @@ const storedMarketColorMode =
   (localStorage.getItem("marketColorMode") as MarketColorMode | null) ?? "auto";
 applyMarketColors(storedMarketColorMode);
 
+const storedDensity =
+  (localStorage.getItem("density") as Density | null) ?? "comfortable";
+applyDensity(storedDensity);
+
 export const useThemeStore = create<ThemeState>((set) => ({
   theme: stored,
   marketColorMode: storedMarketColorMode,
+  density: storedDensity,
   toggle: () =>
     set((s) => {
       const next: Theme = s.theme === "dark" ? "light" : "dark";
@@ -56,5 +68,10 @@ export const useThemeStore = create<ThemeState>((set) => ({
     localStorage.setItem("marketColorMode", mode);
     applyMarketColors(mode);
     set({ marketColorMode: mode });
+  },
+  setDensity: (density) => {
+    localStorage.setItem("density", density);
+    applyDensity(density);
+    set({ density });
   },
 }));

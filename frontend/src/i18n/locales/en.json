@@ -72,7 +72,16 @@
       "theme_light_desc": "Light mode for bright environments.",
       "switch_to_dark": "Switch to dark",
       "switch_to_light": "Switch to light",
-      "language": "Language"
+      "language": "Language",
+      "market_colors": "Market color convention",
+      "market_colors_desc": "How up / down moves are colored.",
+      "market_colors_auto": "Auto",
+      "market_colors_tw": "TW (red up)",
+      "market_colors_intl": "Intl (green up)",
+      "density": "Density",
+      "density_desc": "Row height in tables and lists.",
+      "density_comfortable": "Comfortable",
+      "density_compact": "Compact"
     },
     "admin_link": "Open system admin"
   },

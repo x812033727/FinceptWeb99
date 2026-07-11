@@ -46,7 +46,14 @@ export default function SettingsPage() {
   const qc = useQueryClient();
   const { t, i18n } = useTranslation();
   const role = useAuthStore((s) => s.user?.role);
-  const { theme, toggle: toggleTheme } = useThemeStore();
+  const {
+    theme,
+    toggle: toggleTheme,
+    marketColorMode,
+    setMarketColorMode,
+    density,
+    setDensity,
+  } = useThemeStore();
 
   const { data: me } = useQuery<UserProfile>({
     queryKey: ["me"],
@@ -180,6 +187,56 @@ export default function SettingsPage() {
             >
               {i18n.language === "zh-TW" ? "Switch to English" : "切換為繁體中文"}
             </button>
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium">{t("settings.preferences.market_colors")}</p>
+              <p className="text-xs text-muted-foreground">
+                {t("settings.preferences.market_colors_desc")}
+              </p>
+            </div>
+            <div className="flex rounded border border-border overflow-hidden shrink-0" role="group">
+              {(["auto", "tw", "intl"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => setMarketColorMode(mode)}
+                  aria-pressed={marketColorMode === mode}
+                  className={`px-2.5 py-1.5 text-xs transition-colors min-h-[36px] ${
+                    marketColorMode === mode
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground hover:bg-accent/10"
+                  }`}
+                >
+                  {t(`settings.preferences.market_colors_${mode}`)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium">{t("settings.preferences.density")}</p>
+              <p className="text-xs text-muted-foreground">
+                {t("settings.preferences.density_desc")}
+              </p>
+            </div>
+            <div className="flex rounded border border-border overflow-hidden shrink-0" role="group">
+              {(["comfortable", "compact"] as const).map((d) => (
+                <button
+                  key={d}
+                  onClick={() => setDensity(d)}
+                  aria-pressed={density === d}
+                  className={`px-2.5 py-1.5 text-xs transition-colors min-h-[36px] ${
+                    density === d
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground hover:bg-accent/10"
+                  }`}
+                >
+                  {t(`settings.preferences.density_${d}`)}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </Section>

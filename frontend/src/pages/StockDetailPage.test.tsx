@@ -210,3 +210,91 @@ describe("StockDetailPage history keepPreviousData", () => {
     });
   });
 });
+
+// ── A2 多週期切換: intraday / weekly / daily switching ─────────────
+
+function makeIntradayBars(n: number) {
+  // Bucket-start Unix ms, 5-minute spacing — the backend intraday shape.
+  const base = Date.UTC(2026, 6, 10, 1, 30, 0);
+  return Array.from({ length: n }, (_, i) => ({
+    time: base + i * 300_000,
+    open: 600 + i,
+    high: 601 + i,
+    low: 599 + i,
+    close: 600.5 + i,
+    volume: 1000,
+  }));
+}
+
+function mockApiWithIntraday(intradayBarCount: number) {
+  apiGetMock.mockImplementation((url: string) => {
+    if (url.startsWith("/us/quote/")) {
+      return Promise.resolve({
+        data: { price: 180.5, change_pct: 1.0, name: "Apple Inc.", currency: "USD", data_source: "polygon" },
+      });
+    }
+    if (url.startsWith("/us/earnings/")) {
+      return Promise.resolve({
+        data: { earnings_date: null, eps_estimate: null, revenue_estimate: null },
+      });
+    }
+    if (url.includes("/intraday/")) {
+      return Promise.resolve({
+        data: {
+          symbol: "AAPL", market: "US",
+          interval: /interval=(\w+)/.exec(url)?.[1] ?? "5m",
+          coverage_days: 30,
+          bars: makeIntradayBars(intradayBarCount),
+        },
+      });
+    }
+    if (url.includes("/history/")) {
+      return Promise.resolve({ data: makeBars(3) });
+    }
+    return Promise.resolve({ data: {} });
+  });
+}
+
+describe("StockDetailPage timeframe switching (A2)", () => {
+  it("switches daily → intraday → weekly → daily", async () => {
+    mockApiWithIntraday(5);
+    renderPage();
+
+    // Daily default: 3 daily bars on the chart, period buttons visible.
+    await waitFor(() => expect(screen.getByTestId("chart")).toHaveTextContent("3"));
+    expect(screen.getByText("1y")).toBeInTheDocument();
+
+    // Probe found intraday data → 5m enabled; switching fetches /intraday.
+    const btn5m = await screen.findByRole("button", { name: "5m" });
+    await waitFor(() => expect(btn5m).toBeEnabled());
+    fireEvent.click(btn5m);
+    await waitFor(() => expect(screen.getByTestId("chart")).toHaveTextContent("5"));
+    // Range buttons hide (intraday always spans the coverage window) and
+    // the 30-day coverage note labels the limitation.
+    expect(screen.queryByText("1y")).toBeNull();
+    expect(screen.getByText(/last 30 days/)).toBeInTheDocument();
+
+    // 週 aggregates the already-fetched daily bars client-side:
+    // 2026-01-01(Thu)…01-03(Sat) fall in one ISO week → 1 bar.
+    fireEvent.click(screen.getByRole("button", { name: "W" }));
+    await waitFor(() => expect(screen.getByTestId("chart")).toHaveTextContent("1"));
+    expect(screen.getByText("1y")).toBeInTheDocument();
+
+    // Back to 日 → raw daily bars again.
+    fireEvent.click(screen.getByRole("button", { name: "D" }));
+    await waitFor(() => expect(screen.getByTestId("chart")).toHaveTextContent("3"));
+  });
+
+  it("disables intraday buttons when the probe returns no snapshot bars", async () => {
+    mockApiWithIntraday(0);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByTestId("chart")).toHaveTextContent("3"));
+    for (const label of ["1m", "5m", "15m"]) {
+      expect(screen.getByRole("button", { name: label })).toBeDisabled();
+    }
+    // Daily-based timeframes still work.
+    fireEvent.click(screen.getByRole("button", { name: "M" }));
+    await waitFor(() => expect(screen.getByTestId("chart")).toHaveTextContent("1"));
+  });
+});

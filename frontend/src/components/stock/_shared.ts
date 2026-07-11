@@ -234,3 +234,33 @@ export const fetchEarnings = (sym: string) =>
   api.get<{ earnings_date: string | null; eps_estimate: number | null; revenue_estimate: number | null }>(
     `/us/earnings/${sym}`
   ).then((r) => r.data);
+
+// ── A2 分時 (intraday) ────────────────────────────────────────────
+
+export type IntradayInterval = "1m" | "5m" | "15m";
+
+/** Chart timeframe: 分時 (1m/5m/15m via the /intraday endpoint) or
+ *  日/週/月 (daily history, 週/月 aggregated client-side). Lives here —
+ *  not in TimeframeSelector.tsx — so component files stay
+ *  components-only for react-refresh. */
+export type Timeframe = IntradayInterval | "1d" | "1wk" | "1mo";
+
+export const INTRADAY_TIMEFRAMES: readonly IntradayInterval[] = ["1m", "5m", "15m"];
+
+export const isIntradayTimeframe = (tf: Timeframe): tf is IntradayInterval =>
+  (INTRADAY_TIMEFRAMES as readonly string[]).includes(tf);
+
+export interface IntradayResponse {
+  symbol: string;
+  market: string;
+  interval: IntradayInterval;
+  /** Snapshot retention window — the furthest back `bars` can reach.
+   *  Surfaced so the chart can label the ~30-day limitation. */
+  coverage_days: number;
+  bars: OHLCVBar[]; // bar.time is Unix ms (bucket start)
+}
+
+export const fetchIntraday = (mkt: Market, sym: string, interval: IntradayInterval) =>
+  api.get<IntradayResponse>(
+    `/${mkt.toLowerCase()}/intraday/${sym}?interval=${interval}`
+  ).then((r) => r.data);

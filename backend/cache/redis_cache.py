@@ -282,6 +282,10 @@ def key_history(market: str, symbol: str, interval: str, range_token: str = "") 
     suffix = f":{range_token}" if range_token else ""
     return f"{market}:history:{symbol}:{interval}{suffix}"
 
+def key_intraday(market: str, symbol: str, interval: str) -> str:
+    """Snapshot-aggregated intraday bars (A2 分時) — interval ∈ {1m, 5m, 15m}."""
+    return f"{market}:intraday:{symbol}:{interval}"
+
 def key_fundamentals(market: str, symbol: str) -> str:
     return f"{market}:fundamentals:{symbol}:snapshot"
 

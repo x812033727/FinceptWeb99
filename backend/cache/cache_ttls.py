@@ -26,6 +26,12 @@ TTL_QUOTE_US_OFF_HOURS = 5 * 60  # overseas indicator snapshots cached during
 TTL_HISTORY_DAILY = 4 * 3600        # 4 h — yesterday's bars don't change
 TTL_HISTORY_INTRADAY = 5 * 60       # 5 min — used by the crypto service
 
+# ── intraday bars aggregated from quote_snapshots (A2 分時) ──────
+TTL_INTRADAY_BARS = 60               # snapshot writer cadence is 60 s, so a
+                                     # shorter TTL would only re-aggregate
+                                     # the same rows; a longer one would lag
+                                     # the live session by >1 bar
+
 # ── fundamentals (PE/PB/yield, snapshots) ────────────────────────
 TTL_FUNDAMENTALS = 24 * 3600        # daily refresh (TWSE BWIBBU_d / yfinance)
 TTL_VALUATION_BAND = 24 * 3600

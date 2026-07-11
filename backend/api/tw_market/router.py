@@ -8,6 +8,7 @@ from api.tw_market.schemas import (
     TWIndexResponse,
 )
 from dependencies import get_current_user
+import services.intraday_service as intraday_svc
 import services.tw_market_service as svc
 
 router = APIRouter()
@@ -41,6 +42,17 @@ async def history(
         return await svc.get_history(symbol, months=months)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Data source error: {e}")
+
+
+@router.get("/intraday/{symbol}", response_model=intraday_svc.IntradayResponse)
+async def intraday(
+    symbol: str,
+    _: CurrentUser,
+    interval: str = Query("5m", pattern="^(1m|5m|15m)$", description="1m 5m 15m"),
+):
+    """分時 K 線 — 由 quote_snapshots 每分鐘快照聚合;僅涵蓋快照保留
+    窗口(`coverage_days`,現為 30 天)。無快照時回傳空 `bars`(200)。"""
+    return await intraday_svc.get_intraday("TW", symbol, interval)
 
 
 @router.get("/institutional/{symbol}", response_model=list[dict])

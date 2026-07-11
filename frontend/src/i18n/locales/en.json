@@ -312,6 +312,24 @@
       "coverage_note": "Intraday data covers the last {{days}} days only",
       "no_intraday_data": "No intraday data available for this symbol"
     },
+    "ai_report": {
+      "tab": "AI Report",
+      "title": "AI Research Report",
+      "generate": "Generate Report",
+      "regenerate": "Regenerate",
+      "stop": "Stop",
+      "stage_context": "Gathering market data (quote, chips, revenue, news, technicals)…",
+      "stage_generating": "AI is writing the report…",
+      "empty": "No report yet. Click “Generate Report” and the AI will stream a structured research report from valuation, chip flows, revenue, news sentiment and technicals.",
+      "quota_exceeded": "Daily AI quota exceeded. It resets at midnight UTC — please try again tomorrow.",
+      "no_key": "No LLM API key configured. Add a provider key in the admin console or your personal settings, then retry.",
+      "load_failed": "Failed to load the report. Please try again later.",
+      "disclaimer": "This report is AI-generated, for research reference only — not investment advice.",
+      "past_reports": "Past Reports",
+      "past_reports_count": "{{count}} saved",
+      "no_past_reports": "No saved reports yet.",
+      "viewing_saved": "Viewing saved report from {{when}}"
+    },
     "health": {
       "tab": "Financial Health",
       "no_data": "No financial data available",

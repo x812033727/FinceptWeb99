@@ -312,6 +312,24 @@
       "coverage_note": "分時資料僅涵蓋近 {{days}} 天",
       "no_intraday_data": "此標的暫無分時資料"
     },
+    "ai_report": {
+      "tab": "AI 報告",
+      "title": "AI 個股研究報告",
+      "generate": "產生報告",
+      "regenerate": "重新產生",
+      "stop": "停止",
+      "stage_context": "正在整理市場資料（報價、籌碼、營收、新聞、技術面）…",
+      "stage_generating": "AI 撰寫報告中…",
+      "empty": "尚未產生報告。點擊「產生報告」，AI 將彙整估值、籌碼、營收、新聞情緒與技術面，串流產出一份結構化研究報告。",
+      "quota_exceeded": "今日 AI 使用額度已用完，將於 UTC 午夜重置，請明天再試。",
+      "no_key": "尚未設定 LLM API 金鑰。請至管理後台或個人設定新增供應商金鑰後再試。",
+      "load_failed": "報告載入失敗，請稍後再試。",
+      "disclaimer": "本報告由 AI 產生，僅供研究參考，非投資建議。",
+      "past_reports": "歷史報告",
+      "past_reports_count": "已存檔 {{count}} 份",
+      "no_past_reports": "尚無存檔報告。",
+      "viewing_saved": "檢視 {{when}} 的存檔報告"
+    },
     "health": {
       "tab": "財務體質",
       "no_data": "暫無財報資料",

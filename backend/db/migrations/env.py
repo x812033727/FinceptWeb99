@@ -25,6 +25,7 @@ import models.tw_revenue_monthly  # noqa: F401
 import models.discussion_round_context  # noqa: F401
 import models.strategy_version  # noqa: F401
 import models.strategy_health_metric  # noqa: F401
+import models.stock_report  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)

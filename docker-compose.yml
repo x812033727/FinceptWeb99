@@ -103,6 +103,12 @@ services:
       CORS_ORIGINS:      ${CORS_ORIGINS:-http://localhost}
       ADMIN_EMAIL:       ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD:    ${ADMIN_PASSWORD:-}
+      # /metrics gate — without this passthrough the in-compose
+      # Prometheus scrapes from the docker bridge and gets 403 against
+      # the default 127.0.0.1-only allowlist. Same enumerated-keys
+      # rule as the FinMind vars below.
+      METRICS_ALLOW_CIDRS: ${METRICS_ALLOW_CIDRS:-127.0.0.1/32,::1/128,172.16.0.0/12}
+      METRICS_AUTH_TOKEN:  ${METRICS_AUTH_TOKEN:-}
       # FinMind clone subsystem — see backend/finmind/config.py.
       # Without explicit passthrough here, .env edits never reach
       # the container's process env (compose only enumerates listed

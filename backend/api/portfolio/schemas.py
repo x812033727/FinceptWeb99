@@ -122,6 +122,79 @@ class OptimiseResponse(BaseModel):
     frontier: list[dict] = []
 
 
+# ── Risk dashboard (feature C1) ───────────────────────────────────
+
+class RiskVaREntry(BaseModel):
+    """One VaR figure — (method × confidence level). Shape mirrors the
+    dicts returned by analytics/risk.py so nothing is re-mapped."""
+    method: str                      # historical | parametric | monte_carlo
+    confidence_level: float
+    horizon_days: int = 1
+    var_pct: float
+    var_amount: float
+    cvar_pct: float | None = None
+    n_simulations: int | None = None
+    annualised_return: float | None = None
+    annualised_vol: float | None = None
+
+
+class RiskMetrics(BaseModel):
+    """Output of analytics.risk.portfolio_metrics, verbatim."""
+    annualised_return: float
+    annualised_volatility: float
+    sharpe_ratio: float
+    sortino_ratio: float
+    calmar_ratio: float
+    max_drawdown: float
+    beta: float | None = None
+    alpha: float | None = None
+
+
+class RiskWeightRow(BaseModel):
+    symbol: str
+    market: str
+    weight_pct: float
+    # % of total portfolio variance this holding contributes
+    # (marginal-contribution decomposition). None when the holding was
+    # excluded from the return matrix (insufficient history).
+    risk_contribution_pct: float | None = None
+
+
+class RiskCorrelationMatrix(BaseModel):
+    symbols: list[str]
+    matrix: list[list[float]]        # symbols × symbols, in `symbols` order
+
+
+class RiskConcentrationWarning(BaseModel):
+    kind: str                        # single_position | market_bucket
+    key: str                         # symbol or market name
+    weight_pct: float
+    threshold_pct: float
+
+
+class RiskExcludedHolding(BaseModel):
+    symbol: str
+    market: str
+    reason: str                      # insufficient_history
+    observations: int = 0
+
+
+class PortfolioRiskResponse(BaseModel):
+    portfolio_id: str
+    currency: str
+    as_of: str
+    portfolio_value: float
+    observations: int                # aligned daily-return count used
+    empty: bool = False              # True → portfolio has no holdings
+    benchmark: str | None = None     # SPY | _TAIEX_TR | None (fetch failed)
+    metrics: RiskMetrics | None = None
+    var: list[RiskVaREntry] = []
+    weights: list[RiskWeightRow] = []
+    correlation: RiskCorrelationMatrix | None = None
+    warnings: list[RiskConcentrationWarning] = []
+    excluded: list[RiskExcludedHolding] = []
+
+
 class TransactionResponse(BaseModel):
     id: UUID
     symbol: str

@@ -5,16 +5,21 @@ import { useTranslation } from "react-i18next";
 import { Maximize2, Minimize2 } from "lucide-react";
 import CandlestickChart from "@/components/charts/CandlestickChart";
 import type { Market } from "@/types/market";
+import { aggregateBars } from "@/lib/aggregateBars";
 import { PeriodButton, StatRow } from "@/components/stock/_atoms";
 import { LiveQuoteHeader } from "@/components/stock/LiveQuoteHeader";
 import { TabStrip, type TabDef } from "@/components/stock/TabStrip";
+import TimeframeSelector from "@/components/stock/TimeframeSelector";
 import {
   fetchEarnings,
   fetchFundamentals,
   fetchHistory,
+  fetchIntraday,
   fetchQuote,
   fmt,
+  isIntradayTimeframe,
   isTWETF,
+  type Timeframe,
 } from "@/components/stock/_shared";
 import type { CryptoTab, Period, TWTab, USTab } from "@/components/stock/_shared";
 import { DividendsPanel } from "@/components/stock/DividendsPanel";
@@ -80,6 +85,56 @@ export default function StockDetailPage() {
     enabled: mkt === "CRYPTO" ? true
       : mkt === "US" ? usTab === "chart" : twTab === "chart",
   });
+
+  // ── A2 多週期切換 ─────────────────────────────────────────────
+  // 分時 (1m/5m/15m) fetches the snapshot-aggregated /intraday endpoint;
+  // 週/月 aggregate the daily history above client-side. Default 日 keeps
+  // the pre-A2 behaviour (daily bars rendered as-is).
+  const [timeframe, setTimeframe] = useState<Timeframe>("1d");
+  // Symbol/market navigation doesn't remount this page (same route), so
+  // an intraday timeframe must not leak onto a symbol without snapshots.
+  // Adjust-state-during-render (not an effect) per React guidance — the
+  // stale render is discarded before the DOM commits.
+  const [tfKey, setTfKey] = useState(`${mkt}:${sym}`);
+  if (tfKey !== `${mkt}:${sym}`) {
+    setTfKey(`${mkt}:${sym}`);
+    setTimeframe("1d");
+  }
+  const intradayActive = isIntradayTimeframe(timeframe);
+
+  const chartVisible =
+    mkt === "CRYPTO" ? cryptoTab === "chart"
+    : mkt === "US" ? usTab === "chart" : twTab === "chart";
+
+  // Availability probe (5m) — enables/disables the 分時 buttons and doubles
+  // as the data query when 5m is the selected interval (same queryKey).
+  const { data: intradayProbe } = useQuery({
+    queryKey: ["intraday", mkt, sym, "5m"],
+    queryFn: () => fetchIntraday(mkt, sym, "5m"),
+    staleTime: 60_000,
+    enabled: chartVisible,
+  });
+  const intradayAvailable = (intradayProbe?.bars?.length ?? 0) > 0;
+  const coverageDays = intradayProbe?.coverage_days ?? 30;
+
+  const { data: intraday, isLoading: intradayLoading } = useQuery({
+    queryKey: ["intraday", mkt, sym, timeframe],
+    queryFn: () => fetchIntraday(mkt, sym, timeframe as "1m" | "5m" | "15m"),
+    staleTime: 60_000,
+    placeholderData: keepPreviousData,
+    enabled: chartVisible && intradayActive,
+  });
+
+  // No manual useMemo — the React Compiler memoizes this; 週/月 rollup
+  // over ≤ a few thousand daily bars is cheap even unmemoized.
+  const displayBars = intradayActive
+    ? intraday?.bars ?? []
+    : timeframe === "1wk" ? aggregateBars(bars, "week")
+    : timeframe === "1mo" ? aggregateBars(bars, "month")
+    : bars;
+  const displayLoading = intradayActive
+    ? intradayLoading && !intraday
+    : barsLoading;
 
   const { data: fundamentals } = useQuery({
     queryKey: ["fundamentals", mkt, sym],
@@ -170,15 +225,30 @@ export default function StockDetailPage() {
                 : "lg:col-span-3 bg-card border border-border rounded-lg overflow-hidden"
             }
           >
-            <div className="flex items-center gap-1 px-4 pt-3 pb-2 border-b border-border shrink-0">
-              {/* TW data is daily-only (no intraday endpoint) — hide
-                  `1d` / `5d` so the buttons can't render dead. US +
-                  Crypto get the full range. */}
-              {((mkt === "TW"
-                ? ["1mo", "3mo", "1y", "5y"]
-                : ["1d", "5d", "1mo", "3mo", "1y", "5y"]) as Period[]).map((p) => (
-                <PeriodButton key={p} active={p === period} label={p} onClick={() => setPeriod(p)} />
-              ))}
+            <div className="flex flex-wrap items-center gap-x-1 gap-y-1 px-4 pt-3 pb-2 border-b border-border shrink-0">
+              {/* Range buttons apply to the daily-history timeframes only —
+                  分時 always spans the whole snapshot coverage window, so
+                  they hide while an intraday timeframe is active. TW's
+                  history endpoint is daily-only: hide `1d` / `5d` so the
+                  buttons can't render dead. US + Crypto get the full range. */}
+              {!intradayActive &&
+                ((mkt === "TW"
+                  ? ["1mo", "3mo", "1y", "5y"]
+                  : ["1d", "5d", "1mo", "3mo", "1y", "5y"]) as Period[]).map((p) => (
+                  <PeriodButton key={p} active={p === period} label={p} onClick={() => setPeriod(p)} />
+                ))}
+              {!intradayActive && <span className="w-px h-4 bg-border mx-1" aria-hidden />}
+              <TimeframeSelector
+                value={timeframe}
+                onChange={setTimeframe}
+                intradayAvailable={intradayAvailable}
+                coverageDays={coverageDays}
+              />
+              {intradayActive && (
+                <span className="text-[11px] text-muted-foreground ml-2">
+                  {t("stock.timeframe.coverage_note", { days: coverageDays })}
+                </span>
+              )}
               <button
                 type="button"
                 onClick={() => setChartFullscreen((f) => !f)}
@@ -190,19 +260,21 @@ export default function StockDetailPage() {
               </button>
             </div>
             <div className={chartFullscreen ? "p-3 flex-1 min-h-0" : "p-3"}>
-              {barsLoading ? (
+              {displayLoading ? (
                 <div className="h-full min-h-[360px] flex items-center justify-center text-muted-foreground text-sm animate-pulse">
                   {t("common.loading")}
                 </div>
-              ) : bars.length === 0 ? (
+              ) : displayBars.length === 0 ? (
                 <div className="h-full min-h-[360px] flex items-center justify-center text-muted-foreground text-sm">
-                  No data available
+                  {intradayActive
+                    ? t("stock.timeframe.no_intraday_data")
+                    : "No data available"}
                 </div>
               ) : (
                 // Omitting `height` lets the chart's ResizeObserver track the
                 // flex container, so the canvas fills the viewport in
                 // fullscreen and snaps back to 360px on exit.
-                <CandlestickChart bars={bars} height={chartFullscreen ? undefined : 360} />
+                <CandlestickChart bars={displayBars} height={chartFullscreen ? undefined : 360} />
               )}
             </div>
           </div>

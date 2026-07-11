@@ -1594,6 +1594,53 @@ async def read_latest_quote(
     }
 
 
+async def read_quote_snapshots_range(
+    db: AsyncSession, market: str, symbol: str, *, start: datetime,
+) -> list[tuple[datetime, float | None, int | None]]:
+    """Narrow (ts, last_price, volume) fetch for the intraday aggregator.
+
+    Returns rows ts-ascending with ts normalised to tz-aware UTC (SQLite
+    drops tzinfo; Postgres keeps it). `volume` is the *cumulative* session
+    volume as written by the quote refresh task — see
+    `services.intraday_service` for the per-bar differencing.
+    """
+    stmt = (
+        select(QuoteSnapshot.ts, QuoteSnapshot.last_price, QuoteSnapshot.volume)
+        .where(
+            QuoteSnapshot.market == market,
+            QuoteSnapshot.symbol == symbol,
+            QuoteSnapshot.ts >= start,
+        )
+        .order_by(QuoteSnapshot.ts.asc())
+    )
+    rows = (await db.execute(stmt)).all()
+    out: list[tuple[datetime, float | None, int | None]] = []
+    for ts, price, volume in rows:
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        out.append((
+            ts,
+            float(price) if price is not None else None,
+            int(volume) if volume is not None else None,
+        ))
+    return out
+
+
+async def read_quote_snapshots_range_autosession(
+    market: str, symbol: str, *, start: datetime,
+) -> list[tuple[datetime, float | None, int | None]]:
+    """Same as `read_quote_snapshots_range` but opens its own session and
+    swallows DB errors — the intraday endpoint degrades to an empty bar
+    list (with coverage note) rather than 500 on a Postgres outage."""
+    try:
+        async with AsyncSessionLocal() as db:
+            return await read_quote_snapshots_range(db, market, symbol, start=start)
+    except Exception as exc:
+        log.warning("ingest.quote_snapshot.range_read_error",
+                    extra={"market": market, "symbol": symbol, "error": str(exc)})
+        return []
+
+
 async def prune_quote_snapshots(db: AsyncSession, *, older_than_days: int) -> int:
     """Delete snapshots older than `older_than_days`. Returns deleted count."""
     cutoff = datetime.now(UTC) - timedelta(days=older_than_days)

@@ -1,7 +1,7 @@
 export type Market = "US" | "TW" | "CRYPTO";
 
 export interface OHLCVBar {
-  time: string;      // "YYYY-MM-DD" for daily; Unix timestamp for intraday
+  time: string | number; // "YYYY-MM-DD" for daily; Unix ms for intraday
   open: number;
   high: number;
   low: number;

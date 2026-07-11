@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from dependencies import get_current_user
 import services.crypto_market_service as svc
+import services.intraday_service as intraday_svc
 
 router = APIRouter()
 CurrentUser = Annotated[dict, Depends(get_current_user)]
@@ -30,6 +31,19 @@ async def history(
     limit: int = Query(365, ge=1, le=720),
 ) -> list[dict[str, Any]]:
     return await svc.get_history(symbol.upper(), interval=interval, limit=limit)
+
+
+@router.get("/intraday/{symbol}", response_model=intraday_svc.IntradayResponse)
+async def intraday(
+    symbol: str,
+    _: CurrentUser,
+    interval: str = Query("5m", pattern="^(1m|5m|15m)$", description="1m 5m 15m"),
+):
+    """Snapshot-aggregated intraday bars. Crypto's refresh path doesn't
+    persist quote snapshots yet, so this typically returns empty `bars`
+    (the UI treats that as "分時 unavailable"); the endpoint exists so all
+    three markets share one contract and lights up when snapshots land."""
+    return await intraday_svc.get_intraday("CRYPTO", symbol, interval)
 
 
 @router.get("/screener")

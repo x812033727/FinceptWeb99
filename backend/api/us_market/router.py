@@ -11,6 +11,7 @@ from api.us_market.schemas import (
 )
 from dependencies import get_current_user
 from limiter import limiter
+import services.intraday_service as intraday_svc
 import services.us_market_service as svc
 
 router = APIRouter()
@@ -36,6 +37,18 @@ async def history(
         return await svc.get_history(ticker.upper(), period=period, interval=interval)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Data source error: {e}")
+
+
+@router.get("/intraday/{ticker}", response_model=intraday_svc.IntradayResponse)
+async def intraday(
+    ticker: str,
+    _: CurrentUser,
+    interval: str = Query("5m", pattern="^(1m|5m|15m)$", description="1m 5m 15m"),
+):
+    """分時 K 線 — aggregated from the quote_snapshots archive, limited to
+    the snapshot retention window (`coverage_days`). Empty `bars` when the
+    symbol has no snapshots — expected, not an error."""
+    return await intraday_svc.get_intraday("US", ticker, interval)
 
 
 @router.get("/fundamentals/{ticker}", response_model=FundamentalsResponse)

@@ -1,7 +1,20 @@
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useAuthStore } from "@/store/authStore";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import {
+  Bitcoin,
+  Bot,
+  Globe,
+  Landmark,
+  LineChart,
+  PieChart,
+  Search,
+  Star,
+  TrendingUp,
+  type LucideIcon,
+} from "lucide-react";
 import api from "@/lib/api";
 import { formatQuoteFreshness } from "@/lib/freshness";
 import { DataSourceBadge } from "@/components/DataSourceBadge";
@@ -29,13 +42,33 @@ function IndexCard({ symbol, label }: { symbol: string; label: string }) {
   // weekend / off-hours views from looking like live prices.
   const localTime = formatQuoteFreshness(tsMs ?? null, i18n.language);
 
+  // Tick flash — briefly tint the price row when a refetch moves the
+  // price. Keyframes live in index.css (`animate-flash-up/down`, 300 ms,
+  // disabled under prefers-reduced-motion). The ref tracks the last
+  // rendered price so a cache-identical refetch doesn't flash.
+  const prevPrice = useRef<number | null>(null);
+  const [flash, setFlash] = useState<"up" | "down" | null>(null);
+  useEffect(() => {
+    if (unavailable || price == null) return;
+    const prev = prevPrice.current;
+    prevPrice.current = price;
+    if (prev == null || prev === price) return;
+    setFlash(price > prev ? "up" : "down");
+    const id = setTimeout(() => setFlash(null), 400);
+    return () => clearTimeout(id);
+  }, [price, unavailable]);
+
   return (
     <Link
       to={`/stock/US/${symbol}`}
       className="bg-card border border-border rounded-lg p-4 hover:border-primary/40 transition-colors"
     >
       <div className="text-xs text-muted-foreground mb-1">{label}</div>
-      <div className="text-lg font-bold text-foreground">
+      <div
+        className={`text-lg font-bold text-foreground rounded px-1 -mx-1 ${
+          flash === "up" ? "animate-flash-up" : flash === "down" ? "animate-flash-down" : ""
+        }`}
+      >
         {!unavailable && price != null ? <Num value={price} /> : "—"}
       </div>
       <div className="text-sm font-medium mt-0.5">
@@ -72,17 +105,20 @@ interface NewsItem {
   sentiment_label?: "bullish" | "bearish" | "neutral" | null;
 }
 
+// Colors only — labels come from i18n (`dashboard.sentiment.*`). All
+// three tones are semantic tokens so the badge tracks both the light
+// theme and the [data-market-colors] convention flip.
 const SENTIMENT_BADGE: Record<
   NonNullable<NewsItem["sentiment_label"]>,
-  { label: string; cls: string }
+  { labelKey: string; cls: string }
 > = {
-  bullish: { label: "利多", cls: "bg-up/10 text-up border-up/30" },
-  bearish: { label: "利空", cls: "bg-down/10 text-down border-down/30" },
-  neutral: { label: "中性", cls: "bg-zinc-800/40 text-zinc-300 border-zinc-700/50" },
+  bullish: { labelKey: "dashboard.sentiment.bullish", cls: "bg-up/10 text-up border-up/30" },
+  bearish: { labelKey: "dashboard.sentiment.bearish", cls: "bg-down/10 text-down border-down/30" },
+  neutral: { labelKey: "dashboard.sentiment.neutral", cls: "bg-flat/10 text-flat border-flat/30" },
 };
 
 function NewsList({ items }: { items: NewsItem[] }) {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   return (
     <div className="divide-y divide-border/50">
       {items.slice(0, 5).map((item, i) => {
@@ -111,7 +147,7 @@ function NewsList({ items }: { items: NewsItem[] }) {
                   <span
                     className={`px-1.5 py-0.5 rounded border text-[10px] ${badge.cls}`}
                   >
-                    {badge.label}
+                    {t(badge.labelKey)}
                   </span>
                 )}
               </div>
@@ -123,33 +159,33 @@ function NewsList({ items }: { items: NewsItem[] }) {
   );
 }
 
-function RecentGlobalNews() {
+function RecentNewsFeed({ market }: { market: "TW" | "GLOBAL" }) {
   const { t } = useTranslation();
   const { data: items = [], isLoading } = useQuery<NewsItem[]>({
-    queryKey: ["news", "GLOBAL", "recent"],
-    queryFn: () => api.get("/global/news/recent?limit=20").then((r) => r.data),
+    queryKey: ["news", market, "recent"],
+    // 5-min stale matches the ingest cadence (hourly) — UI doesn't
+    // need to refetch faster than the data can change.
+    queryFn: () =>
+      api
+        .get(market === "TW" ? "/tw/news/recent?limit=20" : "/global/news/recent?limit=20")
+        .then((r) => r.data),
     staleTime: 5 * 60_000,
   });
 
   if (isLoading) {
-    return <div className="text-xs text-muted-foreground animate-pulse">{t("dashboard.loading_news")}</div>;
+    return (
+      <div className="px-4 py-3 text-xs text-muted-foreground animate-pulse">
+        {t("dashboard.loading_news")}
+      </div>
+    );
   }
 
-  return (
-    <div className="bg-card border border-border rounded-lg overflow-hidden">
-      <div className="px-4 py-3 border-b border-border">
-        <h2 className="text-sm font-medium text-foreground">
-          {t("dashboard.global_market_news")}
-        </h2>
-      </div>
-      {!items.length ? (
-        <div className="px-4 py-6 text-xs text-muted-foreground text-center">
-          {t("dashboard.no_news")}
-        </div>
-      ) : (
-        <NewsList items={items} />
-      )}
+  return !items.length ? (
+    <div className="px-4 py-6 text-xs text-muted-foreground text-center">
+      {t("dashboard.no_news")}
     </div>
+  ) : (
+    <NewsList items={items} />
   );
 }
 
@@ -186,54 +222,48 @@ function OverseasIndicators() {
 
   if (isLoading) {
     return (
-      <div className="text-xs text-muted-foreground animate-pulse">
+      <div className="px-4 py-3 text-xs text-muted-foreground animate-pulse">
         {t("dashboard.loading_overseas") ?? "Loading..."}
       </div>
     );
   }
 
   const rows = data?.indices ?? [];
-  return (
-    <div className="bg-card border border-border rounded-lg overflow-hidden">
-      <div className="px-4 py-3 border-b border-border">
-        <h2 className="text-sm font-medium text-foreground">
-          {t("dashboard.overseas_indicators_title")}
-        </h2>
+  if (rows.length === 0) {
+    return (
+      <div className="px-4 py-6 text-xs text-muted-foreground text-center">
+        {t("dashboard.overseas_indicators_empty")}
       </div>
-      {rows.length === 0 ? (
-        <div className="px-4 py-6 text-xs text-muted-foreground text-center">
-          {t("dashboard.overseas_indicators_empty")}
-        </div>
-      ) : (
-        <ul className="divide-y divide-border/50">
-          {rows.map((idx) => {
-            const sign = idx.change_pct >= 0 ? "+" : "";
-            const cls = idx.change_pct >= 0 ? "text-up" : "text-down";
-            return (
-              <li
-                key={idx.symbol}
-                className="px-4 py-2 grid grid-cols-[minmax(0,1fr)_auto_auto] items-baseline gap-3 text-sm"
-              >
-                <span className="text-foreground truncate" title={idx.symbol}>
-                  {idx.name}
-                </span>
-                <span className="font-mono tabular-nums text-foreground">
-                  {idx.close.toLocaleString(undefined, {
-                    maximumFractionDigits: 2,
-                  })}
-                </span>
-                <span
-                  className={`font-mono tabular-nums text-right w-20 ${cls}`}
-                >
-                  {sign}
-                  {idx.change_pct.toFixed(2)}%
-                </span>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </div>
+    );
+  }
+  return (
+    <ul className="divide-y divide-border/50">
+      {rows.map((idx) => {
+        const sign = idx.change_pct >= 0 ? "+" : "";
+        const cls = idx.change_pct >= 0 ? "text-up" : "text-down";
+        return (
+          <li
+            key={idx.symbol}
+            className="px-4 py-2 grid grid-cols-[minmax(0,1fr)_auto_auto] items-baseline gap-3 text-sm"
+          >
+            <span className="text-foreground truncate" title={idx.symbol}>
+              {idx.name}
+            </span>
+            <span className="font-mono tabular-nums text-foreground">
+              {idx.close.toLocaleString(undefined, {
+                maximumFractionDigits: 2,
+              })}
+            </span>
+            <span
+              className={`font-mono tabular-nums text-right w-20 ${cls}`}
+            >
+              {sign}
+              {idx.change_pct.toFixed(2)}%
+            </span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -251,7 +281,7 @@ interface AnnouncementItem {
 }
 
 function AnnouncementsList({ items }: { items: AnnouncementItem[] }) {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   return (
     <div className="divide-y divide-border/50">
       {items.slice(0, 5).map((item, i) => {
@@ -281,7 +311,7 @@ function AnnouncementsList({ items }: { items: AnnouncementItem[] }) {
                 <span
                   className={`px-1.5 py-0.5 rounded border text-[10px] ${badge.cls}`}
                 >
-                  {badge.label}
+                  {t(badge.labelKey)}
                 </span>
               )}
             </div>
@@ -315,13 +345,7 @@ function AnnouncementsList({ items }: { items: AnnouncementItem[] }) {
   );
 }
 
-function RecentAnnouncements({
-  market,
-  titleKey,
-}: {
-  market: "TW" | "US";
-  titleKey: string;
-}) {
+function RecentAnnouncements({ market }: { market: "TW" | "US" }) {
   const { t } = useTranslation();
   const { data: items = [], isLoading } = useQuery<AnnouncementItem[]>({
     queryKey: ["announcements", market, "recent"],
@@ -335,61 +359,86 @@ function RecentAnnouncements({
 
   if (isLoading) {
     return (
-      <div className="text-xs text-muted-foreground animate-pulse">
+      <div className="px-4 py-3 text-xs text-muted-foreground animate-pulse">
         {t("dashboard.loading_announcements")}
       </div>
     );
   }
 
-  return (
-    <div className="bg-card border border-border rounded-lg overflow-hidden">
-      <div className="px-4 py-3 border-b border-border">
-        <h2 className="text-sm font-medium text-foreground">{t(titleKey)}</h2>
-      </div>
-      {!items.length ? (
-        <div className="px-4 py-6 text-xs text-muted-foreground text-center">
-          {t("dashboard.no_announcements")}
-        </div>
-      ) : (
-        <AnnouncementsList items={items} />
-      )}
+  return !items.length ? (
+    <div className="px-4 py-6 text-xs text-muted-foreground text-center">
+      {t("dashboard.no_announcements")}
     </div>
+  ) : (
+    <AnnouncementsList items={items} />
   );
 }
 
-function RecentTWNews() {
+// ── Intel feed (right column) ──────────────────────────────────────
+
+/**
+ * One sub-group inside the unified intel-feed card. Replaces the five
+ * separate section-header + card-header pairs the right column used to
+ * stack — a single slim uppercase strip per source keeps the terminal
+ * density while making the whole column read as one feed.
+ */
+function FeedSection({
+  titleKey,
+  children,
+}: {
+  titleKey: string;
+  children: ReactNode;
+}) {
   const { t } = useTranslation();
-  const { data: items = [], isLoading } = useQuery<NewsItem[]>({
-    queryKey: ["news", "TW", "recent"],
-    // 5-min stale matches the ingest cadence (hourly) — UI doesn't
-    // need to refetch faster than the data can change.
-    queryFn: () => api.get("/tw/news/recent?limit=20").then((r) => r.data),
-    staleTime: 5 * 60_000,
-  });
-
-  if (isLoading) {
-    return <div className="text-xs text-muted-foreground animate-pulse">{t("dashboard.loading_news")}</div>;
-  }
-
   return (
-    <div className="bg-card border border-border rounded-lg overflow-hidden">
-      <div className="px-4 py-3 border-b border-border">
-        <h2 className="text-sm font-medium text-foreground">
-          {t("dashboard.tw_market_news")}
-        </h2>
+    <section>
+      <h3 className="px-4 py-2 text-[10px] uppercase tracking-wider text-muted-foreground font-medium bg-muted/20 border-b border-border/50">
+        {t(titleKey)}
+      </h3>
+      {children}
+    </section>
+  );
+}
+
+function IntelFeed() {
+  const { t } = useTranslation();
+  return (
+    <div>
+      <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
+        {t("dashboard.intel_feed")}
+      </h2>
+      <div className="bg-card border border-border rounded-lg overflow-hidden divide-y divide-border">
+        <FeedSection titleKey="dashboard.overseas_indicators_title">
+          <OverseasIndicators />
+        </FeedSection>
+        <FeedSection titleKey="dashboard.tw_market_news">
+          <RecentNewsFeed market="TW" />
+        </FeedSection>
+        <FeedSection titleKey="dashboard.global_market_news">
+          <RecentNewsFeed market="GLOBAL" />
+        </FeedSection>
+        <FeedSection titleKey="dashboard.tw_announcements">
+          <RecentAnnouncements market="TW" />
+        </FeedSection>
+        <FeedSection titleKey="dashboard.us_announcements">
+          <RecentAnnouncements market="US" />
+        </FeedSection>
       </div>
-      {!items.length ? (
-        <div className="px-4 py-6 text-xs text-muted-foreground text-center">
-          {t("dashboard.no_news")}
-        </div>
-      ) : (
-        <NewsList items={items} />
-      )}
     </div>
   );
 }
 
 // ── Main ──────────────────────────────────────────────────────────
+
+interface QuickAccessCard {
+  labelKey: string;
+  descKey: string;
+  icon: LucideIcon;
+  /** Left accent — full literal class names so Tailwind JIT sees them. */
+  accent: string;
+  iconCls: string;
+  href: string;
+}
 
 export default function DashboardPage() {
   const { t } = useTranslation();
@@ -402,35 +451,38 @@ export default function DashboardPage() {
     { symbol: "GLD", label: t("dashboard.indices.gold_etf") },
   ];
 
-  const cards = [
-    { labelKey: "nav.us_market",  descKey: "dashboard.cards.us_market_desc",  icon: "🇺🇸", href: "/market/US" },
-    { labelKey: "nav.tw_market",  descKey: "dashboard.cards.tw_market_desc",  icon: "🇹🇼", href: "/market/TW" },
-    { labelKey: "nav.crypto",     descKey: "dashboard.cards.crypto_desc",     icon: "₿",  href: "/market/CRYPTO" },
-    { labelKey: "nav.screener",   descKey: "dashboard.cards.screener_desc",   icon: "🔍", href: "/screener" },
-    { labelKey: "nav.watchlist",  descKey: "dashboard.cards.watchlist_desc",  icon: "⭐", href: "/watchlist" },
-    { labelKey: "nav.portfolio",  descKey: "dashboard.cards.portfolio_desc",  icon: "📊", href: "/portfolio" },
-    { labelKey: "nav.analytics",  descKey: "dashboard.cards.analytics_desc",  icon: "📐", href: "/analytics" },
-    { labelKey: "nav.macro",      descKey: "dashboard.cards.macro_desc",      icon: "🌐", href: "/macro" },
-    { labelKey: "nav.ai",         descKey: "dashboard.cards.ai_desc",         icon: "🤖", href: "/ai" },
+  const cards: QuickAccessCard[] = [
+    { labelKey: "nav.us_market", descKey: "dashboard.cards.us_market_desc", icon: TrendingUp, accent: "border-l-chart-1 hover:border-l-chart-1", iconCls: "text-chart-1", href: "/market/US" },
+    { labelKey: "nav.tw_market", descKey: "dashboard.cards.tw_market_desc", icon: Landmark,   accent: "border-l-chart-2 hover:border-l-chart-2", iconCls: "text-chart-2", href: "/market/TW" },
+    { labelKey: "nav.crypto",    descKey: "dashboard.cards.crypto_desc",    icon: Bitcoin,    accent: "border-l-chart-3 hover:border-l-chart-3", iconCls: "text-chart-3", href: "/market/CRYPTO" },
+    { labelKey: "nav.screener",  descKey: "dashboard.cards.screener_desc",  icon: Search,     accent: "border-l-chart-4 hover:border-l-chart-4", iconCls: "text-chart-4", href: "/screener" },
+    { labelKey: "nav.watchlist", descKey: "dashboard.cards.watchlist_desc", icon: Star,       accent: "border-l-chart-5 hover:border-l-chart-5", iconCls: "text-chart-5", href: "/watchlist" },
+    { labelKey: "nav.portfolio", descKey: "dashboard.cards.portfolio_desc", icon: PieChart,   accent: "border-l-chart-6 hover:border-l-chart-6", iconCls: "text-chart-6", href: "/portfolio" },
+    { labelKey: "nav.analytics", descKey: "dashboard.cards.analytics_desc", icon: LineChart,  accent: "border-l-chart-1 hover:border-l-chart-1", iconCls: "text-chart-1", href: "/analytics" },
+    { labelKey: "nav.macro",     descKey: "dashboard.cards.macro_desc",     icon: Globe,      accent: "border-l-chart-2 hover:border-l-chart-2", iconCls: "text-chart-2", href: "/macro" },
+    { labelKey: "nav.ai",        descKey: "dashboard.cards.ai_desc",        icon: Bot,        accent: "border-l-chart-3 hover:border-l-chart-3", iconCls: "text-chart-3", href: "/ai" },
   ];
 
   return (
     <div className="p-4 sm:p-6 space-y-5 sm:space-y-6">
-      {/* welcome */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-        <div className="min-w-0">
-          <h1 className="text-xl sm:text-2xl font-bold text-foreground">{t("dashboard.title")}</h1>
-          <p className="text-xs sm:text-sm text-muted-foreground mt-0.5 truncate">
-            {t("dashboard.welcome_back")}，<span className="text-foreground">{user?.email}</span>
-            {" · "}
-            <span className="capitalize text-primary">{user?.role}</span>
-          </p>
-        </div>
+      {/* status bar — single-line: title · user · role chip · AI quota */}
+      <div className="flex items-center gap-2 flex-wrap min-w-0 bg-card border border-border rounded-lg px-3 py-2">
+        <h1 className="text-sm font-bold text-foreground shrink-0">{t("dashboard.title")}</h1>
+        <span className="text-muted-foreground/50 shrink-0">·</span>
+        <span className="text-xs text-muted-foreground truncate min-w-0">{user?.email}</span>
+        {user?.role && (
+          <span className="shrink-0 px-1.5 py-0.5 rounded border border-primary/30 bg-primary/10 text-primary text-[10px] uppercase tracking-wider">
+            {user.role}
+          </span>
+        )}
         {user?.ai_requests_remaining !== undefined && (
-          <div className="text-xs text-muted-foreground sm:text-right shrink-0">
-            {t("dashboard.ai_requests_today")}
-            <div className="text-foreground font-medium text-sm">{user.ai_requests_remaining} {t("dashboard.remaining")}</div>
-          </div>
+          <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
+            {t("dashboard.ai_requests_today")}{" "}
+            <span className="text-foreground font-mono tabular-nums text-xs normal-case">
+              {user.ai_requests_remaining}
+            </span>{" "}
+            {t("dashboard.remaining")}
+          </span>
         )}
       </div>
 
@@ -444,65 +496,31 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* nav cards + news */}
+      {/* nav cards + intel feed */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
           <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">{t("dashboard.quick_access")}</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {cards.map((card) => (
-              <Link
-                key={card.labelKey}
-                to={card.href}
-                className="bg-card border border-border rounded-lg p-4 space-y-1.5 hover:border-primary/50 hover:bg-card/80 transition-colors block group"
-              >
-                <div className="text-xl">{card.icon}</div>
-                <h2 className="text-foreground font-medium text-sm group-hover:text-primary transition-colors">
-                  {t(card.labelKey)}
-                </h2>
-                <p className="text-xs text-muted-foreground">{t(card.descKey)}</p>
-              </Link>
-            ))}
+            {cards.map((card) => {
+              const Icon = card.icon;
+              return (
+                <Link
+                  key={card.labelKey}
+                  to={card.href}
+                  className={`bg-card border border-border border-l-[3px] ${card.accent} rounded-lg p-4 space-y-1.5 hover:border-primary/50 hover:bg-card/80 transition-colors block group`}
+                >
+                  <Icon className={`w-4 h-4 ${card.iconCls}`} aria-hidden="true" />
+                  <h2 className="text-foreground font-medium text-sm group-hover:text-primary transition-colors">
+                    {t(card.labelKey)}
+                  </h2>
+                  <p className="text-xs text-muted-foreground">{t(card.descKey)}</p>
+                </Link>
+              );
+            })}
           </div>
         </div>
 
-        <div className="space-y-4">
-          <div>
-            <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
-              {t("dashboard.overseas_indicators_section")}
-            </h2>
-            <OverseasIndicators />
-          </div>
-          <div>
-            <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
-              {t("dashboard.latest_tw_news")}
-            </h2>
-            <RecentTWNews />
-          </div>
-          <div>
-            <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
-              {t("dashboard.latest_global_news")}
-            </h2>
-            <RecentGlobalNews />
-          </div>
-          <div>
-            <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
-              {t("dashboard.latest_tw_announcements")}
-            </h2>
-            <RecentAnnouncements
-              market="TW"
-              titleKey="dashboard.tw_announcements"
-            />
-          </div>
-          <div>
-            <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
-              {t("dashboard.latest_us_announcements")}
-            </h2>
-            <RecentAnnouncements
-              market="US"
-              titleKey="dashboard.us_announcements"
-            />
-          </div>
-        </div>
+        <IntelFeed />
       </div>
     </div>
   );

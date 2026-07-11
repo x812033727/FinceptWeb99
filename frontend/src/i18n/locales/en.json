@@ -476,6 +476,21 @@
       "open_in_ai": "Open in AI page",
       "uses_quota": "Uses {{count}} daily AI request"
     },
+    "ai_review": {
+      "title": "AI Health Check",
+      "subtitle": "One click streams an AI review of the risk numbers above: concentration, market-regime fit, and action items",
+      "generate": "Run Health Check",
+      "regenerate": "Run Again",
+      "stop": "Stop",
+      "stage_context": "Computing portfolio risk and market regime…",
+      "stage_generating": "AI is writing the review…",
+      "empty": "No review yet. Click “Run Health Check” and the AI will assess this portfolio's concentration, risk metrics and fit with the current market regime, ending with actionable suggestions.",
+      "quota_exceeded": "Daily AI quota exceeded. It resets at midnight UTC — please try again tomorrow.",
+      "no_key": "No LLM API key configured. Add a provider key in the admin console or your personal settings, then retry.",
+      "empty_portfolio": "This portfolio has no holdings yet. Add transactions first, then run the health check.",
+      "disclaimer": "This review is AI-generated, for research reference only — not investment advice.",
+      "not_saved": "On-demand analysis — not saved"
+    },
     "transactions": {
       "title": "Transactions",
       "add": "Add Transaction",

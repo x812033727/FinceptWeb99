@@ -13,6 +13,7 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from _version import __version__
 from api.admin.router import router as admin_router
+from api.ai_agents.portfolio_review import router as portfolio_review_router
 from api.ai_agents.router import router as ai_router
 from api.ai_agents.stock_report import router as stock_report_router
 from api.alerts.router import router as alerts_router
@@ -273,6 +274,9 @@ app.include_router(ai_router, prefix="/api/ai", tags=["AI Agents"])
 # B1 個股 AI 研究報告 — same /api/ai namespace, separate module so the
 # chat router stays focused. Shares the daily AI quota helpers.
 app.include_router(stock_report_router, prefix="/api/ai", tags=["AI Agents"])
+# B5 AI 投組健檢 — same /api/ai namespace; reuses the C1 risk service +
+# regime classifier for context and the B1 quota/key/SSE patterns.
+app.include_router(portfolio_review_router, prefix="/api/ai", tags=["AI Agents"])
 app.include_router(watchlist_router, prefix="/api/watchlist", tags=["Watchlist"])
 app.include_router(alerts_router, prefix="/api/alerts", tags=["Alerts"])
 app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])

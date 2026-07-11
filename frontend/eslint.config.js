@@ -59,7 +59,8 @@ export default tseslint.config(
   //   - DiscussionLessonsCard / MaturityBadge / CapturedSessionBadge /
   //     LessonLibraryPage / RoundContextsCard: categorical badge sets
   //     (green sits alongside purple/blue/slate — not direction/status).
-  //   - UsageCard / AIPage: per-provider brand colours.
+  //   - UsageCard / PersonaList (ex-AIPage, PR-8 拆分): per-provider
+  //     brand colours.
   //   - DividendsPanel: cash-vs-stock dividend column accents.
   {
     files: ["src/**/*.{ts,tsx}"],
@@ -72,7 +73,7 @@ export default tseslint.config(
       "src/components/discussion/RoundContextsCard.tsx",
       "src/pages/LessonLibraryPage.tsx",
       "src/components/admin/UsageCard.tsx",
-      "src/pages/AIPage.tsx",
+      "src/components/ai/PersonaList.tsx",
       "src/components/stock/DividendsPanel.tsx",
     ],
     rules: {

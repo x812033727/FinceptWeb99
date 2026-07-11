@@ -46,9 +46,34 @@ const config: Config = {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
-        // Market-specific
-        positive: "#22c55e",
-        negative: "#ef4444",
+        // Surface elevation scale
+        surface: {
+          0: "hsl(var(--surface-0))",
+          1: "hsl(var(--surface-1))",
+          2: "hsl(var(--surface-2))",
+          3: "hsl(var(--surface-3))",
+        },
+        // Status semantics
+        success: "hsl(var(--success))",
+        warning: "hsl(var(--warning))",
+        danger: "hsl(var(--danger))",
+        info: "hsl(var(--info))",
+        // Market direction — follows [data-market-colors] convention
+        up: "hsl(var(--up))",
+        down: "hsl(var(--down))",
+        flat: "hsl(var(--flat))",
+        // Categorical chart series
+        chart: {
+          1: "hsl(var(--chart-1))",
+          2: "hsl(var(--chart-2))",
+          3: "hsl(var(--chart-3))",
+          4: "hsl(var(--chart-4))",
+          5: "hsl(var(--chart-5))",
+          6: "hsl(var(--chart-6))",
+        },
+        // Transitional aliases — migrate call sites to up/down, then remove
+        positive: "hsl(var(--up))",
+        negative: "hsl(var(--down))",
       },
       borderRadius: {
         lg: "var(--radius)",

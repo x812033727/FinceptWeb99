@@ -379,6 +379,18 @@ class Settings(BaseSettings):
     SMTP_USE_SSL: bool = False
     SMTP_TIMEOUT_SECONDS: int = 20
 
+    # Web Push (PR-D3 瀏覽器推播) — VAPID keypair identifying THIS
+    # deployment to browser push services (self-hosted, no third-party
+    # paid service). When either key is empty the web_push transport
+    # reports not-configured and skips silently — fail-closed like the
+    # SMTP gate above (`web_push_service.is_configured()`). Generate
+    # once per deployment (see .env.example for the one-liners); the
+    # claims email is what push services contact on abuse (falls back
+    # to a placeholder when empty).
+    VAPID_PUBLIC_KEY: str = ""
+    VAPID_PRIVATE_KEY: str = ""
+    VAPID_CLAIMS_EMAIL: str = ""
+
     # Environment
     DEBUG: bool = False
 

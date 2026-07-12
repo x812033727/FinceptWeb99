@@ -94,6 +94,18 @@
       "density_comfortable": "Comfortable",
       "density_compact": "Compact"
     },
+    "notifications": {
+      "title": "Notifications",
+      "web_push": "Browser push notifications",
+      "web_push_desc": "Get alert notifications even when no tab is open.",
+      "web_push_on_desc": "Enabled on this browser — alerts arrive even offline from the app.",
+      "enable": "Enable",
+      "disable": "Disable",
+      "denied": "Notifications are blocked for this site — allow them in your browser settings, then reload.",
+      "unsupported": "This browser does not support push notifications.",
+      "unconfigured": "Server push is not configured (VAPID keys missing) — contact your administrator.",
+      "error": "Failed to update push subscription. Please try again."
+    },
     "admin_link": "Open system admin"
   },
   "nav": {

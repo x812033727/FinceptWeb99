@@ -221,3 +221,48 @@ async function spaFallback(request, event) {
     return cached || new Response("Offline", { status: 503 });
   }
 }
+
+// ── Web Push (D3 瀏覽器推播) ──────────────────────────────────────
+// Payload contract (backend web_push_service._notification_payload):
+//   { title, body, tag, url }
+// `tag` dedupes re-fires of the same repeating alert; `url` is where a
+// click should land (defaults to the alerts page).
+
+self.addEventListener("push", (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    // Non-JSON payload (e.g. push-service test ping) — show as body text.
+    data = { body: event.data ? event.data.text() : "" };
+  }
+  const title = data.title || "Fincept";
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: data.body || "",
+      tag: data.tag || undefined,
+      icon: "/icon-512.svg",
+      badge: "/favicon.svg",
+      data: { url: data.url || "/alerts" },
+    })
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || "/";
+  event.waitUntil(
+    self.clients
+      .matchAll({ type: "window", includeUncontrolled: true })
+      .then((clientList) => {
+        // Prefer an existing tab: navigate it to the target and focus.
+        for (const client of clientList) {
+          if ("focus" in client) {
+            if (client.navigate) client.navigate(url).catch(() => {});
+            return client.focus();
+          }
+        }
+        return self.clients.openWindow(url);
+      })
+  );
+});

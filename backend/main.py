@@ -23,6 +23,7 @@ from api.crypto_market.router import router as crypto_router
 from api.discussion.router import router as discussion_router
 from api.global_market.router import router as global_router
 from api.announcements.router import router as announcements_router
+from api.notifications.router import router as notifications_router
 from api.portfolio.router import router as portfolio_router
 from api.system.router import router as system_router
 from api.tw_market.router import router as tw_router
@@ -155,7 +156,8 @@ async def lifespan(app: FastAPI):
     )
 
     from api.websocket.manager import publish_alert_to_user, publish_update, start_pubsub_listener
-    from services.notification_service import register_push_impl
+    from services.notification_service import register_push_impl, register_transport
+    from services.web_push_service import push_to_user as web_push_to_user
 
     # Alert push goes through Redis pub/sub in every topology: the fire
     # site (often the scheduler process) publishes once, and each web
@@ -163,6 +165,9 @@ async def lifespan(app: FastAPI):
     # the old multi-worker gap where an alert fired on worker A never
     # reached a tab connected to worker B.
     register_push_impl(publish_alert_to_user)
+    # Web Push (PR-D3): browser notifications even with no tab open.
+    # No-ops silently until VAPID keys are configured.
+    register_transport("web_push", web_push_to_user)
     await start_pubsub_listener()
 
     # ── Scheduler + Kraken pump (per-topology) ───────────────────
@@ -284,6 +289,7 @@ app.include_router(discussion_router, prefix="/api/discussion", tags=["Discussio
 app.include_router(global_router, prefix="/api/global", tags=["Global Market"])
 app.include_router(announcements_router, prefix="/api/announcements", tags=["Announcements"])
 app.include_router(system_router, prefix="/api/system", tags=["System"])
+app.include_router(notifications_router, prefix="/api/notifications", tags=["Notifications"])
 app.include_router(finmind_router, prefix="/api/finmind", tags=["FinMind Clone"])
 
 

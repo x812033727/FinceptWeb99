@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Moon, Shield, Sun, X } from "lucide-react";
+import { Bell, BellOff, Moon, Shield, Sun, X } from "lucide-react";
 import api from "@/lib/api";
+import { disablePush, enablePush, getPushStatus, type PushStatus } from "@/lib/webPush";
 import { useAuthStore } from "@/store/authStore";
 import { useThemeStore } from "@/store/themeStore";
 import { UsageCard } from "@/components/admin/UsageCard";
@@ -119,6 +120,36 @@ export default function SettingsPage() {
     mutationFn: (id: string) => api.delete(`/auth/api-keys/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["api-keys"] }),
   });
+
+  // ── Web Push (D3 瀏覽器推播) ───────────────────────────────────
+  const [pushStatus, setPushStatus] = useState<PushStatus | "loading">("loading");
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushError, setPushError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getPushStatus().then((s) => {
+      if (!cancelled) setPushStatus(s);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handlePushToggle() {
+    setPushBusy(true);
+    setPushError(false);
+    try {
+      const next = pushStatus === "on" ? await disablePush() : await enablePush();
+      setPushStatus(next);
+    } catch {
+      setPushError(true);
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
+  const pushToggleable = pushStatus === "on" || pushStatus === "off" || pushStatus === "unconfigured";
 
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-2xl">
@@ -239,6 +270,49 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
+      </Section>
+
+      {/* Notifications (D3 Web Push) */}
+      <Section title={t("settings.notifications.title")}>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium">{t("settings.notifications.web_push")}</p>
+            <p className="text-xs text-muted-foreground">
+              {pushStatus === "unsupported"
+                ? t("settings.notifications.unsupported")
+                : pushStatus === "denied"
+                ? t("settings.notifications.denied")
+                : pushStatus === "unconfigured"
+                ? t("settings.notifications.unconfigured")
+                : pushStatus === "on"
+                ? t("settings.notifications.web_push_on_desc")
+                : t("settings.notifications.web_push_desc")}
+            </p>
+          </div>
+          {pushStatus !== "loading" && pushStatus !== "unsupported" && pushStatus !== "denied" && (
+            <button
+              onClick={() => void handlePushToggle()}
+              disabled={pushBusy || !pushToggleable}
+              aria-pressed={pushStatus === "on"}
+              className="px-3 py-1.5 rounded border border-border text-sm hover:bg-accent/10 transition-colors min-h-[36px] inline-flex items-center gap-2 disabled:opacity-50 shrink-0"
+            >
+              {pushStatus === "on" ? (
+                <>
+                  <BellOff className="h-3.5 w-3.5" aria-hidden="true" />
+                  {pushBusy ? "…" : t("settings.notifications.disable")}
+                </>
+              ) : (
+                <>
+                  <Bell className="h-3.5 w-3.5" aria-hidden="true" />
+                  {pushBusy ? "…" : t("settings.notifications.enable")}
+                </>
+              )}
+            </button>
+          )}
+        </div>
+        {pushError && (
+          <p className="text-xs text-danger">{t("settings.notifications.error")}</p>
+        )}
       </Section>
 
       {/* Change password */}

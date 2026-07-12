@@ -74,8 +74,8 @@ export function ConclusionCard({
   // semantic stops: dark tinted top → near-black bottom, with a
   // matching tinted border.
   const baseClass = isPostMortem
-    ? "bg-gradient-to-br from-purple-950/40 to-purple-950/10 border border-purple-800/50 rounded-lg p-4 mt-6 shadow-sm"
-    : "bg-gradient-to-br from-amber-950/40 to-amber-950/10 border border-amber-800/50 rounded-lg p-4 mt-6 shadow-sm";
+    ? "bg-gradient-to-br from-purple-950/40 to-purple-950/10 border border-purple-800/50 rounded-lg p-4 mt-6"
+    : "bg-gradient-to-br from-amber-950/40 to-amber-950/10 border border-amber-800/50 rounded-lg p-4 mt-6";
   const cardClass = hasError
     ? "bg-danger/10 border border-danger/30 rounded-lg p-4 mt-6"
     : baseClass;

@@ -2,7 +2,9 @@ import type { Config } from "tailwindcss";
 import animate from "tailwindcss-animate";
 
 const config: Config = {
-  darkMode: ["class"],
+  // No `.dark` class in this app — theming is driven by the [data-light]
+  // attribute + CSS-var value layer (index.css), so `dark:` variants were
+  // dead config (the one stray usage was converted to a semantic token).
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {

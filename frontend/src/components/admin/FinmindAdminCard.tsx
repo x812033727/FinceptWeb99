@@ -343,7 +343,7 @@ export default function FinmindAdminCard() {
               "sqlite-test": "SQLite (test environment)",
             }[c.mode];
             const modeColor = c.mode === "shared-main-db"
-              ? "text-blue-700 dark:text-blue-300"
+              ? "text-primary"
               : "text-muted-foreground";
             return (
               <div className="rounded border border-border bg-muted/30 p-3 text-xs">

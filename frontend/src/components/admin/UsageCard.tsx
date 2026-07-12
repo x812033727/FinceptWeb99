@@ -1,9 +1,13 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
+import { Inbox } from "lucide-react";
 import api from "@/lib/api";
 import { CollapsibleHeader } from "@/components/Collapsible";
 import { useCollapsible } from "@/hooks/useCollapsible";
+import { DataTable, type DataTableColumn } from "@/components/ui/table";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { StatCard } from "@/components/ui/StatCard";
 
 interface UsageBucket {
   provider: string;
@@ -39,25 +43,18 @@ interface UsageSummary {
   top_tools: ToolCallStat[];
 }
 
+// Stable identity color per provider, drawn from the categorical chart
+// tokens (never the raw Tailwind palette — theme layers own the hues).
 const PROVIDER_COLOR: Record<string, string> = {
-  openai: "text-green-400",
-  anthropic: "text-orange-400",
-  gemini: "text-blue-400",
-  minimax: "text-purple-400",
-  groq: "text-pink-400",
-  deepseek: "text-cyan-400",
-  openrouter: "text-yellow-400",
-  ollama: "text-violet-400",
+  openai: "text-chart-1",
+  anthropic: "text-chart-2",
+  gemini: "text-chart-3",
+  minimax: "text-chart-4",
+  groq: "text-chart-5",
+  deepseek: "text-chart-6",
+  openrouter: "text-chart-2",
+  ollama: "text-chart-3",
 };
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="bg-secondary/30 rounded p-2">
-      <p className="text-[10px] text-muted-foreground uppercase tracking-wider">{label}</p>
-      <p className="text-sm font-semibold mt-0.5 tabular-nums">{value}</p>
-    </div>
-  );
-}
 
 export function UsageCard({ scope }: { scope: "admin" | "me" }) {
   const { t } = useTranslation();
@@ -70,6 +67,51 @@ export function UsageCard({ scope }: { scope: "admin" | "me" }) {
     queryKey: ["llm-usage", scope, days],
     queryFn: () => api.get(`${path}?range_days=${days}`).then((r) => r.data),
   });
+
+  const columns: DataTableColumn<UsageBucket>[] = [
+    {
+      key: "provider",
+      header: t("personas.provider"),
+      render: (b) => (
+        <span className={`font-medium ${PROVIDER_COLOR[b.provider] ?? "text-foreground"}`}>
+          {b.provider}
+        </span>
+      ),
+      mobile: "primary",
+    },
+    {
+      key: "model",
+      header: t("personas.model"),
+      cellClassName: "font-mono text-muted-foreground",
+    },
+    {
+      key: "requests",
+      header: t("usage.requests"),
+      numeric: true,
+      render: (b) => b.requests.toLocaleString(),
+    },
+    {
+      key: "tokens",
+      header: "tokens",
+      numeric: true,
+      cellClassName: "text-muted-foreground",
+      render: (b) => (b.prompt_tokens + b.completion_tokens).toLocaleString(),
+    },
+    {
+      key: "tool_calls",
+      header: t("usage.tool_calls_short"),
+      numeric: true,
+      cellClassName: "text-muted-foreground",
+      render: (b) => (b.tool_call_count ?? 0).toLocaleString(),
+    },
+    {
+      key: "cost",
+      header: t("usage.cost"),
+      numeric: true,
+      render: (b) => <span className="font-medium">${b.cost_usd.toFixed(4)}</span>,
+      mobile: "primary",
+    },
+  ];
 
   return (
     <div className="bg-card border border-border rounded-lg p-4 space-y-3">
@@ -106,47 +148,26 @@ export function UsageCard({ scope }: { scope: "admin" | "me" }) {
       {isLoading || !data ? (
         <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>
       ) : data.total_requests === 0 ? (
-        <p className="text-xs text-muted-foreground py-3">{t("usage.empty")}</p>
+        <EmptyState icon={Inbox} title={t("usage.empty")} className="py-4" />
       ) : (
         <>
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-            <Stat label={t("usage.cost")} value={`$${data.total_cost_usd.toFixed(4)}`} />
-            <Stat label={t("usage.requests")} value={data.total_requests.toLocaleString()} />
-            <Stat label={t("usage.prompt_tokens")} value={data.total_prompt_tokens.toLocaleString()} />
-            <Stat label={t("usage.completion_tokens")} value={data.total_completion_tokens.toLocaleString()} />
-            <Stat label={t("usage.tool_calls")} value={(data.total_tool_calls ?? 0).toLocaleString()} />
+            <StatCard label={t("usage.cost")} value={`$${data.total_cost_usd.toFixed(4)}`} compact />
+            <StatCard label={t("usage.requests")} value={data.total_requests.toLocaleString()} compact />
+            <StatCard label={t("usage.prompt_tokens")} value={data.total_prompt_tokens.toLocaleString()} compact />
+            <StatCard label={t("usage.completion_tokens")} value={data.total_completion_tokens.toLocaleString()} compact />
+            <StatCard label={t("usage.tool_calls")} value={(data.total_tool_calls ?? 0).toLocaleString()} compact />
           </div>
 
           <div className="space-y-1">
             <p className="text-[10px] text-muted-foreground uppercase tracking-wider">{t("usage.by_provider")}</p>
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-muted-foreground border-b border-border/50">
-                  <th className="text-left py-1 font-medium">{t("personas.provider")}</th>
-                  <th className="text-left py-1 font-medium">{t("personas.model")}</th>
-                  <th className="text-right py-1 font-medium">{t("usage.requests")}</th>
-                  <th className="text-right py-1 font-medium">tokens</th>
-                  <th className="text-right py-1 font-medium">{t("usage.tool_calls_short")}</th>
-                  <th className="text-right py-1 font-medium">{t("usage.cost")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.by_provider.map((b, i) => (
-                  <tr key={i} className="border-b border-border/30">
-                    <td className={`py-1 font-medium ${PROVIDER_COLOR[b.provider] ?? "text-foreground"}`}>{b.provider}</td>
-                    <td className="py-1 font-mono text-muted-foreground">{b.model}</td>
-                    <td className="py-1 text-right">{b.requests.toLocaleString()}</td>
-                    <td className="py-1 text-right text-muted-foreground">
-                      {(b.prompt_tokens + b.completion_tokens).toLocaleString()}
-                    </td>
-                    <td className="py-1 text-right text-muted-foreground tabular-nums">
-                      {(b.tool_call_count ?? 0).toLocaleString()}
-                    </td>
-                    <td className="py-1 text-right font-medium">${b.cost_usd.toFixed(4)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <DataTable
+              aria-label={t("usage.by_provider")}
+              columns={columns}
+              rows={data.by_provider}
+              rowKey={(b) => `${b.provider}:${b.model}`}
+              mobileMode="cards"
+            />
           </div>
 
           {(data.total_tool_calls ?? 0) > 0 && (

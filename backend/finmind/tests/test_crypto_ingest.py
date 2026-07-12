@@ -9,12 +9,19 @@ row-shaping is unit-tested separately against a mocked HTTP layer.
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy import select, text
 
 from finmind.ingest.runner import ingest_chunk
-from finmind.models.crypto import CryptoOhlcv, CryptoUniverse
+from finmind.models.crypto import (
+    CryptoAssetInfo,
+    CryptoFundingRate,
+    CryptoOhlcv,
+    CryptoOpenInterest,
+    CryptoUniverse,
+)
 from finmind.models.dataset_source import DatasetSource
 from finmind.scheduler.dispatcher import expand_due_datasets
 from finmind.scheduler.runner import get_crypto_universe
@@ -111,6 +118,100 @@ async def test_crypto_price_ingest_is_idempotent(finmind_session):
     assert count == 2  # not 4
 
 
+class _FakeFetchClient:
+    """Returns a fixed row list for any (dataset, symbol) — used to drive
+    the funding / OI / info ingest paths deterministically."""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def fetch(self, dataset_code, symbol, start_date, end_date):
+        return self._rows
+
+
+async def _enable(session, code):
+    await seed_dataset_sources()
+    ds = await session.get(DatasetSource, code)
+    ds.enabled = True
+    await session.commit()
+    return ds
+
+
+@pytest.mark.asyncio
+async def test_crypto_funding_rate_ingest_end_to_end(finmind_session):
+    await _enable(finmind_session, "CryptoFundingRate")
+    rows = [{
+        "symbol": "BTCUSDT", "funding_time": "2026-01-01T00:00:00+00:00",
+        "funding_rate": "0.00010000", "mark_price": "87608.30",
+    }]
+    result = await ingest_chunk(
+        finmind_session, dataset_code="CryptoFundingRate", symbol="BTCUSDT",
+        range_start=date(2026, 1, 1), range_end=date(2026, 1, 1),
+        client=_FakeFetchClient(rows),
+    )
+    assert result.status == "done"
+    fr = (await finmind_session.execute(select(CryptoFundingRate))).scalars().all()
+    assert len(fr) == 1
+    assert fr[0].market == "BINANCE"
+    assert str(fr[0].funding_rate) == "0.0001000000"
+
+
+@pytest.mark.asyncio
+async def test_crypto_open_interest_ingest_end_to_end(finmind_session):
+    await _enable(finmind_session, "CryptoOpenInterest")
+    rows = [{
+        "symbol": "BTCUSDT", "ts": "2026-01-01T01:00:00+00:00",
+        "open_interest": "12345.67", "open_interest_value": "1080000000.00",
+    }]
+    result = await ingest_chunk(
+        finmind_session, dataset_code="CryptoOpenInterest", symbol="BTCUSDT",
+        range_start=date(2026, 1, 1), range_end=date(2026, 1, 1),
+        client=_FakeFetchClient(rows),
+    )
+    assert result.status == "done"
+    oi = (await finmind_session.execute(select(CryptoOpenInterest))).scalars().all()
+    assert len(oi) == 1
+    assert str(oi[0].open_interest) == "12345.67000000"
+
+
+@pytest.mark.asyncio
+async def test_crypto_info_ingest_end_to_end(finmind_session):
+    """Market-wide CryptoInfo → dated snapshot rows in crypto_asset_info."""
+    ds = await _enable(finmind_session, "CryptoInfo")
+    assert ds.per_symbol is False
+    assert ds.active_source == "coingecko"
+    rows = [{
+        "snapshot_date": "2026-01-05", "coingecko_id": "bitcoin",
+        "symbol": "BTC", "name": "Bitcoin", "market_cap_rank": 1,
+        "market_cap": "1000000000000", "circulating_supply": "20000000",
+        "total_supply": "21000000", "ath": "100000",
+    }]
+    result = await ingest_chunk(
+        finmind_session, dataset_code="CryptoInfo", symbol=None,
+        range_start=date(2026, 1, 5), range_end=date(2026, 1, 5),
+        client=_FakeFetchClient(rows),
+    )
+    assert result.status == "done"
+    info = (await finmind_session.execute(select(CryptoAssetInfo))).scalars().all()
+    assert len(info) == 1
+    assert info[0].coingecko_id == "bitcoin"
+    assert info[0].snapshot_date == date(2026, 1, 5)
+    assert info[0].market_cap_rank == 1
+
+
+@pytest.mark.asyncio
+async def test_coingecko_info_handler_stamps_snapshot_date():
+    """The coingecko self-crawl handler stamps the chunk end_date as
+    snapshot_date onto every market row."""
+    from finmind.ingest.selfcrawl import coingecko as cg
+
+    markets = [{"coingecko_id": "bitcoin", "symbol": "BTC"}]
+    with patch.object(cg._coingecko, "get_markets",
+                      new=AsyncMock(return_value=markets)):
+        out = await cg._fetch_crypto_info(None, date(2026, 1, 1), date(2026, 1, 5))
+    assert out[0]["snapshot_date"] == "2026-01-05"
+
+
 # ── Universe routing ─────────────────────────────────────────────
 
 
@@ -192,7 +293,7 @@ def test_build_rows_maps_and_skips_stablecoins():
          "market_cap_rank": 150},  # no Binance pair
     ]
     spot = {"BTCUSDT", "USDTUSDT"}  # even if USDT pair existed, it's skipped
-    uni, info = build_rows(markets, spot, date(2026, 7, 12))
+    uni = build_rows(markets, spot, date(2026, 7, 12))
 
     by_id = {r["coingecko_id"]: r for r in uni}
     assert by_id["bitcoin"]["status"] == "active"
@@ -200,8 +301,7 @@ def test_build_rows_maps_and_skips_stablecoins():
     assert by_id["tether"]["status"] == "unmapped"   # stablecoin skip
     assert by_id["tether"]["binance_symbol"] is None
     assert by_id["someshit"]["status"] == "unmapped"  # no pair
-    assert len(info) == 3
-    assert info[0]["snapshot_date"] == "2026-07-12"
+    assert len(uni) == 3
 
 
 @pytest.mark.asyncio
@@ -215,8 +315,8 @@ async def test_apply_refresh_upserts_and_delists(finmind_session):
 
     markets = [{"coingecko_id": "bitcoin", "symbol": "BTC", "name": "Bitcoin",
                 "market_cap_rank": 1, "market_cap": 1e12}]
-    uni, info = build_rows(markets, {"BTCUSDT"}, date(2026, 7, 12))
-    summary = await apply_refresh(finmind_session, uni, info, date(2026, 7, 12))
+    uni = build_rows(markets, {"BTCUSDT"}, date(2026, 7, 12))
+    summary = await apply_refresh(finmind_session, uni, date(2026, 7, 12))
 
     assert summary["active"] == 1
     assert summary["delisted"] == 1  # oldcoin dropped out

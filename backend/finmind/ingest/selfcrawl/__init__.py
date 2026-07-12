@@ -95,13 +95,21 @@ def _binance_client_factory() -> Any:
     return BinanceClient()
 
 
+def _coingecko_client_factory() -> Any:
+    """Late-import factory for the CoinGecko market-cap-info connector."""
+    from finmind.ingest.selfcrawl.coingecko import CoingeckoClient
+
+    return CoingeckoClient()
+
+
 _REGISTRY: dict[str, ConnectorFactory] = {
-    "twse":    _twse_client_factory,
-    "tpex":    lambda: _NotWiredYetClient("tpex"),
-    "taifex":  lambda: _NotWiredYetClient("taifex"),
-    "mops":    _mops_client_factory,
-    "tdcc":    lambda: _NotWiredYetClient("tdcc"),
-    "binance": _binance_client_factory,
+    "twse":      _twse_client_factory,
+    "tpex":      lambda: _NotWiredYetClient("tpex"),
+    "taifex":    lambda: _NotWiredYetClient("taifex"),
+    "mops":      _mops_client_factory,
+    "tdcc":      lambda: _NotWiredYetClient("tdcc"),
+    "binance":   _binance_client_factory,
+    "coingecko": _coingecko_client_factory,
 }
 
 
@@ -188,6 +196,12 @@ def _binance_supported_datasets() -> set[str]:
     return set(_s())
 
 
+def _coingecko_supported_datasets() -> set[str]:
+    from finmind.ingest.selfcrawl.coingecko import supported_datasets as _s
+
+    return set(_s())
+
+
 def _finmind_supported_datasets() -> set[str]:
     """FinMind covers every dataset in the catalog — the whole point of
     Phase A is the paid sub serves all 80. Load lazily because catalog
@@ -199,9 +213,10 @@ def _finmind_supported_datasets() -> set[str]:
 
 _SUPPORTED_DATASETS_PROVIDERS: dict[str, SupportedDatasetsProvider] = {
     "finmind": _finmind_supported_datasets,
-    "twse":    _twse_supported_datasets,
-    "mops":    _mops_supported_datasets,
-    "binance": _binance_supported_datasets,
+    "twse":      _twse_supported_datasets,
+    "mops":      _mops_supported_datasets,
+    "binance":   _binance_supported_datasets,
+    "coingecko": _coingecko_supported_datasets,
     # tpex / taifex / tdcc currently route to `_NotWiredYetClient`, so
     # their supported set is empty by definition. A real connector
     # registers here via `register_supported_datasets()` below at

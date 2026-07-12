@@ -203,6 +203,9 @@ MACRO: tuple[DatasetSpec, ...] = (
 CRYPTO: tuple[DatasetSpec, ...] = (
     DatasetSpec("CryptoPrice", "加密貨幣日 K 線 (Binance)", per_symbol=True),
     DatasetSpec("CryptoPriceHourly", "加密貨幣小時 K 線 (Binance)", per_symbol=True),
+    DatasetSpec("CryptoFundingRate", "加密貨幣資金費率 (Binance 永續)", per_symbol=True),
+    DatasetSpec("CryptoOpenInterest", "加密貨幣未平倉量 (Binance 永續)", per_symbol=True),
+    DatasetSpec("CryptoInfo", "加密貨幣市值資訊 (CoinGecko)", per_symbol=False),
 )
 
 

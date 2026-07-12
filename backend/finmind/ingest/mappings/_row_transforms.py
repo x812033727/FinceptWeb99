@@ -67,6 +67,49 @@ def _row_crypto_ohlcv(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _row_crypto_funding_rate(row: dict[str, Any]) -> dict[str, Any]:
+    """Binance perp funding-rate row → crypto_funding_rate. funding_time
+    is TIMESTAMPTZ; funding_rate keeps full precision (~1e-4 magnitude)."""
+    return {
+        "market": row.get("market", "BINANCE"),
+        "symbol": _to_str(row.get("symbol")),
+        "funding_time": _to_datetime(row.get("funding_time")),
+        "funding_rate": _to_decimal(row.get("funding_rate")),
+        "mark_price": _to_decimal(row.get("mark_price")),
+        "source": row.get("source", "binance"),
+    }
+
+
+def _row_crypto_open_interest(row: dict[str, Any]) -> dict[str, Any]:
+    """Binance perp open-interest row → crypto_open_interest."""
+    return {
+        "market": row.get("market", "BINANCE"),
+        "symbol": _to_str(row.get("symbol")),
+        "ts": _to_datetime(row.get("ts")),
+        "open_interest": _to_decimal(row.get("open_interest")),
+        "open_interest_value": _to_decimal(row.get("open_interest_value")),
+        "source": row.get("source", "binance"),
+    }
+
+
+def _row_crypto_asset_info(row: dict[str, Any]) -> dict[str, Any]:
+    """CoinGecko markets row → crypto_asset_info. snapshot_date is
+    stamped by the coingecko self-crawl handler (the chunk's date), so
+    each daily run appends one row per coin keyed by (snapshot_date, id)."""
+    return {
+        "snapshot_date": _to_date(row.get("snapshot_date")),
+        "coingecko_id": _to_str(row.get("coingecko_id")),
+        "symbol": _to_str(row.get("symbol")),
+        "name": _to_str(row.get("name")),
+        "market_cap_rank": _to_int(row.get("market_cap_rank")),
+        "market_cap": _to_decimal(row.get("market_cap")),
+        "circulating_supply": _to_decimal(row.get("circulating_supply")),
+        "total_supply": _to_decimal(row.get("total_supply")),
+        "ath": _to_decimal(row.get("ath")),
+        "source": row.get("source", "coingecko"),
+    }
+
+
 def _row_margin(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "market": row.get("market", "TWSE"),

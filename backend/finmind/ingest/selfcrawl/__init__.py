@@ -87,12 +87,21 @@ def _mops_client_factory() -> Any:
     return MopsClient()
 
 
+def _binance_client_factory() -> Any:
+    """Late-import factory for the crypto OHLCV connector — keeps the
+    selfcrawl package import-light when crypto deps aren't needed."""
+    from finmind.ingest.selfcrawl.binance import BinanceClient
+
+    return BinanceClient()
+
+
 _REGISTRY: dict[str, ConnectorFactory] = {
-    "twse":   _twse_client_factory,
-    "tpex":   lambda: _NotWiredYetClient("tpex"),
-    "taifex": lambda: _NotWiredYetClient("taifex"),
-    "mops":   _mops_client_factory,
-    "tdcc":   lambda: _NotWiredYetClient("tdcc"),
+    "twse":    _twse_client_factory,
+    "tpex":    lambda: _NotWiredYetClient("tpex"),
+    "taifex":  lambda: _NotWiredYetClient("taifex"),
+    "mops":    _mops_client_factory,
+    "tdcc":    lambda: _NotWiredYetClient("tdcc"),
+    "binance": _binance_client_factory,
 }
 
 
@@ -173,6 +182,12 @@ def _mops_supported_datasets() -> set[str]:
     return set(_s())
 
 
+def _binance_supported_datasets() -> set[str]:
+    from finmind.ingest.selfcrawl.binance import supported_datasets as _s
+
+    return set(_s())
+
+
 def _finmind_supported_datasets() -> set[str]:
     """FinMind covers every dataset in the catalog — the whole point of
     Phase A is the paid sub serves all 80. Load lazily because catalog
@@ -186,6 +201,7 @@ _SUPPORTED_DATASETS_PROVIDERS: dict[str, SupportedDatasetsProvider] = {
     "finmind": _finmind_supported_datasets,
     "twse":    _twse_supported_datasets,
     "mops":    _mops_supported_datasets,
+    "binance": _binance_supported_datasets,
     # tpex / taifex / tdcc currently route to `_NotWiredYetClient`, so
     # their supported set is empty by definition. A real connector
     # registers here via `register_supported_datasets()` below at

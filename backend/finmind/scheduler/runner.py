@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from finmind.ingest.runner import ChunkResult, ingest_chunk
+from finmind.models.crypto import CryptoUniverse
 from finmind.models.dataset_source import DatasetSource
 from finmind.models.master import TwStockInfo
 from finmind.scheduler.dispatcher import DueChunk, expand_due_datasets
@@ -86,6 +87,30 @@ async def get_warrant_universe_from_tw_stock_info(
     return list(rows)
 
 
+async def get_crypto_universe(
+    session: AsyncSession, *, active_only: bool = True,
+) -> list[str]:
+    """Read the Binance-symbol universe from `crypto_universe` for
+    per-symbol crypto dataset fan-out. Returns the mapped
+    `binance_symbol` values (skipping coins with no Binance listing,
+    i.e. `binance_symbol IS NULL` / status='unmapped'), sorted for
+    stable ordering.
+
+    `active_only=True` drops delisted coins so the scheduler stops
+    fetching pairs Binance no longer trades, while their history stays
+    in `crypto_ohlcv`. Empty list when the universe hasn't been
+    refreshed yet — the caller skips crypto per-symbol datasets rather
+    than fanning out over nothing."""
+    stmt = select(CryptoUniverse.binance_symbol).where(
+        CryptoUniverse.binance_symbol.is_not(None)
+    )
+    if active_only:
+        stmt = stmt.where(CryptoUniverse.status == "active")
+    stmt = stmt.order_by(CryptoUniverse.binance_symbol)
+    rows = (await session.execute(stmt)).scalars().all()
+    return [s for s in rows if s]
+
+
 @dataclass
 class ChunkOutcome:
     chunk: DueChunk
@@ -97,6 +122,7 @@ async def run_due_now(
     *,
     symbols: list[str] | None = None,
     warrant_symbols: list[str] | None = None,
+    crypto_symbols: list[str] | None = None,
     now: datetime | None = None,
     client=None,
 ) -> list[ChunkOutcome]:
@@ -104,8 +130,10 @@ async def run_due_now(
 
     Caller-supplied `symbols` is the equity per-symbol universe.
     `warrant_symbols` is a separate universe used only by datasets
-    listed in `dispatcher._WARRANT_UNIVERSE_DATASETS`. Market-wide
-    datasets ignore both. `now` defaults to UTC wall clock. `client`
+    listed in `dispatcher._WARRANT_UNIVERSE_DATASETS`. `crypto_symbols`
+    is the Binance-pair universe used by binance/coingecko-sourced
+    datasets (see `get_crypto_universe`). Market-wide datasets ignore
+    all three. `now` defaults to UTC wall clock. `client`
     overrides the ingest source (for tests) — production leaves it
     None and the runner picks per `dataset_sources.active_source`.
 
@@ -123,7 +151,10 @@ async def run_due_now(
     ).scalars().all()
 
     chunks = expand_due_datasets(
-        list(rows), now, symbols=symbols, warrant_symbols=warrant_symbols,
+        list(rows), now,
+        symbols=symbols,
+        warrant_symbols=warrant_symbols,
+        crypto_symbols=crypto_symbols,
     )
     log.info(
         "scheduler: %d enabled datasets, %d due chunks", len(rows), len(chunks)

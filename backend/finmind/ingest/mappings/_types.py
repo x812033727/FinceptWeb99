@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -108,6 +108,23 @@ def _to_date(v: Any) -> date | None:
         return v.date()
     return date.fromisoformat(str(v)[:10])
 
+
+
+def _to_datetime(v: Any) -> datetime | None:
+    """Parse an ISO-8601 string (or pass through a datetime) into an
+    aware datetime. Used by the crypto tables whose `ts`/`funding_time`
+    columns are TIMESTAMPTZ (sub-day granularity), unlike the TW tables'
+    `_to_date`. A naive input is assumed UTC. Returns None on empty or
+    unparseable input."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, datetime):
+        return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+    try:
+        dt = datetime.fromisoformat(str(v))
+    except (TypeError, ValueError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 def _to_int(v: Any) -> int | None:

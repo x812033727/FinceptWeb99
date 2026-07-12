@@ -38,7 +38,7 @@ class CatalogEntry:
     local_table: str            # "" if Phase 1 hasn't built the table yet
     primary_source: str         # 'finmind' default
     fallback_source: str | None # 'twse' | 'tpex' | 'taifex' | 'mops' | 'tdcc' | None
-    ingest_freq: str            # 'daily' | 'monthly' | 'quarterly' | 'realtime' | 'on_demand'
+    ingest_freq: str            # 'hourly' | '8h' | 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'realtime' | 'on_demand'
     # FinMind only serves one day per call for these datasets (KBar,
     # PriceTick, BlockTradingDailyReport, GovernmentBankBuySell,
     # {Trading,Warrant}TradingDailyReport — the FinMind validator
@@ -185,6 +185,17 @@ MACRO: tuple[CatalogEntry, ...] = (
 )
 
 
+# ── Crypto (加密貨幣) ─────────────────────────────────────────────
+# Born self-sourced: primary_source='binance', no FinMind phase and no
+# fallback (FinMind has no crypto). active_source seeds to 'binance', so
+# these route straight through the Binance self-crawl connector. Both
+# write crypto_ohlcv, discriminated by the interval column.
+CRYPTO: tuple[CatalogEntry, ...] = (
+    CatalogEntry("CryptoPrice",       "crypto_ohlcv", "binance", None, "daily"),
+    CatalogEntry("CryptoPriceHourly", "crypto_ohlcv", "binance", None, "hourly"),
+)
+
+
 CATALOG: dict[str, tuple[CatalogEntry, ...]] = {
     "technical":        TECHNICAL,
     "chip":             CHIP,
@@ -194,6 +205,7 @@ CATALOG: dict[str, tuple[CatalogEntry, ...]] = {
     "convertible_bond": CONVERTIBLE_BOND,
     "other":            OTHER,
     "macro":            MACRO,
+    "crypto":           CRYPTO,
 }
 
 

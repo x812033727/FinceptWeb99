@@ -44,6 +44,7 @@ from finmind.db.session import (  # noqa: E402
     finmind_engine,
 )
 from finmind.scheduler.runner import (  # noqa: E402
+    get_crypto_universe,
     get_universe_from_tw_stock_info,
     get_warrant_universe_from_tw_stock_info,
     run_due_now,
@@ -93,6 +94,17 @@ async def _load_warrant_symbols(args, session) -> list[str] | None:
         ]
     if args.warrant_universe_from_tw_stock_info:
         return await get_warrant_universe_from_tw_stock_info(session)
+    return None
+
+
+async def _load_crypto_symbols(args, session) -> list[str] | None:
+    """Resolve the crypto (Binance-pair) universe for per-symbol crypto
+    datasets. Independent of the equity/warrant universes — routed by
+    active_source in the dispatcher. Returns None when the flag is off
+    (crypto per-symbol datasets then record symbol=None → failed, unless
+    --skip-per-symbol)."""
+    if args.crypto_universe_from_db:
+        return await get_crypto_universe(session)
     return None
 
 
@@ -153,6 +165,17 @@ async def amain() -> int:
         ),
     )
     parser.add_argument(
+        "--crypto-universe-from-db",
+        action="store_true",
+        help=(
+            "Auto-discover the crypto universe from `crypto_universe` "
+            "(active + Binance-mapped rows). Required for the crypto "
+            "cron — per-symbol crypto datasets (CryptoPrice*) fan out "
+            "across it. Populate the table first with "
+            "`crypto_universe_refresh`."
+        ),
+    )
+    parser.add_argument(
         "--skip-per-symbol",
         action="store_true",
         help=(
@@ -190,11 +213,13 @@ async def amain() -> int:
     async with FinmindAsyncSessionLocal() as session:
         symbols = await _load_symbols(args, session)
         warrant_symbols = await _load_warrant_symbols(args, session)
+        crypto_symbols = await _load_crypto_symbols(args, session)
 
         outcomes = await run_due_now(
             session,
             symbols=symbols,
             warrant_symbols=warrant_symbols,
+            crypto_symbols=crypto_symbols,
             now=datetime.now(tz=timezone.utc),
         )
 

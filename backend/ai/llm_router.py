@@ -111,6 +111,27 @@ PROVIDERS: dict[str, ProviderSpec] = {
     "claude_agent": ProviderSpec(
         "claude_agent", "_claude_agent_stream", lambda: settings.CLAUDE_AGENT_MODEL,
     ),
+    # Subscription providers fronted by the host LLM gateway. Keyless
+    # here — the gateway holds the CLI/OAuth credentials. `_gateway_stream`
+    # routes by provider name; the model string is a hint the gateway's
+    # CLI may honor.
+    "claude_sub": ProviderSpec(
+        "gateway", "_gateway_stream", lambda: "claude-sonnet-4-5-20250929",
+    ),
+    "codex_sub": ProviderSpec(
+        "gateway", "_gateway_stream", lambda: "gpt-5-codex",
+    ),
+    "agy": ProviderSpec(
+        "gateway", "_gateway_stream", lambda: "gemini-2.5-pro",
+    ),
+}
+
+# When a gateway (subscription) provider fails and AI_FALLBACK_TO_API is
+# on, retry through the matching API-key provider.
+_GATEWAY_FALLBACK: dict[str, str] = {
+    "claude_sub": "anthropic",
+    "codex_sub": "openai",
+    "agy": "gemini",
 }
 
 
@@ -219,6 +240,34 @@ async def stream_chat(
             allowed_tools=allowed_tools or [],
             max_turns=max_turns or settings.CLAUDE_AGENT_MAX_TURNS,
         )
+    elif spec.kind == "gateway":
+        # Try the subscription gateway; if it fails BEFORE any output
+        # (down / 5xx / timeout) fall back to the matching API provider.
+        failed = False
+        async for ev in stream_fn(
+            messages, resolved_model, provider=prov,
+            max_tokens=max_tokens, temperature=temperature,
+            tool_schemas=openai_tool_schemas, tool_dispatch=openai_tool_dispatch,
+        ):
+            if ev.get("type") == "_gateway_failed":
+                failed = True
+                break
+            yield ev
+        if failed:
+            fb = _GATEWAY_FALLBACK.get(prov)
+            if settings.AI_FALLBACK_TO_API and fb and PROVIDERS.get(fb):
+                yield {"type": "info", "message": f"gateway unavailable; falling back to {fb}"}
+                async for ev in stream_chat(
+                    messages, provider=fb, model=None,
+                    max_tokens=max_tokens, temperature=temperature,
+                    openai_tool_schemas=openai_tool_schemas,
+                    openai_tool_dispatch=openai_tool_dispatch,
+                    db=db, user_id=user_id,
+                ):
+                    yield ev
+            else:
+                yield {"type": "error", "message": f"[{prov}] gateway unavailable and no API fallback"}
+        return
     else:  # pragma: no cover — registry entries own their kind
         raise ValueError(f"Unknown provider kind: {spec.kind}")
 
@@ -810,6 +859,99 @@ async def _minimax_stream(
         provider_label="minimax",
     ):
         yield ev
+
+
+# ── LLM Gateway (subscription providers via host sidecar) ─────────
+
+async def _gateway_stream(
+    messages: list[dict],
+    model: str,
+    *,
+    provider: str,
+    max_tokens: int,
+    temperature: float,
+    tool_schemas: list[dict] | None = None,
+    tool_dispatch: dict[str, Any] | None = None,
+    api_key: str = "",  # unused — gateway holds the credentials
+) -> AsyncGenerator[dict, None]:
+    """Stream from the host LLM gateway (OpenAI-compatible SSE).
+
+    Emits the router's normal `delta` / `usage` events. On a failure
+    BEFORE any content (gateway not configured, connect/timeout, or a
+    4xx/5xx status) it yields a single `{"type": "_gateway_failed"}`
+    sentinel so `stream_chat` can fall back to the matching API
+    provider. A failure MID-stream (after deltas were sent) surfaces as
+    an `error` event with no fallback — the partial output already went
+    out, so re-running would duplicate it.
+    """
+    url = settings.LLM_GATEWAY_URL
+    if not url:
+        yield {"type": "_gateway_failed", "reason": "not_configured"}
+        return
+
+    endpoint = url.rstrip("/") + "/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {settings.LLM_GATEWAY_TOKEN}",
+        "X-LLM-Provider": provider,
+        "Accept": "text/event-stream",
+    }
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stream": True,
+    }
+    if tool_schemas:
+        payload["tools"] = tool_schemas
+
+    produced = False
+    try:
+        async with httpx.AsyncClient(timeout=settings.LLM_GATEWAY_TIMEOUT_S) as client:
+            async with client.stream("POST", endpoint, json=payload, headers=headers) as resp:
+                if resp.status_code >= 400:
+                    body = (await resp.aread()).decode("utf-8", "replace")[:200]
+                    logger.warning("gateway.http_error",
+                                   extra={"provider": provider, "status": resp.status_code, "body": body})
+                    yield {"type": "_gateway_failed", "reason": f"http {resp.status_code}"}
+                    return
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[len("data:"):].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    for ev in _gateway_chunk_to_events(chunk):
+                        produced = True
+                        yield ev
+    except Exception as exc:  # noqa: BLE001 — connect/read/timeout
+        logger.warning("gateway.stream_failed",
+                       extra={"provider": provider, "error": str(exc), "produced": produced})
+        if produced:
+            yield {"type": "error", "message": f"[{provider}] gateway stream interrupted: {exc}"}
+        else:
+            yield {"type": "_gateway_failed", "reason": str(exc)}
+
+
+def _gateway_chunk_to_events(chunk: dict) -> list[dict]:
+    """Translate one OpenAI-compat streaming chunk into router events."""
+    out: list[dict] = []
+    for choice in chunk.get("choices", []) or []:
+        delta = (choice.get("delta") or {}).get("content")
+        if delta:
+            out.append({"type": "delta", "text": delta})
+    usage = chunk.get("usage")
+    if usage:
+        out.append({
+            "type": "usage",
+            "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
+            "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
+        })
+    return out
 
 
 # ── Groq (OpenAI-compatible, very fast) ───────────────────────────

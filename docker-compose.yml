@@ -90,6 +90,10 @@ services:
     # 3 workers now that the scheduler is a separate container (P2) —
     # there is no longer a per-worker scheduler penalty.
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 3
+    # Reach the host-side LLM Gateway sidecar (subscription providers)
+    # via the host-gateway alias; no-op unless LLM_GATEWAY_URL is set.
+    extra_hosts:
+      - "host-gateway:host-gateway"
     environment: &app-env
       DATABASE_URL:      postgresql+asyncpg://${POSTGRES_USER:-fincept}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-finceptweb}
       REDIS_URL:         redis://${REDIS_PASSWORD:+:${REDIS_PASSWORD}@}redis:6379
@@ -100,6 +104,13 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY:    ${GEMINI_API_KEY:-}
       OLLAMA_HOST:       ${OLLAMA_HOST:-http://ollama:11434}
+      # LLM Gateway (subscription providers) — host sidecar reached via
+      # the host-gateway alias (see extra_hosts). Empty URL disables the
+      # claude_sub / codex_sub / agy providers. See /opt/llm-gateway.
+      LLM_GATEWAY_URL:   ${LLM_GATEWAY_URL:-}
+      LLM_GATEWAY_TOKEN: ${LLM_GATEWAY_TOKEN:-}
+      AI_FALLBACK_TO_API: ${AI_FALLBACK_TO_API:-true}
+      AI_DEFAULT_STACK:  ${AI_DEFAULT_STACK:-api}
       JWT_SECRET_KEY:    ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
       JWT_ALGORITHM:     ${JWT_ALGORITHM:-HS256}
       CORS_ORIGINS:      ${CORS_ORIGINS:-http://localhost}
@@ -177,6 +188,8 @@ services:
   scheduler:
     build: ./backend
     command: python worker.py
+    extra_hosts:
+      - "host-gateway:host-gateway"
     environment:
       <<: *app-env
       SCHEDULER_ENABLED: "true"

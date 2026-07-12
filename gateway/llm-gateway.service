@@ -1,0 +1,22 @@
+[Unit]
+Description=LLM Gateway — subscription CLIs (Claude Max / Codex / Antigravity) over OpenAI-compat SSE
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+# HOME must point at the account holding the subscription credentials
+# (~/.claude/.credentials.json, ~/.codex/auth.json). Deliberately NO
+# ANTHROPIC_API_KEY — the SDK/CLI then bill the Max subscription, not
+# the API. Same principle as ti-autopilot.service.
+Environment=HOME=/root
+Environment=PATH=/usr/bin:/bin:/usr/local/bin
+Environment=LLM_GATEWAY_TOKEN=%i
+WorkingDirectory=/opt/llm-gateway
+ExecStart=/opt/llm-gateway/venv/bin/uvicorn app:app --host 172.17.0.1 --port 8799
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

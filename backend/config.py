@@ -115,6 +115,24 @@ class Settings(BaseSettings):
     CLAUDE_AGENT_ENABLED: bool = True
     CLAUDE_AGENT_MODEL: str = "claude-sonnet-4-5-20250929"
     CLAUDE_AGENT_MAX_TURNS: int = 8
+
+    # ── LLM Gateway (subscription providers) ──────────────────────
+    # Host-side sidecar that fronts the Claude Max / Codex / Antigravity
+    # SUBSCRIPTION CLIs (credentials live on the host, not in the
+    # container). Backend providers claude_sub / codex_sub / agy stream
+    # from it via an OpenAI-compatible SSE endpoint. Empty URL disables
+    # them (they error clearly). See /opt/llm-gateway.
+    LLM_GATEWAY_URL: str = ""            # e.g. http://host-gateway:8799
+    LLM_GATEWAY_TOKEN: str = ""          # shared Bearer secret
+    LLM_GATEWAY_TIMEOUT_S: int = 600     # long — subscription runs can be slow
+    # When a gateway call fails (down / 5xx / timeout) fall back to the
+    # matching API-key provider (claude_sub→anthropic, codex_sub→openai)
+    # if that key is configured. Mirrors Ti's "set ANTHROPIC_API_KEY to
+    # opt into API billing" switch, container-side.
+    AI_FALLBACK_TO_API: bool = True
+    # Selects the default model stack resolved by ai.model_registry:
+    # "api" (current API-key defaults) or "subscription" (gateway).
+    AI_DEFAULT_STACK: str = "api"
     CLAUDE_AGENT_TOOL_TIMEOUT_S: int = 30
     CLAUDE_AGENT_PYTHON_MEM_MB: int = 256
     CLAUDE_AGENT_PYTHON_CPU_S: int = 5

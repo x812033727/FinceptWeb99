@@ -25,12 +25,16 @@ from __future__ import annotations
 
 import logging
 import re
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as ET  # ParseError type only
 from datetime import UTC
 from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
+# Untrusted external RSS — parse with defusedxml (XXE / entity-expansion
+# guard); stdlib ET is explicitly documented as unsafe on hostile input.
+from defusedxml.ElementTree import fromstring as _safe_fromstring
+from defusedxml.common import DefusedXmlException
 
 log = logging.getLogger(__name__)
 
@@ -120,8 +124,8 @@ async def get_news(
         xml_text = r.text
 
     try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError as exc:
+        root = _safe_fromstring(xml_text)
+    except (ET.ParseError, DefusedXmlException) as exc:
         log.warning(
             "google_news_tw.parse_failed",
             extra={"error": str(exc), "head": xml_text[:200]},

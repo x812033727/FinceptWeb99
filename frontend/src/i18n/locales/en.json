@@ -18,7 +18,8 @@
       "data": "Data Sources",
       "quality": "Signal Quality",
       "users": "Users",
-      "usage": "Usage"
+      "usage": "Usage",
+      "db": "DB"
     },
     "stats": {
       "total_users": "Total Users",
@@ -210,7 +211,21 @@
     "remove": "Remove",
     "add": "Add",
     "yes": "Yes",
-    "no": "No"
+    "no": "No",
+    "prev": "Prev",
+    "next": "Next"
+  },
+  "dbBrowser": {
+    "title": "Database Browser",
+    "catalog": "Table catalog",
+    "table": "Table",
+    "rows": "Rows",
+    "size": "Size",
+    "total": "Total",
+    "latest": "latest",
+    "backToTables": "Back to tables",
+    "noTables": "No tables",
+    "noRows": "No rows"
   },
   "dashboard": {
     "title": "Dashboard",

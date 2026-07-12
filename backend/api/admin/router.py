@@ -79,6 +79,15 @@ router.include_router(
     _finmind_proxy_router, prefix="/finmind", tags=["AdminFinMind"],
 )
 
+# Read-only DB browser for the AdminPage「DB」tab — see db_browser.py
+# for the security model (schema allowlist, catalog-verified
+# identifiers, masked credential columns).
+from api.admin.db_browser import router as _db_browser_router  # noqa: E402
+
+router.include_router(
+    _db_browser_router, prefix="/db", tags=["AdminDbBrowser"],
+)
+
 # FinMind 全量回填 chain control + monitor — backed by an in-process
 # asyncio task in services/finmind_chain_service.py. Replaces the
 # host-level finmind_chain.sh (which stays as a redeploy fallback).

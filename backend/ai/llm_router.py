@@ -27,6 +27,93 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# ── Provider registry ─────────────────────────────────────────────
+#
+# Single source of truth for everything per-provider that used to live
+# in three drifting tables: `stream_chat`'s if/elif dispatch,
+# `default_model_for`'s dict, and `_resolve_api_key`'s attr_map.
+# Adding a provider is now ONE entry here (plus its `_*_stream`
+# implementation). The R0 characterization tests
+# (tests/test_llm_router_dispatch_characterization.py) freeze the
+# observable behavior of all three surfaces across this structure.
+
+
+class ProviderSpec:
+    """Per-provider wiring for `stream_chat`.
+
+    `stream_attr` is the NAME of the module-level `_*_stream` function,
+    resolved via `globals()` at call time — late binding keeps
+    `patch.object(llm_router, "_openai_stream", …)` working in tests
+    and lets reloads swap implementations.
+
+    `kind` selects the call signature:
+      - "simple":        (messages, model, max_tokens, temperature, api_key=)
+      - "no_key":        (messages, model, max_tokens, temperature)
+      - "openai_compat": OpenAI-style tool loop (tool_schemas/dispatch/
+                         max_turns from `max_turns_attr`)
+      - "claude_agent":  claude-agent-sdk session (mcp_server/
+                         allowed_tools/max_turns)
+
+    `default_model` is a zero-arg callable so specs that follow a
+    settings value keep reading it lazily. `env_key_attr` is the
+    settings attribute `_resolve_api_key` falls back to (None for
+    keyless providers — ollama, and claude_agent which reads
+    ANTHROPIC_API_KEY from the environment inside the SDK).
+    """
+
+    __slots__ = ("kind", "stream_attr", "default_model", "env_key_attr", "max_turns_attr")
+
+    def __init__(
+        self,
+        kind: str,
+        stream_attr: str,
+        default_model,
+        env_key_attr: str | None = None,
+        max_turns_attr: str | None = None,
+    ) -> None:
+        self.kind = kind
+        self.stream_attr = stream_attr
+        self.default_model = default_model
+        self.env_key_attr = env_key_attr
+        self.max_turns_attr = max_turns_attr
+
+
+PROVIDERS: dict[str, ProviderSpec] = {
+    "openai": ProviderSpec(
+        "simple", "_openai_stream", lambda: "gpt-4o-mini", "OPENAI_API_KEY",
+    ),
+    "anthropic": ProviderSpec(
+        "simple", "_anthropic_stream", lambda: "claude-haiku-4-5-20251001",
+        "ANTHROPIC_API_KEY",
+    ),
+    "gemini": ProviderSpec(
+        "simple", "_gemini_stream", lambda: "gemini-2.0-flash", "GEMINI_API_KEY",
+    ),
+    "ollama": ProviderSpec(
+        "no_key", "_ollama_stream", lambda: "llama3.2",
+    ),
+    "minimax": ProviderSpec(
+        "openai_compat", "_minimax_stream", lambda: settings.MINIMAX_MODEL,
+        "MINIMAX_API_KEY", "MINIMAX_MAX_TURNS",
+    ),
+    "groq": ProviderSpec(
+        "openai_compat", "_groq_stream", lambda: settings.GROQ_MODEL,
+        "GROQ_API_KEY", "GROQ_MAX_TURNS",
+    ),
+    "deepseek": ProviderSpec(
+        "openai_compat", "_deepseek_stream", lambda: settings.DEEPSEEK_MODEL,
+        "DEEPSEEK_API_KEY", "DEEPSEEK_MAX_TURNS",
+    ),
+    "openrouter": ProviderSpec(
+        "openai_compat", "_openrouter_stream", lambda: settings.OPENROUTER_MODEL,
+        "OPENROUTER_API_KEY", "OPENROUTER_MAX_TURNS",
+    ),
+    "claude_agent": ProviderSpec(
+        "claude_agent", "_claude_agent_stream", lambda: settings.CLAUDE_AGENT_MODEL,
+    ),
+}
+
+
 async def _resolve_api_key(
     provider: str, db: "AsyncSession | None", user_id: "str | None" = None,
 ) -> str:
@@ -52,17 +139,9 @@ async def _resolve_api_key(
         except Exception as exc:  # noqa: BLE001 — DB hiccup must not break chat
             logger.warning("llm_key.db_lookup_failed",
                            extra={"provider": provider, "error": str(exc)})
-    # settings fallback
-    attr_map = {
-        "openai": "OPENAI_API_KEY",
-        "anthropic": "ANTHROPIC_API_KEY",
-        "gemini": "GEMINI_API_KEY",
-        "minimax": "MINIMAX_API_KEY",
-        "groq": "GROQ_API_KEY",
-        "deepseek": "DEEPSEEK_API_KEY",
-        "openrouter": "OPENROUTER_API_KEY",
-    }
-    attr = attr_map.get(provider, "")
+    # settings fallback — attr comes from the provider registry.
+    spec = PROVIDERS.get(provider)
+    attr = spec.env_key_attr if spec else None
     return getattr(settings, attr, "") if attr else ""
 
 
@@ -75,18 +154,8 @@ def default_model_for(provider: str | None) -> str:
     here instead of duplicating the literals.
     """
     prov = (provider or settings.DEFAULT_LLM_PROVIDER).lower()
-    defaults = {
-        "openai": "gpt-4o-mini",
-        "anthropic": "claude-haiku-4-5-20251001",
-        "gemini": "gemini-2.0-flash",
-        "ollama": "llama3.2",
-        "minimax": settings.MINIMAX_MODEL,
-        "groq": settings.GROQ_MODEL,
-        "deepseek": settings.DEEPSEEK_MODEL,
-        "openrouter": settings.OPENROUTER_MODEL,
-        "claude_agent": settings.CLAUDE_AGENT_MODEL,
-    }
-    return defaults.get(prov, "")
+    spec = PROVIDERS.get(prov)
+    return spec.default_model() if spec else ""
 
 
 # ── provider dispatch ──────────────────────────────────────────────
@@ -117,79 +186,44 @@ async def stream_chat(
     back to the .env-supplied key in `settings`.
     """
     prov = (provider or settings.DEFAULT_LLM_PROVIDER).lower()
-    api_key = await _resolve_api_key(prov, db, user_id)
+    spec = PROVIDERS.get(prov)
+    if spec is None:
+        raise ValueError(f"Unknown LLM provider: {prov}")
 
-    if prov == "openai":
-        async for ev in _openai_stream(messages, model or "gpt-4o-mini", max_tokens, temperature, api_key=api_key):
-            yield ev
-    elif prov == "anthropic":
-        async for ev in _anthropic_stream(messages, model or "claude-haiku-4-5-20251001", max_tokens, temperature, api_key=api_key):
-            yield ev
-    elif prov == "gemini":
-        async for ev in _gemini_stream(messages, model or "gemini-2.0-flash", max_tokens, temperature, api_key=api_key):
-            yield ev
-    elif prov == "ollama":
-        async for ev in _ollama_stream(messages, model or "llama3.2", max_tokens, temperature):
-            yield ev
-    elif prov == "minimax":
-        async for ev in _minimax_stream(
+    api_key = await _resolve_api_key(prov, db, user_id)
+    # Late-bound lookup so tests patching `llm_router._x_stream` (and
+    # any runtime monkeypatching) intercept the call.
+    stream_fn = globals()[spec.stream_attr]
+    resolved_model = model or spec.default_model()
+
+    if spec.kind == "simple":
+        agen = stream_fn(messages, resolved_model, max_tokens, temperature, api_key=api_key)
+    elif spec.kind == "no_key":
+        agen = stream_fn(messages, resolved_model, max_tokens, temperature)
+    elif spec.kind == "openai_compat":
+        agen = stream_fn(
             messages,
-            model or settings.MINIMAX_MODEL,
+            resolved_model,
             max_tokens=max_tokens,
             temperature=temperature,
             tool_schemas=openai_tool_schemas,
             tool_dispatch=openai_tool_dispatch,
-            max_turns=max_turns or settings.MINIMAX_MAX_TURNS,
+            max_turns=max_turns or getattr(settings, spec.max_turns_attr),
             api_key=api_key,
-        ):
-            yield ev
-    elif prov == "groq":
-        async for ev in _groq_stream(
+        )
+    elif spec.kind == "claude_agent":
+        agen = stream_fn(
             messages,
-            model or settings.GROQ_MODEL,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            tool_schemas=openai_tool_schemas,
-            tool_dispatch=openai_tool_dispatch,
-            max_turns=max_turns or settings.GROQ_MAX_TURNS,
-            api_key=api_key,
-        ):
-            yield ev
-    elif prov == "deepseek":
-        async for ev in _deepseek_stream(
-            messages,
-            model or settings.DEEPSEEK_MODEL,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            tool_schemas=openai_tool_schemas,
-            tool_dispatch=openai_tool_dispatch,
-            max_turns=max_turns or settings.DEEPSEEK_MAX_TURNS,
-            api_key=api_key,
-        ):
-            yield ev
-    elif prov == "openrouter":
-        async for ev in _openrouter_stream(
-            messages,
-            model or settings.OPENROUTER_MODEL,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            tool_schemas=openai_tool_schemas,
-            tool_dispatch=openai_tool_dispatch,
-            max_turns=max_turns or settings.OPENROUTER_MAX_TURNS,
-            api_key=api_key,
-        ):
-            yield ev
-    elif prov == "claude_agent":
-        async for ev in _claude_agent_stream(
-            messages,
-            model or settings.CLAUDE_AGENT_MODEL,
+            resolved_model,
             mcp_server=mcp_server,
             allowed_tools=allowed_tools or [],
             max_turns=max_turns or settings.CLAUDE_AGENT_MAX_TURNS,
-        ):
-            yield ev
-    else:
-        raise ValueError(f"Unknown LLM provider: {prov}")
+        )
+    else:  # pragma: no cover — registry entries own their kind
+        raise ValueError(f"Unknown provider kind: {spec.kind}")
+
+    async for ev in agen:
+        yield ev
 
 
 # ── OpenAI ────────────────────────────────────────────────────────

@@ -18,7 +18,8 @@
       "data": "資料來源",
       "quality": "訊號品質",
       "users": "使用者",
-      "usage": "用量"
+      "usage": "用量",
+      "db": "資料庫"
     },
     "stats": {
       "total_users": "使用者總數",
@@ -210,7 +211,21 @@
     "remove": "移除",
     "add": "新增",
     "yes": "是",
-    "no": "否"
+    "no": "否",
+    "prev": "上一頁",
+    "next": "下一頁"
+  },
+  "dbBrowser": {
+    "title": "資料庫瀏覽器",
+    "catalog": "資料表清單",
+    "table": "資料表",
+    "rows": "筆數",
+    "size": "大小",
+    "total": "總筆數",
+    "latest": "最新",
+    "backToTables": "返回清單",
+    "noTables": "沒有資料表",
+    "noRows": "沒有資料"
   },
   "dashboard": {
     "title": "儀表板",

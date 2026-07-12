@@ -34,6 +34,7 @@ import { SystemTasksCard } from "@/components/admin/SystemTasksCard";
 import { SystemUpdateCard } from "@/components/admin/SystemUpdateCard";
 import { RedeployCard } from "@/components/admin/RedeployCard";
 import { UsageCard } from "@/components/admin/UsageCard";
+import { DbBrowserTab } from "@/components/admin/DbBrowserTab";
 
 interface AdminUser {
   id: string;
@@ -62,7 +63,7 @@ const ROLE_COLORS: Record<string, string> = {
 const USERS_GRID_COLS =
   "grid grid-cols-[minmax(0,1fr)_90px_70px_90px_70px]";
 
-const TAB_KEYS = ["ops", "ai", "data", "quality", "users", "usage"] as const;
+const TAB_KEYS = ["ops", "ai", "data", "quality", "users", "usage", "db"] as const;
 type TabKey = (typeof TAB_KEYS)[number];
 const DEFAULT_TAB: TabKey = "ops";
 
@@ -158,6 +159,10 @@ function AdminContent() {
         <TabsContent value="usage" className="space-y-4 mt-4">
           <UsageCard scope="admin" />
           <FinmindUsageCard />
+        </TabsContent>
+
+        <TabsContent value="db" className="space-y-4 mt-4">
+          <DbBrowserTab />
         </TabsContent>
       </Tabs>
     </div>

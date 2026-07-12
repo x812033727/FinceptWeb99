@@ -100,7 +100,7 @@ export interface DataTableColumn<T> {
 export interface DataTableProps<T> {
   columns: DataTableColumn<T>[];
   rows: T[];
-  rowKey: (row: T) => string | number;
+  rowKey: (row: T, index: number) => string | number;
   /**
    * Layout below the `sm` breakpoint:
    *  - "scroll" (default): horizontal scroll, sticky first column
@@ -164,9 +164,9 @@ export function DataTable<T>({
         </tr>
       </TableHeader>
       <TableBody>
-        {rows.map((row) => (
+        {rows.map((row, i) => (
           <TableRow
-            key={rowKey(row)}
+            key={rowKey(row, i)}
             onClick={onRowClick ? () => onRowClick(row) : undefined}
             className={onRowClick ? "cursor-pointer" : undefined}
           >
@@ -196,9 +196,9 @@ export function DataTable<T>({
       <div className={className}>
         <div className="hidden sm:block overflow-x-auto">{table}</div>
         <ul className="sm:hidden space-y-2" aria-label={ariaLabel}>
-          {rows.map((row) => (
+          {rows.map((row, i) => (
             <li
-              key={rowKey(row)}
+              key={rowKey(row, i)}
               onClick={onRowClick ? () => onRowClick(row) : undefined}
               className={cn(
                 "rounded-md border border-border bg-surface-1 p-3",

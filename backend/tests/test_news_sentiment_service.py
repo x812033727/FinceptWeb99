@@ -103,6 +103,42 @@ def test_parse_response_object_instead_of_array_returns_empty():
     assert parsed == []
 
 
+# ── _format_items: full-text lead + JSON escaping (G5 R8-3) ─────────
+
+
+def test_format_items_includes_lead_only_when_body_present():
+    import json as _json
+
+    rows = [
+        NewsArticle(id=1, symbol="2330", title="台積電法說",
+                    body="內文摘要 " * 400),   # long body → truncated lead
+        NewsArticle(id=2, symbol=None, title="大盤收紅", body=None),
+    ]
+    data = _json.loads(news_sentiment_service._format_items(rows))
+    assert data[0]["id"] == 1
+    assert "lead" in data[0]
+    assert len(data[0]["lead"]) <= news_sentiment_service._BODY_EXCERPT_CHARS
+    # No body → no lead; market-wide gets the [大盤] tag.
+    assert "lead" not in data[1]
+    assert data[1]["title"].startswith("[大盤]")
+
+
+def test_format_items_escapes_quotes_and_newlines():
+    """The old f-string build corrupted the JSON when a headline/body
+    contained a quote or newline. json.dumps must produce parseable output."""
+    import json as _json
+
+    rows = [NewsArticle(
+        id=3, symbol="2454",
+        title='聯發科說「AI 強」\n續漲',
+        body='發言人表示："下半年看好"\n訂單能見度高',
+    )]
+    data = _json.loads(news_sentiment_service._format_items(rows))  # must not raise
+    assert data[0]["id"] == 3
+    assert "AI" in data[0]["title"]
+    assert "看好" in data[0]["lead"]
+
+
 # ── score_pending end-to-end ───────────────────────────────────────
 
 

@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
 import { formatTaipei } from "@/lib/timeFormat";
+import { DataTable, type DataTableColumn } from "../ui/table";
 import type { StrategyVersionRow } from "./_helpers";
 
 /**
@@ -52,6 +53,81 @@ export function VersionHistorySection({ strategyId }: { strategyId: string }) {
 
   const versions = versionsQ.data ?? [];
 
+  const columns: DataTableColumn<StrategyVersionRow>[] = [
+    {
+      key: "v",
+      header: "v",
+      mobile: "primary",
+      render: (v) => <span className="font-mono">v{v.version_number}</span>,
+    },
+    {
+      key: "kind",
+      header: t("discussion.versions.col.kind"),
+      render: (v) => (
+        <span
+          className={`px-1.5 py-0.5 text-[10px] rounded border ${
+            v.artifact_kind === "weights"
+              ? "border-blue-700/40 text-blue-300"
+              : "border-purple-700/40 text-purple-300"
+          }`}
+        >
+          {t(`discussion.versions.kind.${v.artifact_kind}`)}
+        </span>
+      ),
+    },
+    {
+      key: "fit_at",
+      header: t("discussion.versions.col.fit_at"),
+      render: (v) => (
+        <span className="text-muted-foreground">
+          {v.fit_at ? formatTaipei(v.fit_at, "date") : "—"}
+        </span>
+      ),
+    },
+    {
+      key: "samples",
+      header: t("discussion.versions.col.samples"),
+      numeric: true,
+      render: (v) => <>{v.sample_count ?? "—"}</>,
+    },
+    {
+      key: "status",
+      header: t("discussion.versions.col.status"),
+      render: (v) => (
+        <span
+          className={`text-[10px] ${
+            v.status === "active"
+              ? "text-success"
+              : v.status === "rolled_back"
+                ? "text-danger"
+                : "text-muted-foreground"
+          }`}
+        >
+          {t(`discussion.versions.status.${v.status}`)}
+        </span>
+      ),
+    },
+    {
+      key: "action",
+      header: "",
+      align: "right",
+      render: (v) =>
+        v.status !== "active" ? (
+          <button
+            type="button"
+            onClick={() => rollbackMut.mutate(v.id)}
+            disabled={rollbackMut.isPending}
+            className="px-2 py-0.5 text-[10px] border border-border
+                       text-muted-foreground rounded
+                       hover:text-warning hover:border-warning/30
+                       disabled:opacity-50"
+          >
+            {t("discussion.versions.rollback")}
+          </button>
+        ) : null,
+    },
+  ];
+
   return (
     <div className="border-t border-border/50 mt-2 pt-2">
       <button
@@ -94,74 +170,14 @@ export function VersionHistorySection({ strategyId }: { strategyId: string }) {
             </div>
           )}
           {versions.length > 0 && (
-            <table className="w-full text-[11px]">
-              <thead>
-                <tr className="text-muted-foreground border-b border-border">
-                  <th className="text-left py-1">v</th>
-                  <th className="text-left py-1">{t("discussion.versions.col.kind")}</th>
-                  <th className="text-left py-1">{t("discussion.versions.col.fit_at")}</th>
-                  <th className="text-right py-1">{t("discussion.versions.col.samples")}</th>
-                  <th className="text-left py-1">{t("discussion.versions.col.status")}</th>
-                  <th className="text-right py-1"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {versions.map((v) => {
-                  const isActive = v.status === "active";
-                  const fitAt = v.fit_at
-                    ? formatTaipei(v.fit_at, "date")
-                    : "—";
-                  return (
-                    <tr key={v.id} className="border-b border-border/40">
-                      <td className="py-1 font-mono">v{v.version_number}</td>
-                      <td className="py-1">
-                        <span
-                          className={`px-1.5 py-0.5 text-[10px] rounded border ${
-                            v.artifact_kind === "weights"
-                              ? "border-blue-700/40 text-blue-300"
-                              : "border-purple-700/40 text-purple-300"
-                          }`}
-                        >
-                          {t(`discussion.versions.kind.${v.artifact_kind}`)}
-                        </span>
-                      </td>
-                      <td className="py-1 text-muted-foreground">{fitAt}</td>
-                      <td className="py-1 text-right tabular-nums">
-                        {v.sample_count ?? "—"}
-                      </td>
-                      <td className="py-1">
-                        <span
-                          className={`text-[10px] ${
-                            isActive
-                              ? "text-success"
-                              : v.status === "rolled_back"
-                                ? "text-danger"
-                                : "text-muted-foreground"
-                          }`}
-                        >
-                          {t(`discussion.versions.status.${v.status}`)}
-                        </span>
-                      </td>
-                      <td className="py-1 text-right">
-                        {!isActive && (
-                          <button
-                            type="button"
-                            onClick={() => rollbackMut.mutate(v.id)}
-                            disabled={rollbackMut.isPending}
-                            className="px-2 py-0.5 text-[10px] border border-border
-                                       text-muted-foreground rounded
-                                       hover:text-warning hover:border-warning/30
-                                       disabled:opacity-50"
-                          >
-                            {t("discussion.versions.rollback")}
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <DataTable
+              columns={columns}
+              rows={versions}
+              rowKey={(v) => v.id}
+              mobileMode="cards"
+              className="text-[11px]"
+              aria-label={t("discussion.versions.title")}
+            />
           )}
         </div>
       )}

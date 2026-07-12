@@ -15,6 +15,7 @@ import type {
   LessonLibraryResponse,
   LessonLibraryRow,
 } from "@/components/discussion/_helpers";
+import { DataTable, type DataTableColumn } from "@/components/ui/table";
 
 
 type SortKey = "hit_rate" | "usage" | "recent" | "created";
@@ -61,6 +62,85 @@ export default function LessonLibraryPage() {
     setter(value);
     setOffset(0);
   }
+
+  const columns: DataTableColumn<LessonLibraryRow>[] = [
+    {
+      key: "market",
+      header: "market",
+      cellClassName: "align-top font-mono text-muted-foreground",
+      render: (row) => row.market,
+    },
+    {
+      key: "tier",
+      header: "tier",
+      cellClassName: "align-top",
+      render: (row) => {
+        if (!row.tier) return null;
+        const tierTone =
+          row.tier === "structural"
+            ? "bg-amber-900/40 text-amber-200 border-amber-700/50"
+            : row.tier === "semantic"
+              ? "bg-emerald-900/40 text-emerald-200 border-emerald-700/50"
+              : "bg-blue-900/40 text-blue-200 border-blue-700/50";
+        return (
+          <span className={`inline-block px-1.5 py-0.5 text-[10px] rounded border ${tierTone}`}>
+            {row.tier}
+          </span>
+        );
+      },
+    },
+    {
+      key: "category",
+      header: "category",
+      cellClassName: "align-top text-[10px] text-muted-foreground",
+      render: (row) => row.category,
+    },
+    {
+      key: "lesson",
+      header: t("lesson_library.col.lesson"),
+      cellClassName: "align-top max-w-md",
+      render: (row) => (
+        <>
+          <div className="break-words">{row.lesson_text}</div>
+          {(row.related_symbols.length > 0 || row.missed_winners.length > 0) && (
+            <div className="text-[10px] text-muted-foreground mt-0.5">
+              {row.related_symbols.length > 0 && (
+                <span>related: {row.related_symbols.join(", ")}</span>
+              )}
+              {row.missed_winners.length > 0 && (
+                <span className="ml-2">missed: {row.missed_winners.join(", ")}</span>
+              )}
+            </div>
+          )}
+        </>
+      ),
+    },
+    {
+      key: "usage",
+      header: t("lesson_library.col.usage"),
+      numeric: true,
+      cellClassName: "align-top",
+      render: (row) => `${row.hit_count}/${row.usage_count}`,
+    },
+    {
+      key: "rate",
+      header: t("lesson_library.col.rate"),
+      numeric: true,
+      cellClassName: "align-top",
+      render: (row) =>
+        row.recent_hit_rate_10 !== null
+          ? `${(row.recent_hit_rate_10 * 100).toFixed(0)}%`
+          : "—",
+    },
+    {
+      key: "last_used",
+      header: t("lesson_library.col.last_used"),
+      align: "right",
+      cellClassName: "align-top text-muted-foreground",
+      render: (row) =>
+        row.last_used_at ? new Date(row.last_used_at).toLocaleDateString() : "—",
+    },
+  ];
 
   return (
     <div className="p-4 sm:p-6 space-y-4 max-w-6xl">
@@ -152,32 +232,13 @@ export default function LessonLibraryPage() {
         </div>
       )}
       {items.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="text-muted-foreground border-b border-border">
-                <th className="text-left py-1.5 px-1">market</th>
-                <th className="text-left py-1.5 px-1">tier</th>
-                <th className="text-left py-1.5 px-1">category</th>
-                <th className="text-left py-1.5 px-1">
-                  {t("lesson_library.col.lesson")}
-                </th>
-                <th className="text-right py-1.5 px-1">
-                  {t("lesson_library.col.usage")}
-                </th>
-                <th className="text-right py-1.5 px-1">
-                  {t("lesson_library.col.rate")}
-                </th>
-                <th className="text-right py-1.5 px-1">
-                  {t("lesson_library.col.last_used")}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((row) => <Row key={row.id} row={row} />)}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          columns={columns}
+          rows={items}
+          rowKey={(row) => row.id}
+          mobileMode="scroll"
+          aria-label={t("lesson_library.title")}
+        />
       )}
 
       {/* Pagination */}
@@ -224,59 +285,5 @@ function FilterField({
       <span className="text-[10px] text-muted-foreground">{label}</span>
       {children}
     </label>
-  );
-}
-
-
-function Row({ row }: { row: LessonLibraryRow }) {
-  const tierTone =
-    row.tier === "structural"
-      ? "bg-amber-900/40 text-amber-200 border-amber-700/50"
-      : row.tier === "semantic"
-        ? "bg-emerald-900/40 text-emerald-200 border-emerald-700/50"
-        : "bg-blue-900/40 text-blue-200 border-blue-700/50";
-  const ratePct =
-    row.recent_hit_rate_10 !== null
-      ? `${(row.recent_hit_rate_10 * 100).toFixed(0)}%`
-      : "—";
-  const lastUsed = row.last_used_at
-    ? new Date(row.last_used_at).toLocaleDateString()
-    : "—";
-  return (
-    <tr className="border-b border-border/40 align-top">
-      <td className="py-1 px-1 font-mono text-muted-foreground">{row.market}</td>
-      <td className="py-1 px-1">
-        {row.tier && (
-          <span className={`inline-block px-1.5 py-0.5 text-[10px] rounded border ${tierTone}`}>
-            {row.tier}
-          </span>
-        )}
-      </td>
-      <td className="py-1 px-1 text-[10px] text-muted-foreground">
-        {row.category}
-      </td>
-      <td className="py-1 px-1 max-w-md">
-        <div className="break-words">{row.lesson_text}</div>
-        {(row.related_symbols.length > 0 || row.missed_winners.length > 0) && (
-          <div className="text-[10px] text-muted-foreground mt-0.5">
-            {row.related_symbols.length > 0 && (
-              <span>
-                related: {row.related_symbols.join(", ")}
-              </span>
-            )}
-            {row.missed_winners.length > 0 && (
-              <span className="ml-2">
-                missed: {row.missed_winners.join(", ")}
-              </span>
-            )}
-          </div>
-        )}
-      </td>
-      <td className="py-1 px-1 text-right tabular-nums">
-        {row.hit_count}/{row.usage_count}
-      </td>
-      <td className="py-1 px-1 text-right tabular-nums">{ratePct}</td>
-      <td className="py-1 px-1 text-right text-muted-foreground">{lastUsed}</td>
-    </tr>
   );
 }

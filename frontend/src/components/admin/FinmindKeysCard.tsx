@@ -5,6 +5,7 @@ import { CollapsibleHeader } from "@/components/Collapsible";
 import { useCollapsible } from "@/hooks/useCollapsible";
 import api, { errorDetail } from "@/lib/api";
 import { formatTaipei } from "@/lib/timeFormat";
+import { DataTable, type DataTableColumn } from "../ui/table";
 
 // Plaintext key auto-clear delay. Long enough for the operator to
 // copy + send to the customer; short enough that walking away from
@@ -199,6 +200,147 @@ export default function FinmindKeysCard() {
   const enabledCount =
     (keysQuery.data ?? []).filter((k) => k.enabled).length;
 
+  const planColumns: DataTableColumn<PlanItem>[] = [
+    {
+      key: "code",
+      header: "Code",
+      render: (p) => <span className="font-mono">{p.code}</span>,
+    },
+    { key: "name", header: "Name", render: (p) => p.name },
+    {
+      key: "price_monthly",
+      header: "TWD/mo",
+      numeric: true,
+      render: (p) => p.price_monthly ?? "—",
+    },
+    {
+      key: "quota_daily_calls",
+      header: "Calls/d",
+      numeric: true,
+      render: (p) => p.quota_daily_calls.toLocaleString(),
+    },
+    {
+      key: "quota_daily_rows",
+      header: "Rows/d",
+      numeric: true,
+      render: (p) => p.quota_daily_rows.toLocaleString(),
+    },
+    {
+      key: "status",
+      header: "Status",
+      render: (p) =>
+        p.enabled ? (
+          <span className="text-success">enabled</span>
+        ) : (
+          <span className="text-muted-foreground">disabled</span>
+        ),
+    },
+    {
+      key: "actions",
+      header: "",
+      render: (p) =>
+        p.enabled ? (
+          <button
+            type="button"
+            onClick={() => {
+              if (
+                confirm(
+                  `Disable plan "${p.code}"? New keys ` +
+                    `won't be able to use it; existing ` +
+                    `subscriptions degrade to free-tier.`,
+                )
+              ) {
+                disablePlanMutation.mutate(p.code);
+              }
+            }}
+            className="rounded border border-destructive px-1.5 py-0.5 text-[10px] text-destructive hover:bg-destructive/10"
+          >
+            Disable
+          </button>
+        ) : null,
+    },
+  ];
+
+  const keyColumns: DataTableColumn<ApiKeyItem>[] = [
+    {
+      key: "prefix",
+      header: "Prefix",
+      render: (k) => <span className="font-mono">{k.prefix}…</span>,
+    },
+    { key: "owner", header: "Owner", render: (k) => k.owner_email },
+    {
+      key: "name",
+      header: "Name",
+      render: (k) => (
+        <span className="text-muted-foreground">{k.name || "—"}</span>
+      ),
+    },
+    {
+      key: "plan",
+      header: "Plan",
+      render: (k) =>
+        k.plan_code ? (
+          <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">
+            {k.plan_code}
+          </span>
+        ) : (
+          <span className="text-muted-foreground">free</span>
+        ),
+    },
+    {
+      key: "status",
+      header: "Status",
+      render: (k) =>
+        k.enabled ? (
+          <span className="text-success">enabled</span>
+        ) : (
+          <span className="text-muted-foreground">revoked</span>
+        ),
+    },
+    {
+      key: "last_used",
+      header: "Last used",
+      render: (k) => (
+        <span className="text-muted-foreground">
+          {k.last_used_at ? formatTaipei(k.last_used_at) : "never"}
+        </span>
+      ),
+    },
+    {
+      key: "created",
+      header: "Created",
+      render: (k) => (
+        <span className="text-muted-foreground">
+          {formatTaipei(k.created_at, "date")}
+        </span>
+      ),
+    },
+    {
+      key: "actions",
+      header: "",
+      render: (k) =>
+        k.enabled ? (
+          <button
+            type="button"
+            onClick={() => {
+              if (
+                confirm(
+                  `Revoke key for ${k.owner_email}? ` +
+                    `Their integration will start getting 401s immediately.`,
+                )
+              ) {
+                revokeMutation.mutate(k.id);
+              }
+            }}
+            disabled={revokeMutation.isPending}
+            className="rounded border border-destructive px-1.5 py-0.5 text-[10px] text-destructive hover:bg-destructive/10 disabled:opacity-50"
+          >
+            Revoke
+          </button>
+        ) : null,
+    },
+  ];
+
   return (
     <div className="rounded-lg border border-border bg-card p-4">
       <CollapsibleHeader
@@ -319,69 +461,14 @@ export default function FinmindKeysCard() {
             </form>
 
             {plansQuery.data && plansQuery.data.length > 0 && (
-              <table className="mt-3 w-full text-xs">
-                <thead className="border-b border-border text-left text-muted-foreground">
-                  <tr>
-                    <th className="py-1 pr-2">Code</th>
-                    <th className="py-1 pr-2">Name</th>
-                    <th className="py-1 pr-2 text-right">TWD/mo</th>
-                    <th className="py-1 pr-2 text-right">Calls/d</th>
-                    <th className="py-1 pr-2 text-right">Rows/d</th>
-                    <th className="py-1 pr-2">Status</th>
-                    <th className="py-1 pr-2"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {plansQuery.data.map((p) => (
-                    <tr
-                      key={p.code}
-                      className="border-b border-border last:border-b-0"
-                    >
-                      <td className="py-1 pr-2 font-mono">{p.code}</td>
-                      <td className="py-1 pr-2">{p.name}</td>
-                      <td className="py-1 pr-2 text-right">
-                        {p.price_monthly ?? "—"}
-                      </td>
-                      <td className="py-1 pr-2 text-right">
-                        {p.quota_daily_calls.toLocaleString()}
-                      </td>
-                      <td className="py-1 pr-2 text-right">
-                        {p.quota_daily_rows.toLocaleString()}
-                      </td>
-                      <td className="py-1 pr-2">
-                        {p.enabled ? (
-                          <span className="text-success">enabled</span>
-                        ) : (
-                          <span className="text-muted-foreground">
-                            disabled
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-1 pr-2">
-                        {p.enabled && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (
-                                confirm(
-                                  `Disable plan "${p.code}"? New keys ` +
-                                    `won't be able to use it; existing ` +
-                                    `subscriptions degrade to free-tier.`,
-                                )
-                              ) {
-                                disablePlanMutation.mutate(p.code);
-                              }
-                            }}
-                            className="rounded border border-destructive px-1.5 py-0.5 text-[10px] text-destructive hover:bg-destructive/10"
-                          >
-                            Disable
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <DataTable
+                className="mt-3"
+                columns={planColumns}
+                rows={plansQuery.data}
+                rowKey={(p) => p.code}
+                mobileMode="scroll"
+                aria-label="Plans"
+              />
             )}
           </div>
 
@@ -521,83 +608,13 @@ export default function FinmindKeysCard() {
             </div>
           )}
           {keysQuery.data && keysQuery.data.length > 0 && (
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead className="border-b border-border text-left text-muted-foreground">
-                  <tr>
-                    <th className="py-1.5 pr-2">Prefix</th>
-                    <th className="py-1.5 pr-2">Owner</th>
-                    <th className="py-1.5 pr-2">Name</th>
-                    <th className="py-1.5 pr-2">Plan</th>
-                    <th className="py-1.5 pr-2">Status</th>
-                    <th className="py-1.5 pr-2">Last used</th>
-                    <th className="py-1.5 pr-2">Created</th>
-                    <th className="py-1.5 pr-2"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {keysQuery.data.map((k) => (
-                    <tr
-                      key={k.id}
-                      className="border-b border-border last:border-b-0"
-                    >
-                      <td className="py-1.5 pr-2 font-mono">{k.prefix}…</td>
-                      <td className="py-1.5 pr-2">{k.owner_email}</td>
-                      <td className="py-1.5 pr-2 text-muted-foreground">
-                        {k.name || "—"}
-                      </td>
-                      <td className="py-1.5 pr-2">
-                        {k.plan_code ? (
-                          <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">
-                            {k.plan_code}
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground">free</span>
-                        )}
-                      </td>
-                      <td className="py-1.5 pr-2">
-                        {k.enabled ? (
-                          <span className="text-success">enabled</span>
-                        ) : (
-                          <span className="text-muted-foreground">
-                            revoked
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-1.5 pr-2 text-muted-foreground">
-                        {k.last_used_at
-                          ? formatTaipei(k.last_used_at)
-                          : "never"}
-                      </td>
-                      <td className="py-1.5 pr-2 text-muted-foreground">
-                        {formatTaipei(k.created_at, "date")}
-                      </td>
-                      <td className="py-1.5 pr-2">
-                        {k.enabled && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (
-                                confirm(
-                                  `Revoke key for ${k.owner_email}? ` +
-                                    `Their integration will start getting 401s immediately.`,
-                                )
-                              ) {
-                                revokeMutation.mutate(k.id);
-                              }
-                            }}
-                            disabled={revokeMutation.isPending}
-                            className="rounded border border-destructive px-1.5 py-0.5 text-[10px] text-destructive hover:bg-destructive/10 disabled:opacity-50"
-                          >
-                            Revoke
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <DataTable
+              columns={keyColumns}
+              rows={keysQuery.data}
+              rowKey={(k) => k.id}
+              mobileMode="scroll"
+              aria-label="API keys"
+            />
           )}
         </div>
       )}

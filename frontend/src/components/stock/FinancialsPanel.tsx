@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { Loading } from "./_atoms";
 import { fetchFinancials } from "./_shared";
+import { DataTable, type DataTableColumn } from "../ui/table";
 
 export function FinancialsPanel({ symbol }: { symbol: string }) {
   const { t } = useTranslation();
@@ -39,40 +40,39 @@ export function FinancialsPanel({ symbol }: { symbol: string }) {
 
         if (!cols.length) return null;
 
+        const columns: DataTableColumn<string>[] = [
+          {
+            key: "metric",
+            header: "Metric",
+            headerClassName: "min-w-[200px]",
+            render: (row) => <span className="text-muted-foreground">{row}</span>,
+          },
+          ...cols.map((c) => ({
+            key: c,
+            header: c.slice(0, 4),
+            numeric: true,
+            cellClassName: "text-foreground",
+            render: (row: string) => {
+              const v = (table[row] as Record<string, number | null>)?.[c];
+              return v == null ? "—" : Math.abs(v) >= 1e9
+                ? `${(v / 1e9).toFixed(2)}B`
+                : Math.abs(v) >= 1e6
+                ? `${(v / 1e6).toFixed(1)}M`
+                : v.toLocaleString();
+            },
+          })),
+        ];
+
         return (
           <div key={key}>
             <h3 className="text-sm font-semibold text-foreground mb-2">{title}</h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-border text-muted-foreground">
-                    <th className="text-left py-1.5 pr-4 font-medium min-w-[200px]">Metric</th>
-                    {cols.map((c) => (
-                      <th key={c} className="text-right py-1.5 px-2 font-medium">{c.slice(0, 4)}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row) => (
-                    <tr key={row} className="border-b border-border/30 hover:bg-accent/5">
-                      <td className="py-1.5 pr-4 text-muted-foreground">{row}</td>
-                      {cols.map((c) => {
-                        const v = (table[row] as Record<string, number | null>)?.[c];
-                        return (
-                          <td key={c} className="text-right py-1.5 px-2 text-foreground">
-                            {v == null ? "—" : Math.abs(v) >= 1e9
-                              ? `${(v / 1e9).toFixed(2)}B`
-                              : Math.abs(v) >= 1e6
-                              ? `${(v / 1e6).toFixed(1)}M`
-                              : v.toLocaleString()}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <DataTable
+              columns={columns}
+              rows={rows}
+              rowKey={(row) => row}
+              mobileMode="scroll"
+              aria-label={title}
+            />
           </div>
         );
       })}

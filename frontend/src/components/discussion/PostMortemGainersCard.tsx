@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { useCollapsible } from "@/hooks/useCollapsible";
+import { DataTable, type DataTableColumn } from "../ui/table";
 import type { PostMortemResponse } from "./_helpers";
 
 /**
@@ -82,6 +83,42 @@ export function PostMortemGainersCard({
 
   const lastDay = tradingDays[tradingDays.length - 1] ?? "";
 
+  type RecPerfRow = (typeof recPerf)[number];
+  const columns: DataTableColumn<RecPerfRow>[] = [
+    {
+      key: "symbol",
+      header: t("discussion.post_mortem_symbol_col"),
+      render: (row) => (
+        <span className="font-mono font-bold text-foreground">{row.symbol}</span>
+      ),
+    },
+    {
+      key: "base",
+      header: t("discussion.post_mortem_base_col"),
+      numeric: true,
+      render: (row) => (
+        <span className="font-mono tabular-nums text-muted-foreground">
+          {row.base_close.toLocaleString(undefined, {
+            maximumFractionDigits: 2,
+          })}
+        </span>
+      ),
+    },
+    ...tradingDays.map((d, i) => ({
+      key: d,
+      header: <span title={d}>D{i + 1}</span>,
+      numeric: true,
+      render: (row: RecPerfRow) => {
+        const dp = row.days.find((x) => x.trading_day === d);
+        return dp ? (
+          <PerfCell pct={dp.change_pct} />
+        ) : (
+          <span className="text-muted-foreground/50 text-[10px]">—</span>
+        );
+      },
+    })),
+  ];
+
   return (
     <div className="bg-purple-950/15 border border-purple-800/40 rounded-lg p-3 mt-3 space-y-4">
       <div className="flex items-baseline justify-between gap-2 flex-wrap">
@@ -104,63 +141,13 @@ export function PostMortemGainersCard({
             {t("discussion.post_mortem_self_eval_empty")}
           </p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="text-xs w-full">
-              <thead>
-                <tr className="text-muted-foreground/80 text-[10px] uppercase">
-                  <th className="text-left py-1 pr-3 font-medium">
-                    {t("discussion.post_mortem_symbol_col")}
-                  </th>
-                  <th className="text-right py-1 px-2 font-medium">
-                    {t("discussion.post_mortem_base_col")}
-                  </th>
-                  {tradingDays.map((d, i) => (
-                    <th
-                      key={d}
-                      className="text-right py-1 px-2 font-medium"
-                      title={d}
-                    >
-                      D{i + 1}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {recPerf.map((row) => {
-                  const byDay = new Map(row.days.map((d) => [d.trading_day, d]));
-                  return (
-                    <tr key={row.symbol} className="border-t border-border/50">
-                      <td className="py-1 pr-3 font-mono font-bold text-foreground">
-                        {row.symbol}
-                      </td>
-                      <td className="py-1 px-2 text-right font-mono tabular-nums text-muted-foreground">
-                        {row.base_close.toLocaleString(undefined, {
-                          maximumFractionDigits: 2,
-                        })}
-                      </td>
-                      {tradingDays.map((d) => {
-                        const dp = byDay.get(d);
-                        return (
-                          <td
-                            key={d}
-                            className="py-1 px-2 text-right"
-                          >
-                            {dp ? (
-                              <PerfCell pct={dp.change_pct} />
-                            ) : (
-                              <span className="text-muted-foreground/50 text-[10px]">
-                                —
-                              </span>
-                            )}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            columns={columns}
+            rows={recPerf}
+            rowKey={(row) => row.symbol}
+            mobileMode="scroll"
+            aria-label={t("discussion.post_mortem_self_eval_title")}
+          />
         )}
       </div>
 

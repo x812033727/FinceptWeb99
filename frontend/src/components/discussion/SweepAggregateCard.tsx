@@ -7,6 +7,7 @@ import {
   type ReliabilityBucket,
   type SweepAggregate,
 } from "./_helpers";
+import { DataTable, type DataTableColumn } from "../ui/table";
 
 /** PR-B sweep / strategy aggregate KPIs.
  *
@@ -574,51 +575,58 @@ function PersonaTable({ agg }: { agg: SweepAggregate }) {
     const br = b.hit_rate ?? -1;
     return br - ar;
   });
+  type PersonaRow = (typeof agg.per_persona)[number];
+  const columns: DataTableColumn<PersonaRow>[] = [
+    {
+      key: "persona",
+      header: t("aggregate.persona", "專家"),
+      mobile: "primary",
+      cellClassName: "font-mono truncate max-w-[8em]",
+      render: (p) => p.persona_id,
+    },
+    {
+      key: "hit",
+      header: t("aggregate.hit", "命中"),
+      numeric: true,
+      render: (p) =>
+        p.hit_rate === null ? "—" : `${(p.hit_rate * 100).toFixed(0)}%`,
+    },
+    {
+      key: "win",
+      header: t("aggregate.win_count", "勝"),
+      numeric: true,
+      render: (p) => <span className="text-success">{p.win_count}</span>,
+    },
+    {
+      key: "disc",
+      header: t("aggregate.disc_count", "場次"),
+      numeric: true,
+      render: (p) => p.discussions_count,
+    },
+    {
+      key: "ad",
+      header: (
+        <span title={t("aggregate.agree_dissent_tip", "agree+supplement / dissent")}>
+          A/D
+        </span>
+      ),
+      align: "right",
+      cellClassName: "font-mono text-muted-foreground",
+      render: (p) => `${p.agree_turn_count}/${p.dissent_turn_count}`,
+    },
+  ];
   return (
     <div className="bg-secondary/20 border border-border rounded p-2">
       <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">
         {t("aggregate.persona_stats", "專家命中表")}
       </p>
-      <table className="w-full text-[11px]">
-        <thead>
-          <tr className="text-left text-muted-foreground">
-            <th className="font-normal">{t("aggregate.persona", "專家")}</th>
-            <th className="font-normal text-right">
-              {t("aggregate.hit", "命中")}
-            </th>
-            <th className="font-normal text-right">
-              {t("aggregate.win_count", "勝")}
-            </th>
-            <th className="font-normal text-right">
-              {t("aggregate.disc_count", "場次")}
-            </th>
-            <th
-              className="font-normal text-right"
-              title={t("aggregate.agree_dissent_tip",
-                       "agree+supplement / dissent")}
-            >
-              A/D
-            </th>
-          </tr>
-        </thead>
-        <tbody className="font-mono">
-          {sorted.map((p) => (
-            <tr key={p.persona_id} className="border-t border-border/40">
-              <td className="py-0.5 truncate max-w-[8em]">{p.persona_id}</td>
-              <td className="py-0.5 text-right">
-                {p.hit_rate === null ? "—" : `${(p.hit_rate * 100).toFixed(0)}%`}
-              </td>
-              <td className="py-0.5 text-right text-success">
-                {p.win_count}
-              </td>
-              <td className="py-0.5 text-right">{p.discussions_count}</td>
-              <td className="py-0.5 text-right text-muted-foreground">
-                {p.agree_turn_count}/{p.dissent_turn_count}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <DataTable
+        columns={columns}
+        rows={sorted}
+        rowKey={(p) => p.persona_id}
+        mobileMode="cards"
+        aria-label={t("aggregate.persona_stats", "專家命中表")}
+      />
     </div>
   );
 }

@@ -4,6 +4,7 @@ import {
 } from "recharts";
 import { Loading } from "./_atoms";
 import { fetchInstitutional, fmtK } from "./_shared";
+import { DataTable, type DataTableColumn } from "../ui/table";
 
 export function InstitutionalPanel({ symbol }: { symbol: string }) {
   const { data = [], isLoading } = useQuery({
@@ -21,6 +22,82 @@ export function InstitutionalPanel({ symbol }: { symbol: string }) {
     sitc: Math.round((r.sitc_buy - r.sitc_sell) / 1000),
     dealer: Math.round((r.dealer_buy - r.dealer_sell) / 1000),
   }));
+
+  type InstRow = (typeof data)[number];
+  const rows = [...data].reverse().slice(0, 30);
+  const columns: DataTableColumn<InstRow>[] = [
+    {
+      key: "date",
+      header: "日期",
+      render: (r) => <span className="text-muted-foreground">{r.date}</span>,
+    },
+    {
+      key: "fini_buy",
+      header: "外資買",
+      numeric: true,
+      render: (r) => fmtK(r.fini_buy),
+    },
+    {
+      key: "fini_sell",
+      header: "外資賣",
+      numeric: true,
+      render: (r) => fmtK(r.fini_sell),
+    },
+    {
+      key: "fini_net",
+      header: "外資淨",
+      numeric: true,
+      headerClassName: "text-up",
+      render: (r) => {
+        const net = r.fini_buy - r.fini_sell;
+        return (
+          <span className={`font-medium ${net >= 0 ? "text-up" : "text-down"}`}>
+            {net >= 0 ? "+" : ""}{fmtK(Math.abs(net))}
+          </span>
+        );
+      },
+    },
+    {
+      key: "sitc_buy",
+      header: "投信買",
+      numeric: true,
+      render: (r) => fmtK(r.sitc_buy),
+    },
+    {
+      key: "sitc_sell",
+      header: "投信賣",
+      numeric: true,
+      render: (r) => fmtK(r.sitc_sell),
+    },
+    {
+      key: "sitc_net",
+      header: "投信淨",
+      numeric: true,
+      headerClassName: "text-blue-400",
+      render: (r) => {
+        const net = r.sitc_buy - r.sitc_sell;
+        return (
+          <span className={`font-medium ${net >= 0 ? "text-up" : "text-down"}`}>
+            {net >= 0 ? "+" : ""}{fmtK(Math.abs(net))}
+          </span>
+        );
+      },
+    },
+    {
+      key: "dealer_net",
+      header: "自營淨",
+      numeric: true,
+      headerClassName: "text-purple-400",
+      render: (r) => {
+        const net = r.dealer_buy - r.dealer_sell;
+        return (
+          <span className={`font-medium ${net >= 0 ? "text-up" : "text-down"}`}>
+            {net >= 0 ? "+" : ""}{fmtK(Math.abs(net))}
+          </span>
+        );
+      },
+    },
+  ];
 
   return (
     <div className="p-4 space-y-4">
@@ -44,47 +121,13 @@ export function InstitutionalPanel({ symbol }: { symbol: string }) {
         </div>
 
         {/* table */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-border text-muted-foreground">
-                <th className="text-left py-2 pr-4 font-medium">日期</th>
-                <th className="text-right py-2 px-2 font-medium">外資買</th>
-                <th className="text-right py-2 px-2 font-medium">外資賣</th>
-                <th className="text-right py-2 px-2 font-medium text-up">外資淨</th>
-                <th className="text-right py-2 px-2 font-medium">投信買</th>
-                <th className="text-right py-2 px-2 font-medium">投信賣</th>
-                <th className="text-right py-2 px-2 font-medium text-blue-400">投信淨</th>
-                <th className="text-right py-2 px-2 font-medium text-purple-400">自營淨</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[...data].reverse().slice(0, 30).map((r) => {
-                const finiNet = r.fini_buy - r.fini_sell;
-                const sitcNet = r.sitc_buy - r.sitc_sell;
-                const dealerNet = r.dealer_buy - r.dealer_sell;
-                return (
-                  <tr key={r.date} className="border-b border-border/30 hover:bg-accent/5">
-                    <td className="py-1.5 pr-4 text-muted-foreground">{r.date}</td>
-                    <td className="text-right py-1.5 px-2">{fmtK(r.fini_buy)}</td>
-                    <td className="text-right py-1.5 px-2">{fmtK(r.fini_sell)}</td>
-                    <td className={`text-right py-1.5 px-2 font-medium ${finiNet >= 0 ? "text-up" : "text-down"}`}>
-                      {finiNet >= 0 ? "+" : ""}{fmtK(Math.abs(finiNet))}
-                    </td>
-                    <td className="text-right py-1.5 px-2">{fmtK(r.sitc_buy)}</td>
-                    <td className="text-right py-1.5 px-2">{fmtK(r.sitc_sell)}</td>
-                    <td className={`text-right py-1.5 px-2 font-medium ${sitcNet >= 0 ? "text-up" : "text-down"}`}>
-                      {sitcNet >= 0 ? "+" : ""}{fmtK(Math.abs(sitcNet))}
-                    </td>
-                    <td className={`text-right py-1.5 px-2 font-medium ${dealerNet >= 0 ? "text-up" : "text-down"}`}>
-                      {dealerNet >= 0 ? "+" : ""}{fmtK(Math.abs(dealerNet))}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          columns={columns}
+          rows={rows}
+          rowKey={(r) => r.date}
+          mobileMode="scroll"
+          aria-label="法人買賣超"
+        />
       </div>
     </div>
   );

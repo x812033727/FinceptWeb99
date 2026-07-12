@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { useCollapsible } from "@/hooks/useCollapsible";
 import type { PersonaUsageDetail } from "@/types/discussion";
+import { DataTable, type DataTableColumn } from "../ui/table";
 
 export interface RoundUsageDetailProps {
   discussionId: string;
@@ -83,6 +84,43 @@ export function RoundUsageDetail({
   const orderedBlocks = Object.entries(blockChars).sort((a, b) => b[1] - a[1]);
   const maxBlock = Math.max(1, ...orderedBlocks.map(([, v]) => v));
 
+  const personaRows = details
+    .slice()
+    .sort((a, b) => b.prompt_tokens - a.prompt_tokens);
+  const personaColumns: DataTableColumn<PersonaUsageDetail>[] = [
+    {
+      key: "persona",
+      header: t("discussion.usage_detail.persona"),
+      mobile: "primary",
+      cellClassName: "text-foreground",
+      render: (d) => personaName(d.persona_id),
+    },
+    {
+      key: "input",
+      header: t("discussion.usage_detail.input"),
+      numeric: true,
+      render: (d) => d.prompt_tokens.toLocaleString(),
+    },
+    {
+      key: "output",
+      header: t("discussion.usage_detail.output"),
+      numeric: true,
+      render: (d) => d.completion_tokens.toLocaleString(),
+    },
+    {
+      key: "tools",
+      header: t("discussion.usage_detail.tools"),
+      numeric: true,
+      render: (d) => d.tool_call_count || "—",
+    },
+    {
+      key: "cost",
+      header: t("discussion.usage_detail.cost"),
+      numeric: true,
+      render: (d) => (d.cost_usd > 0 ? `$${d.cost_usd.toFixed(4)}` : "—"),
+    },
+  ];
+
   return (
     <div className="mb-3 rounded-lg border border-border bg-card/50">
       <button
@@ -100,56 +138,13 @@ export function RoundUsageDetail({
             <div className="mb-1 font-semibold text-foreground/80">
               {t("discussion.usage_detail.per_persona")}
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full tabular-nums">
-                <thead>
-                  <tr className="text-left text-muted-foreground border-b border-border">
-                    <th className="py-1 pr-2 font-medium">
-                      {t("discussion.usage_detail.persona")}
-                    </th>
-                    <th className="py-1 px-2 font-medium text-right">
-                      {t("discussion.usage_detail.input")}
-                    </th>
-                    <th className="py-1 px-2 font-medium text-right">
-                      {t("discussion.usage_detail.output")}
-                    </th>
-                    <th className="py-1 px-2 font-medium text-right">
-                      {t("discussion.usage_detail.tools")}
-                    </th>
-                    <th className="py-1 pl-2 font-medium text-right">
-                      {t("discussion.usage_detail.cost")}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {details
-                    .slice()
-                    .sort((a, b) => b.prompt_tokens - a.prompt_tokens)
-                    .map((d) => (
-                      <tr
-                        key={d.persona_id}
-                        className="border-b border-border/40 last:border-0"
-                      >
-                        <td className="py-1 pr-2 text-foreground">
-                          {personaName(d.persona_id)}
-                        </td>
-                        <td className="py-1 px-2 text-right">
-                          {d.prompt_tokens.toLocaleString()}
-                        </td>
-                        <td className="py-1 px-2 text-right">
-                          {d.completion_tokens.toLocaleString()}
-                        </td>
-                        <td className="py-1 px-2 text-right">
-                          {d.tool_call_count || "—"}
-                        </td>
-                        <td className="py-1 pl-2 text-right">
-                          {d.cost_usd > 0 ? `$${d.cost_usd.toFixed(4)}` : "—"}
-                        </td>
-                      </tr>
-                    ))}
-                </tbody>
-              </table>
-            </div>
+            <DataTable
+              columns={personaColumns}
+              rows={personaRows}
+              rowKey={(d) => d.persona_id}
+              mobileMode="cards"
+              aria-label={t("discussion.usage_detail.per_persona")}
+            />
           </section>
 
           {orderedSections.length > 0 && (

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import api, { errorDetail } from "@/lib/api";
+import { DataTable, type DataTableColumn } from "@/components/ui/table";
 
 /**
  * Public-facing landing page for the FinMind-clone subsystem
@@ -145,6 +146,64 @@ export default function FinmindPage() {
   }, [datasets, categoryFilter, showOnlyAvailable, searchQuery]);
 
   const availableCount = datasets.filter((d) => d.available).length;
+
+  const columns: DataTableColumn<CatalogItem>[] = [
+    {
+      key: "dataset_code",
+      header: "資料集",
+      cellClassName: "font-mono",
+      render: (d) => (
+        <span className="font-mono">
+          {d.dataset_code}
+          {d.sponsor_tier && (
+            <span
+              className="ml-1 rounded bg-warning/15 px-1 text-[10px] text-warning"
+              title="FinMind Sponsor 級資料集"
+            >
+              sponsor
+            </span>
+          )}
+        </span>
+      ),
+    },
+    {
+      key: "category",
+      header: "分類",
+      cellClassName: "text-muted-foreground",
+      render: (d) => CATEGORY_LABELS[d.category] ?? d.category,
+    },
+    {
+      key: "description_zh",
+      header: "描述",
+      render: (d) => d.description_zh,
+    },
+    {
+      key: "ingest_freq",
+      header: "頻率",
+      cellClassName: "text-muted-foreground",
+      render: (d) => FREQ_LABELS[d.ingest_freq] ?? d.ingest_freq,
+    },
+    {
+      key: "per_symbol",
+      header: "每股",
+      cellClassName: "text-muted-foreground",
+      render: (d) => (d.per_symbol ? "✓" : "—"),
+    },
+    {
+      key: "available",
+      header: "狀態",
+      render: (d) =>
+        d.available ? (
+          <span className="rounded bg-success/15 px-1.5 py-0.5 text-[10px] text-success">
+            可查
+          </span>
+        ) : (
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            建置中
+          </span>
+        ),
+    },
+  ];
 
   return (
     <div className="space-y-8 p-4 lg:p-6">
@@ -295,71 +354,19 @@ export default function FinmindPage() {
         )}
 
         {catalogQuery.data && (
-          <div className="overflow-x-auto rounded-lg border border-border bg-card">
-            <table className="w-full text-xs">
-              <thead className="border-b border-border bg-muted/30 text-left">
-                <tr>
-                  <th className="px-3 py-2">資料集</th>
-                  <th className="px-3 py-2">分類</th>
-                  <th className="px-3 py-2">描述</th>
-                  <th className="px-3 py-2">頻率</th>
-                  <th className="px-3 py-2">每股</th>
-                  <th className="px-3 py-2">狀態</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((d) => (
-                  <tr
-                    key={d.dataset_code}
-                    className="border-b border-border last:border-b-0 hover:bg-muted/30"
-                  >
-                    <td className="px-3 py-2 font-mono">
-                      {d.dataset_code}
-                      {d.sponsor_tier && (
-                        <span
-                          className="ml-1 rounded bg-warning/15 px-1 text-[10px] text-warning"
-                          title="FinMind Sponsor 級資料集"
-                        >
-                          sponsor
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-muted-foreground">
-                      {CATEGORY_LABELS[d.category] ?? d.category}
-                    </td>
-                    <td className="px-3 py-2">{d.description_zh}</td>
-                    <td className="px-3 py-2 text-muted-foreground">
-                      {FREQ_LABELS[d.ingest_freq] ?? d.ingest_freq}
-                    </td>
-                    <td className="px-3 py-2 text-muted-foreground">
-                      {d.per_symbol ? "✓" : "—"}
-                    </td>
-                    <td className="px-3 py-2">
-                      {d.available ? (
-                        <span className="rounded bg-success/15 px-1.5 py-0.5 text-[10px] text-success">
-                          可查
-                        </span>
-                      ) : (
-                        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                          建置中
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-                {filtered.length === 0 && (
-                  <tr>
-                    <td
-                      colSpan={6}
-                      className="px-3 py-6 text-center text-muted-foreground"
-                    >
-                      無符合條件的資料集
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            columns={columns}
+            rows={filtered}
+            rowKey={(d) => d.dataset_code}
+            mobileMode="scroll"
+            aria-label="資料集目錄"
+            className="rounded-lg border border-border bg-card"
+            empty={
+              <div className="rounded-lg border border-border bg-card px-3 py-6 text-center text-sm text-muted-foreground">
+                無符合條件的資料集
+              </div>
+            }
+          />
         )}
       </section>
 

@@ -3,6 +3,7 @@ import { CollapsibleHeader } from "@/components/Collapsible";
 import { useCollapsible } from "@/hooks/useCollapsible";
 import api from "@/lib/api";
 import { formatTaipei } from "@/lib/timeFormat";
+import { DataTable, type DataTableColumn } from "../ui/table";
 
 interface PendingCalibration {
   strategy_id: string;
@@ -139,6 +140,60 @@ function PendingRow({
   const pendingAt = (raw: number) =>
     pending.find((p) => Math.abs(p.raw - raw) < 1e-9)?.calibrated;
 
+  const columns: DataTableColumn<number>[] = [
+    {
+      key: "raw",
+      header: "raw",
+      cellClassName: "font-mono",
+      render: (raw) => raw.toFixed(2),
+    },
+    {
+      key: "live",
+      header: "live",
+      numeric: true,
+      render: (raw) => {
+        const l = liveAt(raw);
+        return l !== undefined ? l.toFixed(3) : "—";
+      },
+    },
+    {
+      key: "pending",
+      header: "pending",
+      numeric: true,
+      render: (raw) => {
+        const p = pendingAt(raw);
+        return p !== undefined ? p.toFixed(3) : "—";
+      },
+    },
+    {
+      key: "delta",
+      header: "Δ",
+      numeric: true,
+      render: (raw) => {
+        const l = liveAt(raw);
+        const p = pendingAt(raw);
+        const delta = l !== undefined && p !== undefined ? p - l : null;
+        return (
+          <span
+            className={
+              delta === null
+                ? "text-muted-foreground"
+                : delta > 0
+                  ? "text-success"
+                  : delta < 0
+                    ? "text-danger"
+                    : ""
+            }
+          >
+            {delta === null
+              ? "—"
+              : `${delta > 0 ? "+" : ""}${delta.toFixed(3)}`}
+          </span>
+        );
+      },
+    },
+  ];
+
   return (
     <div className="border border-border rounded p-3 bg-background/40">
       <div className="flex items-center justify-between mb-2 gap-2">
@@ -180,49 +235,13 @@ function PendingRow({
           </button>
         </div>
       </div>
-      <table className="w-full text-[11px]">
-        <thead>
-          <tr className="text-muted-foreground border-b border-border">
-            <th className="text-left py-1">raw</th>
-            <th className="text-right py-1">live</th>
-            <th className="text-right py-1">pending</th>
-            <th className="text-right py-1">Δ</th>
-          </tr>
-        </thead>
-        <tbody>
-          {allRaws.map((raw) => {
-            const l = liveAt(raw);
-            const p = pendingAt(raw);
-            const delta = l !== undefined && p !== undefined ? p - l : null;
-            return (
-              <tr key={raw} className="border-b border-border/40">
-                <td className="py-1 font-mono">{raw.toFixed(2)}</td>
-                <td className="py-1 text-right font-mono">
-                  {l !== undefined ? l.toFixed(3) : "—"}
-                </td>
-                <td className="py-1 text-right font-mono">
-                  {p !== undefined ? p.toFixed(3) : "—"}
-                </td>
-                <td
-                  className={`py-1 text-right font-mono ${
-                    delta === null
-                      ? "text-muted-foreground"
-                      : delta > 0
-                        ? "text-success"
-                        : delta < 0
-                          ? "text-danger"
-                          : ""
-                  }`}
-                >
-                  {delta === null
-                    ? "—"
-                    : `${delta > 0 ? "+" : ""}${delta.toFixed(3)}`}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      <DataTable
+        columns={columns}
+        rows={allRaws}
+        rowKey={(raw) => raw}
+        mobileMode="scroll"
+        aria-label={`${strategy.name} calibration curve diff`}
+      />
     </div>
   );
 }

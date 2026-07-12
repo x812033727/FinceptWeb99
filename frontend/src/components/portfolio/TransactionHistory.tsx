@@ -6,6 +6,7 @@ import { useDeleteTransaction } from "@/hooks/usePortfolio";
 import { EditTransactionModal } from "./EditTransactionModal";
 import { exportCSV } from "./_shared";
 import type { TransactionRow } from "./_shared";
+import { DataTable, type DataTableColumn } from "../ui/table";
 
 export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
   const { t } = useTranslation();
@@ -17,6 +18,106 @@ export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
       api.get(`/portfolio/${portfolioId}/transactions?limit=200`).then((r) => r.data),
     staleTime: 30_000,
   });
+
+  const columns: DataTableColumn<TransactionRow>[] = [
+    {
+      key: "tx_date",
+      header: t("portfolio.transactions.executed_at"),
+      render: (tx) => <span className="text-muted-foreground">{tx.tx_date}</span>,
+    },
+    {
+      key: "symbol",
+      header: t("portfolio.holdings.symbol"),
+      render: (tx) => <span className="font-medium text-primary">{tx.symbol}</span>,
+    },
+    {
+      key: "market",
+      header: t("portfolio.holdings.market"),
+      render: (tx) => <span className="text-muted-foreground">{tx.market}</span>,
+    },
+    {
+      key: "tx_type",
+      header: t("portfolio.transactions.type"),
+      render: (tx) => (
+        <span
+          className={`font-medium capitalize ${
+            tx.tx_type === "buy"      ? "text-up"
+            : tx.tx_type === "sell"   ? "text-down"
+            : "text-amber-400"
+          }`}
+        >
+          {tx.tx_type}
+        </span>
+      ),
+    },
+    {
+      key: "quantity",
+      header: t("portfolio.transactions.qty"),
+      numeric: true,
+      cellClassName: "text-foreground",
+      render: (tx) => tx.quantity.toLocaleString(),
+    },
+    {
+      key: "price",
+      header: t("portfolio.transactions.price"),
+      numeric: true,
+      cellClassName: "text-foreground",
+      render: (tx) =>
+        tx.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+    },
+    {
+      key: "fx_rate",
+      header: t("portfolio.transactions.fx_rate"),
+      numeric: true,
+      cellClassName: "text-muted-foreground",
+      render: (tx) =>
+        tx.fx_rate === 1
+          ? "—"
+          : tx.fx_rate.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 }),
+    },
+    {
+      key: "value",
+      header: t("portfolio.holdings.value"),
+      numeric: true,
+      cellClassName: "text-muted-foreground whitespace-nowrap",
+      render: (tx) => (
+        <>
+          {(tx.quantity * tx.price).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+          <span className="ml-1 text-[10px] opacity-60">{tx.market === "TW" ? "TWD" : "USD"}</span>
+        </>
+      ),
+    },
+    {
+      key: "notes",
+      header: "Notes",
+      cellClassName: "text-muted-foreground max-w-[160px] truncate",
+      render: (tx) => tx.notes ?? "",
+    },
+    {
+      key: "actions",
+      header: "",
+      align: "right",
+      // Actions stay visible (the original row-level `group-hover` reveal
+      // never fired on touch, so edit/delete were unreachable on mobile).
+      cellClassName: "whitespace-nowrap",
+      render: (tx) => (
+        <>
+          <button
+            onClick={() => setEditing(tx)}
+            className="text-muted-foreground hover:text-foreground mr-2"
+            title={t("common.edit")}
+          >✎</button>
+          <button
+            onClick={() => {
+              if (confirm(t("portfolio.confirm_delete_tx"))) deleteTx.mutate(tx.id);
+            }}
+            className="text-muted-foreground hover:text-danger"
+            title={t("common.delete")}
+          >×</button>
+        </>
+      ),
+    },
+  ];
 
   function handleExport() {
     exportCSV(
@@ -54,68 +155,13 @@ export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
       )}
 
       {txns.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-border text-muted-foreground">
-                <th className="text-left py-2 pr-4 font-medium">{t("portfolio.transactions.executed_at")}</th>
-                <th className="text-left py-2 px-2 font-medium">{t("portfolio.holdings.symbol")}</th>
-                <th className="text-left py-2 px-2 font-medium">{t("portfolio.holdings.market")}</th>
-                <th className="text-left py-2 px-2 font-medium">{t("portfolio.transactions.type")}</th>
-                <th className="text-right py-2 px-2 font-medium">{t("portfolio.transactions.qty")}</th>
-                <th className="text-right py-2 px-2 font-medium">{t("portfolio.transactions.price")}</th>
-                <th className="text-right py-2 px-2 font-medium">{t("portfolio.transactions.fx_rate")}</th>
-                <th className="text-right py-2 px-2 font-medium">{t("portfolio.holdings.value")}</th>
-                <th className="text-left py-2 pl-4 font-medium">Notes</th>
-                <th className="px-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {txns.map((tx) => (
-                <tr key={tx.id} className="border-b border-border/30 hover:bg-accent/5 group">
-                  <td className="py-1.5 pr-4 text-muted-foreground">{tx.tx_date}</td>
-                  <td className="py-1.5 px-2 font-medium text-primary">{tx.symbol}</td>
-                  <td className="py-1.5 px-2 text-muted-foreground">{tx.market}</td>
-                  <td className={`py-1.5 px-2 font-medium capitalize ${
-                    tx.tx_type === "buy"      ? "text-up"
-                    : tx.tx_type === "sell"   ? "text-down"
-                    : "text-amber-400"
-                  }`}>{tx.tx_type}</td>
-                  <td className="py-1.5 px-2 text-right text-foreground">
-                    {tx.quantity.toLocaleString()}
-                  </td>
-                  <td className="py-1.5 px-2 text-right text-foreground">
-                    {tx.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </td>
-                  <td className="py-1.5 px-2 text-right text-muted-foreground">
-                    {tx.fx_rate === 1 ? "—" : tx.fx_rate.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })}
-                  </td>
-                  <td className="py-1.5 px-2 text-right text-muted-foreground whitespace-nowrap">
-                    {(tx.quantity * tx.price).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                    <span className="ml-1 text-[10px] opacity-60">{tx.market === "TW" ? "TWD" : "USD"}</span>
-                  </td>
-                  <td className="py-1.5 pl-4 text-muted-foreground max-w-[160px] truncate">
-                    {tx.notes ?? ""}
-                  </td>
-                  <td className="py-1.5 px-2 text-right whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button
-                      onClick={() => setEditing(tx)}
-                      className="text-muted-foreground hover:text-foreground mr-2"
-                      title={t("common.edit")}
-                    >✎</button>
-                    <button
-                      onClick={() => {
-                        if (confirm(t("portfolio.confirm_delete_tx"))) deleteTx.mutate(tx.id);
-                      }}
-                      className="text-muted-foreground hover:text-danger"
-                      title={t("common.delete")}
-                    >×</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          columns={columns}
+          rows={txns}
+          rowKey={(tx) => tx.id}
+          mobileMode="scroll"
+          aria-label={t("portfolio.transactions.title")}
+        />
       )}
 
       {editing && (

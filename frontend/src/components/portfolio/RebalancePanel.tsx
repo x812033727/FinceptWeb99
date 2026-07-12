@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
 import { Num } from "@/components/Num";
+import { DataTable, type DataTableColumn } from "../ui/table";
 
 interface RebalanceTrade {
   symbol: string;
@@ -53,6 +54,55 @@ export default function RebalancePanel({ portfolioId }: { portfolioId: string })
   });
 
   const p = plan.data;
+
+  const columns: DataTableColumn<RebalanceTrade>[] = [
+    {
+      key: "symbol",
+      header: t("portfolio.rebalance.col_symbol"),
+      mobile: "primary",
+      render: (tr) => (
+        <span className="font-medium text-foreground">
+          {tr.symbol}
+          <span className="ml-1.5 text-[10px] text-muted-foreground">{tr.market}</span>
+        </span>
+      ),
+    },
+    {
+      key: "side",
+      header: t("portfolio.rebalance.col_side"),
+      render: (tr) => (
+        <span className={tr.side === "buy" ? "text-up" : "text-down"}>
+          {tr.side === "buy" ? t("portfolio.rebalance.buy") : t("portfolio.rebalance.sell")}
+        </span>
+      ),
+    },
+    {
+      key: "qty",
+      header: t("portfolio.rebalance.col_qty"),
+      numeric: true,
+      render: (tr) => <Num value={tr.quantity} />,
+    },
+    {
+      key: "value",
+      header: t("portfolio.rebalance.col_value"),
+      numeric: true,
+      render: (tr) => <Num value={tr.est_value} />,
+    },
+    {
+      key: "fee",
+      header: t("portfolio.rebalance.col_fee"),
+      numeric: true,
+      cellClassName: "text-muted-foreground",
+      render: (tr) => <Num value={tr.est_fee} />,
+    },
+    {
+      key: "weights",
+      header: t("portfolio.rebalance.col_weights"),
+      align: "right",
+      cellClassName: "num text-muted-foreground",
+      render: (tr) => `${tr.current_weight_pct}% → ${tr.target_weight_pct}%`,
+    },
+  ];
 
   return (
     <div className="bg-card border border-border rounded-lg p-5 space-y-4">
@@ -111,39 +161,13 @@ export default function RebalancePanel({ portfolioId }: { portfolioId: string })
 
       {p && p.trades.length > 0 && (
         <>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-xs text-muted-foreground border-b border-border">
-                  <th className="text-left py-2 pr-3">{t("portfolio.rebalance.col_symbol")}</th>
-                  <th className="text-left py-2 pr-3">{t("portfolio.rebalance.col_side")}</th>
-                  <th className="text-right py-2 pr-3">{t("portfolio.rebalance.col_qty")}</th>
-                  <th className="text-right py-2 pr-3">{t("portfolio.rebalance.col_value")}</th>
-                  <th className="text-right py-2 pr-3">{t("portfolio.rebalance.col_fee")}</th>
-                  <th className="text-right py-2">{t("portfolio.rebalance.col_weights")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {p.trades.map((tr) => (
-                  <tr key={`${tr.symbol}-${tr.side}`} className="border-b border-border/50">
-                    <td className="py-2 pr-3 font-medium text-foreground">
-                      {tr.symbol}
-                      <span className="ml-1.5 text-[10px] text-muted-foreground">{tr.market}</span>
-                    </td>
-                    <td className={`py-2 pr-3 ${tr.side === "buy" ? "text-up" : "text-down"}`}>
-                      {tr.side === "buy" ? t("portfolio.rebalance.buy") : t("portfolio.rebalance.sell")}
-                    </td>
-                    <td className="py-2 pr-3 text-right"><Num value={tr.quantity} /></td>
-                    <td className="py-2 pr-3 text-right"><Num value={tr.est_value} /></td>
-                    <td className="py-2 pr-3 text-right text-muted-foreground"><Num value={tr.est_fee} /></td>
-                    <td className="py-2 text-right num text-muted-foreground">
-                      {tr.current_weight_pct}% → {tr.target_weight_pct}%
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            columns={columns}
+            rows={p.trades}
+            rowKey={(tr) => `${tr.symbol}-${tr.side}`}
+            mobileMode="cards"
+            aria-label={t("portfolio.rebalance.title")}
+          />
 
           <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground">
             <span>{t("portfolio.rebalance.sum_sell")}:<Num value={p.summary.sell_total ?? 0} className="ml-1 text-foreground" /></span>

@@ -24,6 +24,7 @@ import type {
   StrategyCompareResponse,
 } from "@/components/discussion/_helpers";
 import { fetchStrategies, type StrategyTemplate } from "@/components/discussion/_helpers";
+import { DataTable, type DataTableColumn } from "@/components/ui/table";
 
 
 // Stable line colours per slot — operator can rely on "the green
@@ -231,64 +232,70 @@ function KpiTable({
   strategies: (StrategyCompareEntry & { color: string })[];
 }) {
   const { t } = useTranslation();
+  type KpiRow = StrategyCompareEntry & { color: string };
+  const columns: DataTableColumn<KpiRow>[] = [
+    {
+      key: "name",
+      header: t("strategy_compare.col.name"),
+      mobile: "primary",
+      render: (s) => (
+        <>
+          <span
+            className="inline-block w-2 h-2 rounded-full mr-1"
+            style={{ backgroundColor: s.color }}
+          />
+          {s.name}
+        </>
+      ),
+    },
+    {
+      key: "tier",
+      header: t("strategy_compare.col.tier"),
+      render: (s) => (
+        <span className="text-muted-foreground text-[10px]">
+          {s.maturity_tier ?? "—"}
+        </span>
+      ),
+    },
+    {
+      key: "brier_avg",
+      header: t("strategy_compare.col.brier_avg"),
+      numeric: true,
+      render: (s) =>
+        s.summary.brier_avg !== null ? s.summary.brier_avg.toFixed(3) : "—",
+    },
+    {
+      key: "brier_latest",
+      header: t("strategy_compare.col.brier_latest"),
+      numeric: true,
+      render: (s) =>
+        s.summary.brier_latest !== null
+          ? s.summary.brier_latest.toFixed(3)
+          : "—",
+    },
+    {
+      key: "hit_rate_latest",
+      header: t("strategy_compare.col.hit_rate_latest"),
+      numeric: true,
+      render: (s) =>
+        s.summary.hit_rate_latest !== null
+          ? `${(s.summary.hit_rate_latest * 100).toFixed(0)}%`
+          : "—",
+    },
+    {
+      key: "samples",
+      header: t("strategy_compare.col.samples"),
+      numeric: true,
+      render: (s) => s.summary.sample_total,
+    },
+  ];
   return (
-    <table className="w-full text-xs">
-      <thead>
-        <tr className="text-muted-foreground border-b border-border">
-          <th className="text-left py-1.5 px-1">
-            {t("strategy_compare.col.name")}
-          </th>
-          <th className="text-left py-1.5 px-1">
-            {t("strategy_compare.col.tier")}
-          </th>
-          <th className="text-right py-1.5 px-1">
-            {t("strategy_compare.col.brier_avg")}
-          </th>
-          <th className="text-right py-1.5 px-1">
-            {t("strategy_compare.col.brier_latest")}
-          </th>
-          <th className="text-right py-1.5 px-1">
-            {t("strategy_compare.col.hit_rate_latest")}
-          </th>
-          <th className="text-right py-1.5 px-1">
-            {t("strategy_compare.col.samples")}
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {strategies.map((s) => (
-          <tr key={s.strategy_id} className="border-b border-border/40">
-            <td className="py-1 px-1">
-              <span
-                className="inline-block w-2 h-2 rounded-full mr-1"
-                style={{ backgroundColor: s.color }}
-              />
-              {s.name}
-            </td>
-            <td className="py-1 px-1 text-muted-foreground text-[10px]">
-              {s.maturity_tier ?? "—"}
-            </td>
-            <td className="py-1 px-1 text-right tabular-nums">
-              {s.summary.brier_avg !== null
-                ? s.summary.brier_avg.toFixed(3)
-                : "—"}
-            </td>
-            <td className="py-1 px-1 text-right tabular-nums">
-              {s.summary.brier_latest !== null
-                ? s.summary.brier_latest.toFixed(3)
-                : "—"}
-            </td>
-            <td className="py-1 px-1 text-right tabular-nums">
-              {s.summary.hit_rate_latest !== null
-                ? `${(s.summary.hit_rate_latest * 100).toFixed(0)}%`
-                : "—"}
-            </td>
-            <td className="py-1 px-1 text-right tabular-nums">
-              {s.summary.sample_total}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <DataTable
+      columns={columns}
+      rows={strategies}
+      rowKey={(s) => s.strategy_id}
+      mobileMode="cards"
+      aria-label={t("strategy_compare.title")}
+    />
   );
 }

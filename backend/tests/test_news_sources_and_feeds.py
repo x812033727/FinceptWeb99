@@ -118,9 +118,15 @@ async def test_do_run_one_dead_feed_is_non_fatal(monkeypatch):
         inserted["n"] = len(rows)
         return len(rows)
 
+    health_calls: list = []
+
+    async def fake_health(job_id, **kw):
+        health_calls.append((job_id, kw.get("ok")))
+
     monkeypatch.setattr(feeds, "fetch_feed", fake_fetch)
     monkeypatch.setattr(feeds, "insert_news_articles", fake_insert)
     monkeypatch.setattr(feeds, "_tag_symbol", lambda t: None)
+    monkeypatch.setattr(feeds, "record_health", fake_health)
     # Stub the session context manager.
     monkeypatch.setattr(feeds, "AsyncSessionLocal", _FakeSession)
 
@@ -128,6 +134,11 @@ async def test_do_run_one_dead_feed_is_non_fatal(monkeypatch):
     # 4 sources, ltn dies → 3 rows.
     assert n == 3
     assert inserted["n"] == 3
+    # Per-source health recorded: ltn unhealthy, the other 3 healthy.
+    by_source = dict(health_calls)
+    assert by_source["newsfeed:ltn_ec"] is False
+    assert by_source["newsfeed:cnyes"] is True
+    assert len([v for v in by_source.values() if v]) == 3
 
 
 @pytest.mark.asyncio

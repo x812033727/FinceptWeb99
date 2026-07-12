@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { Loading } from "./_atoms";
 import { fetchETFHoldings } from "./_shared";
+import { DataTable, type DataTableColumn } from "../ui/table";
 
 const PIE_COLORS = [
   "hsl(var(--chart-1))", "hsl(var(--chart-2))", "hsl(var(--chart-3))",
@@ -35,6 +36,37 @@ export function HoldingsPanel({ symbol }: { symbol: string }) {
     : top10.map((h) => ({ name: h.symbol, value: h.weight }));
 
   const top10Weight = top10.reduce((s, h) => s + h.weight, 0);
+
+  const rows = data.holdings.slice(0, 30).map((h, i) => ({ ...h, rank: i + 1 }));
+  type HoldingRow = (typeof rows)[number];
+  const columns: DataTableColumn<HoldingRow>[] = [
+    {
+      key: "rank",
+      header: "#",
+      mobile: "secondary",
+      render: (h) => <span className="text-muted-foreground">{h.rank}</span>,
+    },
+    {
+      key: "symbol",
+      header: t("stock.etf.constituent"),
+      mobile: "primary",
+      render: (h) => <span className="text-primary font-medium">{h.symbol}</span>,
+    },
+    {
+      key: "name",
+      header: t("market.table.name"),
+      mobile: "secondary",
+      render: (h) => <span className="text-foreground">{h.name_zh || "—"}</span>,
+    },
+    {
+      key: "weight",
+      header: t("stock.etf.weight"),
+      numeric: true,
+      render: (h) => (
+        <span className="text-foreground font-medium">{h.weight.toFixed(2)}%</span>
+      ),
+    },
+  ];
 
   return (
     <div className="p-4 space-y-4">
@@ -70,29 +102,14 @@ export function HoldingsPanel({ symbol }: { symbol: string }) {
           </ResponsiveContainer>
         </div>
 
-        <div className="lg:col-span-3 overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-border text-muted-foreground">
-                <th className="text-left py-2 pr-4 font-medium">#</th>
-                <th className="text-left py-2 pr-4 font-medium">{t("stock.etf.constituent")}</th>
-                <th className="text-left py-2 pr-4 font-medium">{t("market.table.name")}</th>
-                <th className="text-right py-2 px-2 font-medium">{t("stock.etf.weight")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.holdings.slice(0, 30).map((h, i) => (
-                <tr key={h.symbol} className="border-b border-border/30 hover:bg-accent/5">
-                  <td className="py-1.5 pr-4 text-muted-foreground">{i + 1}</td>
-                  <td className="py-1.5 pr-4 text-primary font-medium">{h.symbol}</td>
-                  <td className="py-1.5 pr-4 text-foreground">{h.name_zh || "—"}</td>
-                  <td className="text-right py-1.5 px-2 text-foreground font-medium">
-                    {h.weight.toFixed(2)}%
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="lg:col-span-3">
+          <DataTable
+            columns={columns}
+            rows={rows}
+            rowKey={(h) => h.symbol}
+            mobileMode="cards"
+            aria-label={t("stock.etf.weight")}
+          />
         </div>
       </div>
     </div>

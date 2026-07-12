@@ -12,6 +12,7 @@ import {
 } from "recharts";
 
 import { CollapsibleHeader } from "@/components/Collapsible";
+import { DataTable, type DataTableColumn } from "@/components/ui/table";
 import { useCollapsible } from "@/hooks/useCollapsible";
 import api, { errorDetail } from "@/lib/api";
 
@@ -81,6 +82,35 @@ export default function FinmindUsageCard() {
     (s, d) => s + d.rows,
     0,
   );
+
+  const columns: DataTableColumn<UsageByDataset>[] = [
+    {
+      key: "dataset_code",
+      header: "Dataset",
+      mobile: "primary",
+      render: (d) => <span className="font-mono">{d.dataset_code}</span>,
+    },
+    {
+      key: "calls",
+      header: "Calls",
+      numeric: true,
+      render: (d) => formatNumber(d.calls),
+    },
+    {
+      key: "rows",
+      header: "Rows",
+      numeric: true,
+      render: (d) => formatNumber(d.rows),
+    },
+    {
+      key: "rows_per_call",
+      header: "Rows/call",
+      numeric: true,
+      cellClassName: "text-muted-foreground",
+      render: (d) =>
+        d.calls ? Math.round(d.rows / d.calls).toLocaleString() : "—",
+    },
+  ];
 
   return (
     <div className="rounded-lg border border-border bg-card p-4">
@@ -203,43 +233,13 @@ export default function FinmindUsageCard() {
                   <h3 className="mb-2 text-sm font-semibold">
                     Top datasets ({days}d)
                   </h3>
-                  <table className="w-full text-xs">
-                    <thead className="border-b border-border text-left text-muted-foreground">
-                      <tr>
-                        <th className="py-1.5 pr-2">Dataset</th>
-                        <th className="py-1.5 pr-2 text-right">Calls</th>
-                        <th className="py-1.5 pr-2 text-right">Rows</th>
-                        <th className="py-1.5 pr-2 text-right">
-                          Rows/call
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {usageQuery.data.by_dataset
-                        .slice(0, 10)
-                        .map((d) => (
-                          <tr
-                            key={d.dataset_code}
-                            className="border-b border-border last:border-b-0"
-                          >
-                            <td className="py-1 pr-2 font-mono">
-                              {d.dataset_code}
-                            </td>
-                            <td className="py-1 pr-2 text-right">
-                              {formatNumber(d.calls)}
-                            </td>
-                            <td className="py-1 pr-2 text-right">
-                              {formatNumber(d.rows)}
-                            </td>
-                            <td className="py-1 pr-2 text-right text-muted-foreground">
-                              {d.calls
-                                ? Math.round(d.rows / d.calls).toLocaleString()
-                                : "—"}
-                            </td>
-                          </tr>
-                        ))}
-                    </tbody>
-                  </table>
+                  <DataTable
+                    columns={columns}
+                    rows={usageQuery.data.by_dataset.slice(0, 10)}
+                    rowKey={(d) => d.dataset_code}
+                    mobileMode="cards"
+                    aria-label={`Top datasets (${days}d)`}
+                  />
                 </div>
               )}
             </>

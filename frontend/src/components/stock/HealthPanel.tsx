@@ -5,6 +5,7 @@ import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 
 import { Loading } from "./_atoms";
 import { fetchHealth, fmtPct1 } from "./_shared";
 import type { HealthPeriod, Light } from "./_shared";
+import { DataTable, type DataTableColumn } from "../ui/table";
 
 const LIGHT_CLASS: Record<Light, string> = {
   green:  "bg-success",
@@ -93,6 +94,50 @@ export function HealthPanel({ symbol }: { symbol: string }) {
 
   const { periods, summary, lights } = data;
 
+  const periodRows = [...periods].reverse();
+  const columns: DataTableColumn<HealthPeriod>[] = [
+    {
+      key: "date",
+      header: t("stock.health.period"),
+      render: (p) => <span className="text-muted-foreground">{p.date}</span>,
+    },
+    {
+      key: "gross_margin",
+      header: t("stock.health.gross_margin"),
+      numeric: true,
+      cellClassName: "text-foreground",
+      render: (p) => fmtPct1(p.gross_margin),
+    },
+    {
+      key: "operating_margin",
+      header: t("stock.health.operating_margin"),
+      numeric: true,
+      cellClassName: "text-foreground",
+      render: (p) => fmtPct1(p.operating_margin),
+    },
+    {
+      key: "net_margin",
+      header: t("stock.health.net_margin"),
+      numeric: true,
+      cellClassName: "text-foreground",
+      render: (p) => fmtPct1(p.net_margin),
+    },
+    {
+      key: "debt_ratio",
+      header: t("stock.health.debt_ratio"),
+      numeric: true,
+      cellClassName: "text-foreground",
+      render: (p) => fmtPct1(p.debt_ratio),
+    },
+    {
+      key: "eps",
+      header: "EPS",
+      numeric: true,
+      cellClassName: "text-foreground",
+      render: (p) => (p.eps == null ? "—" : p.eps.toFixed(2)),
+    },
+  ];
+
   return (
     <div className="p-4 space-y-4">
       {/* summary strip */}
@@ -180,32 +225,13 @@ export function HealthPanel({ symbol }: { symbol: string }) {
       </div>
 
       {/* per-period table */}
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="border-b border-border text-muted-foreground">
-              <th className="text-left py-2 pr-4 font-medium">{t("stock.health.period")}</th>
-              <th className="text-right py-2 px-2 font-medium">{t("stock.health.gross_margin")}</th>
-              <th className="text-right py-2 px-2 font-medium">{t("stock.health.operating_margin")}</th>
-              <th className="text-right py-2 px-2 font-medium">{t("stock.health.net_margin")}</th>
-              <th className="text-right py-2 px-2 font-medium">{t("stock.health.debt_ratio")}</th>
-              <th className="text-right py-2 px-2 font-medium">EPS</th>
-            </tr>
-          </thead>
-          <tbody>
-            {[...periods].reverse().map((p) => (
-              <tr key={p.date} className="border-b border-border/30 hover:bg-accent/5">
-                <td className="py-1.5 pr-4 text-muted-foreground">{p.date}</td>
-                <td className="text-right py-1.5 px-2 text-foreground">{fmtPct1(p.gross_margin)}</td>
-                <td className="text-right py-1.5 px-2 text-foreground">{fmtPct1(p.operating_margin)}</td>
-                <td className="text-right py-1.5 px-2 text-foreground">{fmtPct1(p.net_margin)}</td>
-                <td className="text-right py-1.5 px-2 text-foreground">{fmtPct1(p.debt_ratio)}</td>
-                <td className="text-right py-1.5 px-2 text-foreground">{p.eps == null ? "—" : p.eps.toFixed(2)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        columns={columns}
+        rows={periodRows}
+        rowKey={(p) => p.date}
+        mobileMode="scroll"
+        aria-label={t("stock.health.period")}
+      />
     </div>
   );
 }

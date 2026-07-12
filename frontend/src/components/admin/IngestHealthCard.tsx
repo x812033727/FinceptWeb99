@@ -3,6 +3,7 @@ import api from "@/lib/api";
 import { CollapsibleHeader } from "@/components/Collapsible";
 import { useCollapsible } from "@/hooks/useCollapsible";
 import { IngestHealthSparkline } from "./IngestHealthSparkline";
+import { DataTable, type DataTableColumn } from "../ui/table";
 
 interface IngestHealth {
   job_id: string;
@@ -381,6 +382,110 @@ export function IngestHealthCard() {
   });
   const retryingJobId = retry.isPending ? retry.variables : null;
 
+  const columns: DataTableColumn<IngestHealth>[] = [
+    {
+      key: "job",
+      header: "Job",
+      cellClassName: "align-top",
+      render: (r) => {
+        const meta = JOB_META[r.job_id];
+        return (
+          <div>
+            <div className="font-mono">{r.job_id}</div>
+            {meta && (
+              <div className="text-[10px] text-muted-foreground/80 mt-0.5">
+                {meta.description_zh}
+              </div>
+            )}
+          </div>
+        );
+      },
+    },
+    {
+      key: "schedule",
+      header: "排程",
+      cellClassName: "align-top text-muted-foreground whitespace-nowrap",
+      render: (r) => JOB_META[r.job_id]?.schedule_zh ?? "—",
+    },
+    {
+      key: "status",
+      header: "Status",
+      cellClassName: "align-top",
+      render: (r) => {
+        const { text: badgeText, cls: badgeCls } = deriveIngestBadge(r);
+        return (
+          <span className={`px-1.5 py-0.5 rounded text-[10px] ${badgeCls}`}>
+            {badgeText}
+          </span>
+        );
+      },
+    },
+    {
+      key: "sparkline",
+      header: <span title="過去 7 天每日結果 (UTC)，最右邊是今天">7d</span>,
+      cellClassName: "align-top",
+      render: (r) => <IngestHealthSparkline jobId={r.job_id} />,
+    },
+    {
+      key: "row_count",
+      header: "Rows",
+      numeric: true,
+      cellClassName: "align-top",
+      render: (r) => r.row_count.toLocaleString(),
+    },
+    {
+      key: "last_run",
+      header: "Last Run",
+      cellClassName: "align-top text-muted-foreground",
+      render: (r) => (
+        <div>
+          <div>{timeAgo(r.last_run_at)}</div>
+          {isDataStale(r) && (
+            <span
+              title={`資料新鮮度：寫入的最新 ts 為 ${r.latest_data_ts} — 比 last_run_at 落後超過 2 日`}
+              className="inline-block mt-0.5 px-1 py-0.5 rounded text-[9px] bg-warning/10 text-warning border border-warning/30"
+            >
+              data stale
+            </span>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: "error",
+      header: "Error",
+      cellClassName: "align-top text-muted-foreground",
+      render: (r) => (
+        <span
+          className="block truncate max-w-[24rem]"
+          title={r.error ?? undefined}
+        >
+          {r.error ?? ""}
+        </span>
+      ),
+    },
+    {
+      key: "action",
+      header: "Action",
+      align: "right",
+      cellClassName: "align-top",
+      render: (r) =>
+        RETRYABLE_INGEST_JOBS.has(r.job_id) ? (
+          <button
+            type="button"
+            disabled={retry.isPending}
+            onClick={() => retry.mutate(r.job_id)}
+            title="Clear backoff and queue one immediate run"
+            className="px-2 py-1 rounded border border-border bg-background hover:bg-accent/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {retryingJobId === r.job_id ? "Retrying..." : "Retry now"}
+          </button>
+        ) : (
+          <span className="text-muted-foreground">-</span>
+        ),
+    },
+  ];
+
   return (
     <div className="bg-card border border-border rounded-lg p-4 space-y-3">
       <CollapsibleHeader
@@ -420,88 +525,13 @@ export function IngestHealthCard() {
           No ingest jobs have reported yet — first cron tick is pending.
         </p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-border text-[10px] text-muted-foreground uppercase tracking-wider">
-                <th className="text-left py-1.5 pr-3">Job</th>
-                <th className="text-left py-1.5 pr-3">排程</th>
-                <th className="text-left py-1.5 pr-3">Status</th>
-                <th className="text-left py-1.5 pr-3" title="過去 7 天每日結果 (UTC)，最右邊是今天">7d</th>
-                <th className="text-right py-1.5 pr-3">Rows</th>
-                <th className="text-left py-1.5 pr-3">Last Run</th>
-                <th className="text-left py-1.5">Error</th>
-                <th className="text-right py-1.5 pl-3">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/40">
-              {rows.map((r) => {
-                const { text: badgeText, cls: badgeCls } = deriveIngestBadge(r);
-                const meta = JOB_META[r.job_id];
-                return (
-                <tr key={r.job_id}>
-                  <td className="py-1.5 pr-3 align-top">
-                    <div className="font-mono">{r.job_id}</div>
-                    {meta && (
-                      <div className="text-[10px] text-muted-foreground/80 mt-0.5">
-                        {meta.description_zh}
-                      </div>
-                    )}
-                  </td>
-                  <td className="py-1.5 pr-3 text-muted-foreground align-top whitespace-nowrap">
-                    {meta?.schedule_zh ?? "—"}
-                  </td>
-                  <td className="py-1.5 pr-3 align-top">
-                    <span
-                      className={`px-1.5 py-0.5 rounded text-[10px] ${badgeCls}`}
-                    >
-                      {badgeText}
-                    </span>
-                  </td>
-                  <td className="py-1.5 pr-3 align-top">
-                    <IngestHealthSparkline jobId={r.job_id} />
-                  </td>
-                  <td className="py-1.5 pr-3 text-right tabular-nums align-top">
-                    {r.row_count.toLocaleString()}
-                  </td>
-                  <td className="py-1.5 pr-3 text-muted-foreground align-top">
-                    <div>{timeAgo(r.last_run_at)}</div>
-                    {isDataStale(r) && (
-                      <span
-                        title={`資料新鮮度：寫入的最新 ts 為 ${r.latest_data_ts} — 比 last_run_at 落後超過 2 日`}
-                        className="inline-block mt-0.5 px-1 py-0.5 rounded text-[9px] bg-warning/10 text-warning border border-warning/30"
-                      >
-                        data stale
-                      </span>
-                    )}
-                  </td>
-                  <td
-                    className="py-1.5 text-muted-foreground truncate max-w-[24rem] align-top"
-                    title={r.error ?? undefined}
-                  >
-                    {r.error ?? ""}
-                  </td>
-                  <td className="py-1.5 pl-3 text-right align-top">
-                    {RETRYABLE_INGEST_JOBS.has(r.job_id) ? (
-                      <button
-                        type="button"
-                        disabled={retry.isPending}
-                        onClick={() => retry.mutate(r.job_id)}
-                        title="Clear backoff and queue one immediate run"
-                        className="px-2 py-1 rounded border border-border bg-background hover:bg-accent/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                      >
-                        {retryingJobId === r.job_id ? "Retrying..." : "Retry now"}
-                      </button>
-                    ) : (
-                      <span className="text-muted-foreground">-</span>
-                    )}
-                  </td>
-                </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          columns={columns}
+          rows={rows}
+          rowKey={(r) => r.job_id}
+          mobileMode="scroll"
+          aria-label="Scheduled Ingest Health"
+        />
       )}
       </>)}
     </div>

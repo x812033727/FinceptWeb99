@@ -122,11 +122,14 @@ describe("FinmindUsageCard — populated state", () => {
     expect(
       await screen.findByText(/Calls \+ rows per UTC day/i),
     ).toBeInTheDocument();
-    // Top datasets table shows dataset codes
-    expect(screen.getByText("TaiwanStockPrice")).toBeInTheDocument();
+    // Top datasets table shows dataset codes. DataTable (mobileMode="cards")
+    // renders both the desktop table and the mobile card markup (one is
+    // CSS-hidden), so each code appears twice in the DOM — assert presence
+    // via getAllByText rather than the single-match getByText.
+    expect(screen.getAllByText("TaiwanStockPrice").length).toBeGreaterThan(0);
     expect(
-      screen.getByText("TaiwanStockMarginPurchaseShortSale"),
-    ).toBeInTheDocument();
+      screen.getAllByText("TaiwanStockMarginPurchaseShortSale").length,
+    ).toBeGreaterThan(0);
   });
 
   it("formats large numbers in the subtitle (K / M)", async () => {

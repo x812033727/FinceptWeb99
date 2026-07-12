@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Loading } from "./_atoms";
 import { fetchOptions, fmt, fmtK } from "./_shared";
 import type { OptionRow } from "./_shared";
+import { DataTable, type DataTableColumn } from "../ui/table";
 
 function IVSurface({ options, optionType }: { options: OptionRow[]; optionType: "call" | "put" }) {
   const filtered = options.filter(
@@ -117,6 +118,67 @@ export function OptionsPanel({ symbol }: { symbol: string }) {
   // bid/ask spreads; the yfinance fallback (free-tier default) doesn't.
   const isYFinanceChain = options[0]?.data_source === "yfinance";
 
+  const rows = filtered.slice(0, 80);
+  const columns: DataTableColumn<OptionRow>[] = [
+    {
+      key: "expiration_date",
+      header: "Expiry",
+      render: (o) => <span className="text-muted-foreground">{o.expiration_date ?? "—"}</span>,
+    },
+    {
+      key: "strike",
+      header: "Strike",
+      numeric: true,
+      render: (o) => <span className="font-medium text-foreground">{fmt(o.strike)}</span>,
+    },
+    {
+      key: "bid",
+      header: "Bid",
+      numeric: true,
+      render: (o) => <span className="text-foreground">{fmt(o.bid)}</span>,
+    },
+    {
+      key: "ask",
+      header: "Ask",
+      numeric: true,
+      render: (o) => <span className="text-foreground">{fmt(o.ask)}</span>,
+    },
+    {
+      key: "last_price",
+      header: "Last",
+      numeric: true,
+      render: (o) => <span className="text-foreground">{fmt(o.last_price)}</span>,
+    },
+    {
+      key: "volume",
+      header: "Volume",
+      numeric: true,
+      render: (o) => <span className="text-muted-foreground">{o.volume ? fmtK(o.volume) : "—"}</span>,
+    },
+    {
+      key: "open_interest",
+      header: "OI",
+      numeric: true,
+      render: (o) => <span className="text-muted-foreground">{o.open_interest ? fmtK(o.open_interest) : "—"}</span>,
+    },
+    {
+      key: "implied_volatility",
+      header: "IV",
+      numeric: true,
+      render: (o) => (
+        <span className="text-muted-foreground">
+          {o.implied_volatility ? `${(o.implied_volatility * 100).toFixed(1)}%` : "—"}
+        </span>
+      ),
+    },
+    {
+      key: "delta",
+      header: "Delta",
+      numeric: true,
+      render: (o) => <span className="text-muted-foreground">{fmt(o.delta, 3)}</span>,
+    },
+  ];
+
   return (
     <div className="p-4 space-y-4">
       {isYFinanceChain && (
@@ -168,47 +230,20 @@ export function OptionsPanel({ symbol }: { symbol: string }) {
       {view === "surface" && <IVSurface options={options} optionType={optionType} />}
 
       {/* table */}
-      {view === "table" && <div className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="border-b border-border text-muted-foreground">
-              <th className="text-left py-2 pr-3 font-medium">Expiry</th>
-              <th className="text-right py-2 px-2 font-medium">Strike</th>
-              <th className="text-right py-2 px-2 font-medium">Bid</th>
-              <th className="text-right py-2 px-2 font-medium">Ask</th>
-              <th className="text-right py-2 px-2 font-medium">Last</th>
-              <th className="text-right py-2 px-2 font-medium">Volume</th>
-              <th className="text-right py-2 px-2 font-medium">OI</th>
-              <th className="text-right py-2 px-2 font-medium">IV</th>
-              <th className="text-right py-2 px-2 font-medium">Delta</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.length === 0 && (
-              <tr>
-                <td colSpan={9} className="py-6 text-center text-muted-foreground text-xs">
-                  No {optionType} contracts in this chain.
-                </td>
-              </tr>
-            )}
-            {filtered.slice(0, 80).map((o, i) => (
-              <tr key={i} className="border-b border-border/30 hover:bg-accent/5">
-                <td className="py-1.5 pr-3 text-muted-foreground">{o.expiration_date ?? "—"}</td>
-                <td className="text-right py-1.5 px-2 font-medium text-foreground">{fmt(o.strike)}</td>
-                <td className="text-right py-1.5 px-2 text-foreground">{fmt(o.bid)}</td>
-                <td className="text-right py-1.5 px-2 text-foreground">{fmt(o.ask)}</td>
-                <td className="text-right py-1.5 px-2 text-foreground">{fmt(o.last_price)}</td>
-                <td className="text-right py-1.5 px-2 text-muted-foreground">{o.volume ? fmtK(o.volume) : "—"}</td>
-                <td className="text-right py-1.5 px-2 text-muted-foreground">{o.open_interest ? fmtK(o.open_interest) : "—"}</td>
-                <td className="text-right py-1.5 px-2 text-muted-foreground">
-                  {o.implied_volatility ? `${(o.implied_volatility * 100).toFixed(1)}%` : "—"}
-                </td>
-                <td className="text-right py-1.5 px-2 text-muted-foreground">{fmt(o.delta, 3)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>}
+      {view === "table" && (
+        <DataTable
+          columns={columns}
+          rows={rows}
+          rowKey={(_o, i) => i}
+          mobileMode="scroll"
+          aria-label="Options chain"
+          empty={
+            <div className="py-6 text-center text-muted-foreground text-xs">
+              No {optionType} contracts in this chain.
+            </div>
+          }
+        />
+      )}
     </div>
   );
 }

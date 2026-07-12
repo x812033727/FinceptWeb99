@@ -5,6 +5,7 @@ import api from "@/lib/api";
 import { formatPct } from "@/lib/formatters";
 import { CollapsibleHeader } from "@/components/Collapsible";
 import { useCollapsible } from "@/hooks/useCollapsible";
+import { DataTable, type DataTableColumn } from "../ui/table";
 
 /**
  * Empirical signal-quality dashboard. PR #250 shipped the backend
@@ -113,6 +114,47 @@ export function SignalQualityCard() {
     .filter((r) => r.n_total > 0)
     .sort((a, b) => categoricalSpread(b) - categoricalSpread(a));
 
+  const numericColumns: DataTableColumn<NumericRow>[] = [
+    {
+      key: "label",
+      header: t("signal_quality.col_signal"),
+      render: (row) => <span className="font-mono text-foreground/90">{row.label}</span>,
+    },
+    {
+      key: "n",
+      header: "n",
+      numeric: true,
+    },
+    {
+      key: "pearson_r",
+      header: t("signal_quality.col_pearson"),
+      numeric: true,
+      render: (row) => (
+        <span className={pearsonColor(row.pearson_r)}>
+          {row.pearson_r === null ? "n/a" : fmtNum(row.pearson_r, 3)}
+        </span>
+      ),
+    },
+    {
+      key: "sign_match_pct",
+      header: t("signal_quality.col_sign_match"),
+      numeric: true,
+      render: (row) => (
+        <span className="text-muted-foreground">
+          {row.sign_match_pct === null
+            ? "n/a"
+            : `${row.sign_match_pct.toFixed(1)}%`}
+        </span>
+      ),
+    },
+    {
+      key: "mean_d5_return",
+      header: t("signal_quality.col_mean_d5"),
+      numeric: true,
+      render: (row) => formatPct(row.mean_d5_return),
+    },
+  ];
+
   return (
     <div className="bg-card border border-border rounded-lg p-4 space-y-3">
       <CollapsibleHeader
@@ -189,34 +231,13 @@ export function SignalQualityCard() {
                   <p className="text-[10px] text-muted-foreground uppercase tracking-wider">
                     {t("signal_quality.numeric_title")}
                   </p>
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="text-muted-foreground border-b border-border/50">
-                        <th className="text-left py-1 font-medium">{t("signal_quality.col_signal")}</th>
-                        <th className="text-right py-1 font-medium">n</th>
-                        <th className="text-right py-1 font-medium">{t("signal_quality.col_pearson")}</th>
-                        <th className="text-right py-1 font-medium">{t("signal_quality.col_sign_match")}</th>
-                        <th className="text-right py-1 font-medium">{t("signal_quality.col_mean_d5")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {numericSorted.map((row) => (
-                        <tr key={row.path} className="border-b border-border/30">
-                          <td className="py-1 font-mono text-foreground/90">{row.label}</td>
-                          <td className="py-1 text-right tabular-nums">{row.n}</td>
-                          <td className={`py-1 text-right tabular-nums ${pearsonColor(row.pearson_r)}`}>
-                            {row.pearson_r === null ? "n/a" : fmtNum(row.pearson_r, 3)}
-                          </td>
-                          <td className="py-1 text-right tabular-nums text-muted-foreground">
-                            {row.sign_match_pct === null
-                              ? "n/a"
-                              : `${row.sign_match_pct.toFixed(1)}%`}
-                          </td>
-                          <td className="py-1 text-right tabular-nums">{formatPct(row.mean_d5_return)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <DataTable
+                    columns={numericColumns}
+                    rows={numericSorted}
+                    rowKey={(row) => row.path}
+                    mobileMode="scroll"
+                    aria-label={t("signal_quality.numeric_title")}
+                  />
                   <p className="text-[10px] text-muted-foreground/80">
                     {t("signal_quality.numeric_legend")}
                   </p>

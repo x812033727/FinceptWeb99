@@ -16,6 +16,7 @@ import {
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
 import { Num, DeltaText } from "@/components/Num";
+import { DataTable, type DataTableColumn } from "@/components/ui/table";
 import {
   CompareResponse, MAX_COMPARE, RunListResponse, toChartRows,
 } from "./compare";
@@ -68,7 +69,8 @@ export default function BacktestHistoryPanel() {
   const compare = compareIds != null ? compareQuery.data : undefined;
   const chartRows = compare ? toChartRows(compare) : [];
 
-  const metricRows: { key: string; label: string; render: (m: Record<string, number | undefined>) => React.ReactNode }[] = [
+  type MetricRow = { key: string; label: string; render: (m: Record<string, number | undefined>) => React.ReactNode };
+  const metricRows: MetricRow[] = [
     {
       key: "total_return_pct", label: t("analytics.backtest.total_return"),
       render: m => <DeltaText value={m.total_return_pct} percent />,
@@ -99,6 +101,87 @@ export default function BacktestHistoryPanel() {
     },
   ];
 
+  type RunRow = (typeof items)[number];
+  const runColumns: DataTableColumn<RunRow>[] = [
+    {
+      key: "select",
+      header: "",
+      headerClassName: "w-8",
+      render: run => (
+        <input
+          type="checkbox"
+          aria-label={`select-${run.id}`}
+          checked={selected.includes(run.id)}
+          onChange={() => toggle(run.id)}
+        />
+      ),
+    },
+    {
+      key: "name",
+      header: t("analytics.backtest.run_name"),
+      cellClassName: "text-foreground",
+      render: run => runLabel(run),
+    },
+    {
+      key: "strategy",
+      header: t("analytics.backtest.strategy"),
+      cellClassName: "text-muted-foreground",
+      render: run => strategyLabel(run.strategy),
+    },
+    {
+      key: "run_date",
+      header: t("analytics.backtest.run_date"),
+      cellClassName: "text-muted-foreground font-mono tabular-nums",
+      render: run => run.created_at.slice(0, 10),
+    },
+    {
+      key: "total_return",
+      header: t("analytics.backtest.total_return"),
+      numeric: true,
+      render: run => <DeltaText value={run.metrics.total_return_pct} percent />,
+    },
+    {
+      key: "actions",
+      header: "",
+      align: "right",
+      headerClassName: "w-16",
+      render: run => (
+        <button
+          type="button"
+          onClick={() => {
+            if (window.confirm(t("analytics.backtest.delete_confirm"))) {
+              deleteRun.mutate(run.id);
+            }
+          }}
+          className="text-xs text-negative hover:underline"
+        >
+          {t("common.delete")}
+        </button>
+      ),
+    },
+  ];
+
+  const metricColumns: DataTableColumn<MetricRow>[] = compare
+    ? [
+        {
+          key: "metric",
+          header: t("analytics.backtest.metric"),
+          render: row => <span className="text-muted-foreground">{row.label}</span>,
+        },
+        ...compare.runs.map((run, i) => ({
+          key: run.id,
+          header: (
+            <>
+              <span style={{ color: SERIES_COLORS[i % SERIES_COLORS.length] }}>●</span>{" "}
+              {runLabel(run)}
+            </>
+          ),
+          numeric: true,
+          render: (row: MetricRow) => row.render(run.metrics),
+        })),
+      ]
+    : [];
+
   return (
     <div className="bg-card border border-border rounded-lg p-5 space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -122,55 +205,13 @@ export default function BacktestHistoryPanel() {
       )}
 
       {items.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-xs text-muted-foreground">
-                <th className="w-8"></th>
-                <th className="text-left pb-2 font-normal">{t("analytics.backtest.run_name")}</th>
-                <th className="text-left pb-2 font-normal">{t("analytics.backtest.strategy")}</th>
-                <th className="text-left pb-2 font-normal">{t("analytics.backtest.run_date")}</th>
-                <th className="text-right pb-2 font-normal">{t("analytics.backtest.total_return")}</th>
-                <th className="w-16"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map(run => (
-                <tr key={run.id} className="border-t border-border/30">
-                  <td className="py-2">
-                    <input
-                      type="checkbox"
-                      aria-label={`select-${run.id}`}
-                      checked={selected.includes(run.id)}
-                      onChange={() => toggle(run.id)}
-                    />
-                  </td>
-                  <td className="py-2 text-foreground">{runLabel(run)}</td>
-                  <td className="py-2 text-muted-foreground">{strategyLabel(run.strategy)}</td>
-                  <td className="py-2 text-muted-foreground font-mono tabular-nums">
-                    {run.created_at.slice(0, 10)}
-                  </td>
-                  <td className="py-2 text-right">
-                    <DeltaText value={run.metrics.total_return_pct} percent />
-                  </td>
-                  <td className="py-2 text-right">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (window.confirm(t("analytics.backtest.delete_confirm"))) {
-                          deleteRun.mutate(run.id);
-                        }
-                      }}
-                      className="text-xs text-negative hover:underline"
-                    >
-                      {t("common.delete")}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          columns={runColumns}
+          rows={items}
+          rowKey={run => run.id}
+          mobileMode="scroll"
+          aria-label={t("analytics.backtest.history")}
+        />
       )}
 
       {compareIds != null && compareQuery.isLoading && (
@@ -225,33 +266,13 @@ export default function BacktestHistoryPanel() {
             </ResponsiveContainer>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-xs text-muted-foreground">
-                  <th className="text-left pb-2 font-normal">{t("analytics.backtest.metric")}</th>
-                  {compare.runs.map((run, i) => (
-                    <th key={run.id} className="text-right pb-2 font-normal">
-                      <span style={{ color: SERIES_COLORS[i % SERIES_COLORS.length] }}>●</span>{" "}
-                      {runLabel(run)}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {metricRows.map(row => (
-                  <tr key={row.key} className="border-t border-border/30">
-                    <td className="py-1.5 text-muted-foreground">{row.label}</td>
-                    {compare.runs.map(run => (
-                      <td key={run.id} className="py-1.5 text-right">
-                        {row.render(run.metrics)}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            columns={metricColumns}
+            rows={metricRows}
+            rowKey={row => row.key}
+            mobileMode="scroll"
+            aria-label={t("analytics.backtest.metric")}
+          />
         </div>
       )}
     </div>

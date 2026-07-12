@@ -101,6 +101,14 @@ def _tdcc_client_factory() -> Any:
     return TdccClient()
 
 
+def _fred_client_factory() -> Any:
+    """Late-import factory for the FRED macro (bond yield / crude oil)
+    connector."""
+    from finmind.ingest.selfcrawl.fred import FredClient
+
+    return FredClient()
+
+
 def _binance_client_factory() -> Any:
     """Late-import factory for the crypto OHLCV connector — keeps the
     selfcrawl package import-light when crypto deps aren't needed."""
@@ -122,6 +130,7 @@ _REGISTRY: dict[str, ConnectorFactory] = {
     "taifex":    _taifex_client_factory,
     "mops":      _mops_client_factory,
     "tdcc":      _tdcc_client_factory,
+    "fred":      _fred_client_factory,
     "binance":   _binance_client_factory,
     "coingecko": _coingecko_client_factory,
 }
@@ -216,6 +225,12 @@ def _tdcc_supported_datasets() -> set[str]:
     return set(_s())
 
 
+def _fred_supported_datasets() -> set[str]:
+    from finmind.ingest.selfcrawl.fred import supported_datasets as _s
+
+    return set(_s())
+
+
 def _binance_supported_datasets() -> set[str]:
     from finmind.ingest.selfcrawl.binance import supported_datasets as _s
 
@@ -242,6 +257,7 @@ _SUPPORTED_DATASETS_PROVIDERS: dict[str, SupportedDatasetsProvider] = {
     "twse":      _twse_supported_datasets,
     "taifex":    _taifex_supported_datasets,
     "tdcc":      _tdcc_supported_datasets,
+    "fred":      _fred_supported_datasets,
     "mops":      _mops_supported_datasets,
     "binance":   _binance_supported_datasets,
     "coingecko": _coingecko_supported_datasets,

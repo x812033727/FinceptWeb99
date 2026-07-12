@@ -79,6 +79,62 @@ async def _yfinance_fallback(series_id: str) -> list[dict[str, Any]]:
     return _bars_to_observations(bars, scale)
 
 
+# Keyless public CSV endpoint — no API key, no rate-limit sign-up.
+# Used by the FinMind-clone macro self-crawl (fred source) which must
+# work on any deployment without the operator provisioning a FRED key.
+_FREDGRAPH_CSV = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+
+
+async def get_series_csv(
+    series_id: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch one FRED series via the KEYLESS fredgraph CSV endpoint.
+
+    Returns ``[{date: ISO, value: float}, ...]``, skipping FRED's ``.``
+    missing-observation marker (holidays / no-print days). Empty list on
+    any HTTP / parse failure — the macro self-crawl treats that as
+    "skip this series this run" rather than erroring the whole chunk.
+
+    Unlike :func:`get_series` this needs no API key, so it's the path
+    the self-crawl connectors use for cutover-off-FinMind."""
+    import csv
+    import io
+
+    params: dict[str, Any] = {"id": series_id}
+    if start_date:
+        params["cosd"] = start_date
+    if end_date:
+        params["coed"] = end_date
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as c:
+            r = await c.get(_FREDGRAPH_CSV, params=params)
+            r.raise_for_status()
+    except Exception as exc:
+        log.warning("fred.csv.fetch_failed", extra={"series": series_id, "error": str(exc)})
+        return []
+
+    out: list[dict[str, Any]] = []
+    reader = csv.reader(io.StringIO(r.text))
+    rows = list(reader)
+    if len(rows) < 2:
+        return []
+    # Header: observation_date,<SERIES_ID>. Value column is index 1.
+    for line in rows[1:]:
+        if len(line) < 2:
+            continue
+        raw_date, raw_val = line[0].strip(), line[1].strip()
+        if not raw_date or raw_val in ("", "."):
+            continue
+        try:
+            value = float(raw_val)
+        except ValueError:
+            continue
+        out.append({"date": raw_date, "value": value})
+    return out
+
+
 async def get_series(series_id: str, start_date: str | None = None, end_date: str | None = None) -> list[dict[str, Any]]:
     from services.market_key_service import resolve_key
     api_key = await resolve_key("fred")

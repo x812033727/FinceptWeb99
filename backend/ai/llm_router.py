@@ -116,7 +116,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
     # routes by provider name; the model string is a hint the gateway's
     # CLI may honor.
     "claude_sub": ProviderSpec(
-        "gateway", "_gateway_stream", lambda: "claude-sonnet-4-5-20250929",
+        "gateway", "_gateway_stream", lambda: "claude-sonnet-5",
     ),
     "codex_sub": ProviderSpec(
         "gateway", "_gateway_stream", lambda: "gpt-5-codex",

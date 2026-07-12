@@ -70,7 +70,7 @@ async def test_gateway_stream_success_yields_delta_and_usage():
             _install_client(_FakeClient(response=resp)):
         events = [
             ev async for ev in lr._gateway_stream(
-                [{"role": "user", "content": "hi"}], "claude-sonnet-4-5-20250929",
+                [{"role": "user", "content": "hi"}], "claude-sonnet-5",
                 provider="claude_sub", max_tokens=100, temperature=0.3,
             )
         ]

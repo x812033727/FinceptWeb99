@@ -327,7 +327,7 @@ _AGENTS: dict[str, AgentSpec] = {
             "Be concise; favour a tool call over a guess."
         ),
         default_provider="claude_agent",
-        default_model="claude-sonnet-4-5-20250929",
+        default_model="claude-sonnet-5",
     ),
 
     # ── Value investing — Buffett / Graham / Munger ───────────────

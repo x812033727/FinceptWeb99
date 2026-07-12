@@ -17,6 +17,8 @@ from api.portfolio.schemas import (
     OptimiseRequest,
     OptimiseResponse,
     PortfolioRiskResponse,
+    RebalancePlanRequest,
+    RebalancePlanResponse,
 )
 from dependencies import get_current_user
 from db.session import get_db
@@ -131,6 +133,38 @@ async def optimise(request: Request, portfolio_id: str, body: OptimiseRequest, u
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Optimisation error: {e}")
+
+
+@router.post("/{portfolio_id}/rebalance-plan", response_model=RebalancePlanResponse)
+@limiter.limit("5/minute")
+async def rebalance_plan(request: Request, portfolio_id: str, body: RebalancePlanRequest, user: CurrentUser, db: DB):
+    """Rebalance preview (feature C5) — compares current weights against a
+    target (Markowitz optimise / equal weight / custom) and returns a
+    minimal trade list with lot rounding (TW 1000-share board lots),
+    fee estimates and dust-trade suppression. Preview ONLY — nothing is
+    executed. Holdings the target can't cover are frozen, not sold."""
+    from services.rebalance_service import build_rebalance_plan
+    try:
+        result = await build_rebalance_plan(
+            portfolio_id,
+            user["id"],
+            db,
+            target=body.target,
+            target_risk=body.target_risk,
+            max_weight=body.max_weight,
+            custom_weights=body.custom_weights,
+            fee_bps=body.fee_bps,
+            min_trade_pct=body.min_trade_pct,
+            allow_odd_lot=body.allow_odd_lot,
+        )
+        return RebalancePlanResponse(**result)
+    except ValueError as e:
+        msg = str(e)
+        if "not found" in msg.lower():
+            raise HTTPException(status_code=404, detail=msg)
+        raise HTTPException(status_code=400, detail=msg)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Rebalance error: {e}")
 
 
 @router.get("/{portfolio_id}/risk", response_model=PortfolioRiskResponse)

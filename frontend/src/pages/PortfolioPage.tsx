@@ -17,6 +17,7 @@ import { ExpertEvaluationCard } from "@/components/portfolio/ExpertEvaluationCar
 import { PerformanceChart } from "@/components/portfolio/PerformanceChart";
 import { PortfolioAIReviewCard } from "@/components/portfolio/PortfolioAIReviewCard";
 import { RiskDashboardPanel } from "@/components/portfolio/RiskDashboardPanel";
+import RebalancePanel from "@/components/portfolio/RebalancePanel";
 import { TransactionHistory } from "@/components/portfolio/TransactionHistory";
 import { exportCSV } from "@/components/portfolio/_shared";
 
@@ -132,7 +133,7 @@ function PortfolioDetail({
   optimiseResult, optimisePending, onRunOptimise,
 }: any) {
   const { t } = useTranslation();
-  const [detailTab, setDetailTab] = useState<"overview" | "risk" | "transactions">("overview");
+  const [detailTab, setDetailTab] = useState<"overview" | "risk" | "rebalance" | "transactions">("overview");
 
   if (!detail) return <div className="text-muted-foreground text-sm">{isFetching ? t("common.loading") : ""}</div>;
 
@@ -182,7 +183,7 @@ function PortfolioDetail({
 
       {/* Tab selector */}
       <div className="flex gap-1 bg-secondary/30 p-1 rounded-lg w-fit">
-        {(["overview", "risk", "transactions"] as const).map((tab) => (
+        {(["overview", "risk", "rebalance", "transactions"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setDetailTab(tab)}
@@ -196,7 +197,9 @@ function PortfolioDetail({
               ? t("portfolio.tabs.holdings")
               : tab === "risk"
                 ? t("portfolio.tabs.risk")
-                : t("portfolio.tabs.transactions")}
+                : tab === "rebalance"
+                  ? t("portfolio.tabs.rebalance")
+                  : t("portfolio.tabs.transactions")}
           </button>
         ))}
       </div>
@@ -308,6 +311,10 @@ function PortfolioDetail({
         </button>
       </div>
         </>
+      )}
+
+      {detailTab === "rebalance" && (
+        <RebalancePanel portfolioId={portfolioId} />
       )}
 
       {detailTab === "risk" && (

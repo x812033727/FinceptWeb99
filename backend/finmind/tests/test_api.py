@@ -57,7 +57,10 @@ async def test_list_datasets_returns_full_catalog(client, finmind_session):
     resp = await client.get("/api/finmind/datasets")
     assert resp.status_code == 200
     body = resp.json()
-    assert len(body) == 80
+    # Compare against the live catalog size rather than a hardcoded
+    # number so adding macro/crypto datasets doesn't leave this stale.
+    from finmind.dataset_catalog import all_entries
+    assert len(body) == len(list(all_entries()))
     # Spot-check a known dataset's shape.
     by_code = {row["dataset_code"]: row for row in body}
     assert by_code["TaiwanStockPrice"]["local_table"] == "ohlcv_daily"
@@ -73,7 +76,8 @@ async def test_public_catalog_returns_slim_shape(client, finmind_session):
     resp = await client.get("/api/finmind/catalog")
     assert resp.status_code == 200
     body = resp.json()
-    assert len(body) == 80
+    from finmind.dataset_catalog import all_entries
+    assert len(body) == len(list(all_entries()))
     by_code = {row["dataset_code"]: row for row in body}
     sample = by_code["TaiwanStockPrice"]
     # Operator-only fields must be absent.
@@ -265,6 +269,51 @@ async def test_admin_update_rejects_unimplemented_source(
         headers={"X-Finmind-Admin-Key": "test-admin-secret"},
     )
     assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_admin_update_rejects_uncovered_dataset_on_real_source(
+    client, finmind_session, monkeypatch
+):
+    """Per-dataset gatekeeper parity with the main-app proxy: source
+    'twse' has a real connector but no futures handler, so flipping
+    TaiwanFuturesDaily → twse must 400 (would otherwise NotImplementedError
+    at ingest time), even though the coarse is_source_implemented(twse)
+    is True."""
+    monkeypatch.setenv("FINMIND_ADMIN_API_KEY", "test-admin-secret")
+
+    await seed_dataset_sources()
+
+    resp = await client.patch(
+        "/api/finmind/admin/datasets/TaiwanFuturesDaily",
+        json={"active_source": "twse"},
+        headers={"X-Finmind-Admin-Key": "test-admin-secret"},
+    )
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "no handler for dataset" in detail
+    assert "TaiwanFuturesDaily" in detail
+
+
+@pytest.mark.asyncio
+async def test_admin_update_allows_fred_macro_cutover(
+    client, finmind_session, monkeypatch
+):
+    """The clone admin allowlist is now registry-derived (known_sources),
+    so flipping a macro dataset to its real fred connector succeeds where
+    the old hardcoded {finmind,twse,tpex,taifex,mops,tdcc} literal would
+    have 400'd before the coverage check."""
+    monkeypatch.setenv("FINMIND_ADMIN_API_KEY", "test-admin-secret")
+
+    await seed_dataset_sources()
+
+    resp = await client.patch(
+        "/api/finmind/admin/datasets/GovernmentBondsYield",
+        json={"active_source": "fred"},
+        headers={"X-Finmind-Admin-Key": "test-admin-secret"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["active_source"] == "fred"
 
 
 @pytest.mark.asyncio

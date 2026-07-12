@@ -13,9 +13,22 @@ import pytest
 from finmind.ingest.selfcrawl import (
     _SUPPORTED_DATASETS_PROVIDERS,
     covers_dataset,
+    known_sources,
     register_supported_datasets,
     supported_datasets,
 )
+
+
+def test_known_sources_covers_registry_plus_finmind():
+    """The flip-endpoint allowlist is derived from this. It must include
+    finmind + every registered connector — crucially fred/binance/
+    coingecko, which the old hardcoded literal omitted (blocking macro +
+    crypto cutover)."""
+    ks = known_sources()
+    assert "finmind" in ks
+    for src in ("twse", "tpex", "taifex", "mops", "tdcc", "fred",
+                "binance", "coingecko"):
+        assert src in ks, f"{src} missing from known_sources()"
 
 
 def test_finmind_covers_every_catalog_dataset():

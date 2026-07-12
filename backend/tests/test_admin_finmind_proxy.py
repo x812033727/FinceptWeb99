@@ -671,6 +671,32 @@ async def test_proxy_patch_phase_a_to_b_switch(
 
 
 @pytest.mark.asyncio
+async def test_proxy_patch_allows_fred_cutover_for_macro(
+    client, db_session, finmind_db_override,
+):
+    """Regression: the flip allowlist used to be a hardcoded literal
+    missing fred/binance/coingecko, so flipping a macro dataset to its
+    real fred connector 400'd with 'active_source must be one of ...'
+    before the covers_dataset check ever ran. Now the allowlist is
+    derived from the connector registry (known_sources), so the macro
+    cutover the G2 plan needs actually goes through."""
+    SessionLocal = finmind_db_override
+    await _seed_catalog(SessionLocal)
+
+    email = "admin_fm_fred@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.patch(
+        "/api/admin/finmind/datasets/GovernmentBondsYield",
+        json={"active_source": "fred"},
+        headers=_auth(token),
+    )
+    assert r.status_code == 200
+    assert r.json()["active_source"] == "fred"
+
+
+@pytest.mark.asyncio
 async def test_proxy_patch_rejects_uncovered_dataset_on_real_source(
     client, db_session, finmind_db_override,
 ):

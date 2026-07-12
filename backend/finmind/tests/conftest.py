@@ -94,11 +94,12 @@ def _override_finmind_session_factory(finmind_engine, monkeypatch):
     # changing it on `finmind.db.session` doesn't propagate to those
     # scripts — patch each one explicitly.
     import finmind.scripts.check as _check
+    import finmind.scripts.cutover as _cutover
     import finmind.scripts.diagnostic as _diagnostic
     import finmind.scripts.init_db as _init_db
     import finmind.scripts.status as _status
 
-    for mod in (_init_db, _status, _check, _diagnostic):
+    for mod in (_init_db, _status, _check, _diagnostic, _cutover):
         monkeypatch.setattr(mod, "FinmindAsyncSessionLocal", SessionLocal)
         monkeypatch.setattr(mod, "finmind_engine", finmind_engine)
     yield

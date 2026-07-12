@@ -158,6 +158,19 @@ def is_source_implemented(source: str) -> bool:
     return not isinstance(instance, _NotWiredYetClient)
 
 
+def known_sources() -> set[str]:
+    """Every source string the runner can route — `finmind` plus every
+    registered self-crawl connector (real or stub).
+
+    The AdminPage flip endpoints use this as the outer allowlist so the
+    valid-source set can't silently drift from the registry the way a
+    hand-maintained literal did (it was missing fred/binance/coingecko,
+    blocking macro + crypto cutover). Membership here only means "known
+    routing target"; `is_source_implemented`/`covers_dataset` still gate
+    whether the flip is actually safe for a given dataset."""
+    return {"finmind", *_REGISTRY}
+
+
 def register_connector(source: str, factory: ConnectorFactory) -> None:
     """Hot-pluggable registration — the eventual real implementations
     in `selfcrawl/{twse,tpex,...}.py` call this at import time so

@@ -1,0 +1,32 @@
+# FinMind clone — Taiwan daily-ingest cron (host crontab snippet).
+#
+# Phase A' runs the self-crawl ingest directly against TWSE/MOPS/TAIFEX/
+# TDCC/FRED. `run_due` is idempotent + resume-safe: it only fetches
+# datasets whose freshness budget has lapsed (dispatcher.is_due), so
+# running it often is cheap and a missed slot self-heals on the next tick.
+#
+# INSTALL (host, one-time — this file is committed as reference, NOT
+# auto-installed):
+#
+#   docker compose exec backend true   # sanity: container up
+#   crontab -l > /tmp/cur ; cat backend/finmind/deploy/finmind-cron >> /tmp/cur ; crontab /tmp/cur
+#
+# All times are the HOST timezone. The container runs UTC internally but
+# `run_due` keys off data freshness, not wall-clock, so the schedule below
+# is a "poke often around the TWSE publish times" pattern, not a hard gate.
+#
+# Rate limiting: every self-crawl request goes through the shared
+# ~1 req/s Redis token bucket (data/tw/twse_connector), so overlapping
+# ticks + any backfill automatically serialise against TWSE. Safe to
+# leave running alongside a deep_backfill.
+
+# ── Daily incremental (weekday, staggered around publish times) ──
+# 15:10 — price/volume settle after the 13:30 close.
+10 15 * * 1-5  cd /opt/finceptweb99 && docker compose exec -T backend python -m finmind.scripts.run_due --universe-from-tw-stock-info >> /var/log/finmind-run-due.log 2>&1
+# 17:30 — institutional / margin / securities-lending land late afternoon.
+30 17 * * 1-5  cd /opt/finceptweb99 && docker compose exec -T backend python -m finmind.scripts.run_due --universe-from-tw-stock-info >> /var/log/finmind-run-due.log 2>&1
+# 22:00 — derivatives (TAIFEX after-hours) + any weekly/monthly rollups.
+0 22 * * 1-5   cd /opt/finceptweb99 && docker compose exec -T backend python -m finmind.scripts.run_due --universe-from-tw-stock-info >> /var/log/finmind-run-due.log 2>&1
+
+# ── Macro (FRED) — publishes on US schedule; a nightly poke is plenty ──
+30 6 * * *     cd /opt/finceptweb99 && docker compose exec -T backend python -m finmind.scripts.run_due --skip-per-symbol >> /var/log/finmind-run-due.log 2>&1

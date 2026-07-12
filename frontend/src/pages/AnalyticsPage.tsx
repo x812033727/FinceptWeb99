@@ -1,12 +1,13 @@
 import { useState, FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
+import BacktestHistoryPanel from "@/components/analytics/BacktestHistoryPanel";
 
 type Tab = "dcf" | "var" | "backtest";
 
@@ -282,6 +283,7 @@ const FALLBACK_STRATEGIES: StrategyInfo[] = [
 
 function BacktestPanel() {
   const { t } = useTranslation();
+  const qc = useQueryClient();
   const [symbols, setSymbols] = useState("AAPL");
   const [markets, setMarkets] = useState("US");
   const [strategy, setStrategy] = useState("sma_crossover");
@@ -298,6 +300,9 @@ function BacktestPanel() {
   const [slippageBps, setSlippageBps] = useState("");
   const [commissionBps, setCommissionBps] = useState("");
   const [allowShort, setAllowShort] = useState(false);
+  // C3 persistence — off by default.
+  const [saveRun, setSaveRun] = useState(false);
+  const [runName, setRunName] = useState("");
 
   const strategiesQuery = useQuery({
     queryKey: ["backtest-strategies"],
@@ -309,6 +314,10 @@ function BacktestPanel() {
 
   const run = useMutation({
     mutationFn: (body: unknown) => api.post("/analytics/backtest", body).then(r => r.data),
+    onSuccess: (data) => {
+      // A persisted run must show up in the 歷史回測 list right away.
+      if (data?.run_id) qc.invalidateQueries({ queryKey: ["backtest-runs"] });
+    },
   });
 
   function strategyLabel(s: StrategyInfo): string {
@@ -339,6 +348,10 @@ function BacktestPanel() {
     if (slippageBps)   body.slippage_bps = +slippageBps;
     if (commissionBps) body.commission_bps = +commissionBps;
     if (allowShort)    body.allow_short = true;
+    if (saveRun) {
+      body.save = true;
+      if (runName.trim()) body.name = runName.trim().slice(0, 120);
+    }
     run.mutate(body);
   }
 
@@ -399,10 +412,28 @@ function BacktestPanel() {
             </div>
           )}
 
+          <div className="flex items-center gap-3 flex-wrap">
+            <label className="flex items-center gap-2 text-xs text-foreground whitespace-nowrap">
+              <input type="checkbox" checked={saveRun} onChange={e => setSaveRun(e.target.checked)} />
+              {t("analytics.backtest.save_run")}
+            </label>
+            {saveRun && (
+              <input
+                className={`${inputCls} flex-1 min-w-40`}
+                maxLength={120}
+                value={runName}
+                onChange={e => setRunName(e.target.value)}
+                placeholder={t("analytics.backtest.run_name_placeholder")}
+                aria-label={t("analytics.backtest.run_name")}
+              />
+            )}
+          </div>
+
           <button type="submit" disabled={run.isPending} className="w-full py-2 bg-primary text-primary-foreground text-sm rounded hover:opacity-90 disabled:opacity-50">
             {run.isPending ? t("analytics.backtest.running") : t("analytics.backtest.run")}
           </button>
           {run.isError && <p className="text-negative text-xs">{(run.error as any)?.response?.data?.detail}</p>}
+          {run.data?.run_id && <p className="text-positive text-xs">{t("analytics.backtest.saved")}</p>}
         </form>
       </Card>
 
@@ -456,6 +487,8 @@ function BacktestPanel() {
         </>
       )}
       {r?.status === "failed" && <p className="text-negative text-sm">{r.error}</p>}
+
+      <BacktestHistoryPanel />
     </div>
   );
 }

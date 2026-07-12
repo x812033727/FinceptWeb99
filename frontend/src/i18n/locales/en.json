@@ -652,7 +652,20 @@
       "max_drawdown": "Max Drawdown",
       "win_rate": "Win Rate",
       "trades": "Trades",
-      "equity_curve": "Equity Curve"
+      "equity_curve": "Equity Curve",
+      "save_run": "Save this run",
+      "run_name": "Run name",
+      "run_name_placeholder": "Run name (optional)",
+      "saved": "Saved to backtest history",
+      "history": "Saved Backtests",
+      "history_empty": "No saved runs yet — tick \"Save this run\" before running a backtest.",
+      "run_date": "Date",
+      "compare": "Compare",
+      "compare_hint": "Select 2–4 runs",
+      "normalized_equity": "Normalized equity (each run starts at 100)",
+      "metric": "Metric",
+      "unnamed": "(unnamed)",
+      "delete_confirm": "Delete this saved backtest run?"
     }
   },
   "ai": {

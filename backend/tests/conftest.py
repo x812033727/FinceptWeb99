@@ -49,6 +49,7 @@ from sqlalchemy.ext.asyncio import (  # noqa: E402
 # model being imported by a sibling test — leading to FK-resolution failures
 # when tests run in isolation.
 import models.alert  # noqa: E402,F401
+import models.backtest_run  # noqa: E402,F401
 import models.backtest_sweep  # noqa: E402,F401
 import models.corporate_announcement  # noqa: E402,F401
 import models.discussion  # noqa: E402,F401

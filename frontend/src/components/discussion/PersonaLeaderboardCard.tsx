@@ -9,6 +9,7 @@
  * all the operator's strategies).
  */
 import { useMemo, useState } from "react";
+import { Snowflake, Ghost } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
@@ -241,18 +242,18 @@ function Row({
       <td className="py-1 text-right">
         {row.frozen_in_strategies > 0 && (
           <span
-            className="inline-block text-[10px] mr-1 text-zinc-400"
+            className="inline-flex items-center gap-0.5 text-[10px] mr-1 text-zinc-400"
             title="frozen in N strategies"
           >
-            🧊{row.frozen_in_strategies}
+            <Snowflake size={10} aria-hidden="true" />{row.frozen_in_strategies}
           </span>
         )}
         {row.shadow_in_strategies > 0 && (
           <span
-            className="inline-block text-[10px] text-purple-300"
+            className="inline-flex items-center gap-0.5 text-[10px] text-purple-300"
             title="shadow in N strategies"
           >
-            👻{row.shadow_in_strategies}
+            <Ghost size={10} aria-hidden="true" />{row.shadow_in_strategies}
           </span>
         )}
         {row.frozen_in_strategies === 0 && row.shadow_in_strategies === 0 && (

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ClipboardList } from "lucide-react";
 import { SweepAggregateCard } from "./SweepAggregateCard";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -262,7 +263,7 @@ function SweepProgressRow({
             {" "}{sweep.rounds_per_discussion} {t("sweep.rounds")} ·
             {" "}c={sweep.concurrency}
             {sweep.auto_post_mortem !== false ? (
-              <span className="ml-1 text-purple-300/80">· 📋</span>
+              <span className="ml-1 inline-flex items-center gap-0.5 text-purple-300/80">· <ClipboardList className="h-3 w-3" aria-hidden="true" /></span>
             ) : null}
           </span>
         </div>

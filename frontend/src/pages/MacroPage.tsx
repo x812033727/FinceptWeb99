@@ -5,6 +5,7 @@ import {
   ReferenceLine, CartesianGrid,
 } from "recharts";
 import { useTranslation } from "react-i18next";
+import { Bot } from "lucide-react";
 import api from "@/lib/api";
 import { useNavigate } from "react-router-dom";
 
@@ -183,7 +184,10 @@ export default function MacroPage() {
           onClick={analyseWithAI}
           className="self-start px-3 sm:px-4 py-2 bg-primary/10 border border-primary/30 text-primary rounded-lg text-sm hover:bg-primary/20 transition-colors whitespace-nowrap"
         >
-          🤖 {t("nav.ai")}
+          <span className="inline-flex items-center gap-1.5">
+            <Bot className="h-4 w-4" aria-hidden="true" />
+            {t("nav.ai")}
+          </span>
         </button>
       </div>
 

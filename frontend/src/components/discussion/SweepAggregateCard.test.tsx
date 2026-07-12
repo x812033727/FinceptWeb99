@@ -267,11 +267,11 @@ describe("SweepAggregateCard — WalkForwardCompareSection", () => {
         screen.getByText(/D5 平均報酬/),
       ).toBeInTheDocument(),
     );
-    // The compare grid has its own column header "🔬 Test (OOS)";
-    // the FoldBadge also shows "🔬 Test fold (OOS)". Match the
-    // grid header specifically.
+    // The compare grid has its own column header "Test (OOS)" (the 🔬
+    // glyph is now a lucide FlaskConical icon sibling); the FoldBadge
+    // also shows "Test fold (OOS)". Match the grid header specifically.
     expect(screen.getByText(/Train.*in-sample/)).toBeInTheDocument();
-    expect(screen.getByText("🔬 Test (OOS)")).toBeInTheDocument();
+    expect(screen.getByText("Test (OOS)")).toBeInTheDocument();
     // Train brier 0.100 should appear; test brier 0.300 also
     // appears multiple times (BrierRow tile + CompareGrid cell).
     // We don't assert color directly — just on the values.

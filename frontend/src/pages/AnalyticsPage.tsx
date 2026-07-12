@@ -6,6 +6,7 @@ import {
   Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
 import { useTranslation } from "react-i18next";
+import { Bot } from "lucide-react";
 import api from "@/lib/api";
 import BacktestHistoryPanel from "@/components/analytics/BacktestHistoryPanel";
 
@@ -97,7 +98,7 @@ function DCFPanel({ onAnalyseWithAI }: { onAnalyseWithAI: (ctx: unknown) => void
               onClick={() => onAnalyseWithAI(r)}
               className="text-xs text-primary hover:underline"
             >
-              🤖 {t("nav.ai")}
+              <span className="inline-flex items-center gap-1"><Bot className="h-3.5 w-3.5" aria-hidden="true" />{t("nav.ai")}</span>
             </button>
           }
         >

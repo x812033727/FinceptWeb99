@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { GraduationCap, FlaskConical, Search } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import {
   fetchSweepAggregate,
@@ -92,11 +93,13 @@ function FoldBadge({ agg }: { agg: SweepAggregate }) {
     ? "bg-blue-900/30 text-blue-200 border-blue-700/50"
     : "bg-purple-900/30 text-purple-200 border-purple-700/50";
   const label = fold === "train"
-    ? t("aggregate.fold_train", "🎓 Train fold (in-sample)")
-    : t("aggregate.fold_test", "🔬 Test fold (OOS)");
+    ? t("aggregate.fold_train", "Train fold (in-sample)")
+    : t("aggregate.fold_test", "Test fold (OOS)");
+  const FoldIcon = fold === "train" ? GraduationCap : FlaskConical;
   return (
     <div className="flex items-center gap-2 text-[11px]">
-      <span className={`border rounded px-1.5 py-0.5 ${styles}`}>
+      <span className={`inline-flex items-center gap-1 border rounded px-1.5 py-0.5 ${styles}`}>
+        <FoldIcon className="h-3 w-3" aria-hidden="true" />
         {label}
       </span>
       {fold === "test" && agg.parent_sweep_id ? (
@@ -409,14 +412,19 @@ function WalkForwardCompareSection({ testAgg }: { testAgg: SweepAggregate }) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="text-[11px] text-purple-300 hover:text-purple-200"
+        className="inline-flex items-center gap-1 text-[11px] text-purple-300 hover:text-purple-200"
       >
-        {open
-          ? t("aggregate.compare_hide", "▼ 收起 train 折比較")
-          : t(
+        {open ? (
+          t("aggregate.compare_hide", "▼ 收起 train 折比較")
+        ) : (
+          <>
+            <Search className="h-3 w-3" aria-hidden="true" />
+            {t(
               "aggregate.compare_show",
-              "🔍 展開 train vs test 並排 KPI(in-sample vs OOS)",
+              "展開 train vs test 並排 KPI(in-sample vs OOS)",
             )}
+          </>
+        )}
       </button>
       {open ? (
         <CompareGrid parentSweepId={testAgg.parent_sweep_id} testAgg={testAgg} />
@@ -456,10 +464,16 @@ function CompareGrid({
       <div className="grid grid-cols-3 gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">
         <div>{t("aggregate.compare_metric", "指標")}</div>
         <div className="text-center">
-          {t("aggregate.compare_train", "🎓 Train (in-sample)")}
+          <span className="inline-flex items-center justify-center gap-1">
+            <GraduationCap className="h-3 w-3" aria-hidden="true" />
+            {t("aggregate.compare_train", "Train (in-sample)")}
+          </span>
         </div>
         <div className="text-center">
-          {t("aggregate.compare_test", "🔬 Test (OOS)")}
+          <span className="inline-flex items-center justify-center gap-1">
+            <FlaskConical className="h-3 w-3" aria-hidden="true" />
+            {t("aggregate.compare_test", "Test (OOS)")}
+          </span>
         </div>
       </div>
       <CompareRow

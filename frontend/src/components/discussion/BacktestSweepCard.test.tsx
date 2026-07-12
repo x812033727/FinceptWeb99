@@ -292,8 +292,10 @@ describe("BacktestSweepCard — progress display", () => {
     ]);
     renderCard();
 
-    // The marker lives in the per-row config strip.
-    expect(await screen.findByText("· 📋")).toBeInTheDocument();
+    // The marker lives in the per-row config strip; the 📋 glyph is now a
+    // lucide ClipboardList icon (rendered as <svg class="lucide-clipboard-list">).
+    await screen.findByText(/×5 days/);
+    expect(document.querySelector(".lucide-clipboard-list")).toBeInTheDocument();
   });
 
   it("omits the 「📋」 marker when auto_post_mortem is off", async () => {
@@ -307,7 +309,7 @@ describe("BacktestSweepCard — progress display", () => {
     // wrong reason.
     await screen.findByText(/×5 days/);
 
-    expect(screen.queryByText("· 📋")).not.toBeInTheDocument();
+    expect(document.querySelector(".lucide-clipboard-list")).not.toBeInTheDocument();
   });
 });
 

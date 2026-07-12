@@ -58,11 +58,10 @@ def test_mops_covers_monthly_revenue_and_quarterly_statements():
 
 
 def test_stub_sources_return_empty_set():
-    """tpex / tdcc still route to `_NotWiredYetClient` — no handlers, so
+    """tpex still routes to `_NotWiredYetClient` — no handlers, so
     `supported_datasets` must report empty so the gatekeeper rejects
-    every flip targeted at them. (taifex was wired in W2.)"""
-    for source in ("tpex", "tdcc"):
-        assert supported_datasets(source) == set()
+    every flip targeted at it. (taifex wired in W2, tdcc in W3.)"""
+    assert supported_datasets("tpex") == set()
 
 
 def test_taifex_reports_daily_market_datasets():
@@ -71,6 +70,11 @@ def test_taifex_reports_daily_market_datasets():
     assert supported_datasets("taifex") == {
         "TaiwanFuturesDaily", "TaiwanOptionDaily",
     }
+
+
+def test_tdcc_reports_holding_shares_per():
+    """W3 wired the TDCC 股權分散 report."""
+    assert supported_datasets("tdcc") == {"TaiwanStockHoldingSharesPer"}
 
 
 def test_unknown_source_returns_empty_set_not_error():

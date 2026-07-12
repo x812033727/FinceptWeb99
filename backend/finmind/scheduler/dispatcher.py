@@ -128,7 +128,7 @@ _CRYPTO_SOURCES: frozenset[str] = frozenset({"binance", "coingecko"})
 # ignores the symbol. Keyed on active_source so Phase A (finmind) keeps
 # its per-symbol fan-out untouched — the market-wide route only applies
 # after cutover flips active_source to the crawl source.
-_MARKET_WIDE_SOURCES: frozenset[str] = frozenset({"taifex"})
+_MARKET_WIDE_SOURCES: frozenset[str] = frozenset({"taifex", "tdcc"})
 
 
 def expand_due_datasets(

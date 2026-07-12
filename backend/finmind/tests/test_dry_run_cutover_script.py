@@ -64,12 +64,11 @@ def test_diff_outcome_status_fail_only_on_selfcrawl_error():
 
 def test_enumerate_all_datasets_skips_stub_sources():
     """`--all` mode should only diff datasets whose fallback source has
-    a real handler. tpex/tdcc are still stubbed → their datasets must
-    NOT show up; wired sources (twse/mops/taifex) do."""
+    a real handler. tpex is still stubbed → its datasets must NOT show
+    up; wired sources (twse/mops/taifex/tdcc) do."""
     targets = _enumerate_all_datasets()
     sources = {src for _, src in targets}
     assert "tpex" not in sources
-    assert "tdcc" not in sources
     # Headline TWSE handler must show up.
     assert ("TaiwanStockPrice", "twse") in targets
     # Headline MOPS handler must show up.
@@ -78,6 +77,8 @@ def test_enumerate_all_datasets_skips_stub_sources():
     assert ("TaiwanFuturesDaily", "taifex") in targets
     assert ("TaiwanOptionDaily", "taifex") in targets
     assert ("TaiwanFuturesInstitutionalInvestors", "taifex") not in targets
+    # TDCC 股權分散 wired in W3.
+    assert ("TaiwanStockHoldingSharesPer", "tdcc") in targets
 
 
 @pytest.mark.asyncio

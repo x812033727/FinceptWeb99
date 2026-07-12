@@ -45,9 +45,6 @@ router = APIRouter()
 AdminUser = Annotated[User, Depends(require_admin)]
 FmDb = Annotated[AsyncSession, Depends(get_finmind_db)]
 
-_VALID_SOURCES = {"finmind", "twse", "tpex", "taifex", "mops", "tdcc"}
-
-
 async def _ensure_finmind_db_reachable(db: AsyncSession) -> None:
     """Probe the FinMind clone DB and raise 503 on failure.
 
@@ -172,18 +169,11 @@ async def update_finmind_dataset(
     if body.enabled is not None:
         row.enabled = body.enabled
     if body.active_source is not None:
-        if body.active_source not in _VALID_SOURCES:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"active_source must be one of "
-                    f"{sorted(_VALID_SOURCES)}; got '{body.active_source}'"
-                ),
-            )
-        # Two-layer gatekeeper:
+        # Two-layer gatekeeper (outer allowlist derived from the
+        # connector registry via known_sources() so it can't drift):
         #   1. is_source_implemented() — does the source even have a
         #      real connector? Catches flips to fully-stubbed
-        #      sources (tpex / taifex / tdcc currently).
+        #      sources (tpex currently).
         #   2. covers_dataset() — does THAT connector know how to
         #      fetch THIS dataset? Catches partial coverage, e.g.
         #      flipping `TaiwanFuturesDaily` to source='twse' (TWSE
@@ -193,8 +183,18 @@ async def update_finmind_dataset(
         from finmind.ingest.selfcrawl import (
             covers_dataset,
             is_source_implemented,
+            known_sources,
         )
 
+        valid_sources = known_sources()
+        if body.active_source not in valid_sources:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"active_source must be one of "
+                    f"{sorted(valid_sources)}; got '{body.active_source}'"
+                ),
+            )
         if not is_source_implemented(body.active_source):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

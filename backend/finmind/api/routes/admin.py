@@ -45,9 +45,6 @@ async def admin_list_datasets(
     ]
 
 
-_VALID_SOURCES = {"finmind", "twse", "tpex", "taifex", "mops", "tdcc"}
-
-
 @router.patch(
     "/admin/datasets/{dataset_code}",
     response_model=DatasetSourceItem,
@@ -68,19 +65,28 @@ async def admin_update_dataset(
     if body.enabled is not None:
         row.enabled = body.enabled
     if body.active_source is not None:
-        if body.active_source not in _VALID_SOURCES:
+        # Same two-layer gatekeeper as the main-app proxy
+        # (api/admin/finmind_proxy.py): the outer allowlist comes from
+        # known_sources() (registry-derived, can't drift), then
+        # is_source_implemented() rejects stub sources and
+        # covers_dataset() rejects flips to a real connector that lacks
+        # a handler for THIS dataset — either would break ingest at
+        # runtime with NotImplementedError.
+        from finmind.ingest.selfcrawl import (
+            covers_dataset,
+            is_source_implemented,
+            known_sources,
+        )
+
+        valid_sources = known_sources()
+        if body.active_source not in valid_sources:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    f"active_source must be one of {sorted(_VALID_SOURCES)}; "
+                    f"active_source must be one of {sorted(valid_sources)}; "
                     f"got '{body.active_source}'"
                 ),
             )
-        # Mirror the same stub-source guard as the main-app proxy
-        # (api/admin/finmind_proxy.py) — flipping to a stubbed
-        # source would break the next ingest cycle silently.
-        from finmind.ingest.selfcrawl import is_source_implemented
-
         if not is_source_implemented(body.active_source):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -89,6 +95,17 @@ async def admin_update_dataset(
                     f"connector wired up yet — implement "
                     f"finmind/ingest/selfcrawl/{body.active_source}.py "
                     f"+ register_connector() before flipping."
+                ),
+            )
+        if not covers_dataset(body.active_source, dataset_code):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"active_source='{body.active_source}' has a connector "
+                    f"but no handler for dataset '{dataset_code}'. Add a "
+                    f"handler to finmind/ingest/selfcrawl/"
+                    f"{body.active_source}.py:_DISPATCH before flipping, OR "
+                    f"keep the current active_source for this dataset."
                 ),
             )
         row.active_source = body.active_source

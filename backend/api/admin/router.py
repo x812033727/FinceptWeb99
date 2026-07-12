@@ -101,6 +101,7 @@ VALID_ROLES = {r.value for r in UserRole}
 RETRYABLE_INGEST_JOBS = {
     "ingest_news_tw": "Taiwan news ingest",
     "ingest_news_international": "International news ingest",
+    "ingest_news_feeds": "TW direct-publisher RSS ingest (cnyes/udn/ltn/cna)",
     "ingest_ohlcv_tw": "TW daily OHLCV ingest (TWSE → FinMind)",
     "ingest_institutional_tw": "TW institutional flow",
     "ingest_margin_tw": "TW margin balance",
@@ -504,6 +505,9 @@ async def _run_ingest_job_once(job_id: str) -> None:
         await run()
     elif job_id == "ingest_news_international":
         from tasks.ingest_news_international import run
+        await run()
+    elif job_id == "ingest_news_feeds":
+        from tasks.ingest_news_feeds import run
         await run()
     elif job_id == "ingest_ohlcv_tw":
         from tasks.ingest_ohlcv_tw import run

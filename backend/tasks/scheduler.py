@@ -188,6 +188,21 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # Direct publisher RSS feeds (G5): cnyes / 經濟日報 / 自由財經 /
+    # 中央社. Complements the Google-News aggregator above with
+    # first-party links + dictionary-first symbol tagging. Dedup collapses
+    # cross-source overlap. Offset 30 min from the Google-News jobs so the
+    # two news pipelines don't spike TWSE-symbol-map lookups together.
+    from tasks.ingest_news_feeds import run as run_ingest_news_feeds
+    scheduler.add_job(
+        run_ingest_news_feeds,
+        trigger=IntervalTrigger(hours=1),
+        id="ingest_news_feeds",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── US SEC EDGAR 8-K filings (PR-D3) ──────────────────────────
     # Hourly. Sister cron to ingest_announcements_tw but pulls SEC's
     # recent 8-K filings ATOM feed instead of MOPS. Writes into the

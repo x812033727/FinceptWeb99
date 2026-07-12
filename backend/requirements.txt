@@ -42,6 +42,7 @@ apscheduler==3.10.4
 python-dateutil==2.9.0
 pytz==2024.2
 beautifulsoup4==4.12.3  # MOPS scraper
+defusedxml==0.7.1  # safe RSS/Atom parsing (XXE / entity-expansion guard)
 
 # US market data
 yfinance==0.2.43

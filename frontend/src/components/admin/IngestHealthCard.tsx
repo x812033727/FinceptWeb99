@@ -132,6 +132,7 @@ export function isDataStale(r: IngestHealth): boolean {
 const RETRYABLE_INGEST_JOBS = new Set([
   "ingest_news_tw",
   "ingest_news_international",
+  "ingest_news_feeds",
   "ingest_ohlcv_tw",
   "ingest_institutional_tw",
   "ingest_margin_tw",
@@ -164,6 +165,10 @@ const JOB_META: Record<string, JobMeta> = {
   },
   ingest_news_international: {
     description_zh: "國際財經新聞抓取（Fed / 美股 / 國際）",
+    schedule_zh: "每 1 小時",
+  },
+  ingest_news_feeds: {
+    description_zh: "台股新聞抓取（直連 RSS：鉅亨 / 經濟日報 / 自由財經 / 中央社）",
     schedule_zh: "每 1 小時",
   },
   ingest_ohlcv_tw: {

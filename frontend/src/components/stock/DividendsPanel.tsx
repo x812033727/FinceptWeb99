@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Bar, BarChart, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Loading } from "./_atoms";
 import { fetchDividends } from "./_shared";
+import { DataTable, type DataTableColumn } from "../ui/table";
 
 export function DividendsPanel({ symbol, currentPrice }: { symbol: string; currentPrice: number | null }) {
   const { t } = useTranslation();
@@ -43,6 +44,43 @@ export function DividendsPanel({ symbol, currentPrice }: { symbol: string; curre
     ? (avgCash5 / currentPrice) * 100
     : null;
   const lastPayout = data[data.length - 1];
+
+  type DivRow = (typeof data)[number];
+  const rows = [...data].reverse().slice(0, 30);
+  const columns: DataTableColumn<DivRow>[] = [
+    {
+      key: "date",
+      header: t("stock.dividends.announce_date"),
+      mobile: "primary",
+      render: (r) => <span className="text-muted-foreground">{r.date}</span>,
+    },
+    {
+      key: "ex_date",
+      header: t("stock.dividends.ex_date"),
+      render: (r) => <span className="text-muted-foreground">{r.ex_date ?? "—"}</span>,
+    },
+    {
+      key: "cash",
+      header: `${t("stock.dividends.cash")} (TWD)`,
+      numeric: true,
+      // Cash payout — a positive amount, so the semantic `success` token
+      // (theme-following) rather than a hardcoded green that bypassed the
+      // value layer + market-colour convention.
+      render: (r) => (
+        <span className="num font-medium text-success">
+          {r.cash_dividend ? r.cash_dividend.toFixed(3) : "—"}
+        </span>
+      ),
+    },
+    {
+      key: "stock",
+      header: `${t("stock.dividends.stock")} (股)`,
+      numeric: true,
+      render: (r) => (
+        <span className="num">{r.stock_dividend ? r.stock_dividend.toFixed(3) : "—"}</span>
+      ),
+    },
+  ];
 
   return (
     <div className="p-4 space-y-4">
@@ -86,32 +124,13 @@ export function DividendsPanel({ symbol, currentPrice }: { symbol: string; curre
         </BarChart>
       </ResponsiveContainer>
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="border-b border-border text-muted-foreground">
-              <th className="text-left py-2 pr-4 font-medium">{t("stock.dividends.announce_date")}</th>
-              <th className="text-left py-2 pr-4 font-medium">{t("stock.dividends.ex_date")}</th>
-              <th className="text-right py-2 px-2 font-medium">{t("stock.dividends.cash")} (TWD)</th>
-              <th className="text-right py-2 px-2 font-medium">{t("stock.dividends.stock")} (股)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {[...data].reverse().slice(0, 30).map((r, i) => (
-              <tr key={`${r.date}-${i}`} className="border-b border-border/30 hover:bg-accent/5">
-                <td className="py-1.5 pr-4 text-muted-foreground">{r.date}</td>
-                <td className="py-1.5 pr-4 text-muted-foreground">{r.ex_date ?? "—"}</td>
-                <td className="text-right py-1.5 px-2 text-green-400 font-medium">
-                  {r.cash_dividend ? r.cash_dividend.toFixed(3) : "—"}
-                </td>
-                <td className="text-right py-1.5 px-2 text-yellow-400">
-                  {r.stock_dividend ? r.stock_dividend.toFixed(3) : "—"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        columns={columns}
+        rows={rows}
+        rowKey={(r, i) => `${r.date}-${i}`}
+        mobileMode="cards"
+        aria-label={t("stock.dividends.tab")}
+      />
     </div>
   );
 }

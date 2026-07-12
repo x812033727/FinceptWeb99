@@ -251,6 +251,12 @@ async def _can_reserve_llm_call(
 
 _BATCH_SIZE = 20
 _MAX_AGE_DAYS_FOR_SCORING = 7
+# Direct-feed articles carry an extracted body (G5). We feed the model a
+# lead excerpt (not the whole 20k-char body) so it can disambiguate
+# headlines the title alone leaves ambiguous ("台積電法說" — beat or miss?)
+# without blowing up the batch's token budget. Title-only articles
+# (Google News redirect links) simply omit the `lead` field.
+_BODY_EXCERPT_CHARS = 800
 
 
 def _bucket(score: float) -> str:
@@ -269,8 +275,10 @@ class _Scored:
 
 
 _PROMPT_TEMPLATE = (
-    "你是金融新聞情緒分析師。針對下列每則台股相關新聞標題，"
-    "判斷對該股票或大盤的短線（1-5 個交易日）情緒方向。\n\n"
+    "你是金融新聞情緒分析師。針對下列每則台股相關新聞，"
+    "判斷對該股票或大盤的短線（1-5 個交易日）情緒方向。\n"
+    "每則含 title（標題）；部分附 lead（前文摘要），若有請優先依 lead "
+    "的實質內容判斷，標題可能為吸睛用語。\n\n"
     "輸出必須是合法 JSON 陣列，格式：\n"
     '[{{"id": 整數, "score": -1.0~1.0, "reason": "≤20字"}}]\n\n'
     "score 規則：\n"
@@ -285,12 +293,21 @@ _PROMPT_TEMPLATE = (
 
 
 def _format_items(rows: list[NewsArticle]) -> str:
-    lines = []
+    # Built with json.dumps so a title/lead containing a quote, newline or
+    # backslash can't break the JSON we hand the model (the old f-string
+    # build did no escaping — a `"` in a headline silently corrupted the
+    # whole batch's input).
+    items: list[dict] = []
     for r in rows:
         symbol = f"[{r.symbol}] " if r.symbol else "[大盤] "
         title = r.title.strip().replace("\n", " ")[:120]
-        lines.append(f'  {{"id": {r.id}, "title": "{symbol}{title}"}}')
-    return "[\n" + ",\n".join(lines) + "\n]"
+        obj: dict = {"id": r.id, "title": f"{symbol}{title}"}
+        if r.body:
+            lead = " ".join(r.body.split())[:_BODY_EXCERPT_CHARS]
+            if lead:
+                obj["lead"] = lead
+        items.append(obj)
+    return json.dumps(items, ensure_ascii=False, indent=1)
 
 
 def _parse_response(text: str) -> list[dict]:

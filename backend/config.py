@@ -113,7 +113,7 @@ class Settings(BaseSettings):
     # without the SDK never surfaces 500s — see `claude_agent_effective_enabled`.
     # Analyst/admin role required regardless.
     CLAUDE_AGENT_ENABLED: bool = True
-    CLAUDE_AGENT_MODEL: str = "claude-sonnet-4-5-20250929"
+    CLAUDE_AGENT_MODEL: str = "claude-sonnet-5"
     CLAUDE_AGENT_MAX_TURNS: int = 8
 
     # ── LLM Gateway (subscription providers) ──────────────────────

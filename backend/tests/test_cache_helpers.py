@@ -144,3 +144,47 @@ async def test_cache_get_json_increments_miss_counter_on_decode_error():
 
     assert result is None
     assert after == before + 1
+
+
+# ── Per-dataset usage hash helpers (FinMind cutover instrumentation) ──
+
+
+@pytest.mark.asyncio
+async def test_cache_hincrby_returns_new_field_value():
+    fake_redis = AsyncMock()
+    fake_redis.hincrby.return_value = 7
+    with patch("cache.redis_cache.get_redis", return_value=fake_redis):
+        assert await rc.cache_hincrby("h", "TaiwanStockPrice", 1) == 7
+    fake_redis.hincrby.assert_awaited_once_with("h", "TaiwanStockPrice", 1)
+
+
+@pytest.mark.asyncio
+async def test_cache_hincrby_arms_ttl_only_on_first_field_write():
+    """Expiry is armed once, when the field's returned value equals the
+    increment (a fresh hash's first field). Later bumps must not extend
+    the day-hash's TTL — otherwise a busy dataset keeps the hash alive
+    forever and it never self-clears."""
+    fake_redis = AsyncMock()
+    fake_redis.hincrby.return_value = 1  # first write → value == amount
+    with patch("cache.redis_cache.get_redis", return_value=fake_redis):
+        await rc.cache_hincrby("h", "d", 1, ttl_seconds=3600)
+    fake_redis.expire.assert_awaited_once_with("h", 3600)
+
+    fake_redis.expire.reset_mock()
+    fake_redis.hincrby.return_value = 5  # subsequent write → value > amount
+    with patch("cache.redis_cache.get_redis", return_value=fake_redis):
+        await rc.cache_hincrby("h", "d", 1, ttl_seconds=3600)
+    fake_redis.expire.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cache_hgetall_returns_hash_dict():
+    fake_redis = AsyncMock()
+    fake_redis.hgetall.return_value = {"TaiwanStockPrice": "42", "TaiwanStockPER": "9"}
+    with patch("cache.redis_cache.get_redis", return_value=fake_redis):
+        out = await rc.cache_hgetall("h")
+    assert out == {"TaiwanStockPrice": "42", "TaiwanStockPER": "9"}
+
+
+def test_key_finmind_dataset_usage_shape():
+    assert rc.key_finmind_dataset_usage("20260712") == "finmind:upstream:usage:20260712"

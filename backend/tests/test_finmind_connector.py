@@ -115,6 +115,57 @@ async def test_query_proceeds_when_quota_count_at_or_below_limit():
 
 
 @pytest.mark.asyncio
+async def test_query_records_per_dataset_usage_on_real_call():
+    """A call that clears the quota gate and hits FinMind bumps the
+    per-dataset usage hash — the input the cutover-priority report
+    ranks on."""
+    payload = {"status": 200, "data": [{"date": "2024-01-02", "close": 785}]}
+    patcher_http, fake = install_http(FakeResponse(payload))
+    rec = AsyncMock(return_value=1)
+    with patcher_http, \
+            patch.object(finmind, "cache_incr", new=AsyncMock(return_value=1)), \
+            patch.object(finmind, "cache_hincrby", new=rec):
+        await finmind._query("TaiwanStockPER", "2330", "2024-01-01")
+
+    assert len(fake.calls) == 1
+    rec.assert_awaited_once()
+    # field (2nd positional arg) is the dataset code
+    assert rec.call_args.args[1] == "TaiwanStockPER"
+
+
+@pytest.mark.asyncio
+async def test_query_does_not_record_usage_when_quota_exhausted():
+    """Quota-blocked calls never reach FinMind, so they must not count
+    against the per-dataset spend tally."""
+    limit = finmind.settings.FINMIND_HOURLY_REQUEST_LIMIT
+    patcher_http, _ = install_http(FakeResponse({"status": 200, "data": []}))
+    rec = AsyncMock(return_value=1)
+    with patcher_http, \
+            patch.object(finmind, "cache_incr", new=AsyncMock(return_value=limit + 1)), \
+            patch.object(finmind, "cache_hincrby", new=rec):
+        await finmind._query("TaiwanStockPrice", "2330", "2024-01-01")
+
+    rec.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_query_usage_recording_failure_does_not_break_fetch():
+    """Instrumentation is best-effort: a Redis error in the usage
+    counter must not surface to the caller or drop the real rows."""
+    payload = {"status": 200, "data": [{"date": "2024-01-02", "close": 785}]}
+    patcher_http, _ = install_http(FakeResponse(payload))
+    with patcher_http, \
+            patch.object(finmind, "cache_incr", new=AsyncMock(return_value=1)), \
+            patch.object(
+                finmind, "cache_hincrby",
+                new=AsyncMock(side_effect=ConnectionError("redis down")),
+            ):
+        out = await finmind._query("TaiwanStockPrice", "2330", "2024-01-01")
+
+    assert out == [{"date": "2024-01-02", "close": 785}]
+
+
+@pytest.mark.asyncio
 async def test_query_uses_one_hour_ttl_on_counter():
     """Counter TTL must match FinMind's per-hour rate limit window
     (3600s) — a 24h TTL would waste 24× the available budget."""

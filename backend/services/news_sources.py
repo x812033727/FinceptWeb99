@@ -38,10 +38,11 @@ class NewsSource:
     market: str          # "TW" | "GLOBAL"
     lang: str            # e.g. "zh-TW"
     enabled: bool = True
-    # Some publishers put the article body in the RSS <description>;
-    # others (most) only a teaser. Informational for the full-text
-    # phase — not consumed yet.
-    full_description: bool = False
+    # Whether the full-text enricher should fetch + extract the article
+    # body from this source's first-party links. All four launch feeds
+    # were verified extractable (trafilatura returned clean 500-1900 char
+    # bodies); flip False for a source that paywalls or blocks bots.
+    fulltext_enabled: bool = True
 
 
 # Direct publisher feeds. Google News RSS stays on its own task
@@ -96,3 +97,11 @@ def get_source(key: str) -> NewsSource | None:
         if s.key == key:
             return s
     return None
+
+
+def fulltext_source_keys() -> list[str]:
+    """Source keys whose articles the full-text enricher should fetch —
+    enabled feeds with `fulltext_enabled`. The enricher scopes its
+    `news_articles.source IN (...)` query to these so it never tries to
+    fetch a Google-News redirect link."""
+    return [s.key for s in SOURCES if s.enabled and s.fulltext_enabled]

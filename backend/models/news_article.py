@@ -56,3 +56,12 @@ class NewsArticle(Base):
     sentiment_scored_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True,
     )
+    # Full article text extracted from the first-party link (G5 phase 2,
+    # direct-publisher feeds only — Google-News redirect links aren't
+    # fetchable). NULL = not yet attempted; `body_fetched_at` set (with
+    # body possibly still NULL) = attempted, so the enrichment task won't
+    # retry a page that yielded nothing.
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    body_fetched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )

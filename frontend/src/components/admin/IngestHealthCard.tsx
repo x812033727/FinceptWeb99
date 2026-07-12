@@ -133,6 +133,7 @@ const RETRYABLE_INGEST_JOBS = new Set([
   "ingest_news_tw",
   "ingest_news_international",
   "ingest_news_feeds",
+  "enrich_news_fulltext",
   "ingest_ohlcv_tw",
   "ingest_institutional_tw",
   "ingest_margin_tw",
@@ -170,6 +171,10 @@ const JOB_META: Record<string, JobMeta> = {
   ingest_news_feeds: {
     description_zh: "台股新聞抓取（直連 RSS：鉅亨 / 經濟日報 / 自由財經 / 中央社）",
     schedule_zh: "每 1 小時",
+  },
+  enrich_news_fulltext: {
+    description_zh: "新聞全文抽取（直連來源文章內文）",
+    schedule_zh: "每 30 分",
   },
   ingest_ohlcv_tw: {
     description_zh: "台股每日 K 線（TWSE → FinMind 後備）",

@@ -8,12 +8,12 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, func, or_ as sa_or, select
+from sqlalchemy import delete, func, or_ as sa_or, select, update as sa_update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1953,6 +1953,47 @@ async def read_recent_news(
             item["sentiment_label"] = r.sentiment_label
         out.append(item)
     return out
+
+
+async def read_news_needing_body(
+    db: AsyncSession,
+    *,
+    source_keys: Sequence[str],
+    limit: int = 30,
+    max_age_days: int = 7,
+) -> list[tuple[int, str]]:
+    """(id, link) of recent articles from `source_keys` that haven't had
+    a full-text extraction attempt yet (`body_fetched_at IS NULL`),
+    newest first. Scoped to the full-text-capable direct-feed sources so
+    we never try to fetch a Google-News redirect link."""
+    if not source_keys:
+        return []
+    cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
+    stmt = (
+        select(NewsArticle.id, NewsArticle.link)
+        .where(
+            NewsArticle.source.in_(list(source_keys)),
+            NewsArticle.body_fetched_at.is_(None),
+            NewsArticle.published_at >= cutoff,
+        )
+        .order_by(NewsArticle.published_at.desc())
+        .limit(limit)
+    )
+    return [(int(r[0]), r[1]) for r in (await db.execute(stmt)).all()]
+
+
+async def update_news_body(
+    db: AsyncSession, article_id: int, body: str | None
+) -> None:
+    """Persist an extraction result. Always stamps `body_fetched_at` (so
+    a NULL-body attempt isn't retried); `body` may be None on a failed /
+    empty extract."""
+    await db.execute(
+        sa_update(NewsArticle)
+        .where(NewsArticle.id == article_id)
+        .values(body=body, body_fetched_at=datetime.now(UTC))
+    )
+    await db.commit()
 
 
 async def insert_news_articles_autosession(rows: Iterable[NewsArticleRow]) -> int:

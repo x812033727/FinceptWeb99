@@ -203,6 +203,21 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # Full-text enrichment (G5 phase 2): fetch + extract the article body
+    # for recent direct-feed articles that lack one. Decoupled from the
+    # hourly ingest (slow third-party page fetches, robots-respecting +
+    # per-domain throttled) and capped per run, so 30 min is plenty to
+    # keep pace with the feed volume.
+    from tasks.enrich_news_fulltext import run as run_enrich_news_fulltext
+    scheduler.add_job(
+        run_enrich_news_fulltext,
+        trigger=IntervalTrigger(minutes=30),
+        id="enrich_news_fulltext",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── US SEC EDGAR 8-K filings (PR-D3) ──────────────────────────
     # Hourly. Sister cron to ingest_announcements_tw but pulls SEC's
     # recent 8-K filings ATOM feed instead of MOPS. Writes into the

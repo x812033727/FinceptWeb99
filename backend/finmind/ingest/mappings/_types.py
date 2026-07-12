@@ -17,6 +17,30 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class CompareSpec:
+    """Value-level comparison recipe for the cutover dry-run's
+    ``--values`` mode. Describes how to join a self-crawl connector's
+    raw rows against FinMind's raw rows and which columns must match
+    within tolerance before a source flip is safe.
+
+    All column names here are FinMind's *raw* response keys (the shape
+    ``SourceClient.fetch`` returns), NOT the local-table columns —
+    self-crawl handlers translate their upstream columns back to
+    FinMind's key names precisely so this comparison, and the existing
+    ``column_map``, both stay source-agnostic.
+
+    ``value_cols`` entries are ``(column, kind, tol)`` where ``kind`` is:
+      - ``"rel"``   relative error ``|a-b| / max(|a|,|b|) <= tol`` (prices)
+      - ``"abs"``   absolute error ``|a-b| <= tol`` (share/lot counts
+                    that differ only by rounding)
+      - ``"exact"`` string/enum equality (``tol`` ignored)
+    """
+
+    key_cols: tuple[str, ...]
+    value_cols: tuple[tuple[str, str, float], ...]
+
+
+@dataclass(frozen=True)
 class DatasetMapping:
     """One entry per FinMind dataset the ingest runner can route."""
 
@@ -57,6 +81,10 @@ class DatasetMapping:
     # The chunk in `backfill_progress` still spans the full range —
     # the day-level fan-out is internal to one chunk's fetch step.
     single_day: bool = False
+    # Optional value-level comparison recipe for the cutover dry-run's
+    # ``--values`` mode (see `CompareSpec`). When absent, the dry-run
+    # falls back to its row-count-only check for this dataset.
+    compare_spec: CompareSpec | None = None
 
 
 

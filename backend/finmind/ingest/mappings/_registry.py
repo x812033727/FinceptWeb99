@@ -80,6 +80,7 @@ from ._row_transforms import (
     _row_trading_calendar,
 )
 from ._types import (
+    CompareSpec,
     DatasetMapping,
     MappingNotFoundError,
     _to_date,
@@ -107,6 +108,18 @@ MAPPINGS: dict[str, DatasetMapping] = {
         pk_columns=("market", "symbol", "ts"),
         extra={"market": "TWSE", "source": "finmind"},
         row_transform=_row_ohlcv,
+        compare_spec=CompareSpec(
+            key_cols=("date", "stock_id"),
+            value_cols=(
+                ("open", "rel", 0.005),
+                ("max", "rel", 0.005),
+                ("min", "rel", 0.005),
+                ("close", "rel", 0.005),
+                # Volume can differ by odd-lot inclusion between TWSE
+                # STOCK_DAY and FinMind — allow 1% relative slack.
+                ("Trading_Volume", "rel", 0.01),
+            ),
+        ),
     ),
     "TaiwanStockMarginPurchaseShortSale": DatasetMapping(
         dataset_code="TaiwanStockMarginPurchaseShortSale",
@@ -124,6 +137,14 @@ MAPPINGS: dict[str, DatasetMapping] = {
         pk_columns=("market", "symbol", "ts"),
         extra={"market": "TWSE", "source": "finmind"},
         row_transform=_row_margin,
+        compare_spec=CompareSpec(
+            key_cols=("date", "stock_id"),
+            value_cols=(
+                # Balances are exact share counts — no rounding slack.
+                ("MarginPurchaseTodayBalance", "abs", 0.0),
+                ("ShortSaleTodayBalance", "abs", 0.0),
+            ),
+        ),
     ),
     "TaiwanStockInstitutionalInvestorsBuySell": DatasetMapping(
         dataset_code="TaiwanStockInstitutionalInvestorsBuySell",
@@ -186,6 +207,14 @@ MAPPINGS: dict[str, DatasetMapping] = {
         pk_columns=("market", "symbol", "ts"),
         extra={"market": "TWSE", "source": "finmind"},
         row_transform=_row_per,
+        compare_spec=CompareSpec(
+            key_cols=("date", "stock_id"),
+            value_cols=(
+                ("PER", "rel", 0.01),
+                ("PBR", "rel", 0.01),
+                ("dividend_yield", "rel", 0.01),
+            ),
+        ),
     ),
     # ── 還原股價 ────────────────────────────────────────────────
     "TaiwanStockPriceAdj": DatasetMapping(

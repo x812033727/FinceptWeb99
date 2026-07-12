@@ -6,6 +6,7 @@ Tracks usage in Redis with a 1-hour rolling window; falls silent (returns
 import contextvars
 import logging
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -13,9 +14,11 @@ import httpx
 from cache.redis_cache import (
     cache_decr,
     cache_get,
+    cache_hincrby,
     cache_incr,
     cache_set,
     key_finmind_counter,
+    key_finmind_dataset_usage,
     key_finmind_ip_banned,
     key_finmind_quota_exhausted_counter,
 )
@@ -24,6 +27,29 @@ from config import settings
 log = logging.getLogger(__name__)
 
 _BASE = "https://api.finmindtrade.com/api/v4/data"
+
+# Retain per-dataset upstream usage for 35 days — a bit over a
+# fortnight, matching the window the cutover-priority report reads.
+_USAGE_TTL_S = 35 * 24 * 3600
+
+
+async def _record_dataset_call(dataset: str) -> None:
+    """Best-effort per-dataset outbound-call counter. Bumps the field
+    `dataset` inside today's `finmind:upstream:usage:{YYYYMMDD}` hash so
+    `finmind.scripts.usage_report` can rank which datasets consume the
+    FinMind hourly budget — the input that drives self-crawl cutover
+    priority. Swallows every error: instrumentation must never break a
+    live data fetch. Called once per call that clears the quota gate and
+    is about to hit FinMind, so it tracks real API spend the same way
+    the global `key_finmind_counter` does."""
+    try:
+        day = datetime.now(tz=timezone.utc).strftime("%Y%m%d")
+        await cache_hincrby(
+            key_finmind_dataset_usage(day), dataset, 1,
+            ttl_seconds=_USAGE_TTL_S,
+        )
+    except Exception:
+        pass
 
 # Datasets that FinMind moved off the generic /api/v4/data dispatcher
 # to dataset-specific paths. Calling them via the generic endpoint
@@ -186,6 +212,11 @@ async def _query(dataset: str, data_id: str, start_date: str, end_date: str | No
                 f"(local count={count}, dataset={dataset})"
             )
         return []
+
+    # Past the quota gate — this call will hit FinMind, so it counts
+    # against our budget. Record it per-dataset (best-effort) for the
+    # cutover-priority report.
+    await _record_dataset_call(dataset)
 
     if dataset in _DEDICATED_ENDPOINTS:
         # Dedicated-endpoint datasets accept a single `date` (no

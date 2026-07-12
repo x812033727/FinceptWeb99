@@ -20,15 +20,27 @@ Usage (from `backend/`):
     # cutover rehearsal. Stops on first hard failure unless --keep-going.
     python -m finmind.scripts.dry_run_cutover --all --days 7
 
-Output: per-dataset markdown row with row-count delta + first/last
-date overlap. Row-level value diff is intentionally NOT done here
-(connectors mostly differ on column unit conventions and empty-string
-vs None — that's exactly what `mappings.py` row_transform already
-handles, so a value-level diff would be noisy and not actionable).
+    # Value-level diff for a dataset that has a compare_spec: join both
+    # sources on the key columns and check each value column within
+    # tolerance (coverage + per-column mismatch rate).
+    python -m finmind.scripts.dry_run_cutover --dataset TaiwanStockPrice \\
+        --symbol 2330 --values
+
+Default output: per-dataset markdown row with row-count delta + first/
+last date overlap. This row-count check stays the fast default because
+connectors often differ on column unit conventions and empty-string vs
+None, which `mappings.py` row_transform normalises away.
+
+`--values` opts into a stricter, per-column value comparison for
+datasets that declare a `compare_spec` in `mappings/_registry.py`
+(FinMind raw column names, join keys + tolerances). Use it before
+flipping high-value datasets (price / institutional / margin) where a
+matching row COUNT isn't enough assurance — you want the numbers to
+agree too. Datasets without a compare_spec report as SKIP.
 
 Exit codes:
-    0 = every dataset's row-count delta is within tolerance
-    1 = at least one dataset failed or exceeded the delta tolerance
+    0 = every dataset within tolerance (row-count, or value in --values)
+    1 = at least one dataset failed or exceeded the tolerance
 """
 from __future__ import annotations
 
@@ -40,6 +52,10 @@ import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from finmind.ingest.mappings._types import CompareSpec
 
 _BACKEND_DIR = Path(__file__).resolve().parents[2]
 if str(_BACKEND_DIR) not in sys.path:
@@ -81,10 +97,137 @@ class DiffOutcome:
         return "OK"
 
 
-async def _fetch(source: str, dataset: str, symbol: str | None,
-                 start: date, end: date) -> tuple[int | None, str | None]:
-    """Returns (row_count, error_str). Either field is None when the
-    other is set."""
+# ── Value-level comparison (--values mode) ───────────────────────
+
+
+def _coerce_float(v: object) -> float | None:
+    if v is None or v == "":
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _values_match(a: object, b: object, kind: str, tol: float) -> bool | None:
+    """Compare one cell across the two sources. Returns True/False, or
+    None when the pair is *incomparable* (both sides missing the value)
+    so the caller can exclude it from the mismatch-rate denominator
+    rather than scoring it as a spurious match."""
+    if kind == "exact":
+        sa = "" if a is None else str(a).strip()
+        sb = "" if b is None else str(b).strip()
+        if sa == "" and sb == "":
+            return None
+        return sa == sb
+
+    fa, fb = _coerce_float(a), _coerce_float(b)
+    if fa is None and fb is None:
+        return None  # both empty — nothing to compare
+    if fa is None or fb is None:
+        return False  # one side has a value, the other doesn't → mismatch
+    if kind == "abs":
+        return abs(fa - fb) <= tol
+    # "rel": relative error against the larger magnitude; both-zero is a
+    # match (0 vs 0 with any tol).
+    denom = max(abs(fa), abs(fb))
+    if denom == 0:
+        return True
+    return abs(fa - fb) / denom <= tol
+
+
+def _key_of(row: dict, key_cols: tuple[str, ...]) -> tuple:
+    return tuple(str(row.get(c, "")) for c in key_cols)
+
+
+@dataclass
+class ValueDiff:
+    dataset: str
+    source: str
+    finmind_keys: int
+    selfcrawl_keys: int
+    common_keys: int
+    # column -> (mismatches, comparable_pairs)
+    per_col: dict[str, tuple[int, int]]
+    samples: list[str]
+    error: str | None = None
+
+    @property
+    def coverage_pct(self) -> float:
+        """Share of FinMind keys also present on the self-crawl side."""
+        if self.finmind_keys == 0:
+            return 100.0 if self.selfcrawl_keys == 0 else 0.0
+        return self.common_keys / self.finmind_keys * 100.0
+
+    def worst_mismatch_pct(self) -> float:
+        worst = 0.0
+        for mism, comp in self.per_col.values():
+            if comp:
+                worst = max(worst, mism / comp * 100.0)
+        return worst
+
+    def status(self, min_coverage_pct: float, max_mismatch_pct: float) -> str:
+        if self.error:
+            return "FAIL"
+        if self.coverage_pct < min_coverage_pct:
+            return "WARN"
+        if self.worst_mismatch_pct() > max_mismatch_pct:
+            return "WARN"
+        return "OK"
+
+
+def compare_values(
+    dataset: str,
+    source: str,
+    fm_rows: list[dict],
+    sc_rows: list[dict],
+    spec: "CompareSpec",
+    max_samples: int = 5,
+) -> ValueDiff:
+    """Join FinMind vs self-crawl raw rows on `spec.key_cols` and diff
+    each `spec.value_cols` column within its tolerance. Pure function —
+    no I/O — so it's directly unit-testable."""
+    fm_idx = {_key_of(r, spec.key_cols): r for r in fm_rows}
+    sc_idx = {_key_of(r, spec.key_cols): r for r in sc_rows}
+    common = sorted(set(fm_idx) & set(sc_idx))
+
+    per_col: dict[str, tuple[int, int]] = {
+        col: (0, 0) for col, _, _ in spec.value_cols
+    }
+    samples: list[str] = []
+    for key in common:
+        fm_row, sc_row = fm_idx[key], sc_idx[key]
+        for col, kind, tol in spec.value_cols:
+            verdict = _values_match(
+                fm_row.get(col), sc_row.get(col), kind, tol,
+            )
+            if verdict is None:
+                continue
+            mism, comp = per_col[col]
+            per_col[col] = (mism + (0 if verdict else 1), comp + 1)
+            if not verdict and len(samples) < max_samples:
+                samples.append(
+                    f"{key} {col}: finmind={fm_row.get(col)!r} "
+                    f"selfcrawl={sc_row.get(col)!r}"
+                )
+
+    return ValueDiff(
+        dataset=dataset,
+        source=source,
+        finmind_keys=len(fm_idx),
+        selfcrawl_keys=len(sc_idx),
+        common_keys=len(common),
+        per_col=per_col,
+        samples=samples,
+    )
+
+
+async def _fetch_rows(source: str, dataset: str, symbol: str | None,
+                      start: date, end: date,
+                      ) -> tuple[list[dict] | None, str | None]:
+    """Returns (rows, error_str). Either field is None when the other is
+    set. The row-count path wraps this; the `--values` path needs the
+    rows themselves to diff column values."""
     from finmind.ingest.selfcrawl import resolve_client
 
     try:
@@ -99,7 +242,17 @@ async def _fetch(source: str, dataset: str, symbol: str | None,
     except Exception as exc:
         return None, f"{exc.__class__.__name__}: {exc}"
 
-    return len(rows), None
+    return rows, None
+
+
+async def _fetch(source: str, dataset: str, symbol: str | None,
+                 start: date, end: date) -> tuple[int | None, str | None]:
+    """Returns (row_count, error_str). Either field is None when the
+    other is set."""
+    rows, err = await _fetch_rows(source, dataset, symbol, start, end)
+    if err is not None:
+        return None, err
+    return len(rows or []), None
 
 
 async def _diff_one(
@@ -140,6 +293,95 @@ def _resolve_target_source(dataset: str) -> str | None:
         if entry.dataset_code == dataset:
             return entry.fallback_source
     return None
+
+
+def _resolve_compare_spec(dataset: str) -> "CompareSpec | None":
+    """Look up the dataset's value-comparison recipe from the ingest
+    mappings registry. Returns None when the dataset has no mapping or
+    the mapping declares no `compare_spec` — in which case `--values`
+    reports the dataset as SKIP (author a spec before trusting a value
+    diff)."""
+    from finmind.ingest.mappings._registry import MAPPINGS
+
+    mapping = MAPPINGS.get(dataset)
+    return mapping.compare_spec if mapping else None
+
+
+async def _diff_values_one(
+    dataset: str, source: str, symbol: str | None,
+    start: date, end: date,
+) -> "ValueDiff":
+    spec = _resolve_compare_spec(dataset)
+    if spec is None:
+        return ValueDiff(
+            dataset=dataset, source=source, finmind_keys=0,
+            selfcrawl_keys=0, common_keys=0, per_col={}, samples=[],
+            error="no compare_spec — author one in mappings/_registry.py",
+        )
+
+    fm_rows, fm_err = await _fetch_rows("finmind", dataset, symbol, start, end)
+    sc_rows, sc_err = await _fetch_rows(source, dataset, symbol, start, end)
+    if sc_err is not None:
+        return ValueDiff(
+            dataset=dataset, source=source, finmind_keys=0,
+            selfcrawl_keys=0, common_keys=0, per_col={}, samples=[],
+            error=f"self-crawl: {sc_err}",
+        )
+    if fm_err is not None:
+        return ValueDiff(
+            dataset=dataset, source=source, finmind_keys=0,
+            selfcrawl_keys=len(sc_rows or []), common_keys=0,
+            per_col={}, samples=[], error=f"finmind: {fm_err}",
+        )
+
+    return compare_values(dataset, source, fm_rows or [], sc_rows or [], spec)
+
+
+def _print_values_report(
+    diffs: list["ValueDiff"], min_coverage: float, max_mismatch: float,
+) -> int:
+    print(
+        "| status | dataset | source | fm keys | sc keys | coverage | "
+        "worst col mismatch |\n"
+        "|--------|---------|--------|---------|---------|----------|"
+        "--------------------|"
+    )
+    bad = 0
+    detail_blocks: list[str] = []
+    for d in diffs:
+        st = d.status(min_coverage, max_mismatch)
+        if st != "OK":
+            bad += 1
+        if d.error:
+            print(
+                f"| {st} | {d.dataset} | {d.source} | — | — | — | "
+                f"{d.error[:40]} |"
+            )
+            continue
+        print(
+            f"| {st} | {d.dataset} | {d.source} | {d.finmind_keys} | "
+            f"{d.selfcrawl_keys} | {d.coverage_pct:.1f}% | "
+            f"{d.worst_mismatch_pct():.2f}% |"
+        )
+        if st != "OK" and (d.samples or d.per_col):
+            lines = [f"\n### {d.dataset} ({d.source}) — mismatch detail"]
+            for col, (mism, comp) in d.per_col.items():
+                if comp:
+                    lines.append(
+                        f"- {col}: {mism}/{comp} mismatched "
+                        f"({mism / comp * 100:.2f}%)"
+                    )
+            for s in d.samples:
+                lines.append(f"  · {s}")
+            detail_blocks.append("\n".join(lines))
+
+    for block in detail_blocks:
+        print(block)
+    print(
+        f"\ndry_run_cutover --values: {len(diffs) - bad} OK / {bad} "
+        f"non-OK out of {len(diffs)} datasets."
+    )
+    return 0 if bad == 0 else 1
 
 
 def _enumerate_all_datasets() -> list[tuple[str, str]]:
@@ -221,6 +463,30 @@ async def amain() -> int:
             "the script exits non-zero. Default: 5%%."
         ),
     )
+    parser.add_argument(
+        "--values", action="store_true",
+        help=(
+            "Value-level diff instead of row-count only: join both "
+            "sources on the dataset's compare_spec key columns and "
+            "check each value column within tolerance. Datasets without "
+            "a compare_spec are reported as SKIP."
+        ),
+    )
+    parser.add_argument(
+        "--min-coverage", type=float, default=98.0,
+        help=(
+            "With --values: minimum %% of FinMind keys that must also "
+            "appear on the self-crawl side. Below this → WARN. "
+            "Default: 98%%."
+        ),
+    )
+    parser.add_argument(
+        "--max-mismatch", type=float, default=1.0,
+        help=(
+            "With --values: maximum per-column value mismatch rate "
+            "before WARN. Default: 1%%."
+        ),
+    )
     args = parser.parse_args()
 
     if args.all and args.dataset:
@@ -260,6 +526,32 @@ async def amain() -> int:
             )
             return 1
         targets = [(args.dataset, source)]
+
+    if args.values:
+        print(
+            f"# Phase B cutover dry-run (values) — window {start}..{end}\n"
+        )
+        diffs: list[ValueDiff] = []
+        for dataset, source in targets:
+            diffs.append(
+                await _diff_values_one(
+                    dataset, source, args.symbol, start, end,
+                )
+            )
+            if (
+                diffs[-1].status(args.min_coverage, args.max_mismatch) != "OK"
+                and args.all and not args.keep_going
+            ):
+                _print_values_report(diffs, args.min_coverage, args.max_mismatch)
+                print(
+                    f"\ndry_run_cutover: stopping at first non-OK "
+                    f"({dataset}). Pass --keep-going to continue.",
+                    file=sys.stderr,
+                )
+                return 1
+        return _print_values_report(
+            diffs, args.min_coverage, args.max_mismatch,
+        )
 
     print(f"# Phase B cutover dry-run — window {start}..{end}\n")
     _print_header()

@@ -155,6 +155,35 @@ async def cache_incr(key: str, ttl_seconds: int | None = None) -> int:
     return count
 
 
+async def cache_hincrby(
+    key: str, field: str, amount: int = 1, ttl_seconds: int | None = None,
+) -> int:
+    """Increment a field inside a Redis hash by `amount`, returning the
+    new field value. When `ttl_seconds` is set the whole hash's expiry
+    is (re)armed on the field's first creation only — mirrors
+    `cache_incr`'s "expire on first bump" semantics so a per-day usage
+    hash self-clears without every write extending its life.
+
+    Used by the FinMind per-dataset upstream usage counter: one hash
+    per UTC day, one field per dataset_code."""
+    r = await get_redis()
+    count = await r.hincrby(key, field, amount)
+    if ttl_seconds and count == amount:
+        # First time this field appears in the hash — arm the TTL. A
+        # brand-new hash has exactly one field whose value == amount, so
+        # this fires once per day-key rather than on every dataset call.
+        await r.expire(key, ttl_seconds)
+    return count
+
+
+async def cache_hgetall(key: str) -> dict[str, str]:
+    """Read an entire Redis hash as a `{field: value}` dict (empty when
+    the key is missing). Used by the usage-report script to pull one
+    day's per-dataset call counts in a single round-trip."""
+    r = await get_redis()
+    return await r.hgetall(key)
+
+
 async def cache_decr(key: str, min_value: int = 0) -> int:
     """Decrement a counter, never falling below `min_value`.
 
@@ -308,6 +337,21 @@ def key_finmind_quota_exhausted_counter() -> str:
     the admin status report so operators notice when their parallel
     backfills are saturating the FinMind cap."""
     return "finmind:quota_exhausted:hourly"
+
+def key_finmind_dataset_usage(day: str) -> str:
+    """Per-day Redis hash of FinMind upstream calls broken down by
+    dataset_code. `day` is a UTC `YYYYMMDD` stamp; each field is a
+    dataset_code and its value the number of outbound calls that day.
+
+    The global `key_finmind_counter` answers "how close are we to the
+    hourly cap right now" but has no dataset dimension, so it can't tell
+    operators WHICH datasets are burning the FinMind budget. This hash
+    fills that gap; `finmind.scripts.usage_report` aggregates the last
+    N day-keys into a ranked table to drive the self-crawl cutover
+    priority order. TTL is 35 days (set by the connector on first write
+    each day) so a fortnight-plus of history is always queryable while
+    old keys self-expire."""
+    return f"finmind:upstream:usage:{day}"
 
 def key_finmind_ip_banned() -> str:
     """Circuit-breaker flag set when FinMind responds with HTTP 403 +

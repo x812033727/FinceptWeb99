@@ -58,6 +58,8 @@ from api.discussion.schemas import (
     DiscussionDetailResponse,
     DiscussionResponse,
     InjectUserMessageRequest,
+    InterjectRequest,
+    InterjectResponse,
     PostMortemDailyGainersOut,
     PostMortemDayPerformanceOut,
     PostMortemGainerOut,
@@ -196,6 +198,7 @@ async def get_session(
             content=t.content,
             citations=t.citations,
             created_at=t.created_at,
+            injected_by_user=bool(getattr(t, "injected_by_user", False)),
         )
         for t in turns
     ]
@@ -466,7 +469,15 @@ async def run_round(
                         user_id=user_id_str,
                         user_role=user_role_str,
                     ):
-                        if ev.type == "turn_end":
+                        # B4: interjected turns (the owner's question +
+                        # the assigned persona's answer) are charged
+                        # separately at /interject enqueue time — only
+                        # roster turns consume this round's up-front
+                        # reservation, so they must not inflate the
+                        # `completed` counter the refund math uses.
+                        if ev.type == "turn_end" and not ev.payload.get(
+                            "injected_by_user"
+                        ):
                             completed += 1
                         queue.put_nowait((ev.type, ev.payload))
                 except Exception as exc:
@@ -621,6 +632,10 @@ async def inject_user_message(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    return _turn_to_response(turn)
+
+
+def _turn_to_response(turn) -> TurnResponse:
     return TurnResponse(
         id=turn.id,
         round=turn.round,
@@ -630,6 +645,116 @@ async def inject_user_message(
         content=turn.content,
         citations=turn.citations,
         created_at=turn.created_at,
+        injected_by_user=bool(getattr(turn, "injected_by_user", False)),
+    )
+
+
+@router.post(
+    "/sessions/{discussion_id}/interject",
+    response_model=InterjectResponse,
+)
+async def interject(
+    discussion_id: uuid.UUID,
+    body: InterjectRequest,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """B4 圓桌討論插話 / 追問. Owner-scoped. Two modes:
+
+    * Discussion RUNNING → the question is enqueued; `run_round`
+      drains the queue at the next turn boundary, persists the
+      question as a `user_input` turn and has the assigned persona
+      (the named `target_persona`, else the moderator default = the
+      first roster persona) answer it as an extra turn. Both turns
+      stream over the round's existing SSE channel with
+      `injected_by_user: true` and are persisted with the same flag.
+      Returns `{status: "queued"}`.
+
+    * Discussion CONCLUDED (`done` + conclusion) → 追問: one bounded
+      follow-up turn runs synchronously (no new round, no context
+      re-gather) and both turns are returned inline as
+      `{status: "answered", question_turn, answer_turn}`.
+
+    Any other state → 409 (between rounds the free-form
+    `/sessions/{id}/inject` endpoint is the right tool — the personas
+    react to it in the NEXT round).
+
+    Quota: one AI request per interjection (the answer turn) — charged
+    up front in both modes.
+    """
+    row = await discussion_service.get_discussion(
+        db, discussion_id=discussion_id, owner_id=_coerce_owner_uuid(user),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Discussion not found")
+    if body.target_persona and body.target_persona not in (row.persona_ids or []):
+        raise HTTPException(
+            status_code=400,
+            detail=f"target_persona {body.target_persona!r} is not on this "
+                   "discussion's roster",
+        )
+
+    if row.status == discussion_service.STATUS_RUNNING:
+        # Capacity check BEFORE charging quota so a rejected request
+        # never costs the user anything.
+        if (
+            discussion_service.pending_interjection_count(row.id)
+            >= discussion_service._MAX_PENDING_INTERJECTIONS
+        ):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many pending interjections — wait for the "
+                       "current ones to be answered",
+            )
+        await _check_quota(user, db, cost=1)
+        try:
+            discussion_service.queue_interjection(
+                row.id,
+                question=body.question,
+                target_persona=body.target_persona,
+            )
+        except ValueError as exc:
+            await _refund(user, count=1)
+            raise HTTPException(status_code=400, detail=str(exc))
+        return InterjectResponse(
+            status="queued", target_persona=body.target_persona,
+        )
+
+    if row.status == discussion_service.STATUS_DONE and row.conclusion:
+        await _check_quota(user, db, cost=1)
+        try:
+            question_turn, answer_turn = await discussion_service.interject_followup(
+                db, row,
+                question=body.question,
+                target_persona=body.target_persona,
+                user_id=str(user["id"]),
+                user_role=str(user.get("role") or ""),
+            )
+        except ValueError as exc:
+            await _refund(user, count=1)
+            raise HTTPException(status_code=400, detail=str(exc))
+        except Exception as exc:
+            await _refund(user, count=1)
+            log.exception(
+                "discussion.interject.followup_failed",
+                extra={"discussion_id": str(discussion_id)},
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=f"Follow-up failed: {exc}",
+            )
+        return InterjectResponse(
+            status="answered",
+            target_persona=answer_turn.persona_id,
+            question_turn=_turn_to_response(question_turn),
+            answer_turn=_turn_to_response(answer_turn),
+        )
+
+    raise HTTPException(
+        status_code=409,
+        detail="Interject requires a running discussion (mid-round) or a "
+               "concluded one (follow-up). Between rounds, use "
+               "/sessions/{id}/inject instead.",
     )
 
 

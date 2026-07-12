@@ -193,6 +193,9 @@ export default function DiscussionPage() {
     injectDraft,
     setInjectDraft,
     injectMut,
+    interjectTarget,
+    setInterjectTarget,
+    interjectMut,
   } = useDiscussionMutations({
     selectedId,
     setSelectedId,
@@ -303,6 +306,18 @@ export default function DiscussionPage() {
   const status = detail?.status ?? "draft";
   const isDraft = !selectedId || status === "draft";
 
+  // B4: which flavour of the inject form applies right now.
+  //   running  → mid-round interject (queued, answered at the next
+  //              turn boundary over SSE)
+  //   followup → post-conclusion 追問 (one bounded synchronous turn)
+  //   between  → classic between-rounds inject (PR #211)
+  const injectMode: "between" | "running" | "followup" =
+    isStreaming || status === "running"
+      ? "running"
+      : status === "done" && detail?.conclusion
+        ? "followup"
+        : "between";
+
   // Reset to a fresh draft. Used by the desktop toolbar's
   // 「+ 新討論」 button AND the mobile sidebar drawer's same
   // button — `useCallback` so `<DiscussionToolbar>` doesn't
@@ -349,6 +364,11 @@ export default function DiscussionPage() {
 
   const injectFormProps = {
     injectDraft, setInjectDraft, injectMut, setInjectSheetOpen,
+    // B4: interject wiring — persona roster of the ACTIVE discussion
+    // (not the unsaved form selection) so the target select matches
+    // what the backend will validate against.
+    interjectMut, interjectTarget, setInterjectTarget,
+    personaIds: detail?.persona_ids ?? [], personaName,
   };
 
   const sessionsFilterProps = {
@@ -409,9 +429,17 @@ export default function DiscussionPage() {
       <Sheet open={injectSheetOpen} onOpenChange={setInjectSheetOpen}>
         <SheetContent side="bottom" className="max-h-[60vh] overflow-y-auto p-4 space-y-3">
           <SheetHeader>
-            <SheetTitle>{t("discussion.inject_label")}</SheetTitle>
+            <SheetTitle>
+              {t(
+                injectMode === "running"
+                  ? "discussion.interject_label"
+                  : injectMode === "followup"
+                    ? "discussion.followup_label"
+                    : "discussion.inject_label",
+              )}
+            </SheetTitle>
           </SheetHeader>
-          <InjectForm {...injectFormProps} />
+          <InjectForm mode={injectMode} {...injectFormProps} />
         </SheetContent>
       </Sheet>
 
@@ -542,6 +570,8 @@ export default function DiscussionPage() {
           postMortemMut={postMortemMut}
           persistedPostMortem={persistedPostMortem}
           bottomRef={bottomRef}
+          injectMode={injectMode}
+          injectFormProps={injectFormProps}
         />
 
         {/* Mobile-only sticky action bar — hosts the most-used CTAs

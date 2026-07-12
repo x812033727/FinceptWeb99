@@ -88,4 +88,42 @@ describe("TurnBubble", () => {
     expect(article.className).toContain("ring-2");
     expect(container.querySelector(".animate-pulse")).not.toBeNull();
   });
+
+  // ── B4: interjection badges ─────────────────────────────────────
+
+  it("badges the owner's interjected question (user_input stance)", () => {
+    render(
+      <TurnBubble
+        turn={makeTurn({
+          persona_id: "_user",
+          stance: "user_input",
+          injected_by_user: true,
+          content: "為什麼看好 2330?",
+        })}
+        personaName={(id) => (id === "_user" ? "You" : id)}
+      />,
+    );
+    expect(screen.getByText("User question")).toBeInTheDocument();
+  });
+
+  it("badges a persona turn answering an interjection", () => {
+    render(
+      <TurnBubble
+        turn={makeTurn({ stance: "supplement", injected_by_user: true })}
+        personaName={personaName}
+      />,
+    );
+    expect(screen.getByText("Interjection reply")).toBeInTheDocument();
+  });
+
+  it("shows no interjection badge on ordinary persona turns", () => {
+    render(
+      <TurnBubble
+        turn={makeTurn({ stance: "supplement" })}
+        personaName={personaName}
+      />,
+    );
+    expect(screen.queryByText("Interjection reply")).not.toBeInTheDocument();
+    expect(screen.queryByText("User question")).not.toBeInTheDocument();
+  });
 });

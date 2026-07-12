@@ -102,6 +102,28 @@ export async function injectUserMessage(
   return res.data;
 }
 
+// ── B4: mid-round interjection + post-conclusion 追問 ─────────────
+
+/** `queued` while the discussion is running (the question/answer
+ * turns arrive over the round's SSE stream); `answered` on the
+ * concluded 追問 path, with both turns returned inline. */
+export interface InterjectResponse {
+  status: "queued" | "answered";
+  target_persona?: string | null;
+  question_turn?: Turn | null;
+  answer_turn?: Turn | null;
+}
+
+export async function interjectSession(
+  id: string,
+  body: { question: string; target_persona?: string },
+): Promise<InterjectResponse> {
+  const res = await api.post<InterjectResponse>(
+    `/discussion/sessions/${id}/interject`, body,
+  );
+  return res.data;
+}
+
 export async function concludeSession(id: string): Promise<{ conclusion: Conclusion }> {
   const res = await api.post<{ conclusion: Conclusion }>(
     `/discussion/sessions/${id}/conclude`,

@@ -62,6 +62,17 @@ export function TurnBubble({
     turn.stance === "agree" && !bodyOverride && !turn.content.trim();
   const body = isAgreeSilent ? t("discussion.agree_silent") : turn.content;
 
+  // B4 badges: the owner's interjected question (`user_input` stance)
+  // vs the persona turn answering it (`injected_by_user` on a normal
+  // stance). Between-rounds injects and post-mortem prompts share the
+  // question badge — they're all owner-authored turns.
+  const injectedBadgeKey =
+    turn.stance === "user_input"
+      ? "discussion.turn_badge_user_question"
+      : turn.injected_by_user
+        ? "discussion.turn_badge_interject_reply"
+        : null;
+
   return (
     <article
       className={cn(
@@ -92,6 +103,11 @@ export function TurnBubble({
             R{turn.round}
           </p>
         </div>
+        {injectedBadgeKey && (
+          <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] border bg-warning/10 text-warning border-warning/30 self-center">
+            {t(injectedBadgeKey)}
+          </span>
+        )}
         <span
           className={cn(
             "shrink-0 inline-flex items-center justify-center h-5 w-5 rounded ring-1",

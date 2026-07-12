@@ -175,11 +175,12 @@ export function DiscussionActionsBar({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuLabel>{t("discussion.more_actions")}</DropdownMenuLabel>
-              {selectedId && isDraft && (detail?.current_round ?? 0) >= 1 && (
-                <DropdownMenuItem
-                  onSelect={() => setInjectSheetOpen(true)}
-                  disabled={isStreaming}
-                >
+              {/* B4: the inject sheet now covers all three flavours —
+                  between-rounds inject, mid-round interject (while
+                  streaming) and post-conclusion 追問 — so the entry
+                  stays enabled whenever at least one round exists. */}
+              {selectedId && (detail?.current_round ?? 0) >= 1 && (
+                <DropdownMenuItem onSelect={() => setInjectSheetOpen(true)}>
                   <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
                   {t("discussion.inject_send")}
                 </DropdownMenuItem>

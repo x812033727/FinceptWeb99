@@ -284,6 +284,10 @@ export function useRoundStream({
                     stance: obj.stance,
                     content: obj.content,
                     created_at: new Date().toISOString(),
+                    // B4: interjected question/answer turns carry the
+                    // flag so the live transcript badges them the same
+                    // way persisted turns do.
+                    injected_by_user: Boolean(obj.injected_by_user),
                   },
                 ]);
                 // Live per-persona usage + prompt-composition breakdown

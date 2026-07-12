@@ -13,6 +13,8 @@ import type {
 } from "@/types/discussion";
 import { ConclusionCard } from "@/components/discussion/ConclusionCard";
 import { ConclusionDiffCard } from "@/components/discussion/ConclusionDiffCard";
+import { InjectForm } from "@/components/discussion/InjectForm";
+import type { InjectFormProps, InjectMode } from "@/components/discussion/InjectForm";
 import { PostMortemSkippedCard } from "@/components/discussion/PostMortemSkippedCard";
 import { PostMortemGainersCard } from "@/components/discussion/PostMortemGainersCard";
 import { RoundContextsCard } from "@/components/discussion/RoundContextsCard";
@@ -43,6 +45,8 @@ export function TranscriptPane({
   postMortemMut,
   persistedPostMortem,
   bottomRef,
+  injectMode,
+  injectFormProps,
 }: {
   selectedId: string | null;
   detail: DiscussionDetail | undefined;
@@ -70,6 +74,12 @@ export function TranscriptPane({
   postMortemMut: { data: PostMortemResponse | undefined };
   persistedPostMortem: PostMortemResponse | null;
   bottomRef: React.RefObject<HTMLDivElement>;
+  /** B4: current interjection mode — "running" renders the interject
+   *  form under the live streaming card, "followup" renders the 追問
+   *  form under the conclusion. Omitted / "between" renders nothing
+   *  here (the between-rounds form lives in the config bar). */
+  injectMode?: InjectMode;
+  injectFormProps?: Omit<InjectFormProps, "mode">;
 }) {
   const { t } = useTranslation();
 
@@ -252,6 +262,14 @@ export function TranscriptPane({
           />
         </>
       )}
+      {/* B4: mid-round interject form — visible while the round
+          streams so the owner can raise a question without opening
+          the config drawer. The backend answers it at the next turn
+          boundary; the resulting turns arrive over the same SSE
+          stream and render above with 使用者提問 / 插話回覆 badges. */}
+      {isStreaming && injectMode === "running" && injectFormProps && (
+        <InjectForm mode="running" {...injectFormProps} />
+      )}
 
       {detail?.conclusion && (
         <ConclusionCard detail={detail} personaName={personaName} />
@@ -274,6 +292,13 @@ export function TranscriptPane({
           conclusion={detail.post_mortem_conclusion}
           variant="post_mortem"
         />
+      )}
+      {/* B4: post-conclusion 追問 affordance — one bounded follow-up
+          question answered by a single persona, appended to the
+          transcript without re-opening full rounds. Sits right under
+          the conclusion cards where the question naturally arises. */}
+      {injectMode === "followup" && injectFormProps && detail?.conclusion && (
+        <InjectForm mode="followup" {...injectFormProps} />
       )}
       {/* Post-mortem gainers leaderboard. Falls back to the
           localStorage-persisted snapshot (PR #268) when the

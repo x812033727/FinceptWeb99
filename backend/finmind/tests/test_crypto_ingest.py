@@ -9,7 +9,6 @@ row-shaping is unit-tested separately against a mocked HTTP layer.
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy import select, text
@@ -17,7 +16,7 @@ from sqlalchemy import select, text
 from finmind.ingest.runner import ingest_chunk
 from finmind.models.crypto import CryptoOhlcv, CryptoUniverse
 from finmind.models.dataset_source import DatasetSource
-from finmind.scheduler.dispatcher import DueChunk, expand_due_datasets
+from finmind.scheduler.dispatcher import expand_due_datasets
 from finmind.scheduler.runner import get_crypto_universe
 from finmind.scripts.crypto_universe_refresh import apply_refresh, build_rows
 from finmind.scripts.init_db import seed_dataset_sources

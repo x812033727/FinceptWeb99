@@ -16,6 +16,12 @@ from models.discussion_strategy_template import DiscussionStrategyTemplate
 from models.strategy_health_metric import StrategyHealthMetric
 from models.user import User, UserRole
 from services import strategy_health_service as svc
+# The service stamps snapshots with datetime.now(UTC).date(); using the
+# host-local date.today() here made these tests fail between local
+# midnight and UTC midnight on any TZ-offset host (e.g. +08 00:00-08:00).
+def _utc_today():
+    return datetime.now(UTC).date()
+
 
 
 @pytest.fixture
@@ -164,7 +170,7 @@ async def test_brier_drift_flag_against_history(
     # Historical row
     db_session.add(StrategyHealthMetric(
         strategy_id=tmpl.id,
-        snapshot_date=date.today() - timedelta(days=3),
+        snapshot_date=_utc_today() - timedelta(days=3),
         brier_30d=0.20,
         sample_count_30d=10,
         status_flags=[],
@@ -189,7 +195,7 @@ async def test_low_sample_short_circuits_drift_check(
     tmpl = await _make_strategy(db_session, owner.id)
     db_session.add(StrategyHealthMetric(
         strategy_id=tmpl.id,
-        snapshot_date=date.today() - timedelta(days=3),
+        snapshot_date=_utc_today() - timedelta(days=3),
         brier_30d=0.20,
         sample_count_30d=10,
         status_flags=[],
@@ -218,7 +224,7 @@ async def test_record_snapshot_writes_new_row(
         briers=[0.20] * 10,
     )
     row = await svc.record_snapshot(db_session, strategy_id=tmpl.id)
-    assert row.snapshot_date == date.today()
+    assert row.snapshot_date == _utc_today()
     assert row.brier_30d == pytest.approx(0.20)
     assert row.sample_count_30d == 10
 
@@ -253,7 +259,7 @@ async def test_list_recent_returns_newest_first(
     db_session: AsyncSession, owner: User,
 ):
     tmpl = await _make_strategy(db_session, owner.id)
-    today = date.today()
+    today = _utc_today()
     for offset in (5, 3, 1):
         db_session.add(StrategyHealthMetric(
             strategy_id=tmpl.id,
@@ -277,7 +283,7 @@ async def test_list_recent_filters_by_window(
 ):
     """An ancient row outside the days window doesn't return."""
     tmpl = await _make_strategy(db_session, owner.id)
-    today = date.today()
+    today = _utc_today()
     db_session.add(StrategyHealthMetric(
         strategy_id=tmpl.id,
         snapshot_date=today - timedelta(days=100),

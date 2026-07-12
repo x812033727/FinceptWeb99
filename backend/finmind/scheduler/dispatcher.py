@@ -26,6 +26,8 @@ from finmind.models.dataset_source import DatasetSource
 # before we re-run. Slightly larger than the natural cadence so a
 # one-cycle blip doesn't double-fire when the cron catches up.
 _BUDGET: dict[str, timedelta] = {
+    "hourly":    timedelta(minutes=50),  # crypto 1h bars — fire each hour
+    "8h":        timedelta(hours=7),     # perp funding cadence
     "daily":     timedelta(hours=22),    # ~daily, allow 2h grace
     "weekly":    timedelta(days=6),
     "monthly":   timedelta(days=28),
@@ -35,7 +37,11 @@ _BUDGET: dict[str, timedelta] = {
 # Default backfill range when a dataset becomes due. Tuned per cadence:
 # daily backfills the last 7 days (catches weekend recovery + late
 # corrections); monthly backfills the last 90 days (covers late filers).
+# hourly/8h keep a short window (a couple of days) — the point is
+# freshness + gap-fill, deep history comes from the one-time backfill.
 _RANGE_DAYS: dict[str, int] = {
+    "hourly":    2,
+    "8h":        3,
     "daily":     7,
     "weekly":    14,
     "monthly":   90,
@@ -107,6 +113,13 @@ _WARRANT_UNIVERSE_DATASETS: frozenset[str] = frozenset({
     "TaiwanStockWarrantTradingDailyReport",
 })
 
+# Sources whose per-symbol datasets fan out across the crypto universe
+# (Binance pairs from `crypto_universe`) instead of the TW equity
+# universe. Keyed on active_source rather than dataset_code so every
+# current + future crypto dataset routes correctly without a per-code
+# allowlist.
+_CRYPTO_SOURCES: frozenset[str] = frozenset({"binance", "coingecko"})
+
 
 def expand_due_datasets(
     datasets: list[DatasetSource],
@@ -114,6 +127,7 @@ def expand_due_datasets(
     *,
     symbols: list[str] | None = None,
     warrant_symbols: list[str] | None = None,
+    crypto_symbols: list[str] | None = None,
 ) -> list[DueChunk]:
     """Pure expansion — turns enabled+due dataset rows into a flat
     work list of DueChunks the runner can iterate.
@@ -157,11 +171,12 @@ def expand_due_datasets(
             range_starts = [rs]
 
         if ds.per_symbol:
-            universe = (
-                warrant_symbols
-                if ds.dataset_code in _WARRANT_UNIVERSE_DATASETS
-                else symbols
-            )
+            if ds.active_source in _CRYPTO_SOURCES:
+                universe = crypto_symbols
+            elif ds.dataset_code in _WARRANT_UNIVERSE_DATASETS:
+                universe = warrant_symbols
+            else:
+                universe = symbols
             if universe:
                 for sym in universe:
                     for start_day in range_starts:

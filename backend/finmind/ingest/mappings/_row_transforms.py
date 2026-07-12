@@ -15,6 +15,7 @@ from typing import Any
 
 from ._types import (
     _to_date,
+    _to_datetime,
     _to_decimal,
     _to_int,
     _to_str,
@@ -43,6 +44,27 @@ def _row_ohlcv(row: dict[str, Any]) -> dict[str, Any]:
         "source": row.get("source", "finmind"),
     }
 
+
+
+def _row_crypto_ohlcv(row: dict[str, Any]) -> dict[str, Any]:
+    """Binance kline → crypto_ohlcv row. `ts` is TIMESTAMPTZ (sub-day
+    granularity for 1h bars) so it uses `_to_datetime`, not `_to_date`.
+    Prices/volumes stay Decimal to preserve sub-cent alt-coin precision;
+    `trades` is the bar's trade count."""
+    return {
+        "market": row.get("market", "BINANCE"),
+        "symbol": _to_str(row.get("symbol")),
+        "interval": _to_str(row.get("interval")),
+        "ts": _to_datetime(row.get("ts")),
+        "open": _to_decimal(row.get("open")),
+        "high": _to_decimal(row.get("high")),
+        "low": _to_decimal(row.get("low")),
+        "close": _to_decimal(row.get("close")),
+        "volume": _to_decimal(row.get("volume")),
+        "quote_volume": _to_decimal(row.get("quote_volume")),
+        "trades": _to_int(row.get("trades")),
+        "source": row.get("source", "binance"),
+    }
 
 
 def _row_margin(row: dict[str, Any]) -> dict[str, Any]:

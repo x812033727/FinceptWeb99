@@ -27,6 +27,9 @@ def test_registry_categories_match_finmind_doc_layout():
     assert set(fd.REGISTRY) == {
         "technical", "chip", "fundamental", "derivative",
         "realtime", "convertible_bond", "other", "macro",
+        # Crypto isn't a FinMind DataList family — it's the clone's own
+        # Binance/CoinGecko-sourced datasets, bucketed here for parity.
+        "crypto",
     }
 
 

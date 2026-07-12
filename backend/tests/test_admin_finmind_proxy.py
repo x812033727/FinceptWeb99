@@ -596,11 +596,11 @@ async def test_proxy_lists_catalog_for_admin(
     )
     assert r.status_code == 200
     body = r.json()
-    # 85 = 80 (FinMind TaiwanMarket DataList + 1 BuyBack legacy) + 5
+    # 87 = 80 (FinMind TaiwanMarket DataList + 1 BuyBack legacy) + 5
     # macro datasets (TaiwanExchangeRate / InterestRate /
-    # GovernmentBondsYield / CnnFearGreedIndex / CrudeOilPrices)
-    # added in the macro-indicators PR.
-    assert len(body) == 85
+    # GovernmentBondsYield / CnnFearGreedIndex / CrudeOilPrices) + 2
+    # crypto datasets (CryptoPrice / CryptoPriceHourly, W5).
+    assert len(body) == 87
     by_code = {row["dataset_code"]: row for row in body}
     assert "TaiwanStockPrice" in by_code
     assert by_code["TaiwanStockPrice"]["per_symbol"] is True
@@ -813,7 +813,7 @@ async def test_proxy_status_returns_collect_status_shape(
         "active_ingestion", "backfill", "recent_errors", "generated_at",
     ):
         assert k in body
-    assert body["catalog"]["seeded"] == 85
+    assert body["catalog"]["seeded"] == 87
 
 
 @pytest.mark.asyncio

@@ -193,6 +193,19 @@ MACRO: tuple[DatasetSpec, ...] = (
 )
 
 
+# ── Crypto (加密貨幣) ─────────────────────────────────────────────
+#
+# Not a FinMind dataset family — these are served by the clone's own
+# Binance/CoinGecko connectors. Registered here so the catalog's
+# import-time cross-check (`_validate_against_finmind_registry`) and the
+# seed's `find_dataset` both recognise the crypto dataset_codes.
+
+CRYPTO: tuple[DatasetSpec, ...] = (
+    DatasetSpec("CryptoPrice", "加密貨幣日 K 線 (Binance)", per_symbol=True),
+    DatasetSpec("CryptoPriceHourly", "加密貨幣小時 K 線 (Binance)", per_symbol=True),
+)
+
+
 REGISTRY: dict[str, tuple[DatasetSpec, ...]] = {
     "technical":        TECHNICAL,
     "chip":             CHIP,
@@ -202,6 +215,7 @@ REGISTRY: dict[str, tuple[DatasetSpec, ...]] = {
     "convertible_bond": CONVERTIBLE_BOND,
     "other":            OTHER,
     "macro":            MACRO,
+    "crypto":           CRYPTO,
 }
 
 

@@ -39,6 +39,7 @@ from ._row_transforms import (
     _row_buyback,
     _row_cb_info,
     _row_cb_inst_daily,
+    _row_crypto_ohlcv,
     _row_day_trade,
     _row_day_trade_fee,
     _row_delisting,
@@ -1149,6 +1150,48 @@ MAPPINGS: dict[str, DatasetMapping] = {
         # end_date omitted returned 2 rows for that one day). Force
         # per-day fan-out so the runner gets every trading day.
         single_day=True,
+    ),
+    # ── Crypto (Binance) ────────────────────────────────────────
+    # Both write crypto_ohlcv, discriminated by the `interval` column
+    # the selfcrawl handler stamps ('1d' vs '1h'). `market`/`source`
+    # are injected via extra; symbol is the Binance pair (BTCUSDT).
+    "CryptoPrice": DatasetMapping(
+        dataset_code="CryptoPrice",
+        local_table="crypto_ohlcv",
+        column_map={
+            "symbol": "symbol",
+            "interval": "interval",
+            "ts": "ts",
+            "open": "open",
+            "high": "high",
+            "low": "low",
+            "close": "close",
+            "volume": "volume",
+            "quote_volume": "quote_volume",
+            "trades": "trades",
+        },
+        pk_columns=("market", "symbol", "interval", "ts"),
+        extra={"market": "BINANCE", "source": "binance"},
+        row_transform=_row_crypto_ohlcv,
+    ),
+    "CryptoPriceHourly": DatasetMapping(
+        dataset_code="CryptoPriceHourly",
+        local_table="crypto_ohlcv",
+        column_map={
+            "symbol": "symbol",
+            "interval": "interval",
+            "ts": "ts",
+            "open": "open",
+            "high": "high",
+            "low": "low",
+            "close": "close",
+            "volume": "volume",
+            "quote_volume": "quote_volume",
+            "trades": "trades",
+        },
+        pk_columns=("market", "symbol", "interval", "ts"),
+        extra={"market": "BINANCE", "source": "binance"},
+        row_transform=_row_crypto_ohlcv,
     ),
 }
 

@@ -15,4 +15,5 @@ from finmind.models import fundamental  # noqa: F401
 from finmind.models import derivative  # noqa: F401
 from finmind.models import corporate  # noqa: F401
 from finmind.models import intraday  # noqa: F401
+from finmind.models import crypto  # noqa: F401
 from finmind.models import billing  # noqa: F401

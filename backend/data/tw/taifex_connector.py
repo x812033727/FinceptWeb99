@@ -290,6 +290,75 @@ async def get_option_daily(
     return out
 
 
+# ── Three-major-investor futures positions (三大法人-期貨) ─────────
+#
+# TAIFEX publishes one row per (date, 商品名稱, 身份別); FinMind's
+# TaiwanFuturesInstitutionalInvestors is ONE wide row per (contract,
+# date) with foreign / trust / dealer long-and-short OI as columns. So
+# the handler PIVOTS the three 身份別 rows of a product into one wide
+# row, mapping the Chinese product name to FinMind's futures_id code.
+
+_FUT_INST_URL = "https://www.taifex.com.tw/cht/3/futContractsDateDown"
+
+# 身份別 → pivot slot.
+_INVESTOR_SLOT = {
+    "外資及陸資": "foreign_investment",
+    "外資": "foreign_investment",
+    "投信": "investment_trust",
+    "自營商": "dealer",
+}
+
+# 商品名稱 → FinMind futures_id. Curated for the headline index/sector
+# futures (the ones used for 外資部位 directional analysis). Products
+# not in this map are skipped rather than emitted under a Chinese name
+# that wouldn't match FinMind on cutover; extend as needed and reconcile
+# with `dry_run_cutover --values`.
+_FUT_NAME_TO_ID = {
+    "臺股期貨": "TX",
+    "小型臺指期貨": "MTX",
+    "微型臺指期貨": "TMF",
+    "電子期貨": "TE",
+    "小型電子期貨": "ZEF",
+    "金融期貨": "TF",
+    "非金電期貨": "XIF",
+    "臺灣50期貨": "T5F",
+}
+
+
+async def get_futures_institutional(
+    start: date, end: date,
+) -> list[dict[str, Any]]:
+    """三大法人-期貨 daily open-interest positions, pivoted to FinMind's
+    `TaiwanFuturesInstitutionalInvestors` raw shape (one wide row per
+    contract per day). Only the curated index/sector futures in
+    `_FUT_NAME_TO_ID` are emitted."""
+    if start > end:
+        return []
+    body = await _download_taifex_csv(
+        _FUT_INST_URL, "https://www.taifex.com.tw/cht/3/futContractsDate",
+        {
+            "queryStartDate": _format_taifex_date(start),
+            "queryEndDate": _format_taifex_date(end),
+        },
+    )
+    rows = _parse_market_rows(body)
+    # (date, futures_id) → wide row being assembled.
+    wide: dict[tuple[str, str], dict[str, Any]] = {}
+    for r in rows:
+        d = _parse_taifex_day(r.get("日期", ""))
+        fid = _FUT_NAME_TO_ID.get(r.get("商品名稱", "").strip())
+        slot = _INVESTOR_SLOT.get(r.get("身份別", "").strip())
+        if d is None or fid is None or slot is None:
+            continue
+        key = (d, fid)
+        wide.setdefault(key, {"date": d, "futures_id": fid})
+        wide[key][f"long_open_interest_balance_volume_{slot}"] = _num(
+            r.get("多方未平倉口數"))
+        wide[key][f"short_open_interest_balance_volume_{slot}"] = _num(
+            r.get("空方未平倉口數"))
+    return list(wide.values())
+
+
 def _parse_taifex_day(raw: str) -> str | None:
     """TAIFEX daily reports use Gregorian YYYY/MM/DD. Returns an ISO
     date string, or None when unparseable (holiday header rows etc.)."""
@@ -337,4 +406,7 @@ async def get_vix_history(
     return _parse_csv_body(body)
 
 
-__all__ = ["get_vix_history", "get_futures_daily", "get_option_daily"]
+__all__ = [
+    "get_vix_history", "get_futures_daily", "get_option_daily",
+    "get_futures_institutional",
+]

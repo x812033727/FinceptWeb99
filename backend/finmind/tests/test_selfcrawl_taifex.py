@@ -21,7 +21,9 @@ def test_taifex_registered_and_covers_daily():
     assert isinstance(resolve_client("taifex"), TaifexClient)
     assert covers_dataset("taifex", "TaiwanFuturesDaily")
     assert covers_dataset("taifex", "TaiwanOptionDaily")
-    assert not covers_dataset("taifex", "TaiwanFuturesInstitutionalInvestors")
+    assert covers_dataset("taifex", "TaiwanFuturesInstitutionalInvestors")
+    # Option institutional still deferred (batch-pivot).
+    assert not covers_dataset("taifex", "TaiwanOptionInstitutionalInvestors")
 
 
 @pytest.mark.asyncio
@@ -42,7 +44,7 @@ async def test_taifex_client_dispatches_to_connector():
 async def test_taifex_client_unsupported_dataset_raises():
     with pytest.raises(NotImplementedError):
         await TaifexClient().fetch(
-            "TaiwanFuturesInstitutionalInvestors", None,
+            "TaiwanOptionInstitutionalInvestors", None,
             date(2026, 1, 1), date(2026, 1, 1),
         )
 
@@ -121,3 +123,48 @@ async def test_taifex_futures_ingest_end_to_end(finmind_session):
     assert float(by["TX"].close) == 30313
     assert by["TX"].open_interest == 75674
     assert by["TX"].ts == date(2026, 1, 5)
+
+
+@pytest.mark.asyncio
+async def test_taifex_futures_institutional_ingest_end_to_end(finmind_session):
+    """三大法人 futures OI → one wide row per contract in
+    tw_futures_inst_daily (day session)."""
+    from finmind.models.derivative import TwFuturesInstDaily
+
+    await seed_dataset_sources()
+    ds = await finmind_session.get(
+        DatasetSource, "TaiwanFuturesInstitutionalInvestors")
+    ds.enabled = True
+    ds.active_source = "taifex"
+    await finmind_session.commit()
+
+    fake_rows = [{
+        "date": "2026-01-05", "futures_id": "TX",
+        "long_open_interest_balance_volume_foreign_investment": "23747",
+        "short_open_interest_balance_volume_foreign_investment": "48848",
+        "long_open_interest_balance_volume_investment_trust": "32819",
+        "short_open_interest_balance_volume_investment_trust": "5326",
+        "long_open_interest_balance_volume_dealer": "4134",
+        "short_open_interest_balance_volume_dealer": "8614",
+    }]
+
+    class _FakeTaifex:
+        async def fetch(self, dataset_code, symbol, start_date, end_date):
+            return fake_rows
+
+    result = await ingest_chunk(
+        finmind_session,
+        dataset_code="TaiwanFuturesInstitutionalInvestors", symbol=None,
+        range_start=date(2026, 1, 5), range_end=date(2026, 1, 5),
+        client=_FakeTaifex(),
+    )
+    assert result.status == "done", result
+    assert result.rows_written == 1
+
+    row = (await finmind_session.execute(
+        select(TwFuturesInstDaily))).scalars().one()
+    assert row.contract == "TX"
+    assert row.session == "day"
+    assert row.foreign_long_open_interest == 23747
+    assert row.foreign_short_open_interest == 48848
+    assert row.dealer_short_open_interest == 8614

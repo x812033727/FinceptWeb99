@@ -73,10 +73,12 @@ def test_enumerate_all_datasets_skips_stub_sources():
     assert ("TaiwanStockPrice", "twse") in targets
     # Headline MOPS handler must show up.
     assert ("TaiwanStockMonthRevenue", "mops") in targets
-    # TAIFEX daily reports were wired in W2 (only the two handled ones).
+    # TAIFEX daily reports wired in W2, 三大法人 futures in W4b.
     assert ("TaiwanFuturesDaily", "taifex") in targets
     assert ("TaiwanOptionDaily", "taifex") in targets
-    assert ("TaiwanFuturesInstitutionalInvestors", "taifex") not in targets
+    assert ("TaiwanFuturesInstitutionalInvestors", "taifex") in targets
+    # Option institutional is still deferred (batch-pivot).
+    assert ("TaiwanOptionInstitutionalInvestors", "taifex") not in targets
     # TDCC 股權分散 wired in W3.
     assert ("TaiwanStockHoldingSharesPer", "tdcc") in targets
 

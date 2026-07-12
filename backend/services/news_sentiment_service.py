@@ -1111,11 +1111,20 @@ async def read_recent_market_sentiment(
             counts.get(r.sentiment_label or "neutral", 0) + 1
         )
 
-    # ── headline sample (newest first, capped) ─────────────────────
+    # ── headline sample (capped) ───────────────────────────────────
+    # Within the tight market window, prefer articles that carry an
+    # extracted body (direct-publisher feeds): their sentiment was scored
+    # WITH the full text (G5 R8-3) so it's more reliable than a title-only
+    # Google-News score. `body IS NOT NULL` first, then newest — the
+    # window is short (~48h) so this costs little recency. `has_fulltext`
+    # is surfaced so the synthesizer can weight body-backed items higher.
     head_stmt = (
         select(NewsArticle)
         .where(*base_filter)
-        .order_by(NewsArticle.published_at.desc())
+        .order_by(
+            NewsArticle.body.is_(None).asc(),  # False(0)=has body → first
+            NewsArticle.published_at.desc(),
+        )
         .limit(limit)
     )
     head_rows = list((await db.scalars(head_stmt)).all())
@@ -1133,6 +1142,7 @@ async def read_recent_market_sentiment(
                 "score":        r.sentiment_score,
                 "label":        r.sentiment_label,
                 "published_at": r.published_at.isoformat(),
+                "has_fulltext": r.body is not None,
             }
             for r in head_rows
         ],
@@ -1215,6 +1225,11 @@ async def read_symbol_sentiment(
                 "score":        r.sentiment_score,
                 "label":        r.sentiment_label,
                 "published_at": r.published_at.isoformat(),
+                # Per-symbol news is sparse; keep pure recency ordering
+                # (staleness matters more here than at market scale), but
+                # still flag body-backed items so the reader knows which
+                # sentiment was scored with full text.
+                "has_fulltext": r.body is not None,
             }
             for r in head_rows
         ],

@@ -11,7 +11,7 @@
  */
 export const PROVIDER_MODELS: Record<string, string[]> = {
   openai:    ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo", "o1", "o1-mini", "o3-mini"],
-  anthropic: ["claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-sonnet-4-5-20250929", "claude-opus-4-7"],
+  anthropic: ["claude-sonnet-5", "claude-opus-4-8", "claude-haiku-4-5-20251001", "claude-opus-4-7", "claude-sonnet-4-6"],
   gemini:    ["gemini-2.0-flash", "gemini-2.0-flash-exp", "gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.5-flash-8b"],
   // Ollama models depend on what the operator has `ollama pull`-ed locally;
   // these are popular community defaults.
@@ -32,7 +32,7 @@ export const PROVIDER_MODELS: Record<string, string[]> = {
   ],
   // claude_agent uses the Claude Agent SDK which under the hood talks to
   // anthropic's Claude models — same catalog.
-  claude_agent: ["claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001", "claude-opus-4-7", "claude-sonnet-4-6"],
+  claude_agent: ["claude-sonnet-5", "claude-haiku-4-5-20251001", "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6"],
 };
 
 export const VALID_PROVIDERS = Object.keys(PROVIDER_MODELS);

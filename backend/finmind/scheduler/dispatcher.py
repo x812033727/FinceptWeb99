@@ -120,6 +120,16 @@ _WARRANT_UNIVERSE_DATASETS: frozenset[str] = frozenset({
 # allowlist.
 _CRYPTO_SOURCES: frozenset[str] = frozenset({"binance", "coingecko"})
 
+# Sources whose per-symbol datasets are actually served by a single
+# market-wide download (one CSV covers every contract for the date), so
+# fanning out per symbol would just re-download the same file N times.
+# When `active_source` is one of these, the dataset emits ONE chunk with
+# symbol=None regardless of its FinMind per_symbol flag; the connector
+# ignores the symbol. Keyed on active_source so Phase A (finmind) keeps
+# its per-symbol fan-out untouched — the market-wide route only applies
+# after cutover flips active_source to the crawl source.
+_MARKET_WIDE_SOURCES: frozenset[str] = frozenset({"taifex"})
+
 
 def expand_due_datasets(
     datasets: list[DatasetSource],
@@ -170,7 +180,7 @@ def expand_due_datasets(
         else:
             range_starts = [rs]
 
-        if ds.per_symbol:
+        if ds.per_symbol and ds.active_source not in _MARKET_WIDE_SOURCES:
             if ds.active_source in _CRYPTO_SOURCES:
                 universe = crypto_symbols
             elif ds.dataset_code in _WARRANT_UNIVERSE_DATASETS:

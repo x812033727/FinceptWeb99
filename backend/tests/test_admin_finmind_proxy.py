@@ -702,9 +702,10 @@ async def test_proxy_patch_rejects_fully_stubbed_source(
     client, db_session, finmind_db_override,
 ):
     """Existing 'no connector wired up yet' check must keep working
-    end-to-end. tpex/taifex/tdcc all hit `_NotWiredYetClient` →
-    every flip targeting them must 400 with the source name in the
-    detail message so the operator knows where to look."""
+    end-to-end. tpex/tdcc still hit `_NotWiredYetClient` → every flip
+    targeting them must 400 with the source name in the detail message
+    so the operator knows where to look. (taifex was wired in W2, so it
+    no longer exercises this path — use a still-stubbed tpex dataset.)"""
     SessionLocal = finmind_db_override
     await _seed_catalog(SessionLocal)
 
@@ -713,13 +714,13 @@ async def test_proxy_patch_rejects_fully_stubbed_source(
     token = await _promote_to_admin(db_session, email, client)
 
     r = await client.patch(
-        "/api/admin/finmind/datasets/TaiwanFuturesDaily",
-        json={"active_source": "taifex"},
+        "/api/admin/finmind/datasets/TaiwanStockConvertibleBondDaily",
+        json={"active_source": "tpex"},
         headers=_auth(token),
     )
     assert r.status_code == 400
     detail = r.json()["detail"]
-    assert "taifex" in detail
+    assert "tpex" in detail
     assert "no connector wired up yet" in detail
 
 

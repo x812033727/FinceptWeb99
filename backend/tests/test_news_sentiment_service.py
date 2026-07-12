@@ -581,6 +581,44 @@ async def test_read_recent_market_sentiment_aggregates(db_session: AsyncSession)
     assert out["considered"] == 3
     assert round(out["avg_score"], 2) == 0.10
     assert len(out["headlines"]) == 3
+    # Flag present on every headline (all title-only here → False).
+    assert all(h["has_fulltext"] is False for h in out["headlines"])
+
+
+@pytest.mark.asyncio
+async def test_market_sentiment_prefers_body_backed_headlines(
+    db_session: AsyncSession,
+):
+    """R8: within the market window, a body-backed (direct-feed) article
+    is surfaced before a newer title-only one — its sentiment was scored
+    with full text, so it's the more reliable headline. Flagged via
+    `has_fulltext`."""
+    now = datetime.now(UTC)
+    await insert_news_articles(db_session, [
+        _row("newest-title-only", "https://example.com/ft_a", symbol=None,
+             published_at=now - timedelta(hours=1)),
+        _row("older-with-body", "https://example.com/ft_b", symbol=None,
+             published_at=now - timedelta(hours=5)),
+    ])
+    rows = (await db_session.scalars(
+        select(NewsArticle).where(NewsArticle.link.like("https://example.com/ft_%"))
+    )).all()
+    for r in rows:
+        r.sentiment_score = 0.5
+        r.sentiment_label = "bullish"
+        r.sentiment_scored_at = now
+        if r.link.endswith("ft_b"):
+            r.body = "完整內文：公司營收成長強勁。"
+    await db_session.commit()
+
+    out = await news_sentiment_service.read_recent_market_sentiment(
+        db_session, market="TW", limit=10, max_age_hours=24,
+    )
+    # Body-backed article ranks first despite being older.
+    assert out["headlines"][0]["title"] == "older-with-body"
+    assert out["headlines"][0]["has_fulltext"] is True
+    assert out["headlines"][1]["title"] == "newest-title-only"
+    assert out["headlines"][1]["has_fulltext"] is False
 
 
 @pytest.mark.asyncio

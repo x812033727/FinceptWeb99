@@ -476,6 +476,21 @@
       "open_in_ai": "在 AI 顧問頁開啟",
       "uses_quota": "消耗 {{count}} 次今日 AI 額度"
     },
+    "ai_review": {
+      "title": "AI 投組健檢",
+      "subtitle": "一鍵串流 AI 健檢報告：集中度、與市場情勢的適配度與行動建議，數據來自上方風險儀表板",
+      "generate": "開始健檢",
+      "regenerate": "重新健檢",
+      "stop": "停止",
+      "stage_context": "正在計算投組風險與市場情勢…",
+      "stage_generating": "AI 撰寫健檢報告中…",
+      "empty": "尚未產生健檢報告。點擊「開始健檢」，AI 將根據集中度、風險指標與當前市場情勢評估這個投組，並提出可執行的行動建議。",
+      "quota_exceeded": "今日 AI 使用額度已用完，將於 UTC 午夜重置，請明天再試。",
+      "no_key": "尚未設定 LLM API 金鑰。請至管理後台或個人設定新增供應商金鑰後再試。",
+      "empty_portfolio": "此投組目前沒有持倉，請先新增交易後再進行健檢。",
+      "disclaimer": "本報告由 AI 產生，僅供研究參考，非投資建議。",
+      "not_saved": "即時分析，不會存檔"
+    },
     "transactions": {
       "title": "交易紀錄",
       "add": "新增交易",

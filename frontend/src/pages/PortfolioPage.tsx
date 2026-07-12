@@ -15,6 +15,7 @@ import { CreatePortfolioModal } from "@/components/portfolio/CreatePortfolioModa
 import { EditPortfolioModal } from "@/components/portfolio/EditPortfolioModal";
 import { ExpertEvaluationCard } from "@/components/portfolio/ExpertEvaluationCard";
 import { PerformanceChart } from "@/components/portfolio/PerformanceChart";
+import { PortfolioAIReviewCard } from "@/components/portfolio/PortfolioAIReviewCard";
 import { RiskDashboardPanel } from "@/components/portfolio/RiskDashboardPanel";
 import { TransactionHistory } from "@/components/portfolio/TransactionHistory";
 import { exportCSV } from "@/components/portfolio/_shared";
@@ -310,7 +311,12 @@ function PortfolioDetail({
       )}
 
       {detailTab === "risk" && (
-        <RiskDashboardPanel portfolioId={portfolioId} />
+        <>
+          <RiskDashboardPanel portfolioId={portfolioId} />
+          {/* B5 — AI health check streams a zh-TW review of the same
+              risk numbers shown above, plus market-regime fit. */}
+          <PortfolioAIReviewCard portfolioId={portfolioId} />
+        </>
       )}
 
       {detailTab === "transactions" && (

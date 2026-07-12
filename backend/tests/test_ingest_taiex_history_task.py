@@ -181,11 +181,16 @@ async def test_get_index_with_history_reads_from_db(
     plus an N-day history line read from ohlcv_daily under _TAIEX.
     Pre-seed the table directly to verify the read path without
     going through the ingest task."""
-    from datetime import date as _date
-    from services.ingest.repository import OhlcvBar, upsert_ohlcv_bars
     import services.tw_market_service as tw
+    from services.ingest.repository import OhlcvBar, upsert_ohlcv_bars
+    from services.tw_trading_calendar import utcnow_tw_date
 
-    today = _date.today()
+    # Seed against the same Taipei-local "today" get_index uses
+    # (`utcnow_tw_date`). `date.today()` is UTC, so during 16:00-24:00
+    # UTC the most-recent seeded bar lags Taipei-today by a day, which
+    # trips get_index's live-value splice (a synthetic today row) →
+    # a 6th history entry and a boundary-flaky `== 5` assertion.
+    today = utcnow_tw_date()
     bars = []
     for i in range(5):
         d = today.fromordinal(today.toordinal() - i)

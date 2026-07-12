@@ -14,11 +14,12 @@ The connector already emits FinMind's raw column names, so the existing
 onto tw_futures_daily / tw_option_daily with no mapping change.
 
 Datasets handled:
-  - TaiwanFuturesDaily   near-month day-session futures OHLCV
-  - TaiwanOptionDaily    near-month day-session option OHLCV
+  - TaiwanFuturesDaily                    near-month day futures OHLCV
+  - TaiwanOptionDaily                     near-month day option OHLCV
+  - TaiwanFuturesInstitutionalInvestors   三大法人 futures OI, pivoted
 
-Deferred (batch-pivot shape — institutional / large-trader / dealer /
-settlement): need the corresponding TAIFEX endpoints wired in
+Deferred (option institutional / large-trader / dealer / settlement):
+need the corresponding TAIFEX endpoints wired in
 `data.tw.taifex_connector` first.
 
 Pre-cutover: run `dry_run_cutover --values` against a live FinMind token
@@ -46,9 +47,18 @@ async def _fetch_option_daily(
     return await _taifex.get_option_daily(start_date, end_date)
 
 
+async def _fetch_futures_institutional(
+    symbol: str | None, start_date: date, end_date: date,
+) -> list[dict[str, Any]]:
+    # Market-wide — one download covers every product; pivoted to the
+    # FinMind wide row per contract in the connector.
+    return await _taifex.get_futures_institutional(start_date, end_date)
+
+
 _DISPATCH = {
     "TaiwanFuturesDaily": _fetch_futures_daily,
     "TaiwanOptionDaily": _fetch_option_daily,
+    "TaiwanFuturesInstitutionalInvestors": _fetch_futures_institutional,
 }
 
 

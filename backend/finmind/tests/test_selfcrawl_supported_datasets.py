@@ -65,10 +65,12 @@ def test_stub_sources_return_empty_set():
 
 
 def test_taifex_reports_daily_market_datasets():
-    """W2 wired the TAIFEX daily futures/options reports — the
-    gatekeeper must now accept flips for exactly those."""
+    """W2 wired the TAIFEX daily futures/options reports; W4b added
+    三大法人 futures. The gatekeeper must accept flips for exactly those."""
     assert supported_datasets("taifex") == {
-        "TaiwanFuturesDaily", "TaiwanOptionDaily",
+        "TaiwanFuturesDaily",
+        "TaiwanOptionDaily",
+        "TaiwanFuturesInstitutionalInvestors",
     }
 
 

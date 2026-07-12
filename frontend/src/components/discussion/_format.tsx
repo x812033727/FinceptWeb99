@@ -143,7 +143,7 @@ export const BAND_LABELS: Record<
   big_win: { mark: "大勝", cls: "text-up" },
   win: { mark: "勝", cls: "text-up" },
   big_loss: { mark: "大敗", cls: "text-down" },
-  loss: { mark: "敗", cls: "text-orange-500" },
+  loss: { mark: "敗", cls: "text-warning" },
   unverifiable: { mark: "", cls: "text-muted-foreground" },
 };
 

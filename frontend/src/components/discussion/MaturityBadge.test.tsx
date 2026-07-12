@@ -41,11 +41,11 @@ describe("MaturityBadge", () => {
     expect(span).toBeInTheDocument();
   });
 
-  it("color tone differs across tiers (mature green vs drifting amber)", () => {
+  it("color tone differs across tiers (mature success vs drifting warning)", () => {
     const { container: a } = render(<MaturityBadge tier="mature" />);
     const { container: b } = render(<MaturityBadge tier="drifting" />);
     const cls = (c: HTMLElement) => (c.firstChild as HTMLElement).className;
-    expect(cls(a)).toContain("emerald");
-    expect(cls(b)).toContain("amber");
+    expect(cls(a)).toContain("success");
+    expect(cls(b)).toContain("warning");
   });
 });

@@ -75,9 +75,9 @@ function pickTone(phase: string): string {
       return "border-purple-800/50 bg-purple-950/30 text-purple-200";
     case "intraday":
     case "between_close_and_publish":
-      return "border-amber-700/60 bg-amber-950/30 text-amber-200";
+      return "border-warning/60 bg-warning/30 text-warning";
     case "pre_open_today":
-      return "border-sky-800/50 bg-sky-950/30 text-sky-200";
+      return "border-info/50 bg-info/30 text-info";
     case "today_close_published":
     case "weekend_or_holiday":
       return "border-border bg-card/40 text-muted-foreground";

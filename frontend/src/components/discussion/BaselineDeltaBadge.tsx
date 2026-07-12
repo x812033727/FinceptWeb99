@@ -64,7 +64,7 @@ export function BaselineDeltaBadge({
       {brierBaseline !== null && (
         <span
           className="inline-flex items-center px-2 py-0.5 text-[11px] rounded
-                     bg-blue-900/30 text-blue-200 border border-blue-700/50"
+                     bg-info/15 text-info border border-info/30"
           title={t("discussion.baseline.brier_tooltip", {
             baseline: brierBaseline.toFixed(3),
           }) as string}

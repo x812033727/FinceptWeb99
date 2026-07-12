@@ -170,7 +170,7 @@ export function StrategyTemplateCard({
             <button
               type="button"
               onClick={() => setShowForm((v) => !v)}
-              className="text-[11px] text-blue-300 hover:text-blue-200"
+              className="text-[11px] text-primary hover:text-primary/80"
             >
               {showForm
                 ? t("common.cancel", "取消")
@@ -415,7 +415,7 @@ function StrategyFormBlock({
         type="button"
         onClick={onSubmit}
         disabled={isSubmitting}
-        className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold px-3 py-1.5 rounded disabled:opacity-50"
+        className="bg-primary hover:bg-primary/90 text-white text-xs font-semibold px-3 py-1.5 rounded disabled:opacity-50"
       >
         {isSubmitting
           ? t("common.saving", "儲存中…")
@@ -519,7 +519,7 @@ function StrategyRow({
         <button
           type="button"
           onClick={() => setShowAggregate((v) => !v)}
-          className="text-blue-300 hover:text-blue-200"
+          className="text-primary hover:text-primary/80"
         >
           {showAggregate
             ? t("strategy.hide_aggregate", "▼ 收起跨 sweep 績效")

@@ -83,7 +83,7 @@ function MarketKeyRow({ info }: { info: MarketKeyInfo }) {
     "—";
   const sourceColor =
     info.source === "db" ? "text-success bg-success/10 border-success/30" :
-    info.source === "env" ? "text-blue-400 bg-blue-400/10 border-blue-400/30" :
+    info.source === "env" ? "text-info bg-info/10 border-info/30" :
     "text-muted-foreground bg-muted/10 border-border";
 
   const lastValidationBadge = info.last_validation_ok === true

@@ -1,7 +1,64 @@
 import { useQuery } from "@tanstack/react-query";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Inbox } from "lucide-react";
+import { DataTable, type DataTableColumn } from "@/components/ui/table";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { Loading } from "./_atoms";
 import { fetchMargin, fmtK } from "./_shared";
+
+interface MarginRow {
+  date: string;
+  margin_purchase: number;
+  margin_balance: number;
+  short_sale: number;
+  short_balance: number;
+}
+
+// Column colors mirror the bars above (chart-1 = 融資, chart-2 = 融券)
+// so the table doubles as the chart's legend.
+const COLUMNS: DataTableColumn<MarginRow>[] = [
+  {
+    key: "date",
+    header: "日期",
+    cellClassName: "text-muted-foreground",
+    mobile: "primary",
+  },
+  {
+    key: "margin_purchase",
+    header: <span className="text-chart-1">融資買入</span>,
+    numeric: true,
+    render: (r) => <span className="text-chart-1">{fmtK(r.margin_purchase)}</span>,
+  },
+  {
+    key: "margin_balance",
+    header: <span className="text-chart-1">融資餘額</span>,
+    numeric: true,
+    render: (r) => <span className="font-medium text-chart-1">{fmtK(r.margin_balance)}</span>,
+    mobile: "primary",
+  },
+  {
+    key: "short_sale",
+    header: <span className="text-chart-2">融券賣出</span>,
+    numeric: true,
+    render: (r) => <span className="text-chart-2">{fmtK(r.short_sale)}</span>,
+  },
+  {
+    key: "short_balance",
+    header: <span className="text-chart-2">融券餘額</span>,
+    numeric: true,
+    render: (r) => <span className="font-medium text-chart-2">{fmtK(r.short_balance)}</span>,
+  },
+  {
+    key: "ratio",
+    header: "券資比",
+    numeric: true,
+    cellClassName: "text-muted-foreground",
+    render: (r) => {
+      const ratio = r.margin_balance > 0 ? (r.short_balance / r.margin_balance) * 100 : null;
+      return ratio != null ? `${ratio.toFixed(1)}%` : "—";
+    },
+  },
+];
 
 export function MarginPanel({ symbol }: { symbol: string }) {
   const { data = [], isLoading } = useQuery({
@@ -11,13 +68,17 @@ export function MarginPanel({ symbol }: { symbol: string }) {
   });
 
   if (isLoading) return <Loading />;
-  if (!data.length) return <div className="p-6 text-muted-foreground text-sm">No margin data.</div>;
+  if (!data.length) {
+    return <EmptyState icon={Inbox} title="無融資融券資料" />;
+  }
 
   const chartData = [...data].reverse().slice(-30).map((r) => ({
     date: r.date.slice(5),
     margin_balance: Math.round(r.margin_balance / 1000),
     short_balance: Math.round(r.short_balance / 1000),
   }));
+
+  const tableRows = [...data].reverse().slice(0, 30) as MarginRow[];
 
   return (
     <div className="p-4 space-y-4">
@@ -34,37 +95,12 @@ export function MarginPanel({ symbol }: { symbol: string }) {
         </ResponsiveContainer>
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="border-b border-border text-muted-foreground">
-              <th className="text-left py-2 pr-4 font-medium">日期</th>
-              <th className="text-right py-2 px-2 font-medium text-blue-400">融資買入</th>
-              <th className="text-right py-2 px-2 font-medium text-blue-400">融資餘額</th>
-              <th className="text-right py-2 px-2 font-medium text-yellow-400">融券賣出</th>
-              <th className="text-right py-2 px-2 font-medium text-yellow-400">融券餘額</th>
-              <th className="text-right py-2 px-2 font-medium">券資比</th>
-            </tr>
-          </thead>
-          <tbody>
-            {[...data].reverse().slice(0, 30).map((r) => {
-              const ratio = r.margin_balance > 0 ? (r.short_balance / r.margin_balance) * 100 : null;
-              return (
-                <tr key={r.date} className="border-b border-border/30 hover:bg-accent/5">
-                  <td className="py-1.5 pr-4 text-muted-foreground">{r.date}</td>
-                  <td className="text-right py-1.5 px-2 text-blue-400">{fmtK(r.margin_purchase)}</td>
-                  <td className="text-right py-1.5 px-2 text-blue-400 font-medium">{fmtK(r.margin_balance)}</td>
-                  <td className="text-right py-1.5 px-2 text-yellow-400">{fmtK(r.short_sale)}</td>
-                  <td className="text-right py-1.5 px-2 text-yellow-400 font-medium">{fmtK(r.short_balance)}</td>
-                  <td className="text-right py-1.5 px-2 text-muted-foreground">
-                    {ratio != null ? `${ratio.toFixed(1)}%` : "—"}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        aria-label="融資融券明細"
+        columns={COLUMNS}
+        rows={tableRows}
+        rowKey={(r) => r.date}
+      />
     </div>
   );
 }

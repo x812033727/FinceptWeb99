@@ -77,7 +77,11 @@ def build_rows(
             "exchange": "binance",
             "status": "active" if mapped else "unmapped",
             "market_cap_rank": m.get("market_cap_rank"),
-            "added_at": today.isoformat(),
+            # Pass a date object, not an ISO string: Postgres binds a
+            # DATE column from a python date, but rejects a str via raw
+            # text() (SQLite is lenient, which is why unit tests missed
+            # this). Same reason `today` below stays a date.
+            "added_at": today,
             "source": "coingecko",
         })
     return universe_rows
@@ -118,7 +122,7 @@ async def apply_refresh(
                 "WHERE status IN ('active','unmapped') "
                 "AND coingecko_id NOT IN :ids"
             ).bindparams(bindparam("ids", expanding=True)),
-            {"today": today.isoformat(), "ids": current_ids},
+            {"today": today, "ids": current_ids},
         )
         delisted = result.rowcount or 0
     await session.commit()

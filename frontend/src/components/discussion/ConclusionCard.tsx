@@ -1,3 +1,4 @@
+import { AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import type { Conclusion, DiscussionDetail } from "@/types/discussion";
@@ -110,7 +111,14 @@ export function ConclusionCard({
             {open ? "▼" : "▶"}
           </span>
           <h3 className={titleClass}>
-            {hasError ? `⚠ ${t(titleKey)}` : t(titleKey)}
+            {hasError ? (
+              <span className="inline-flex items-center gap-1">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                {t(titleKey)}
+              </span>
+            ) : (
+              t(titleKey)
+            )}
           </h3>
         </button>
         {!hasError && (

@@ -1,3 +1,4 @@
+import { Bot } from "lucide-react";
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
@@ -157,7 +158,7 @@ export function ExpertEvaluationCard({ detail }: { portfolioId: string; detail: 
     <div className="bg-card border border-border rounded-lg p-5 space-y-3">
       <div className="flex items-baseline justify-between flex-wrap gap-2">
         <div>
-          <h2 className="text-foreground font-medium">🤖 {t("portfolio.expert_eval.title")}</h2>
+          <h2 className="text-foreground font-medium inline-flex items-center gap-1.5"><Bot className="h-4 w-4" aria-hidden="true" /> {t("portfolio.expert_eval.title")}</h2>
           <p className="text-xs text-muted-foreground mt-0.5">
             {t("portfolio.expert_eval.subtitle")}
           </p>

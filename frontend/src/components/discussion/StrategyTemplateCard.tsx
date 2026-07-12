@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Brain, Microscope, Rocket, Timer, TrendingDown } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatTaipei } from "@/lib/timeFormat";
 import {
@@ -460,7 +461,7 @@ function StrategyRow({
             </span>
             {strategy.auto_schedule_enabled ? (
               <span
-                className="ml-2 text-[10px] bg-success/15 text-success border border-success/30 rounded px-1 py-0.5"
+                className="ml-2 inline-flex items-center gap-1 text-[10px] bg-success/15 text-success border border-success/30 rounded px-1 py-0.5"
                 title={t(
                   "strategy.auto_schedule_active_tip",
                   "每 {{h}}h 自動掃 {{n}} 日（offset {{off}}）",
@@ -471,7 +472,7 @@ function StrategyRow({
                   },
                 )}
               >
-                ⏱ auto
+                <Timer className="h-3 w-3" /> auto
               </span>
             ) : null}
             {/* PR-4a: lifecycle tier badge — coloured by where the
@@ -536,7 +537,12 @@ function StrategyRow({
         >
           {showBrierTrend
             ? t("strategy.brier_trend_hide", "▼ 收起 Brier 趨勢")
-            : t("strategy.brier_trend_show", "📉 Brier 趨勢")}
+            : (
+              <span className="inline-flex items-center gap-1">
+                <TrendingDown className="h-3 w-3" />
+                {t("strategy.brier_trend_show", "Brier 趨勢")}
+              </span>
+            )}
         </button>
         <button
           type="button"
@@ -548,7 +554,12 @@ function StrategyRow({
         >
           {learnMut.isPending
             ? t("strategy.learning", "學習中…")
-            : t("strategy.learn", "🧠 重新學習權重")}
+            : (
+              <span className="inline-flex items-center gap-1">
+                <Brain className="h-3 w-3" />
+                {t("strategy.learn", "重新學習權重")}
+              </span>
+            )}
         </button>
         {strategy.weights_updated_at ? (
           <span className="text-muted-foreground" title={strategy.weights_updated_at}>
@@ -661,7 +672,12 @@ function WalkForwardSection({ strategy }: { strategy: StrategyTemplate }) {
       >
         {open
           ? t("strategy.walk_forward_hide", "▼ 收起 OOS 驗證")
-          : t("strategy.walk_forward_show", "🔬 OOS 驗證 (Walk-Forward)")}
+          : (
+            <span className="inline-flex items-center gap-1">
+              <Microscope className="h-3 w-3" />
+              {t("strategy.walk_forward_show", "OOS 驗證 (Walk-Forward)")}
+            </span>
+          )}
       </button>
       {open ? (
         <div
@@ -729,7 +745,12 @@ function WalkForwardSection({ strategy }: { strategy: StrategyTemplate }) {
             >
               {wfMut.isPending
                 ? t("strategy.wf_submitting", "啟動中…")
-                : t("strategy.wf_submit", "🚀 啟動 Walk-Forward")}
+                : (
+                  <span className="inline-flex items-center gap-1">
+                    <Rocket className="h-3 w-3" />
+                    {t("strategy.wf_submit", "啟動 Walk-Forward")}
+                  </span>
+                )}
             </button>
             {wfResult ? (
               <span className="text-success">

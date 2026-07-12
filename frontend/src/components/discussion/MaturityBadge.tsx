@@ -1,3 +1,4 @@
+import { Clock } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { MaturitySignals, MaturityTier } from "./_helpers";
 
@@ -40,7 +41,7 @@ export function MaturityBadge({
           ? "·"
           : tier === "drifting"
             ? "⚠"
-            : "🕒";
+            : <Clock className="h-3 w-3" />;
 
   // Build a one-line tooltip from the signals so the operator
   // sees the WHY without clicking. Only include fields that have

@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Shield } from "lucide-react";
 import { CollapsibleHeader } from "@/components/Collapsible";
 import { useCollapsible } from "@/hooks/useCollapsible";
 import api from "@/lib/api";
@@ -93,7 +94,12 @@ export function CalibrationReviewCard() {
     <div className="bg-card border border-warning/30 rounded-lg p-4 space-y-3">
       <CollapsibleHeader
         open={open} toggle={toggle}
-        title="🛡️ Calibration deployment gate"
+        title={
+          <span className="inline-flex items-center gap-1.5">
+            <Shield className="h-3.5 w-3.5" aria-hidden="true" />
+            Calibration deployment gate
+          </span>
+        }
         subtitle={subtitle}
       />
       {open && (

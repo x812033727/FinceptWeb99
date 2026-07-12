@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { Snowflake, Ghost } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "@/lib/api";
 import type { StrategyTemplate } from "./_helpers";
@@ -76,8 +77,10 @@ export function PersonaStatusGrid({
                           rounded border ${tone}`}
               title={t(`discussion.persona_status.tooltip.${status}`)}
             >
-              <span>
-                {status === "frozen" ? "🧊" : "👻"}
+              <span className="inline-flex items-center">
+                {status === "frozen"
+                  ? <Snowflake className="h-3 w-3" aria-hidden="true" />
+                  : <Ghost className="h-3 w-3" aria-hidden="true" />}
               </span>
               <span>{display}</span>
               <button

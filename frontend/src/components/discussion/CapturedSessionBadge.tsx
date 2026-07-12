@@ -1,3 +1,4 @@
+import { Calendar } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { CapturedSession } from "@/types/discussion";
 
@@ -48,7 +49,10 @@ export function CapturedSessionBadge({
       role="note"
     >
       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-medium">
-        <span>📅 {t("discussion.captured_session_label")}</span>
+        <span className="inline-flex items-center gap-1">
+          <Calendar className="h-3 w-3 shrink-0" aria-hidden="true" />
+          {t("discussion.captured_session_label")}
+        </span>
         {session_date && <span className="font-mono">{session_date}</span>}
         {decision_date && decision_date !== session_date && (
           <span className="font-mono opacity-90">
@@ -110,7 +114,7 @@ export function CapturedSessionInline({
     <span
       className={`inline-flex items-center gap-1 rounded border ${tone} px-1.5 py-0.5 text-[10px] leading-tight`}
     >
-      <span>📅</span>
+      <Calendar className="h-3 w-3 shrink-0" aria-hidden="true" />
       {session_date && <span className="font-mono">{session_date}</span>}
       {decision_date && decision_date !== session_date && (
         <span className="font-mono opacity-90">

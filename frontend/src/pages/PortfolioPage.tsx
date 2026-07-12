@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Bot } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { formatPct } from "@/lib/formatters";
@@ -58,7 +59,7 @@ export default function PortfolioPage() {
               onClick={analyseWithAI}
               className="flex-1 sm:flex-none px-3 sm:px-4 py-2 text-sm bg-primary/10 border border-primary/30 text-primary rounded-md hover:bg-primary/20 transition-colors"
             >
-              🤖 {t("nav.ai")}
+              <span className="inline-flex items-center gap-1.5"><Bot className="h-4 w-4" aria-hidden="true" /> {t("nav.ai")}</span>
             </button>
           )}
           <button onClick={() => setShowCreate(true)} className="flex-1 sm:flex-none px-3 sm:px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:opacity-90 whitespace-nowrap">

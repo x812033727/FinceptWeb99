@@ -1,3 +1,4 @@
+import { Shuffle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { PostMortemDiff } from "@/types/discussion";
 
@@ -39,8 +40,9 @@ export function ConclusionDiffCard({ diff }: { diff?: PostMortemDiff | null }) {
       className="bg-gradient-to-br from-purple-950/30 to-amber-950/20 border
                  border-purple-800/40 rounded-lg p-3 mt-4 mb-4"
     >
-      <h4 className="text-xs font-semibold text-purple-200 mb-2">
-        🔀 {t("discussion.diff.title")}
+      <h4 className="flex items-center gap-1.5 text-xs font-semibold text-purple-200 mb-2">
+        <Shuffle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        {t("discussion.diff.title")}
       </h4>
 
       {hasNoChanges && (

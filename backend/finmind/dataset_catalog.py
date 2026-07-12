@@ -37,7 +37,7 @@ class CatalogEntry:
     dataset_code: str           # = DatasetSpec.name
     local_table: str            # "" if Phase 1 hasn't built the table yet
     primary_source: str         # 'finmind' default
-    fallback_source: str | None # 'twse' | 'tpex' | 'taifex' | 'mops' | 'tdcc' | None
+    fallback_source: str | None # 'twse' | 'tpex' | 'taifex' | 'mops' | 'tdcc' | 'fred' | None
     ingest_freq: str            # 'hourly' | '8h' | 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'realtime' | 'on_demand'
     # FinMind only serves one day per call for these datasets (KBar,
     # PriceTick, BlockTradingDailyReport, GovernmentBankBuySell,
@@ -179,9 +179,9 @@ OTHER: tuple[CatalogEntry, ...] = (
 MACRO: tuple[CatalogEntry, ...] = (
     CatalogEntry("TaiwanExchangeRate",     "tw_exchange_rate",     "finmind", None, "daily"),
     CatalogEntry("InterestRate",           "macro_interest_rate",  "finmind", None, "daily"),
-    CatalogEntry("GovernmentBondsYield",   "us_bond_yield",        "finmind", None, "daily"),
+    CatalogEntry("GovernmentBondsYield",   "us_bond_yield",        "finmind", "fred", "daily"),
     CatalogEntry("CnnFearGreedIndex",      "us_fear_greed",        "finmind", None, "daily"),
-    CatalogEntry("CrudeOilPrices",         "commodity_price",      "finmind", None, "daily", single_day=True),
+    CatalogEntry("CrudeOilPrices",         "commodity_price",      "finmind", "fred", "daily", single_day=True),
 )
 
 

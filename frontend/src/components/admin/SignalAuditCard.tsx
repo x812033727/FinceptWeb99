@@ -241,7 +241,7 @@ export function SignalAuditCard() {
                   </span>
                 )}
                 {(data.hallucinations?.length ?? 0) > 0 && (
-                  <span className="text-orange-400">
+                  <span className="text-warning">
                     ✗ {t("signal_audit.hallucination_count", {
                       count: data.hallucinations?.length ?? 0,
                     })}
@@ -268,8 +268,8 @@ export function SignalAuditCard() {
               )}
 
               {(data.hallucinations?.length ?? 0) > 0 && (
-                <div className="bg-orange-500/5 border border-orange-500/30 rounded p-2 space-y-1">
-                  <p className="text-[11px] font-semibold text-orange-400 uppercase tracking-wider">
+                <div className="bg-warning/5 border border-warning/30 rounded p-2 space-y-1">
+                  <p className="text-[11px] font-semibold text-warning uppercase tracking-wider">
                     {t("signal_audit.hallucination_title")}
                   </p>
                   <p className="text-[11px] text-muted-foreground">
@@ -279,11 +279,11 @@ export function SignalAuditCard() {
                     {data.hallucinations?.map((row) => (
                       <li
                         key={row.signal}
-                        className="text-orange-300 flex justify-between gap-2"
+                        className="text-warning flex justify-between gap-2"
                         title={`${row.hallucinated} turns / ${row.persona_count_absent} absent persona-turns across ${row.absent_rounds} rounds`}
                       >
                         <span className="truncate">{row.signal}</span>
-                        <span className="tabular-nums text-orange-400/80 shrink-0">
+                        <span className="tabular-nums text-warning/80 shrink-0">
                           {rateLabel(row.hallucination_rate)} ({row.hallucinated}/{row.persona_count_absent})
                         </span>
                       </li>

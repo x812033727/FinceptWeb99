@@ -77,7 +77,7 @@ export function deriveIngestBadge(r: IngestHealth): { text: string; cls: string 
   if (errLower.startsWith("queued")) {
     return {
       text: "queued",
-      cls: "bg-blue-500/10 text-blue-400 border border-blue-500/30",
+      cls: "bg-info/10 text-info border border-info/30",
     };
   }
   if (r.silent_deny || errLower.startsWith("silent_paywall")) {

@@ -103,7 +103,7 @@ export function TranscriptPane({
               date prominently — that's the day being analysed,
               far more useful than when the row was created. */}
           {detail.as_of_date && (
-            <span className="px-1.5 py-0.5 rounded bg-blue-900/20 text-blue-300 border border-blue-800/40 text-[10px] uppercase tracking-wider">
+            <span className="px-1.5 py-0.5 rounded bg-info/20 text-info border border-info/40 text-[10px] uppercase tracking-wider">
               {t("discussion.as_of_date")}：{detail.as_of_date}
             </span>
           )}

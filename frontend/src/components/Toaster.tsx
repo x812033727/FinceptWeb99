@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { useToastStore, type ToastSeverity } from "@/store/toastStore";
 
 const severityStyles: Record<ToastSeverity, { bar: string; bg: string; icon: string }> = {
-  info:    { bar: "bg-blue-500",   bg: "bg-blue-950/40 border-blue-900/50",   icon: "ⓘ" },
+  info:    { bar: "bg-info",  bg: "bg-info/15 border-info/30", icon: "ⓘ" },
   success: { bar: "bg-success",  bg: "bg-success/15 border-success/30", icon: "✓" },
   warning: { bar: "bg-warning",  bg: "bg-warning/15 border-warning/30", icon: "!" },
   error:   { bar: "bg-danger",    bg: "bg-danger/15 border-danger/30",     icon: "×" },

@@ -41,7 +41,7 @@ import { useCollapsible } from "@/hooks/useCollapsible";
 
 const STATUS_COLORS: Record<BacktestSweepStatus, string> = {
   pending: "bg-secondary/30 text-muted-foreground border-border",
-  running: "bg-blue-900/30 text-blue-300 border-blue-800/50",
+  running: "bg-info/30 text-info border-info/50",
   completed: "bg-success/10 text-success border-success/30",
   cancelled: "bg-warning/10 text-warning border-warning/30",
   failed: "bg-danger/10 text-danger border-danger/30",
@@ -359,7 +359,7 @@ function SweepProgressRow({
           <button
             type="button"
             onClick={() => setShowAggregate((v) => !v)}
-            className="text-[10px] text-blue-300 hover:text-blue-200"
+            className="text-[10px] text-primary hover:text-primary/80"
           >
             {showAggregate
               ? t("sweep.hide_aggregate", "▼ 收起聚合儀表板")

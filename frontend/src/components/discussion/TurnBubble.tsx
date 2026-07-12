@@ -39,7 +39,7 @@ const STANCE_ICON: Record<
   },
   supplement: {
     Icon: CornerDownRight,
-    cls: "bg-blue-900/30 text-blue-300 ring-blue-800/50",
+    cls: "bg-info/10 text-info ring-info/30",
     titleKey: "discussion.stance.supplement",
   },
   user_input: {

@@ -22,13 +22,13 @@ export function MaturityBadge({
 
   const tone =
     tier === "mature"
-      ? "bg-emerald-900/40 text-emerald-200 border-emerald-700/50"
+      ? "bg-success/40 text-success border-success/50"
       : tier === "learning"
-        ? "bg-blue-900/40 text-blue-200 border-blue-700/50"
+        ? "bg-info/40 text-info border-info/50"
         : tier === "cold_start"
           ? "bg-slate-800/60 text-slate-300 border-slate-600/50"
           : tier === "drifting"
-            ? "bg-amber-900/40 text-amber-200 border-amber-700/50"
+            ? "bg-warning/40 text-warning border-warning/50"
             : /* stale */ "bg-zinc-800/60 text-zinc-400 border-zinc-700/50";
 
   const icon =

@@ -54,7 +54,7 @@ interface SystemStats {
 
 const ROLE_COLORS: Record<string, string> = {
   viewer: "border-muted-foreground/30 text-muted-foreground",
-  analyst: "border-blue-400/30 text-blue-400 bg-blue-400/10",
+  analyst: "border-primary/30 text-primary bg-primary/10",
   admin: "border-warning/30 text-warning bg-warning/10",
 };
 

@@ -326,7 +326,7 @@ function ReliabilityChart({ buckets }: { buckets: ReliabilityBucket[] }) {
           if (!empty && hit !== null) {
             if (hit > mid + 0.05) color = "bg-success/70";
             else if (hit < mid - 0.05) color = "bg-danger/70";
-            else color = "bg-blue-500/70";
+            else color = "bg-info/70";
           }
           // Reference line: bucket midpoint as percentage.
           const refLinePct = Math.round(mid * 100);

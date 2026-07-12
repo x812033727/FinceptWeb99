@@ -150,7 +150,12 @@ async def run() -> None:
 async def _do_run() -> int:
     """Fetch every enabled TW feed, map to rows, bulk-insert (dedup on
     conflict). Raises only when EVERY feed failed — one flaky publisher
-    is logged and skipped, not fatal."""
+    is logged and skipped, not fatal.
+
+    Records a PER-SOURCE health entry (`newsfeed:<key>`) for each feed so
+    the admin health card shows which of the 4 independent publishers is
+    alive / failing — a job-level "ok" would hide one silently-dead feed
+    among three healthy ones."""
     sources = enabled_sources(market=MARKET)
     if not sources:
         return 0
@@ -162,11 +167,18 @@ async def _do_run() -> int:
             items = await fetch_feed(src.url, limit=_PER_FEED_LIMIT)
         except Exception as exc:
             failures += 1
+            detail = _format_error(exc)
             log.warning("ingest_news_feeds.feed_failed",
-                        extra={"source": src.key, "error": str(exc)})
+                        extra={"source": src.key, "error": detail})
+            await record_health(
+                f"newsfeed:{src.key}", ok=False, row_count=0, error=detail,
+            )
             continue
         rows = [r for it in items if (r := _to_row(it, src.key)) is not None]
         all_rows.extend(rows)
+        # row_count = items this feed returned (pre-dedup) — the health
+        # signal is "feed alive + returning articles", not net-new inserts.
+        await record_health(f"newsfeed:{src.key}", ok=True, row_count=len(rows))
 
     if failures == len(sources):
         # Every feed failed — real outage, arm backoff.

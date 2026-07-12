@@ -176,6 +176,26 @@ const JOB_META: Record<string, JobMeta> = {
     description_zh: "新聞全文抽取（直連來源文章內文）",
     schedule_zh: "每 30 分",
   },
+  // Per-source health rows emitted by ingest_news_feeds — one per direct
+  // publisher feed so a silently-dead feed is visible instead of hidden
+  // behind a job-level "ok". Not individually retryable (see the parent
+  // ingest_news_feeds job), so no entry in RETRYABLE_INGEST_JOBS.
+  "newsfeed:cnyes": {
+    description_zh: "└ 來源：鉅亨網 RSS",
+    schedule_zh: "隨新聞抓取",
+  },
+  "newsfeed:udn_money": {
+    description_zh: "└ 來源：經濟日報 RSS",
+    schedule_zh: "隨新聞抓取",
+  },
+  "newsfeed:ltn_ec": {
+    description_zh: "└ 來源：自由財經 RSS",
+    schedule_zh: "隨新聞抓取",
+  },
+  "newsfeed:cna_finance": {
+    description_zh: "└ 來源：中央社財經 RSS",
+    schedule_zh: "隨新聞抓取",
+  },
   ingest_ohlcv_tw: {
     description_zh: "台股每日 K 線（TWSE → FinMind 後備）",
     schedule_zh: "每天 14:30 (台北)",

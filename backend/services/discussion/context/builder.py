@@ -42,7 +42,6 @@ from services.discussion.freshness import resolve_captured_session
 from services.tw_trading_calendar import prev_trading_day_estimate
 
 from .blocks import (
-    announcements,
     chip,
     derivatives,
     http,
@@ -174,16 +173,10 @@ def _initial_ctx(
         # cache; no DB table. Bounded fan-out (≤ 5 focus_symbols)
         # to cap Sponsor quota burn per discussion.
         "broker_concentration": [],
-        # PR-D1: TW MOPS 重大訊息 official disclosures, last 7 days
-        # (live) / 14 days (backtest). Shape:
-        # `{market: [{symbol, announced_at, category, title, body,
-        # source_url, sentiment_score, sentiment_label}, ...],
-        # per_symbol: {sym: [...]}}`. Always present (default empty
-        # shape) so the prompt template doesn't have to handle
-        # missing keys; populated only for `market='TW'` — empty
-        # for US / GLOBAL until PR-D3 wires SEC 8-K under a
-        # parallel block.
-        "corporate_announcements": {"market": [], "per_symbol": {}},
+        # (G7-1) `corporate_announcements` block removed here — it was
+        # seeded + built (up to 6 serial DB reads/build) but no persona
+        # profile ever included it (24/24 filtered it out) and it has no
+        # signal_audit keyword, so it was pure dead weight in the ctx.
         # Past-discussion lessons retrieved by `discussion_lesson_service`
         # for the same market + per focus_symbol. Shape:
         # `{market: [LessonSummary, ...], per_symbol: {sym: [...], ...}}`.
@@ -451,12 +444,9 @@ async def build_market_context(
         _with_own_session(_news_per_symbol),
     )
 
-    # PR-D1: TW MOPS 重大訊息. DB-bound, no LLM call, fast.
-    await announcements.fetch_corporate_announcements(
-        ctx, db, market=market,
-        focus_symbols=focus_symbols,
-        as_of_dt=as_of_dt, record_error=record_error,
-    )
+    # (G7-1) corporate_announcements build removed — see the ctx-seed
+    # comment above. The MOPS ingest + repository reader stay; only the
+    # unused discussion-context wiring is gone.
 
     if owner_id is not None:
         await owner.fetch_user_context(

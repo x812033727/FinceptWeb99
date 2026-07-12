@@ -391,12 +391,14 @@ async def test_ctx_block_records_error_on_exception(
 
 
 @pytest.mark.asyncio
-async def test_builder_default_shape_includes_corporate_announcements(
+async def test_builder_no_longer_includes_corporate_announcements(
     db_session: AsyncSession,
 ):
-    """Sanity for the prompt template — the key always exists with
-    the canonical empty shape, even on US/GLOBAL where the block
-    is a no-op."""
+    """(G7-1) The discussion context no longer carries a
+    `corporate_announcements` block: no persona profile ever included
+    it (24/24 filtered it out) and it has no signal_audit keyword, so
+    building it was dead weight. The block function itself lives on for
+    `stock_report_service`, which assembles its own ctx."""
     from services.discussion.context.builder import build_market_context
 
     with patch(
@@ -413,7 +415,7 @@ async def test_builder_default_shape_includes_corporate_announcements(
         new=AsyncMock(return_value=[]),
     ):
         ctx = await build_market_context(db_session, market="US")
-    assert ctx["corporate_announcements"] == {"market": [], "per_symbol": {}}
+    assert "corporate_announcements" not in ctx
 
 
 # ── cron orchestration ────────────────────────────────────────────

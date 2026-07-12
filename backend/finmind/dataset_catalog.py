@@ -191,8 +191,12 @@ MACRO: tuple[CatalogEntry, ...] = (
 # these route straight through the Binance self-crawl connector. Both
 # write crypto_ohlcv, discriminated by the interval column.
 CRYPTO: tuple[CatalogEntry, ...] = (
-    CatalogEntry("CryptoPrice",       "crypto_ohlcv", "binance", None, "daily"),
-    CatalogEntry("CryptoPriceHourly", "crypto_ohlcv", "binance", None, "hourly"),
+    CatalogEntry("CryptoPrice",        "crypto_ohlcv",         "binance",   None, "daily"),
+    CatalogEntry("CryptoPriceHourly",  "crypto_ohlcv",         "binance",   None, "hourly"),
+    CatalogEntry("CryptoFundingRate",  "crypto_funding_rate",  "binance",   None, "8h"),
+    CatalogEntry("CryptoOpenInterest", "crypto_open_interest", "binance",   None, "hourly"),
+    # Market-wide CoinGecko snapshot (per_symbol=False) → asset_info.
+    CatalogEntry("CryptoInfo",         "crypto_asset_info",    "coingecko", None, "daily"),
 )
 
 

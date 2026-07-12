@@ -14,12 +14,10 @@ expect (the connector already emits FinMind-clone-friendly keys, so the
 wrapper is a thin interval selector).
 
 Datasets handled:
-  - CryptoPrice        daily klines  (interval '1d')
-  - CryptoPriceHourly  hourly klines (interval '1h')
-
-Funding rate / open interest datasets land in a follow-up wave; the
-connector already exposes `fetch_funding_rate` / `fetch_open_interest`
-for them.
+  - CryptoPrice         daily klines  (interval '1d')
+  - CryptoPriceHourly   hourly klines (interval '1h')
+  - CryptoFundingRate   USDT-perp funding rate (8h cadence)
+  - CryptoOpenInterest  USDT-perp open interest (~30d history only)
 """
 from __future__ import annotations
 
@@ -45,11 +43,32 @@ async def _fetch_crypto_price_hourly(
     return await _binance.fetch_ohlcv(symbol, "1h", start_date, end_date)
 
 
+async def _fetch_crypto_funding_rate(
+    symbol: str | None, start_date: date, end_date: date,
+) -> list[dict[str, Any]]:
+    # Uses the USDT-perp of the same symbol string (Binance perps reuse
+    # the spot pair name, e.g. BTCUSDT). Coins without a perp return []
+    # (recorded as done/0 rows), which is the correct no-op.
+    if not symbol:
+        return []
+    return await _binance.fetch_funding_rate(symbol, start_date, end_date)
+
+
+async def _fetch_crypto_open_interest(
+    symbol: str | None, start_date: date, end_date: date,
+) -> list[dict[str, Any]]:
+    if not symbol:
+        return []
+    return await _binance.fetch_open_interest(symbol, start_date, end_date)
+
+
 # ── Dispatch table ──────────────────────────────────────────────
 
 _DISPATCH = {
     "CryptoPrice": _fetch_crypto_price_daily,
     "CryptoPriceHourly": _fetch_crypto_price_hourly,
+    "CryptoFundingRate": _fetch_crypto_funding_rate,
+    "CryptoOpenInterest": _fetch_crypto_open_interest,
 }
 
 

@@ -54,6 +54,33 @@ async def test_fetch_funding_rate_shapes_rows():
 
 
 @pytest.mark.asyncio
+async def test_fetch_open_interest_shapes_rows():
+    page = [
+        {"symbol": "BTCUSDT", "sumOpenInterest": "12345.67",
+         "sumOpenInterestValue": "1080000000.00", "timestamp": 1767229200000},
+    ]
+    with patch.object(binance, "_get", new=AsyncMock(return_value=page)):
+        rows = await binance.fetch_open_interest("BTCUSDT", date(2026, 1, 1), date(2026, 1, 1))
+    assert len(rows) == 1
+    assert rows[0]["open_interest"] == "12345.67"
+    assert rows[0]["open_interest_value"] == "1080000000.00"
+    assert rows[0]["ts"].startswith("2026-01-01T01:00:00")
+
+
+@pytest.mark.asyncio
+async def test_get_perp_usdt_symbols_filters_trading_perpetual():
+    body = {"symbols": [
+        {"symbol": "BTCUSDT", "quoteAsset": "USDT",
+         "contractType": "PERPETUAL", "status": "TRADING"},
+        {"symbol": "ETHUSDT_240329", "quoteAsset": "USDT",
+         "contractType": "CURRENT_QUARTER", "status": "TRADING"},
+    ]}
+    with patch.object(binance, "_get", new=AsyncMock(return_value=body)):
+        out = await binance.get_perp_usdt_symbols()
+    assert out == {"BTCUSDT"}
+
+
+@pytest.mark.asyncio
 async def test_get_spot_usdt_symbols_filters_trading_usdt():
     body = {"symbols": [
         {"symbol": "BTCUSDT", "quoteAsset": "USDT", "status": "TRADING"},

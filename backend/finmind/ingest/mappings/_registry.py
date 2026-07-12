@@ -39,7 +39,10 @@ from ._row_transforms import (
     _row_buyback,
     _row_cb_info,
     _row_cb_inst_daily,
+    _row_crypto_asset_info,
+    _row_crypto_funding_rate,
     _row_crypto_ohlcv,
+    _row_crypto_open_interest,
     _row_day_trade,
     _row_day_trade_fee,
     _row_delisting,
@@ -1192,6 +1195,52 @@ MAPPINGS: dict[str, DatasetMapping] = {
         pk_columns=("market", "symbol", "interval", "ts"),
         extra={"market": "BINANCE", "source": "binance"},
         row_transform=_row_crypto_ohlcv,
+    ),
+    "CryptoFundingRate": DatasetMapping(
+        dataset_code="CryptoFundingRate",
+        local_table="crypto_funding_rate",
+        column_map={
+            "symbol": "symbol",
+            "funding_time": "funding_time",
+            "funding_rate": "funding_rate",
+            "mark_price": "mark_price",
+        },
+        pk_columns=("market", "symbol", "funding_time"),
+        extra={"market": "BINANCE", "source": "binance"},
+        row_transform=_row_crypto_funding_rate,
+    ),
+    "CryptoOpenInterest": DatasetMapping(
+        dataset_code="CryptoOpenInterest",
+        local_table="crypto_open_interest",
+        column_map={
+            "symbol": "symbol",
+            "ts": "ts",
+            "open_interest": "open_interest",
+            "open_interest_value": "open_interest_value",
+        },
+        pk_columns=("market", "symbol", "ts"),
+        extra={"market": "BINANCE", "source": "binance"},
+        row_transform=_row_crypto_open_interest,
+    ),
+    # Market-wide (per_symbol=False) — one CoinGecko call per run stamps a
+    # dated snapshot of the whole top-N into crypto_asset_info.
+    "CryptoInfo": DatasetMapping(
+        dataset_code="CryptoInfo",
+        local_table="crypto_asset_info",
+        column_map={
+            "snapshot_date": "snapshot_date",
+            "coingecko_id": "coingecko_id",
+            "symbol": "symbol",
+            "name": "name",
+            "market_cap_rank": "market_cap_rank",
+            "market_cap": "market_cap",
+            "circulating_supply": "circulating_supply",
+            "total_supply": "total_supply",
+            "ath": "ath",
+        },
+        pk_columns=("snapshot_date", "coingecko_id"),
+        extra={"source": "coingecko"},
+        row_transform=_row_crypto_asset_info,
     ),
 }
 

@@ -337,6 +337,15 @@ class Settings(BaseSettings):
     # (best-effort → None) and the round / conclusion proceeds unaffected.
     DISCUSSION_AUX_MODEL_TIMEOUT_S: int = 45
 
+    # Daily auto-run discussion schedule, in Asia/Taipei local time. These
+    # are the compiled defaults; both are exposed as runtime tunables so an
+    # admin can change the time in the admin UI without a redeploy — the
+    # scheduler picks the new time up within ~2 min (see the
+    # `reschedule_auto_run_discussion` watcher in tasks/scheduler.py).
+    # Default 04:00 Taipei == the previous hard-coded 20:00 UTC.
+    DISCUSSION_AUTO_RUN_HOUR: int = 4
+    DISCUSSION_AUTO_RUN_MINUTE: int = 0
+
     # `resolve_key(user_id=None)` (the system-task path used by every
     # background cron) normally consults: system row → .env. For solo /
     # single-admin deployments where the operator has only set per-user

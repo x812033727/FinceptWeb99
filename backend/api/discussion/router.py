@@ -22,6 +22,14 @@ existing parsing pattern.
 Quota: each persona-turn counts as one AI request. Viewers get 5/day,
 analysts/admins 20/day — same as the chat endpoint. The synthesizer is
 also one request.
+
+R7/G8 pure-move split — this entry module now owns only the quota-
+coupled round lifecycle (round SSE + inject/interject/conclude) plus the
+sub-router wiring. The CRUD, per-round audit, auto-run config, and
+post-mortem domains live in sibling modules (`sessions`, `contexts`,
+`auto_run`, `post_mortem`) mounted below. `run_round`, `interject`, and
+`conclude_session` stay here on purpose: they resolve `_refund` from this
+module's namespace, and the test suite patches `api.discussion.router._refund`.
 """
 from __future__ import annotations
 
@@ -36,7 +44,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.discussion import auto_run as auto_run_router
+from api.discussion import contexts as contexts_router
 from api.discussion import lessons as lessons_router
+from api.discussion import post_mortem as post_mortem_router
+from api.discussion import sessions as sessions_router
 from api.discussion import strategies as strategies_router
 from api.discussion import sweeps as sweeps_router
 from api.discussion._helpers import (  # noqa: F401  — re-exports kept for back-compat
@@ -51,30 +63,15 @@ from api.discussion._helpers import (  # noqa: F401  — re-exports kept for bac
     _to_response,
 )
 from api.discussion.schemas import (
-    AutoRunConfigRequest,
-    AutoRunConfigResponse,
     ConclusionResponse,
-    CreateDiscussionRequest,
-    DiscussionDetailResponse,
-    DiscussionResponse,
     InjectUserMessageRequest,
     InterjectRequest,
     InterjectResponse,
-    PostMortemDailyGainersOut,
-    PostMortemDayPerformanceOut,
-    PostMortemGainerOut,
-    PostMortemRecommendedPerformanceOut,
-    PostMortemResponse,
-    PostMortemVerdictOut,
-    PostMortemWinnerOut,
-    ScoreboardResponse,
-    ScoreboardRow,
     TurnResponse,
-    UpdateDiscussionRequest,
 )
 from config import settings
 from db.session import get_db, get_db_session_factory
-from services import discussion_auto_run_config_service, discussion_service
+from services import discussion_service
 from services.discussion.symbol_names import enrich_conclusion_with_names
 
 log = logging.getLogger(__name__)
@@ -82,307 +79,13 @@ router = APIRouter()
 router.include_router(lessons_router.router)
 router.include_router(sweeps_router.router)
 router.include_router(strategies_router.router)
+router.include_router(sessions_router.router)
+router.include_router(contexts_router.router)
+router.include_router(auto_run_router.router)
+router.include_router(post_mortem_router.router)
 
 
 # ── routes ─────────────────────────────────────────────────────────
-
-
-@router.get("/sessions", response_model=list[DiscussionResponse])
-async def list_sessions(
-    user: CurrentUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    rows = await discussion_service.list_discussions(
-        db, owner_id=_coerce_owner_uuid(user),
-    )
-    return [_to_response(r) for r in rows]
-
-
-@router.post("/sessions", response_model=DiscussionResponse, status_code=201)
-async def create_session(
-    body: CreateDiscussionRequest,
-    user: CurrentUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    as_of_parsed = None
-    if body.as_of_date:
-        try:
-            from datetime import date as _date
-            as_of_parsed = _date.fromisoformat(body.as_of_date)
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail=f"as_of_date must be ISO YYYY-MM-DD; got {body.as_of_date!r}",
-            )
-    try:
-        row = await discussion_service.create_discussion(
-            db,
-            owner_id=_coerce_owner_uuid(user),
-            topic=body.topic,
-            rules=body.rules,
-            persona_ids=body.persona_ids,
-            market=body.market,
-            as_of_date=as_of_parsed,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except HTTPException:
-        raise
-    except Exception as exc:
-        # Anything unexpected (DB schema drift, FK resolution, IntegrityError,
-        # response-model coercion failure) used to bubble up as a bare
-        # `Internal Server Error` with no detail — leaving the user's red
-        # banner uninformative and the operator with only a stack trace
-        # buried in container logs. Log the full traceback for diagnosis,
-        # and surface the exception class + message so the user can quote
-        # something useful when reporting the failure.
-        log.exception(
-            "discussion.create.unexpected_failure",
-            extra={
-                "user_id": user.get("id") if isinstance(user, dict) else None,
-                "market": body.market,
-                "persona_count": len(body.persona_ids),
-                "as_of_date": body.as_of_date,
-            },
-        )
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to create discussion: {type(exc).__name__}: {exc}",
-        )
-    try:
-        return _to_response(row)
-    except Exception as exc:
-        # Response-model coercion can fail if a recently-added column was
-        # left out of the local DB schema (a missing migration leaves
-        # `db.refresh` returning a row without the attribute). The row is
-        # already persisted; the user's click DID succeed. Log the
-        # specifics so the operator can apply the missing migration; the
-        # 500 still surfaces because we can't honour the response_model
-        # contract.
-        log.exception(
-            "discussion.create.response_serialization_failed",
-            extra={
-                "discussion_id": str(getattr(row, "id", None)),
-                "user_id": user.get("id") if isinstance(user, dict) else None,
-            },
-        )
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Discussion was created but the response could not be "
-                f"serialized: {type(exc).__name__}: {exc}"
-            ),
-        )
-
-
-@router.get("/sessions/{discussion_id}", response_model=DiscussionDetailResponse)
-async def get_session(
-    discussion_id: uuid.UUID,
-    user: CurrentUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    row = await discussion_service.get_discussion(
-        db, discussion_id=discussion_id, owner_id=_coerce_owner_uuid(user),
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="Discussion not found")
-    turns = await discussion_service.get_turns(db, discussion_id=row.id)
-    base = _to_response(row).model_dump()
-    base["turns"] = [
-        TurnResponse(
-            id=t.id,
-            round=t.round,
-            turn_index=t.turn_index,
-            persona_id=t.persona_id,
-            stance=t.stance,
-            content=t.content,
-            citations=t.citations,
-            created_at=t.created_at,
-            injected_by_user=bool(getattr(t, "injected_by_user", False)),
-        )
-        for t in turns
-    ]
-    return DiscussionDetailResponse(**base)
-
-
-@router.get("/sessions/{discussion_id}/contexts")
-async def get_round_contexts(
-    discussion_id: uuid.UUID,
-    user: CurrentUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    """Per-round context snapshots for replay/audit. Owner-scoped —
-    same access rule as the rest of the discussion endpoints. Returns
-    `[{round, context, captured_at}, ...]` ordered by round; an empty
-    list when the discussion was created before context-snapshot
-    persistence was wired in (PR #135) or the snapshot writes failed
-    silently."""
-    row = await discussion_service.get_discussion(
-        db, discussion_id=discussion_id, owner_id=_coerce_owner_uuid(user),
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="Discussion not found")
-    rows = await discussion_service.get_round_contexts(
-        db, discussion_id=row.id,
-    )
-    return [
-        {
-            "round":       r.round,
-            "context":     r.context,
-            "captured_at": r.captured_at,
-            # R6 PR2 round digest — null unless the feature was enabled
-            # when this round ran. Lets the UI show a per-round recap.
-            "digest":      r.digest,
-        }
-        for r in rows
-    ]
-
-
-@router.get("/sessions/{discussion_id}/round-usage")
-async def get_round_usage(
-    discussion_id: uuid.UUID,
-    user: CurrentUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    """Per-round token tally (input + output) for a discussion. Owner-
-    scoped, same access rule as the rest of the discussion endpoints.
-    Returns `[{round, prompt_tokens, completion_tokens, total_tokens,
-    cost_usd}, ...]` ordered by round. Empty for discussions that ran
-    before per-round usage attribution was wired in (their usage rows
-    carry NULL discussion_id/round)."""
-    row = await discussion_service.get_discussion(
-        db, discussion_id=discussion_id, owner_id=_coerce_owner_uuid(user),
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="Discussion not found")
-    from services import llm_usage_service
-    return await llm_usage_service.discussion_round_usage(db, discussion_id=row.id)
-
-
-@router.get("/sessions/{discussion_id}/round-usage/detail")
-async def get_round_usage_detail(
-    discussion_id: uuid.UUID,
-    user: CurrentUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    """Finer per-round ctx usage: exact per-persona token / cost / tool
-    counts (from llm_usage_events) joined with each turn's prompt
-    composition (`discussion_turns.input_breakdown` — char size per
-    prompt section + per context block). Owner-scoped. Returns
-    `[{round, persona_id, provider, model, prompt_tokens,
-    completion_tokens, total_tokens, cost_usd, tool_call_count,
-    breakdown}, ...]` ordered by (round, persona). `breakdown` is null
-    for placeholder turns and rows recorded before the column existed."""
-    row = await discussion_service.get_discussion(
-        db, discussion_id=discussion_id, owner_id=_coerce_owner_uuid(user),
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="Discussion not found")
-    from services import llm_usage_service
-    usage = await llm_usage_service.discussion_round_persona_usage(
-        db, discussion_id=row.id,
-    )
-    turns = await discussion_service.get_turns(db, discussion_id=row.id)
-    bd_by_key = {
-        (t.round, t.persona_id): t.input_breakdown
-        for t in turns
-        if getattr(t, "input_breakdown", None) is not None
-    }
-    for u in usage:
-        u["breakdown"] = bd_by_key.get((u["round"], u["persona_id"]))
-    return usage
-
-
-@router.get(
-    "/sessions/{discussion_id}/scoreboard",
-    response_model=ScoreboardResponse,
-)
-async def get_scoreboard(
-    discussion_id: uuid.UUID,
-    user: CurrentUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    debug: bool = False,
-):
-    """D1-D5 daily close + change % vs day-1 open per recommended
-    symbol. Owner-scoped. Reads the persisted `daily_close_prices`
-    column when populated (filled in by the daily 09:30 UTC cron);
-    falls back to an on-demand compute against `ohlcv_daily` when
-    NULL so newly-concluded discussions show partial data
-    immediately instead of waiting a day.
-
-    `?debug=true` adds a `debug` payload with cron eligibility,
-    trading-window resolution, per-symbol archive/live-fallback
-    trace, and the last cron-run snapshot — for "why is this
-    scoreboard empty" investigations.
-    """
-    from services import discussion_scoreboard_service
-
-    row = await discussion_service.get_discussion(
-        db, discussion_id=discussion_id, owner_id=_coerce_owner_uuid(user),
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="Discussion not found")
-    if not row.conclusion:
-        raise HTTPException(
-            status_code=400,
-            detail="Discussion has no conclusion to score yet",
-        )
-
-    debug_traces: list[dict] | None = [] if debug else None
-    payload = await discussion_scoreboard_service.compute_scoreboard(
-        db, row, debug_traces=debug_traces,
-    )
-    debug_payload: dict | None = None
-    if debug_traces is not None:
-        debug_payload = await discussion_scoreboard_service.build_scoreboard_debug_payload(
-            row, debug_traces,
-        )
-    return ScoreboardResponse(
-        discussion_id=row.id,
-        anchor_date=payload["anchor_date"],
-        created_at_tw_date=payload["created_at_tw_date"],
-        rows=[ScoreboardRow(**r) for r in payload["rows"]],
-        debug=debug_payload,
-    )
-
-
-@router.patch("/sessions/{discussion_id}", response_model=DiscussionResponse)
-async def update_session(
-    discussion_id: uuid.UUID,
-    body: UpdateDiscussionRequest,
-    user: CurrentUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    row = await discussion_service.get_discussion(
-        db, discussion_id=discussion_id, owner_id=_coerce_owner_uuid(user),
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="Discussion not found")
-    try:
-        row = await discussion_service.update_discussion(
-            db,
-            row,
-            topic=body.topic,
-            rules=body.rules,
-            persona_ids=body.persona_ids,
-            market=body.market,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return _to_response(row)
-
-
-@router.delete("/sessions/{discussion_id}", status_code=204)
-async def delete_session(
-    discussion_id: uuid.UUID,
-    user: CurrentUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    deleted = await discussion_service.delete_discussion(
-        db, discussion_id=discussion_id, owner_id=_coerce_owner_uuid(user),
-    )
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Discussion not found")
 
 
 @router.post("/sessions/{discussion_id}/round")
@@ -535,72 +238,6 @@ async def run_round(
         event_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-# ── auto-run config ────────────────────────────────────────────────
-
-
-@router.get("/auto-run/config", response_model=AutoRunConfigResponse)
-async def get_auto_run_config(
-    user: CurrentUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    """Read the current user's daily auto-run config. Returns a row of
-    sensible defaults (`enabled=false`, empty topic / rules / personas)
-    if the user has never saved one — the UI can render an empty form
-    without a 404 dance."""
-    row = await discussion_auto_run_config_service.get_config(
-        db, user_id=_coerce_owner_uuid(user),
-    )
-    if row is None:
-        return AutoRunConfigResponse(
-            enabled=False,
-            persona_ids=[],
-            topic="",
-            rules="",
-            market="TW",
-            send_email=False,
-            updated_at=None,
-        )
-    return AutoRunConfigResponse(
-        enabled=row.enabled,
-        persona_ids=list(row.persona_ids or []),
-        topic=row.topic,
-        rules=row.rules,
-        market=row.market,
-        send_email=bool(row.send_email),
-        updated_at=row.updated_at,
-    )
-
-
-@router.put("/auto-run/config", response_model=AutoRunConfigResponse)
-async def put_auto_run_config(
-    body: AutoRunConfigRequest,
-    user: CurrentUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    try:
-        row = await discussion_auto_run_config_service.upsert_config(
-            db,
-            user_id=_coerce_owner_uuid(user),
-            enabled=body.enabled,
-            persona_ids=body.persona_ids,
-            topic=body.topic,
-            rules=body.rules,
-            market=body.market,
-            send_email=body.send_email,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return AutoRunConfigResponse(
-        enabled=row.enabled,
-        persona_ids=list(row.persona_ids or []),
-        topic=row.topic,
-        rules=row.rules,
-        market=row.market,
-        send_email=bool(row.send_email),
-        updated_at=row.updated_at,
     )
 
 
@@ -788,179 +425,3 @@ async def conclude_session(
         raise
     enrich_conclusion_with_names(row.market, conclusion)
     return ConclusionResponse(discussion_id=row.id, conclusion=conclusion)
-
-
-@router.post(
-    "/sessions/{discussion_id}/post-mortem",
-    response_model=PostMortemResponse,
-)
-async def run_post_mortem(
-    discussion_id: uuid.UUID,
-    user: CurrentUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    """Inject a self-critique prompt against the actual next-trading-day
-    top gainers, so the next round of personas has to defend or revise
-    their recommendation against ground truth.
-
-    Constraints:
-      - Discussion must be a backtest (`as_of_date` not null) — live
-        discussions don't have ground truth available yet.
-      - Discussion must have a conclusion already (otherwise there's
-        nothing to critique).
-      - Discussion must be in `draft` status (no in-flight round).
-
-    Flow:
-      1. Compute next trading day's top-N gainers from
-         ``ohlcv_daily``.
-      2. Format a structured Chinese-prose self-critique prompt
-         enumerating the gainers + the four review questions (hit/miss,
-         missed-stocks-and-why, false-positive signals, missing data).
-      3. Inject as a `user_input` turn so the next round's personas
-         see it in their `## 先前發言` history.
-
-    Returns the top-gainers data + the injected turn id. Caller is
-    expected to follow up with the standard `/round` SSE endpoint
-    to actually run the personas through the critique, then
-    `/conclude` to re-synthesize a final conclusion.
-
-    No AI quota is consumed by this endpoint itself — the LLM cost
-    happens in the subsequent `/round` call.
-    """
-    from services.post_mortem_service import build_post_mortem_message
-
-    row = await discussion_service.get_discussion(
-        db, discussion_id=discussion_id, owner_id=_coerce_owner_uuid(user),
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="Discussion not found")
-    if row.as_of_date is None:
-        raise HTTPException(
-            status_code=400,
-            detail="post_mortem requires backtest mode (as_of_date is null)",
-        )
-    if not row.conclusion:
-        raise HTTPException(
-            status_code=400,
-            detail="post_mortem requires an existing conclusion — "
-                   "run /conclude first",
-        )
-
-    payload = await build_post_mortem_message(db, row)
-    if not payload.trading_days:
-        raise HTTPException(
-            status_code=400,
-            detail="No ohlcv_daily data found in the post-as_of trading "
-                   "window — archive may not reach this date.",
-        )
-
-    verdict = payload.verdict
-    verdict_out = PostMortemVerdictOut(
-        status=verdict.status,
-        threshold_pct=verdict.threshold_pct,
-        window_days=verdict.window_days,
-        winners=[
-            PostMortemWinnerOut(
-                symbol=w.symbol,
-                peak_pct=w.peak_pct,
-                peak_day=w.peak_day.isoformat(),
-            )
-            for w in verdict.winners
-        ],
-        best_pct=verdict.best_pct,
-        reason=verdict.reason,
-    ) if verdict is not None else None
-
-    # Win-skip: recommendation already cleared the threshold so we
-    # short-circuit the inject + new round entirely. UI surfaces a
-    # success badge based on `status="skipped"` + `verdict.winners`.
-    skipped = verdict is not None and verdict.status == "win"
-    if skipped:
-        try:
-            from middleware.metrics import POST_MORTEM_SKIPPED_TOTAL
-            POST_MORTEM_SKIPPED_TOTAL.labels(market=row.market).inc()
-        except Exception:
-            pass
-        injected_turn_id: int | None = None
-    else:
-        if not payload.prompt_text:
-            # `insufficient_data` with non-empty trading_days (rare:
-            # window > 0 but no recommended symbols had bars) — bail
-            # so we don't inject an empty user_input turn.
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    verdict.reason if verdict is not None
-                    else "Cannot build post-mortem prompt"
-                ),
-            )
-        try:
-            turn = await discussion_service.inject_user_message(
-                db, row, content=payload.prompt_text,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        injected_turn_id = turn.id
-        try:
-            from middleware.metrics import POST_MORTEM_RAN_TOTAL
-            POST_MORTEM_RAN_TOTAL.labels(market=row.market).inc()
-        except Exception:
-            pass
-
-    # PR #273: serialise the new D1-D5 shape. Back-compat aliases
-    # `next_trading_day` + `top_gainers` populated from D1's
-    # leaderboard so older clients reading the flat shape still
-    # see "next-day gainers".
-    first_day = payload.trading_days[0]
-    d1_gainers_block = next(
-        (b for b in payload.daily_top_gainers if b.trading_day == first_day),
-        None,
-    )
-    d1_gainers = d1_gainers_block.gainers if d1_gainers_block else []
-
-    return PostMortemResponse(
-        trading_days=[d.isoformat() for d in payload.trading_days],
-        recommended_performance=[
-            PostMortemRecommendedPerformanceOut(
-                symbol=r.symbol,
-                base_close=r.base_close,
-                days=[
-                    PostMortemDayPerformanceOut(
-                        trading_day=dp.trading_day.isoformat(),
-                        close=dp.close,
-                        change_pct=dp.change_pct,
-                    )
-                    for dp in r.days
-                ],
-            )
-            for r in payload.recommended_performance
-        ],
-        daily_top_gainers=[
-            PostMortemDailyGainersOut(
-                trading_day=block.trading_day.isoformat(),
-                gainers=[
-                    PostMortemGainerOut(
-                        symbol=g.symbol, change_pct=g.change_pct,
-                        close=g.close, base_close=g.base_close,
-                        trading_day=g.trading_day.isoformat(),
-                    )
-                    for g in block.gainers
-                ],
-            )
-            for block in payload.daily_top_gainers
-        ],
-        next_trading_day=first_day.isoformat(),
-        top_gainers=[
-            PostMortemGainerOut(
-                symbol=g.symbol, change_pct=g.change_pct,
-                close=g.close, base_close=g.base_close,
-                trading_day=g.trading_day.isoformat(),
-            )
-            for g in d1_gainers
-        ],
-        status="skipped" if skipped else "ran",
-        verdict=verdict_out,
-        injected_turn_id=injected_turn_id,
-    )
-
-

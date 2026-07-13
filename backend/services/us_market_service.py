@@ -875,7 +875,10 @@ async def get_macro_indicator(
     if data:
         await cache_set_json(key, data, TTL_HISTORY)
     else:
-        log.warning("us.macro.empty_series", extra={"name": name, "series_id": series_id})
+        # `name` is a reserved LogRecord attribute — in `extra` it raises
+        # KeyError inside logging (here uncaught → crashes the empty-series
+        # path). Use a distinct key.
+        log.warning("us.macro.empty_series", extra={"macro_name": name, "series_id": series_id})
     return data
 
 

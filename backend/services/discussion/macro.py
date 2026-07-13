@@ -119,8 +119,10 @@ async def _assemble_macro_block(
                 name, as_of=as_of,
             )
         except Exception as exc:
+            # `name` is a reserved LogRecord attribute (the logger name) —
+            # in `extra` it raises KeyError inside logging; use a distinct key.
             log.warning("macro.fetch.failed",
-                        extra={"name": name, "error": str(exc)})
+                        extra={"macro_name": name, "error": str(exc)})
             return name, []
 
     results = await asyncio.gather(*[_pull(n) for n, _ in _MACRO_SERIES])

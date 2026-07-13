@@ -621,7 +621,9 @@ async def synthesize_conclusion(
             elif etype == "error":
                 log.warning(
                     "discussion.synthesize.llm_error",
-                    extra={"message": event.get("message")},
+                    # `message` is a reserved LogRecord attribute — putting
+                    # it in `extra` raises KeyError inside logging.
+                    extra={"detail": event.get("message")},
                 )
                 break
     except Exception as exc:

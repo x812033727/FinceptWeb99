@@ -138,3 +138,16 @@ class BacktestSweep(Base):
     cancelled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True,
     )
+
+
+# The `strategy_id` FK above targets `discussion_strategy_templates`.
+# SQLAlchemy resolves that string reference against the shared metadata at
+# flush time (table sorting), so the target model MUST be registered
+# whenever this one is — otherwise any `session.flush()` that touches
+# `backtest_sweeps` raises NoReferencedTableError and takes the whole
+# commit (e.g. a discussion round persisting a turn) down with it. Import
+# the target here to guarantee co-registration. Safe: the template module
+# doesn't import this one, so there is no cycle.
+from models.discussion_strategy_template import (  # noqa: E402,F401
+    DiscussionStrategyTemplate,
+)

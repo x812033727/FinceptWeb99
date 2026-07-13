@@ -230,6 +230,9 @@ async def get_round_contexts(
             "round":       r.round,
             "context":     r.context,
             "captured_at": r.captured_at,
+            # R6 PR2 round digest — null unless the feature was enabled
+            # when this round ran. Lets the UI show a per-round recap.
+            "digest":      r.digest,
         }
         for r in rows
     ]

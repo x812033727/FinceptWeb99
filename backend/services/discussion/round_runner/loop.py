@@ -600,6 +600,42 @@ async def run_round(
             "completion_tokens": round_tokens.get("completion_tokens", 0),
             "total_tokens": round_tokens.get("total_tokens", 0),
         })
+
+        # R6 PR2: best-effort round digest (off by default). Summarise THIS
+        # round's debate into a compact recap stored on the round-context
+        # row. Generation-only — it does NOT change what personas see, so a
+        # failure here must never affect the round or its turns; hence the
+        # broad guard. Runs after round_end so the SSE stream isn't held up.
+        if settings.DISCUSSION_ROUND_DIGEST_ENABLED:
+            try:
+                from services.discussion.round_digest import (
+                    generate_round_digest,
+                    store_round_digest,
+                )
+                this_round = [t for t in prior_turns if t.round == round_number]
+                digest = await generate_round_digest(
+                    db,
+                    topic=discussion.topic,
+                    turns=this_round,
+                    user_id=user_id,
+                    discussion_id=discussion.id,
+                    round_number=round_number,
+                )
+                if digest:
+                    await store_round_digest(
+                        db,
+                        discussion_id=discussion.id,
+                        round_number=round_number,
+                        digest=digest,
+                    )
+            except Exception:
+                log.warning(
+                    "discussion.round_digest.pipeline_failed",
+                    extra={
+                        "discussion_id": str(discussion.id),
+                        "round": round_number,
+                    },
+                )
     finally:
         # Always reset to DRAFT so the next round attempt isn't blocked
         # by the router's "round in progress" guard. Use the same atomic

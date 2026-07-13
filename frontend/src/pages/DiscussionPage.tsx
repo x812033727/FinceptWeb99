@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query";
 import {
   ChevronDown,
   ChevronRight,
-  Folder,
   Settings as SettingsIcon,
 } from "lucide-react";
 import { useToastStore } from "@/store/toastStore";
@@ -15,9 +14,7 @@ import type {
   DiscussionMarket,
   Turn,
 } from "@/types/discussion";
-import { DiscussionActionsBar } from "@/components/discussion/DiscussionActionsBar";
 import { DiscussionConfigForm } from "@/components/discussion/DiscussionConfigForm";
-import { DiscussionStatusBadge } from "@/components/discussion/DiscussionStatusBadge";
 import { DiscussionToolbar } from "@/components/discussion/DiscussionToolbar";
 import { InjectForm } from "@/components/discussion/InjectForm";
 import {
@@ -52,6 +49,13 @@ import {
   usePersonaShort,
 } from "@/components/discussion/_helpers";
 import type { CollapseState } from "@/components/discussion/_helpers";
+// Presentational sub-components — pure display JSX sections extracted
+// verbatim from this page (R7/G8 巨石頁拆分). All state / hooks stay here.
+import { ConfigSheet } from "./DiscussionPage/ConfigSheet";
+import { DesktopActionBar } from "./DiscussionPage/DesktopActionBar";
+import { InjectSheet } from "./DiscussionPage/InjectSheet";
+import { MobileActionBar } from "./DiscussionPage/MobileActionBar";
+import { MobileHeader } from "./DiscussionPage/MobileHeader";
 
 export default function DiscussionPage() {
   const { t } = useTranslation();
@@ -413,68 +417,35 @@ export default function DiscussionPage() {
           plus an inject form when applicable. Run / Conclude / etc.
           live in the sticky bottom action bar so users can fire
           them without opening the drawer. */}
-      <Sheet open={configSheetOpen} onOpenChange={setConfigSheetOpen}>
-        <SheetContent side="right" className="w-96 max-w-[95vw] overflow-y-auto p-4 space-y-3">
-          <SheetHeader>
-            <SheetTitle>{t("discussion.config_drawer_title")}</SheetTitle>
-            <SheetDescription>{t("discussion.config_drawer_hint")}</SheetDescription>
-          </SheetHeader>
-          <DiscussionConfigForm {...configFormProps} />
-        </SheetContent>
-      </Sheet>
+      <ConfigSheet
+        configSheetOpen={configSheetOpen}
+        setConfigSheetOpen={setConfigSheetOpen}
+        t={t}
+        configFormProps={configFormProps}
+      />
 
       {/* Mobile inject Sheet — small bottom drawer triggered from
           the More menu so users can drop a between-rounds message
           without scrolling the config drawer. */}
-      <Sheet open={injectSheetOpen} onOpenChange={setInjectSheetOpen}>
-        <SheetContent side="bottom" className="max-h-[60vh] overflow-y-auto p-4 space-y-3">
-          <SheetHeader>
-            <SheetTitle>
-              {t(
-                injectMode === "running"
-                  ? "discussion.interject_label"
-                  : injectMode === "followup"
-                    ? "discussion.followup_label"
-                    : "discussion.inject_label",
-              )}
-            </SheetTitle>
-          </SheetHeader>
-          <InjectForm mode={injectMode} {...injectFormProps} />
-        </SheetContent>
-      </Sheet>
+      <InjectSheet
+        injectSheetOpen={injectSheetOpen}
+        setInjectSheetOpen={setInjectSheetOpen}
+        t={t}
+        injectMode={injectMode}
+        injectFormProps={injectFormProps}
+      />
 
       {/* Main column. */}
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
         {/* Mobile header — only visible on <lg. Carries the sessions
             trigger, current discussion title, settings trigger. */}
-        <header className="lg:hidden border-b border-border px-3 py-2 flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={() => setSessionsSheetOpen(true)}
-            aria-label={t("discussion.sessions_drawer_title")}
-            className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent/10 min-h-[36px] min-w-[36px] inline-flex items-center justify-center"
-          >
-            <Folder className="h-4 w-4" aria-hidden="true" />
-          </button>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-foreground truncate">{activeTitle}</p>
-            {detail && (
-              <p className="text-[10px] text-muted-foreground flex items-center gap-1.5">
-                <DiscussionStatusBadge status={detail.status} />
-                <span>R{detail.current_round}</span>
-                {detail.as_of_date && <span>· 回測 {detail.as_of_date}</span>}
-              </p>
-            )}
-          </div>
-          <button
-            type="button"
-            onClick={() => setConfigSheetOpen(true)}
-            aria-label={t("discussion.config_drawer_title")}
-            className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent/10 min-h-[36px] min-w-[36px] inline-flex items-center justify-center"
-          >
-            <SettingsIcon className="h-4 w-4" aria-hidden="true" />
-          </button>
-        </header>
+        <MobileHeader
+          t={t}
+          setSessionsSheetOpen={setSessionsSheetOpen}
+          activeTitle={activeTitle}
+          detail={detail}
+          setConfigSheetOpen={setConfigSheetOpen}
+        />
 
         {/* Desktop sticky action bar (PR-D). Mirrors the mobile
             bottom bar so Run / Conclude / "More" stay one click
@@ -482,14 +453,7 @@ export default function DiscussionPage() {
             transcript or the config form below. streamError sits
             above the bar so rate limits stay visible without
             opening anything. */}
-        <div className="hidden lg:block sticky top-0 z-10 border-b border-border bg-card/95 backdrop-blur px-4 py-2 shrink-0">
-          {streamError && (
-            <p className="text-xs text-danger bg-danger/10 border border-danger/30 rounded px-2 py-1 mb-2">
-              {streamError}
-            </p>
-          )}
-          <DiscussionActionsBar {...actionsBarProps} />
-        </div>
+        <DesktopActionBar streamError={streamError} actionsBarProps={actionsBarProps} />
 
         {/* Desktop tool toolbar (PR-E) — horizontal row of
             「+ 新討論」 + 自動討論 / 策略模板 / 多日回測 popovers.
@@ -580,17 +544,7 @@ export default function DiscussionPage() {
             home-bar safe-area inset. The streamError above the bar
             keeps any rate-limit / round failure visible without
             opening the drawer. */}
-        <div
-          className="lg:hidden border-t border-border bg-card/95 backdrop-blur p-3 shrink-0"
-          style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 0.75rem)" }}
-        >
-          {streamError && (
-            <p className="text-[11px] text-danger bg-danger/10 border border-danger/30 rounded px-2 py-1 mb-2">
-              {streamError}
-            </p>
-          )}
-          <DiscussionActionsBar compact {...actionsBarProps} />
-        </div>
+        <MobileActionBar streamError={streamError} actionsBarProps={actionsBarProps} />
       </div>
     </div>
   );

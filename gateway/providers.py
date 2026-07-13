@@ -60,6 +60,13 @@ async def claude_sub_stream(
         can_use_tool=_auto_allow,
         model=model or None,
         max_turns=max_turns,
+        # The Claude Code CLI defaults to extended thinking, which on a large
+        # persona/analysis prompt (30-50KB) costs ~90s per call and blows past
+        # the discussion persona timeout. Disabling it cuts a complete-response
+        # call from ~90s to ~19s (measured) with no loss of the final answer —
+        # `max_turns` still lets the agent finish its turn. We use claude_sub as
+        # a plain chat backend, so the agentic thinking loop is pure overhead.
+        thinking={"type": "disabled"},
     )
     try:
         async with ClaudeSDKClient(options=options) as client:

@@ -84,6 +84,10 @@ async def codex_sub_stream(
     prompt = (system + "\n\n" if system else "") + _flatten_chat(chat)
     argv = [
         os.environ.get("CODEX_BIN", "codex"), "exec", "--json", "--ephemeral",
+        # The gateway uses codex purely as a text LLM from its own working
+        # dir (/opt/llm-gateway, not a git repo). Without this, `codex exec`
+        # aborts with "Not inside a trusted directory".
+        "--skip-git-repo-check",
         "--sandbox", "read-only", "-c", 'approval_policy="never"',
         "--color", "never",
     ]
@@ -101,11 +105,15 @@ async def agy_stream(
 ) -> AsyncGenerator[str, None]:
     system, chat = _split_system(messages)
     prompt = (system + "\n\n" if system else "") + _flatten_chat(chat)
-    argv = [os.environ.get("AGY_BIN", "agy"), "-p"]
+    # `agy -p/--print <prompt>` runs one prompt non-interactively and prints
+    # the response — the prompt is the flag's ARGUMENT, not stdin.
+    argv = [os.environ.get("AGY_BIN", "agy")]
     if model:
         argv += ["--model", model]
-    # agy -p prints the response to stdout (not JSONL) — stream raw lines.
-    async for text in _spawn_lines(argv, prompt):
+    argv += ["-p", prompt]
+    # agy prints the response to stdout (not JSONL) — stream raw lines; no
+    # stdin (the prompt already rode in as the -p argument).
+    async for text in _spawn_lines(argv, ""):
         yield text
 
 

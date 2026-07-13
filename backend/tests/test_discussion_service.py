@@ -840,12 +840,20 @@ def _full_ctx_for_filter():
     }
 
 
-def test_filter_context_unknown_persona_returns_full_ctx():
-    """Personas not in the registry must NOT silently lose data — fail
-    open so a typo / new persona doesn't hide blocks the LLM expects."""
+def test_filter_context_unknown_persona_fails_closed_to_quant():
+    """G7-2b: an unknown persona falls CLOSED to the QUANT profile (plus
+    the always-included blocks), NOT the full ctx. Unreachable while the
+    agent registry and profile map stay 1:1, but if they drift we'd
+    rather send a slightly-narrow vetted context than silently leak the
+    full 30-50KB (incl. uncatalogued diagnostics) to something unvetted."""
+    from services.discussion import persona_config as pc
+
     ctx = _full_ctx_for_filter()
     out = discussion_service._filter_context_for_persona(ctx, "unknown_persona")
-    assert set(out.keys()) == set(ctx.keys())
+    expected = (pc._ALWAYS_INCLUDED_BLOCKS | pc._QUANT_PROFILE) & set(ctx.keys())
+    assert set(out.keys()) == expected
+    # Definitely NOT the full ctx (fail-open regression guard).
+    assert set(out.keys()) != set(ctx.keys())
 
 
 def test_filter_context_macro_analyst_drops_chip_metrics():

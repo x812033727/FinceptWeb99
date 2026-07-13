@@ -308,6 +308,18 @@ class Settings(BaseSettings):
     DISCUSSION_TURN_MAX_TOKENS: int = 32768
     DISCUSSION_SYNTHESIZER_MAX_TOKENS: int = 32768
 
+    # R6 PR2 round digest: after each round, summarise its turns into a
+    # compact recap (unresolved disagreements preserved). OFF by default —
+    # enabling adds one cheap-model call per round. R6 PR2 (this half)
+    # only *generates + stores* the digest (surfaced on the round-context
+    # API); it does NOT yet change what personas see, so it's behaviour-
+    # neutral for the discussion itself. The token-saving consumption
+    # (personas read digests instead of older transcripts) is a separate
+    # follow-up gated on the N=10 signal_audit check.
+    DISCUSSION_ROUND_DIGEST_ENABLED: bool = False
+    DISCUSSION_ROUND_DIGEST_MODEL: str = "claude-haiku-4-5-20251001"
+    DISCUSSION_ROUND_DIGEST_MAX_TOKENS: int = 512
+
     # `resolve_key(user_id=None)` (the system-task path used by every
     # background cron) normally consults: system row → .env. For solo /
     # single-admin deployments where the operator has only set per-user

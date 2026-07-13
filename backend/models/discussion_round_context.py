@@ -18,6 +18,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Text,
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -42,6 +43,11 @@ class DiscussionRoundContext(Base):
     )
     round: Mapped[int] = mapped_column(Integer, primary_key=True)
     context: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    # R6 PR2: compact ~300-word recap of THIS round's debate (unresolved
+    # disagreements preserved). NULL when the round-digest feature is
+    # disabled (the default) or the summariser call failed — callers must
+    # treat absence as "no digest", never as an error.
+    digest: Mapped[str | None] = mapped_column(Text, nullable=True)
     captured_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

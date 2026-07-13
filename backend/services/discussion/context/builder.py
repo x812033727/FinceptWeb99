@@ -31,6 +31,7 @@ to reason about missing keys. Empty list / None means "no signal";
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime
@@ -473,7 +474,65 @@ async def build_market_context(
         )
 
     await _progress("ctx_ready")
+    _apply_block_byte_caps(ctx)
     return ctx
+
+
+# ── G7-2a: per-block byte cap ──────────────────────────────────────
+#
+# Safety net against pathological context blowups. `focus_briefs` is
+# the documented main offender: 15-30KB for a typical single/few-symbol
+# discussion, but 100KB+ when a topic names a dozen symbols each
+# carrying a full quote + technical + chip + news bundle. An oversized
+# ctx blows prompt cost (re-sent on every tool-loop iteration) and can
+# overflow the model window. Caps are deliberately GENEROUS so the
+# common case is byte-for-byte unchanged — only the long tail gets
+# trimmed, which keeps signal_audit flat (the G7 "no quality loss"
+# gate) while still bounding the worst case.
+_BLOCK_BYTE_CAPS: dict[str, int] = {
+    "focus_briefs": 60_000,
+}
+
+
+def _serialized_bytes(value: Any) -> int:
+    """Byte size of `value` under the same compact JSON encoding
+    `_ask_persona` sends to the LLM (`ensure_ascii=False`, no spaces)."""
+    return len(
+        json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
+    )
+
+
+def _apply_block_byte_caps(ctx: dict[str, Any]) -> None:
+    """Trim oversized list blocks in place to their per-block byte
+    budget. Keeps the longest relevance-ordered prefix that fits (briefs
+    arrive ordered by upstream weight) and appends a sentinel item
+    recording how many were dropped, so a persona reading the block
+    still knows it was truncated rather than silently short. No-op for
+    any block already under its cap — the common path — so the caps only
+    ever bite the tail and leave normal discussions untouched."""
+    for block, cap in _BLOCK_BYTE_CAPS.items():
+        items = ctx.get(block)
+        if not isinstance(items, list) or not items:
+            continue
+        if _serialized_bytes(items) <= cap:
+            continue
+        kept: list[Any] = []
+        for item in items:
+            # Always keep at least the first item even if it alone
+            # exceeds the cap — dropping the whole block would lose more
+            # than it saves; the cap bounds the *count*, not one item.
+            if kept and _serialized_bytes([*kept, item]) > cap:
+                break
+            kept.append(item)
+        dropped = len(items) - len(kept)
+        if dropped <= 0:
+            continue
+        kept.append({"_omitted": dropped, "_reason": "context size cap"})
+        ctx[block] = kept
+        log.info(
+            "discussion.ctx.block_capped",
+            extra={"block": block, "kept": len(kept) - 1, "dropped": dropped},
+        )
 
 
 def _maybe_downgrade_captured_session(ctx: dict[str, Any]) -> None:

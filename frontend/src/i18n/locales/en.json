@@ -1,4 +1,104 @@
 {
+  "finmind": {
+    "hero": {
+      "title": "Complete Taiwan-stock data, FinMind-compatible interface",
+      "desc_1": "80 datasets mirror the response format of FinMind's public API — migrating from FinMind needs no rewrite of the calling side. Every response additionally carries a ",
+      "desc_2": " field so you can track data freshness; CSV / NDJSON batch export can stream up to 1,000,000 rows.",
+      "stat_datasets": "datasets",
+      "stat_available": "currently queryable",
+      "stat_compat": "FinMind response-format compatible",
+      "stat_phase": "Phase A → Phase B switchable"
+    },
+    "pricing": {
+      "heading": "Subscription plans",
+      "popular": "Popular",
+      "api_calls": "API calls",
+      "row_quota": "Row quota",
+      "footnote": "※ Subscriptions and self-service checkout are not open yet. For a trial, contact the administrator to issue an API key. Final pricing terms are governed by the formal contract.",
+      "checkout_soon_title": "Stripe Checkout integration coming soon",
+      "free": {
+        "price": "NT$0",
+        "note": "Free forever",
+        "calls": "100 / day",
+        "rows": "10,000 rows / day",
+        "cta": "Contact admin for a key",
+        "f1": "Full dataset-catalog browsing",
+        "f2": "100 API calls per day",
+        "f3": "FinMind mirror response format",
+        "f4": "Community email support"
+      },
+      "pro": {
+        "price": "NT$1,490",
+        "note": "Per month, cancel anytime",
+        "calls": "10,000 / day",
+        "rows": "1,000,000 rows / day",
+        "cta": "Stripe checkout coming soon",
+        "f1": "Everything in Free",
+        "f2": "10,000 API calls per day",
+        "f3": "CSV / NDJSON batch export",
+        "f4": "Historical backfill (2017+)",
+        "f5": "Email reply within 24h"
+      },
+      "enterprise": {
+        "price": "Custom",
+        "note": "Contact the sales team",
+        "calls": "Unlimited",
+        "rows": "Unlimited",
+        "cta": "Contact sales",
+        "f1": "Everything in Pro",
+        "f2": "Custom datasets / schedules",
+        "f3": "Private deployment (on-prem)",
+        "f4": "SLA 99.9%",
+        "f5": "Dedicated technical contact"
+      }
+    },
+    "catalog": {
+      "heading": "Dataset catalog",
+      "shown_suffix": "shown",
+      "search_placeholder": "Search dataset name or description…",
+      "filter_category": "Category",
+      "filter_all": "All",
+      "filter_available_only": "Available only",
+      "loading": "Loading dataset catalog…",
+      "load_error": "Failed to load catalog: {{detail}}",
+      "empty": "No datasets match the filters",
+      "sponsor_title": "FinMind Sponsor-tier dataset",
+      "col_dataset": "Dataset",
+      "col_category": "Category",
+      "col_description": "Description",
+      "col_freq": "Frequency",
+      "col_per_symbol": "Per symbol",
+      "col_status": "Status",
+      "status_available": "Queryable",
+      "status_building": "Building",
+      "aria_table": "Dataset catalog"
+    },
+    "quickstart": {
+      "heading": "Quickstart",
+      "intro_1": "After obtaining an ",
+      "intro_2": " key, pass it in the HTTP header:",
+      "resp_1": "The response format matches FinMind's public API (",
+      "resp_2": "), so switching from the FinMind SDK requires no rewrite of the calling side."
+    },
+    "category": {
+      "technical": "Technical / price-volume",
+      "chip": "Chip / institutional",
+      "fundamental": "Fundamentals / financials",
+      "derivative": "Derivatives",
+      "corporate": "Corporate actions",
+      "intraday": "Intraday / realtime",
+      "news": "News",
+      "master": "Master data"
+    },
+    "freq": {
+      "daily": "Daily",
+      "monthly": "Monthly",
+      "quarterly": "Quarterly",
+      "weekly": "Weekly",
+      "realtime": "Realtime",
+      "on_demand": "On demand"
+    }
+  },
   "chart": {
     "ind_ma": "MA",
     "ind_ema": "EMA",
@@ -11,6 +111,154 @@
     "ind_sub_group": "Sub-pane indicator"
   },
   "admin": {
+    "ingestHealth": {
+      "schedule": "Schedule",
+      "sparkline_7d_title": "Daily result over the past 7 days (UTC); rightmost is today",
+      "data_stale_title": "Data freshness: latest written ts is {{ts}} — more than 2 days behind last_run_at",
+      "jobs": {
+        "ingest_news_tw": {
+          "desc": "TW stock news scraping (Google News RSS)",
+          "sched": "Every 1 hour"
+        },
+        "ingest_news_international": {
+          "desc": "International financial news scraping (Fed / US stocks / global)",
+          "sched": "Every 1 hour"
+        },
+        "ingest_news_feeds": {
+          "desc": "TW stock news scraping (direct RSS: cnyes / UDN / LTN / CNA)",
+          "sched": "Every 1 hour"
+        },
+        "enrich_news_fulltext": {
+          "desc": "News full-text extraction (direct from source article body)",
+          "sched": "Every 30 min"
+        },
+        "newsfeed_cnyes": {
+          "desc": "└ Source: cnyes RSS",
+          "sched": "With news scrape"
+        },
+        "newsfeed_udn_money": {
+          "desc": "└ Source: UDN Money RSS",
+          "sched": "With news scrape"
+        },
+        "newsfeed_ltn_ec": {
+          "desc": "└ Source: LTN Finance RSS",
+          "sched": "With news scrape"
+        },
+        "newsfeed_cna_finance": {
+          "desc": "└ Source: CNA Finance RSS",
+          "sched": "With news scrape"
+        },
+        "ingest_ohlcv_tw": {
+          "desc": "TW stock daily K-line (TWSE → FinMind fallback)",
+          "sched": "Daily 14:30 (Taipei)"
+        },
+        "ingest_fundamentals_tw": {
+          "desc": "TW stock fundamentals (PE / PB / yield)",
+          "sched": "Daily 14:45 (Taipei)"
+        },
+        "ingest_institutional_tw": {
+          "desc": "TW stock institutional net buy/sell (foreign / trust / dealer)",
+          "sched": "Daily 14:50 (Taipei)"
+        },
+        "ingest_margin_tw": {
+          "desc": "TW stock margin & short balance",
+          "sched": "Daily 15:00 (Taipei)"
+        },
+        "ingest_taiex_history": {
+          "desc": "TAIEX index daily history (price index)",
+          "sched": "Daily 15:10 (Taipei)"
+        },
+        "ingest_taiex_tr_history": {
+          "desc": "TAIEX total-return index (FinMind sponsor — for TWD portfolio benchmark)",
+          "sched": "Daily 15:30 (Taipei)"
+        },
+        "ingest_risk_signals_tw": {
+          "desc": "TW stock risk-alert trio: disposition / trading halt / day-trade ratio (FinMind sponsor)",
+          "sched": "Daily 19:00 (Taipei)"
+        },
+        "ingest_holdings_aggregates_tw": {
+          "desc": "TW stock shareholding dispersion + market-wide institutional daily report (FinMind sponsor)",
+          "sched": "Daily 19:30 (Taipei)"
+        },
+        "ingest_revenue_tw": {
+          "desc": "TW stock monthly revenue (FinMind market-wide single fetch, sponsor tier)",
+          "sched": "Daily 17:00 (Taipei)"
+        },
+        "ingest_revenue_tw_slow": {
+          "desc": "TW stock monthly revenue (MOPS per-symbol fallback, off by default; restart manually when FinMind breaks)",
+          "sched": "Disabled"
+        },
+        "ingest_buyback_tw": {
+          "desc": "TW stock buyback announcements (FinMind v4 has no TaiwanStockBuyBack dataset; off by default, restart manually once FinMind adds it)",
+          "sched": "Disabled"
+        },
+        "ingest_govt_bank_flow_tw": {
+          "desc": "TW stock daily buy/sell amount of the eight major government banks (FinMind sponsor — national-team indicator)",
+          "sched": "Daily 18:30 (Taipei)"
+        },
+        "ingest_quotes_retention_tw": {
+          "desc": "TW stock quote_snapshots 30-day retention (purge old data)",
+          "sched": "Daily 11:00 (Taipei)"
+        },
+        "score_news_sentiment": {
+          "desc": "News sentiment scoring (LLM rates each article bullish / bearish / neutral)",
+          "sched": "Every 30 minutes"
+        },
+        "auto_run_discussion": {
+          "desc": "Daily automatic roundtable discussion (opt-in users)",
+          "sched": "Daily 08:00 (Taipei)"
+        },
+        "verify_discussion_outcome": {
+          "desc": "Roundtable discussion win/loss verdict (max-high vs day1_open × 1.03)",
+          "sched": "Daily 16:30 (Taipei)"
+        },
+        "score_discussion_outcomes": {
+          "desc": "Roundtable discussion 'answer-check' D1-D5 close change calc",
+          "sched": "Daily 17:30 (Taipei)"
+        }
+      }
+    },
+    "finmindBackfill": {
+      "loading": "Loading…",
+      "status_running": "Fetching",
+      "status_stopping": "Stopping…",
+      "status_stopping_short": "Stopping",
+      "status_idle": "Idle",
+      "last_chunk": "Last batch: {{time}}",
+      "per_dataset_progress": "Per-dataset progress",
+      "row_estimate_note": "Row counts are estimates (pg_class.reltuples)",
+      "th_failed": "Failed",
+      "th_table_rows": "Table rows",
+      "quota_chain_budget": "FinMind hourly quota (chain budget)",
+      "global_cap": "Global cap (incl. {{reserved}}/hr reserved for discussion etc.)",
+      "chain_boundary_title": "Chain budget boundary ({{limit}}/hr)",
+      "card_title": "FinMind full backfill monitor",
+      "subtitle": "{{status}} · {{done}}/{{total}} chunks ({{pct}})",
+      "external_activity_title": "Another backfill task is currently using FinMind quota",
+      "external_activity_body": "An external source (host script or the in-container APScheduler daily refresh) was detected claiming chunks within the last 10 minutes. This chain can still start — the pre-flight quota gate will automatically sleep when the chain budget is saturated instead of colliding. But running both together shares the quota, so the progress bar will be slower than expected. If the UI was interrupted unexpectedly and left a stale lock, the next start will automatically reset stuck chunks and restart.",
+      "overall_progress": "Overall progress",
+      "datasets_x_symbols": "{{datasets}} datasets × {{symbols}} symbols",
+      "queue_remaining_short": "{{count}} datasets left in queue",
+      "current_dataset_progress": "Current dataset progress",
+      "failed_inline": "{{count}} failed",
+      "datasets_to_fetch": "Datasets to fetch",
+      "selected_of_total": "{{selected}} / {{total}} selected",
+      "backfill_days": "Backfill days",
+      "days_hint": "365 = 1 year (default)",
+      "btn_start": "Start backfill",
+      "btn_starting": "Starting…",
+      "btn_stop": "Stop (finish current chunk)",
+      "btn_stopping": "Stopping…",
+      "btn_reset_stuck": "Clear stuck chunks",
+      "btn_resetting": "Clearing…",
+      "reset_done": "Cleared {{count}} stuck running chunks",
+      "start_error": "Start failed: {{detail}}",
+      "stop_error": "Stop failed: {{detail}}",
+      "reset_error": "Clear failed: {{detail}}",
+      "recent_errors": "Recent errors",
+      "queue_remaining": "{{count}} more datasets in queue:",
+      "state_error": "Cannot read chain state: {{detail}}"
+    },
     "title": "Admin",
     "tab": {
       "ops": "Operations",
@@ -315,6 +563,56 @@
     "degraded_banner": "Some rows could not be fetched from any provider — they are shown with a placeholder price."
   },
   "stock": {
+    "tab_institutional": "Institutional",
+    "tab_margin": "Margin & short",
+    "tab_revenue": "Monthly revenue",
+    "share_unit": "shares",
+    "stat": {
+      "open": "Open",
+      "high": "High",
+      "low": "Low",
+      "prev_close": "Prev close",
+      "pe": "P/E",
+      "pb": "P/B",
+      "dividend_yield": "Dividend yield",
+      "volume": "Volume",
+      "market": "Market"
+    },
+    "revenue": {
+      "chart_title": "Monthly revenue (millions NTD)",
+      "col_month": "Month",
+      "col_revenue": "Revenue (thousands)",
+      "col_mom": "MoM",
+      "col_yoy": "YoY",
+      "bar_name": "Monthly revenue",
+      "aria": "Monthly revenue"
+    },
+    "institutional": {
+      "chart_title": "Foreign net buy (thousand shares, last 30 days)",
+      "bar_fini": "Foreign",
+      "aria": "Institutional net buy/sell",
+      "col_date": "Date",
+      "col_fini_buy": "Foreign buy",
+      "col_fini_sell": "Foreign sell",
+      "col_fini_net": "Foreign net",
+      "col_sitc_buy": "Trust buy",
+      "col_sitc_sell": "Trust sell",
+      "col_sitc_net": "Trust net",
+      "col_dealer_net": "Dealer net"
+    },
+    "margin": {
+      "chart_title": "Margin & short balance (thousand shares, last 30 days)",
+      "bar_margin": "Margin balance",
+      "bar_short": "Short balance",
+      "aria_table": "Margin & short detail",
+      "empty": "No margin/short data",
+      "col_date": "Date",
+      "col_margin_purchase": "Margin buy",
+      "col_margin_balance": "Margin balance",
+      "col_short_sale": "Short sale",
+      "col_short_balance": "Short balance",
+      "col_ratio": "Short/margin ratio"
+    },
     "quoted_at": "Quoted at",
     "fullscreen": "Fullscreen chart",
     "exit_fullscreen": "Exit fullscreen",
@@ -779,6 +1077,10 @@
     "next": "Next"
   },
   "discussion": {
+    "session_backtest_prefix": "Backtest {{date}}",
+    "session_persona_count": "{{count}} experts",
+    "gainers_no_data": "(No data)",
+    "quality_hallucination_cited": "cited a value not in ctx:",
     "title": "Expert Round-table",
     "subtitle": "Multiple AI experts take turns and debate each other",
     "new": "New Discussion",

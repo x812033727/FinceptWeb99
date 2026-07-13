@@ -40,7 +40,7 @@ export function MobileHeader({
           <p className="text-[10px] text-muted-foreground flex items-center gap-1.5">
             <DiscussionStatusBadge status={detail.status} />
             <span>R{detail.current_round}</span>
-            {detail.as_of_date && <span>· 回測 {detail.as_of_date}</span>}
+            {detail.as_of_date && <span>· {t("discussion.session_backtest_prefix", { date: detail.as_of_date })}</span>}
           </p>
         )}
       </div>

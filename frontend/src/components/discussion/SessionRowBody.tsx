@@ -5,6 +5,7 @@
  */
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import type { Discussion } from "@/types/discussion";
 import { DiscussionStatusBadge } from "@/components/discussion/DiscussionStatusBadge";
 import {
@@ -28,6 +29,7 @@ import {
 // component so each row keeps its own `useQuery` instance (hook
 // rules + ESLint `react-hooks/static-components`).
 export function SessionRowBody({ s }: { s: Discussion }) {
+  const { t } = useTranslation();
   const todayIso = new Date().toISOString().slice(0, 10);
   const anchorIso = s.as_of_date ?? s.created_at?.slice(0, 10) ?? null;
   const anchorReached = anchorIso ? anchorIso <= todayIso : false;
@@ -97,14 +99,14 @@ export function SessionRowBody({ s }: { s: Discussion }) {
         <DiscussionStatusBadge status={s.status} />
         <span className="text-muted-foreground">
           {s.as_of_date
-            ? `回測 ${s.as_of_date}`
+            ? t("discussion.session_backtest_prefix", { date: s.as_of_date })
             : formatDateShort(s.updated_at || s.created_at)}
         </span>
         <span className="text-muted-foreground">·</span>
         <span className="text-muted-foreground">R{s.current_round}</span>
         <span className="text-muted-foreground">·</span>
         <span className="text-muted-foreground">
-          {s.persona_ids.length} 位專家
+          {t("discussion.session_persona_count", { count: s.persona_ids.length })}
         </span>
       </div>
     </>

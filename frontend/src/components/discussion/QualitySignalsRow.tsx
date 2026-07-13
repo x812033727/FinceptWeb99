@@ -99,7 +99,7 @@ export function QualitySignalsRow({ signals }: { signals?: QualitySignals }) {
           {hallucinations.map((w, i) => (
             <li key={`${w.round}-${w.persona_id}-${w.signal}-${i}`}>
               · R{w.round} <span className="font-mono">{w.persona_id}</span>{" "}
-              引用了未在 ctx 內的 <span className="font-mono">{w.signal}</span>
+              {t("discussion.quality_hallucination_cited")} <span className="font-mono">{w.signal}</span>
             </li>
           ))}
         </ul>

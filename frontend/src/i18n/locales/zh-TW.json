@@ -1,4 +1,104 @@
 {
+  "finmind": {
+    "hero": {
+      "title": "台股完整資料,FinMind 相容介面",
+      "desc_1": "80 個資料集鏡像 FinMind 公開 API 的回應格式 — 從 FinMind 遷移無需改寫呼叫端。每筆回應額外帶 ",
+      "desc_2": " 欄位讓你掌握資料新鮮度;CSV / NDJSON 批次匯出可串流至 100 萬列。",
+      "stat_datasets": "個資料集",
+      "stat_available": "個目前可查",
+      "stat_compat": "FinMind 回應格式相容",
+      "stat_phase": "Phase A → Phase B 可切換"
+    },
+    "pricing": {
+      "heading": "訂閱方案",
+      "popular": "熱門",
+      "api_calls": "API 呼叫",
+      "row_quota": "列數配額",
+      "footnote": "※ 訂閱與自助結帳目前尚未開放,如需試用請聯絡管理員開立 API 金鑰。完整定價條款以正式合約為準。",
+      "checkout_soon_title": "Stripe Checkout 整合即將上線",
+      "free": {
+        "price": "NT$0",
+        "note": "永久免費",
+        "calls": "100 次 / 日",
+        "rows": "10,000 列 / 日",
+        "cta": "聯絡管理員索取金鑰",
+        "f1": "完整資料集目錄瀏覽",
+        "f2": "每日 100 次 API 呼叫",
+        "f3": "FinMind 鏡像回應格式",
+        "f4": "社群 Email 支援"
+      },
+      "pro": {
+        "price": "NT$1,490",
+        "note": "每月,可取消",
+        "calls": "10,000 次 / 日",
+        "rows": "1,000,000 列 / 日",
+        "cta": "即將開放 Stripe 結帳",
+        "f1": "Free 全部功能",
+        "f2": "每日 10,000 次 API 呼叫",
+        "f3": "CSV / NDJSON 批次匯出",
+        "f4": "歷史回補(2017+)",
+        "f5": "Email 24h 內回覆"
+      },
+      "enterprise": {
+        "price": "客製",
+        "note": "聯絡業務團隊",
+        "calls": "無上限",
+        "rows": "無上限",
+        "cta": "聯絡業務",
+        "f1": "Pro 全部功能",
+        "f2": "客製資料集 / 排程",
+        "f3": "私有部署 (on-prem)",
+        "f4": "SLA 99.9%",
+        "f5": "專屬技術窗口"
+      }
+    },
+    "catalog": {
+      "heading": "資料集目錄",
+      "shown_suffix": "顯示中",
+      "search_placeholder": "搜尋資料集名稱或描述…",
+      "filter_category": "分類",
+      "filter_all": "全部",
+      "filter_available_only": "僅顯示可查",
+      "loading": "載入資料集目錄…",
+      "load_error": "無法載入目錄: {{detail}}",
+      "empty": "無符合條件的資料集",
+      "sponsor_title": "FinMind Sponsor 級資料集",
+      "col_dataset": "資料集",
+      "col_category": "分類",
+      "col_description": "描述",
+      "col_freq": "頻率",
+      "col_per_symbol": "每股",
+      "col_status": "狀態",
+      "status_available": "可查",
+      "status_building": "建置中",
+      "aria_table": "資料集目錄"
+    },
+    "quickstart": {
+      "heading": "快速上手",
+      "intro_1": "取得 ",
+      "intro_2": " 金鑰後,在 HTTP header 帶上即可:",
+      "resp_1": "回應格式與 FinMind 公開 API 一致 (",
+      "resp_2": "),從 FinMind SDK 切換時不必改寫呼叫端。"
+    },
+    "category": {
+      "technical": "技術 / 價量",
+      "chip": "籌碼",
+      "fundamental": "基本面 / 財報",
+      "derivative": "衍生性商品",
+      "corporate": "公司行動",
+      "intraday": "盤中 / 即時",
+      "news": "新聞",
+      "master": "基本資訊"
+    },
+    "freq": {
+      "daily": "每日",
+      "monthly": "每月",
+      "quarterly": "每季",
+      "weekly": "每週",
+      "realtime": "即時",
+      "on_demand": "依需求"
+    }
+  },
   "chart": {
     "ind_ma": "MA",
     "ind_ema": "EMA",
@@ -11,6 +111,154 @@
     "ind_sub_group": "副圖指標"
   },
   "admin": {
+    "ingestHealth": {
+      "schedule": "排程",
+      "sparkline_7d_title": "過去 7 天每日結果 (UTC)，最右邊是今天",
+      "data_stale_title": "資料新鮮度：寫入的最新 ts 為 {{ts}} — 比 last_run_at 落後超過 2 日",
+      "jobs": {
+        "ingest_news_tw": {
+          "desc": "台股新聞抓取（Google News RSS）",
+          "sched": "每 1 小時"
+        },
+        "ingest_news_international": {
+          "desc": "國際財經新聞抓取（Fed / 美股 / 國際）",
+          "sched": "每 1 小時"
+        },
+        "ingest_news_feeds": {
+          "desc": "台股新聞抓取（直連 RSS：鉅亨 / 經濟日報 / 自由財經 / 中央社）",
+          "sched": "每 1 小時"
+        },
+        "enrich_news_fulltext": {
+          "desc": "新聞全文抽取（直連來源文章內文）",
+          "sched": "每 30 分"
+        },
+        "newsfeed_cnyes": {
+          "desc": "└ 來源：鉅亨網 RSS",
+          "sched": "隨新聞抓取"
+        },
+        "newsfeed_udn_money": {
+          "desc": "└ 來源：經濟日報 RSS",
+          "sched": "隨新聞抓取"
+        },
+        "newsfeed_ltn_ec": {
+          "desc": "└ 來源：自由財經 RSS",
+          "sched": "隨新聞抓取"
+        },
+        "newsfeed_cna_finance": {
+          "desc": "└ 來源：中央社財經 RSS",
+          "sched": "隨新聞抓取"
+        },
+        "ingest_ohlcv_tw": {
+          "desc": "台股每日 K 線（TWSE → FinMind 後備）",
+          "sched": "每天 14:30 (台北)"
+        },
+        "ingest_fundamentals_tw": {
+          "desc": "台股基本面（PE / PB / 殖利率）",
+          "sched": "每天 14:45 (台北)"
+        },
+        "ingest_institutional_tw": {
+          "desc": "台股法人買賣超（外資 / 投信 / 自營商）",
+          "sched": "每天 14:50 (台北)"
+        },
+        "ingest_margin_tw": {
+          "desc": "台股融資融券餘額",
+          "sched": "每天 15:00 (台北)"
+        },
+        "ingest_taiex_history": {
+          "desc": "TAIEX 大盤指數每日歷史線（價格指數）",
+          "sched": "每天 15:10 (台北)"
+        },
+        "ingest_taiex_tr_history": {
+          "desc": "TAIEX 含息報酬指數（FinMind sponsor — TWD portfolio benchmark 用）",
+          "sched": "每天 15:30 (台北)"
+        },
+        "ingest_risk_signals_tw": {
+          "desc": "台股風險警示三件套：處置股 / 暫停交易 / 當沖比例（FinMind sponsor）",
+          "sched": "每天 19:00 (台北)"
+        },
+        "ingest_holdings_aggregates_tw": {
+          "desc": "台股股權分散 + 全市場三大法人日報（FinMind sponsor）",
+          "sched": "每天 19:30 (台北)"
+        },
+        "ingest_revenue_tw": {
+          "desc": "台股月營收（FinMind 全市場一次抓，sponsor tier）",
+          "sched": "每天 17:00 (台北)"
+        },
+        "ingest_revenue_tw_slow": {
+          "desc": "台股月營收（MOPS per-symbol fallback, 預設關閉；FinMind 出問題時手動重啟）",
+          "sched": "停用中"
+        },
+        "ingest_buyback_tw": {
+          "desc": "台股庫藏股公告（FinMind v4 無 TaiwanStockBuyBack 資料集；預設關閉，FinMind 補上後手動重啟）",
+          "sched": "停用中"
+        },
+        "ingest_govt_bank_flow_tw": {
+          "desc": "台股八大行庫每日買賣金額（FinMind sponsor — 國家隊指標）",
+          "sched": "每天 18:30 (台北)"
+        },
+        "ingest_quotes_retention_tw": {
+          "desc": "台股 quote_snapshots 30 日保留（清舊資料）",
+          "sched": "每天 11:00 (台北)"
+        },
+        "score_news_sentiment": {
+          "desc": "新聞情緒評分（LLM 評每篇利多 / 利空 / 中性）",
+          "sched": "每 30 分鐘"
+        },
+        "auto_run_discussion": {
+          "desc": "每日自動圓桌討論（已啟用 opt-in 的使用者）",
+          "sched": "每天 08:00 (台北)"
+        },
+        "verify_discussion_outcome": {
+          "desc": "圓桌討論勝負判定（max-high vs day1_open × 1.03）",
+          "sched": "每天 16:30 (台北)"
+        },
+        "score_discussion_outcomes": {
+          "desc": "圓桌討論「對答案」D1-D5 收盤漲跌計算",
+          "sched": "每天 17:30 (台北)"
+        }
+      }
+    },
+    "finmindBackfill": {
+      "loading": "載入中…",
+      "status_running": "正在抓取",
+      "status_stopping": "正在停止…",
+      "status_stopping_short": "正在停止",
+      "status_idle": "閒置中",
+      "last_chunk": "最後一批: {{time}}",
+      "per_dataset_progress": "每個 dataset 進度",
+      "row_estimate_note": "row 數為估計值 (pg_class.reltuples)",
+      "th_failed": "失敗",
+      "th_table_rows": "資料表 row 數",
+      "quota_chain_budget": "FinMind 每小時 quota(chain 預算)",
+      "global_cap": "全域 cap(含預留 {{reserved}}/hr 給討論等)",
+      "chain_boundary_title": "chain 預算邊界 ({{limit}}/hr)",
+      "card_title": "FinMind 全量回填監控",
+      "subtitle": "{{status}} · {{done}}/{{total}} chunks ({{pct}})",
+      "external_activity_title": "目前有其他 backfill 任務在使用 FinMind quota",
+      "external_activity_body": "10 分鐘內偵測到外部來源(host 腳本或 backend 內 APScheduler 的 daily refresh)正在 claim chunk。本次 chain 仍可啟動 ── pre-flight quota gate 會在 chain 預算飽和時自動 sleep,不會硬撞。但兩邊一起跑會共用 quota,進度條會比預期慢。若 UI 曾意外中斷讓 lock 殘留,下一次 start 會自動 reset stuck → 重啟。",
+      "overall_progress": "整體進度",
+      "datasets_x_symbols": "{{datasets}} 個 dataset × {{symbols}} symbols",
+      "queue_remaining_short": "佇列剩 {{count}} 個 dataset",
+      "current_dataset_progress": "目前 dataset 進度",
+      "failed_inline": "失敗 {{count}}",
+      "datasets_to_fetch": "要抓取的 dataset",
+      "selected_of_total": "{{selected}} / {{total}} 已勾選",
+      "backfill_days": "回填天數",
+      "days_hint": "365 = 1 年 (預設)",
+      "btn_start": "開始回填",
+      "btn_starting": "啟動中…",
+      "btn_stop": "停止 (跑完目前 chunk)",
+      "btn_stopping": "停止中…",
+      "btn_reset_stuck": "清理卡住的 chunk",
+      "btn_resetting": "清理中…",
+      "reset_done": "已清理 {{count}} 條 stuck running chunk",
+      "start_error": "啟動失敗: {{detail}}",
+      "stop_error": "停止失敗: {{detail}}",
+      "reset_error": "清理失敗: {{detail}}",
+      "recent_errors": "最近錯誤",
+      "queue_remaining": "佇列中還有 {{count}} 個 dataset:",
+      "state_error": "無法讀取 chain 狀態: {{detail}}"
+    },
     "title": "管理後台",
     "tab": {
       "ops": "維運",
@@ -315,6 +563,56 @@
     "degraded_banner": "部分股票暫時無法從任何資料源取得即時報價，下方表格仍會顯示這些股票（價格以佔位符顯示）。"
   },
   "stock": {
+    "tab_institutional": "法人買賣超",
+    "tab_margin": "融資融券",
+    "tab_revenue": "月營收",
+    "share_unit": "股",
+    "stat": {
+      "open": "開盤",
+      "high": "最高",
+      "low": "最低",
+      "prev_close": "昨收",
+      "pe": "本益比 P/E",
+      "pb": "淨值比 P/B",
+      "dividend_yield": "殖利率",
+      "volume": "成交量",
+      "market": "市場"
+    },
+    "revenue": {
+      "chart_title": "月營收（百萬新台幣）",
+      "col_month": "月份",
+      "col_revenue": "營收（千元）",
+      "col_mom": "月增率",
+      "col_yoy": "年增率",
+      "bar_name": "月營收",
+      "aria": "月營收"
+    },
+    "institutional": {
+      "chart_title": "外資淨買超（千股，近 30 日）",
+      "bar_fini": "外資",
+      "aria": "法人買賣超",
+      "col_date": "日期",
+      "col_fini_buy": "外資買",
+      "col_fini_sell": "外資賣",
+      "col_fini_net": "外資淨",
+      "col_sitc_buy": "投信買",
+      "col_sitc_sell": "投信賣",
+      "col_sitc_net": "投信淨",
+      "col_dealer_net": "自營淨"
+    },
+    "margin": {
+      "chart_title": "融資融券餘額（千股，近 30 日）",
+      "bar_margin": "融資餘額",
+      "bar_short": "融券餘額",
+      "aria_table": "融資融券明細",
+      "empty": "無融資融券資料",
+      "col_date": "日期",
+      "col_margin_purchase": "融資買入",
+      "col_margin_balance": "融資餘額",
+      "col_short_sale": "融券賣出",
+      "col_short_balance": "融券餘額",
+      "col_ratio": "券資比"
+    },
     "quoted_at": "資料時間",
     "fullscreen": "全螢幕看盤",
     "exit_fullscreen": "離開全螢幕",
@@ -779,6 +1077,10 @@
     "next": "下一頁"
   },
   "discussion": {
+    "session_backtest_prefix": "回測 {{date}}",
+    "session_persona_count": "{{count}} 位專家",
+    "gainers_no_data": "（無資料）",
+    "quality_hallucination_cited": "引用了未在 ctx 內的",
     "title": "專家圓桌",
     "subtitle": "多位 AI 專家輪流發言、互相辯論",
     "new": "新討論",

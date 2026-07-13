@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { CollapsibleHeader } from "@/components/Collapsible";
 import { useCollapsible } from "@/hooks/useCollapsible";
@@ -23,19 +24,20 @@ import { formatTaipei } from "@/lib/timeFormat";
  */
 
 function StatusBanner({ state }: { state: FinmindChainState | undefined }) {
+  const { t } = useTranslation();
   if (!state) {
     return (
       <div className="rounded border border-border bg-muted/30 p-3 text-sm text-muted-foreground">
-        載入中…
+        {t("admin.finmindBackfill.loading")}
       </div>
     );
   }
   const label =
     state.status === "running"
-      ? "正在抓取"
+      ? t("admin.finmindBackfill.status_running")
       : state.status === "stopping"
-        ? "正在停止…"
-        : "閒置中";
+        ? t("admin.finmindBackfill.status_stopping")
+        : t("admin.finmindBackfill.status_idle");
   const cls =
     state.status === "running"
       ? "border-success/40 bg-success/10"
@@ -53,7 +55,7 @@ function StatusBanner({ state }: { state: FinmindChainState | undefined }) {
       )}
       {state.last_chunk_at && (
         <div className="mt-0.5 text-xs text-muted-foreground">
-          最後一批: {formatTaipei(state.last_chunk_at)}
+          {t("admin.finmindBackfill.last_chunk", { time: formatTaipei(state.last_chunk_at) })}
         </div>
       )}
     </div>
@@ -67,13 +69,14 @@ function PerDatasetTable({
   rows: PerDatasetProgress[];
   currentDataset: string | null;
 }) {
+  const { t } = useTranslation();
   if (rows.length === 0) return null;
   return (
     <div>
       <div className="mb-1 flex justify-between text-sm">
-        <span className="font-semibold">每個 dataset 進度</span>
+        <span className="font-semibold">{t("admin.finmindBackfill.per_dataset_progress")}</span>
         <span className="text-xs text-muted-foreground">
-          row 數為估計值 (pg_class.reltuples)
+          {t("admin.finmindBackfill.row_estimate_note")}
         </span>
       </div>
       <div className="overflow-x-auto rounded border border-border">
@@ -83,8 +86,8 @@ function PerDatasetTable({
               <th className="px-2 py-1 text-left font-medium">Dataset</th>
               <th className="px-2 py-1 text-right font-medium">Chunks</th>
               <th className="px-2 py-1 text-right font-medium">%</th>
-              <th className="px-2 py-1 text-right font-medium">失敗</th>
-              <th className="px-2 py-1 text-right font-medium">資料表 row 數</th>
+              <th className="px-2 py-1 text-right font-medium">{t("admin.finmindBackfill.th_failed")}</th>
+              <th className="px-2 py-1 text-right font-medium">{t("admin.finmindBackfill.th_table_rows")}</th>
             </tr>
           </thead>
           <tbody>
@@ -162,6 +165,7 @@ function QuotaGauge({
   limit: number;
   globalLimit: number;
 }) {
+  const { t } = useTranslation();
   const u = used ?? 0;
   const pct = limit > 0 ? Math.min(100, (u / limit) * 100) : 0;
   const color =
@@ -170,8 +174,9 @@ function QuotaGauge({
       : pct >= 70
         ? "bg-warning"
         : "bg-primary";
-  // Reservation = 全域 cap 跟 chain 預算之間的差額,留給討論 / screener
-  // / news 等非 chain 路徑用。當兩者相等時不顯示(沒分離)。
+  // Reservation = the gap between the global cap and the chain budget,
+  // left for non-chain paths like discussion / screener / news. Hidden
+  // when the two are equal (no separation).
   const reserved = Math.max(0, globalLimit - limit);
   const reservedPct =
     globalLimit > 0 ? (reserved / globalLimit) * 100 : 0;
@@ -183,7 +188,7 @@ function QuotaGauge({
     <div>
       <div className="mb-1 flex justify-between text-xs">
         <span className="text-muted-foreground">
-          FinMind 每小時 quota(chain 預算)
+          {t("admin.finmindBackfill.quota_chain_budget")}
         </span>
         <span className="font-mono">
           {u.toLocaleString()} / {limit.toLocaleString()} ({formatProgressPct(u, limit)})
@@ -199,7 +204,7 @@ function QuotaGauge({
         <div className="mt-2">
           <div className="mb-1 flex justify-between text-xs">
             <span className="text-muted-foreground">
-              全域 cap(含預留 {reserved.toLocaleString()}/hr 給討論等)
+              {t("admin.finmindBackfill.global_cap", { reserved: reserved.toLocaleString() })}
             </span>
             <span className="font-mono">
               {u.toLocaleString()} / {globalLimit.toLocaleString()} ({formatProgressPct(u, globalLimit)})
@@ -215,7 +220,7 @@ function QuotaGauge({
             <div
               className="absolute inset-y-0 w-px bg-foreground/40"
               style={{ left: `${chainPct}%` }}
-              title={`chain 預算邊界 (${limit.toLocaleString()}/hr)`}
+              title={t("admin.finmindBackfill.chain_boundary_title", { limit: limit.toLocaleString() })}
             />
             {/* reservation band, dim hatch */}
             <div
@@ -230,6 +235,7 @@ function QuotaGauge({
 }
 
 export default function FinmindBackfillCard() {
+  const { t } = useTranslation();
   const { open, toggle } = useCollapsible("admin-finmind-backfill", true);
   const { stateQuery, start, stop, resetStuck } = useFinmindChain(open);
   const s = stateQuery.data;
@@ -277,13 +283,26 @@ export default function FinmindBackfillCard() {
     });
   }
 
+  const subtitleStatus = s
+    ? s.status === "running"
+      ? t("admin.finmindBackfill.status_running")
+      : s.status === "stopping"
+        ? t("admin.finmindBackfill.status_stopping_short")
+        : t("admin.finmindBackfill.status_idle")
+    : "";
+
   return (
     <div className="rounded-lg border border-border bg-card p-4">
       <CollapsibleHeader
-        title="FinMind 全量回填監控"
+        title={t("admin.finmindBackfill.card_title")}
         subtitle={
           s
-            ? `${s.status === "running" ? "正在抓取" : s.status === "stopping" ? "正在停止" : "閒置中"} · ${s.total_chunks_done.toLocaleString()}/${s.total_chunks_total.toLocaleString()} chunks (${formatProgressPct(s.total_chunks_done, s.total_chunks_total)})`
+            ? t("admin.finmindBackfill.subtitle", {
+                status: subtitleStatus,
+                done: s.total_chunks_done.toLocaleString(),
+                total: s.total_chunks_total.toLocaleString(),
+                pct: formatProgressPct(s.total_chunks_done, s.total_chunks_total),
+              })
             : "click to expand"
         }
         open={open}
@@ -295,15 +314,10 @@ export default function FinmindBackfillCard() {
           {externalActivity && (
             <div className="rounded border border-warning/40 bg-warning/10 p-3 text-xs">
               <div className="font-semibold">
-                目前有其他 backfill 任務在使用 FinMind quota
+                {t("admin.finmindBackfill.external_activity_title")}
               </div>
               <div className="mt-1 text-muted-foreground">
-                10 分鐘內偵測到外部來源(host 腳本或 backend 內 APScheduler
-                的 daily refresh)正在 claim chunk。本次 chain 仍可啟動 ──
-                pre-flight quota gate 會在 chain 預算飽和時自動 sleep,
-                不會硬撞。但兩邊一起跑會共用 quota,進度條會比預期慢。若 UI
-                曾意外中斷讓 lock 殘留,下一次 start 會自動 reset stuck →
-                重啟。
+                {t("admin.finmindBackfill.external_activity_body")}
               </div>
             </div>
           )}
@@ -319,7 +333,7 @@ export default function FinmindBackfillCard() {
             <div>
               <div className="mb-1 flex justify-between text-sm">
                 <span className="font-semibold">
-                  整體進度
+                  {t("admin.finmindBackfill.overall_progress")}
                 </span>
                 <span className="font-mono">
                   {s.total_chunks_done.toLocaleString()} /{" "}
@@ -332,9 +346,12 @@ export default function FinmindBackfillCard() {
                 total={s.total_chunks_total}
               />
               <div className="mt-1 text-xs text-muted-foreground">
-                {s.selected_datasets.length} 個 dataset × {s.universe_size.toLocaleString()} symbols
+                {t("admin.finmindBackfill.datasets_x_symbols", {
+                  datasets: s.selected_datasets.length,
+                  symbols: s.universe_size.toLocaleString(),
+                })}
                 {s.queue.length > 0 && (
-                  <> · 佇列剩 {s.queue.length} 個 dataset</>
+                  <> · {t("admin.finmindBackfill.queue_remaining_short", { count: s.queue.length })}</>
                 )}
               </div>
             </div>
@@ -351,13 +368,13 @@ export default function FinmindBackfillCard() {
             <div>
               <div className="mb-1 flex justify-between text-xs">
                 <span className="text-muted-foreground">
-                  目前 dataset 進度
+                  {t("admin.finmindBackfill.current_dataset_progress")}
                 </span>
                 <span className="font-mono">
                   {s.chunks_done}/{s.chunks_total} ({formatProgressPct(s.chunks_done, s.chunks_total)})
                   {s.chunks_failed > 0 && (
                     <span className="ml-2 text-destructive">
-                      失敗 {s.chunks_failed}
+                      {t("admin.finmindBackfill.failed_inline", { count: s.chunks_failed })}
                     </span>
                   )}
                 </span>
@@ -378,9 +395,12 @@ export default function FinmindBackfillCard() {
           {s?.default_datasets && (
             <div className="rounded border border-border p-3">
               <div className="mb-2 flex items-center justify-between text-sm">
-                <span className="font-semibold">要抓取的 dataset</span>
+                <span className="font-semibold">{t("admin.finmindBackfill.datasets_to_fetch")}</span>
                 <span className="text-xs text-muted-foreground">
-                  {selected.size} / {s.default_datasets.length} 已勾選
+                  {t("admin.finmindBackfill.selected_of_total", {
+                    selected: selected.size,
+                    total: s.default_datasets.length,
+                  })}
                 </span>
               </div>
               <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
@@ -401,7 +421,7 @@ export default function FinmindBackfillCard() {
               </div>
               <div className="mt-3 flex items-center gap-2 text-xs">
                 <label className="flex items-center gap-2">
-                  回填天數
+                  {t("admin.finmindBackfill.backfill_days")}
                   <input
                     type="number"
                     min={1}
@@ -415,7 +435,7 @@ export default function FinmindBackfillCard() {
                   />
                 </label>
                 <span className="text-muted-foreground">
-                  365 = 1 年 (預設)
+                  {t("admin.finmindBackfill.days_hint")}
                 </span>
               </div>
             </div>
@@ -429,7 +449,9 @@ export default function FinmindBackfillCard() {
               disabled={startDisabled}
               className="rounded bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
-              {start.isPending ? "啟動中…" : "開始回填"}
+              {start.isPending
+                ? t("admin.finmindBackfill.btn_starting")
+                : t("admin.finmindBackfill.btn_start")}
             </button>
             <button
               type="button"
@@ -437,7 +459,9 @@ export default function FinmindBackfillCard() {
               disabled={stopDisabled}
               className="rounded border border-destructive bg-destructive/10 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/20 disabled:opacity-50"
             >
-              {stop.isPending ? "停止中…" : "停止 (跑完目前 chunk)"}
+              {stop.isPending
+                ? t("admin.finmindBackfill.btn_stopping")
+                : t("admin.finmindBackfill.btn_stop")}
             </button>
             <button
               type="button"
@@ -445,35 +469,37 @@ export default function FinmindBackfillCard() {
               disabled={resetStuck.isPending}
               className="rounded border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
             >
-              {resetStuck.isPending ? "清理中…" : "清理卡住的 chunk"}
+              {resetStuck.isPending
+                ? t("admin.finmindBackfill.btn_resetting")
+                : t("admin.finmindBackfill.btn_reset_stuck")}
             </button>
             {resetStuck.data && (
               <span className="text-xs text-muted-foreground">
-                已清理 {resetStuck.data.reset} 條 stuck running chunk
+                {t("admin.finmindBackfill.reset_done", { count: resetStuck.data.reset })}
               </span>
             )}
           </div>
 
           {start.isError && (
             <div className="rounded border border-destructive bg-destructive/10 p-2 text-xs">
-              啟動失敗: {errorDetail(start.error)}
+              {t("admin.finmindBackfill.start_error", { detail: errorDetail(start.error) })}
             </div>
           )}
           {stop.isError && (
             <div className="rounded border border-destructive bg-destructive/10 p-2 text-xs">
-              停止失敗: {errorDetail(stop.error)}
+              {t("admin.finmindBackfill.stop_error", { detail: errorDetail(stop.error) })}
             </div>
           )}
           {resetStuck.isError && (
             <div className="rounded border border-destructive bg-destructive/10 p-2 text-xs">
-              清理失敗: {errorDetail(resetStuck.error)}
+              {t("admin.finmindBackfill.reset_error", { detail: errorDetail(resetStuck.error) })}
             </div>
           )}
 
           {/* Recent errors ────────────────────────────────────── */}
           {s?.recent_errors && s.recent_errors.length > 0 && (
             <div>
-              <h3 className="mb-1 text-sm font-semibold">最近錯誤</h3>
+              <h3 className="mb-1 text-sm font-semibold">{t("admin.finmindBackfill.recent_errors")}</h3>
               <ul className="space-y-1 text-xs">
                 {s.recent_errors.map((e, i) => (
                   <li
@@ -490,14 +516,14 @@ export default function FinmindBackfillCard() {
           {/* Queue ────────────────────────────────────────────── */}
           {s && s.queue.length > 0 && (
             <div className="text-xs text-muted-foreground">
-              佇列中還有 {s.queue.length} 個 dataset:{" "}
+              {t("admin.finmindBackfill.queue_remaining", { count: s.queue.length })}{" "}
               <span className="font-mono">{s.queue.join(", ")}</span>
             </div>
           )}
 
           {stateQuery.isError && (
             <div className="rounded border border-destructive bg-destructive/10 p-2 text-xs">
-              無法讀取 chain 狀態: {errorDetail(stateQuery.error)}
+              {t("admin.finmindBackfill.state_error", { detail: errorDetail(stateQuery.error) })}
             </div>
           )}
         </div>

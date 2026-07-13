@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import {
   Bar, BarChart, Cell, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
@@ -7,6 +8,7 @@ import { fetchInstitutional, fmtK } from "./_shared";
 import { DataTable, type DataTableColumn } from "../ui/table";
 
 export function InstitutionalPanel({ symbol }: { symbol: string }) {
+  const { t } = useTranslation();
   const { data = [], isLoading } = useQuery({
     queryKey: ["institutional", symbol],
     queryFn: () => fetchInstitutional(symbol),
@@ -28,24 +30,24 @@ export function InstitutionalPanel({ symbol }: { symbol: string }) {
   const columns: DataTableColumn<InstRow>[] = [
     {
       key: "date",
-      header: "日期",
+      header: t("stock.institutional.col_date"),
       render: (r) => <span className="text-muted-foreground">{r.date}</span>,
     },
     {
       key: "fini_buy",
-      header: "外資買",
+      header: t("stock.institutional.col_fini_buy"),
       numeric: true,
       render: (r) => fmtK(r.fini_buy),
     },
     {
       key: "fini_sell",
-      header: "外資賣",
+      header: t("stock.institutional.col_fini_sell"),
       numeric: true,
       render: (r) => fmtK(r.fini_sell),
     },
     {
       key: "fini_net",
-      header: "外資淨",
+      header: t("stock.institutional.col_fini_net"),
       numeric: true,
       headerClassName: "text-up",
       render: (r) => {
@@ -59,19 +61,19 @@ export function InstitutionalPanel({ symbol }: { symbol: string }) {
     },
     {
       key: "sitc_buy",
-      header: "投信買",
+      header: t("stock.institutional.col_sitc_buy"),
       numeric: true,
       render: (r) => fmtK(r.sitc_buy),
     },
     {
       key: "sitc_sell",
-      header: "投信賣",
+      header: t("stock.institutional.col_sitc_sell"),
       numeric: true,
       render: (r) => fmtK(r.sitc_sell),
     },
     {
       key: "sitc_net",
-      header: "投信淨",
+      header: t("stock.institutional.col_sitc_net"),
       numeric: true,
       headerClassName: "text-blue-400",
       render: (r) => {
@@ -85,7 +87,7 @@ export function InstitutionalPanel({ symbol }: { symbol: string }) {
     },
     {
       key: "dealer_net",
-      header: "自營淨",
+      header: t("stock.institutional.col_dealer_net"),
       numeric: true,
       headerClassName: "text-purple-400",
       render: (r) => {
@@ -104,14 +106,14 @@ export function InstitutionalPanel({ symbol }: { symbol: string }) {
       <div className="space-y-4">
         {/* net buy bar chart */}
         <div>
-          <h4 className="text-xs font-semibold text-foreground mb-2">外資淨買超（千股，近 30 日）</h4>
+          <h4 className="text-xs font-semibold text-foreground mb-2">{t("stock.institutional.chart_title")}</h4>
           <ResponsiveContainer width="100%" height={120}>
             <BarChart data={chartData} margin={{ left: 0, right: 0 }}>
               <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} interval="preserveStartEnd" />
               <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} width={40} />
               <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }} />
               <ReferenceLine y={0} stroke="hsl(var(--border))" />
-              <Bar dataKey="fini" name="外資" radius={[2, 2, 0, 0]}>
+              <Bar dataKey="fini" name={t("stock.institutional.bar_fini")} radius={[2, 2, 0, 0]}>
                 {chartData.map((d, i) => (
                   <Cell key={i} fill={d.fini >= 0 ? "hsl(var(--up))" : "hsl(var(--down))"} />
                 ))}
@@ -126,7 +128,7 @@ export function InstitutionalPanel({ symbol }: { symbol: string }) {
           rows={rows}
           rowKey={(r) => r.date}
           mobileMode="scroll"
-          aria-label="法人買賣超"
+          aria-label={t("stock.institutional.aria")}
         />
       </div>
     </div>

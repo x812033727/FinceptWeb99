@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 
 import api, { errorDetail } from "@/lib/api";
 import { DataTable, type DataTableColumn } from "@/components/ui/table";
@@ -29,87 +30,34 @@ interface CatalogItem {
 interface PricingTier {
   code: "free" | "pro" | "enterprise";
   name: string;
-  priceMonthly: string;
-  priceNote: string;
-  quotaCalls: string;
-  quotaRows: string;
-  features: string[];
-  ctaLabel: string;
+  featureKeys: string[];
   highlighted?: boolean;
 }
 
+// Static, code-only tier definitions. All display strings (price, note,
+// quotas, features, CTA) live in the i18n locale files under
+// `finmind.pricing.<code>.*` so the page renders in the selected language.
 const PRICING_TIERS: PricingTier[] = [
   {
     code: "free",
     name: "Free",
-    priceMonthly: "NT$0",
-    priceNote: "永久免費",
-    quotaCalls: "100 次 / 日",
-    quotaRows: "10,000 列 / 日",
-    features: [
-      "完整資料集目錄瀏覽",
-      "每日 100 次 API 呼叫",
-      "FinMind 鏡像回應格式",
-      "社群 Email 支援",
-    ],
-    ctaLabel: "聯絡管理員索取金鑰",
+    featureKeys: ["f1", "f2", "f3", "f4"],
   },
   {
     code: "pro",
     name: "Pro",
-    priceMonthly: "NT$1,490",
-    priceNote: "每月,可取消",
-    quotaCalls: "10,000 次 / 日",
-    quotaRows: "1,000,000 列 / 日",
-    features: [
-      "Free 全部功能",
-      "每日 10,000 次 API 呼叫",
-      "CSV / NDJSON 批次匯出",
-      "歷史回補(2017+)",
-      "Email 24h 內回覆",
-    ],
-    ctaLabel: "即將開放 Stripe 結帳",
+    featureKeys: ["f1", "f2", "f3", "f4", "f5"],
     highlighted: true,
   },
   {
     code: "enterprise",
     name: "Enterprise",
-    priceMonthly: "客製",
-    priceNote: "聯絡業務團隊",
-    quotaCalls: "無上限",
-    quotaRows: "無上限",
-    features: [
-      "Pro 全部功能",
-      "客製資料集 / 排程",
-      "私有部署 (on-prem)",
-      "SLA 99.9%",
-      "專屬技術窗口",
-    ],
-    ctaLabel: "聯絡業務",
+    featureKeys: ["f1", "f2", "f3", "f4", "f5"],
   },
 ];
 
-const CATEGORY_LABELS: Record<string, string> = {
-  technical: "技術 / 價量",
-  chip: "籌碼",
-  fundamental: "基本面 / 財報",
-  derivative: "衍生性商品",
-  corporate: "公司行動",
-  intraday: "盤中 / 即時",
-  news: "新聞",
-  master: "基本資訊",
-};
-
-const FREQ_LABELS: Record<string, string> = {
-  daily: "每日",
-  monthly: "每月",
-  quarterly: "每季",
-  weekly: "每週",
-  realtime: "即時",
-  on_demand: "依需求",
-};
-
 export default function FinmindPage() {
+  const { t } = useTranslation();
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [showOnlyAvailable, setShowOnlyAvailable] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -150,7 +98,7 @@ export default function FinmindPage() {
   const columns: DataTableColumn<CatalogItem>[] = [
     {
       key: "dataset_code",
-      header: "資料集",
+      header: t("finmind.catalog.col_dataset"),
       cellClassName: "font-mono",
       render: (d) => (
         <span className="font-mono">
@@ -158,7 +106,7 @@ export default function FinmindPage() {
           {d.sponsor_tier && (
             <span
               className="ml-1 rounded bg-warning/15 px-1 text-[10px] text-warning"
-              title="FinMind Sponsor 級資料集"
+              title={t("finmind.catalog.sponsor_title")}
             >
               sponsor
             </span>
@@ -168,38 +116,38 @@ export default function FinmindPage() {
     },
     {
       key: "category",
-      header: "分類",
+      header: t("finmind.catalog.col_category"),
       cellClassName: "text-muted-foreground",
-      render: (d) => CATEGORY_LABELS[d.category] ?? d.category,
+      render: (d) => t(`finmind.category.${d.category}`, { defaultValue: d.category }),
     },
     {
       key: "description_zh",
-      header: "描述",
+      header: t("finmind.catalog.col_description"),
       render: (d) => d.description_zh,
     },
     {
       key: "ingest_freq",
-      header: "頻率",
+      header: t("finmind.catalog.col_freq"),
       cellClassName: "text-muted-foreground",
-      render: (d) => FREQ_LABELS[d.ingest_freq] ?? d.ingest_freq,
+      render: (d) => t(`finmind.freq.${d.ingest_freq}`, { defaultValue: d.ingest_freq }),
     },
     {
       key: "per_symbol",
-      header: "每股",
+      header: t("finmind.catalog.col_per_symbol"),
       cellClassName: "text-muted-foreground",
       render: (d) => (d.per_symbol ? "✓" : "—"),
     },
     {
       key: "available",
-      header: "狀態",
+      header: t("finmind.catalog.col_status"),
       render: (d) =>
         d.available ? (
           <span className="rounded bg-success/15 px-1.5 py-0.5 text-[10px] text-success">
-            可查
+            {t("finmind.catalog.status_available")}
           </span>
         ) : (
           <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-            建置中
+            {t("finmind.catalog.status_building")}
           </span>
         ),
     },
@@ -214,25 +162,25 @@ export default function FinmindPage() {
             FinMind Mirror API
           </div>
           <h1 className="mb-3 text-2xl font-bold lg:text-3xl">
-            台股完整資料,FinMind 相容介面
+            {t("finmind.hero.title")}
           </h1>
           <p className="mb-4 text-sm leading-relaxed text-muted-foreground lg:text-base">
-            80 個資料集鏡像 FinMind 公開 API 的回應格式 — 從 FinMind
-            遷移無需改寫呼叫端。每筆回應額外帶 <code className="rounded bg-muted px-1 text-xs">metadata</code>
-            欄位讓你掌握資料新鮮度;CSV / NDJSON 批次匯出可串流至 100 萬列。
+            {t("finmind.hero.desc_1")}
+            <code className="rounded bg-muted px-1 text-xs">metadata</code>
+            {t("finmind.hero.desc_2")}
           </p>
           <div className="flex flex-wrap gap-3 text-xs">
             <span className="rounded border border-border bg-background px-2 py-1">
-              <span className="font-mono text-primary">{datasets.length}</span> 個資料集
+              <span className="font-mono text-primary">{datasets.length}</span> {t("finmind.hero.stat_datasets")}
             </span>
             <span className="rounded border border-border bg-background px-2 py-1">
-              <span className="font-mono text-success">{availableCount}</span> 個目前可查
+              <span className="font-mono text-success">{availableCount}</span> {t("finmind.hero.stat_available")}
             </span>
             <span className="rounded border border-border bg-background px-2 py-1">
-              FinMind 回應格式相容
+              {t("finmind.hero.stat_compat")}
             </span>
             <span className="rounded border border-border bg-background px-2 py-1">
-              Phase A → Phase B 可切換
+              {t("finmind.hero.stat_phase")}
             </span>
           </div>
         </div>
@@ -240,7 +188,7 @@ export default function FinmindPage() {
 
       {/* Pricing ─────────────────────────────────────── */}
       <section>
-        <h2 className="mb-3 text-lg font-semibold">訂閱方案</h2>
+        <h2 className="mb-3 text-lg font-semibold">{t("finmind.pricing.heading")}</h2>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           {PRICING_TIERS.map((tier) => (
             <div
@@ -255,27 +203,27 @@ export default function FinmindPage() {
                 <h3 className="text-base font-semibold">{tier.name}</h3>
                 {tier.highlighted && (
                   <span className="rounded bg-primary/20 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-                    熱門
+                    {t("finmind.pricing.popular")}
                   </span>
                 )}
               </div>
-              <div className="mb-1 text-2xl font-bold">{tier.priceMonthly}</div>
-              <div className="mb-4 text-xs text-muted-foreground">{tier.priceNote}</div>
+              <div className="mb-1 text-2xl font-bold">{t(`finmind.pricing.${tier.code}.price`)}</div>
+              <div className="mb-4 text-xs text-muted-foreground">{t(`finmind.pricing.${tier.code}.note`)}</div>
               <div className="mb-4 space-y-1 text-xs">
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">API 呼叫</span>
-                  <span className="font-mono">{tier.quotaCalls}</span>
+                  <span className="text-muted-foreground">{t("finmind.pricing.api_calls")}</span>
+                  <span className="font-mono">{t(`finmind.pricing.${tier.code}.calls`)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">列數配額</span>
-                  <span className="font-mono">{tier.quotaRows}</span>
+                  <span className="text-muted-foreground">{t("finmind.pricing.row_quota")}</span>
+                  <span className="font-mono">{t(`finmind.pricing.${tier.code}.rows`)}</span>
                 </div>
               </div>
               <ul className="mb-5 flex-1 space-y-1.5 text-sm">
-                {tier.features.map((f) => (
-                  <li key={f} className="flex gap-2">
+                {tier.featureKeys.map((fk) => (
+                  <li key={fk} className="flex gap-2">
                     <span className="text-success">✓</span>
-                    <span>{f}</span>
+                    <span>{t(`finmind.pricing.${tier.code}.${fk}`)}</span>
                   </li>
                 ))}
               </ul>
@@ -287,25 +235,24 @@ export default function FinmindPage() {
                     ? "bg-primary text-primary-foreground opacity-60"
                     : "border border-border bg-background opacity-60"
                 }`}
-                title="Stripe Checkout 整合即將上線"
+                title={t("finmind.pricing.checkout_soon_title")}
               >
-                {tier.ctaLabel}
+                {t(`finmind.pricing.${tier.code}.cta`)}
               </button>
             </div>
           ))}
         </div>
         <p className="mt-3 text-xs text-muted-foreground">
-          ※ 訂閱與自助結帳目前尚未開放,如需試用請聯絡管理員開立 API
-          金鑰。完整定價條款以正式合約為準。
+          {t("finmind.pricing.footnote")}
         </p>
       </section>
 
       {/* Catalog ─────────────────────────────────────── */}
       <section>
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">資料集目錄</h2>
+          <h2 className="text-lg font-semibold">{t("finmind.catalog.heading")}</h2>
           <span className="text-xs text-muted-foreground">
-            {filtered.length} / {datasets.length} 顯示中
+            {filtered.length} / {datasets.length} {t("finmind.catalog.shown_suffix")}
           </span>
         </div>
 
@@ -314,20 +261,20 @@ export default function FinmindPage() {
             type="search"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="搜尋資料集名稱或描述…"
+            placeholder={t("finmind.catalog.search_placeholder")}
             className="flex-1 min-w-[200px] rounded border border-border bg-background px-3 py-1.5"
           />
           <label className="flex items-center gap-2">
-            分類
+            {t("finmind.catalog.filter_category")}
             <select
               value={categoryFilter}
               onChange={(e) => setCategoryFilter(e.target.value)}
               className="rounded border border-border bg-background px-2 py-1"
             >
-              <option value="all">全部</option>
+              <option value="all">{t("finmind.catalog.filter_all")}</option>
               {categories.map((c) => (
                 <option key={c} value={c}>
-                  {CATEGORY_LABELS[c] ?? c}
+                  {t(`finmind.category.${c}`, { defaultValue: c })}
                 </option>
               ))}
             </select>
@@ -338,18 +285,18 @@ export default function FinmindPage() {
               checked={showOnlyAvailable}
               onChange={(e) => setShowOnlyAvailable(e.target.checked)}
             />
-            僅顯示可查
+            {t("finmind.catalog.filter_available_only")}
           </label>
         </div>
 
         {catalogQuery.isLoading && (
           <div className="rounded border border-border bg-card p-6 text-center text-sm text-muted-foreground">
-            載入資料集目錄…
+            {t("finmind.catalog.loading")}
           </div>
         )}
         {catalogQuery.isError && (
           <div className="rounded border border-destructive bg-destructive/10 p-3 text-sm">
-            無法載入目錄: {errorDetail(catalogQuery.error)}
+            {t("finmind.catalog.load_error", { detail: errorDetail(catalogQuery.error) })}
           </div>
         )}
 
@@ -359,11 +306,11 @@ export default function FinmindPage() {
             rows={filtered}
             rowKey={(d) => d.dataset_code}
             mobileMode="scroll"
-            aria-label="資料集目錄"
+            aria-label={t("finmind.catalog.aria_table")}
             className="rounded-lg border border-border bg-card"
             empty={
               <div className="rounded-lg border border-border bg-card px-3 py-6 text-center text-sm text-muted-foreground">
-                無符合條件的資料集
+                {t("finmind.catalog.empty")}
               </div>
             }
           />
@@ -372,11 +319,12 @@ export default function FinmindPage() {
 
       {/* API quickstart ─────────────────────────────── */}
       <section>
-        <h2 className="mb-3 text-lg font-semibold">快速上手</h2>
+        <h2 className="mb-3 text-lg font-semibold">{t("finmind.quickstart.heading")}</h2>
         <div className="rounded-lg border border-border bg-card p-4">
           <p className="mb-3 text-sm text-muted-foreground">
-            取得 <code className="rounded bg-muted px-1">fck_live_</code>{" "}
-            金鑰後,在 HTTP header 帶上即可:
+            {t("finmind.quickstart.intro_1")}
+            <code className="rounded bg-muted px-1">fck_live_</code>
+            {t("finmind.quickstart.intro_2")}
           </p>
           <pre className="overflow-x-auto rounded bg-muted/50 p-3 text-xs leading-relaxed">
             <code>{`curl -H "X-Finmind-API-Key: fck_live_xxx" \\
@@ -384,9 +332,9 @@ export default function FinmindPage() {
 data_id=2330&start_date=2024-01-01&end_date=2024-12-31&limit=10000"`}</code>
           </pre>
           <p className="mt-3 text-xs text-muted-foreground">
-            回應格式與 FinMind 公開 API 一致 (
+            {t("finmind.quickstart.resp_1")}
             <code className="rounded bg-muted px-1">{`{status, msg, data, metadata}`}</code>
-            ),從 FinMind SDK 切換時不必改寫呼叫端。
+            {t("finmind.quickstart.resp_2")}
           </p>
         </div>
       </section>

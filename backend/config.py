@@ -330,6 +330,13 @@ class Settings(BaseSettings):
     DISCUSSION_SYNTH_CRITIC_MODEL: str = "claude-haiku-4-5-20251001"
     DISCUSSION_SYNTH_CRITIC_MAX_TOKENS: int = 512
 
+    # Wall-clock cap for the auxiliary cheap-model calls (round digest,
+    # devil's-advocate critic). These run inline in the round / synthesis
+    # path, so without a bound a hung provider would stall the whole round
+    # for the SDK's ~600s default. On timeout the aux call is abandoned
+    # (best-effort → None) and the round / conclusion proceeds unaffected.
+    DISCUSSION_AUX_MODEL_TIMEOUT_S: int = 45
+
     # `resolve_key(user_id=None)` (the system-task path used by every
     # background cron) normally consults: system row → .env. For solo /
     # single-admin deployments where the operator has only set per-user

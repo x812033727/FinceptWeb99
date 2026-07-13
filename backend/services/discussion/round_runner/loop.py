@@ -636,14 +636,17 @@ async def run_round(
                     store_round_digest,
                 )
                 this_round = [t for t in prior_turns if t.round == round_number]
-                digest = await generate_round_digest(
-                    db,
-                    topic=discussion.topic,
-                    turns=this_round,
-                    user_id=user_id,
-                    discussion_id=discussion.id,
-                    round_number=round_number,
-                )
+                # Bound the aux-model call so a hung provider can't stall the
+                # round; timeout is caught by the broad guard below → None.
+                async with asyncio.timeout(settings.DISCUSSION_AUX_MODEL_TIMEOUT_S):
+                    digest = await generate_round_digest(
+                        db,
+                        topic=discussion.topic,
+                        turns=this_round,
+                        user_id=user_id,
+                        discussion_id=discussion.id,
+                        round_number=round_number,
+                    )
                 if digest:
                     await store_round_digest(
                         db,

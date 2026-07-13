@@ -29,6 +29,7 @@ the tw_market_service split used for
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -539,13 +540,16 @@ async def synthesize_conclusion(
     if settings.DISCUSSION_SYNTH_CRITIC_ENABLED:
         try:
             from services.discussion.critic import generate_devils_advocate
-            critique = await generate_devils_advocate(
-                db,
-                topic=discussion.topic,
-                transcript=_format_transcript(turns),
-                user_id=user_id,
-                discussion_id=discussion.id,
-            )
+            # Bound the aux-model call so a hung provider can't stall the
+            # conclusion; timeout is caught below → critique None → unchanged.
+            async with asyncio.timeout(settings.DISCUSSION_AUX_MODEL_TIMEOUT_S):
+                critique = await generate_devils_advocate(
+                    db,
+                    topic=discussion.topic,
+                    transcript=_format_transcript(turns),
+                    user_id=user_id,
+                    discussion_id=discussion.id,
+                )
         except Exception:
             critique = None
             log.warning(

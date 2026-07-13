@@ -532,6 +532,35 @@ async def synthesize_conclusion(
             "回傳空陣列 `\"lessons\": []`，不要硬擠。"
         )
 
+    # R6 PR2 devil's-advocate critic (off by default): before committing
+    # to a conclusion, surface the strongest case AGAINST the emerging
+    # consensus and require the conclusion to engage it. Best-effort — any
+    # failure leaves `user_prompt` untouched so synthesis is unchanged.
+    if settings.DISCUSSION_SYNTH_CRITIC_ENABLED:
+        try:
+            from services.discussion.critic import generate_devils_advocate
+            critique = await generate_devils_advocate(
+                db,
+                topic=discussion.topic,
+                transcript=_format_transcript(turns),
+                user_id=user_id,
+                discussion_id=discussion.id,
+            )
+        except Exception:
+            critique = None
+            log.warning(
+                "discussion.critic.pipeline_failed",
+                extra={"id": str(discussion.id)},
+            )
+        if critique:
+            user_prompt += (
+                "\n\n## 反方觀點(魔鬼代言人 · 必須回應)\n"
+                "以下是針對本場浮現共識的最強反面論證。你的 `reasoning` 必須"
+                "明確回應這些反對點(採納並修正結論,或逐點反駁並說明為何不"
+                "影響結論),不得忽略或跳過:\n"
+                f"{critique}"
+            )
+
     messages = [
         {"role": "system", "content": _SYNTHESIZER_SYSTEM},
         {"role": "user", "content": user_prompt},

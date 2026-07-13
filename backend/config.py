@@ -320,6 +320,16 @@ class Settings(BaseSettings):
     DISCUSSION_ROUND_DIGEST_MODEL: str = "claude-haiku-4-5-20251001"
     DISCUSSION_ROUND_DIGEST_MAX_TOKENS: int = 512
 
+    # R6 PR2 devil's-advocate critic: before the synthesiser commits to a
+    # conclusion, generate the strongest case AGAINST the emerging
+    # consensus and require the conclusion to engage it (anti-groupthink).
+    # OFF by default — enabling adds one cheap-model call per synthesis and
+    # changes the conclusion prompt, so it's gated behind the N=10
+    # signal_audit check like every other conclusion-affecting change.
+    DISCUSSION_SYNTH_CRITIC_ENABLED: bool = False
+    DISCUSSION_SYNTH_CRITIC_MODEL: str = "claude-haiku-4-5-20251001"
+    DISCUSSION_SYNTH_CRITIC_MAX_TOKENS: int = 512
+
     # `resolve_key(user_id=None)` (the system-task path used by every
     # background cron) normally consults: system row → .env. For solo /
     # single-admin deployments where the operator has only set per-user

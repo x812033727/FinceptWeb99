@@ -130,6 +130,12 @@ class Settings(BaseSettings):
     # if that key is configured. Mirrors Ti's "set ANTHROPIC_API_KEY to
     # opt into API billing" switch, container-side.
     AI_FALLBACK_TO_API: bool = True
+    # Mirror image of AI_FALLBACK_TO_API: when the gateway is configured
+    # and NO Anthropic API key resolves (per-user / system DB / env),
+    # route "anthropic" and "claude_agent" requests through claude_sub
+    # instead of erroring. Off = keyless anthropic calls fail loudly,
+    # protecting the subscription quota from bulk background jobs.
+    AI_AUTO_UPGRADE_TO_SUB: bool = True
     # Selects the default model stack resolved by ai.model_registry:
     # "api" (current API-key defaults) or "subscription" (gateway).
     AI_DEFAULT_STACK: str = "api"

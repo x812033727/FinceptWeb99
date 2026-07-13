@@ -127,7 +127,11 @@ PROVIDERS: dict[str, ProviderSpec] = {
 }
 
 # When a gateway (subscription) provider fails and AI_FALLBACK_TO_API is
-# on, retry through the matching API-key provider.
+# on, retry through the matching API-key provider. The reverse direction
+# also exists: keyless anthropic/claude_agent requests auto-upgrade to
+# claude_sub when the gateway is configured (AI_AUTO_UPGRADE_TO_SUB) —
+# the fallback recursion passes `_no_upgrade=True` so a dead gateway
+# can't bounce claude_sub→anthropic→claude_sub forever.
 _GATEWAY_FALLBACK: dict[str, str] = {
     "claude_sub": "anthropic",
     "codex_sub": "openai",
@@ -194,6 +198,7 @@ async def stream_chat(
     openai_tool_dispatch: dict[str, Any] | None = None,
     db: "AsyncSession | None" = None,
     user_id: str | None = None,
+    _no_upgrade: bool = False,
 ) -> AsyncGenerator[dict, None]:
     """
     Yield streaming events from the chosen provider.
@@ -205,6 +210,10 @@ async def stream_chat(
     `db` is an open AsyncSession used to resolve admin-stored API keys for
     the chosen provider. When None or no DB key is set the streamer falls
     back to the .env-supplied key in `settings`.
+
+    `_no_upgrade` is internal — set by the gateway-failure fallback
+    recursion so a failed claude_sub call is never re-upgraded back to
+    claude_sub.
     """
     prov = (provider or settings.DEFAULT_LLM_PROVIDER).lower()
     spec = PROVIDERS.get(prov)
@@ -212,10 +221,36 @@ async def stream_chat(
         raise ValueError(f"Unknown LLM provider: {prov}")
 
     api_key = await _resolve_api_key(prov, db, user_id)
+
+    # ── auto-upgrade to the subscription gateway ──────────────────
+    # anthropic / claude_agent requests with no usable Anthropic key are
+    # served by claude_sub when the host gateway is configured. anthropic
+    # reuses the full per-user→system→env resolution already in `api_key`;
+    # claude_agent's SDK only ever reads the env key (DB keys never apply
+    # to it), so that's its working-path test.
+    upgraded = False
+    if (
+        not _no_upgrade
+        and settings.AI_AUTO_UPGRADE_TO_SUB
+        and prov in ("anthropic", "claude_agent")
+        and settings.LLM_GATEWAY_URL
+        and settings.LLM_GATEWAY_TOKEN
+    ):
+        anth_key = api_key if prov == "anthropic" else settings.ANTHROPIC_API_KEY
+        if not anth_key:
+            logger.info("llm_router.auto_upgrade_to_sub",
+                        extra={"requested": prov, "served_by": "claude_sub"})
+            prov, spec, upgraded = "claude_sub", PROVIDERS["claude_sub"], True
+
     # Late-bound lookup so tests patching `llm_router._x_stream` (and
     # any runtime monkeypatching) intercept the call.
     stream_fn = globals()[spec.stream_attr]
     resolved_model = model or spec.default_model()
+
+    if upgraded:
+        # Tell consumers who actually served the request so usage gets
+        # attributed to the subscription, not the anthropic API.
+        yield {"type": "provider", "provider": prov, "model": resolved_model}
 
     if spec.kind == "simple":
         agen = stream_fn(messages, resolved_model, max_tokens, temperature, api_key=api_key)
@@ -263,6 +298,7 @@ async def stream_chat(
                     openai_tool_schemas=openai_tool_schemas,
                     openai_tool_dispatch=openai_tool_dispatch,
                     db=db, user_id=user_id,
+                    _no_upgrade=True,
                 ):
                     yield ev
             else:

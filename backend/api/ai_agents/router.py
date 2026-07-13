@@ -187,6 +187,9 @@ async def chat(
         # i.e. the provider raised before any delta or yielded only errors.
         produced_content = False
         usage_seen: dict[str, int] | None = None
+        # The router may transparently re-route (auto-upgrade to the
+        # subscription gateway); attribute usage to who actually served.
+        served_provider, served_model = provider, model
         try:
             async for event in stream_chat(
                 messages=messages,
@@ -201,6 +204,10 @@ async def chat(
                 user_id=user["id"],
             ):
                 etype = event.get("type")
+                if etype == "provider":
+                    served_provider = event.get("provider") or served_provider
+                    served_model = event.get("model") or served_model
+                    continue
                 if etype == "usage":
                     # Don't forward to client; record server-side only.
                     usage_seen = {
@@ -223,8 +230,8 @@ async def chat(
                 await record_usage(
                     db,
                     user_id=user["id"],
-                    provider=provider,
-                    model=model,
+                    provider=served_provider,
+                    model=served_model,
                     persona_id=body.agent_id,
                     prompt_tokens=usage_seen["prompt_tokens"],
                     completion_tokens=usage_seen["completion_tokens"],

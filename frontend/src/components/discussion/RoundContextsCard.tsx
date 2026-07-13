@@ -141,6 +141,16 @@ function RoundContextRow({ snap }: { snap: RoundContextSnapshot }) {
         {userCtxLine && <div className="text-emerald-400/80">{userCtxLine}</div>}
         {priorLine && <div className="text-blue-400/80">{priorLine}</div>}
       </div>
+      {snap.digest && (
+        <div className="mt-1 rounded border border-primary/25 bg-primary/5 p-1.5">
+          <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary/80">
+            {t("discussion.round_digest_label", "本輪摘要")}
+          </div>
+          <p className="text-[11px] leading-relaxed text-foreground/90 whitespace-pre-line">
+            {snap.digest}
+          </p>
+        </div>
+      )}
       <button
         type="button"
         onClick={() => setShowJson((v) => !v)}

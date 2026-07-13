@@ -78,6 +78,7 @@ async def run_round(
         _upsert_round_context,
         drain_interjections,
         gather_market_context,
+        get_round_contexts,
         get_turns,
     )
 
@@ -210,6 +211,27 @@ async def run_round(
         yield TurnEvent("context", {"context": context})
 
         prior_turns = await get_turns(db, discussion_id=discussion.id)
+
+        # R6 PR2 (opt-in): when round digests are enabled, load the stored
+        # per-round recaps so `_format_history` can render an older round
+        # as one digest line instead of a bag of per-turn one-liners. Empty
+        # map when the feature is off (the default) or nothing's stored yet,
+        # in which case `_ask_persona` sees `round_digests=None` and the
+        # history output is byte-identical to before this feature.
+        round_digests: dict[int, str] | None = None
+        if settings.DISCUSSION_ROUND_DIGEST_ENABLED:
+            try:
+                digest_rows = await get_round_contexts(
+                    db, discussion_id=discussion.id,
+                )
+                found = {r.round: r.digest for r in digest_rows if r.digest}
+                round_digests = found or None
+            except Exception:
+                log.warning(
+                    "discussion.round_digest.load_failed",
+                    extra={"discussion_id": str(discussion.id)},
+                )
+
         # Resolve persona timeout via the runtime config service so admins
         # can retune it from the UI without redeploying. Falls back to
         # the compiled-in setting on any resolver failure.
@@ -404,6 +426,7 @@ async def run_round(
                         user_id=user_id,
                         user_role=user_role,
                         as_of_date=discussion.as_of_date,
+                        round_digests=round_digests,
                         interject_question=(
                             interjection["question"] if injected else None
                         ),

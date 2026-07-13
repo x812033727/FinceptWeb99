@@ -179,6 +179,7 @@ async def _ask_persona(
     user_id: str | None,
     user_role: str | None = None,
     as_of_date: date | None = None,
+    round_digests: dict[int, str] | None = None,
     interject_question: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Yield raw stream events from one persona's turn. Caller assembles
@@ -238,7 +239,7 @@ async def _ask_persona(
     context_json = json.dumps(
         filtered_ctx, ensure_ascii=False, separators=(",", ":"),
     )
-    history = _format_history(prior_turns)
+    history = _format_history(prior_turns, round_digests)
     base_user_prompt = _TURN_PROMPT_TEMPLATE.format(
         topic=topic,
         rules=rules,

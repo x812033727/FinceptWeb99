@@ -19,7 +19,9 @@ single persona LLM call*:
     / ``_PORTFOLIO_PROFILE`` + the ``_SHORT_TERM_PROFILE`` derived
     from quant + per-symbol news) cover the 23 personas without
     enumerating each one. Personas absent from the registry fall
-    through to ``_ALL_PERSONA_BLOCKS`` (full context, fail-open).
+    through to ``_QUANT_PROFILE`` (G7-2b, fail-closed) — unreachable
+    while the agent registry and profile map stay 1:1, but safe if they
+    ever drift.
 
 Lifted out of ``discussion_service`` to make the persona-routing
 seam explicit. ``run_round`` calls ``_resolve_persona_specs`` once
@@ -360,12 +362,23 @@ def _filter_context_for_persona(
     """Project `ctx` down to the blocks `persona_id` actually uses,
     plus the always-included metadata keys.
 
-    Personas not in `_PERSONA_CONTEXT_PROFILES` (custom personas, new
-    additions, typos) get the full context — fail-open so an unknown
-    persona never silently loses data, just costs more tokens.
+    Personas not in `_PERSONA_CONTEXT_PROFILES` fall back to the
+    `_QUANT_PROFILE` (G7-2b, fail-CLOSED). Every compiled-in agent has a
+    profile — the registry and the profile map are 1:1 — so this branch
+    is unreachable in normal operation; it only fires if the two ever
+    drift (a new agent added without a profile). Fail-closed means such a
+    drift shows up as a slightly-too-narrow (QUANT) context — cheaper and
+    it can never leak an uncatalogued diagnostic block (e.g.
+    `news_backfill`) to a persona — instead of the old fail-open, which
+    silently sent the full 30-50KB ctx to something we hadn't vetted. The
+    warning makes the drift visible so the profile map gets fixed.
     """
     profile = _PERSONA_CONTEXT_PROFILES.get(persona_id)
     if profile is None:
-        return ctx
+        log.warning(
+            "discussion.persona.no_profile_fail_closed",
+            extra={"persona_id": persona_id},
+        )
+        profile = _QUANT_PROFILE
     allowed = _ALWAYS_INCLUDED_BLOCKS | profile
     return {k: v for k, v in ctx.items() if k in allowed}

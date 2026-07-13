@@ -131,7 +131,10 @@ async def test_insert_chunks_large_batches_to_avoid_param_limit(
     inserting more rows than fit in one chunk — every row must land,
     and asserting `db.execute` was called multiple times."""
     from unittest.mock import AsyncMock
-    from services.ingest import repository as repo
+
+    # `_INSERT_NEWS_CHUNK_ROWS` moved to the `repo.news` submodule in the
+    # R3-A1/G8 split; patch it where `insert_news_articles` now reads it.
+    from services.ingest.repo import news as repo
 
     monkeypatch.setattr(repo, "_INSERT_NEWS_CHUNK_ROWS", 3)
     rows = [

@@ -1,10 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Loading } from "./_atoms";
 import { fetchRevenue, fmtPct } from "./_shared";
 import { DataTable, type DataTableColumn } from "../ui/table";
 
 export function RevenuePanel({ symbol }: { symbol: string }) {
+  const { t } = useTranslation();
   const { data = [], isLoading } = useQuery({
     queryKey: ["revenue", symbol],
     queryFn: () => fetchRevenue(symbol),
@@ -26,13 +28,13 @@ export function RevenuePanel({ symbol }: { symbol: string }) {
   const columns: DataTableColumn<RevRow>[] = [
     {
       key: "date",
-      header: "月份",
+      header: t("stock.revenue.col_month"),
       mobile: "primary",
       render: (r) => <span className="text-muted-foreground">{r.date.slice(0, 7)}</span>,
     },
     {
       key: "revenue",
-      header: "營收（千元）",
+      header: t("stock.revenue.col_revenue"),
       numeric: true,
       render: (r) => (
         <span className="text-foreground font-medium">{r.revenue.toLocaleString()}</span>
@@ -40,7 +42,7 @@ export function RevenuePanel({ symbol }: { symbol: string }) {
     },
     {
       key: "mom",
-      header: "月增率",
+      header: t("stock.revenue.col_mom"),
       numeric: true,
       render: (r) => (
         <span
@@ -55,7 +57,7 @@ export function RevenuePanel({ symbol }: { symbol: string }) {
     },
     {
       key: "yoy",
-      header: "年增率",
+      header: t("stock.revenue.col_yoy"),
       numeric: true,
       render: (r) => (
         <span
@@ -73,7 +75,7 @@ export function RevenuePanel({ symbol }: { symbol: string }) {
   return (
     <div className="p-4 space-y-4">
       <div>
-        <h4 className="text-xs font-semibold text-foreground mb-2">月營收（百萬新台幣）</h4>
+        <h4 className="text-xs font-semibold text-foreground mb-2">{t("stock.revenue.chart_title")}</h4>
         <ResponsiveContainer width="100%" height={130}>
           <BarChart data={chartData} margin={{ left: 0, right: 0 }}>
             <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} interval="preserveStartEnd" />
@@ -82,7 +84,7 @@ export function RevenuePanel({ symbol }: { symbol: string }) {
               contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
               formatter={(v: number) => [`${v}M NTD`, "Revenue"]}
             />
-            <Bar dataKey="revenue" name="月營收" fill="hsl(var(--chart-1))" radius={[2, 2, 0, 0]} />
+            <Bar dataKey="revenue" name={t("stock.revenue.bar_name")} fill="hsl(var(--chart-1))" radius={[2, 2, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </div>
@@ -92,7 +94,7 @@ export function RevenuePanel({ symbol }: { symbol: string }) {
         rows={rows}
         rowKey={(r) => r.date}
         mobileMode="cards"
-        aria-label="月營收"
+        aria-label={t("stock.revenue.aria")}
       />
     </div>
   );

@@ -85,19 +85,19 @@ describe("FinmindPage — render", () => {
     // function matchers that walk the rendered text.
     await waitFor(() => {
       const chip = screen.getByText((_, el) =>
-        el?.textContent === "3 個資料集",
+        el?.textContent === "3 datasets",
       );
       expect(chip).toBeInTheDocument();
     });
     expect(
-      screen.getByText((_, el) => el?.textContent === "2 個目前可查"),
+      screen.getByText((_, el) => el?.textContent === "2 currently queryable"),
     ).toBeInTheDocument();
   });
 
   it("renders all 3 pricing tiers with disabled CTAs", async () => {
     renderPage();
     // Section header.
-    expect(await screen.findByText(/訂閱方案/)).toBeInTheDocument();
+    expect(await screen.findByText(/Subscription plans/)).toBeInTheDocument();
     // Tier names.
     expect(screen.getByText(/^Free$/)).toBeInTheDocument();
     expect(screen.getByText(/^Pro$/)).toBeInTheDocument();
@@ -124,7 +124,7 @@ describe("FinmindPage — render", () => {
 
   it("renders the curl quickstart snippet", async () => {
     renderPage();
-    expect(await screen.findByText(/快速上手/)).toBeInTheDocument();
+    expect(await screen.findByText(/Quickstart/)).toBeInTheDocument();
     expect(
       screen.getByText(/X-Finmind-API-Key/i),
     ).toBeInTheDocument();
@@ -136,7 +136,7 @@ describe("FinmindPage — filtering", () => {
     renderPage();
     await screen.findByText("TaiwanStockPrice");
 
-    const search = screen.getByPlaceholderText(/搜尋資料集/);
+    const search = screen.getByPlaceholderText(/Search dataset/);
     fireEvent.change(search, { target: { value: "Futures" } });
 
     await waitFor(() => {
@@ -149,7 +149,7 @@ describe("FinmindPage — filtering", () => {
     renderPage();
     await screen.findByText("TaiwanFuturesDaily");
 
-    const toggle = screen.getByLabelText(/僅顯示可查/);
+    const toggle = screen.getByLabelText(/Available only/);
     fireEvent.click(toggle);
 
     await waitFor(() => {
@@ -166,7 +166,7 @@ describe("FinmindPage — error states", () => {
     mockedApi.get.mockRejectedValue(new Error("backend offline"));
     renderPage();
     expect(
-      await screen.findByText(/無法載入目錄/),
+      await screen.findByText(/Failed to load catalog/),
     ).toBeInTheDocument();
   });
 });

@@ -74,7 +74,7 @@ export function DividendsPanel({ symbol, currentPrice }: { symbol: string; curre
     },
     {
       key: "stock",
-      header: `${t("stock.dividends.stock")} (股)`,
+      header: `${t("stock.dividends.stock")} (${t("stock.share_unit")})`,
       numeric: true,
       render: (r) => (
         <span className="num">{r.stock_dividend ? r.stock_dividend.toFixed(3) : "—"}</span>

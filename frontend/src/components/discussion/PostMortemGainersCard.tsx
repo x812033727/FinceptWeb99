@@ -194,7 +194,7 @@ export function PostMortemGainersCard({
                   </div>
                   {block.gainers.length === 0 ? (
                     <p className="text-[10px] text-muted-foreground/60">
-                      （無資料）
+                      {t("discussion.gainers_no_data")}
                     </p>
                   ) : (
                     <ol className="space-y-0.5">

@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
 import { CollapsibleHeader } from "@/components/Collapsible";
 import { useCollapsible } from "@/hooks/useCollapsible";
@@ -150,122 +151,52 @@ const RETRYABLE_INGEST_JOBS = new Set([
   "score_news_sentiment",
 ]);
 
-// Per-job metadata for the IngestHealthCard. `schedule_zh` is mirrored
-// from the corresponding `add_job` call in `backend/tasks/scheduler.py`
-// — when you change the cron expression there, update the entry here
-// or the displayed schedule will silently drift out of sync.
-// `description_zh` is a 1-line summary in 繁體中文 so the table is
-// readable for non-engineering operators.
-interface JobMeta {
-  description_zh: string;
-  schedule_zh: string;
-}
-const JOB_META: Record<string, JobMeta> = {
-  ingest_news_tw: {
-    description_zh: "台股新聞抓取（Google News RSS）",
-    schedule_zh: "每 1 小時",
-  },
-  ingest_news_international: {
-    description_zh: "國際財經新聞抓取（Fed / 美股 / 國際）",
-    schedule_zh: "每 1 小時",
-  },
-  ingest_news_feeds: {
-    description_zh: "台股新聞抓取（直連 RSS：鉅亨 / 經濟日報 / 自由財經 / 中央社）",
-    schedule_zh: "每 1 小時",
-  },
-  enrich_news_fulltext: {
-    description_zh: "新聞全文抽取（直連來源文章內文）",
-    schedule_zh: "每 30 分",
-  },
-  // Per-source health rows emitted by ingest_news_feeds — one per direct
-  // publisher feed so a silently-dead feed is visible instead of hidden
-  // behind a job-level "ok". Not individually retryable (see the parent
-  // ingest_news_feeds job), so no entry in RETRYABLE_INGEST_JOBS.
-  "newsfeed:cnyes": {
-    description_zh: "└ 來源：鉅亨網 RSS",
-    schedule_zh: "隨新聞抓取",
-  },
-  "newsfeed:udn_money": {
-    description_zh: "└ 來源：經濟日報 RSS",
-    schedule_zh: "隨新聞抓取",
-  },
-  "newsfeed:ltn_ec": {
-    description_zh: "└ 來源：自由財經 RSS",
-    schedule_zh: "隨新聞抓取",
-  },
-  "newsfeed:cna_finance": {
-    description_zh: "└ 來源：中央社財經 RSS",
-    schedule_zh: "隨新聞抓取",
-  },
-  ingest_ohlcv_tw: {
-    description_zh: "台股每日 K 線（TWSE → FinMind 後備）",
-    schedule_zh: "每天 14:30 (台北)",
-  },
-  ingest_fundamentals_tw: {
-    description_zh: "台股基本面（PE / PB / 殖利率）",
-    schedule_zh: "每天 14:45 (台北)",
-  },
-  ingest_institutional_tw: {
-    description_zh: "台股法人買賣超（外資 / 投信 / 自營商）",
-    schedule_zh: "每天 14:50 (台北)",
-  },
-  ingest_margin_tw: {
-    description_zh: "台股融資融券餘額",
-    schedule_zh: "每天 15:00 (台北)",
-  },
-  ingest_taiex_history: {
-    description_zh: "TAIEX 大盤指數每日歷史線（價格指數）",
-    schedule_zh: "每天 15:10 (台北)",
-  },
-  ingest_taiex_tr_history: {
-    description_zh: "TAIEX 含息報酬指數（FinMind sponsor — TWD portfolio benchmark 用）",
-    schedule_zh: "每天 15:30 (台北)",
-  },
-  ingest_risk_signals_tw: {
-    description_zh: "台股風險警示三件套：處置股 / 暫停交易 / 當沖比例（FinMind sponsor）",
-    schedule_zh: "每天 19:00 (台北)",
-  },
-  ingest_holdings_aggregates_tw: {
-    description_zh: "台股股權分散 + 全市場三大法人日報（FinMind sponsor）",
-    schedule_zh: "每天 19:30 (台北)",
-  },
-  ingest_revenue_tw: {
-    description_zh: "台股月營收（FinMind 全市場一次抓，sponsor tier）",
-    schedule_zh: "每天 17:00 (台北)",
-  },
-  ingest_revenue_tw_slow: {
-    description_zh: "台股月營收（MOPS per-symbol fallback, 預設關閉；FinMind 出問題時手動重啟）",
-    schedule_zh: "停用中",
-  },
-  ingest_buyback_tw: {
-    description_zh: "台股庫藏股公告（FinMind v4 無 TaiwanStockBuyBack 資料集；預設關閉，FinMind 補上後手動重啟）",
-    schedule_zh: "停用中",
-  },
-  ingest_govt_bank_flow_tw: {
-    description_zh: "台股八大行庫每日買賣金額（FinMind sponsor — 國家隊指標）",
-    schedule_zh: "每天 18:30 (台北)",
-  },
-  ingest_quotes_retention_tw: {
-    description_zh: "台股 quote_snapshots 30 日保留（清舊資料）",
-    schedule_zh: "每天 11:00 (台北)",
-  },
-  score_news_sentiment: {
-    description_zh: "新聞情緒評分（LLM 評每篇利多 / 利空 / 中性）",
-    schedule_zh: "每 30 分鐘",
-  },
-  auto_run_discussion: {
-    description_zh: "每日自動圓桌討論（已啟用 opt-in 的使用者）",
-    schedule_zh: "每天 08:00 (台北)",
-  },
-  verify_discussion_outcome: {
-    description_zh: "圓桌討論勝負判定（max-high vs day1_open × 1.03）",
-    schedule_zh: "每天 16:30 (台北)",
-  },
-  score_discussion_outcomes: {
-    description_zh: "圓桌討論「對答案」D1-D5 收盤漲跌計算",
-    schedule_zh: "每天 17:30 (台北)",
-  },
-};
+// Jobs that have a localized description + schedule label. The strings
+// themselves live in the i18n locale files under
+// `admin.ingestHealth.jobs.<slug>` (slug = job_id with ':' → '_'), so the
+// table renders in the operator's selected language. `schedule` is
+// mirrored from the corresponding `add_job` call in
+// `backend/tasks/scheduler.py` — when you change the cron expression
+// there, update the matching locale entry or the displayed schedule will
+// silently drift out of sync.
+//
+// The `newsfeed:*` entries are per-source health rows emitted by
+// ingest_news_feeds — one per direct publisher feed so a silently-dead
+// feed is visible instead of hidden behind a job-level "ok". Not
+// individually retryable (see the parent ingest_news_feeds job), so no
+// entry in RETRYABLE_INGEST_JOBS.
+const JOB_META_IDS = new Set<string>([
+  "ingest_news_tw",
+  "ingest_news_international",
+  "ingest_news_feeds",
+  "enrich_news_fulltext",
+  "newsfeed:cnyes",
+  "newsfeed:udn_money",
+  "newsfeed:ltn_ec",
+  "newsfeed:cna_finance",
+  "ingest_ohlcv_tw",
+  "ingest_fundamentals_tw",
+  "ingest_institutional_tw",
+  "ingest_margin_tw",
+  "ingest_taiex_history",
+  "ingest_taiex_tr_history",
+  "ingest_risk_signals_tw",
+  "ingest_holdings_aggregates_tw",
+  "ingest_revenue_tw",
+  "ingest_revenue_tw_slow",
+  "ingest_buyback_tw",
+  "ingest_govt_bank_flow_tw",
+  "ingest_quotes_retention_tw",
+  "score_news_sentiment",
+  "auto_run_discussion",
+  "verify_discussion_outcome",
+  "score_discussion_outcomes",
+]);
+
+// i18n key slug for a job_id (':' is the i18next namespace separator,
+// so it must be sanitized out of the key path).
+const jobMetaKey = (jobId: string, field: "desc" | "sched") =>
+  `admin.ingestHealth.jobs.${jobId.replace(/:/g, "_")}.${field}`;
 
 function timeAgo(iso: string | null): string {
   if (!iso) return "—";
@@ -338,6 +269,7 @@ export function deriveSchedulerBadge(
 }
 
 export function IngestHealthCard() {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const { open, toggle } = useCollapsible("admin.ingest-health");
   const { data: serverRows = [], isLoading } = useQuery<IngestHealth[]>({
@@ -388,13 +320,13 @@ export function IngestHealthCard() {
       header: "Job",
       cellClassName: "align-top",
       render: (r) => {
-        const meta = JOB_META[r.job_id];
+        const hasMeta = JOB_META_IDS.has(r.job_id);
         return (
           <div>
             <div className="font-mono">{r.job_id}</div>
-            {meta && (
+            {hasMeta && (
               <div className="text-[10px] text-muted-foreground/80 mt-0.5">
-                {meta.description_zh}
+                {t(jobMetaKey(r.job_id, "desc"))}
               </div>
             )}
           </div>
@@ -403,9 +335,9 @@ export function IngestHealthCard() {
     },
     {
       key: "schedule",
-      header: "排程",
+      header: t("admin.ingestHealth.schedule"),
       cellClassName: "align-top text-muted-foreground whitespace-nowrap",
-      render: (r) => JOB_META[r.job_id]?.schedule_zh ?? "—",
+      render: (r) => (JOB_META_IDS.has(r.job_id) ? t(jobMetaKey(r.job_id, "sched")) : "—"),
     },
     {
       key: "status",
@@ -422,7 +354,7 @@ export function IngestHealthCard() {
     },
     {
       key: "sparkline",
-      header: <span title="過去 7 天每日結果 (UTC)，最右邊是今天">7d</span>,
+      header: <span title={t("admin.ingestHealth.sparkline_7d_title")}>7d</span>,
       cellClassName: "align-top",
       render: (r) => <IngestHealthSparkline jobId={r.job_id} />,
     },
@@ -442,7 +374,7 @@ export function IngestHealthCard() {
           <div>{timeAgo(r.last_run_at)}</div>
           {isDataStale(r) && (
             <span
-              title={`資料新鮮度：寫入的最新 ts 為 ${r.latest_data_ts} — 比 last_run_at 落後超過 2 日`}
+              title={t("admin.ingestHealth.data_stale_title", { ts: r.latest_data_ts })}
               className="inline-block mt-0.5 px-1 py-0.5 rounded text-[9px] bg-warning/10 text-warning border border-warning/30"
             >
               data stale

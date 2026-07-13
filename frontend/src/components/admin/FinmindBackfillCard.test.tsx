@@ -89,7 +89,7 @@ describe("FinmindBackfillCard — render", () => {
   it("renders the title before any query resolves", () => {
     mockedApi.get.mockReturnValue(new Promise(() => {}));
     renderCard();
-    expect(screen.getByText(/FinMind 全量回填監控/)).toBeInTheDocument();
+    expect(screen.getByText(/FinMind full backfill monitor/)).toBeInTheDocument();
   });
 
   it("renders the 12 default datasets and pre-checks all", async () => {
@@ -101,7 +101,7 @@ describe("FinmindBackfillCard — render", () => {
     }
     // 12/12 selected
     await waitFor(() => {
-      expect(screen.getByText("12 / 12 已勾選")).toBeInTheDocument();
+      expect(screen.getByText("12 / 12 selected")).toBeInTheDocument();
     });
   });
 
@@ -116,7 +116,7 @@ describe("FinmindBackfillCard — render", () => {
   it("shows 閒置中 banner when status=idle", async () => {
     mockedApi.get.mockResolvedValue({ data: IDLE_STATE });
     renderCard();
-    expect(await screen.findByText("閒置中")).toBeInTheDocument();
+    expect(await screen.findByText("Idle")).toBeInTheDocument();
   });
 
   it("shows 正在抓取 + progress when status=running", async () => {
@@ -131,7 +131,7 @@ describe("FinmindBackfillCard — render", () => {
       },
     });
     renderCard();
-    expect(await screen.findByText("正在抓取")).toBeInTheDocument();
+    expect(await screen.findByText("Fetching")).toBeInTheDocument();
     expect(
       screen.getByText("TaiwanStockPriceAdj · 2330"),
     ).toBeInTheDocument();
@@ -150,9 +150,9 @@ describe("FinmindBackfillCard — external activity detection", () => {
     });
     renderCard();
     expect(
-      await screen.findByText(/其他 backfill 任務在使用 FinMind quota/),
+      await screen.findByText(/Another backfill task is currently using FinMind quota/),
     ).toBeInTheDocument();
-    const start = await screen.findByRole("button", { name: /開始回填/ });
+    const start = await screen.findByRole("button", { name: /Start backfill/ });
     await waitFor(() => expect(start).not.toBeDisabled());
   });
 });
@@ -175,12 +175,12 @@ describe("FinmindBackfillCard — overall progress", () => {
       },
     });
     renderCard();
-    expect(await screen.findByText("整體進度")).toBeInTheDocument();
+    expect(await screen.findByText("Overall progress")).toBeInTheDocument();
     expect(
       screen.getByText(/1,234 \/ 5,070 \(24%\)/),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/2 個 dataset × 2,535 symbols/),
+      screen.getByText(/2 datasets × 2,535 symbols/),
     ).toBeInTheDocument();
   });
 });
@@ -193,7 +193,7 @@ describe("FinmindBackfillCard — actions", () => {
     });
     renderCard();
 
-    const start = await screen.findByRole("button", { name: /開始回填/ });
+    const start = await screen.findByRole("button", { name: /Start backfill/ });
     await waitFor(() => expect(start).not.toBeDisabled());
     fireEvent.click(start);
 
@@ -222,7 +222,7 @@ describe("FinmindBackfillCard — actions", () => {
     renderCard();
 
     const stop = await screen.findByRole("button", {
-      name: /停止 \(跑完目前 chunk\)/,
+      name: /Stop \(finish current chunk\)/,
     });
     await waitFor(() => expect(stop).not.toBeDisabled());
     fireEvent.click(stop);
@@ -240,7 +240,7 @@ describe("FinmindBackfillCard — actions", () => {
     renderCard();
 
     const reset = await screen.findByRole("button", {
-      name: /清理卡住的 chunk/,
+      name: /Clear stuck chunks/,
     });
     fireEvent.click(reset);
 
@@ -250,7 +250,7 @@ describe("FinmindBackfillCard — actions", () => {
       );
     });
     expect(
-      await screen.findByText(/已清理 3 條 stuck running chunk/),
+      await screen.findByText(/Cleared 3 stuck running chunks/),
     ).toBeInTheDocument();
   });
 });

@@ -180,8 +180,8 @@ export default function StockDetailPage() {
         { key: "chart", label: t("stock.history"), active: twTab === "chart", onClick: () => setTwTab("chart") },
         { key: "holdings", label: t("stock.etf.holdings_tab"), active: twTab === "holdings", onClick: () => setTwTab("holdings") },
         { key: "dividends", label: t("stock.dividends.tab"), active: twTab === "dividends", onClick: () => setTwTab("dividends") },
-        { key: "institutional", label: "法人買賣超", active: twTab === "institutional", onClick: () => setTwTab("institutional") },
-        { key: "margin", label: "融資融券", active: twTab === "margin", onClick: () => setTwTab("margin") },
+        { key: "institutional", label: t("stock.tab_institutional"), active: twTab === "institutional", onClick: () => setTwTab("institutional") },
+        { key: "margin", label: t("stock.tab_margin"), active: twTab === "margin", onClick: () => setTwTab("margin") },
         { key: "news", label: t("stock.news"), active: twTab === "news", onClick: () => setTwTab("news") },
         { key: "ai_report", label: t("stock.ai_report.tab"), active: twTab === "ai_report", onClick: () => setTwTab("ai_report") },
       ];
@@ -191,9 +191,9 @@ export default function StockDetailPage() {
       { key: "health", label: t("stock.health.tab"), active: twTab === "health", onClick: () => setTwTab("health") },
       { key: "valuation", label: t("stock.valuation.tab"), active: twTab === "valuation", onClick: () => setTwTab("valuation") },
       { key: "dividends", label: t("stock.dividends.tab"), active: twTab === "dividends", onClick: () => setTwTab("dividends") },
-      { key: "institutional", label: "法人買賣超", active: twTab === "institutional", onClick: () => setTwTab("institutional") },
-      { key: "margin", label: "融資融券", active: twTab === "margin", onClick: () => setTwTab("margin") },
-      { key: "revenue", label: "月營收", active: twTab === "revenue", onClick: () => setTwTab("revenue") },
+      { key: "institutional", label: t("stock.tab_institutional"), active: twTab === "institutional", onClick: () => setTwTab("institutional") },
+      { key: "margin", label: t("stock.tab_margin"), active: twTab === "margin", onClick: () => setTwTab("margin") },
+      { key: "revenue", label: t("stock.tab_revenue"), active: twTab === "revenue", onClick: () => setTwTab("revenue") },
       { key: "news", label: t("stock.news"), active: twTab === "news", onClick: () => setTwTab("news") },
       { key: "ai_report", label: t("stock.ai_report.tab"), active: twTab === "ai_report", onClick: () => setTwTab("ai_report") },
     ];
@@ -326,19 +326,19 @@ export default function StockDetailPage() {
               </>
             ) : (
               <>
-                <StatRow label="開盤" value={fmt(quote?.open as number | null)} />
-                <StatRow label="最高" value={fmt(quote?.high as number | null)} />
-                <StatRow label="最低" value={fmt(quote?.low as number | null)} />
-                <StatRow label="昨收" value={fmt(quote?.prev_close as number | null)} />
-                <StatRow label="本益比 P/E" value={fmt(fundamentals?.pe_ratio as number | null)} />
-                <StatRow label="淨值比 P/B" value={fmt(fundamentals?.pb_ratio as number | null)} />
-                <StatRow label="殖利率" value={
+                <StatRow label={t("stock.stat.open")} value={fmt(quote?.open as number | null)} />
+                <StatRow label={t("stock.stat.high")} value={fmt(quote?.high as number | null)} />
+                <StatRow label={t("stock.stat.low")} value={fmt(quote?.low as number | null)} />
+                <StatRow label={t("stock.stat.prev_close")} value={fmt(quote?.prev_close as number | null)} />
+                <StatRow label={t("stock.stat.pe")} value={fmt(fundamentals?.pe_ratio as number | null)} />
+                <StatRow label={t("stock.stat.pb")} value={fmt(fundamentals?.pb_ratio as number | null)} />
+                <StatRow label={t("stock.stat.dividend_yield")} value={
                   fundamentals?.dividend_yield != null
                     ? `${(fundamentals.dividend_yield as number).toFixed(2)}%`
                     : "—"
                 } />
-                <StatRow label="成交量" value={quote?.volume ? (quote.volume as number).toLocaleString() : "—"} />
-                <StatRow label="市場" value={quote?.exchange as string | null} />
+                <StatRow label={t("stock.stat.volume")} value={quote?.volume ? (quote.volume as number).toLocaleString() : "—"} />
+                <StatRow label={t("stock.stat.market")} value={quote?.exchange as string | null} />
               </>
             )}
             <StatRow label="Volume" value={quote?.volume ? (quote.volume as number).toLocaleString() : "—"} />

@@ -135,7 +135,7 @@ describe("WalkForwardSection", () => {
     );
 
     const submit = await screen.findByRole("button", {
-      name: /啟動 Walk-Forward|啟動.*Walk/i,
+      name: /Start walk-forward|啟動 Walk-Forward|啟動.*Walk/i,
     });
     await act(async () => {
       fireEvent.click(submit);
@@ -155,7 +155,9 @@ describe("WalkForwardSection", () => {
     expect(payload.anchor_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 
     await waitFor(() =>
-      expect(screen.getByText(/已排定 1 個 fold/)).toBeInTheDocument(),
+      expect(
+        screen.getByText(/已排定 1 個 fold|Scheduled 1 folds/),
+      ).toBeInTheDocument(),
     );
   });
 
@@ -178,7 +180,7 @@ describe("WalkForwardSection", () => {
       screen.getByRole("button", { name: /OOS|Walk-Forward/i }),
     );
     const submit = await screen.findByRole("button", {
-      name: /啟動 Walk-Forward|啟動.*Walk/i,
+      name: /Start walk-forward|啟動 Walk-Forward|啟動.*Walk/i,
     });
     await act(async () => {
       fireEvent.click(submit);

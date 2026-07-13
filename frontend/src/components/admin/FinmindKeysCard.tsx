@@ -5,17 +5,25 @@ import { CollapsibleHeader } from "@/components/Collapsible";
 import { useCollapsible } from "@/hooks/useCollapsible";
 import api, { errorDetail } from "@/lib/api";
 import { formatTaipei } from "@/lib/timeFormat";
-import { DataTable, type DataTableColumn } from "../ui/table";
+import { type DataTableColumn } from "../ui/table";
+
+import { IssueKeyForm } from "./FinmindKeys/issueForm";
+import { IssuedKeyBanner } from "./FinmindKeys/issuedBanner";
+import { KeysTable } from "./FinmindKeys/keysTable";
+import { PlansSection } from "./FinmindKeys/plans";
+import {
+  type ApiKeyItem,
+  type IssueKeyInput,
+  type IssuedKeyResponse,
+  type PlanFormState,
+  type PlanItem,
+  type PlanUpsertInput,
+} from "./FinmindKeys/types";
 
 // Plaintext key auto-clear delay. Long enough for the operator to
 // copy + send to the customer; short enough that walking away from
 // the desk doesn't leave a credential lingering in the DOM forever.
 const PLAINTEXT_AUTO_CLEAR_MS = 120_000; // 2 minutes
-
-// Loose email regex — same shape as HTML5 input[type=email] uses
-// for client-side validation. The backend re-validates anyway, so
-// this is purely UX (disable submit + show inline hint).
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * AdminPage card for issuing + listing + revoking customer API keys.
@@ -29,40 +37,6 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * the row, so api_usage_events FK references stay valid + the audit
  * trail (issued at / revoked at) survives.
  */
-
-interface ApiKeyItem {
-  id: number;
-  prefix: string;
-  owner_email: string;
-  name: string | null;
-  enabled: boolean;
-  expires_at: string | null;
-  last_used_at: string | null;
-  created_at: string;
-  plan_code: string | null;
-  subscription_id: number | null;
-}
-
-interface IssuedKeyResponse {
-  record_id: number;
-  plaintext: string;
-  prefix: string;
-  owner_email: string;
-  plan_code: string | null;
-  subscription_id: number | null;
-}
-
-interface PlanItem {
-  code: string;
-  name: string;
-  price_monthly: number | null;
-  price_yearly: number | null;
-  currency: string;
-  allowed_datasets: string[] | null;
-  quota_daily_calls: number;
-  quota_daily_rows: number;
-  enabled: boolean;
-}
 
 export default function FinmindKeysCard() {
   const { open, toggle } = useCollapsible("admin-finmind-keys", false);
@@ -91,7 +65,7 @@ export default function FinmindKeysCard() {
   // Plan management — inline mini-form so the operator can create a
   // plan without opening a separate modal / page. Plans are
   // operator-managed metadata; customers never see this UI.
-  const [planForm, setPlanForm] = useState({
+  const [planForm, setPlanForm] = useState<PlanFormState>({
     code: "",
     name: "",
     price_monthly: "",
@@ -118,11 +92,7 @@ export default function FinmindKeysCard() {
   });
 
   const issueMutation = useMutation({
-    mutationFn: async (input: {
-      owner_email: string;
-      name?: string;
-      plan_code?: string;
-    }) => {
+    mutationFn: async (input: IssueKeyInput) => {
       const r = await api.post<IssuedKeyResponse>(
         "/admin/finmind/keys",
         input,
@@ -141,13 +111,7 @@ export default function FinmindKeysCard() {
   });
 
   const upsertPlanMutation = useMutation({
-    mutationFn: async (input: {
-      code: string;
-      name: string;
-      price_monthly: number | null;
-      quota_daily_calls: number;
-      quota_daily_rows: number;
-    }) => {
+    mutationFn: async (input: PlanUpsertInput) => {
       const r = await api.put<PlanItem>(
         `/admin/finmind/plans/${input.code}`,
         {
@@ -358,236 +322,32 @@ export default function FinmindKeysCard() {
         <div className="mt-4 space-y-6">
           {/* Plans section (above the issue form so the operator
               creates a plan before issuing keys to use it) ───── */}
-          <div className="rounded border border-border bg-muted/10 p-3">
-            <h3 className="mb-2 text-sm font-semibold">Plans</h3>
-            <form
-              className="flex flex-wrap items-end gap-2 text-sm"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!planForm.code.trim() || !planForm.name.trim()) return;
-                upsertPlanMutation.mutate({
-                  code: planForm.code.trim(),
-                  name: planForm.name.trim(),
-                  price_monthly: planForm.price_monthly
-                    ? Number(planForm.price_monthly)
-                    : null,
-                  quota_daily_calls: Number(planForm.quota_daily_calls) || 0,
-                  quota_daily_rows: Number(planForm.quota_daily_rows) || 0,
-                });
-              }}
-            >
-              <label className="flex flex-col">
-                <span className="text-xs text-muted-foreground">Code</span>
-                <input
-                  type="text"
-                  required
-                  value={planForm.code}
-                  onChange={(e) =>
-                    setPlanForm({ ...planForm, code: e.target.value })
-                  }
-                  className="w-24 rounded border border-border bg-background px-2 py-1"
-                  placeholder="pro"
-                />
-              </label>
-              <label className="flex flex-col">
-                <span className="text-xs text-muted-foreground">Name</span>
-                <input
-                  type="text"
-                  required
-                  value={planForm.name}
-                  onChange={(e) =>
-                    setPlanForm({ ...planForm, name: e.target.value })
-                  }
-                  className="rounded border border-border bg-background px-2 py-1"
-                  placeholder="Pro"
-                />
-              </label>
-              <label className="flex flex-col">
-                <span className="text-xs text-muted-foreground">
-                  TWD/month
-                </span>
-                <input
-                  type="number"
-                  value={planForm.price_monthly}
-                  onChange={(e) =>
-                    setPlanForm({
-                      ...planForm,
-                      price_monthly: e.target.value,
-                    })
-                  }
-                  className="w-24 rounded border border-border bg-background px-2 py-1"
-                  placeholder="990"
-                />
-              </label>
-              <label className="flex flex-col">
-                <span className="text-xs text-muted-foreground">
-                  Calls/day
-                </span>
-                <input
-                  type="number"
-                  value={planForm.quota_daily_calls}
-                  onChange={(e) =>
-                    setPlanForm({
-                      ...planForm,
-                      quota_daily_calls: e.target.value,
-                    })
-                  }
-                  className="w-24 rounded border border-border bg-background px-2 py-1"
-                />
-              </label>
-              <label className="flex flex-col">
-                <span className="text-xs text-muted-foreground">
-                  Rows/day
-                </span>
-                <input
-                  type="number"
-                  value={planForm.quota_daily_rows}
-                  onChange={(e) =>
-                    setPlanForm({
-                      ...planForm,
-                      quota_daily_rows: e.target.value,
-                    })
-                  }
-                  className="w-28 rounded border border-border bg-background px-2 py-1"
-                />
-              </label>
-              <button
-                type="submit"
-                disabled={upsertPlanMutation.isPending}
-                className="rounded border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
-              >
-                {upsertPlanMutation.isPending ? "Saving…" : "Save plan"}
-              </button>
-            </form>
-
-            {plansQuery.data && plansQuery.data.length > 0 && (
-              <DataTable
-                className="mt-3"
-                columns={planColumns}
-                rows={plansQuery.data}
-                rowKey={(p) => p.code}
-                mobileMode="scroll"
-                aria-label="Plans"
-              />
-            )}
-          </div>
+          <PlansSection
+            planForm={planForm}
+            setPlanForm={setPlanForm}
+            upsertPlanMutation={upsertPlanMutation}
+            plansQuery={plansQuery}
+            planColumns={planColumns}
+          />
 
           {/* Issue form ────────────────────────── */}
           <div className="rounded border border-border bg-muted/20 p-3">
             <h3 className="mb-2 text-sm font-semibold">Issue new key</h3>
-            <form
-              className="flex flex-wrap items-end gap-2 text-sm"
-              onSubmit={(e) => {
-                e.preventDefault();
-                const email = ownerEmail.trim();
-                if (!email || !EMAIL_RE.test(email)) return;
-                issueMutation.mutate({
-                  owner_email: email,
-                  name: keyName.trim() || undefined,
-                  plan_code: keyPlanCode.trim() || undefined,
-                });
-              }}
-            >
-              <label className="flex flex-col">
-                <span className="text-xs text-muted-foreground">
-                  Owner email
-                </span>
-                <input
-                  type="email"
-                  required
-                  value={ownerEmail}
-                  onChange={(e) => setOwnerEmail(e.target.value)}
-                  className="rounded border border-border bg-background px-2 py-1"
-                  placeholder="customer@example.com"
-                />
-                {ownerEmail.trim().length > 0 &&
-                  !EMAIL_RE.test(ownerEmail.trim()) && (
-                    <span className="mt-0.5 text-[10px] text-destructive">
-                      Invalid email format
-                    </span>
-                  )}
-              </label>
-              <label className="flex flex-col">
-                <span className="text-xs text-muted-foreground">
-                  Name (optional)
-                </span>
-                <input
-                  type="text"
-                  value={keyName}
-                  onChange={(e) => setKeyName(e.target.value)}
-                  className="rounded border border-border bg-background px-2 py-1"
-                  placeholder="e.g. prod-backtest"
-                />
-              </label>
-              <label className="flex flex-col">
-                <span className="text-xs text-muted-foreground">Plan</span>
-                <select
-                  value={keyPlanCode}
-                  onChange={(e) => setKeyPlanCode(e.target.value)}
-                  className="rounded border border-border bg-background px-2 py-1"
-                >
-                  <option value="">Free tier (default)</option>
-                  {(plansQuery.data ?? [])
-                    .filter((p) => p.enabled)
-                    .map((p) => (
-                      <option key={p.code} value={p.code}>
-                        {p.code} — {p.name}
-                      </option>
-                    ))}
-                </select>
-              </label>
-              <button
-                type="submit"
-                disabled={
-                  issueMutation.isPending ||
-                  !ownerEmail.trim() ||
-                  !EMAIL_RE.test(ownerEmail.trim())
-                }
-                className="rounded bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-              >
-                {issueMutation.isPending ? "Issuing…" : "Issue key"}
-              </button>
-            </form>
+            <IssueKeyForm
+              ownerEmail={ownerEmail}
+              setOwnerEmail={setOwnerEmail}
+              keyName={keyName}
+              setKeyName={setKeyName}
+              keyPlanCode={keyPlanCode}
+              setKeyPlanCode={setKeyPlanCode}
+              issueMutation={issueMutation}
+              plansQuery={plansQuery}
+            />
 
-            {issuedKey && (
-              <div className="mt-3 rounded border border-warning/40 bg-warning/10 p-3 text-xs">
-                <div className="mb-1 font-semibold text-warning">
-                  ⚠ Copy this key now — it will not be shown again.
-                </div>
-                <div className="break-all font-mono">
-                  {issuedKey.plaintext}
-                </div>
-                <div className="mt-2 flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigator.clipboard?.writeText(issuedKey.plaintext);
-                    }}
-                    className="rounded border border-border bg-background px-2 py-0.5 text-[11px]"
-                  >
-                    Copy
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setIssuedKey(null)}
-                    className="rounded border border-border bg-background px-2 py-0.5 text-[11px]"
-                  >
-                    Dismiss
-                  </button>
-                  <span className="text-muted-foreground">
-                    Issued for {issuedKey.owner_email} · prefix{" "}
-                    <code>{issuedKey.prefix}</code> ·{" "}
-                    {issuedKey.plan_code ? (
-                      <>
-                        plan <code>{issuedKey.plan_code}</code>
-                      </>
-                    ) : (
-                      <>plan free-tier</>
-                    )}
-                  </span>
-                </div>
-              </div>
-            )}
+            <IssuedKeyBanner
+              issuedKey={issuedKey}
+              setIssuedKey={setIssuedKey}
+            />
             {issueMutation.isError && (
               <div className="mt-2 text-xs text-destructive">
                 Failed:{" "}
@@ -597,25 +357,7 @@ export default function FinmindKeysCard() {
           </div>
 
           {/* Keys table ─────────────────────────── */}
-          {keysQuery.isLoading && (
-            <div className="text-sm text-muted-foreground">Loading…</div>
-          )}
-          {keysQuery.data && keysQuery.data.length === 0 && (
-            <div className="rounded border border-border bg-muted/30 p-6 text-center text-sm text-muted-foreground">
-              No API keys yet. Issue one above to give a customer access
-              to <code className="rounded bg-muted px-1">/api/finmind/data/...</code>
-              .
-            </div>
-          )}
-          {keysQuery.data && keysQuery.data.length > 0 && (
-            <DataTable
-              columns={keyColumns}
-              rows={keysQuery.data}
-              rowKey={(k) => k.id}
-              mobileMode="scroll"
-              aria-label="API keys"
-            />
-          )}
+          <KeysTable keysQuery={keysQuery} keyColumns={keyColumns} />
         </div>
       )}
     </div>

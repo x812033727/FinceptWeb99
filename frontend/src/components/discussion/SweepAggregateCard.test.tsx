@@ -82,9 +82,11 @@ describe("SweepAggregateCard — BrierRow", () => {
     renderCard({ sweepId: BASE.sweep_id! });
     // Wait for the card to render at all (verdict tile)
     await waitFor(() =>
-      expect(screen.getByText("討論數")).toBeInTheDocument(),
+      expect(screen.getByText("Discussions")).toBeInTheDocument(),
     );
-    expect(screen.queryByText(/校準度量/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/校準度量|Calibration metric/),
+    ).not.toBeInTheDocument();
   });
 
   it("renders raw + calibrated brier with improvement message", async () => {
@@ -97,13 +99,15 @@ describe("SweepAggregateCard — BrierRow", () => {
     });
     renderCard({ sweepId: BASE.sweep_id! });
     await waitFor(() =>
-      expect(screen.getByText(/校準度量/)).toBeInTheDocument(),
+      expect(
+        screen.getByText(/校準度量|Calibration metric/),
+      ).toBeInTheDocument(),
     );
     expect(screen.getByText("0.250")).toBeInTheDocument();
     expect(screen.getByText("0.180")).toBeInTheDocument();
     // delta = -0.07 → improvement message
     expect(
-      screen.getByText(/校準曲線降低 Brier/),
+      screen.getByText(/校準曲線降低 Brier|Calibration curve lowers Brier/),
     ).toBeInTheDocument();
   });
 
@@ -121,7 +125,7 @@ describe("SweepAggregateCard — BrierRow", () => {
     expect(screen.getByText("n/a")).toBeInTheDocument();
     // No improvement message — delta can't be computed
     expect(
-      screen.queryByText(/校準曲線降低/),
+      screen.queryByText(/校準曲線降低|Calibration curve lowers/),
     ).not.toBeInTheDocument();
   });
 
@@ -134,7 +138,7 @@ describe("SweepAggregateCard — BrierRow", () => {
     renderCard({ sweepId: BASE.sweep_id! });
     await waitFor(() =>
       expect(
-        screen.getByText(/校準後反而變差/),
+        screen.getByText(/校準後反而變差|Calibration made it worse/),
       ).toBeInTheDocument(),
     );
   });
@@ -145,7 +149,7 @@ describe("SweepAggregateCard — FoldBadge", () => {
     mockFetchSweep.mockResolvedValue({ ...BASE, fold_kind: "production" });
     renderCard({ sweepId: BASE.sweep_id! });
     await waitFor(() =>
-      expect(screen.getByText("討論數")).toBeInTheDocument(),
+      expect(screen.getByText("Discussions")).toBeInTheDocument(),
     );
     expect(screen.queryByText(/Train fold/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Test fold/)).not.toBeInTheDocument();
@@ -182,7 +186,7 @@ describe("SweepAggregateCard — WalkForwardCompareSection", () => {
     });
     renderCard({ sweepId: BASE.sweep_id! });
     await waitFor(() =>
-      expect(screen.getByText("討論數")).toBeInTheDocument(),
+      expect(screen.getByText("Discussions")).toBeInTheDocument(),
     );
     expect(
       screen.queryByText(/train vs test|train 折比較/),
@@ -198,7 +202,7 @@ describe("SweepAggregateCard — WalkForwardCompareSection", () => {
     });
     renderCard({ sweepId: BASE.sweep_id! });
     await waitFor(() =>
-      expect(screen.getByText("討論數")).toBeInTheDocument(),
+      expect(screen.getByText("Discussions")).toBeInTheDocument(),
     );
     expect(
       screen.queryByText(/train 折比較|train vs test/),
@@ -251,7 +255,7 @@ describe("SweepAggregateCard — WalkForwardCompareSection", () => {
 
     // Section starts collapsed.
     expect(
-      screen.queryByText(/D5 平均報酬/),
+      screen.queryByText(/D5 平均報酬|Avg D5 return/),
     ).not.toBeInTheDocument();
 
     // Click to expand.
@@ -264,7 +268,7 @@ describe("SweepAggregateCard — WalkForwardCompareSection", () => {
     // Headers + at least one KPI row.
     await waitFor(() =>
       expect(
-        screen.getByText(/D5 平均報酬/),
+        screen.getByText(/D5 平均報酬|Avg D5 return/),
       ).toBeInTheDocument(),
     );
     // The compare grid has its own column header "Test (OOS)" (the 🔬
@@ -347,7 +351,9 @@ describe("SweepAggregateCard — ReliabilityChart", () => {
     });
     renderCard({ sweepId: BASE.sweep_id! });
     await waitFor(() =>
-      expect(screen.getByText(/校準度量/)).toBeInTheDocument(),
+      expect(
+        screen.getByText(/校準度量|Calibration metric/),
+      ).toBeInTheDocument(),
     );
     expect(screen.queryByText(/Reliability/)).not.toBeInTheDocument();
   });

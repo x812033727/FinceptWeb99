@@ -98,7 +98,7 @@ describe("BrierTrendChart", () => {
     renderChart();
     await waitFor(() =>
       expect(
-        screen.getByText(/還在累積|warming up/),
+        screen.getByText(/還在累積|warming up|still accumulating/),
       ).toBeInTheDocument(),
     );
   });

@@ -276,6 +276,10 @@ export interface RoundContextSnapshot {
    * defensively. */
   context: Record<string, unknown>;
   captured_at: string;
+  /** R6 PR2 round digest — a compact recap of this round's debate.
+   * null unless `DISCUSSION_ROUND_DIGEST_ENABLED` was on when the round
+   * ran, so the UI renders it only when present. */
+  digest?: string | null;
 }
 
 export interface ScoreboardRow {

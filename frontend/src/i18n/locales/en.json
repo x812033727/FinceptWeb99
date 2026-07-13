@@ -841,6 +841,7 @@
     "cancel_multi_round": "Cancel",
     "cancelling": "Cancelling…",
     "round_label": "Round {{round}}",
+    "round_digest_label": "Round recap",
     "round_summary": "Round {{round}} · {{count}} turns",
     "round_tokens": "in {{prompt}} + out {{completion}} = {{total}} tokens",
     "usage_detail": {

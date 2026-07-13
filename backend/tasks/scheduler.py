@@ -2,11 +2,56 @@
 APScheduler setup — AsyncIOScheduler runs inside the FastAPI event loop.
 Jobs are registered here and started/stopped via the lifespan hook in main.py.
 """
+import logging
+
+from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+log = logging.getLogger(__name__)
+
 scheduler = AsyncIOScheduler(timezone="UTC")
+
+# Last (hour, minute) the auto-run job was rescheduled to, so the watcher
+# below only reschedules on an actual change (see
+# `_reschedule_auto_run_discussion`).
+_auto_run_applied: tuple[int, int] | None = None
+
+
+async def _reschedule_auto_run_discussion() -> None:
+    """Pick up admin changes to the daily auto-run time (set via the
+    runtime-config UI) and reschedule the `auto_run_discussion` job — the
+    scheduler runs in its own process, so it can't be rescheduled from the
+    API directly. Reschedules only when the configured (hour, minute)
+    actually changes. Best-effort: a missing job (this scheduler instance
+    didn't register it) or a transient read error is a no-op."""
+    global _auto_run_applied
+    try:
+        from db.session import AsyncSessionLocal
+        from services import runtime_config_service as runtime_config
+        async with AsyncSessionLocal() as db:
+            hour = await runtime_config.get_int(db, "DISCUSSION_AUTO_RUN_HOUR")
+            minute = await runtime_config.get_int(db, "DISCUSSION_AUTO_RUN_MINUTE")
+    except Exception:
+        log.warning("scheduler.auto_run_reschedule_read_failed")
+        return
+    if (hour, minute) == _auto_run_applied:
+        return
+    try:
+        scheduler.reschedule_job(
+            "auto_run_discussion",
+            trigger=CronTrigger(hour=hour, minute=minute, timezone="Asia/Taipei"),
+        )
+    except JobLookupError:
+        return  # this process's scheduler didn't add the job
+    except Exception:
+        log.warning("scheduler.auto_run_reschedule_failed",
+                    extra={"hour": hour, "minute": minute})
+        return
+    _auto_run_applied = (hour, minute)
+    log.info("scheduler.auto_run_rescheduled",
+             extra={"hour": hour, "minute": minute})
 
 
 def setup_jobs() -> None:
@@ -540,8 +585,24 @@ def setup_jobs() -> None:
     from tasks.auto_run_discussion import run as run_auto_run_discussion
     scheduler.add_job(
         run_auto_run_discussion,
-        trigger=CronTrigger(hour=20, minute=0, timezone="UTC"),
+        # Admin-configurable via the runtime-config UI (Asia/Taipei). The
+        # compiled default is 04:00 Taipei (== the previous 20:00 UTC). The
+        # `reschedule_auto_run_discussion` watcher below applies UI changes
+        # within ~2 min without a restart.
+        trigger=CronTrigger(
+            hour=settings.DISCUSSION_AUTO_RUN_HOUR,
+            minute=settings.DISCUSSION_AUTO_RUN_MINUTE,
+            timezone="Asia/Taipei",
+        ),
         id="auto_run_discussion",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _reschedule_auto_run_discussion,
+        trigger=IntervalTrigger(minutes=2),
+        id="reschedule_auto_run_discussion",
         replace_existing=True,
         max_instances=1,
         coalesce=True,

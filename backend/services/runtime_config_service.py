@@ -340,6 +340,30 @@ _REGISTRY: dict[str, RuntimeSettingSpec] = {
         min_value=0.0,
         max_value=5.0,
     ),
+    "DISCUSSION_AUTO_RUN_HOUR": RuntimeSettingSpec(
+        key="DISCUSSION_AUTO_RUN_HOUR",
+        type="int",
+        name="每日討論執行時 (台北 0-23)",
+        description=(
+            "Hour of day (Asia/Taipei, 0-23) the daily auto-run "
+            "discussion fires. Pairs with the minute setting. The "
+            "scheduler applies changes within ~2 minutes — no redeploy "
+            "or restart needed."
+        ),
+        min_value=0,
+        max_value=23,
+    ),
+    "DISCUSSION_AUTO_RUN_MINUTE": RuntimeSettingSpec(
+        key="DISCUSSION_AUTO_RUN_MINUTE",
+        type="int",
+        name="每日討論執行分 (0-59)",
+        description=(
+            "Minute of the hour (0-59) the daily auto-run discussion "
+            "fires, in Asia/Taipei. Pairs with the hour setting."
+        ),
+        min_value=0,
+        max_value=59,
+    ),
 }
 
 

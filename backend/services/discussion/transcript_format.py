@@ -62,7 +62,10 @@ def _summarize_turn_content(content: str) -> str:
     return body
 
 
-def _format_history(prior_turns: list[DiscussionTurn]) -> str:
+def _format_history(
+    prior_turns: list[DiscussionTurn],
+    round_digests: dict[int, str] | None = None,
+) -> str:
     """Build the `## 先前發言` block for a persona prompt.
 
     Two-tier compression keeps the prompt budget bounded:
@@ -76,6 +79,13 @@ def _format_history(prior_turns: list[DiscussionTurn]) -> str:
     The full window comes after the summary block so the LLM's
     recency bias works in our favour — the most recent turn is the
     last thing in the prompt before its own "你現在的任務" line.
+
+    `round_digests` (R6 PR2, opt-in): a `{round: digest}` map. When
+    provided, an older round that has a stored digest is rendered as
+    that single round-level recap instead of one summary line per turn.
+    Passing None (the default, and what the round loop passes whenever
+    `DISCUSSION_ROUND_DIGEST_ENABLED` is off) reproduces the original
+    per-turn-summary output byte-for-byte.
     """
     if not prior_turns:
         return "（你是本場第一位發言者）"
@@ -102,8 +112,22 @@ def _format_history(prior_turns: list[DiscussionTurn]) -> str:
     sections: list[str] = []
     if older:
         sections.append("（較早輪次摘要）")
-        for t in older:
-            sections.append(_render(t, _summarize_turn_content(t.content)))
+        if round_digests:
+            # Emit a round's digest once, in place of that round's
+            # per-turn one-liners; rounds without a digest fall back to
+            # the per-turn summary so nothing is lost.
+            emitted: set[int] = set()
+            for t in older:
+                digest = round_digests.get(t.round)
+                if digest:
+                    if t.round not in emitted:
+                        emitted.add(t.round)
+                        sections.append(f"- 第{t.round}輪摘要：{digest}")
+                else:
+                    sections.append(_render(t, _summarize_turn_content(t.content)))
+        else:
+            for t in older:
+                sections.append(_render(t, _summarize_turn_content(t.content)))
     if older and recent:
         sections.append("")
         sections.append("（最近發言全文）")

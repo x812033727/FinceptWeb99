@@ -39,6 +39,7 @@ from services.ingest.repository import (
     record_failure,
     record_health,
 )
+from tasks._runner import TaskOutcome, run_ingest_task
 
 log = logging.getLogger(__name__)
 
@@ -90,57 +91,21 @@ def _format_news_error(exc: BaseException) -> str:
 # ── orchestration ─────────────────────────────────────────────────
 
 
+async def _body() -> TaskOutcome:
+    return TaskOutcome(row_count=await _do_run())
+
+
 async def run() -> None:
     """Entry point invoked by APScheduler."""
-    if not await acquire_lock(_LOCK_KEY, _LOCK_TTL):
-        log.info("ingest_news_international.skipped_lock_held")
-        return
-    try:
-        remaining = await backoff_remaining_seconds(JOB_ID)
-        if remaining > 0:
-            failures = await get_failure_count(JOB_ID)
-            mins = max(1, remaining // 60)
-            previous = await get_health(JOB_ID)
-            tail = ""
-            if previous and previous.error and "skipped" not in (previous.error or ""):
-                last_err = previous.error[:200]
-                tail = f"; last: {last_err}"
-            log.info(
-                "ingest_news_international.skipped_backoff",
-                extra={"failures": failures, "seconds_remaining": remaining},
-            )
-            await record_health(
-                JOB_ID, ok=False, row_count=0,
-                error=(
-                    f"skipped (backoff after {failures} failures, "
-                    f"~{mins} min remaining{tail})"
-                ),
-            )
-            return
-
-        try:
-            row_count = await _do_run()
-        except Exception as exc:
-            detail = _format_news_error(exc)
-            failures = await record_failure(JOB_ID)
-            log.warning(
-                "ingest_news_international.failed",
-                extra={"error": detail, "failures": failures},
-            )
-            await record_health(
-                JOB_ID, ok=False, row_count=0,
-                error=f"{detail} (failure #{failures}; auto-backoff armed)",
-            )
-            return
-
-        await clear_failures(JOB_ID)
-        log.info(
-            "ingest_news_international.done",
-            extra={"rows_processed": row_count},
-        )
-        await record_health(JOB_ID, ok=True, row_count=row_count)
-    finally:
-        await release_lock(_LOCK_KEY)
+    await run_ingest_task(
+        job_id=JOB_ID, lock_key=_LOCK_KEY, lock_ttl=_LOCK_TTL, log=log,
+        acquire_lock=acquire_lock, release_lock=release_lock,
+        backoff_remaining_seconds=backoff_remaining_seconds,
+        get_failure_count=get_failure_count, get_health=get_health,
+        record_health=record_health, record_failure=record_failure,
+        clear_failures=clear_failures,
+        body=_body, format_error=_format_news_error, log_backoff_skip=True,
+    )
 
 
 async def _do_run() -> int:

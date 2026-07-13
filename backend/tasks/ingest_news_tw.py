@@ -44,6 +44,7 @@ from services.ingest.repository import (
     record_failure,
     record_health,
 )
+from tasks._runner import TaskOutcome, run_ingest_task
 
 log = logging.getLogger(__name__)
 
@@ -95,76 +96,34 @@ def _format_news_error(exc: BaseException) -> str:
 # ── orchestration ─────────────────────────────────────────────────
 
 
+async def _body() -> TaskOutcome:
+    counters = await _do_run()
+    # `row_count` carries the row-count badge value (input rows that
+    # made it past pubdate parsing). The status text exposes the full
+    # counter set so admins can spot a parse-fail spike that would
+    # otherwise look like "ok / 95 / 5m ago" with no signal that 5
+    # articles got dropped.
+    status = (
+        f"fetched={counters['fetched']} attempted={counters['attempted']}"
+    )
+    if counters["dropped_pubdate"]:
+        status += f" dropped_pubdate={counters['dropped_pubdate']}"
+    return TaskOutcome(
+        row_count=counters["attempted"], status=status, done_extra=counters,
+    )
+
+
 async def run() -> None:
     """Entry point invoked by APScheduler."""
-    if not await acquire_lock(_LOCK_KEY, _LOCK_TTL):
-        log.info("ingest_news_tw.skipped_lock_held")
-        return
-    try:
-        # Backoff gate: if the previous run set a cooldown window we
-        # silently skip work but still record health so operators see
-        # the task is alive and counting down. Preserve the most
-        # recent actual failure error in the new health entry — without
-        # this, the IngestHealthCard masks the root cause behind a
-        # generic "skipped" message and operators have to clear Redis
-        # to see what's actually broken.
-        remaining = await backoff_remaining_seconds(JOB_ID)
-        if remaining > 0:
-            failures = await get_failure_count(JOB_ID)
-            mins = max(1, remaining // 60)
-            previous = await get_health(JOB_ID)
-            tail = ""
-            if previous and previous.error and "skipped" not in (previous.error or ""):
-                # Trim to keep the health row readable; full context
-                # is in the application logs.
-                last_err = previous.error[:200]
-                tail = f"; last: {last_err}"
-            log.info(
-                "ingest_news_tw.skipped_backoff",
-                extra={"failures": failures, "seconds_remaining": remaining},
-            )
-            await record_health(
-                JOB_ID, ok=False, row_count=0,
-                error=(
-                    f"skipped (backoff after {failures} failures, "
-                    f"~{mins} min remaining{tail})"
-                ),
-            )
-            return
-
-        try:
-            counters = await _do_run()
-        except Exception as exc:
-            detail = _format_news_error(exc)
-            failures = await record_failure(JOB_ID)
-            log.warning(
-                "ingest_news_tw.failed",
-                extra={"error": detail, "failures": failures},
-            )
-            await record_health(
-                JOB_ID, ok=False, row_count=0,
-                error=f"{detail} (failure #{failures}; auto-backoff armed)",
-            )
-            return
-
-        # Success — clear any leftover backoff state from prior failures.
-        await clear_failures(JOB_ID)
-        log.info("ingest_news_tw.done", extra=counters)
-        # `row_count` carries the row-count badge value (input rows that
-        # made it past pubdate parsing). The status text exposes the
-        # full counter set so admins can spot a parse-fail spike that
-        # would otherwise look like "ok / 95 / 5m ago" with no signal
-        # that 5 articles got dropped.
-        status = (
-            f"fetched={counters['fetched']} attempted={counters['attempted']}"
-        )
-        if counters["dropped_pubdate"]:
-            status += f" dropped_pubdate={counters['dropped_pubdate']}"
-        await record_health(
-            JOB_ID, ok=True, row_count=counters["attempted"], error=status,
-        )
-    finally:
-        await release_lock(_LOCK_KEY)
+    await run_ingest_task(
+        job_id=JOB_ID, lock_key=_LOCK_KEY, lock_ttl=_LOCK_TTL, log=log,
+        acquire_lock=acquire_lock, release_lock=release_lock,
+        backoff_remaining_seconds=backoff_remaining_seconds,
+        get_failure_count=get_failure_count, get_health=get_health,
+        record_health=record_health, record_failure=record_failure,
+        clear_failures=clear_failures,
+        body=_body, format_error=_format_news_error, log_backoff_skip=True,
+    )
 
 
 async def _do_run() -> dict[str, int]:

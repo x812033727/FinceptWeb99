@@ -43,6 +43,7 @@ from services.ingest.repository import (
     record_failure,
     record_health,
 )
+from tasks._runner import TaskOutcome, run_ingest_task
 
 log = logging.getLogger(__name__)
 
@@ -83,60 +84,29 @@ def _format_announce_error(exc: BaseException) -> str:
     return f"unexpected: {exc}"
 
 
+async def _body() -> TaskOutcome:
+    counters = await _do_run()
+    status = (
+        f"fetched={counters['fetched']} attempted={counters['attempted']}"
+    )
+    if counters["err_count"]:
+        status += f" parse_errors={counters['err_count']}"
+    return TaskOutcome(
+        row_count=counters["attempted"], status=status, done_extra=counters,
+    )
+
+
 async def run() -> None:
     """APScheduler entry point."""
-    if not await acquire_lock(_LOCK_KEY, _LOCK_TTL):
-        log.info("ingest_announcements_tw.skipped_lock_held")
-        return
-    try:
-        remaining = await backoff_remaining_seconds(JOB_ID)
-        if remaining > 0:
-            failures = await get_failure_count(JOB_ID)
-            mins = max(1, remaining // 60)
-            previous = await get_health(JOB_ID)
-            tail = ""
-            if previous and previous.error and "skipped" not in (previous.error or ""):
-                tail = f"; last: {previous.error[:200]}"
-            log.info(
-                "ingest_announcements_tw.skipped_backoff",
-                extra={"failures": failures, "seconds_remaining": remaining},
-            )
-            await record_health(
-                JOB_ID, ok=False, row_count=0,
-                error=(
-                    f"skipped (backoff after {failures} failures, "
-                    f"~{mins} min remaining{tail})"
-                ),
-            )
-            return
-
-        try:
-            counters = await _do_run()
-        except Exception as exc:
-            detail = _format_announce_error(exc)
-            failures = await record_failure(JOB_ID)
-            log.warning(
-                "ingest_announcements_tw.failed",
-                extra={"error": detail, "failures": failures},
-            )
-            await record_health(
-                JOB_ID, ok=False, row_count=0,
-                error=f"{detail} (failure #{failures}; auto-backoff armed)",
-            )
-            return
-
-        await clear_failures(JOB_ID)
-        log.info("ingest_announcements_tw.done", extra=counters)
-        status = (
-            f"fetched={counters['fetched']} attempted={counters['attempted']}"
-        )
-        if counters["err_count"]:
-            status += f" parse_errors={counters['err_count']}"
-        await record_health(
-            JOB_ID, ok=True, row_count=counters["attempted"], error=status,
-        )
-    finally:
-        await release_lock(_LOCK_KEY)
+    await run_ingest_task(
+        job_id=JOB_ID, lock_key=_LOCK_KEY, lock_ttl=_LOCK_TTL, log=log,
+        acquire_lock=acquire_lock, release_lock=release_lock,
+        backoff_remaining_seconds=backoff_remaining_seconds,
+        get_failure_count=get_failure_count, get_health=get_health,
+        record_health=record_health, record_failure=record_failure,
+        clear_failures=clear_failures,
+        body=_body, format_error=_format_announce_error, log_backoff_skip=True,
+    )
 
 
 async def _do_run() -> dict[str, int]:

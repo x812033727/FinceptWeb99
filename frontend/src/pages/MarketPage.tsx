@@ -7,6 +7,7 @@ import api from "@/lib/api";
 import { formatPct } from "@/lib/formatters";
 import type { Market, ScreenerResult } from "@/types/market";
 import { DataSourceBadge } from "@/components/DataSourceBadge";
+import { PageHeader } from "@/components/ui/PageHeader";
 
 // ── types ──────────────────────────────────────────────────────────
 
@@ -94,14 +95,14 @@ function ChangeCell({ value, unavailable }: { value: number | null | undefined; 
 function IndexCard({ idx, unavailable }: { idx: MarketIndex; unavailable?: boolean }) {
   const pos = idx.change_pct >= 0;
   return (
-    <div className="bg-card border border-border rounded-lg p-4">
-      <div className="text-xs text-muted-foreground">{idx.name}</div>
-      <div className="text-xl font-bold text-foreground mt-1">
+    <div className="bg-surface-1 shadow-highlight border border-border rounded-lg p-4">
+      <div className="text-label uppercase text-muted-foreground truncate">{idx.name}</div>
+      <div className="text-stat font-semibold tabular-nums text-foreground mt-1">
         {unavailable
           ? <span className="text-muted-foreground">—</span>
           : idx.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}
       </div>
-      <div className={`text-sm font-medium ${unavailable ? "text-muted-foreground" : pos ? "text-up" : "text-down"}`}>
+      <div className={`text-data font-medium ${unavailable ? "text-muted-foreground" : pos ? "text-up" : "text-down"}`}>
         {unavailable ? "—" : formatPct(idx.change_pct)}
       </div>
     </div>
@@ -180,20 +181,19 @@ export default function MarketPage() {
   });
 
   return (
-    <div className="p-4 sm:p-6 space-y-5 sm:space-y-6">
-      {/* header */}
-      <div>
-        <h1 className="text-xl sm:text-2xl font-bold text-foreground">
-          {mkt === "US" ? t("market.us_title")
+    <div className="p-gutter sm:p-page space-y-stack sm:space-y-section">
+      <PageHeader
+        title={
+          mkt === "US" ? t("market.us_title")
             : mkt === "CRYPTO" ? t("market.crypto_title")
-            : t("market.tw_title")}
-        </h1>
-        <p className="text-xs sm:text-sm text-muted-foreground mt-1">
-          {mkt === "US" ? t("market.us_subtitle")
+            : t("market.tw_title")
+        }
+        description={
+          mkt === "US" ? t("market.us_subtitle")
             : mkt === "CRYPTO" ? t("market.crypto_subtitle")
-            : t("market.tw_subtitle")}
-        </p>
-      </div>
+            : t("market.tw_subtitle")
+        }
+      />
 
       {/* index cards */}
       {mkt === "TW" && twIndex && (
@@ -231,7 +231,7 @@ export default function MarketPage() {
       )}
 
       {/* search + table */}
-      <div className="bg-card border border-border rounded-lg overflow-hidden">
+      <div className="bg-card shadow-highlight border border-border rounded-lg overflow-hidden">
         <div className="px-4 py-3 border-b border-border">
           <input
             type="text"

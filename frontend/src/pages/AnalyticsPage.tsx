@@ -238,7 +238,7 @@ export default function AnalyticsPage() {
 
   return (
     <div className="min-h-screen bg-background p-4 sm:p-6 space-y-5 sm:space-y-6">
-      <h1 className="text-title font-bold text-primary">{t("analytics.title")}</h1>
+      <h1 className="text-title font-semibold text-foreground">{t("analytics.title")}</h1>
 
       <div className="flex gap-1 bg-secondary/30 p-1 rounded-lg w-fit max-w-full overflow-x-auto">
         {tabs.map(tabItem => (

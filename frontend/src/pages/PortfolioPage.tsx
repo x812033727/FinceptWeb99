@@ -52,7 +52,7 @@ export default function PortfolioPage() {
     <div className="min-h-screen bg-background p-gutter sm:p-page space-y-stack sm:space-y-section">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <h1 className="text-title font-bold text-primary">{t("portfolio.title")}</h1>
+        <h1 className="text-title font-semibold text-foreground">{t("portfolio.title")}</h1>
         <div className="flex gap-2">
           {detail && (
             <button

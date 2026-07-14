@@ -51,7 +51,9 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 const { authState } = vi.hoisted(() => ({
-  authState: { user: null as { role: "viewer" | "analyst" | "admin" } | null },
+  authState: {
+    user: null as { role: "viewer" | "analyst" | "admin"; email?: string } | null,
+  },
 }));
 vi.mock("@/store/authStore", () => ({
   useAuthStore: <T,>(selector: (s: typeof authState) => T) => selector(authState),
@@ -145,6 +147,13 @@ describe("Sidebar grouped nav", () => {
     authState.user = { role: "admin" };
     const { container } = renderSidebar(true);
     expect(container.querySelector('a[data-to="/admin"]')).not.toBeNull();
+  });
+
+  it("footer shows the signed-in email + role chip when available", () => {
+    authState.user = { role: "analyst", email: "trader@example.com" };
+    renderSidebar(true);
+    expect(screen.getByText("trader@example.com")).toBeInTheDocument();
+    expect(screen.getByText("analyst")).toBeInTheDocument();
   });
 
   it("renders 4 group headers (Finmind folded into System in W1)", () => {

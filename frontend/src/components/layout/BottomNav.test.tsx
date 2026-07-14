@@ -58,6 +58,16 @@ describe("BottomNav", () => {
     expect(aiBtn.getAttribute("aria-current")).toBe("page");
   });
 
+  it("renders the active-tab accent bar only on the active tab", () => {
+    locationMock.pathname = "/dashboard";
+    render(<BottomNav onOpenMore={vi.fn()} />);
+    const homeBtn = screen.getByText("Home").closest("button") as HTMLElement;
+    const marketsBtn = screen.getByText("Markets").closest("button") as HTMLElement;
+    // The accent bar is a bg-primary hairline rendered inside the active tab.
+    expect(homeBtn.querySelector(".bg-primary")).not.toBeNull();
+    expect(marketsBtn.querySelector(".bg-primary")).toBeNull();
+  });
+
   it("clicking a tab navigates to its route", () => {
     render(<BottomNav onOpenMore={vi.fn()} />);
     fireEvent.click(screen.getByText("Portfolio"));

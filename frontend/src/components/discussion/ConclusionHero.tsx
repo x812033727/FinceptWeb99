@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { formatNumber } from "@/lib/formatters";
 import { AlertTriangle } from "lucide-react";
 import type { Conclusion, DiscussionDetail } from "@/types/discussion";
 import { cn } from "@/lib/utils";
@@ -94,7 +95,7 @@ export function ConclusionHero({
                       ? "D1 —"
                       : close === undefined
                         ? "D1 —"
-                        : `D1 ${close.toFixed(2)}`}
+                        : `D1 ${formatNumber(close)}`}
                   </span>
                 </button>
               );

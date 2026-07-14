@@ -210,7 +210,7 @@ function PendingRow({
               ({strategy.market})
             </span>
           </div>
-          <div className="text-[11px] text-warning truncate">
+          <div className="text-meta text-warning truncate">
             {payload.pending_reason ?? "Pending review"}
           </div>
           {payload.pending_at && (

@@ -35,7 +35,7 @@ export function WalkForwardCompareSection({ testAgg }: { testAgg: SweepAggregate
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-1 text-[11px] text-purple-300 hover:text-purple-200"
+        className="inline-flex items-center gap-1 text-meta text-purple-300 hover:text-purple-200"
       >
         {open ? (
           t("aggregate.compare_hide", "▼ 收起 train 折比較")
@@ -66,14 +66,14 @@ function CompareGrid({
   });
   if (isLoading) {
     return (
-      <p className="text-[11px] text-muted-foreground animate-pulse">
+      <p className="text-meta text-muted-foreground animate-pulse">
         {t("common.loading")}
       </p>
     );
   }
   if (error || !trainAgg) {
     return (
-      <p className="text-[11px] text-danger">
+      <p className="text-meta text-danger">
         {(error as Error | undefined)?.message
           ?? t(
               "aggregate.compare_train_missing",
@@ -170,7 +170,7 @@ function CompareRow({
     else if (testBetter) testCls = "text-success";
   }
   return (
-    <div className="grid grid-cols-3 gap-1 text-[11px] font-mono">
+    <div className="grid grid-cols-3 gap-1 text-meta font-mono">
       <div className="text-muted-foreground">{label}</div>
       <div className="text-center">{fmt(train)}</div>
       <div className={`text-center ${testCls}`}>{fmt(test)}</div>

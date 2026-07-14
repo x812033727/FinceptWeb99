@@ -254,7 +254,7 @@ export function SignalAuditCard() {
                   <p className="text-label font-semibold text-danger uppercase tracking-wider">
                     {t("signal_audit.zero_uptake_title")}
                   </p>
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-meta text-muted-foreground">
                     {t("signal_audit.zero_uptake_help")}
                   </p>
                   <ul className="text-xs font-mono space-y-0.5">
@@ -272,7 +272,7 @@ export function SignalAuditCard() {
                   <p className="text-label font-semibold text-warning uppercase tracking-wider">
                     {t("signal_audit.hallucination_title")}
                   </p>
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-meta text-muted-foreground">
                     {t("signal_audit.hallucination_help")}
                   </p>
                   <ul className="text-xs font-mono space-y-0.5">

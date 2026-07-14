@@ -78,7 +78,7 @@ export function FilterBar({
                 <div className={`text-sm font-medium ${active ? "text-primary" : "text-foreground"}`}>
                   {t(s.nameKey)}
                 </div>
-                <div className="text-[11px] text-muted-foreground mt-1 leading-snug line-clamp-2">
+                <div className="text-meta text-muted-foreground mt-1 leading-snug line-clamp-2">
                   {t(s.descKey)}
                 </div>
               </button>

@@ -192,7 +192,7 @@ export function StrategyFormBlock({
         )}
       </fieldset>
       {error ? (
-        <p className="text-[11px] text-danger">
+        <p className="text-meta text-danger">
           {(error as { response?: { data?: { detail?: string } } })
             ?.response?.data?.detail ?? (error as Error).message}
         </p>

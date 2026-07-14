@@ -101,6 +101,16 @@ export default tseslint.config(
           message:
             "Arbitrary text-[10px] is banned — use the `text-micro` role token (10px, tuned tracking) so the type scale stays unified.",
         },
+        {
+          selector: "Literal[value=/text-\\[11px\\]/]",
+          message:
+            "Arbitrary text-[11px] is banned — use `text-meta` (11px, no tracking) for meta/body or `text-label` (11px + tracking) for uppercase eyebrows.",
+        },
+        {
+          selector: "TemplateElement[value.cooked=/text-\\[11px\\]/]",
+          message:
+            "Arbitrary text-[11px] is banned — use `text-meta` (11px, no tracking) for meta/body or `text-label` (11px + tracking) for uppercase eyebrows.",
+        },
       ],
     },
   },

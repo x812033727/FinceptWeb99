@@ -148,7 +148,7 @@ export function DiscussionLessonsCard() {
                   className="border border-border rounded p-2 space-y-1"
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                    <div className="flex items-center gap-2 text-meta text-muted-foreground">
                       <span className="font-mono">{row.market}</span>
                       <span>·</span>
                       <span className="font-mono">{row.as_of_date}</span>

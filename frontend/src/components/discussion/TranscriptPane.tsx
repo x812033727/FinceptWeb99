@@ -98,7 +98,7 @@ export function TranscriptPane({
         </div>
       )}
       {selectedId && detail && (
-        <div className="text-[11px] text-muted-foreground border-b border-border pb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <div className="text-meta text-muted-foreground border-b border-border pb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
           {/* PR #277: backtest discussions surface the as_of
               date prominently — that's the day being analysed,
               far more useful than when the row was created. */}
@@ -189,7 +189,7 @@ export function TranscriptPane({
         <>
           {streamingRound !== null && (
             <div className="flex items-center gap-2 my-3">
-              <span className="text-[11px] font-semibold text-primary tracking-wider">
+              <span className="text-meta font-semibold text-primary tracking-wider">
                 {t("discussion.round_label", { round: streamingRound })}
               </span>
               <span className="flex-1 h-px bg-border" />

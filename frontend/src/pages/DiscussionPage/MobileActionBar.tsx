@@ -23,7 +23,7 @@ export function MobileActionBar({
       style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 0.75rem)" }}
     >
       {streamError && (
-        <p className="text-[11px] text-danger bg-danger/10 border border-danger/30 rounded px-2 py-1 mb-2">
+        <p className="text-meta text-danger bg-danger/10 border border-danger/30 rounded px-2 py-1 mb-2">
           {streamError}
         </p>
       )}

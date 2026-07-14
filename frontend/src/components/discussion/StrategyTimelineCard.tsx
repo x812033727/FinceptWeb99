@@ -153,7 +153,7 @@ export function StrategyTimelineCard({
       <button
         type="button"
         onClick={toggle}
-        className="text-[11px] text-muted-foreground hover:text-foreground
+        className="text-meta text-muted-foreground hover:text-foreground
                    flex items-center gap-1"
       >
         <span className="w-3 inline-block">{open ? "▼" : "▶"}</span>
@@ -168,12 +168,12 @@ export function StrategyTimelineCard({
       {open && (
         <div className="mt-2 space-y-2">
           {isLoading && (
-            <div className="text-[11px] text-muted-foreground animate-pulse">
+            <div className="text-meta text-muted-foreground animate-pulse">
               {t("common.loading")}
             </div>
           )}
           {!isLoading && !hasContent && (
-            <div className="text-[11px] text-muted-foreground italic">
+            <div className="text-meta text-muted-foreground italic">
               {t("discussion.timeline.empty")}
             </div>
           )}
@@ -332,7 +332,7 @@ function EventDetail({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="text-[11px] border border-border rounded p-2 bg-background/40">
+    <div className="text-meta border border-border rounded p-2 bg-background/40">
       <div className="flex items-center justify-between mb-1">
         <span className="font-semibold">
           {t(`discussion.timeline.event.${event.kind}`)}{" "}

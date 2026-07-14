@@ -151,7 +151,7 @@ function LanguageToggle() {
   return (
     <button
       onClick={() => void i18n.changeLanguage(next)}
-      className="px-2 rounded text-[11px] font-medium hover:bg-accent/10 text-muted-foreground hover:text-foreground transition-colors min-h-[36px] min-w-[36px] flex items-center justify-center"
+      className="px-2 rounded text-meta font-medium hover:bg-accent/10 text-muted-foreground hover:text-foreground transition-colors min-h-[36px] min-w-[36px] flex items-center justify-center"
       title={t("topbar.language")}
     >
       {label}

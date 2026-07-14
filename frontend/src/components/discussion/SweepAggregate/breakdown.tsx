@@ -82,7 +82,7 @@ export function LessonsList({ agg }: { agg: SweepAggregate }) {
       </summary>
       <ul className="mt-1.5 space-y-1">
         {agg.lessons.map((l, i) => (
-          <li key={i} className="text-[11px]">
+          <li key={i} className="text-meta">
             <span className="inline-block bg-warning/10 text-warning border border-warning/30 rounded px-1 py-0.5 mr-1.5 text-[9px] uppercase">
               {l.category}
             </span>

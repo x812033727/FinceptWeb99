@@ -58,7 +58,7 @@ export function PersonaStatusGrid({
 
   return (
     <div className="border-t border-border/50 mt-2 pt-2 space-y-1">
-      <div className="text-[11px] text-muted-foreground">
+      <div className="text-meta text-muted-foreground">
         {t("discussion.persona_status.title")}
       </div>
       <div className="flex flex-wrap gap-1.5">
@@ -73,7 +73,7 @@ export function PersonaStatusGrid({
           return (
             <span
               key={pid}
-              className={`inline-flex items-center gap-1 px-2 py-0.5 text-[11px]
+              className={`inline-flex items-center gap-1 px-2 py-0.5 text-meta
                           rounded border ${tone}`}
               title={t(`discussion.persona_status.tooltip.${status}`)}
             >

@@ -59,7 +59,7 @@ export function SweepForm({
 
   return (
     <div className="bg-secondary/20 border border-border rounded-lg p-3 space-y-2">
-      <p className="text-[11px] text-muted-foreground leading-relaxed">
+      <p className="text-meta text-muted-foreground leading-relaxed">
         {t("sweep.intro")}
       </p>
       {strategies.length > 0 && (

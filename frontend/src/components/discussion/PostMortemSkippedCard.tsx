@@ -78,7 +78,7 @@ export function PostMortemSkippedCard({
           </ul>
         </div>
       )}
-      <p className="text-[11px] text-muted-foreground mt-3">
+      <p className="text-meta text-muted-foreground mt-3">
         {t("discussion_post_mortem_skipped.reason_prefix")}: {v.reason}
       </p>
     </div>

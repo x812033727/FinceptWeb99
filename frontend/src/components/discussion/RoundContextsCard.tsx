@@ -127,7 +127,7 @@ function RoundContextRow({ snap }: { snap: RoundContextSnapshot }) {
           </span>
         </div>
       </div>
-      <div className="space-y-0.5 text-[11px] text-foreground/80">
+      <div className="space-y-0.5 text-meta text-foreground/80">
         {taiexLine && <div>{taiexLine}</div>}
         {newsLine && <div>{newsLine}</div>}
         {buyerLine && <div>{buyerLine}</div>}
@@ -146,7 +146,7 @@ function RoundContextRow({ snap }: { snap: RoundContextSnapshot }) {
           <div className="mb-0.5 text-micro font-semibold uppercase tracking-wider text-primary/80">
             {t("discussion.round_digest_label", "本輪摘要")}
           </div>
-          <p className="text-[11px] leading-relaxed text-foreground/90 whitespace-pre-line">
+          <p className="text-meta leading-relaxed text-foreground/90 whitespace-pre-line">
             {snap.digest}
           </p>
         </div>

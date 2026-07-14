@@ -65,13 +65,13 @@ function VaRTiles({ entries, currency }: { entries: RiskVaREntry[]; currency: st
                 <p className="text-base font-semibold text-foreground mt-0.5">
                   <Num value={v95.var_pct * 100} format="percent" />
                 </p>
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-meta text-muted-foreground">
                   {t("portfolio.risk.var95_amount", {
                     amount: `${currency} ${v95.var_amount.toLocaleString()}`,
                   })}
                 </p>
                 {v99 && (
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-meta text-muted-foreground">
                     {t("portfolio.risk.var99")}:{" "}
                     <Num value={v99.var_pct * 100} format="percent" />
                   </p>

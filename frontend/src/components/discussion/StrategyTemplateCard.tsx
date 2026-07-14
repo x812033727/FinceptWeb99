@@ -141,7 +141,7 @@ export function StrategyTemplateCard({
             <button
               type="button"
               onClick={() => setShowForm((v) => !v)}
-              className="text-[11px] text-primary hover:text-primary/80"
+              className="text-meta text-primary hover:text-primary/80"
             >
               {showForm
                 ? t("common.cancel", "取消")

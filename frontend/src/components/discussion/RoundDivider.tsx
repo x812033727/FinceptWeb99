@@ -33,7 +33,7 @@ export function RoundDivider({ round, turnCount, tokens, className }: RoundDivid
       className={cn("flex items-center gap-3 my-6 first:mt-2", className)}
     >
       <span className="flex-1 h-px bg-gradient-to-r from-transparent to-border" />
-      <span className="px-3 py-1 rounded-full bg-card border border-border text-[11px] font-semibold text-primary tracking-wider whitespace-nowrap">
+      <span className="px-3 py-1 rounded-full bg-card border border-border text-meta font-semibold text-primary tracking-wider whitespace-nowrap">
         {label}
       </span>
       {tokenLabel && (

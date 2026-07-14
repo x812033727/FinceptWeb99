@@ -92,7 +92,7 @@ export function DiscussionConfigForm({
         </div>
         {collapse.topic ? (
           topic && (
-            <p className="mt-1 ml-4 text-[11px] text-muted-foreground line-clamp-1">
+            <p className="mt-1 ml-4 text-meta text-muted-foreground line-clamp-1">
               {topic}
             </p>
           )
@@ -138,7 +138,7 @@ export function DiscussionConfigForm({
         </div>
         {collapse.rules ? (
           rules && (
-            <p className="mt-1 ml-4 text-[11px] text-muted-foreground line-clamp-1">
+            <p className="mt-1 ml-4 text-meta text-muted-foreground line-clamp-1">
               {rules.split("\n")[0]}
             </p>
           )
@@ -176,7 +176,7 @@ export function DiscussionConfigForm({
                   onClick={() => togglePersona(a.id)}
                   disabled={!isDraft || isStreaming}
                   className={cn(
-                    "px-2 py-1 rounded text-[11px] border transition-colors disabled:opacity-60 min-h-[32px]",
+                    "px-2 py-1 rounded text-meta border transition-colors disabled:opacity-60 min-h-[32px]",
                     selected
                       ? "border-primary bg-primary/15 text-primary"
                       : "border-border bg-card text-muted-foreground hover:border-primary/40"
@@ -226,7 +226,7 @@ export function DiscussionConfigForm({
           type="button"
           onClick={saveAsDefaults}
           disabled={isStreaming}
-          className="px-2 py-1 text-[11px] rounded border border-border text-muted-foreground hover:border-primary/40 hover:text-foreground transition-colors disabled:opacity-50 min-h-[28px]"
+          className="px-2 py-1 text-meta rounded border border-border text-muted-foreground hover:border-primary/40 hover:text-foreground transition-colors disabled:opacity-50 min-h-[28px]"
           title={t("discussion.save_as_defaults_hint")}
         >
           {t("discussion.save_as_defaults")}

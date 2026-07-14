@@ -44,7 +44,7 @@ export function CreatePortfolioModal({ onClose }: { onClose: () => void }) {
               <option value="USD">USD</option>
               <option value="TWD">TWD</option>
             </select>
-            <p className="mt-1 text-[11px] text-muted-foreground leading-relaxed">
+            <p className="mt-1 text-meta text-muted-foreground leading-relaxed">
               {t("portfolio.currency_hint")}
             </p>
           </div>

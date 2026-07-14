@@ -50,7 +50,7 @@ export function BaselineDeltaBadge({
     <div className="flex flex-wrap items-center gap-1.5 mb-3">
       {pctChange !== null && consensusBaseline !== null && (
         <span
-          className={`inline-flex items-center px-2 py-0.5 text-[11px] rounded border ${consensusTone}`}
+          className={`inline-flex items-center px-2 py-0.5 text-meta rounded border ${consensusTone}`}
           title={t("discussion.baseline.consensus_tooltip", {
             current: vb.consensus_score.toFixed(2),
             baseline: consensusBaseline.toFixed(2),
@@ -63,7 +63,7 @@ export function BaselineDeltaBadge({
       )}
       {brierBaseline !== null && (
         <span
-          className="inline-flex items-center px-2 py-0.5 text-[11px] rounded
+          className="inline-flex items-center px-2 py-0.5 text-meta rounded
                      bg-info/15 text-info border border-info/30"
           title={t("discussion.baseline.brier_tooltip", {
             baseline: brierBaseline.toFixed(3),

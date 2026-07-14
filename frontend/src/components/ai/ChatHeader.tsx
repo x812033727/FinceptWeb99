@@ -110,7 +110,7 @@ export function ChatHeader({
             the backend doesn't return a number (admins). */}
         {remaining !== null && (
           <span
-            className="text-[11px] tabular-nums px-1.5 py-0.5 rounded border border-border text-muted-foreground"
+            className="text-meta tabular-nums px-1.5 py-0.5 rounded border border-border text-muted-foreground"
             title={t("ai.quota_remaining_hint")}
           >
             {t("ai.quota_remaining_short", { remaining })}
@@ -131,7 +131,7 @@ export function ChatHeader({
             aria-label={t("ai.tools_toggle_aria")}
             title={useClaudeAgent ? t("ai.tools_on_hint") : t("ai.use_tools_hint")}
             className={cn(
-              "hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] transition-colors min-h-[28px] disabled:opacity-50",
+              "hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded border text-meta transition-colors min-h-[28px] disabled:opacity-50",
               useClaudeAgent
                 ? "border-warning/30 bg-warning/10 text-warning hover:bg-warning/20"
                 : "border-border text-muted-foreground hover:text-foreground hover:border-primary/40"
@@ -146,7 +146,7 @@ export function ChatHeader({
             turn it off. Distinct from the toggle above. */}
         {effectiveIsClaudeAgent && !claudeAgentToggleVisible && (
           <span
-            className="hidden sm:inline-flex items-center gap-1 text-[11px] text-warning"
+            className="hidden sm:inline-flex items-center gap-1 text-meta text-warning"
             title={t("ai.tools_on_hint")}
           >
             <Wrench className="h-3 w-3" aria-hidden="true" />

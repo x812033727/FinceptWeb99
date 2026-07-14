@@ -133,7 +133,7 @@ export function VersionHistorySection({ strategyId }: { strategyId: string }) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="text-[11px] text-muted-foreground hover:text-foreground
+        className="text-meta text-muted-foreground hover:text-foreground
                    flex items-center gap-1"
       >
         <span className="w-3 inline-block">{open ? "▼" : "▶"}</span>
@@ -160,12 +160,12 @@ export function VersionHistorySection({ strategyId }: { strategyId: string }) {
           </div>
 
           {versionsQ.isLoading && (
-            <div className="text-[11px] text-muted-foreground animate-pulse">
+            <div className="text-meta text-muted-foreground animate-pulse">
               {t("common.loading")}
             </div>
           )}
           {!versionsQ.isLoading && versions.length === 0 && (
-            <div className="text-[11px] text-muted-foreground italic">
+            <div className="text-meta text-muted-foreground italic">
               {t("discussion.versions.empty")}
             </div>
           )}
@@ -175,7 +175,7 @@ export function VersionHistorySection({ strategyId }: { strategyId: string }) {
               rows={versions}
               rowKey={(v) => v.id}
               mobileMode="cards"
-              className="text-[11px]"
+              className="text-meta"
               aria-label={t("discussion.versions.title")}
             />
           )}

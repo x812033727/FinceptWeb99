@@ -46,13 +46,13 @@ export function ConclusionDiffCard({ diff }: { diff?: PostMortemDiff | null }) {
       </h4>
 
       {hasNoChanges && (
-        <p className="text-[11px] text-muted-foreground italic">
+        <p className="text-meta text-muted-foreground italic">
           {t("discussion.diff.no_structural_change")}
         </p>
       )}
 
       {(diff.symbols_added.length > 0 || diff.symbols_removed.length > 0) && (
-        <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+        <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta">
           {diff.symbols_added.length > 0 && (
             <span className="flex items-center gap-1">
               <span className="text-success font-medium">
@@ -90,10 +90,10 @@ export function ConclusionDiffCard({ diff }: { diff?: PostMortemDiff | null }) {
 
       {confidenceEntries.length > 0 && (
         <div className="mb-2">
-          <div className="text-[11px] text-muted-foreground mb-1">
+          <div className="text-meta text-muted-foreground mb-1">
             {t("discussion.diff.confidence_shifts")}
           </div>
-          <ul className="text-[11px] space-y-0.5">
+          <ul className="text-meta space-y-0.5">
             {confidenceEntries.map(([sym, change]) => {
               const positive = change.delta > 0;
               return (
@@ -116,7 +116,7 @@ export function ConclusionDiffCard({ diff }: { diff?: PostMortemDiff | null }) {
         </div>
       )}
 
-      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-meta text-muted-foreground">
         <span>
           {t("discussion.diff.reasoning_overlap")}:{" "}
           <span className={overlapColor}>{overlapPct}%</span>

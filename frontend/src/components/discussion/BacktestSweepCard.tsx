@@ -297,7 +297,7 @@ export function BacktestSweepCard({
           />
 
           {createMut.error ? (
-            <p className="text-[11px] text-danger">
+            <p className="text-meta text-danger">
               {(createMut.error as { response?: { data?: { detail?: string } } })
                 ?.response?.data?.detail ??
                 (createMut.error as Error).message}

@@ -147,13 +147,14 @@ describe("Sidebar grouped nav", () => {
     expect(container.querySelector('a[data-to="/admin"]')).not.toBeNull();
   });
 
-  it("renders 5 group headers", () => {
+  it("renders 4 group headers (Finmind folded into System in W1)", () => {
     renderSidebar(true);
     expect(screen.getByText("Markets")).toBeInTheDocument();
     expect(screen.getByText("Workspace")).toBeInTheDocument();
     expect(screen.getByText("AI")).toBeInTheDocument();
-    expect(screen.getByText("Data")).toBeInTheDocument();
     expect(screen.getByText("System")).toBeInTheDocument();
+    // The former single-item "Data" group was merged into System.
+    expect(screen.queryByText("Data")).toBeNull();
   });
 
   it("collapsing a group hides its items but keeps the header visible", () => {

@@ -57,7 +57,7 @@ export default function BottomNav({ onOpenMore }: BottomNavProps) {
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       aria-label={t("bottom_nav.aria")}
     >
-      <ul className="flex items-stretch h-14">
+      <ul className="flex items-stretch h-[var(--nav-h)]">
         {TABS.map(({ to, labelKey, Icon, matches }) => {
           const active = matches(location.pathname);
           return (
@@ -67,13 +67,21 @@ export default function BottomNav({ onOpenMore }: BottomNavProps) {
                 onClick={() => navigate(to)}
                 onTouchStart={() => prefetchPage(to)}
                 className={cn(
-                  "w-full h-full flex flex-col items-center justify-center gap-0.5 min-h-[44px]",
+                  "relative w-full h-full flex flex-col items-center justify-center gap-0.5 min-h-[44px]",
                   active ? "text-primary" : "text-muted-foreground hover:text-foreground"
                 )}
                 aria-current={active ? "page" : undefined}
               >
+                {/* Active top-accent bar — mirrors the sidebar's active rail
+                    so the active affordance reads the same across breakpoints. */}
+                {active && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute top-0 inset-x-4 h-0.5 rounded-full bg-primary"
+                  />
+                )}
                 <Icon className="h-5 w-5" aria-hidden="true" />
-                <span className="text-[10px] font-medium leading-none">{t(labelKey)}</span>
+                <span className="text-micro font-medium leading-none">{t(labelKey)}</span>
               </button>
             </li>
           );
@@ -86,7 +94,7 @@ export default function BottomNav({ onOpenMore }: BottomNavProps) {
             aria-label={t("bottom_nav.more")}
           >
             <Menu className="h-5 w-5" aria-hidden="true" />
-            <span className="text-[10px] font-medium leading-none">{t("bottom_nav.more")}</span>
+            <span className="text-micro font-medium leading-none">{t("bottom_nav.more")}</span>
           </button>
         </li>
       </ul>

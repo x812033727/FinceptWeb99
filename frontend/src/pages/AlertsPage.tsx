@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { formatNumber } from "@/lib/formatters";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
@@ -147,7 +148,7 @@ function formatPrice(a: Alert): string {
   if (a.target_price == null) return "";
   return a.market === "TW"
     ? a.target_price.toLocaleString()
-    : `$${a.target_price.toFixed(2)}`;
+    : `$${formatNumber(a.target_price)}`;
 }
 
 /** Human-readable condition summary per rule type. */

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { formatNumber } from "@/lib/formatters";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -77,13 +78,13 @@ export function ValuationBandPanel({ symbol }: { symbol: string }) {
         <div className="bg-background border border-border rounded p-3">
           <div className="text-xs text-muted-foreground">{t("stock.valuation.current")}</div>
           <div className="text-lg font-semibold text-foreground">
-            {stats.current == null ? "—" : stats.current.toFixed(2)}
+            {stats.current == null ? "—" : formatNumber(stats.current)}
           </div>
         </div>
         <div className="bg-background border border-border rounded p-3">
           <div className="text-xs text-muted-foreground">{t("stock.valuation.mean")}</div>
           <div className="text-lg font-semibold text-foreground">
-            {stats.mean == null ? "—" : stats.mean.toFixed(2)}
+            {stats.mean == null ? "—" : formatNumber(stats.mean)}
           </div>
         </div>
         <div className="bg-background border border-border rounded p-3">
@@ -125,7 +126,7 @@ export function ValuationBandPanel({ symbol }: { symbol: string }) {
               y={b.v}
               stroke={b.color}
               strokeDasharray="4 4"
-              label={{ value: `${b.label} ${b.v.toFixed(1)}`, position: "right",
+              label={{ value: `${b.label} ${formatNumber(b.v, 1)}`, position: "right",
                        fill: b.color, fontSize: 10 }}
             />
           ))}
@@ -151,7 +152,7 @@ export function ValuationBandPanel({ symbol }: { symbol: string }) {
           <div key={k} className="bg-background border border-border rounded px-2 py-1.5 flex justify-between">
             <span className="text-muted-foreground">{label}</span>
             <span className="text-foreground font-medium">
-              {stats[k] == null ? "—" : (stats[k] as number).toFixed(2)}
+              {stats[k] == null ? "—" : formatNumber(stats[k] as number)}
             </span>
           </div>
         ))}

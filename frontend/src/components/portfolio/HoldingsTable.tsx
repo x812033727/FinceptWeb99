@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { formatNumber } from "@/lib/formatters";
 import type { Holding } from "@/types/portfolio";
 
 interface Props {
@@ -35,8 +36,8 @@ export default function HoldingsTable({ holdings, currency }: Props) {
               <td className="py-2 px-2 sm:pr-4 sm:pl-0 font-medium text-foreground">{h.symbol}</td>
               <td className="hidden lg:table-cell py-2 pr-4 text-muted-foreground">{h.market}</td>
               <td className="py-2 px-2 sm:pr-4 sm:pl-0 text-right">{h.quantity.toLocaleString()}</td>
-              <td className="hidden lg:table-cell py-2 pr-4 text-right">{h.avg_cost.toFixed(2)}</td>
-              <td className="hidden sm:table-cell py-2 pr-4 text-right">{(h.current_price ?? 0).toFixed(2)}</td>
+              <td className="hidden lg:table-cell py-2 pr-4 text-right">{formatNumber(h.avg_cost)}</td>
+              <td className="hidden sm:table-cell py-2 pr-4 text-right">{formatNumber(h.current_price ?? 0)}</td>
               <td className="py-2 px-2 sm:pr-4 sm:pl-0 text-right">{(h.current_value ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
               <td className={`hidden md:table-cell py-2 pr-4 text-right font-medium ${(h.unrealized_pnl ?? 0) >= 0 ? "text-positive" : "text-negative"}`}>
                 {(h.unrealized_pnl ?? 0) >= 0 ? "+" : ""}

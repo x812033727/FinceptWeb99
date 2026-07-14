@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { formatNumber } from "@/lib/formatters";
 import { Outlet, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Bell, Globe, Menu, MoreHorizontal, Sun, Moon, X } from "lucide-react";
@@ -100,11 +101,11 @@ function NotificationBell() {
                         a.condition === "above" ? "text-up" : "text-down"
                       }
                     >
-                      {a.target_price.toFixed(2)}
+                      {formatNumber(a.target_price)}
                     </span>{" "}
                     — {t("topbar.hit")}{" "}
                     <span className="text-foreground">
-                      {a.current_price.toFixed(2)}
+                      {formatNumber(a.current_price)}
                     </span>
                   </p>
                 </div>

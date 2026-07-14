@@ -92,8 +92,8 @@ function AdminContent() {
   }
 
   return (
-    <div className="p-4 sm:p-6 space-y-5 max-w-5xl">
-      <h1 className="text-xl font-semibold">{t("admin.title")}</h1>
+    <div className="p-gutter sm:p-page space-y-stack max-w-5xl">
+      <h1 className="text-title font-semibold">{t("admin.title")}</h1>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         {/* md+ — full tab strip. */}
@@ -210,7 +210,7 @@ function UsersTab() {
             { label: t("admin.stats.alerts"), value: stats.total_alerts },
             { label: t("admin.stats.watchlists"), value: stats.total_watchlists },
           ].map(({ label, value }) => (
-            <div key={label} className="bg-card border border-border rounded-lg p-3 text-center">
+            <div key={label} className="bg-card shadow-highlight border border-border rounded-lg p-3 text-center">
               <p className="text-2xl font-bold tabular-nums">{value}</p>
               <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
             </div>
@@ -259,7 +259,7 @@ function UsersSection({
   });
 
   return (
-    <div className="bg-card border border-border rounded-lg p-4 space-y-3">
+    <div className="bg-card shadow-highlight border border-border rounded-lg p-4 space-y-3">
       <CollapsibleHeader open={open} toggle={toggle} title={`Users (${users.length})`} />
       {open && (
         <div className="-mx-4 -mb-4 overflow-hidden rounded-b-lg">

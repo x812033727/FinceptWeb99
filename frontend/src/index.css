@@ -4,53 +4,65 @@
 
 @layer base {
   :root {
-    /* R5 visual refresh: base neutral shifted from an electric 47%-sat
-       navy to a calmer ~26% graphite-navy so data + accent colours pop,
-       with wider surface-elevation steps for clearer card/panel depth.
-       Token NAMES + structure unchanged (value-layer only). */
-    --background: 222 30% 7%;
-    --foreground: 214 22% 92%;
-    --primary: 199 90% 50%;
+    /* R6 visual refresh: deeper, slightly de-saturated graphite-navy base
+       so data + accent pop harder; even ~3.3%L surface steps; cooler,
+       quieter borders; a marginally richer azure primary. Evolution of
+       R5 — token NAMES + structure unchanged (value-layer only). */
+    --background: 222 26% 6%;
+    --foreground: 210 20% 93%;
+    --primary: 200 92% 52%;
     --primary-foreground: 222 40% 7%;
-    --secondary: 222 22% 14%;
-    --secondary-foreground: 214 22% 92%;
-    --muted: 222 20% 12%;
-    --muted-foreground: 216 16% 60%;
-    --accent: 199 90% 50%;
+    --secondary: 222 20% 13%;
+    --secondary-foreground: 210 20% 93%;
+    --muted: 222 18% 11%;
+    --muted-foreground: 218 13% 57%;
+    --accent: 200 92% 52%;
     --accent-foreground: 222 40% 7%;
-    --card: 222 24% 10%;
-    --card-foreground: 214 22% 92%;
-    --border: 220 20% 18%;
-    --input: 222 20% 15%;
-    --ring: 199 90% 50%;
+    --card: 220 22% 9.3%;
+    --card-foreground: 210 20% 93%;
+    --border: 220 15% 19%;
+    --input: 220 16% 15%;
+    --ring: 200 92% 52%;
     --radius: 0.5rem;
 
     /* Surface elevation scale — 0 (page) → 3 (highest raised element).
-       Wider lightness steps than before (7→10.5→14→17.5) so a raised
-       card reads as clearly layered above the page, not near-flat. */
-    --surface-0: 222 30% 7%;
-    --surface-1: 222 24% 10.5%;
-    --surface-2: 221 22% 14%;
-    --surface-3: 220 20% 17.5%;
-    --border-subtle: 220 18% 15%;
-    --border-strong: 220 22% 25%;
+       Even ~3.3%L steps (6→9.3→12.6→16); --card kept in lockstep with
+       surface-1 so raised panels read as clearly layered. */
+    --surface-0: 222 26% 6%;
+    --surface-1: 220 22% 9.3%;
+    --surface-2: 219 19% 12.6%;
+    --surface-3: 218 17% 16%;
+    --border-subtle: 220 14% 13%;
+    --border-strong: 220 17% 27%;
+
+    /* Elevation model (R6): border-driven surface ladder stays the primary
+       depth cue; a 1px inset top-highlight gives raised panels a machined
+       edge, and shadow tokens are reserved for FLOATING layers only
+       (dropdown/popover/command/sheet/dialog/drawer) — never inline cards. */
+    --highlight-top: inset 0 1px 0 0 hsl(0 0% 100% / 0.04);
+    --shadow-popover: 0 8px 24px -6px hsl(0 0% 0% / 0.5), 0 2px 6px hsl(0 0% 0% / 0.4);
+    --shadow-overlay: 0 16px 48px -12px hsl(0 0% 0% / 0.6);
+
+    /* Bottom-nav height — single source shared by BottomNav + AppLayout's
+       <main> bottom padding so the two never drift. */
+    --nav-h: 3.5rem;
 
     /* Status semantics — independent of market direction colors.
        Harmonised to a consistent saturation/lightness family. */
-    --success: 152 55% 46%;
-    --warning: 38 90% 53%;
-    --danger: 0 72% 56%;
-    --info: 199 90% 50%;
+    --success: 152 52% 48%;
+    --warning: 38 92% 55%;
+    --danger: 0 70% 58%;
+    --info: 200 92% 52%;
 
     /* Market direction — indirected through --mkt-up/--mkt-down so the
        [data-market-colors] attribute can flip the convention (intl: 綠漲紅跌,
        tw: 紅漲綠跌) without touching consumers. Defaults = intl so the
        tokens resolve even before the attribute is stamped. */
-    --mkt-up: 152 58% 47%;
-    --mkt-down: 0 74% 58%;
+    --mkt-up: 152 56% 49%;
+    --mkt-down: 0 72% 59%;
     --up: var(--mkt-up);
     --down: var(--mkt-down);
-    --flat: 216 15% 58%;
+    --flat: 218 12% 56%;
 
     /* Density — row height for tables / list rows. Flipped by the
        [data-density] attribute stamped by themeStore.applyDensity. */
@@ -58,12 +70,12 @@
 
     /* Categorical chart series (Recharts / canvas libs) — tuned for even
        perceptual spacing + legibility on the deeper graphite base. */
-    --chart-1: 199 88% 57%;
-    --chart-2: 38 90% 57%;
-    --chart-3: 259 68% 69%;
-    --chart-4: 152 55% 51%;
-    --chart-5: 328 68% 63%;
-    --chart-6: 216 16% 63%;
+    --chart-1: 200 90% 58%;
+    --chart-2: 40 92% 58%;
+    --chart-3: 262 66% 70%;
+    --chart-4: 152 54% 52%;
+    --chart-5: 330 66% 64%;
+    --chart-6: 218 14% 62%;
   }
 }
 
@@ -78,68 +90,73 @@
    combos below outrank these (2 attribute selectors vs 1) so light mode
    always gets the contrast-adjusted values. */
 [data-market-colors="intl"] {
-  --mkt-up: 152 58% 47%;
-  --mkt-down: 0 74% 58%;
+  --mkt-up: 152 56% 49%;
+  --mkt-down: 0 72% 59%;
 }
 [data-market-colors="tw"] {
-  --mkt-up: 0 74% 58%;
-  --mkt-down: 152 58% 47%;
+  --mkt-up: 0 72% 59%;
+  --mkt-down: 152 56% 49%;
 }
 
 /* Light theme overrides — applied when <html data-light> is set */
 [data-light] {
-  /* R5: cooler, slightly more neutral paper; white cards keep a crisp
-     step above the page; borders firmed up for definition. */
+  /* R6: cooler, slightly more neutral paper; white cards keep a crisp
+     step above the page; borders firmed up for definition. Contrast-
+     adjusted mirror of the R6 dark values. */
   --background: 214 24% 97%;
   --foreground: 222 32% 12%;
-  --primary: 199 92% 40%;
+  --primary: 200 92% 41%;
   --primary-foreground: 0 0% 100%;
   --secondary: 214 20% 93%;
   --secondary-foreground: 222 32% 12%;
   --muted: 214 20% 91%;
-  --muted-foreground: 216 14% 40%;
-  --accent: 199 92% 40%;
+  --muted-foreground: 218 13% 41%;
+  --accent: 200 92% 41%;
   --accent-foreground: 0 0% 100%;
   --card: 0 0% 100%;
   --card-foreground: 222 32% 12%;
-  --border: 214 22% 84%;
-  --input: 214 20% 91%;
-  --ring: 199 92% 40%;
+  --border: 214 20% 83%;
+  --input: 214 20% 90%;
+  --ring: 200 92% 41%;
 
   --surface-0: 214 26% 97%;
   --surface-1: 0 0% 100%;
   --surface-2: 214 22% 94%;
   --surface-3: 214 20% 90.5%;
   --border-subtle: 214 22% 88%;
-  --border-strong: 214 20% 76%;
+  --border-strong: 214 18% 74%;
+
+  /* Light-mode top highlight — a bright inner hairline reads as raised
+     on white surfaces (dark mode uses a faint white line instead). */
+  --highlight-top: inset 0 1px 0 0 hsl(0 0% 100% / 0.6);
 
   /* Status + data colors darkened for contrast on white backgrounds */
-  --success: 152 60% 30%;
+  --success: 152 58% 31%;
   --warning: 35 92% 38%;
-  --danger: 0 72% 45%;
-  --info: 200 95% 39%;
+  --danger: 0 70% 46%;
+  --info: 200 92% 40%;
 
-  --mkt-up: 152 60% 30%;
-  --mkt-down: 0 72% 45%;
-  --flat: 216 14% 42%;
+  --mkt-up: 152 58% 31%;
+  --mkt-down: 0 70% 46%;
+  --flat: 218 13% 42%;
 
-  --chart-1: 200 95% 39%;
+  --chart-1: 200 92% 40%;
   --chart-2: 35 92% 38%;
-  --chart-3: 259 60% 50%;
-  --chart-4: 152 60% 31%;
-  --chart-5: 328 64% 44%;
-  --chart-6: 216 15% 42%;
+  --chart-3: 262 58% 52%;
+  --chart-4: 152 58% 32%;
+  --chart-5: 330 62% 45%;
+  --chart-6: 218 14% 42%;
 }
 
 /* Light + market convention combos — must be spelled out explicitly so
    they beat both single-attribute blocks regardless of source order. */
 [data-light][data-market-colors="intl"] {
-  --mkt-up: 152 60% 30%;
-  --mkt-down: 0 72% 45%;
+  --mkt-up: 152 58% 31%;
+  --mkt-down: 0 70% 46%;
 }
 [data-light][data-market-colors="tw"] {
-  --mkt-up: 0 72% 45%;
-  --mkt-down: 152 60% 30%;
+  --mkt-up: 0 70% 46%;
+  --mkt-down: 152 58% 31%;
 }
 
 @layer base {

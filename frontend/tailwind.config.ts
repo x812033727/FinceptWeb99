@@ -82,6 +82,50 @@ const config: Config = {
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
       },
+      // Typographic scale — role-named, not size-named, so a later density
+      // or font swap re-tunes one place. Additive: text-xs/text-sm stay for
+      // the hundreds of existing call sites; new work uses role tokens.
+      // [size, { lineHeight, letterSpacing }]. Negative tracking on large
+      // sizes is what reads as "terminal-grade" rather than default Tailwind.
+      fontSize: {
+        micro: ["10px", { lineHeight: "14px", letterSpacing: "0.02em" }],
+        label: ["11px", { lineHeight: "16px", letterSpacing: "0.06em" }],
+        data: ["12px", { lineHeight: "18px" }],
+        body: ["13px", { lineHeight: "20px" }],
+        heading: ["14px", { lineHeight: "20px", letterSpacing: "-0.006em" }],
+        stat: ["20px", { lineHeight: "24px", letterSpacing: "-0.02em" }],
+        title: ["24px", { lineHeight: "30px", letterSpacing: "-0.014em" }],
+        display: ["30px", { lineHeight: "36px", letterSpacing: "-0.02em" }],
+      },
+      // Spacing rhythm — semantic keys layered on the 4px grid so all pages
+      // share one cadence (p-gutter sm:p-page, space-y-stack sm:space-y-section).
+      spacing: {
+        field: "0.5rem", // 8px  — control / inline gap
+        stack: "0.75rem", // 12px — gap inside a card / between tiles
+        gutter: "1rem", // 16px — page edge padding (mobile)
+        page: "1.5rem", // 24px — page edge padding (desktop)
+        section: "1.5rem", // 24px — vertical gap between page sections
+      },
+      // Font stacks. W0 points at system fonts (zero network cost); a later
+      // isolated PR may self-host Inter + JetBrains Mono (woff2, subset,
+      // preload) so its LCP/CLS is measured on its own.
+      fontFamily: {
+        sans: ["Inter var", "Inter", "system-ui", "sans-serif"],
+        mono: [
+          "JetBrains Mono",
+          "ui-monospace",
+          "SFMono-Regular",
+          "Menlo",
+          "monospace",
+        ],
+      },
+      // Elevation — inset top-highlight for raised panels; drop shadows are
+      // reserved for FLOATING layers only (see index.css tokens).
+      boxShadow: {
+        highlight: "var(--highlight-top)",
+        popover: "var(--shadow-popover)",
+        overlay: "var(--shadow-overlay)",
+      },
     },
   },
   plugins: [animate],

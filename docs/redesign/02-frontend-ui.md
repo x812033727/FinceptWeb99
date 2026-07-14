@@ -1,5 +1,7 @@
 # 前端 UI 重設計 + 前端效能藍圖
 
+> ⚠️ **已過時 —— 這是規劃期文件,描述重設計*之前*的狀態**(`--background: 222 47% 8%`、696 硬編色、`darkMode:["class"]`、DiscussionPage ~1990 行)。重設計已於 2026-07-14 交付(PR #91–#109)。**現行設計系統請看 [`R6-design-system.md`](R6-design-system.md)。** 本文件保留作歷史規劃紀錄。
+>
 > 本文件是[架構重規劃藍圖](00-overview.md)的前端章節。設計方向:**專業金融終端風精緻化** —— 保留深海軍藍終端 DNA(`--background: 222 47% 8%`、sky-blue primary),向 Bloomberg / TradingView 級的一致性與密度打磨,不做亮色 SaaS 化。
 
 ## 1. UI 現況診斷

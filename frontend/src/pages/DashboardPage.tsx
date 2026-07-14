@@ -155,7 +155,7 @@ export default function DashboardPage() {
             {user.role}
           </span>
         )}
-        {user?.ai_requests_remaining !== undefined && (
+        {typeof user?.ai_requests_remaining === "number" && (
           <span className="ml-auto shrink-0 text-label uppercase text-muted-foreground">
             {t("dashboard.ai_requests_today")}{" "}
             <span className="text-foreground font-mono tabular-nums text-data normal-case">

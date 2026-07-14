@@ -12,11 +12,15 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-const { apiGetMock, wsState } = vi.hoisted(() => ({
+const { apiGetMock, wsState, authState } = vi.hoisted(() => ({
   apiGetMock: vi.fn(),
   wsState: {
     connected: true,
     live: {} as Record<string, { price: number; change: number | null; changePct: number | null; volume: number | null; ts: number | null; dataSource: string | null } | undefined>,
+  },
+  authState: {
+    user: null as { email?: string; role?: string; ai_requests_remaining?: number | null } | null,
+    token: null as string | null,
   },
 }));
 
@@ -33,11 +37,10 @@ vi.mock("@/hooks/useWebSocket", () => ({
 
 vi.mock("@/store/authStore", () => ({
   useAuthStore: Object.assign(
-    (selector?: (s: { user: null; token: null }) => unknown) => {
-      const state = { user: null, token: null };
-      return selector ? selector(state) : state;
+    (selector?: (s: typeof authState) => unknown) => {
+      return selector ? selector(authState) : authState;
     },
-    { getState: () => ({ user: null, token: null }) },
+    { getState: () => authState },
   ),
 }));
 
@@ -57,6 +60,8 @@ function renderPage() {
 beforeEach(() => {
   wsState.connected = true;
   wsState.live = {};
+  authState.user = null;
+  authState.token = null;
   apiGetMock.mockReset();
   apiGetMock.mockImplementation((url: string) => {
     if (url.startsWith("/us/quote/")) {
@@ -93,5 +98,28 @@ describe("DashboardPage IndexCard live-quote precedence", () => {
     await waitFor(() => {
       expect(screen.getAllByText("500.00").length).toBe(4);
     });
+  });
+});
+
+describe("DashboardPage AI-quota chip", () => {
+  it("renders the count when ai_requests_remaining is a number", () => {
+    authState.user = { email: "u@x.io", role: "user", ai_requests_remaining: 42 };
+    const { container } = renderPage();
+    expect(container.textContent).toMatch(/AI requests today\s*42\s*remaining/i);
+  });
+
+  it("renders the count even when the remaining quota is zero", () => {
+    authState.user = { email: "u@x.io", role: "user", ai_requests_remaining: 0 };
+    const { container } = renderPage();
+    expect(container.textContent).toMatch(/AI requests today\s*0\s*remaining/i);
+  });
+
+  it("hides the chip entirely for an unlimited account (null quota)", () => {
+    // Admin / unlimited accounts return ai_requests_remaining: null. The old
+    // `!== undefined` guard let null through and rendered a blank count with a
+    // stray double space ("AI requests today  remaining"). The chip must hide.
+    authState.user = { email: "admin@x.io", role: "admin", ai_requests_remaining: null };
+    const { container } = renderPage();
+    expect(container.textContent).not.toMatch(/AI requests today/i);
   });
 });

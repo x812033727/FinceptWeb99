@@ -132,10 +132,10 @@ export default function AIPage() {
   const remaining = me?.ai_requests_remaining ?? null;
 
   return (
-    // h-[calc(100vh-2.5rem)] = viewport minus AppLayout's 40px (h-10) topbar.
+    // h-[calc(100vh-2.75rem)] = viewport minus AppLayout's 40px (h-10) topbar.
     // h-full doesn't always resolve reliably through the AppLayout chain
     // (flex-1 main → ErrorBoundary → AIPage), so we pin the height explicitly.
-    <div className="h-[calc(100vh-2.5rem)] bg-background flex overflow-hidden">
+    <div className="h-[calc(100vh-2.75rem)] bg-background flex overflow-hidden">
       {/* Desktop sidebar — always visible on lg+, hidden on mobile (Sheet
           takes over). Keeps the agent list within thumb reach without
           eating mobile screen real estate. */}

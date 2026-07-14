@@ -383,7 +383,7 @@ export default function DiscussionPage() {
   // ── render ────────────────────────────────────────────────────
 
   return (
-    <div className="h-[calc(100vh-2.5rem)] bg-background flex overflow-hidden">
+    <div className="h-[calc(100vh-2.75rem)] bg-background flex overflow-hidden">
       {/* Desktop sidebar — sessions filter + virtualized list. */}
       <SessionsRail {...sessionsFilterProps} />
 

@@ -154,7 +154,7 @@ export default function FinmindPage() {
   ];
 
   return (
-    <div className="space-y-8 p-4 lg:p-6">
+    <div className="space-y-8 p-gutter lg:p-page">
       {/* Hero ─────────────────────────────────────────── */}
       <section className="rounded-lg border border-border bg-gradient-to-br from-primary/10 via-background to-background p-6 lg:p-8">
         <div className="max-w-3xl">
@@ -307,9 +307,9 @@ export default function FinmindPage() {
             rowKey={(d) => d.dataset_code}
             mobileMode="scroll"
             aria-label={t("finmind.catalog.aria_table")}
-            className="rounded-lg border border-border bg-card"
+            className="rounded-lg border border-border bg-card shadow-highlight"
             empty={
-              <div className="rounded-lg border border-border bg-card px-3 py-6 text-center text-sm text-muted-foreground">
+              <div className="rounded-lg border border-border bg-card shadow-highlight px-3 py-6 text-center text-sm text-muted-foreground">
                 {t("finmind.catalog.empty")}
               </div>
             }
@@ -320,7 +320,7 @@ export default function FinmindPage() {
       {/* API quickstart ─────────────────────────────── */}
       <section>
         <h2 className="mb-3 text-lg font-semibold">{t("finmind.quickstart.heading")}</h2>
-        <div className="rounded-lg border border-border bg-card p-4">
+        <div className="rounded-lg border border-border bg-card shadow-highlight p-4">
           <p className="mb-3 text-sm text-muted-foreground">
             {t("finmind.quickstart.intro_1")}
             <code className="rounded bg-muted px-1">fck_live_</code>

@@ -20,6 +20,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { ChartTooltip } from "@/components/ui/ChartTooltip";
 import api from "@/lib/api";
 import type { StrategyHealthSnapshot } from "./_helpers";
 
@@ -119,18 +120,15 @@ export function HealthMetricsSparkline({
             width={32}
           />
           <Tooltip
-            wrapperStyle={{ fontSize: 11 }}
-            formatter={(value: number, name: string) => {
-              if (name === "hitRate") {
-                return [`${(value * 100).toFixed(1)}%`, t("discussion.health.hit_rate")];
-              }
-              return [value?.toFixed(3), t("discussion.health.brier")];
-            }}
-            labelFormatter={(label) => label}
-            contentStyle={{
-              backgroundColor: "hsl(var(--popover))",
-              borderColor: "hsl(var(--border))",
-            }}
+            content={
+              <ChartTooltip
+                valueFormatter={(v, name) =>
+                  name === t("discussion.health.hit_rate")
+                    ? `${(v * 100).toFixed(1)}%`
+                    : v?.toFixed(3)
+                }
+              />
+            }
           />
           <Line
             yAxisId="brier"
@@ -141,7 +139,7 @@ export function HealthMetricsSparkline({
             dot={<StatusFlagDot />}
             activeDot={{ r: 4 }}
             connectNulls={false}
-            name="brier"
+            name={t("discussion.health.brier")}
           />
           <Line
             yAxisId="hit"
@@ -152,7 +150,7 @@ export function HealthMetricsSparkline({
             dot={false}
             activeDot={{ r: 4 }}
             connectNulls={false}
-            name="hitRate"
+            name={t("discussion.health.hit_rate")}
           />
         </LineChart>
       </ResponsiveContainer>

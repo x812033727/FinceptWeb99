@@ -113,7 +113,7 @@ function MarketKeyRow({ info }: { info: MarketKeyInfo }) {
             </a>
           )}
         </div>
-        <span className={`text-[10px] border px-1.5 py-0.5 rounded ${sourceColor}`}>{sourceBadge}</span>
+        <span className={`text-micro border px-1.5 py-0.5 rounded ${sourceColor}`}>{sourceBadge}</span>
       </div>
 
       {info.has_key && (

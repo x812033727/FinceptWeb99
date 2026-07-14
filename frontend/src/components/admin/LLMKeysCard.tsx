@@ -126,7 +126,7 @@ function LLMKeyRow({ info }: { info: LLMKeyInfo }) {
           <span className="font-medium text-sm">{meta.name}</span>
           <span className="text-xs text-muted-foreground ml-2">{meta.tagline}</span>
         </div>
-        <span className={`text-[10px] border px-1.5 py-0.5 rounded ${sourceColor}`}>{sourceBadge}</span>
+        <span className={`text-micro border px-1.5 py-0.5 rounded ${sourceColor}`}>{sourceBadge}</span>
       </div>
 
       {info.has_key && (

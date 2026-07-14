@@ -59,7 +59,7 @@ export function SessionsFilterBar({
             type="button"
             onClick={() => setSessionsStatusFilter(s)}
             className={cn(
-              "px-2 py-0.5 rounded-full text-[10px] border transition-colors min-h-[24px]",
+              "px-2 py-0.5 rounded-full text-micro border transition-colors min-h-[24px]",
               sessionsStatusFilter === s
                 ? "border-primary bg-primary/15 text-primary"
                 : "border-border text-muted-foreground hover:text-foreground"

@@ -94,7 +94,7 @@ export function BrierTrendChart({
   return (
     <div className="bg-secondary/20 border border-border rounded p-2 space-y-1">
       <p
-        className="text-[10px] text-muted-foreground uppercase tracking-wider"
+        className="text-micro text-muted-foreground uppercase tracking-wider"
         title={t(
           "strategy.brier_trend_tip",
           "每個 sweep 一個點。下降 = 整體預測誤差變小;" +

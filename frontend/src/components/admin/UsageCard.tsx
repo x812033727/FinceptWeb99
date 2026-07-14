@@ -160,7 +160,7 @@ export function UsageCard({ scope }: { scope: "admin" | "me" }) {
           </div>
 
           <div className="space-y-1">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">{t("usage.by_provider")}</p>
+            <p className="text-micro text-muted-foreground uppercase tracking-wider">{t("usage.by_provider")}</p>
             <DataTable
               aria-label={t("usage.by_provider")}
               columns={columns}
@@ -172,7 +172,7 @@ export function UsageCard({ scope }: { scope: "admin" | "me" }) {
 
           {(data.total_tool_calls ?? 0) > 0 && (
             <div className="space-y-1">
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">{t("usage.top_tools")}</p>
+              <p className="text-micro text-muted-foreground uppercase tracking-wider">{t("usage.top_tools")}</p>
               <div className="flex flex-wrap gap-1.5">
                 {(data.top_tools ?? []).map((tool) => (
                   <span

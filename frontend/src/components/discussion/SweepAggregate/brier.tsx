@@ -36,7 +36,7 @@ export function BrierRow({ agg }: { agg: SweepAggregate }) {
   return (
     <div className="bg-secondary/20 border border-border rounded p-2 space-y-1.5">
       <p
-        className="text-[10px] text-muted-foreground uppercase tracking-wider"
+        className="text-micro text-muted-foreground uppercase tracking-wider"
         title={t(
           "aggregate.brier_tip",
           "Brier 分數 = 預測機率與實際結果的均方誤差。" +
@@ -86,7 +86,7 @@ export function BrierRow({ agg }: { agg: SweepAggregate }) {
         ) : null}
       </div>
       {delta !== null ? (
-        <p className={`text-[10px] ${deltaClass}`}>
+        <p className={`text-micro ${deltaClass}`}>
           {delta < -0.001
             ? t(
                 "aggregate.brier_improving",
@@ -123,7 +123,7 @@ function ReliabilityChart({ buckets }: { buckets: ReliabilityBucket[] }) {
   const maxCount = Math.max(1, ...buckets.map((b) => b.count));
   return (
     <div className="space-y-0.5">
-      <p className="text-[10px] text-muted-foreground">
+      <p className="text-micro text-muted-foreground">
         {t(
           "aggregate.reliability_label",
           "Reliability — 按 confidence 分 10 桶,實際命中率 vs 預測值",

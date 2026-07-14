@@ -214,7 +214,7 @@ function PendingRow({
             {payload.pending_reason ?? "Pending review"}
           </div>
           {payload.pending_at && (
-            <div className="text-[10px] text-muted-foreground">
+            <div className="text-micro text-muted-foreground">
               Queued: {formatTaipei(payload.pending_at)}
             </div>
           )}

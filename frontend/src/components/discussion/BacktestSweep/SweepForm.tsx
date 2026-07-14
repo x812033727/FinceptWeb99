@@ -158,12 +158,12 @@ export function SweepForm({
           {t("sweep.auto_post_mortem_label")}
         </span>
       </label>
-      <p className="text-[10px] text-muted-foreground/70 leading-relaxed">
+      <p className="text-micro text-muted-foreground/70 leading-relaxed">
         {autoPostMortem
           ? t("sweep.auto_post_mortem_on_help")
           : t("sweep.auto_post_mortem_off_help")}
       </p>
-      <p className="text-[10px] text-muted-foreground/70 leading-relaxed">
+      <p className="text-micro text-muted-foreground/70 leading-relaxed">
         {t("sweep.reuse_note", {
           personas: personaIds.length,
         })}

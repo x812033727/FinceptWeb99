@@ -498,7 +498,7 @@ export default function DiscussionPage() {
               </span>
             )}
             {(topicDirty || rulesDirty) && (
-              <span className="text-[10px] text-warning ml-auto shrink-0">
+              <span className="text-micro text-warning ml-auto shrink-0">
                 {t("discussion.unsaved")}
               </span>
             )}

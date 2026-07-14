@@ -25,7 +25,7 @@ export function CollapsibleHeader({
         aria-expanded={open}
         className="flex-1 flex items-start gap-2 text-left hover:opacity-80 transition-opacity"
       >
-        <span className="text-[10px] text-muted-foreground w-3 inline-block pt-1">
+        <span className="text-micro text-muted-foreground w-3 inline-block pt-1">
           {open ? "▼" : "▶"}
         </span>
         <div className="flex-1 min-w-0">

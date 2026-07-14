@@ -73,20 +73,20 @@ export function AutoPromoteSettings({
         <button
           type="button"
           onClick={() => setShowAdvanced((v) => !v)}
-          className="text-[10px] text-muted-foreground hover:text-foreground"
+          className="text-micro text-muted-foreground hover:text-foreground"
         >
           {showAdvanced
             ? t("discussion.auto_promote.hide_advanced")
             : t("discussion.auto_promote.show_advanced")}
         </button>
       </div>
-      <p className="text-[10px] text-muted-foreground leading-tight">
+      <p className="text-micro text-muted-foreground leading-tight">
         {t("discussion.auto_promote.subtitle")}
       </p>
 
       {showAdvanced && (
         <div className="grid grid-cols-2 gap-2 mt-1">
-          <label className="flex flex-col gap-0.5 text-[10px]">
+          <label className="flex flex-col gap-0.5 text-micro">
             <span className="text-muted-foreground">
               {t("discussion.auto_promote.min_brier_improvement")}
             </span>
@@ -101,7 +101,7 @@ export function AutoPromoteSettings({
                          text-[11px] tabular-nums"
             />
           </label>
-          <label className="flex flex-col gap-0.5 text-[10px]">
+          <label className="flex flex-col gap-0.5 text-micro">
             <span className="text-muted-foreground">
               {t("discussion.auto_promote.min_hit_rate")}
             </span>
@@ -125,7 +125,7 @@ export function AutoPromoteSettings({
             type="button"
             onClick={() => mut.mutate()}
             disabled={mut.isPending}
-            className="px-2 py-0.5 text-[10px] rounded bg-success text-white
+            className="px-2 py-0.5 text-micro rounded bg-success text-white
                        hover:bg-success/90 disabled:opacity-50"
           >
             {mut.isPending

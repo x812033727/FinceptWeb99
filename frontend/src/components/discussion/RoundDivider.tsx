@@ -37,7 +37,7 @@ export function RoundDivider({ round, turnCount, tokens, className }: RoundDivid
         {label}
       </span>
       {tokenLabel && (
-        <span className="px-2 py-1 rounded-full bg-card border border-border text-[10px] font-medium text-muted-foreground tracking-wide whitespace-nowrap tabular-nums">
+        <span className="px-2 py-1 rounded-full bg-card border border-border text-micro font-medium text-muted-foreground tracking-wide whitespace-nowrap tabular-nums">
           {tokenLabel}
         </span>
       )}

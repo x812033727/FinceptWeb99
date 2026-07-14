@@ -128,7 +128,7 @@ export function InjectForm({
         </select>
       )}
       <div className="flex items-center justify-between">
-        <span className="text-[10px] text-muted-foreground">
+        <span className="text-micro text-muted-foreground">
           {injectDraft.length}/2000
           <span className="ml-2 opacity-60">
             {t("discussion.inject_shortcut_hint")}
@@ -146,12 +146,12 @@ export function InjectForm({
       {mode === "running" &&
         interjectMut?.isSuccess &&
         interjectMut.data?.status === "queued" && (
-          <p className="text-[10px] text-success">
+          <p className="text-micro text-success">
             {t("discussion.interject_queued")}
           </p>
         )}
       {activeMut.isError && (
-        <p className="text-[10px] text-danger">
+        <p className="text-micro text-danger">
           {(activeMut.error as Error)?.message ?? t("common.error")}
         </p>
       )}

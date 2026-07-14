@@ -159,7 +159,7 @@ export function StrategyTimelineCard({
         <span className="w-3 inline-block">{open ? "▼" : "▶"}</span>
         {t("discussion.timeline.title", { days: windowDays })}
         {events.length > 0 && (
-          <span className="ml-1 text-[10px] text-muted-foreground">
+          <span className="ml-1 text-micro text-muted-foreground">
             · {events.length} {t("discussion.timeline.events_short")}
           </span>
         )}
@@ -254,7 +254,7 @@ export function StrategyTimelineCard({
               </ResponsiveContainer>
 
               {market && (regimeData?.bands ?? []).length > 0 && (
-                <label className="flex items-center gap-1 text-[10px] text-muted-foreground mt-1">
+                <label className="flex items-center gap-1 text-micro text-muted-foreground mt-1">
                   <input
                     type="checkbox"
                     checked={regimesOn}
@@ -294,7 +294,7 @@ function EventLegend({
   // Compact list under the chart so the operator sees what each
   // marker represents and can click for detail.
   return (
-    <ul className="flex flex-wrap gap-1.5 text-[10px]">
+    <ul className="flex flex-wrap gap-1.5 text-micro">
       {events.slice().reverse().slice(0, 12).map((ev, i) => (
         <li key={`leg-${i}`}>
           <button
@@ -343,12 +343,12 @@ function EventDetail({
         <button
           type="button"
           onClick={onClose}
-          className="text-[10px] text-muted-foreground hover:text-foreground"
+          className="text-micro text-muted-foreground hover:text-foreground"
         >
           {t("common.close")}
         </button>
       </div>
-      <dl className="space-y-0.5 text-[10px]">
+      <dl className="space-y-0.5 text-micro">
         {event.kind === "version_change" && (
           <>
             <div>

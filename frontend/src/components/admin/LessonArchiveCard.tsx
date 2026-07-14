@@ -106,7 +106,7 @@ export function LessonArchiveCard() {
                   className="border border-border rounded p-2 text-[11px] flex items-start justify-between gap-2"
                 >
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground mb-0.5">
+                    <div className="flex items-center gap-1.5 text-micro text-muted-foreground mb-0.5">
                       <span className="font-mono">{row.market}</span>
                       <span>·</span>
                       <span>{row.tier}</span>
@@ -135,7 +135,7 @@ export function LessonArchiveCard() {
                     type="button"
                     onClick={() => unarchiveMut.mutate(row.id)}
                     disabled={unarchiveMut.isPending}
-                    className="px-2 py-0.5 text-[10px] border border-border
+                    className="px-2 py-0.5 text-micro border border-border
                                text-muted-foreground rounded
                                hover:text-success hover:border-success/30
                                disabled:opacity-50 shrink-0"

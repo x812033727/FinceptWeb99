@@ -97,7 +97,7 @@ export default function GlobalSearch() {
               }`}
             >
               <span className="font-medium">{r.symbol}</span>
-              <span className="ml-auto text-muted-foreground text-[10px] border border-border rounded px-1">
+              <span className="ml-auto text-muted-foreground text-micro border border-border rounded px-1">
                 {r.market}
               </span>
             </button>

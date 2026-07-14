@@ -154,7 +154,7 @@ export function DiscussionLessonsCard() {
                       <span className="font-mono">{row.as_of_date}</span>
                       <span>·</span>
                       <span
-                        className={`px-1.5 py-0.5 rounded text-[10px] ${
+                        className={`px-1.5 py-0.5 rounded text-micro ${
                           CATEGORY_BADGE[row.category] ?? CATEGORY_BADGE.other
                         }`}
                       >
@@ -173,7 +173,7 @@ export function DiscussionLessonsCard() {
                   </p>
                   {(row.related_symbols.length > 0 ||
                     row.missed_winners.length > 0) && (
-                    <div className="flex flex-wrap gap-1 text-[10px] text-muted-foreground">
+                    <div className="flex flex-wrap gap-1 text-micro text-muted-foreground">
                       {row.related_symbols.length > 0 && (
                         <span>
                           {t("discussion_lessons.related")}:{" "}

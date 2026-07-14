@@ -247,7 +247,7 @@ function KpiTable({
       key: "tier",
       header: t("strategy_compare.col.tier"),
       render: (s) => (
-        <span className="text-muted-foreground text-[10px]">
+        <span className="text-muted-foreground text-micro">
           {s.maturity_tier ?? "—"}
         </span>
       ),

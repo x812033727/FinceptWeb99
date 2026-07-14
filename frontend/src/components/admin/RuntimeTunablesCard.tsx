@@ -67,22 +67,22 @@ function RuntimeSettingRow({ s }: { s: RuntimeSetting }) {
     <div className="grid grid-cols-[260px_1fr_120px_auto] items-start gap-2 py-2 border-b border-border/40 text-xs">
       <div>
         <div className="font-medium text-sm">{s.name}</div>
-        <div className="text-[10px] text-muted-foreground font-mono mt-0.5">{s.key}</div>
+        <div className="text-micro text-muted-foreground font-mono mt-0.5">{s.key}</div>
         {s.is_overridden && (
           <span className="inline-block mt-1 text-[9px] border border-warning/30 text-warning bg-warning/10 px-1 rounded">
             {t("personas.overridden")}
           </span>
         )}
         {auditLine && (
-          <div className="text-[10px] text-muted-foreground mt-1">{auditLine}</div>
+          <div className="text-micro text-muted-foreground mt-1">{auditLine}</div>
         )}
       </div>
       <div className="text-[11px] text-muted-foreground leading-snug">
         {s.description}
         {rangeHint && (
-          <span className="ml-1 text-[10px] font-mono">[{rangeHint}]</span>
+          <span className="ml-1 text-micro font-mono">[{rangeHint}]</span>
         )}
-        <div className="text-[10px] mt-1">
+        <div className="text-micro mt-1">
           {t("runtimeTunables.default")}：
           <span className="font-mono ml-1">{String(s.default_value)}</span>
         </div>
@@ -153,7 +153,7 @@ export function RuntimeTunablesCard() {
           {isLoading ? (
             <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>
           ) : (
-            <div className="grid grid-cols-[260px_1fr_120px_auto] gap-2 text-[10px] text-muted-foreground uppercase tracking-wider border-b border-border pb-1">
+            <div className="grid grid-cols-[260px_1fr_120px_auto] gap-2 text-micro text-muted-foreground uppercase tracking-wider border-b border-border pb-1">
               <span>{t("runtimeTunables.setting")}</span>
               <span>{t("runtimeTunables.description")}</span>
               <span>{t("runtimeTunables.value")}</span>

@@ -61,11 +61,11 @@ export function StreamingTurnCard({
           >
             {personaName}
           </p>
-          <p className="text-[10px] text-muted-foreground mt-0.5">
+          <p className="text-micro text-muted-foreground mt-0.5">
             {round != null ? `R${round}` : " "}
           </p>
         </div>
-        <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-primary/15 text-primary text-[10px] font-medium animate-pulse">
+        <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-primary/15 text-primary text-micro font-medium animate-pulse">
           <Sparkles className="h-3 w-3" aria-hidden="true" />
           {t("discussion.thinking_chip")}
         </span>

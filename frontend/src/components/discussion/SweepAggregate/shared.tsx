@@ -24,7 +24,7 @@ export function Tile({
   return (
     <div className="bg-secondary/30 border border-border rounded p-1.5">
       <p
-        className="text-[10px] text-muted-foreground uppercase tracking-wider"
+        className="text-micro text-muted-foreground uppercase tracking-wider"
         title={labelTip}
       >
         {label}

@@ -116,7 +116,7 @@ export function PersonasCard() {
           {isLoading ? (
             <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>
           ) : (
-            <div className="grid grid-cols-[200px_140px_1fr_auto] gap-2 text-[10px] text-muted-foreground uppercase tracking-wider border-b border-border pb-1">
+            <div className="grid grid-cols-[200px_140px_1fr_auto] gap-2 text-micro text-muted-foreground uppercase tracking-wider border-b border-border pb-1">
               <span>{t("personas.persona")}</span>
               <span>{t("personas.provider")}</span>
               <span>{t("personas.model")}</span>

@@ -91,6 +91,16 @@ export default tseslint.config(
           message:
             "Hardcoded red/green/emerald Tailwind classes are banned. Use text-up/text-down (market direction, flips with [data-market-colors]) or text-success/text-danger (status).",
         },
+        {
+          selector: "Literal[value=/text-\\[10px\\]/]",
+          message:
+            "Arbitrary text-[10px] is banned — use the `text-micro` role token (10px, tuned tracking) so the type scale stays unified.",
+        },
+        {
+          selector: "TemplateElement[value.cooked=/text-\\[10px\\]/]",
+          message:
+            "Arbitrary text-[10px] is banned — use the `text-micro` role token (10px, tuned tracking) so the type scale stays unified.",
+        },
       ],
     },
   },

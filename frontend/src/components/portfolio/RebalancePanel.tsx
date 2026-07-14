@@ -63,7 +63,7 @@ export default function RebalancePanel({ portfolioId }: { portfolioId: string })
       render: (tr) => (
         <span className="font-medium text-foreground">
           {tr.symbol}
-          <span className="ml-1.5 text-[10px] text-muted-foreground">{tr.market}</span>
+          <span className="ml-1.5 text-micro text-muted-foreground">{tr.market}</span>
         </span>
       ),
     },

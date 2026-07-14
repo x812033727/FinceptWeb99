@@ -77,7 +77,7 @@ export function SessionRowBody({ s }: { s: Discussion }) {
               <div key={ln.symbol} className="font-mono">
                 <span className={bandLabel?.cls ?? ""}>{ln.symbol}</span>
                 {bandLabel?.mark ? (
-                  <span className={`ml-1 text-[10px] ${bandLabel.cls}`}>
+                  <span className={`ml-1 text-micro ${bandLabel.cls}`}>
                     {bandLabel.mark}
                   </span>
                 ) : null}
@@ -95,7 +95,7 @@ export function SessionRowBody({ s }: { s: Discussion }) {
           })}
         </div>
       )}
-      <div className="mt-1 flex items-center gap-2 text-[10px] flex-wrap">
+      <div className="mt-1 flex items-center gap-2 text-micro flex-wrap">
         <DiscussionStatusBadge status={s.status} />
         <span className="text-muted-foreground">
           {s.as_of_date

@@ -47,14 +47,14 @@ export function StrategyRow({
         <div className="min-w-0">
           <p className="text-xs font-semibold text-foreground truncate">
             {strategy.name}
-            <span className="ml-2 text-[10px] text-muted-foreground">
+            <span className="ml-2 text-micro text-muted-foreground">
               {strategy.market} · {strategy.persona_ids.length}{" "}
               {t("strategy.personas", "專家")} · r={strategy.default_rounds}
               · c={strategy.default_concurrency}
             </span>
             {strategy.auto_schedule_enabled ? (
               <span
-                className="ml-2 inline-flex items-center gap-1 text-[10px] bg-success/15 text-success border border-success/30 rounded px-1 py-0.5"
+                className="ml-2 inline-flex items-center gap-1 text-micro bg-success/15 text-success border border-success/30 rounded px-1 py-0.5"
                 title={t(
                   "strategy.auto_schedule_active_tip",
                   "每 {{h}}h 自動掃 {{n}} 日（offset {{off}}）",
@@ -101,7 +101,7 @@ export function StrategyRow({
             .map(([pid, w]) => (
               <span
                 key={pid}
-                className="text-[10px] bg-success/10 text-success border border-success/30 rounded px-1.5 py-0.5 font-mono"
+                className="text-micro bg-success/10 text-success border border-success/30 rounded px-1.5 py-0.5 font-mono"
                 title={t("strategy.weight_tooltip", "PR-C 學到的權重")}
               >
                 {pid}: {w.toFixed(2)}
@@ -109,7 +109,7 @@ export function StrategyRow({
             ))}
         </div>
       ) : null}
-      <div className="flex items-center gap-3 text-[10px]">
+      <div className="flex items-center gap-3 text-micro">
         <button
           type="button"
           onClick={() => setShowAggregate((v) => !v)}
@@ -164,8 +164,8 @@ export function StrategyRow({
       {learnResult ? (
         <p className={
           learnResult.updated
-            ? "text-[10px] text-success"
-            : "text-[10px] text-warning"
+            ? "text-micro text-success"
+            : "text-micro text-warning"
         }>
           {learnResult.updated
             ? t("strategy.learn_done",
@@ -176,7 +176,7 @@ export function StrategyRow({
         </p>
       ) : null}
       {learnMut.error ? (
-        <p className="text-[10px] text-danger">
+        <p className="text-micro text-danger">
           {(learnMut.error as { response?: { data?: { detail?: string } } })
             ?.response?.data?.detail ?? (learnMut.error as Error).message}
         </p>

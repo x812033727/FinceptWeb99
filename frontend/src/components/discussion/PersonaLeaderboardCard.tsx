@@ -217,7 +217,7 @@ function Row({
       </td>
       <td className={`py-1 text-right tabular-nums ${winRateColor}`}>
         {winRatePct}
-        <span className="text-muted-foreground text-[10px] ml-1">
+        <span className="text-muted-foreground text-micro ml-1">
           ({row.win_attribution_count}/{row.participation_count})
         </span>
       </td>
@@ -242,7 +242,7 @@ function Row({
       <td className="py-1 text-right">
         {row.frozen_in_strategies > 0 && (
           <span
-            className="inline-flex items-center gap-0.5 text-[10px] mr-1 text-zinc-400"
+            className="inline-flex items-center gap-0.5 text-micro mr-1 text-zinc-400"
             title="frozen in N strategies"
           >
             <Snowflake size={10} aria-hidden="true" />{row.frozen_in_strategies}
@@ -250,14 +250,14 @@ function Row({
         )}
         {row.shadow_in_strategies > 0 && (
           <span
-            className="inline-flex items-center gap-0.5 text-[10px] text-purple-300"
+            className="inline-flex items-center gap-0.5 text-micro text-purple-300"
             title="shadow in N strategies"
           >
             <Ghost size={10} aria-hidden="true" />{row.shadow_in_strategies}
           </span>
         )}
         {row.frozen_in_strategies === 0 && row.shadow_in_strategies === 0 && (
-          <span className="text-muted-foreground text-[10px]">—</span>
+          <span className="text-muted-foreground text-micro">—</span>
         )}
       </td>
     </tr>

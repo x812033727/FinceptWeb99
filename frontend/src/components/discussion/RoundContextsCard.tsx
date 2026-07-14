@@ -122,7 +122,7 @@ function RoundContextRow({ snap }: { snap: RoundContextSnapshot }) {
         </span>
         <div className="flex items-center gap-1.5 flex-wrap">
           <CapturedSessionInline session={capturedSession} />
-          <span className="text-[10px] text-muted-foreground">
+          <span className="text-micro text-muted-foreground">
             {formatTaipei(snap.captured_at, "datetime")}
           </span>
         </div>
@@ -143,7 +143,7 @@ function RoundContextRow({ snap }: { snap: RoundContextSnapshot }) {
       </div>
       {snap.digest && (
         <div className="mt-1 rounded border border-primary/25 bg-primary/5 p-1.5">
-          <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary/80">
+          <div className="mb-0.5 text-micro font-semibold uppercase tracking-wider text-primary/80">
             {t("discussion.round_digest_label", "本輪摘要")}
           </div>
           <p className="text-[11px] leading-relaxed text-foreground/90 whitespace-pre-line">
@@ -154,7 +154,7 @@ function RoundContextRow({ snap }: { snap: RoundContextSnapshot }) {
       <button
         type="button"
         onClick={() => setShowJson((v) => !v)}
-        className="text-[10px] text-muted-foreground hover:text-primary"
+        className="text-micro text-muted-foreground hover:text-primary"
       >
         {showJson
           ? t("discussion.context_hide_json")
@@ -162,10 +162,10 @@ function RoundContextRow({ snap }: { snap: RoundContextSnapshot }) {
       </button>
       {showJson && (
         <>
-          <div className="mt-1 text-[10px] text-muted-foreground">
+          <div className="mt-1 text-micro text-muted-foreground">
             {t("discussion.context_json_timezone_note")}
           </div>
-          <pre className="mt-1 text-[10px] bg-card/40 border border-border rounded p-2 overflow-x-auto max-h-64 leading-tight">
+          <pre className="mt-1 text-micro bg-card/40 border border-border rounded p-2 overflow-x-auto max-h-64 leading-tight">
             {JSON.stringify(taipeiContext, null, 2)}
           </pre>
         </>
@@ -201,22 +201,22 @@ export function RoundContextsCard({ discussionId }: { discussionId: string }) {
         </span>
         {t("discussion.context_replay_title")}
         {snaps.length > 0 && (
-          <span className="ml-auto text-[10px] text-muted-foreground">
+          <span className="ml-auto text-micro text-muted-foreground">
             {t("discussion.context_replay_count", { n: snaps.length })}
           </span>
         )}
       </button>
       {open && (
         <div className="mt-2 space-y-2">
-          <p className="text-[10px] text-muted-foreground leading-relaxed">
+          <p className="text-micro text-muted-foreground leading-relaxed">
             {t("discussion.context_replay_subtitle")}
           </p>
           {isLoading ? (
-            <p className="text-[10px] text-muted-foreground animate-pulse">
+            <p className="text-micro text-muted-foreground animate-pulse">
               …
             </p>
           ) : snaps.length === 0 ? (
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-micro text-muted-foreground">
               {t("discussion.context_replay_empty")}
             </p>
           ) : (

@@ -60,7 +60,7 @@ function NewsList({ items }: { items: NewsItem[] }) {
                 </span>
                 {badge && (
                   <span
-                    className={`px-1.5 py-0.5 rounded border text-[10px] ${badge.cls}`}
+                    className={`px-1.5 py-0.5 rounded border text-micro ${badge.cls}`}
                   >
                     {t(badge.labelKey)}
                   </span>
@@ -211,7 +211,7 @@ function AnnouncementsList({ items }: { items: AnnouncementItem[] }) {
               <span className="font-mono tabular-nums text-primary">
                 {item.symbol}
               </span>
-              <span className="px-1.5 py-0.5 rounded bg-muted/30 text-muted-foreground border border-border text-[10px]">
+              <span className="px-1.5 py-0.5 rounded bg-muted/30 text-muted-foreground border border-border text-micro">
                 {item.category}
               </span>
             </div>
@@ -226,7 +226,7 @@ function AnnouncementsList({ items }: { items: AnnouncementItem[] }) {
               </span>
               {badge && (
                 <span
-                  className={`px-1.5 py-0.5 rounded border text-[10px] ${badge.cls}`}
+                  className={`px-1.5 py-0.5 rounded border text-micro ${badge.cls}`}
                 >
                   {t(badge.labelKey)}
                 </span>

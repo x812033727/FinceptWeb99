@@ -124,7 +124,7 @@ export function RedeployCard() {
       {open && (
         <div className="space-y-3">
           {/* Phase step indicator */}
-          <div className="flex flex-wrap items-center gap-1 text-[10px]">
+          <div className="flex flex-wrap items-center gap-1 text-micro">
             {PHASE_ORDER.map((p, idx) => {
               const reached =
                 PHASE_ORDER.indexOf(phase as DeployPhase) >= idx ||
@@ -207,7 +207,7 @@ export function RedeployCard() {
                 </button>
               )}
               {showLog && data.log_tail && (
-                <pre className="mt-1 max-h-48 overflow-auto rounded bg-black/30 p-2 font-mono text-[10px] text-danger whitespace-pre-wrap">
+                <pre className="mt-1 max-h-48 overflow-auto rounded bg-black/30 p-2 font-mono text-micro text-danger whitespace-pre-wrap">
                   {data.log_tail.join("\n")}
                 </pre>
               )}

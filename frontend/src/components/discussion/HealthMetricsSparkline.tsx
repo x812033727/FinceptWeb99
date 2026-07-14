@@ -154,7 +154,7 @@ export function HealthMetricsSparkline({
           />
         </LineChart>
       </ResponsiveContainer>
-      <div className="flex items-center justify-end gap-3 text-[10px] text-muted-foreground mt-0.5">
+      <div className="flex items-center justify-end gap-3 text-micro text-muted-foreground mt-0.5">
         <span className="flex items-center gap-1">
           <span className="inline-block w-2 h-2 rounded-full" style={{ background: "hsl(var(--chart-2))" }} />
           {t("discussion.health.brier")}

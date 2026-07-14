@@ -22,14 +22,14 @@ function ScoreboardRowView({ row }: { row: ScoreboardRow }) {
         {row.name ? (
           <span className="flex flex-col leading-tight">
             <span className="text-sm text-foreground">{row.name}</span>
-            <span className="font-mono text-[10px] text-muted-foreground">
+            <span className="font-mono text-micro text-muted-foreground">
               {row.symbol}
             </span>
           </span>
         ) : (
           <span className="font-mono text-sm text-foreground">{row.symbol}</span>
         )}
-        <span className="text-[10px] text-muted-foreground">
+        <span className="text-micro text-muted-foreground">
           {t("discussion.scoreboard_day1_open")}：
           <span className="font-mono ml-1 text-foreground/80">
             {row.day1_open !== null ? toFixedSmart(row.day1_open) : "—"}
@@ -40,7 +40,7 @@ function ScoreboardRowView({ row }: { row: ScoreboardRow }) {
         {row.change_pcts.map((pct, i) => (
           <div
             key={i}
-            className="text-center text-[10px] border border-border/40 rounded px-1 py-1"
+            className="text-center text-micro border border-border/40 rounded px-1 py-1"
           >
             <div className="text-muted-foreground">D{i + 1}</div>
             <div className={`font-mono font-semibold ${pctClass(pct)}`}>
@@ -55,7 +55,7 @@ function ScoreboardRowView({ row }: { row: ScoreboardRow }) {
         ))}
       </div>
       {row.days_resolved < 5 && (
-        <p className="text-[10px] text-muted-foreground/80">
+        <p className="text-micro text-muted-foreground/80">
           {t("discussion.scoreboard_pending", {
             resolved: row.days_resolved,
           })}
@@ -122,30 +122,30 @@ export function ScoreboardCard({
         </span>
         {t("discussion.scoreboard_title")}
         {data && data.rows.length > 0 && (
-          <span className="ml-auto text-[10px] text-muted-foreground">
+          <span className="ml-auto text-micro text-muted-foreground">
             {t("discussion.scoreboard_count", { n: data.rows.length })}
           </span>
         )}
       </button>
       {open && (
         <div className="mt-2 space-y-2">
-          <p className="text-[10px] text-muted-foreground leading-relaxed">
+          <p className="text-micro text-muted-foreground leading-relaxed">
             {t("discussion.scoreboard_subtitle")}
           </p>
           {!hasConclusion ? (
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-micro text-muted-foreground">
               {t("discussion.scoreboard_no_conclusion")}
             </p>
           ) : isLoading ? (
-            <p className="text-[10px] text-muted-foreground animate-pulse">
+            <p className="text-micro text-muted-foreground animate-pulse">
               …
             </p>
           ) : isError ? (
-            <p className="text-[10px] text-danger">
+            <p className="text-micro text-danger">
               {(error as Error)?.message || t("discussion.scoreboard_error")}
             </p>
           ) : !data || data.rows.length === 0 ? (
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-micro text-muted-foreground">
               {t("discussion.scoreboard_empty")}
             </p>
           ) : (
@@ -156,26 +156,26 @@ export function ScoreboardCard({
               <button
                 type="button"
                 onClick={() => setDebugOpen((v) => !v)}
-                className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                className="text-micro text-muted-foreground hover:text-foreground transition-colors"
               >
                 {debugOpen ? "▼" : "▶"} debug
               </button>
               {debugOpen && (
                 <div className="mt-1">
                   {debugQuery.isLoading ? (
-                    <p className="text-[10px] text-muted-foreground animate-pulse">
+                    <p className="text-micro text-muted-foreground animate-pulse">
                       loading debug payload…
                     </p>
                   ) : debugQuery.isError ? (
-                    <p className="text-[10px] text-danger">
+                    <p className="text-micro text-danger">
                       {(debugQuery.error as Error)?.message || "debug fetch failed"}
                     </p>
                   ) : debugQuery.data?.debug ? (
-                    <pre className="text-[10px] font-mono leading-tight whitespace-pre-wrap break-all bg-muted/40 border border-border/60 rounded p-2 max-h-96 overflow-auto">
+                    <pre className="text-micro font-mono leading-tight whitespace-pre-wrap break-all bg-muted/40 border border-border/60 rounded p-2 max-h-96 overflow-auto">
                       {JSON.stringify(debugQuery.data.debug, null, 2)}
                     </pre>
                   ) : (
-                    <p className="text-[10px] text-muted-foreground">
+                    <p className="text-micro text-muted-foreground">
                       (no debug payload returned)
                     </p>
                   )}

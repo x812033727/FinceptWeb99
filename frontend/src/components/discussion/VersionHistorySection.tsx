@@ -65,7 +65,7 @@ export function VersionHistorySection({ strategyId }: { strategyId: string }) {
       header: t("discussion.versions.col.kind"),
       render: (v) => (
         <span
-          className={`px-1.5 py-0.5 text-[10px] rounded border ${
+          className={`px-1.5 py-0.5 text-micro rounded border ${
             v.artifact_kind === "weights"
               ? "border-blue-700/40 text-blue-300"
               : "border-purple-700/40 text-purple-300"
@@ -95,7 +95,7 @@ export function VersionHistorySection({ strategyId }: { strategyId: string }) {
       header: t("discussion.versions.col.status"),
       render: (v) => (
         <span
-          className={`text-[10px] ${
+          className={`text-micro ${
             v.status === "active"
               ? "text-success"
               : v.status === "rolled_back"
@@ -117,7 +117,7 @@ export function VersionHistorySection({ strategyId }: { strategyId: string }) {
             type="button"
             onClick={() => rollbackMut.mutate(v.id)}
             disabled={rollbackMut.isPending}
-            className="px-2 py-0.5 text-[10px] border border-border
+            className="px-2 py-0.5 text-micro border border-border
                        text-muted-foreground rounded
                        hover:text-warning hover:border-warning/30
                        disabled:opacity-50"
@@ -148,7 +148,7 @@ export function VersionHistorySection({ strategyId }: { strategyId: string }) {
                 key={k}
                 type="button"
                 onClick={() => setKindFilter(k)}
-                className={`px-2 py-0.5 text-[10px] rounded border ${
+                className={`px-2 py-0.5 text-micro rounded border ${
                   kindFilter === k
                     ? "bg-primary/20 text-primary border-primary/40"
                     : "border-border text-muted-foreground hover:text-foreground"

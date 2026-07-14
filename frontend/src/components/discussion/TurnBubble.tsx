@@ -99,12 +99,12 @@ export function TurnBubble({
           >
             {name}
           </p>
-          <p className="text-[10px] text-muted-foreground mt-0.5">
+          <p className="text-micro text-muted-foreground mt-0.5">
             R{turn.round}
           </p>
         </div>
         {injectedBadgeKey && (
-          <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] border bg-warning/10 text-warning border-warning/30 self-center">
+          <span className="shrink-0 px-1.5 py-0.5 rounded-full text-micro border bg-warning/10 text-warning border-warning/30 self-center">
             {t(injectedBadgeKey)}
           </span>
         )}

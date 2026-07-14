@@ -128,12 +128,12 @@ function PersonaGroupBlock({
         <div className="min-w-0 flex-1">
           <div className="text-[11px] font-semibold text-foreground uppercase tracking-wide flex items-center gap-1.5">
             <span className="truncate">{t(`personas.groups.${groupId}.title`)}</span>
-            <span className="text-[10px] text-muted-foreground font-normal normal-case">
+            <span className="text-micro text-muted-foreground font-normal normal-case">
               ({agents.length})
             </span>
           </div>
           {open && (
-            <div className="text-[10px] text-muted-foreground leading-snug mt-0.5">
+            <div className="text-micro text-muted-foreground leading-snug mt-0.5">
               {t(`personas.groups.${groupId}.hint`)}
             </div>
           )}

@@ -83,7 +83,7 @@ export default function LessonLibraryPage() {
               ? "bg-emerald-900/40 text-emerald-200 border-emerald-700/50"
               : "bg-blue-900/40 text-blue-200 border-blue-700/50";
         return (
-          <span className={`inline-block px-1.5 py-0.5 text-[10px] rounded border ${tierTone}`}>
+          <span className={`inline-block px-1.5 py-0.5 text-micro rounded border ${tierTone}`}>
             {row.tier}
           </span>
         );
@@ -92,7 +92,7 @@ export default function LessonLibraryPage() {
     {
       key: "category",
       header: "category",
-      cellClassName: "align-top text-[10px] text-muted-foreground",
+      cellClassName: "align-top text-micro text-muted-foreground",
       render: (row) => row.category,
     },
     {
@@ -103,7 +103,7 @@ export default function LessonLibraryPage() {
         <>
           <div className="break-words">{row.lesson_text}</div>
           {(row.related_symbols.length > 0 || row.missed_winners.length > 0) && (
-            <div className="text-[10px] text-muted-foreground mt-0.5">
+            <div className="text-micro text-muted-foreground mt-0.5">
               {row.related_symbols.length > 0 && (
                 <span>related: {row.related_symbols.join(", ")}</span>
               )}
@@ -282,7 +282,7 @@ function FilterField({
 }) {
   return (
     <label className="flex flex-col gap-0.5">
-      <span className="text-[10px] text-muted-foreground">{label}</span>
+      <span className="text-micro text-muted-foreground">{label}</span>
       {children}
     </label>
   );

@@ -84,7 +84,7 @@ function CompareGrid({
   }
   return (
     <div className="space-y-1">
-      <div className="grid grid-cols-3 gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+      <div className="grid grid-cols-3 gap-1 text-micro uppercase tracking-wider text-muted-foreground">
         <div>{t("aggregate.compare_metric", "指標")}</div>
         <div className="text-center">
           <span className="inline-flex items-center justify-center gap-1">
@@ -124,7 +124,7 @@ function CompareGrid({
         test={testAgg.avg_pnl_pct[4] ?? null}
         format="signed_percent"
       />
-      <p className="text-[10px] text-muted-foreground mt-1">
+      <p className="text-micro text-muted-foreground mt-1">
         {t(
           "aggregate.compare_overfitting_tip",
           "Train < Test 差距愈大 = 模型在 train 折擬合了雜訊。" +

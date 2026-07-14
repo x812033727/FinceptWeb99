@@ -76,7 +76,7 @@ function SweepProgressRow({
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-baseline gap-2 min-w-0">
           <span
-            className={`px-1.5 py-0.5 rounded border text-[10px] uppercase tracking-wider ${STATUS_COLORS[sweep.status]}`}
+            className={`px-1.5 py-0.5 rounded border text-micro uppercase tracking-wider ${STATUS_COLORS[sweep.status]}`}
           >
             {sweep.status}
           </span>
@@ -135,7 +135,7 @@ function SweepProgressRow({
           style={{ width: `${pct}%` }}
         />
       </div>
-      <div className="flex justify-between text-[10px] text-muted-foreground tabular-nums">
+      <div className="flex justify-between text-micro text-muted-foreground tabular-nums">
         <span>
           {t("sweep.completed_label")}: {done}/{total}
           {failed > 0 ? (
@@ -156,12 +156,12 @@ function SweepProgressRow({
       </div>
 
       {sweep.error_message ? (
-        <p className="text-[10px] text-danger">
+        <p className="text-micro text-danger">
           {t("sweep.error_label")}: {sweep.error_message}
         </p>
       ) : null}
       {failed > 0 ? (
-        <details className="text-[10px] text-muted-foreground">
+        <details className="text-micro text-muted-foreground">
           <summary className="cursor-pointer">
             {t("sweep.failed_dates_summary", { count: failed })}
           </summary>
@@ -183,7 +183,7 @@ function SweepProgressRow({
           <button
             type="button"
             onClick={() => setShowAggregate((v) => !v)}
-            className="text-[10px] text-primary hover:text-primary/80"
+            className="text-micro text-primary hover:text-primary/80"
           >
             {showAggregate
               ? t("sweep.hide_aggregate", "▼ 收起聚合儀表板")

@@ -76,14 +76,12 @@ const NAV_GROUPS: NavGroupDef[] = [
     ],
   },
   {
-    key: "data",
-    labelKey: "nav.group.data",
-    items: [{ to: "/finmind", labelKey: "nav.finmind", Icon: Database }],
-  },
-  {
     key: "system",
     labelKey: "nav.group.system",
     items: [
+      // Finmind folded in from the former single-item `data` group (W1
+      // IA change: a one-item collapsible group was navigation noise).
+      { to: "/finmind", labelKey: "nav.finmind", Icon: Database },
       { to: "/settings", labelKey: "nav.settings", Icon: Settings },
       { to: "/admin", labelKey: "nav.admin", Icon: Shield, adminOnly: true },
     ],
@@ -103,15 +101,27 @@ function NavItem({ item, onNavigate }: { item: NavItemDef; onNavigate?: () => vo
       onTouchStart={prefetch}
       className={({ isActive }) =>
         cn(
-          "flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors min-h-[36px]",
+          "relative flex items-center gap-2.5 px-3 py-2 rounded-md text-data transition-colors min-h-[36px]",
           isActive
             ? "bg-primary/15 text-primary font-medium"
             : "text-muted-foreground hover:text-foreground hover:bg-accent/10"
         )
       }
     >
-      <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-      {t(item.labelKey)}
+      {({ isActive }) => (
+        <>
+          {/* Active left accent bar — the signature "top-tier terminal"
+              rail-nav tell, on top of the existing fill. */}
+          {isActive && (
+            <span
+              aria-hidden="true"
+              className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary"
+            />
+          )}
+          <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+          {t(item.labelKey)}
+        </>
+      )}
     </NavLink>
   );
 }
@@ -132,7 +142,7 @@ function NavGroup({ group, visibleItems, defaultOpen, onNavigate }: NavGroupProp
         type="button"
         onClick={toggle}
         aria-expanded={open}
-        className="w-full flex items-center justify-between px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors min-h-[28px]"
+        className="w-full flex items-center justify-between px-3 py-1.5 text-label font-semibold uppercase text-muted-foreground hover:text-foreground transition-colors min-h-[28px]"
       >
         <span>{t(group.labelKey)}</span>
         {open ? (
@@ -163,7 +173,8 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
-  const role = useAuthStore((s) => s.user?.role);
+  const user = useAuthStore((s) => s.user);
+  const role = user?.role;
 
   // Pin all destinations the user might tap so the chunk is warm by the
   // time the drawer animation finishes. Cheap (cached) once fired.
@@ -235,10 +246,22 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
           })}
         </nav>
 
-        <div className="border-t border-border p-3">
+        <div className="border-t border-border-subtle p-3 space-y-2">
+          {user?.email && (
+            <div className="px-1 flex items-center gap-2 min-w-0">
+              <span className="truncate text-micro text-muted-foreground" title={user.email}>
+                {user.email}
+              </span>
+              {role && (
+                <span className="shrink-0 rounded px-1.5 py-0.5 text-micro font-medium uppercase bg-primary/12 text-primary border border-primary/25">
+                  {role}
+                </span>
+              )}
+            </div>
+          )}
           <button
             onClick={handleLogout}
-            className="w-full text-left px-3 py-2 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-accent/10 transition-colors min-h-[36px]"
+            className="w-full text-left px-3 py-2 rounded-md text-data text-muted-foreground hover:text-foreground hover:bg-accent/10 transition-colors min-h-[36px]"
           >
             {t("nav.sign_out")}
           </button>

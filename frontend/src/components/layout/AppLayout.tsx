@@ -266,7 +266,7 @@ export default function AppLayout() {
     <div className="flex min-h-screen bg-background">
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <div className="h-10 border-b border-border flex items-center gap-2 sm:gap-3 px-3 sm:px-4 shrink-0">
+        <div className="h-11 border-b border-border-subtle shadow-highlight flex items-center gap-2 sm:gap-3 px-3 sm:px-4 shrink-0">
           <MenuButton onOpen={() => setSidebarOpen(true)} />
           <GlobalSearch />
           <PaletteHint />
@@ -287,7 +287,7 @@ export default function AppLayout() {
             <MoreMenu />
           </div>
         </div>
-        <main className="flex-1 overflow-auto pb-[calc(env(safe-area-inset-bottom)+3.5rem)] lg:pb-0">
+        <main className="flex-1 overflow-auto pb-[calc(env(safe-area-inset-bottom)+var(--nav-h))] lg:pb-0">
           <Outlet />
         </main>
       </div>

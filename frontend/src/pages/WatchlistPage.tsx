@@ -255,7 +255,7 @@ function WatchlistCard({ wl }: { wl: Watchlist }) {
   });
 
   return (
-    <div className="bg-card border border-border rounded-lg overflow-hidden">
+    <div className="bg-card shadow-highlight border border-border rounded-lg overflow-hidden">
       {/* header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <button
@@ -322,10 +322,10 @@ export default function WatchlistPage() {
   });
 
   return (
-    <div className="p-4 sm:p-6 space-y-5 sm:space-y-6">
+    <div className="p-gutter sm:p-page space-y-stack sm:space-y-section">
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
         <div>
-          <h1 className="text-xl sm:text-2xl font-bold text-foreground">{t("watchlist.title")}</h1>
+          <h1 className="text-title font-bold text-foreground">{t("watchlist.title")}</h1>
           <p className="text-xs sm:text-sm text-muted-foreground mt-1">{t("watchlist.live_prices")}</p>
         </div>
         <form
@@ -351,7 +351,7 @@ export default function WatchlistPage() {
       {isLoading ? (
         <div className="text-muted-foreground text-sm animate-pulse">{t("common.loading")}</div>
       ) : watchlists.length === 0 ? (
-        <div className="bg-card border border-border rounded-lg p-8 text-center text-muted-foreground text-sm">
+        <div className="bg-card shadow-highlight border border-border rounded-lg p-8 text-center text-muted-foreground text-sm">
           {t("watchlist.no_lists")}
         </div>
       ) : (

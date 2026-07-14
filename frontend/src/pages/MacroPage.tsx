@@ -171,11 +171,11 @@ export default function MacroPage() {
   }
 
   return (
-    <div className="p-4 sm:p-6 space-y-5 sm:space-y-6">
+    <div className="p-gutter sm:p-page space-y-stack sm:space-y-section">
       {/* header */}
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
         <div>
-          <h1 className="text-xl sm:text-2xl font-bold text-foreground">{t("macro.title")}</h1>
+          <h1 className="text-title font-bold text-foreground">{t("macro.title")}</h1>
           <p className="text-xs sm:text-sm text-muted-foreground mt-1">
             {t("macro.subtitle")}
           </p>
@@ -207,7 +207,7 @@ export default function MacroPage() {
       </div>
 
       {/* main chart */}
-      <div className="bg-card border border-border rounded-lg p-5">
+      <div className="bg-card shadow-highlight border border-border rounded-lg p-5">
         <MacroChart
           indicator={activeLabel}
           data={activeData}

@@ -92,7 +92,7 @@ export function DividendsPanel({ symbol, currentPrice }: { symbol: string; curre
             {lastPayout ? lastPayout.cash_dividend.toFixed(3) : "—"}
           </div>
           {lastPayout?.ex_date && (
-            <div className="text-[10px] text-muted-foreground mt-0.5">{t("stock.dividends.ex_date")}: {lastPayout.ex_date}</div>
+            <div className="text-micro text-muted-foreground mt-0.5">{t("stock.dividends.ex_date")}: {lastPayout.ex_date}</div>
           )}
         </div>
         <div className="bg-background border border-border rounded p-3">

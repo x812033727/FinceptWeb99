@@ -37,7 +37,7 @@ export function MobileHeader({
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium text-foreground truncate">{activeTitle}</p>
         {detail && (
-          <p className="text-[10px] text-muted-foreground flex items-center gap-1.5">
+          <p className="text-micro text-muted-foreground flex items-center gap-1.5">
             <DiscussionStatusBadge status={detail.status} />
             <span>R{detail.current_round}</span>
             {detail.as_of_date && <span>· {t("discussion.session_backtest_prefix", { date: detail.as_of_date })}</span>}

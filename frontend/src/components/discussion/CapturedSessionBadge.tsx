@@ -59,9 +59,9 @@ export function CapturedSessionBadge({
             → {t("discussion.captured_session_entry")} {decision_date}
           </span>
         )}
-        <span className="text-[10px] uppercase opacity-80">{phaseLabel}</span>
+        <span className="text-micro uppercase opacity-80">{phaseLabel}</span>
         {is_intraday && (
-          <span className="text-[10px] uppercase opacity-80">
+          <span className="text-micro uppercase opacity-80">
             · {t("discussion.captured_session_intraday")}
           </span>
         )}
@@ -112,7 +112,7 @@ export function CapturedSessionInline({
   );
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded border ${tone} px-1.5 py-0.5 text-[10px] leading-tight`}
+      className={`inline-flex items-center gap-1 rounded border ${tone} px-1.5 py-0.5 text-micro leading-tight`}
     >
       <Calendar className="h-3 w-3 shrink-0" aria-hidden="true" />
       {session_date && <span className="font-mono">{session_date}</span>}

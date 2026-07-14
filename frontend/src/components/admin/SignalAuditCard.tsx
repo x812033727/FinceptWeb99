@@ -87,7 +87,7 @@ function Sparkline({
   height?: number;
 }) {
   if (!points || points.length < 2) {
-    return <span className="text-[10px] text-muted-foreground/60">—</span>;
+    return <span className="text-micro text-muted-foreground/60">—</span>;
   }
   const xs = points.map((_, i) => (i / (points.length - 1)) * width);
   const ys = points.map((p) => height - p.citation_rate * height);
@@ -293,7 +293,7 @@ export function SignalAuditCard() {
               )}
 
               <div className="space-y-1.5">
-                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">
+                <p className="text-micro text-muted-foreground uppercase tracking-wider">
                   {t("signal_audit.coverage_title")}
                 </p>
                 <ul className="space-y-1">

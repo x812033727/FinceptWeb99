@@ -140,7 +140,7 @@ function CommandPaletteDialog() {
                   onMouseEnter={() => prefetchPage(`/stock/${r.market}/${r.symbol}`)}
                 >
                   <span className="font-medium">{r.symbol}</span>
-                  <span className="ml-auto text-[10px] border border-border rounded px-1 text-muted-foreground">
+                  <span className="ml-auto text-micro border border-border rounded px-1 text-muted-foreground">
                     {r.market}
                   </span>
                 </CommandItem>

@@ -61,7 +61,7 @@ export function IssueKeyForm({
         />
         {ownerEmail.trim().length > 0 &&
           !EMAIL_RE.test(ownerEmail.trim()) && (
-            <span className="mt-0.5 text-[10px] text-destructive">
+            <span className="mt-0.5 text-micro text-destructive">
               Invalid email format
             </span>
           )}

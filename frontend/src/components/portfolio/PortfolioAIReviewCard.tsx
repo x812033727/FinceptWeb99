@@ -249,7 +249,7 @@ export function PortfolioAIReviewCard({ portfolioId }: { portfolioId: string }) 
       ) : null}
 
       {!streaming && content && (
-        <p className="text-[10px] text-muted-foreground border-t border-border pt-2">
+        <p className="text-micro text-muted-foreground border-t border-border pt-2">
           {t("portfolio.ai_review.disclaimer")} · {t("portfolio.ai_review.not_saved")}
         </p>
       )}

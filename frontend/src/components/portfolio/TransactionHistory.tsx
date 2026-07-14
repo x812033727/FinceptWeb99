@@ -83,7 +83,7 @@ export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
       render: (tx) => (
         <>
           {(tx.quantity * tx.price).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-          <span className="ml-1 text-[10px] opacity-60">{tx.market === "TW" ? "TWD" : "USD"}</span>
+          <span className="ml-1 text-micro opacity-60">{tx.market === "TW" ? "TWD" : "USD"}</span>
         </>
       ),
     },

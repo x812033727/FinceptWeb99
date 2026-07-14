@@ -126,7 +126,7 @@ export function StrategyFormBlock({
       </label>
 
       <fieldset className="border border-border rounded p-2 mt-1 space-y-1.5">
-        <legend className="text-[10px] text-muted-foreground uppercase tracking-wider px-1">
+        <legend className="text-micro text-muted-foreground uppercase tracking-wider px-1">
           {t("strategy.auto_schedule", "自動排程（PR-D）")}
         </legend>
         <label className="flex items-center gap-2">

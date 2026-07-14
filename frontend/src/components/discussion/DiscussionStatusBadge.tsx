@@ -20,7 +20,7 @@ export function DiscussionStatusBadge({ status, className }: { status: Status; c
   return (
     <span
       className={cn(
-        "inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] uppercase tracking-wider",
+        "inline-flex items-center px-1.5 py-0.5 rounded border text-micro uppercase tracking-wider",
         cls,
         className
       )}

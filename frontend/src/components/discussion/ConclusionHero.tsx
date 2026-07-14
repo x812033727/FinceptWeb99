@@ -55,7 +55,7 @@ export function ConclusionHero({
     <div className={cn("space-y-3", className)}>
       {conclusion.recommended_symbols.length > 0 && (
         <div>
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">
+          <p className="text-micro uppercase tracking-wider text-muted-foreground mb-1.5">
             {t("discussion.recommended_symbols")}
           </p>
           <div className="flex flex-wrap gap-1.5">
@@ -109,7 +109,7 @@ export function ConclusionHero({
 
       {conclusion.risks.length > 0 && (
         <div>
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">
+          <p className="text-micro uppercase tracking-wider text-muted-foreground mb-1.5">
             {t("discussion.risks")}
           </p>
           <ul className="space-y-1">

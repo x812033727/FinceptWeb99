@@ -217,7 +217,7 @@ export default function FinmindKeysCard() {
                 disablePlanMutation.mutate(p.code);
               }
             }}
-            className="rounded border border-destructive px-1.5 py-0.5 text-[10px] text-destructive hover:bg-destructive/10"
+            className="rounded border border-destructive px-1.5 py-0.5 text-micro text-destructive hover:bg-destructive/10"
           >
             Disable
           </button>
@@ -244,7 +244,7 @@ export default function FinmindKeysCard() {
       header: "Plan",
       render: (k) =>
         k.plan_code ? (
-          <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">
+          <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-micro">
             {k.plan_code}
           </span>
         ) : (
@@ -297,7 +297,7 @@ export default function FinmindKeysCard() {
               }
             }}
             disabled={revokeMutation.isPending}
-            className="rounded border border-destructive px-1.5 py-0.5 text-[10px] text-destructive hover:bg-destructive/10 disabled:opacity-50"
+            className="rounded border border-destructive px-1.5 py-0.5 text-micro text-destructive hover:bg-destructive/10 disabled:opacity-50"
           >
             Revoke
           </button>

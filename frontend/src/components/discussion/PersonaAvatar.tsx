@@ -21,7 +21,7 @@ export function PersonaAvatar({
   personaId, name, initial, size = "md", className,
 }: PersonaAvatarProps) {
   const identity = getPersonaIdentity(personaId, name, initial);
-  const dim = size === "sm" ? "h-6 w-6 text-[10px]" : "h-7 w-7 text-[11px]";
+  const dim = size === "sm" ? "h-6 w-6 text-micro" : "h-7 w-7 text-[11px]";
   return (
     <span
       className={cn(

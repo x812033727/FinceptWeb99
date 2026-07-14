@@ -89,7 +89,7 @@ export function PersonaStatusGrid({
                   persona_id: pid, status: "active",
                 })}
                 disabled={setStatus.isPending}
-                className="ml-1 text-[10px] text-muted-foreground
+                className="ml-1 text-micro text-muted-foreground
                            hover:text-success disabled:opacity-50"
               >
                 {t("discussion.persona_status.thaw")}

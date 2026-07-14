@@ -59,7 +59,7 @@ export function WalkForwardSection({ strategy }: { strategy: StrategyTemplate })
   )?.response?.data?.detail ?? (wfMut.error as Error | undefined)?.message;
 
   return (
-    <div className="text-[10px] space-y-1">
+    <div className="text-micro space-y-1">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}

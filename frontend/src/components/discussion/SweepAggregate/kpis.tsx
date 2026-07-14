@@ -96,7 +96,7 @@ export function PnlRow({ agg }: { agg: SweepAggregate }) {
   const { t } = useTranslation();
   return (
     <div className="bg-secondary/20 border border-border rounded p-2">
-      <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">
+      <p className="text-micro text-muted-foreground uppercase tracking-wider mb-1">
         {t("aggregate.avg_pnl", "平均報酬 D1-D5（推薦標的）")}
       </p>
       <div className="grid grid-cols-5 gap-1">
@@ -105,7 +105,7 @@ export function PnlRow({ agg }: { agg: SweepAggregate }) {
             p === null ? "" : p > 0 ? "text-up" : "text-down";
           return (
             <div key={i} className="text-center">
-              <p className="text-[10px] text-muted-foreground">D{i + 1}</p>
+              <p className="text-micro text-muted-foreground">D{i + 1}</p>
               <p className={`text-xs font-mono font-semibold ${accent}`}>
                 {fmtPct(p)}
               </p>

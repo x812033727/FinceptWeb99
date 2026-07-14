@@ -224,7 +224,7 @@ export function ExpertEvaluationCard({ detail }: { portfolioId: string; detail: 
                     </span>
                   </summary>
                   {tc.result && (
-                    <pre className="mt-1 bg-background/60 border border-border rounded p-2 overflow-auto max-h-48 text-foreground/80 whitespace-pre-wrap text-[10px]">
+                    <pre className="mt-1 bg-background/60 border border-border rounded p-2 overflow-auto max-h-48 text-foreground/80 whitespace-pre-wrap text-micro">
                       {tc.result}
                     </pre>
                   )}
@@ -244,7 +244,7 @@ export function ExpertEvaluationCard({ detail }: { portfolioId: string; detail: 
             <p className="text-xs text-danger bg-danger/10 border border-danger/30 rounded px-3 py-2">{error}</p>
           )}
 
-          <p className="text-[10px] text-muted-foreground">
+          <p className="text-micro text-muted-foreground">
             {t("ai.disclaimer")} · {t("portfolio.expert_eval.uses_quota", { count: 1 })}
           </p>
         </div>

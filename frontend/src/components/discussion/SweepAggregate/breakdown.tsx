@@ -58,7 +58,7 @@ export function PersonaTable({ agg }: { agg: SweepAggregate }) {
   ];
   return (
     <div className="bg-secondary/20 border border-border rounded p-2">
-      <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">
+      <p className="text-micro text-muted-foreground uppercase tracking-wider mb-1">
         {t("aggregate.persona_stats", "專家命中表")}
       </p>
       <DataTable
@@ -77,7 +77,7 @@ export function LessonsList({ agg }: { agg: SweepAggregate }) {
   if (agg.lessons.length === 0) return null;
   return (
     <details className="bg-secondary/20 border border-border rounded p-2">
-      <summary className="text-[10px] text-muted-foreground uppercase tracking-wider cursor-pointer">
+      <summary className="text-micro text-muted-foreground uppercase tracking-wider cursor-pointer">
         {t("aggregate.lessons", "事後檢討教訓")}（{agg.lessons.length}）
       </summary>
       <ul className="mt-1.5 space-y-1">

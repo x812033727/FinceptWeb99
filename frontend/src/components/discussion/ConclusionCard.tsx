@@ -107,7 +107,7 @@ export function ConclusionCard({
           aria-expanded={open}
           className="flex items-center gap-2 text-left hover:opacity-80 transition-opacity flex-1 min-w-0"
         >
-          <span className="text-[10px] text-muted-foreground w-3 inline-block shrink-0">
+          <span className="text-micro text-muted-foreground w-3 inline-block shrink-0">
             {open ? "▼" : "▶"}
           </span>
           <h3 className={titleClass}>

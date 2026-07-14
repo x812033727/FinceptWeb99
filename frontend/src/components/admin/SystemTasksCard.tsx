@@ -78,7 +78,7 @@ function SystemTaskRow({ tcfg }: { tcfg: SystemTaskConfig }) {
     <div className="grid grid-cols-[200px_140px_1fr_auto] items-start gap-2 py-2 border-b border-border/40 text-xs">
       <div>
         <div className="font-medium text-sm">{tcfg.name}</div>
-        <div className="text-[10px] text-muted-foreground leading-snug mt-0.5">
+        <div className="text-micro text-muted-foreground leading-snug mt-0.5">
           {tcfg.description}
         </div>
         {tcfg.is_overridden && (
@@ -87,7 +87,7 @@ function SystemTaskRow({ tcfg }: { tcfg: SystemTaskConfig }) {
           </span>
         )}
         {auditLine && (
-          <div className="text-[10px] text-muted-foreground mt-1">{auditLine}</div>
+          <div className="text-micro text-muted-foreground mt-1">{auditLine}</div>
         )}
       </div>
       <select
@@ -107,7 +107,7 @@ function SystemTaskRow({ tcfg }: { tcfg: SystemTaskConfig }) {
         </select>
         {testResult && (
           <div
-            className={`text-[10px] rounded px-2 py-1 border ${
+            className={`text-micro rounded px-2 py-1 border ${
               testResult.ok
                 ? "border-success/30 bg-success/10 text-success"
                 : "border-danger/30 bg-danger/10 text-danger"
@@ -175,7 +175,7 @@ export function SystemTasksCard() {
           {isLoading ? (
             <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>
           ) : (
-            <div className="grid grid-cols-[200px_140px_1fr_auto] gap-2 text-[10px] text-muted-foreground uppercase tracking-wider border-b border-border pb-1">
+            <div className="grid grid-cols-[200px_140px_1fr_auto] gap-2 text-micro text-muted-foreground uppercase tracking-wider border-b border-border pb-1">
               <span>{t("systemTasks.task")}</span>
               <span>{t("personas.provider")}</span>
               <span>{t("personas.model")}</span>

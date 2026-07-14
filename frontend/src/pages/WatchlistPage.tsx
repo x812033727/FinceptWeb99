@@ -132,7 +132,7 @@ function WatchlistFreshnessFooter({ items }: { items: WatchlistItem[] }) {
   );
 
   return (
-    <div className="px-4 pt-1 pb-3 flex items-center gap-3 text-[10px] text-muted-foreground border-b border-border/30">
+    <div className="px-4 pt-1 pb-3 flex items-center gap-3 text-micro text-muted-foreground border-b border-border/30">
       <span>
         {t("watchlist.last_quoted")}：
         <span className="text-foreground/80 font-mono">

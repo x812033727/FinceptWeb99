@@ -325,7 +325,7 @@ export function IngestHealthCard() {
           <div>
             <div className="font-mono">{r.job_id}</div>
             {hasMeta && (
-              <div className="text-[10px] text-muted-foreground/80 mt-0.5">
+              <div className="text-micro text-muted-foreground/80 mt-0.5">
                 {t(jobMetaKey(r.job_id, "desc"))}
               </div>
             )}
@@ -346,7 +346,7 @@ export function IngestHealthCard() {
       render: (r) => {
         const { text: badgeText, cls: badgeCls } = deriveIngestBadge(r);
         return (
-          <span className={`px-1.5 py-0.5 rounded text-[10px] ${badgeCls}`}>
+          <span className={`px-1.5 py-0.5 rounded text-micro ${badgeCls}`}>
             {badgeText}
           </span>
         );
@@ -429,14 +429,14 @@ export function IngestHealthCard() {
               const sched = deriveSchedulerBadge(heartbeat);
               return (
                 <span
-                  className={`px-1.5 py-0.5 rounded text-[10px] ${sched.cls}`}
+                  className={`px-1.5 py-0.5 rounded text-micro ${sched.cls}`}
                   title={sched.tooltip}
                 >
                   {sched.text}
                 </span>
               );
             })()}
-            <span className="text-[10px] text-muted-foreground">
+            <span className="text-micro text-muted-foreground">
               refreshes every 60s
             </span>
           </div>

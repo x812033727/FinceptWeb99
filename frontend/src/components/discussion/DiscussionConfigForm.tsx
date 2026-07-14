@@ -75,7 +75,7 @@ export function DiscussionConfigForm({
             </span>
             {t("discussion.topic_label")}
             {topicDirty && (
-              <span className="ml-1 text-[10px] text-warning">
+              <span className="ml-1 text-micro text-warning">
                 {t("discussion.unsaved")}
               </span>
             )}
@@ -84,7 +84,7 @@ export function DiscussionConfigForm({
             <button
               onClick={saveTopic}
               disabled={!topicDirty || updateMut.isPending || isStreaming}
-              className="px-2 py-0.5 text-[10px] border border-border rounded hover:border-primary/40 transition-colors disabled:opacity-30"
+              className="px-2 py-0.5 text-micro border border-border rounded hover:border-primary/40 transition-colors disabled:opacity-30"
             >
               {updateMut.isPending ? t("common.saving") : t("common.save")}
             </button>
@@ -121,7 +121,7 @@ export function DiscussionConfigForm({
             </span>
             {t("discussion.rules_label")}
             {rulesDirty && (
-              <span className="ml-1 text-[10px] text-warning">
+              <span className="ml-1 text-micro text-warning">
                 {t("discussion.unsaved")}
               </span>
             )}
@@ -130,7 +130,7 @@ export function DiscussionConfigForm({
             <button
               onClick={saveRules}
               disabled={!rulesDirty || updateMut.isPending || isStreaming}
-              className="px-2 py-0.5 text-[10px] border border-border rounded hover:border-primary/40 transition-colors disabled:opacity-30"
+              className="px-2 py-0.5 text-micro border border-border rounded hover:border-primary/40 transition-colors disabled:opacity-30"
             >
               {updateMut.isPending ? t("common.saving") : t("common.save")}
             </button>
@@ -215,7 +215,7 @@ export function DiscussionConfigForm({
           className="bg-card border border-border rounded px-2 py-1 text-foreground focus:outline-none focus:border-primary/50 disabled:opacity-60 min-h-[32px]"
         />
         {asOfDate && (
-          <span className="px-1.5 py-0.5 rounded text-[10px] border border-warning/30 bg-warning/10 text-warning">
+          <span className="px-1.5 py-0.5 rounded text-micro border border-warning/30 bg-warning/10 text-warning">
             {t("discussion.backtest_badge")}
           </span>
         )}
@@ -231,7 +231,7 @@ export function DiscussionConfigForm({
         >
           {t("discussion.save_as_defaults")}
         </button>
-        <span className="text-[10px] text-muted-foreground">
+        <span className="text-micro text-muted-foreground">
           {t("discussion.save_as_defaults_hint")}
         </span>
       </div>

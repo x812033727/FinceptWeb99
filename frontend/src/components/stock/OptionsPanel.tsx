@@ -68,7 +68,7 @@ function IVSurface({ options, optionType }: { options: OptionRow[]; optionType: 
                   return (
                     <td
                       key={expiry}
-                      className="text-center py-0.5 px-1 rounded text-[10px] font-medium"
+                      className="text-center py-0.5 px-1 rounded text-micro font-medium"
                       style={{
                         backgroundColor: ivColor(iv),
                         color: iv ? "#f9fafb" : "transparent",
@@ -83,7 +83,7 @@ function IVSurface({ options, optionType }: { options: OptionRow[]; optionType: 
             ))}
           </tbody>
         </table>
-        <div className="flex items-center gap-2 mt-2 text-[10px] text-muted-foreground">
+        <div className="flex items-center gap-2 mt-2 text-micro text-muted-foreground">
           <span>Low IV</span>
           <div className="flex h-2 w-24 rounded overflow-hidden">
             {Array.from({ length: 24 }).map((_, i) => (

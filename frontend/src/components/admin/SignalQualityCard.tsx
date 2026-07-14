@@ -228,7 +228,7 @@ export function SignalQualityCard() {
 
               {numericSorted.length > 0 && (
                 <div className="space-y-1.5">
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider">
+                  <p className="text-micro text-muted-foreground uppercase tracking-wider">
                     {t("signal_quality.numeric_title")}
                   </p>
                   <DataTable
@@ -238,7 +238,7 @@ export function SignalQualityCard() {
                     mobileMode="scroll"
                     aria-label={t("signal_quality.numeric_title")}
                   />
-                  <p className="text-[10px] text-muted-foreground/80">
+                  <p className="text-micro text-muted-foreground/80">
                     {t("signal_quality.numeric_legend")}
                   </p>
                 </div>
@@ -246,7 +246,7 @@ export function SignalQualityCard() {
 
               {categoricalSorted.length > 0 && (
                 <div className="space-y-1.5">
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider">
+                  <p className="text-micro text-muted-foreground uppercase tracking-wider">
                     {t("signal_quality.categorical_title")}
                   </p>
                   <div className="space-y-3">
@@ -258,7 +258,7 @@ export function SignalQualityCard() {
                         <div key={row.path} className="space-y-1">
                           <div className="flex items-baseline gap-2">
                             <span className="font-mono text-xs text-foreground/90">{row.label}</span>
-                            <span className="text-[10px] text-muted-foreground">
+                            <span className="text-micro text-muted-foreground">
                               n={row.n_total}
                             </span>
                           </div>
@@ -284,7 +284,7 @@ export function SignalQualityCard() {
                       );
                     })}
                   </div>
-                  <p className="text-[10px] text-muted-foreground/80">
+                  <p className="text-micro text-muted-foreground/80">
                     {t("signal_quality.categorical_legend")}
                   </p>
                 </div>

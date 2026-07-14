@@ -114,7 +114,7 @@ export function AutoRunConfigCard({
           </span>
           {t("discussion.auto_run_title")}
           {cfg?.enabled && (
-            <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-success/10 text-success border border-success/30">
+            <span className="ml-auto text-micro px-1.5 py-0.5 rounded bg-success/10 text-success border border-success/30">
               ON
             </span>
           )}
@@ -123,16 +123,16 @@ export function AutoRunConfigCard({
 
       {!collapsed && (
         <div className="mt-2 space-y-2">
-          <p className="text-[10px] text-muted-foreground leading-relaxed">
+          <p className="text-micro text-muted-foreground leading-relaxed">
             {t("discussion.auto_run_subtitle")}
           </p>
 
           {isLoading ? (
-            <p className="text-[10px] text-muted-foreground animate-pulse">
+            <p className="text-micro text-muted-foreground animate-pulse">
               …
             </p>
           ) : isError ? (
-            <p className="text-[10px] text-danger">
+            <p className="text-micro text-danger">
               {t("discussion.auto_run_load_failed")}
             </p>
           ) : (
@@ -156,7 +156,7 @@ export function AutoRunConfigCard({
                 />
                 <span className="flex flex-col">
                   <span>{t("discussion.auto_run_send_email")}</span>
-                  <span className="text-[10px] text-muted-foreground">
+                  <span className="text-micro text-muted-foreground">
                     {t("discussion.auto_run_send_email_hint")}
                   </span>
                 </span>
@@ -217,7 +217,7 @@ export function AutoRunConfigCard({
                         key={a.id}
                         type="button"
                         onClick={() => togglePersona(a.id)}
-                        className={`px-1.5 py-0.5 rounded text-[10px] border transition-colors ${
+                        className={`px-1.5 py-0.5 rounded text-micro border transition-colors ${
                           selected
                             ? "border-primary bg-primary/15 text-primary"
                             : "border-border bg-card text-muted-foreground hover:border-primary/40"
@@ -231,7 +231,7 @@ export function AutoRunConfigCard({
               </div>
 
               {error && (
-                <p className="text-[10px] text-danger">{error}</p>
+                <p className="text-micro text-danger">{error}</p>
               )}
 
               <div className="flex items-center gap-2">
@@ -246,7 +246,7 @@ export function AutoRunConfigCard({
                     : t("discussion.auto_run_save")}
                 </button>
                 {showSaved && (
-                  <span className="text-[10px] text-success">
+                  <span className="text-micro text-success">
                     ✓ {t("discussion.auto_run_saved")}
                   </span>
                 )}

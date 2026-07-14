@@ -90,7 +90,7 @@ export function DatasetTable({
                     {d.dataset_code}
                     {d.sponsor_tier && (
                       <span
-                        className="ml-1 rounded bg-warning/15 px-1 text-[10px] text-warning"
+                        className="ml-1 rounded bg-warning/15 px-1 text-micro text-warning"
                         title="FinMind sponsor-tier dataset"
                       >
                         sponsor
@@ -170,7 +170,7 @@ export function DatasetTable({
                       disabled={
                         !d.local_table || runDatasetMutation.isPending
                       }
-                      className="rounded border border-border px-1.5 py-0.5 text-[10px] hover:bg-muted disabled:opacity-50"
+                      className="rounded border border-border px-1.5 py-0.5 text-micro hover:bg-muted disabled:opacity-50"
                       title={
                         d.per_symbol
                           ? "Per-symbol dataset — runs without symbol; most upstream sources fail in that mode (use the cron with --universe-from-tw-stock-info for the per-symbol fan-out)"
@@ -181,7 +181,7 @@ export function DatasetTable({
                     </button>
                     {runResults[d.dataset_code] && (
                       <span
-                        className={`ml-1 text-[10px] ${
+                        className={`ml-1 text-micro ${
                           runResults[d.dataset_code].status === "done"
                             ? "text-success"
                             : runResults[d.dataset_code].status === "skipped"

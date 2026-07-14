@@ -69,7 +69,7 @@ export function LiveQuoteHeader({ symbol, market, quote, isETF }: LiveQuoteHeade
         <div className={`text-xs sm:text-sm font-medium tabular-nums ${isPositive ? "text-up" : "text-down"}`}>
           {displayChange !== undefined ? fmtPct(displayChange, true) : "—"}
         </div>
-        <div className="text-[10px] sm:text-xs text-muted-foreground mt-0.5">
+        <div className="text-micro sm:text-xs text-muted-foreground mt-0.5">
           {market === "TW" ? "TWD" : (quote?.currency as string ?? "USD")}
         </div>
         {(() => {
@@ -87,7 +87,7 @@ export function LiveQuoteHeader({ symbol, market, quote, isETF }: LiveQuoteHeade
           );
           if (!localTime) return null;
           return (
-            <div className="text-[10px] text-muted-foreground/70 mt-0.5 tabular-nums">
+            <div className="text-micro text-muted-foreground/70 mt-0.5 tabular-nums">
               {t("stock.quoted_at")}：{localTime}
             </div>
           );

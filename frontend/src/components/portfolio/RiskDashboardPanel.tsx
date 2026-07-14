@@ -43,7 +43,7 @@ function StatTile({ label, children, hint }: {
     <div className="bg-secondary/30 rounded p-3 min-w-0">
       <p className="text-xs text-muted-foreground truncate" title={label}>{label}</p>
       <p className="text-sm font-medium text-foreground mt-0.5">{children}</p>
-      {hint && <p className="text-[10px] text-muted-foreground mt-0.5">{hint}</p>}
+      {hint && <p className="text-micro text-muted-foreground mt-0.5">{hint}</p>}
     </div>
   );
 }
@@ -147,7 +147,7 @@ function WeightBar({ weights }: { weights: RiskWeightRow[] }) {
             <span className="inline-block w-2 h-2 rounded-sm" style={{ backgroundColor: s.color }} aria-hidden />
             {s.label} <Num value={s.pct} format="percent" decimals={1} />
             {s.contribution != null && (
-              <span className="text-[10px]">
+              <span className="text-micro">
                 ({t("portfolio.risk.risk_contribution_short")} <Num value={s.contribution} format="percent" decimals={1} />)
               </span>
             )}
@@ -175,13 +175,13 @@ function CorrelationHeatmap({ correlation }: { correlation: RiskCorrelation }) {
       >
         <div />
         {symbols.map((s) => (
-          <div key={`col-${s}`} className="text-[10px] text-muted-foreground text-center px-1 py-0.5 truncate" title={s}>
+          <div key={`col-${s}`} className="text-micro text-muted-foreground text-center px-1 py-0.5 truncate" title={s}>
             {s}
           </div>
         ))}
         {symbols.map((rowSym, i) => (
           <div key={`row-${rowSym}`} className="contents">
-            <div className="text-[10px] text-muted-foreground pr-2 py-0.5 text-right truncate self-center" title={rowSym}>
+            <div className="text-micro text-muted-foreground pr-2 py-0.5 text-right truncate self-center" title={rowSym}>
               {rowSym}
             </div>
             {symbols.map((colSym, j) => {
@@ -195,7 +195,7 @@ function CorrelationHeatmap({ correlation }: { correlation: RiskCorrelation }) {
                   aria-label={`${rowSym} × ${colSym}: ${v.toFixed(2)}`}
                 >
                   {showValues && (
-                    <span className="text-[10px] font-mono tabular-nums text-foreground/80">
+                    <span className="text-micro font-mono tabular-nums text-foreground/80">
                       {v.toFixed(2)}
                     </span>
                   )}

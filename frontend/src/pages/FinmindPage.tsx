@@ -105,7 +105,7 @@ export default function FinmindPage() {
           {d.dataset_code}
           {d.sponsor_tier && (
             <span
-              className="ml-1 rounded bg-warning/15 px-1 text-[10px] text-warning"
+              className="ml-1 rounded bg-warning/15 px-1 text-micro text-warning"
               title={t("finmind.catalog.sponsor_title")}
             >
               sponsor
@@ -142,11 +142,11 @@ export default function FinmindPage() {
       header: t("finmind.catalog.col_status"),
       render: (d) =>
         d.available ? (
-          <span className="rounded bg-success/15 px-1.5 py-0.5 text-[10px] text-success">
+          <span className="rounded bg-success/15 px-1.5 py-0.5 text-micro text-success">
             {t("finmind.catalog.status_available")}
           </span>
         ) : (
-          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+          <span className="rounded bg-muted px-1.5 py-0.5 text-micro text-muted-foreground">
             {t("finmind.catalog.status_building")}
           </span>
         ),
@@ -202,7 +202,7 @@ export default function FinmindPage() {
               <div className="mb-1 flex items-center justify-between">
                 <h3 className="text-base font-semibold">{tier.name}</h3>
                 {tier.highlighted && (
-                  <span className="rounded bg-primary/20 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                  <span className="rounded bg-primary/20 px-1.5 py-0.5 text-micro font-medium text-primary">
                     {t("finmind.pricing.popular")}
                   </span>
                 )}

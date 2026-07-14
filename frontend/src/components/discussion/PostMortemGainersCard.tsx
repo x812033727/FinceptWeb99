@@ -113,7 +113,7 @@ export function PostMortemGainersCard({
         return dp ? (
           <PerfCell pct={dp.change_pct} />
         ) : (
-          <span className="text-muted-foreground/50 text-[10px]">—</span>
+          <span className="text-muted-foreground/50 text-micro">—</span>
         );
       },
     })),
@@ -163,14 +163,14 @@ export function PostMortemGainersCard({
           aria-expanded={sectionB.open}
           className="w-full flex items-center gap-1.5 text-left hover:opacity-80 transition-opacity"
         >
-          <span className="text-[10px] text-muted-foreground w-2.5 inline-block">
+          <span className="text-micro text-muted-foreground w-2.5 inline-block">
             {sectionB.open ? "▼" : "▶"}
           </span>
           <h5 className="text-[11px] font-semibold text-purple-200/90 uppercase tracking-wider">
             {t("discussion.post_mortem_daily_winners_title")}
           </h5>
           {!sectionB.open && dailyBlocks.length > 0 && (
-            <span className="text-[10px] text-muted-foreground ml-1">
+            <span className="text-micro text-muted-foreground ml-1">
               ({dailyBlocks.length})
             </span>
           )}
@@ -188,12 +188,12 @@ export function PostMortemGainersCard({
             >
               {dailyBlocks.map((block, i) => (
                 <div key={block.trading_day} className="space-y-1">
-                  <div className="text-[10px] text-muted-foreground/80">
+                  <div className="text-micro text-muted-foreground/80">
                     D{i + 1}
                     <span className="font-mono">{block.trading_day}</span>
                   </div>
                   {block.gainers.length === 0 ? (
-                    <p className="text-[10px] text-muted-foreground/60">
+                    <p className="text-micro text-muted-foreground/60">
                       {t("discussion.gainers_no_data")}
                     </p>
                   ) : (
@@ -221,7 +221,7 @@ export function PostMortemGainersCard({
         )}
       </div>
 
-      <p className="text-[10px] text-muted-foreground/70 leading-relaxed">
+      <p className="text-micro text-muted-foreground/70 leading-relaxed">
         {t("discussion.post_mortem_help_v2")}
       </p>
     </div>

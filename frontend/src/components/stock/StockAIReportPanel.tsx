@@ -298,7 +298,7 @@ export function StockAIReportPanel({ symbol, market }: { symbol: string; market:
       ) : content ? (
         <div className="max-w-prose space-y-1.5" data-testid="ai-report-content">
           {viewingId && (
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-micro text-muted-foreground">
               {t("stock.ai_report.viewing_saved", {
                 when: formatTaipei(
                   reports.find((r) => r.id === viewingId)?.created_at ?? "",
@@ -318,7 +318,7 @@ export function StockAIReportPanel({ symbol, market }: { symbol: string; market:
       ) : null}
 
       {!streaming && content && (
-        <p className="text-[10px] text-muted-foreground border-t border-border pt-2">
+        <p className="text-micro text-muted-foreground border-t border-border pt-2">
           {t("stock.ai_report.disclaimer")}
         </p>
       )}

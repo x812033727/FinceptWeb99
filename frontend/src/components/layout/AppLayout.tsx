@@ -24,7 +24,7 @@ function WsStatus({ compact = false }: { compact?: boolean }) {
   const connected = useWsConnected();
   return (
     <div
-      className={`flex items-center gap-1.5 text-[10px] text-muted-foreground select-none ${
+      className={`flex items-center gap-1.5 text-micro text-muted-foreground select-none ${
         compact ? "" : ""
       }`}
       title={connected ? t("topbar.ws_connected") : t("topbar.ws_disconnected")}
@@ -64,7 +64,7 @@ function NotificationBell() {
       >
         <Bell className="h-4 w-4" aria-hidden="true" />
         {unreadCount > 0 && (
-          <span className="absolute top-0.5 right-0.5 min-w-[16px] h-4 flex items-center justify-center text-[10px] font-bold rounded-full bg-primary text-primary-foreground px-0.5">
+          <span className="absolute top-0.5 right-0.5 min-w-[16px] h-4 flex items-center justify-center text-micro font-bold rounded-full bg-primary text-primary-foreground px-0.5">
             {unreadCount > 9 ? "9+" : unreadCount}
           </span>
         )}
@@ -229,7 +229,7 @@ function PaletteHint() {
     <button
       type="button"
       onClick={() => setOpen(true)}
-      className="hidden lg:inline-flex items-center gap-1.5 px-2 py-1 rounded border border-border text-[10px] text-muted-foreground hover:text-foreground hover:bg-accent/10 transition-colors"
+      className="hidden lg:inline-flex items-center gap-1.5 px-2 py-1 rounded border border-border text-micro text-muted-foreground hover:text-foreground hover:bg-accent/10 transition-colors"
       title={t("palette.title")}
     >
       <kbd className="font-sans">⌘</kbd>

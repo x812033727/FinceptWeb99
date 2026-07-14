@@ -305,7 +305,7 @@ export function BacktestSweepCard({
           ) : null}
 
           <div className="space-y-1.5">
-            <h5 className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+            <h5 className="text-label font-semibold text-muted-foreground uppercase tracking-wider">
               {t("sweep.list_title")}
             </h5>
             {sweepsQuery.isLoading ? (

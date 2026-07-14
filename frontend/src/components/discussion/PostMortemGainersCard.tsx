@@ -133,7 +133,7 @@ export function PostMortemGainersCard({
 
       {/* Section A — recommended D1-D5 self-eval */}
       <div className="space-y-1.5">
-        <h5 className="text-[11px] font-semibold text-purple-200/90 uppercase tracking-wider">
+        <h5 className="text-label font-semibold text-purple-200/90 uppercase tracking-wider">
           {t("discussion.post_mortem_self_eval_title")}
         </h5>
         {recPerf.length === 0 ? (
@@ -166,7 +166,7 @@ export function PostMortemGainersCard({
           <span className="text-micro text-muted-foreground w-2.5 inline-block">
             {sectionB.open ? "▼" : "▶"}
           </span>
-          <h5 className="text-[11px] font-semibold text-purple-200/90 uppercase tracking-wider">
+          <h5 className="text-label font-semibold text-purple-200/90 uppercase tracking-wider">
             {t("discussion.post_mortem_daily_winners_title")}
           </h5>
           {!sectionB.open && dailyBlocks.length > 0 && (

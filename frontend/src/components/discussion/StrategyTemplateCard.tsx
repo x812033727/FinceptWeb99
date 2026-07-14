@@ -135,7 +135,7 @@ export function StrategyTemplateCard({
       {open && (
         <>
           <div className="flex items-center justify-between">
-            <h5 className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+            <h5 className="text-label font-semibold text-muted-foreground uppercase tracking-wider">
               {t("strategy.list_title", "我的策略")}（{strategies.length}）
             </h5>
             <button

@@ -126,7 +126,7 @@ function PersonaGroupBlock({
           )}
         </span>
         <div className="min-w-0 flex-1">
-          <div className="text-[11px] font-semibold text-foreground uppercase tracking-wide flex items-center gap-1.5">
+          <div className="text-label font-semibold text-foreground uppercase tracking-wide flex items-center gap-1.5">
             <span className="truncate">{t(`personas.groups.${groupId}.title`)}</span>
             <span className="text-micro text-muted-foreground font-normal normal-case">
               ({agents.length})
@@ -240,7 +240,7 @@ export function PersonaList({
         })}
         {orphans.length > 0 && (
           <div className="space-y-1.5">
-            <div className="px-1 text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+            <div className="px-1 text-label font-semibold text-muted-foreground uppercase tracking-wide">
               {t("ai.other_agents")}
             </div>
             <div className="space-y-1.5">

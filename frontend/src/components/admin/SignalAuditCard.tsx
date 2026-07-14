@@ -251,7 +251,7 @@ export function SignalAuditCard() {
 
               {data.zero_uptake.length > 0 && (
                 <div className="bg-danger/5 border border-danger/30 rounded p-2 space-y-1">
-                  <p className="text-[11px] font-semibold text-danger uppercase tracking-wider">
+                  <p className="text-label font-semibold text-danger uppercase tracking-wider">
                     {t("signal_audit.zero_uptake_title")}
                   </p>
                   <p className="text-[11px] text-muted-foreground">
@@ -269,7 +269,7 @@ export function SignalAuditCard() {
 
               {(data.hallucinations?.length ?? 0) > 0 && (
                 <div className="bg-warning/5 border border-warning/30 rounded p-2 space-y-1">
-                  <p className="text-[11px] font-semibold text-warning uppercase tracking-wider">
+                  <p className="text-label font-semibold text-warning uppercase tracking-wider">
                     {t("signal_audit.hallucination_title")}
                   </p>
                   <p className="text-[11px] text-muted-foreground">

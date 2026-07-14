@@ -18,31 +18,37 @@ export interface StatCardProps {
   hint?: React.ReactNode;
   /** Dense variant for stat grids inside cards (smaller value + padding). */
   compact?: boolean;
+  /** Announce value changes to assistive tech (aria-live="polite") — use
+   * for tiles bound to live/ticking data (indices, quotes). */
+  live?: boolean;
   className?: string;
 }
 
-export function StatCard({ label, value, delta, icon: Icon, hint, compact = false, className }: StatCardProps) {
+export function StatCard({ label, value, delta, icon: Icon, hint, compact = false, live = false, className }: StatCardProps) {
   return (
     <div
       className={cn(
-        "rounded-lg border border-border bg-surface-1",
+        "rounded-lg border border-border bg-surface-1 shadow-highlight",
         compact ? "p-2" : "p-3 sm:p-4",
         className
       )}
     >
       <div className="flex items-center justify-between gap-2">
-        <p className={cn("truncate text-muted-foreground", compact ? "text-[10px] uppercase tracking-wider" : "text-xs")}>
+        <p className={cn("truncate text-muted-foreground", compact ? "text-label uppercase" : "text-data")}>
           {label}
         </p>
         {Icon && <Icon className="h-4 w-4 shrink-0 text-muted-foreground/60" aria-hidden="true" />}
       </div>
-      <div className={cn("flex items-baseline gap-2", compact ? "mt-0.5" : "mt-1")}>
-        <span className={cn("font-semibold tracking-tight tabular-nums", compact ? "text-sm" : "text-xl")}>
+      <div
+        className={cn("flex items-baseline gap-2", compact ? "mt-0.5" : "mt-1")}
+        aria-live={live ? "polite" : undefined}
+      >
+        <span className={cn("font-semibold tabular-nums", compact ? "text-sm tracking-tight" : "text-stat")}>
           {value}
         </span>
-        {delta && <span className="text-xs">{delta}</span>}
+        {delta && <span className="text-data">{delta}</span>}
       </div>
-      {hint && <p className="mt-0.5 text-[11px] text-muted-foreground/70">{hint}</p>}
+      {hint && <p className="mt-0.5 text-micro text-muted-foreground/70">{hint}</p>}
     </div>
   );
 }

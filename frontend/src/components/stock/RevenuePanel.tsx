@@ -4,6 +4,7 @@ import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recha
 import { Loading } from "./_atoms";
 import { fetchRevenue, fmtPct } from "./_shared";
 import { DataTable, type DataTableColumn } from "../ui/table";
+import { ChartTooltip, chartAxisTick } from "../ui/ChartTooltip";
 
 export function RevenuePanel({ symbol }: { symbol: string }) {
   const { t } = useTranslation();
@@ -78,12 +79,9 @@ export function RevenuePanel({ symbol }: { symbol: string }) {
         <h4 className="text-xs font-semibold text-foreground mb-2">{t("stock.revenue.chart_title")}</h4>
         <ResponsiveContainer width="100%" height={130}>
           <BarChart data={chartData} margin={{ left: 0, right: 0 }}>
-            <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} interval="preserveStartEnd" />
-            <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} width={50} />
-            <Tooltip
-              contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
-              formatter={(v: number) => [`${v}M NTD`, "Revenue"]}
-            />
+            <XAxis dataKey="date" tick={chartAxisTick} interval="preserveStartEnd" />
+            <YAxis tick={chartAxisTick} width={50} />
+            <Tooltip content={<ChartTooltip valueFormatter={(v) => `${v}M NTD`} />} />
             <Bar dataKey="revenue" name={t("stock.revenue.bar_name")} fill="hsl(var(--chart-1))" radius={[2, 2, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>

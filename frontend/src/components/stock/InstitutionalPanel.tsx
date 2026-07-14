@@ -6,6 +6,7 @@ import {
 import { Loading } from "./_atoms";
 import { fetchInstitutional, fmtK } from "./_shared";
 import { DataTable, type DataTableColumn } from "../ui/table";
+import { ChartTooltip, chartAxisTick } from "../ui/ChartTooltip";
 
 export function InstitutionalPanel({ symbol }: { symbol: string }) {
   const { t } = useTranslation();
@@ -109,9 +110,9 @@ export function InstitutionalPanel({ symbol }: { symbol: string }) {
           <h4 className="text-xs font-semibold text-foreground mb-2">{t("stock.institutional.chart_title")}</h4>
           <ResponsiveContainer width="100%" height={120}>
             <BarChart data={chartData} margin={{ left: 0, right: 0 }}>
-              <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} interval="preserveStartEnd" />
-              <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} width={40} />
-              <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }} />
+              <XAxis dataKey="date" tick={chartAxisTick} interval="preserveStartEnd" />
+              <YAxis tick={chartAxisTick} width={40} />
+              <Tooltip content={<ChartTooltip />} />
               <ReferenceLine y={0} stroke="hsl(var(--border))" />
               <Bar dataKey="fini" name={t("stock.institutional.bar_fini")} radius={[2, 2, 0, 0]}>
                 {chartData.map((d, i) => (

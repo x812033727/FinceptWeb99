@@ -38,6 +38,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { ChartTooltip } from "@/components/ui/ChartTooltip";
 import {
   fetchStrategyBrierHistory,
   type BrierHistoryPoint,
@@ -128,14 +129,10 @@ export function BrierTrendChart({
               width={28}
             />
             <Tooltip
-              contentStyle={{
-                background: "hsl(var(--background))",
-                border: "1px solid hsl(var(--border))",
-                fontSize: "11px",
-              }}
-              labelStyle={{ color: "hsl(var(--foreground))" }}
-              formatter={(value) =>
-                typeof value === "number" ? value.toFixed(3) : "—"
+              content={
+                <ChartTooltip
+                  valueFormatter={(v) => (typeof v === "number" ? v.toFixed(3) : "—")}
+                />
               }
             />
             <Legend

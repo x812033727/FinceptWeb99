@@ -115,6 +115,15 @@ export interface DataTableProps<T> {
   onRowClick?: (row: T) => void;
   className?: string;
   "aria-label"?: string;
+  /** Screen-reader table caption (visually hidden). Give this when the
+   * table has no visible heading so assistive tech can name it. */
+  caption?: string;
+  /** Marks the table `aria-busy` while data is (re)loading. */
+  loading?: boolean;
+  /** Wraps the row region in `aria-live="polite"` so screen readers
+   * announce updates — use for tables whose values tick (quotes,
+   * watchlist). Off by default (most tables are static). */
+  live?: boolean;
 }
 
 function cellAlign<T>(col: DataTableColumn<T>): string {
@@ -137,6 +146,9 @@ export function DataTable<T>({
   onRowClick,
   className,
   "aria-label": ariaLabel,
+  caption,
+  loading,
+  live,
 }: DataTableProps<T>) {
   if (!rows.length) {
     return (
@@ -145,7 +157,8 @@ export function DataTable<T>({
   }
 
   const table = (
-    <Table aria-label={ariaLabel}>
+    <Table aria-label={ariaLabel} aria-busy={loading || undefined}>
+      {caption && <caption className="sr-only">{caption}</caption>}
       <TableHeader className={stickyHeader ? "sticky top-0 z-10 bg-card" : undefined}>
         <tr className="border-b border-border">
           {columns.map((col, i) => (
@@ -163,7 +176,7 @@ export function DataTable<T>({
           ))}
         </tr>
       </TableHeader>
-      <TableBody>
+      <TableBody aria-live={live ? "polite" : undefined}>
         {rows.map((row, i) => (
           <TableRow
             key={rowKey(row, i)}
@@ -195,13 +208,18 @@ export function DataTable<T>({
     return (
       <div className={className}>
         <div className="hidden sm:block overflow-x-auto">{table}</div>
-        <ul className="sm:hidden space-y-2" aria-label={ariaLabel}>
+        <ul
+          className="sm:hidden space-y-2"
+          aria-label={ariaLabel}
+          aria-live={live ? "polite" : undefined}
+          aria-busy={loading || undefined}
+        >
           {rows.map((row, i) => (
             <li
               key={rowKey(row, i)}
               onClick={onRowClick ? () => onRowClick(row) : undefined}
               className={cn(
-                "rounded-md border border-border bg-surface-1 p-3",
+                "rounded-md border border-border bg-surface-1 p-3 shadow-highlight",
                 onRowClick && "cursor-pointer active:bg-accent/10"
               )}
             >

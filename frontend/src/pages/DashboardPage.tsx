@@ -74,29 +74,30 @@ function IndexCard({ symbol, label }: { symbol: string; label: string }) {
   return (
     <Link
       to={`/stock/US/${symbol}`}
-      className="bg-card border border-border rounded-lg p-4 hover:border-primary/40 transition-colors"
+      className="block shrink-0 snap-start min-w-[44%] sm:min-w-0 bg-surface-1 shadow-highlight border border-border rounded-lg p-4 hover:border-primary/40 transition-colors"
     >
-      <div className="text-xs text-muted-foreground mb-1">{label}</div>
+      <div className="text-label uppercase text-muted-foreground mb-1 truncate">{label}</div>
       <div
-        className={`text-lg font-bold text-foreground rounded px-1 -mx-1 ${
+        className={`text-stat font-semibold tabular-nums text-foreground rounded px-1 -mx-1 ${
           flash === "up" ? "animate-flash-up" : flash === "down" ? "animate-flash-down" : ""
         }`}
+        aria-live="polite"
       >
         {!unavailable && price != null ? <Num value={price} /> : "—"}
       </div>
-      <div className="text-sm font-medium mt-0.5">
+      <div className="text-data font-medium mt-0.5">
         {unavailable ? (
           <span className="text-muted-foreground">—</span>
         ) : (
           <DeltaText value={changePct} percent />
         )}
       </div>
-      <div className="text-xs text-muted-foreground mt-1 inline-flex items-center">
+      <div className="text-micro text-muted-foreground mt-1 inline-flex items-center">
         {symbol}
         <DataSourceBadge source={dataSource} />
       </div>
       {localTime && (
-        <div className="text-[10px] text-muted-foreground/70 mt-0.5 tabular-nums">
+        <div className="text-micro text-muted-foreground/70 mt-0.5 tabular-nums">
           {localTime}
         </div>
       )}
@@ -408,7 +409,7 @@ function FeedSection({
   const { t } = useTranslation();
   return (
     <section>
-      <h3 className="px-4 py-2 text-[10px] uppercase tracking-wider text-muted-foreground font-medium bg-muted/20 border-b border-border/50">
+      <h3 className="px-4 py-2 text-label uppercase text-muted-foreground font-medium bg-surface-2 border-b border-border-subtle">
         {t(titleKey)}
       </h3>
       {children}
@@ -420,10 +421,10 @@ function IntelFeed() {
   const { t } = useTranslation();
   return (
     <div>
-      <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
+      <h2 className="text-label text-muted-foreground uppercase mb-2">
         {t("dashboard.intel_feed")}
       </h2>
-      <div className="bg-card border border-border rounded-lg overflow-hidden divide-y divide-border">
+      <div className="bg-card shadow-highlight border border-border rounded-lg overflow-hidden divide-y divide-border">
         <FeedSection titleKey="dashboard.overseas_indicators_title">
           <OverseasIndicators />
         </FeedSection>
@@ -480,21 +481,21 @@ export default function DashboardPage() {
   ];
 
   return (
-    <div className="p-4 sm:p-6 space-y-5 sm:space-y-6">
+    <div className="p-gutter sm:p-page space-y-stack sm:space-y-section">
       {/* status bar — single-line: title · user · role chip · AI quota */}
-      <div className="flex items-center gap-2 flex-wrap min-w-0 bg-card border border-border rounded-lg px-3 py-2">
-        <h1 className="text-sm font-bold text-foreground shrink-0">{t("dashboard.title")}</h1>
+      <div className="flex items-center gap-2 flex-wrap min-w-0 bg-surface-1 shadow-highlight border border-border-subtle rounded-lg px-3 py-2">
+        <h1 className="text-heading font-bold text-foreground shrink-0">{t("dashboard.title")}</h1>
         <span className="text-muted-foreground/50 shrink-0">·</span>
-        <span className="text-xs text-muted-foreground truncate min-w-0">{user?.email}</span>
+        <span className="text-data text-muted-foreground truncate min-w-0">{user?.email}</span>
         {user?.role && (
-          <span className="shrink-0 px-1.5 py-0.5 rounded border border-primary/30 bg-primary/10 text-primary text-[10px] uppercase tracking-wider">
+          <span className="shrink-0 px-1.5 py-0.5 rounded border border-primary/30 bg-primary/10 text-primary text-label uppercase">
             {user.role}
           </span>
         )}
         {user?.ai_requests_remaining !== undefined && (
-          <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
+          <span className="ml-auto shrink-0 text-label uppercase text-muted-foreground">
             {t("dashboard.ai_requests_today")}{" "}
-            <span className="text-foreground font-mono tabular-nums text-xs normal-case">
+            <span className="text-foreground font-mono tabular-nums text-data normal-case">
               {user.ai_requests_remaining}
             </span>{" "}
             {t("dashboard.remaining")}
@@ -502,20 +503,21 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* market indices */}
+      {/* market indices — horizontal snap ticker on mobile, 4-up grid ≥sm */}
       <div>
-        <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">{t("dashboard.market_overview")}</h2>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <h2 className="text-label text-muted-foreground uppercase mb-2">{t("dashboard.market_overview")}</h2>
+        <div className="flex gap-3 overflow-x-auto snap-x pb-1 sm:grid sm:grid-cols-4 sm:overflow-visible sm:pb-0">
           {indices.map((idx) => (
             <IndexCard key={idx.symbol} symbol={idx.symbol} label={idx.label} />
           ))}
         </div>
       </div>
 
-      {/* nav cards + intel feed */}
+      {/* nav cards + intel feed. Mobile fold-order: intel feed (fresh info)
+          before quick-access (whose 4 destinations live in the BottomNav). */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
-          <h2 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">{t("dashboard.quick_access")}</h2>
+        <div className="order-2 lg:order-1 lg:col-span-2">
+          <h2 className="text-label text-muted-foreground uppercase mb-2">{t("dashboard.quick_access")}</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {cards.map((card) => {
               const Icon = card.icon;
@@ -523,20 +525,22 @@ export default function DashboardPage() {
                 <Link
                   key={card.labelKey}
                   to={card.href}
-                  className={`bg-card border border-border border-l-[3px] ${card.accent} rounded-lg p-4 space-y-1.5 hover:border-primary/50 hover:bg-card/80 transition-colors block group`}
+                  className={`bg-card shadow-highlight border border-border border-l-[3px] ${card.accent} rounded-lg p-4 space-y-1.5 hover:border-primary/50 hover:bg-card/80 transition-colors block group`}
                 >
                   <Icon className={`w-4 h-4 ${card.iconCls}`} aria-hidden="true" />
-                  <h2 className="text-foreground font-medium text-sm group-hover:text-primary transition-colors">
+                  <h2 className="text-foreground font-medium text-heading group-hover:text-primary transition-colors">
                     {t(card.labelKey)}
                   </h2>
-                  <p className="text-xs text-muted-foreground">{t(card.descKey)}</p>
+                  <p className="text-data text-muted-foreground">{t(card.descKey)}</p>
                 </Link>
               );
             })}
           </div>
         </div>
 
-        <IntelFeed />
+        <div className="order-1 lg:order-2">
+          <IntelFeed />
+        </div>
       </div>
     </div>
   );

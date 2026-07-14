@@ -27,7 +27,7 @@ interface ApiKey {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="bg-card border border-border rounded-lg p-5 space-y-4">
+    <div className="bg-card shadow-highlight border border-border rounded-lg p-5 space-y-4">
       <h2 className="text-sm font-semibold">{title}</h2>
       {children}
     </div>
@@ -153,7 +153,7 @@ export default function SettingsPage() {
 
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-2xl">
-      <h1 className="text-xl sm:text-2xl font-semibold">Settings</h1>
+      <h1 className="text-title font-semibold">Settings</h1>
 
       {/* Profile */}
       <Section title="Profile">

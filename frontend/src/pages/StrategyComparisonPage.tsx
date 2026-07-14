@@ -103,8 +103,8 @@ export default function StrategyComparisonPage() {
   }, [seriesByStrategy]);
 
   return (
-    <div className="p-4 sm:p-6 space-y-4 max-w-6xl">
-      <h1 className="text-xl font-semibold">
+    <div className="p-gutter sm:p-page space-y-stack max-w-6xl">
+      <h1 className="text-title font-semibold">
         {t("strategy_compare.title")}
       </h1>
 

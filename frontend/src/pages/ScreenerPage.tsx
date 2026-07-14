@@ -84,9 +84,9 @@ export default function ScreenerPage() {
   });
 
   return (
-    <div className="p-4 sm:p-6 flex flex-col gap-5 sm:gap-6 h-screen">
+    <div className="p-gutter sm:p-page flex flex-col gap-stack sm:gap-section h-screen">
       <div>
-        <h1 className="text-xl sm:text-2xl font-bold text-foreground">{t("screener.title")}</h1>
+        <h1 className="text-title font-bold text-foreground">{t("screener.title")}</h1>
         <p className="text-xs sm:text-sm text-muted-foreground mt-1">
           {t("screener.subtitle")}
         </p>

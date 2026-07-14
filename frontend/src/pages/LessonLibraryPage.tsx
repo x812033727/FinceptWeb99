@@ -143,9 +143,9 @@ export default function LessonLibraryPage() {
   ];
 
   return (
-    <div className="p-4 sm:p-6 space-y-4 max-w-6xl">
+    <div className="p-gutter sm:p-page space-y-stack max-w-6xl">
       <div className="flex items-baseline justify-between gap-2">
-        <h1 className="text-xl font-semibold">
+        <h1 className="text-title font-semibold">
           {t("lesson_library.title")}
         </h1>
         <span className="text-xs text-muted-foreground">

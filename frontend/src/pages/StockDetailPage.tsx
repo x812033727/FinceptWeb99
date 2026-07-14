@@ -200,8 +200,8 @@ export default function StockDetailPage() {
   })();
 
   return (
-    <div className="p-4 sm:p-6 space-y-4 sm:space-y-5">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+    <div className="p-gutter sm:p-page space-y-stack sm:space-y-section">
+      <div className="flex items-center gap-2 text-micro text-muted-foreground">
         <button onClick={() => navigate(`/market/${mkt}`)} className="hover:text-foreground transition-colors">
           {mkt === "US" ? t("nav.us_market")
             : mkt === "CRYPTO" ? t("nav.crypto")
@@ -226,7 +226,7 @@ export default function StockDetailPage() {
             className={
               chartFullscreen
                 ? "fixed inset-0 z-50 bg-background flex flex-col"
-                : "lg:col-span-3 bg-card border border-border rounded-lg overflow-hidden"
+                : "lg:col-span-3 bg-card shadow-highlight border border-border rounded-lg overflow-hidden"
             }
           >
             <div className="flex flex-wrap items-center gap-x-1 gap-y-1 px-4 pt-3 pb-2 border-b border-border shrink-0">
@@ -284,8 +284,8 @@ export default function StockDetailPage() {
           </div>
 
           {/* stats sidebar */}
-          <div className="bg-card border border-border rounded-lg p-4">
-            <h3 className="text-sm font-semibold text-foreground mb-3">
+          <div className="bg-card shadow-highlight border border-border rounded-lg p-4">
+            <h3 className="text-heading font-semibold text-foreground mb-3">
               {t("stock.fundamentals")}
             </h3>
             {mkt === "US" ? (
@@ -347,17 +347,17 @@ export default function StockDetailPage() {
       )}
 
       {mkt === "US" && usTab === "financials" && (
-        <div className="bg-card border border-border rounded-lg overflow-hidden">
+        <div className="bg-card shadow-highlight border border-border rounded-lg overflow-hidden">
           <FinancialsPanel symbol={sym} />
         </div>
       )}
       {mkt === "US" && usTab === "options" && (
-        <div className="bg-card border border-border rounded-lg overflow-hidden">
+        <div className="bg-card shadow-highlight border border-border rounded-lg overflow-hidden">
           <OptionsPanel symbol={sym} />
         </div>
       )}
       {mkt === "US" && usTab === "ai_report" && (
-        <div className="bg-card border border-border rounded-lg overflow-hidden">
+        <div className="bg-card shadow-highlight border border-border rounded-lg overflow-hidden">
           <StockAIReportPanel symbol={sym} market="US" />
         </div>
       )}
@@ -365,43 +365,43 @@ export default function StockDetailPage() {
       {mkt === "TW" ? (
         <>
           {twTab === "health" && (
-            <div className="bg-card border border-border rounded-lg overflow-hidden">
+            <div className="bg-card shadow-highlight border border-border rounded-lg overflow-hidden">
               <HealthPanel symbol={sym} />
             </div>
           )}
           {twTab === "valuation" && (
-            <div className="bg-card border border-border rounded-lg overflow-hidden">
+            <div className="bg-card shadow-highlight border border-border rounded-lg overflow-hidden">
               <ValuationBandPanel symbol={sym} />
             </div>
           )}
           {twTab === "holdings" && (
-            <div className="bg-card border border-border rounded-lg overflow-hidden">
+            <div className="bg-card shadow-highlight border border-border rounded-lg overflow-hidden">
               <HoldingsPanel symbol={sym} />
             </div>
           )}
           {twTab === "dividends" && (
-            <div className="bg-card border border-border rounded-lg overflow-hidden">
+            <div className="bg-card shadow-highlight border border-border rounded-lg overflow-hidden">
               <DividendsPanel symbol={sym} currentPrice={(quote?.price as number | undefined) ?? null} />
             </div>
           )}
           {twTab === "institutional" && (
-            <div className="bg-card border border-border rounded-lg overflow-hidden">
+            <div className="bg-card shadow-highlight border border-border rounded-lg overflow-hidden">
               <InstitutionalPanel symbol={sym} />
             </div>
           )}
           {twTab === "margin" && (
-            <div className="bg-card border border-border rounded-lg overflow-hidden">
+            <div className="bg-card shadow-highlight border border-border rounded-lg overflow-hidden">
               <MarginPanel symbol={sym} />
             </div>
           )}
           {twTab === "revenue" && (
-            <div className="bg-card border border-border rounded-lg overflow-hidden">
+            <div className="bg-card shadow-highlight border border-border rounded-lg overflow-hidden">
               <RevenuePanel symbol={sym} />
             </div>
           )}
           {twTab === "news" && <NewsFeed symbol={sym} market="TW" />}
           {twTab === "ai_report" && (
-            <div className="bg-card border border-border rounded-lg overflow-hidden">
+            <div className="bg-card shadow-highlight border border-border rounded-lg overflow-hidden">
               <StockAIReportPanel symbol={sym} market="TW" />
             </div>
           )}
@@ -413,8 +413,8 @@ export default function StockDetailPage() {
       )}
 
       {mkt === "US" && usTab === "chart" && Boolean(fundamentals?.description) && (
-        <div className="bg-card border border-border rounded-lg p-4">
-          <h3 className="text-sm font-semibold text-foreground mb-2">About</h3>
+        <div className="bg-card shadow-highlight border border-border rounded-lg p-4">
+          <h3 className="text-heading font-semibold text-foreground mb-2">About</h3>
           <p className="text-xs text-muted-foreground leading-relaxed line-clamp-4">
             {String(fundamentals?.description ?? "")}
           </p>

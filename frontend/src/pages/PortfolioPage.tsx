@@ -49,10 +49,10 @@ export default function PortfolioPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background p-4 sm:p-6 space-y-5 sm:space-y-6">
+    <div className="min-h-screen bg-background p-gutter sm:p-page space-y-stack sm:space-y-section">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <h1 className="text-xl sm:text-2xl font-bold text-primary">{t("portfolio.title")}</h1>
+        <h1 className="text-title font-bold text-primary">{t("portfolio.title")}</h1>
         <div className="flex gap-2">
           {detail && (
             <button
@@ -175,7 +175,7 @@ function PortfolioDetail({
             color: pnlPositive ? "text-positive" : "text-negative",
           },
         ].map((c) => (
-          <div key={c.label} className="bg-card border border-border rounded-lg p-4">
+          <div key={c.label} className="bg-card shadow-highlight border border-border rounded-lg p-4">
             <p className="text-xs text-muted-foreground">{c.label}</p>
             <p className={`text-lg font-semibold mt-1 ${c.color ?? "text-foreground"}`}>{c.value}</p>
           </div>
@@ -209,7 +209,7 @@ function PortfolioDetail({
         <>
           {/* Holdings + pie */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2 bg-card border border-border rounded-lg p-5">
+            <div className="lg:col-span-2 bg-card shadow-highlight border border-border rounded-lg p-5">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-foreground font-medium">{t("portfolio.tabs.holdings")}</h2>
                 <div className="flex gap-2">
@@ -228,7 +228,7 @@ function PortfolioDetail({
               <HoldingsTable holdings={detail.holdings} currency={detail.currency} />
             </div>
 
-            <div className="bg-card border border-border rounded-lg p-5">
+            <div className="bg-card shadow-highlight border border-border rounded-lg p-5">
               <h2 className="text-foreground font-medium mb-2">{t("portfolio.tabs.allocation")}</h2>
               <AllocationPie holdings={detail.holdings} />
             </div>
@@ -243,7 +243,7 @@ function PortfolioDetail({
       <ExpertEvaluationCard portfolioId={portfolioId} detail={detail} />
 
       {/* Optimiser */}
-      <div className="bg-card border border-border rounded-lg p-5 space-y-4">
+      <div className="bg-card shadow-highlight border border-border rounded-lg p-5 space-y-4">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-foreground font-medium">{t("portfolio.optimizer.title")}</h2>

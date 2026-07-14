@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { ChartTooltip } from "@/components/ui/ChartTooltip";
 import { Inbox } from "lucide-react";
 import { DataTable, type DataTableColumn } from "@/components/ui/table";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -90,7 +91,7 @@ export function MarginPanel({ symbol }: { symbol: string }) {
           <BarChart data={chartData} margin={{ left: 0, right: 0 }}>
             <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} interval="preserveStartEnd" />
             <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} width={45} />
-            <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }} />
+            <Tooltip content={<ChartTooltip />} />
             <Bar dataKey="margin_balance" name={t("stock.margin.bar_margin")} fill="hsl(var(--chart-1))" radius={[2, 2, 0, 0]} />
             <Bar dataKey="short_balance" name={t("stock.margin.bar_short")} fill="hsl(var(--chart-2))" radius={[2, 2, 0, 0]} />
           </BarChart>

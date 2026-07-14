@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { Bar, BarChart, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { ChartTooltip } from "@/components/ui/ChartTooltip";
 import { Loading } from "./_atoms";
 import { fetchDividends } from "./_shared";
 import { DataTable, type DataTableColumn } from "../ui/table";
@@ -114,10 +115,7 @@ export function DividendsPanel({ symbol, currentPrice }: { symbol: string; curre
         <BarChart data={chartData} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
           <XAxis dataKey="year" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} />
           <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} width={40} />
-          <Tooltip
-            contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
-            formatter={(v: number) => [v.toFixed(3), "TWD/share"]}
-          />
+          <Tooltip content={<ChartTooltip valueFormatter={(v) => v.toFixed(3)} />} />
           <Legend wrapperStyle={{ fontSize: 11 }} iconSize={8} />
           <Bar dataKey="cash" name={t("stock.dividends.cash")} fill="hsl(var(--chart-4))" radius={[2, 2, 0, 0]} />
           <Bar dataKey="stock" name={t("stock.dividends.stock")} fill="hsl(var(--chart-2))" radius={[2, 2, 0, 0]} />

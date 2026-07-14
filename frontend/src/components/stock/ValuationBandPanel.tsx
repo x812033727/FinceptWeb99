@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
+import { ChartTooltip } from "@/components/ui/ChartTooltip";
 import { Loading } from "./_atoms";
 import { fetchValuationBand } from "./_shared";
 
@@ -117,10 +118,7 @@ export function ValuationBandPanel({ symbol }: { symbol: string }) {
             width={45}
             domain={["auto", "auto"]}
           />
-          <Tooltip
-            contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
-            formatter={(v: number) => [v?.toFixed(2) ?? "—", metric.toUpperCase()]}
-          />
+          <Tooltip content={<ChartTooltip valueFormatter={(v) => v?.toFixed(2) ?? "—"} />} />
           {bands.map((b) => (
             <ReferenceLine
               key={b.label}

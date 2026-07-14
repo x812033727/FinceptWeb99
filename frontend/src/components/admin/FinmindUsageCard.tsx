@@ -10,6 +10,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { ChartTooltip } from "@/components/ui/ChartTooltip";
 
 import { CollapsibleHeader } from "@/components/Collapsible";
 import { DataTable, type DataTableColumn } from "@/components/ui/table";
@@ -201,14 +202,7 @@ export default function FinmindUsageCard() {
                           fontSize: 11,
                         }}
                       />
-                      <Tooltip
-                        formatter={(value: number) => formatNumber(value)}
-                        contentStyle={{
-                          background: "hsl(var(--card))",
-                          border: "1px solid hsl(var(--border))",
-                        }}
-                        labelStyle={{ color: "hsl(var(--foreground))" }}
-                      />
+                      <Tooltip content={<ChartTooltip valueFormatter={(v) => formatNumber(v)} />} />
                       <Legend wrapperStyle={{ fontSize: 12 }} />
                       <Bar
                         yAxisId="left"

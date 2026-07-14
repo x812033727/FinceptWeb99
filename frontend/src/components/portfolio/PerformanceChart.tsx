@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
+import { ChartTooltip } from "@/components/ui/ChartTooltip";
 import api from "@/lib/api";
 
 const PERIOD_DAYS: Record<string, number> = { "1M": 30, "3M": 90, "6M": 180, "1Y": 365 };
@@ -172,14 +173,7 @@ export function PerformanceChart({
               tickFormatter={(v) => v.toFixed(0)}
               domain={["auto", "auto"]}
             />
-            <Tooltip
-              contentStyle={{
-                background: "hsl(var(--card))",
-                border: "1px solid hsl(var(--border))",
-                fontSize: 11,
-              }}
-              formatter={(v: number, name: string) => [`${v.toFixed(2)}`, name]}
-            />
+            <Tooltip content={<ChartTooltip valueFormatter={(v) => v.toFixed(2)} />} />
             <Legend wrapperStyle={{ fontSize: 11 }} />
             <Line
               type="monotone"

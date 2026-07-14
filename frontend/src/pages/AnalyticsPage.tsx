@@ -5,6 +5,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
+import { ChartTooltip } from "@/components/ui/ChartTooltip";
 import { useTranslation } from "react-i18next";
 import { Bot } from "lucide-react";
 import api from "@/lib/api";
@@ -474,11 +475,7 @@ function BacktestPanel() {
                     tickFormatter={d => d.slice(0, 7)} interval={Math.floor(r.equity_curve.length / 8)} />
                   <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
                     tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} width={60} />
-                  <Tooltip
-                    contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
-                    labelStyle={{ color: "hsl(var(--muted-foreground))", fontSize: 11 }}
-                    formatter={(v: number) => [`$${v.toLocaleString()}`, "Portfolio"]}
-                  />
+                  <Tooltip content={<ChartTooltip valueFormatter={(v) => `$${v.toLocaleString()}`} />} />
                   <ReferenceLine y={+capital} stroke="hsl(var(--muted-foreground))" strokeDasharray="4 2" />
                   <Area type="monotone" dataKey="value" stroke="hsl(var(--chart-1))" fill="url(#eq)" strokeWidth={1.5} dot={false} />
                 </AreaChart>

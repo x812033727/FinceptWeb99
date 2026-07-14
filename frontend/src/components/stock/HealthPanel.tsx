@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { ChartTooltip } from "@/components/ui/ChartTooltip";
 import { Loading } from "./_atoms";
 import { fetchHealth, fmtPct1 } from "./_shared";
 import type { HealthPeriod, Light } from "./_shared";
@@ -58,10 +59,7 @@ function MetricSparkRow({
         <BarChart data={data} margin={{ left: 0, right: 0, top: 4, bottom: 0 }}>
           <XAxis dataKey="date" hide />
           <YAxis hide />
-          <Tooltip
-            contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
-            formatter={(v: number) => [`${v == null ? "—" : v.toFixed(2)}${suffix}`, label]}
-          />
+          <Tooltip content={<ChartTooltip valueFormatter={(v) => `${v == null ? "—" : v.toFixed(2)}${suffix}`} />} />
           <Bar dataKey="value" radius={[2, 2, 0, 0]}>
             {data.map((d, i) => (
               <Cell

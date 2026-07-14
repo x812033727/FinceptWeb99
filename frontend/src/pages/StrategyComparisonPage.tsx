@@ -18,6 +18,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { ChartTooltip } from "@/components/ui/ChartTooltip";
 import api from "@/lib/api";
 import type {
   StrategyCompareEntry,
@@ -188,13 +189,7 @@ export default function StrategyComparisonPage() {
                   tickFormatter={(v: number) => v.toFixed(2)}
                   width={40}
                 />
-                <Tooltip
-                  wrapperStyle={{ fontSize: 11 }}
-                  contentStyle={{
-                    backgroundColor: "hsl(var(--popover))",
-                    borderColor: "hsl(var(--border))",
-                  }}
-                />
+                <Tooltip content={<ChartTooltip />} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
                 {seriesByStrategy.map((s) => (
                   <Line

@@ -78,14 +78,14 @@ export function HealthMetricsSparkline({
 
   if (isLoading) {
     return (
-      <div className="text-[11px] text-muted-foreground italic mt-2">
+      <div className="text-meta text-muted-foreground italic mt-2">
         {t("common.loading")}
       </div>
     );
   }
   if (series.length === 0) {
     return (
-      <div className="text-[11px] text-muted-foreground italic mt-2">
+      <div className="text-meta text-muted-foreground italic mt-2">
         {t("discussion.health.empty")}
       </div>
     );
@@ -93,7 +93,7 @@ export function HealthMetricsSparkline({
 
   return (
     <div className="mt-2">
-      <div className="text-[11px] text-muted-foreground mb-1">
+      <div className="text-meta text-muted-foreground mb-1">
         {t("discussion.health.title", { days: windowDays })}
       </div>
       <ResponsiveContainer width="100%" height={120}>

@@ -21,7 +21,7 @@ function Chip({
       type="button"
       aria-pressed={active}
       onClick={onClick}
-      className={`px-2 py-0.5 text-[11px] rounded transition-colors touch-manipulation ${
+      className={`px-2 py-0.5 text-meta rounded transition-colors touch-manipulation ${
         active
           ? "bg-primary text-primary-foreground"
           : "text-muted-foreground hover:text-foreground hover:bg-accent/20"

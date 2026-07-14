@@ -77,7 +77,7 @@ function RuntimeSettingRow({ s }: { s: RuntimeSetting }) {
           <div className="text-micro text-muted-foreground mt-1">{auditLine}</div>
         )}
       </div>
-      <div className="text-[11px] text-muted-foreground leading-snug">
+      <div className="text-meta text-muted-foreground leading-snug">
         {s.description}
         {rangeHint && (
           <span className="ml-1 text-micro font-mono">[{rangeHint}]</span>

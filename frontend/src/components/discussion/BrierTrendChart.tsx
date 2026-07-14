@@ -68,21 +68,21 @@ export function BrierTrendChart({
 
   if (isLoading) {
     return (
-      <p className="text-[11px] text-muted-foreground animate-pulse px-1 py-0.5">
+      <p className="text-meta text-muted-foreground animate-pulse px-1 py-0.5">
         {t("common.loading")}
       </p>
     );
   }
   if (error) {
     return (
-      <p className="text-[11px] text-danger px-1 py-0.5">
+      <p className="text-meta text-danger px-1 py-0.5">
         {(error as Error).message}
       </p>
     );
   }
   if (points.length === 0) {
     return (
-      <p className="text-[11px] text-muted-foreground px-1 py-0.5">
+      <p className="text-meta text-muted-foreground px-1 py-0.5">
         {t(
           "strategy.brier_trend_empty",
           "尚未有已 resolve 的 sweep — 訓練資料還在累積中",

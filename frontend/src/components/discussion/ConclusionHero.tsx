@@ -135,7 +135,7 @@ export function ConclusionHero({
       {/* Stat row — consensus % + horizon. tabular-nums so multi-row
           renders align vertically when ConclusionHero is rendered
           twice (post-mortem alongside primary). */}
-      <div className="flex items-center gap-4 pt-2 border-t border-border/60 text-[11px] text-muted-foreground tabular-nums">
+      <div className="flex items-center gap-4 pt-2 border-t border-border/60 text-meta text-muted-foreground tabular-nums">
         <span>
           {t("discussion.consensus")}：
           <span className="font-mono text-foreground ml-1">

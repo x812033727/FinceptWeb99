@@ -25,7 +25,7 @@ export function QualitySignalsRow({ signals }: { signals?: QualitySignals }) {
     return (
       <div className="flex flex-wrap gap-1.5 mb-3">
         <span
-          className="inline-flex items-center px-2 py-0.5 text-[11px] rounded
+          className="inline-flex items-center px-2 py-0.5 text-meta rounded
                      bg-muted/40 text-muted-foreground border border-border"
         >
           {t("discussion.quality.skipped")}
@@ -45,7 +45,7 @@ export function QualitySignalsRow({ signals }: { signals?: QualitySignals }) {
       <div className="flex flex-wrap items-center gap-1.5">
         {cleanRun && (
           <span
-            className="inline-flex items-center px-2 py-0.5 text-[11px] rounded
+            className="inline-flex items-center px-2 py-0.5 text-meta rounded
                        bg-success/10 text-success border border-success/30"
             title={t("discussion.quality.passed_tooltip") as string}
           >
@@ -56,7 +56,7 @@ export function QualitySignalsRow({ signals }: { signals?: QualitySignals }) {
           <button
             type="button"
             onClick={() => setHallucinationOpen((v) => !v)}
-            className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] rounded
+            className="inline-flex items-center gap-1 px-2 py-0.5 text-meta rounded
                        bg-danger/15 text-danger border border-danger/30
                        hover:bg-danger/25 transition-colors"
           >
@@ -70,7 +70,7 @@ export function QualitySignalsRow({ signals }: { signals?: QualitySignals }) {
         )}
         {contradiction && (
           <span
-            className="inline-flex items-center px-2 py-0.5 text-[11px] rounded
+            className="inline-flex items-center px-2 py-0.5 text-meta rounded
                        bg-warning/15 text-warning border border-warning/30"
             title={t("discussion.quality.contradiction_tooltip") as string}
           >
@@ -79,7 +79,7 @@ export function QualitySignalsRow({ signals }: { signals?: QualitySignals }) {
         )}
         {overConfident && (
           <span
-            className="inline-flex items-center px-2 py-0.5 text-[11px] rounded
+            className="inline-flex items-center px-2 py-0.5 text-meta rounded
                        bg-warning/15 text-warning border border-warning/30"
             title={
               t("discussion.quality.over_confident_tooltip", {
@@ -93,7 +93,7 @@ export function QualitySignalsRow({ signals }: { signals?: QualitySignals }) {
       </div>
       {hallucinationOpen && hallucinations.length > 0 && (
         <ul
-          className="text-[11px] text-danger/90 bg-danger/10 border
+          className="text-meta text-danger/90 bg-danger/10 border
                      border-danger/30 rounded px-2 py-1.5 space-y-0.5"
         >
           {hallucinations.map((w, i) => (

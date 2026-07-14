@@ -61,14 +61,14 @@ export function SweepAggregateCard({
   if (!enabled) return null;
   if (isLoading) {
     return (
-      <p className="text-[11px] text-muted-foreground animate-pulse px-1 py-0.5">
+      <p className="text-meta text-muted-foreground animate-pulse px-1 py-0.5">
         {t("common.loading")}
       </p>
     );
   }
   if (error) {
     return (
-      <p className="text-[11px] text-danger px-1 py-0.5">
+      <p className="text-meta text-danger px-1 py-0.5">
         {(error as Error).message}
       </p>
     );

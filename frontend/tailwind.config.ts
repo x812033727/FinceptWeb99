@@ -90,6 +90,10 @@ const config: Config = {
       fontSize: {
         micro: ["10px", { lineHeight: "14px", letterSpacing: "0.02em" }],
         label: ["11px", { lineHeight: "16px", letterSpacing: "0.06em" }],
+        // 11px normal-case small text (meta / help / values) — same size as
+        // `label` but WITHOUT the eyebrow tracking, so it's the drop-in token
+        // for the bare text-[11px] literals that aren't uppercase eyebrows.
+        meta: ["11px", { lineHeight: "16px" }],
         data: ["12px", { lineHeight: "18px" }],
         body: ["13px", { lineHeight: "20px" }],
         heading: ["14px", { lineHeight: "20px", letterSpacing: "-0.006em" }],

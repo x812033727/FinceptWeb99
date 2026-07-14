@@ -249,7 +249,7 @@ export default function StockDetailPage() {
                 coverageDays={coverageDays}
               />
               {intradayActive && (
-                <span className="text-[11px] text-muted-foreground ml-2">
+                <span className="text-meta text-muted-foreground ml-2">
                   {t("stock.timeframe.coverage_note", { days: coverageDays })}
                 </span>
               )}

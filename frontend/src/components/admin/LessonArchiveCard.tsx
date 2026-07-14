@@ -80,13 +80,13 @@ export function LessonArchiveCard() {
       {open && (
         <div className="space-y-3">
           <div className="flex items-center gap-2">
-            <label className="text-[11px] text-muted-foreground">
+            <label className="text-meta text-muted-foreground">
               {t("admin.lesson_archive.market_filter")}
             </label>
             <select
               value={marketFilter}
               onChange={(e) => setMarketFilter(e.target.value)}
-              className="bg-background border border-border rounded px-2 py-0.5 text-[11px]"
+              className="bg-background border border-border rounded px-2 py-0.5 text-meta"
             >
               <option value="">{t("admin.lesson_archive.market_all")}</option>
               <option value="TW">TW</option>
@@ -95,7 +95,7 @@ export function LessonArchiveCard() {
             </select>
           </div>
           {items.length === 0 ? (
-            <div className="text-[11px] text-muted-foreground italic">
+            <div className="text-meta text-muted-foreground italic">
               {t("admin.lesson_archive.empty")}
             </div>
           ) : (
@@ -103,7 +103,7 @@ export function LessonArchiveCard() {
               {items.map((row) => (
                 <li
                   key={row.id}
-                  className="border border-border rounded p-2 text-[11px] flex items-start justify-between gap-2"
+                  className="border border-border rounded p-2 text-meta flex items-start justify-between gap-2"
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5 text-micro text-muted-foreground mb-0.5">

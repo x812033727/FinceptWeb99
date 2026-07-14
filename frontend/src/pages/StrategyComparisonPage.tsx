@@ -129,7 +129,7 @@ export default function StrategyComparisonPage() {
                 key={s.id}
                 type="button"
                 onClick={() => toggleStrategy(s.id)}
-                className={`px-2 py-0.5 text-[11px] rounded ${tone}`}
+                className={`px-2 py-0.5 text-meta rounded ${tone}`}
                 style={style}
                 disabled={!on && selectedIds.length >= 4}
               >
@@ -142,12 +142,12 @@ export default function StrategyComparisonPage() {
           })}
         </div>
         <div className="flex items-center gap-2">
-          <label className="text-[11px] text-muted-foreground flex items-center gap-1">
+          <label className="text-meta text-muted-foreground flex items-center gap-1">
             {t("strategy_compare.days")}:
             <select
               value={days}
               onChange={(e) => setDays(Number(e.target.value))}
-              className="bg-background border border-border rounded px-1 py-0.5 text-[11px]"
+              className="bg-background border border-border rounded px-1 py-0.5 text-meta"
             >
               <option value={30}>30</option>
               <option value={60}>60</option>
@@ -159,7 +159,7 @@ export default function StrategyComparisonPage() {
             type="button"
             onClick={runCompare}
             disabled={selectedIds.length === 0 || compare.isPending}
-            className="px-2 py-0.5 text-[11px] bg-success text-white rounded
+            className="px-2 py-0.5 text-meta bg-success text-white rounded
                        hover:bg-success/90 disabled:opacity-50"
           >
             {compare.isPending

@@ -75,7 +75,7 @@ export function MaturityBadge({
 
   return (
     <span
-      className={`inline-flex items-center gap-1 px-2 py-0.5 text-[11px] rounded border ${tone}`}
+      className={`inline-flex items-center gap-1 px-2 py-0.5 text-meta rounded border ${tone}`}
       title={tooltip}
     >
       <span>{icon}</span>

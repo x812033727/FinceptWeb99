@@ -45,7 +45,7 @@ export function CapturedSessionBadge({
 
   return (
     <div
-      className={`mb-3 rounded border ${tone} px-3 py-2 text-[11px] leading-snug`}
+      className={`mb-3 rounded border ${tone} px-3 py-2 text-meta leading-snug`}
       role="note"
     >
       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-medium">

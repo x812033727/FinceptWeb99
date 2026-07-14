@@ -59,7 +59,7 @@ export function AutoPromoteSettings({
   return (
     <div className="border-t border-border/50 mt-2 pt-2 space-y-1.5">
       <div className="flex items-center justify-between gap-2">
-        <label className="flex items-center gap-2 text-[11px] cursor-pointer">
+        <label className="flex items-center gap-2 text-meta cursor-pointer">
           <input
             type="checkbox"
             checked={enabled}
@@ -98,7 +98,7 @@ export function AutoPromoteSettings({
               value={minBrierImprovement}
               onChange={(e) => setMinBrierImprovement(Number(e.target.value))}
               className="bg-background border border-border rounded px-1 py-0.5
-                         text-[11px] tabular-nums"
+                         text-meta tabular-nums"
             />
           </label>
           <label className="flex flex-col gap-0.5 text-micro">
@@ -113,7 +113,7 @@ export function AutoPromoteSettings({
               value={minHitRate}
               onChange={(e) => setMinHitRate(Number(e.target.value))}
               className="bg-background border border-border rounded px-1 py-0.5
-                         text-[11px] tabular-nums"
+                         text-meta tabular-nums"
             />
           </label>
         </div>

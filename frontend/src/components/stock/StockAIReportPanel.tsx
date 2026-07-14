@@ -355,7 +355,7 @@ export function StockAIReportPanel({ symbol, market }: { symbol: string; market:
                         <span className="text-muted-foreground"> · {r.model}</span>
                       ) : null}
                     </span>
-                    <span className="block text-[11px] text-muted-foreground truncate">
+                    <span className="block text-meta text-muted-foreground truncate">
                       {r.preview}
                     </span>
                   </span>

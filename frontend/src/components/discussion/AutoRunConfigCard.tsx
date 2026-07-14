@@ -162,7 +162,7 @@ export function AutoRunConfigCard({
                 </span>
               </label>
 
-              <div className="flex items-center gap-2 text-[11px]">
+              <div className="flex items-center gap-2 text-meta">
                 <span className="text-muted-foreground">
                   {t("discussion.market_label")}
                 </span>
@@ -178,7 +178,7 @@ export function AutoRunConfigCard({
               </div>
 
               <div>
-                <label className="text-[11px] text-muted-foreground">
+                <label className="text-meta text-muted-foreground">
                   {t("discussion.auto_run_topic_label")}
                 </label>
                 <textarea
@@ -187,12 +187,12 @@ export function AutoRunConfigCard({
                   rows={2}
                   maxLength={500}
                   placeholder={t("discussion.auto_run_topic_placeholder")}
-                  className="w-full mt-0.5 resize-none bg-card border border-border rounded px-2 py-1 text-[11px] text-foreground focus:outline-none focus:border-primary/50"
+                  className="w-full mt-0.5 resize-none bg-card border border-border rounded px-2 py-1 text-meta text-foreground focus:outline-none focus:border-primary/50"
                 />
               </div>
 
               <div>
-                <label className="text-[11px] text-muted-foreground">
+                <label className="text-meta text-muted-foreground">
                   {t("discussion.auto_run_rules_label")}
                 </label>
                 <textarea
@@ -201,12 +201,12 @@ export function AutoRunConfigCard({
                   rows={4}
                   maxLength={2000}
                   placeholder={t("discussion.auto_run_rules_placeholder")}
-                  className="w-full mt-0.5 resize-none bg-card border border-border rounded px-2 py-1 text-[11px] text-foreground font-mono focus:outline-none focus:border-primary/50"
+                  className="w-full mt-0.5 resize-none bg-card border border-border rounded px-2 py-1 text-meta text-foreground font-mono focus:outline-none focus:border-primary/50"
                 />
               </div>
 
               <div>
-                <label className="text-[11px] text-muted-foreground">
+                <label className="text-meta text-muted-foreground">
                   {t("discussion.auto_run_personas_label")} ({personaIds.length})
                 </label>
                 <div className="mt-1 flex flex-wrap gap-1">
@@ -239,7 +239,7 @@ export function AutoRunConfigCard({
                   type="button"
                   onClick={handleSave}
                   disabled={saveMut.isPending}
-                  className="px-2.5 py-1 rounded text-[11px] bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+                  className="px-2.5 py-1 rounded text-meta bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
                 >
                   {saveMut.isPending
                     ? t("common.saving")

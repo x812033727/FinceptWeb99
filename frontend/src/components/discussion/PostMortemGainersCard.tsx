@@ -137,7 +137,7 @@ export function PostMortemGainersCard({
           {t("discussion.post_mortem_self_eval_title")}
         </h5>
         {recPerf.length === 0 ? (
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-meta text-muted-foreground">
             {t("discussion.post_mortem_self_eval_empty")}
           </p>
         ) : (
@@ -177,7 +177,7 @@ export function PostMortemGainersCard({
         </button>
         {sectionB.open && (
           dailyBlocks.length === 0 ? (
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-meta text-muted-foreground">
               {t("discussion.post_mortem_daily_winners_empty")}
             </p>
           ) : (
@@ -201,7 +201,7 @@ export function PostMortemGainersCard({
                       {block.gainers.map((g, j) => (
                         <li
                           key={g.symbol}
-                          className="grid grid-cols-[1.2rem_minmax(0,1fr)_auto] items-center gap-1 text-[11px]"
+                          className="grid grid-cols-[1.2rem_minmax(0,1fr)_auto] items-center gap-1 text-meta"
                         >
                           <span className="text-muted-foreground/60 tabular-nums">
                             {j + 1}.

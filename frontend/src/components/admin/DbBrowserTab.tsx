@@ -128,7 +128,7 @@ function TableViewer({ info, onBack }: { info: TableInfo; onBack: () => void }) 
         const v = row[i];
         return v === null ? <span className="text-muted-foreground/50">null</span> : String(v);
       },
-      cellClassName: "font-mono text-[11px] max-w-[240px] truncate",
+      cellClassName: "font-mono text-meta max-w-[240px] truncate",
     }));
   }, [data]);
 

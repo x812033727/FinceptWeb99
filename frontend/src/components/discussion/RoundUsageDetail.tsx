@@ -127,13 +127,13 @@ export function RoundUsageDetail({
         type="button"
         onClick={toggle}
         aria-expanded={open}
-        className="w-full flex items-center justify-between px-3 py-2 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+        className="w-full flex items-center justify-between px-3 py-2 text-meta font-medium text-muted-foreground hover:text-foreground"
       >
         <span>{t("discussion.usage_detail.title")}</span>
         <span className="tabular-nums">{open ? "▾" : "▸"}</span>
       </button>
       {open && (
-        <div className="px-3 pb-3 space-y-4 text-[11px]">
+        <div className="px-3 pb-3 space-y-4 text-meta">
           <section>
             <div className="mb-1 font-semibold text-foreground/80">
               {t("discussion.usage_detail.per_persona")}

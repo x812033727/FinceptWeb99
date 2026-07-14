@@ -80,7 +80,7 @@ export function StrategyRow({
             ) : null}
           </p>
           {strategy.description ? (
-            <p className="text-[11px] text-muted-foreground truncate">
+            <p className="text-meta text-muted-foreground truncate">
               {strategy.description}
             </p>
           ) : null}
@@ -89,7 +89,7 @@ export function StrategyRow({
           type="button"
           onClick={onDelete}
           disabled={isDeleting}
-          className="text-[11px] text-danger hover:text-danger/80 disabled:opacity-50 shrink-0"
+          className="text-meta text-danger hover:text-danger/80 disabled:opacity-50 shrink-0"
         >
           {t("common.delete", "刪除")}
         </button>

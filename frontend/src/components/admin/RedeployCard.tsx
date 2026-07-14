@@ -198,7 +198,7 @@ export function RedeployCard() {
               </div>
               {data.log_tail && data.log_tail.length > 0 && (
                 <button
-                  className="underline text-[11px]"
+                  className="underline text-meta"
                   onClick={() => setShowLog((v) => !v)}
                 >
                   {showLog

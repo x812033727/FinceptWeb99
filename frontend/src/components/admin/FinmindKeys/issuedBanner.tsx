@@ -30,14 +30,14 @@ export function IssuedKeyBanner({
           onClick={() => {
             navigator.clipboard?.writeText(issuedKey.plaintext);
           }}
-          className="rounded border border-border bg-background px-2 py-0.5 text-[11px]"
+          className="rounded border border-border bg-background px-2 py-0.5 text-meta"
         >
           Copy
         </button>
         <button
           type="button"
           onClick={() => setIssuedKey(null)}
-          className="rounded border border-border bg-background px-2 py-0.5 text-[11px]"
+          className="rounded border border-border bg-background px-2 py-0.5 text-meta"
         >
           Dismiss
         </button>

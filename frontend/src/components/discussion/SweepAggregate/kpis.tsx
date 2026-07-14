@@ -22,7 +22,7 @@ export function FoldBadge({ agg }: { agg: SweepAggregate }) {
     : t("aggregate.fold_test", "Test fold (OOS)");
   const FoldIcon = fold === "train" ? GraduationCap : FlaskConical;
   return (
-    <div className="flex items-center gap-2 text-[11px]">
+    <div className="flex items-center gap-2 text-meta">
       <span className={`inline-flex items-center gap-1 border rounded px-1.5 py-0.5 ${styles}`}>
         <FoldIcon className="h-3 w-3" aria-hidden="true" />
         {label}

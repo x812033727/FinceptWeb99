@@ -95,7 +95,7 @@ export function InjectForm({
 
   return (
     <div className="border border-border rounded-md p-2 bg-card/40 space-y-1.5">
-      <label className="text-[11px] text-muted-foreground">
+      <label className="text-meta text-muted-foreground">
         {t(labelKey)}
       </label>
       <textarea
@@ -138,7 +138,7 @@ export function InjectForm({
           type="button"
           onClick={submit}
           disabled={!injectDraft.trim() || activeMut.isPending}
-          className="px-2.5 py-1 rounded text-[11px] border border-warning/30 text-warning hover:bg-warning/10 transition-colors disabled:opacity-40 min-h-[32px]"
+          className="px-2.5 py-1 rounded text-meta border border-warning/30 text-warning hover:bg-warning/10 transition-colors disabled:opacity-40 min-h-[32px]"
         >
           {activeMut.isPending ? t("common.saving") : t(sendKey)}
         </button>

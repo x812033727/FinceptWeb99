@@ -13,6 +13,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, ReferenceLine,
 } from "recharts";
+import { ChartTooltip } from "@/components/ui/ChartTooltip";
 import { useTranslation } from "react-i18next";
 import api from "@/lib/api";
 import { Num, DeltaText } from "@/components/Num";
@@ -243,11 +244,7 @@ export default function BacktestHistoryPanel() {
                   domain={["auto", "auto"]}
                   width={48}
                 />
-                <Tooltip
-                  contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
-                  labelStyle={{ color: "hsl(var(--muted-foreground))", fontSize: 11 }}
-                  formatter={(v: number) => v?.toFixed(2)}
-                />
+                <Tooltip content={<ChartTooltip valueFormatter={(v) => v?.toFixed(2)} />} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
                 <ReferenceLine y={100} stroke="hsl(var(--muted-foreground))" strokeDasharray="4 2" />
                 {compare.runs.map((run, i) => (

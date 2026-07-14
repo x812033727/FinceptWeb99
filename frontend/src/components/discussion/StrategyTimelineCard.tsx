@@ -28,6 +28,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { ChartTooltip } from "@/components/ui/ChartTooltip";
 import api from "@/lib/api";
 import { useCollapsible } from "@/hooks/useCollapsible";
 import type {
@@ -216,13 +217,7 @@ export function StrategyTimelineCard({
                     tickFormatter={(v: number) => `${Math.round(v * 100)}%`}
                     width={32}
                   />
-                  <Tooltip
-                    wrapperStyle={{ fontSize: 11 }}
-                    contentStyle={{
-                      backgroundColor: "hsl(var(--popover))",
-                      borderColor: "hsl(var(--border))",
-                    }}
-                  />
+                  <Tooltip content={<ChartTooltip />} />
                   <Line
                     yAxisId="brier" type="monotone" dataKey="brier"
                     stroke="hsl(var(--chart-2))" strokeWidth={2}

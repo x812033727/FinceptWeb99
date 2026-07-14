@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
+import { ChartTooltip } from "@/components/ui/ChartTooltip";
 import { Loading } from "./_atoms";
 import { fetchETFHoldings } from "./_shared";
 import { DataTable, type DataTableColumn } from "../ui/table";
@@ -93,10 +94,7 @@ export function HoldingsPanel({ symbol }: { symbol: string }) {
                   <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                 ))}
               </Pie>
-              <Tooltip
-                contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
-                formatter={(v: number) => [`${v.toFixed(2)}%`, "weight"]}
-              />
+              <Tooltip content={<ChartTooltip valueFormatter={(v) => `${v.toFixed(2)}%`} />} />
               <Legend wrapperStyle={{ fontSize: 11 }} iconSize={8} />
             </PieChart>
           </ResponsiveContainer>

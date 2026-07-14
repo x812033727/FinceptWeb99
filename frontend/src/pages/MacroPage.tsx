@@ -4,6 +4,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
   ReferenceLine, CartesianGrid,
 } from "recharts";
+import { ChartTooltip } from "@/components/ui/ChartTooltip";
 import { useTranslation } from "react-i18next";
 import { Bot } from "lucide-react";
 import api from "@/lib/api";
@@ -101,14 +102,7 @@ function MacroChart({
             interval="preserveStartEnd"
           />
           <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} width={45} />
-          <Tooltip
-            contentStyle={{
-              background: "hsl(var(--card))",
-              border: "1px solid hsl(var(--border))",
-              fontSize: 11,
-            }}
-            formatter={(v: number) => [`${v.toFixed(3)} ${unit}`, indicator]}
-          />
+          <Tooltip content={<ChartTooltip valueFormatter={(v) => `${v.toFixed(3)} ${unit}`} />} />
           <ReferenceLine y={0} stroke="hsl(var(--muted-foreground))" strokeDasharray="4 4" />
           <Line
             type="monotone"

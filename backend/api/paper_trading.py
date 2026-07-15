@@ -12,6 +12,7 @@ from db.session import get_db
 from dependencies import get_current_user
 from limiter import limiter
 from services import paper_trading_service as svc
+from services import paper_risk_service
 
 router = APIRouter()
 CurrentUser = Annotated[dict, Depends(get_current_user)]
@@ -80,6 +81,8 @@ class PaperFillResponse(BaseModel):
     quantity: float
     price: float
     fee: float
+    currency: str
+    realized_pnl: float
     quote_price: float | None
     slippage_bps: float | None
     liquidity_quantity: float | None
@@ -91,6 +94,27 @@ class PaperFillResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PaperRiskPolicyUpdate(BaseModel):
+    trading_enabled: bool = True
+    max_order_notional_usd: float | None = Field(default=None, gt=0)
+    max_order_notional_twd: float | None = Field(default=None, gt=0)
+    max_position_notional_usd: float | None = Field(default=None, gt=0)
+    max_position_notional_twd: float | None = Field(default=None, gt=0)
+    max_daily_loss_usd: float | None = Field(default=None, gt=0)
+    max_daily_loss_twd: float | None = Field(default=None, gt=0)
+    max_open_orders: int | None = Field(default=None, ge=1, le=10_000)
+    max_symbol_concentration_pct: float | None = Field(default=None, gt=0, le=100)
+
+
+class PaperRiskPolicyResponse(PaperRiskPolicyUpdate):
+    portfolio_id: UUID
+    configured: bool
+    updated_at: datetime | None
+    cancelled_open_orders: int
+    daily_realized_pnl_usd: float
+    daily_realized_pnl_twd: float
+
+
 def _error(exc: ValueError) -> HTTPException:
     message = str(exc)
     if "not found" in message.lower():
@@ -98,6 +122,36 @@ def _error(exc: ValueError) -> HTTPException:
     if isinstance(exc, svc.PaperTradingConflict):
         return HTTPException(status_code=409, detail=message)
     return HTTPException(status_code=400, detail=message)
+
+
+@router.get("/{portfolio_id}/paper-risk-policy", response_model=PaperRiskPolicyResponse)
+async def get_paper_risk_policy(portfolio_id: str, user: CurrentUser, db: DB):
+    try:
+        return await paper_risk_service.get_policy_state(
+            portfolio_id=portfolio_id, user_id=user["id"], db=db
+        )
+    except ValueError as exc:
+        raise _error(exc)
+
+
+@router.put("/{portfolio_id}/paper-risk-policy", response_model=PaperRiskPolicyResponse)
+@limiter.limit("30/minute")
+async def update_paper_risk_policy(
+    request: Request,
+    portfolio_id: str,
+    body: PaperRiskPolicyUpdate,
+    user: CurrentUser,
+    db: DB,
+):
+    try:
+        return await paper_risk_service.update_policy(
+            portfolio_id=portfolio_id,
+            user_id=user["id"],
+            db=db,
+            **body.model_dump(),
+        )
+    except ValueError as exc:
+        raise _error(exc)
 
 
 @router.post(

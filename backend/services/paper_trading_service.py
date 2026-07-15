@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.paper_trading import PaperFill, PaperOrder
 from models.portfolio import Holding, Market, Portfolio
-from services import market_calendar_service
+from services import market_calendar_service, paper_risk_service
 
 OPEN_STATUSES = ("pending", "partially_filled")
 
@@ -170,6 +170,19 @@ async def submit_order(
         return existing
 
     open_orders = await _open_orders(portfolio_id, db)
+    try:
+        await paper_risk_service.enforce_submission(
+            portfolio_id=portfolio_id,
+            market=normalized_market,
+            symbol=normalized_symbol,
+            side=normalized_side,
+            quantity=qty,
+            reservation_price=reservation_price,
+            open_orders=open_orders,
+            db=db,
+        )
+    except paper_risk_service.PaperRiskViolation as exc:
+        raise PaperTradingConflict(str(exc)) from exc
     if normalized_side == "buy":
         currency = _currency(normalized_market)
         cash = await _cash_balance(portfolio_id, currency, db)
@@ -364,6 +377,18 @@ async def fill_order(
             raise PaperTradingConflict("sell fill price is below limit price")
 
     open_orders = await _open_orders(portfolio_id, db)
+    try:
+        await paper_risk_service.enforce_fill(
+            portfolio_id=portfolio_id,
+            order=order,
+            quantity=qty,
+            price=fill_price,
+            open_orders=open_orders,
+            db=db,
+        )
+    except paper_risk_service.PaperRiskViolation as exc:
+        raise PaperTradingConflict(str(exc)) from exc
+    sell_avg_cost = 0.0
     if order.side == "buy":
         currency = _currency(order.market)
         cash = await _cash_balance(portfolio_id, currency, db)
@@ -385,6 +410,7 @@ async def fill_order(
             )
         )
         held = float(holding.quantity) if holding else 0.0
+        sell_avg_cost = float(holding.avg_cost) if holding else 0.0
         other_reserved = sum(
             _remaining(item)
             for item in open_orders
@@ -398,6 +424,11 @@ async def fill_order(
 
     execution_time = filled_at or datetime.now(UTC)
     fill_id = uuid.uuid4()
+    currency = _currency(order.market)
+    fee_amount = qty * fill_price * float(order.fee_bps) / 10_000
+    realized_pnl = (
+        (fill_price - sell_avg_cost) * qty - fee_amount if order.side == "sell" else -fee_amount
+    )
     from services.portfolio_service import add_transaction
 
     transaction = await add_transaction(
@@ -413,13 +444,12 @@ async def fill_order(
         notes=f"paper_order:{order.id}",
         db=db,
     )
-    fee_amount = qty * fill_price * float(order.fee_bps) / 10_000
     if fee_amount > 1e-9:
         from services.portfolio_cash_service import append_entry
 
         await append_entry(
             portfolio_id=portfolio_id,
-            currency=_currency(order.market),
+            currency=currency,
             amount=-fee_amount,
             entry_type="fee",
             source="paper_fill",
@@ -443,6 +473,8 @@ async def fill_order(
         quantity=qty,
         price=fill_price,
         fee=fee_amount,
+        currency=currency,
+        realized_pnl=realized_pnl,
         quote_price=normalized_quote_price,
         slippage_bps=normalized_slippage,
         liquidity_quantity=normalized_liquidity,

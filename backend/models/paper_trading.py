@@ -3,7 +3,16 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -105,6 +114,8 @@ class PaperFill(Base):
     quantity: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
     price: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
     fee: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False, default=0)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    realized_pnl: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False, default=0)
     quote_price: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
     slippage_bps: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
     liquidity_quantity: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
@@ -112,3 +123,31 @@ class PaperFill(Base):
     execution_source: Mapped[str] = mapped_column(String(20), nullable=False, default="manual")
     idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
     filled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PaperRiskPolicy(Base):
+    __tablename__ = "paper_risk_policies"
+
+    portfolio_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("portfolios.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    trading_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    max_order_notional_usd: Mapped[float | None] = mapped_column(Numeric(20, 6))
+    max_order_notional_twd: Mapped[float | None] = mapped_column(Numeric(20, 6))
+    max_position_notional_usd: Mapped[float | None] = mapped_column(Numeric(20, 6))
+    max_position_notional_twd: Mapped[float | None] = mapped_column(Numeric(20, 6))
+    max_daily_loss_usd: Mapped[float | None] = mapped_column(Numeric(20, 6))
+    max_daily_loss_twd: Mapped[float | None] = mapped_column(Numeric(20, 6))
+    max_open_orders: Mapped[int | None] = mapped_column(Integer)
+    max_symbol_concentration_pct: Mapped[float | None] = mapped_column(Numeric(7, 4))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )

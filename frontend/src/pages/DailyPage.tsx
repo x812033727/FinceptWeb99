@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, CalendarDays, ShieldAlert, Users } from "lucide-react";
 import { getPersonaIdentity } from "@/components/discussion/personaIdentity";
+import { BAND_LABELS, classifySymbolBand } from "@/components/discussion/format/symbols";
 
 type QualitySignals = {
   consensus_contradiction?: boolean;
@@ -46,6 +47,11 @@ const horizon: Record<string, string> = {
   short_term: "短期", medium_term: "中期", long_term: "長期",
 };
 const stance: Record<string, string> = { agree: "贊同", dissent: "異議", supplement: "補充" };
+const stanceTone: Record<string, string> = {
+  agree: "border-success/30 bg-success/10 text-success",
+  dissent: "border-danger/30 bg-danger/10 text-danger",
+  supplement: "border-info/30 bg-info/10 text-info",
+};
 
 function qualityWarnings(q?: QualitySignals): string[] {
   if (!q) return [];
@@ -147,11 +153,11 @@ function StrategyRun({ run }: { run: Result }) {
   const warnings = qualityWarnings(run.conclusion.quality_signals);
   return <article className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5 sm:p-7">
     <OutcomeSummary run={run} />
-    <div className="mt-4 flex flex-wrap gap-3">{(run.conclusion.recommended_symbols ?? []).map((symbol) => <div key={symbol} className="rounded-xl bg-slate-950 px-4 py-3"><div className="font-bold">{symbol}</div><div className="text-xs text-slate-400">{run.conclusion.symbol_names?.[symbol] ?? ""}</div></div>)}{!(run.conclusion.recommended_symbols?.length) && <p className="text-slate-400">本場沒有推薦標的</p>}</div>
+    <div className="mt-4 flex flex-wrap gap-3">{(run.conclusion.recommended_symbols ?? []).map((symbol) => <div key={symbol} className="rounded-xl bg-amber-900/40 px-4 py-3 text-amber-100 ring-1 ring-amber-800/60"><div className="font-bold">{symbol}</div><div className="text-xs text-amber-200/70">{run.conclusion.symbol_names?.[symbol] ?? ""}</div></div>)}{!(run.conclusion.recommended_symbols?.length) && <p className="text-slate-400">本場沒有推薦標的</p>}</div>
     <p className="mt-5 whitespace-pre-wrap leading-7 text-slate-200">{run.conclusion.reasoning}</p>
     <div className="mt-5 grid gap-3 sm:grid-cols-2"><Info label="時間框架" value={horizon[run.conclusion.time_horizon ?? ""] ?? run.conclusion.time_horizon ?? "—"} /><Info label="共識度" value={typeof run.conclusion.consensus_score === "number" ? `${Math.round(run.conclusion.consensus_score * 100)}%` : "—"} /></div>
     {!!warnings.length && <div className="mt-5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">{warnings.join("；")}</div>}
-    <details className="mt-6"><summary className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-slate-300"><Users className="h-4 w-4 text-success" />展開五輪完整發言</summary><div className="mt-4 space-y-3">{run.turns.map((turn) => { const identity = getPersonaIdentity(turn.persona_id, turn.persona_name); return <div key={`${turn.round}-${turn.turn_index}`} className="rounded-xl border border-l-[3px] border-slate-800 bg-slate-950/60 p-4" style={{ borderLeftColor: identity.accentColor }}><div className="flex justify-between gap-3 text-sm"><b style={{ color: identity.accentColor }}>{turn.persona_name}</b><span className="text-slate-500">第 {turn.round} 輪 · {stance[turn.stance] ?? turn.stance}</span></div><p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-300">{turn.content || "（本輪無補充發言）"}</p></div>; })}</div></details>
+    <details className="mt-6"><summary className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-slate-300"><Users className="h-4 w-4 text-success" />展開五輪完整發言</summary><div className="mt-4 space-y-3">{run.turns.map((turn) => { const identity = getPersonaIdentity(turn.persona_id, turn.persona_name); return <div key={`${turn.round}-${turn.turn_index}`} className="rounded-xl border border-l-[3px] border-slate-800 bg-slate-950/60 p-4" style={{ borderLeftColor: identity.accentColor }}><div className="flex items-center justify-between gap-3 text-sm"><b style={{ color: identity.accentColor }}>{turn.persona_name}</b><span className={`rounded-full border px-2 py-0.5 text-xs ${stanceTone[turn.stance] ?? "border-slate-700 bg-slate-800 text-slate-400"}`}>第 {turn.round} 輪 · {stance[turn.stance] ?? turn.stance}</span></div><p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-300">{turn.content || "（本輪無補充發言）"}</p></div>; })}</div></details>
   </article>;
 }
 
@@ -167,12 +173,12 @@ function OutcomeSummary({ run }: { run: Result }) {
     return { symbol, open, close, change };
   });
   return <section className="mt-5 rounded-xl border border-slate-800 bg-slate-950/50 p-4 text-slate-100">
-    <div className="flex flex-wrap items-center justify-between gap-2"><div><h3 className="font-semibold text-slate-200">本場答案</h3><p className="mt-1 text-lg font-bold text-white">{symbols.length ? symbols.join("、") : "本場沒有推薦標的"}</p></div><div className="text-right"><div className="text-xs text-slate-500">五日績效</div><span className="mt-1 inline-block rounded-full bg-slate-800 px-3 py-1 text-sm font-bold text-slate-300">{run.verdict ? verdictLabel[run.verdict] ?? run.verdict : run.verify_after_date ? `預計 ${new Date(`${run.verify_after_date}T00:00:00+08:00`).toLocaleDateString("zh-TW", { month: "numeric", day: "numeric" })} 對答案` : "等待驗證"}</span></div></div>
+    <div className="flex flex-wrap items-center justify-between gap-2"><div><h3 className="font-semibold text-amber-300">本場答案</h3><p className="mt-1 text-lg font-bold text-amber-100">{symbols.length ? symbols.join("、") : "本場沒有推薦標的"}</p></div><div className="text-right"><div className="text-xs text-slate-500">五日績效</div><span className={`mt-1 inline-block rounded-full bg-slate-800 px-3 py-1 text-sm font-bold ${run.verdict ? BAND_LABELS[run.verdict]?.cls ?? "text-slate-300" : "text-slate-300"}`}>{run.verdict ? verdictLabel[run.verdict] ?? run.verdict : run.verify_after_date ? `預計 ${new Date(`${run.verify_after_date}T00:00:00+08:00`).toLocaleDateString("zh-TW", { month: "numeric", day: "numeric" })} 對答案` : "等待驗證"}</span></div></div>
     {!!rows.length && <div className="mt-3 space-y-2">{rows.map((row) => {
       const changes = (run.daily_close_prices?.[row.symbol] ?? []).map((close) => row.open && close != null ? (close / row.open - 1) * 100 : null);
-      const observed = changes.filter((value): value is number => value != null);
-      const interim = observed.some((value) => value <= -5) ? "大敗" : observed.some((value) => value >= 5) ? "勝" : observed.length ? "敗" : "等待";
-      return <div key={row.symbol} className="rounded-lg bg-slate-950/60 p-3 text-sm"><b>{row.symbol} {run.verdict ? verdictLabel[run.verdict] ?? run.verdict : interim}</b><div className="mt-1">{Array.from({ length: 5 }, (_, index) => { const value = changes[index]; return <span key={index}><span className={value == null ? "text-slate-500" : value >= 0 ? "text-up" : "text-down"}>{value == null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`}</span>{index < 4 && <span className="text-slate-600">／</span>}</span>; })}</div></div>;
+      const band = run.verdict ?? classifySymbolBand(changes.map((value) => value == null ? null : value / 100));
+      const display = band ? BAND_LABELS[band] : { mark: "等待", cls: "text-slate-400" };
+      return <div key={row.symbol} className="rounded-lg bg-slate-950/60 p-3 text-sm"><b className={display.cls}>{row.symbol} {display.mark}</b><div className="mt-1">{Array.from({ length: 5 }, (_, index) => { const value = changes[index]; return <span key={index}><span className={value == null ? "text-slate-500" : value >= 0 ? "text-up" : "text-down"}>{value == null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`}</span>{index < 4 && <span className="text-slate-600">／</span>}</span>; })}</div></div>;
     })}</div>}
     <p className="mt-3 text-sm leading-6 text-slate-400">{run.verdict_reason || "完成五個交易日後，系統會在這裡顯示驗證結果。"}</p>
   </section>;

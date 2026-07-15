@@ -127,6 +127,32 @@ export function useTransactionImports(portfolioId: string) {
   });
 }
 
+export interface TransactionImportTransaction {
+  id: string;
+  import_id: string | null;
+  symbol: string;
+  market: string;
+  tx_type: string;
+  quantity: number;
+  price: number;
+  fx_rate: number;
+  tx_date: string;
+  notes: string | null;
+  created_at: string;
+}
+
+export function useTransactionImportTransactions(
+  portfolioId: string, importId: string | null,
+) {
+  return useQuery({
+    queryKey: ["portfolio-transaction-import", portfolioId, importId],
+    queryFn: () => api.get<TransactionImportTransaction[]>(
+      `/portfolio/${portfolioId}/transaction-imports/${importId}/transactions`,
+    ).then((response) => response.data),
+    enabled: Boolean(importId),
+  });
+}
+
 export function useRollbackTransactionImport(portfolioId: string) {
   const qc = useQueryClient();
   return useMutation({

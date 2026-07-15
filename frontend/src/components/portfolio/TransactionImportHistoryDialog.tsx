@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { errorDetail } from "@/lib/api";
 import {
   useRollbackTransactionImport,
+  useTransactionImportTransactions,
   useTransactionImports,
 } from "@/hooks/usePortfolio";
 import {
@@ -16,6 +17,8 @@ export function TransactionImportHistoryDialog({
   const imports = useTransactionImports(portfolioId);
   const rollback = useRollbackTransactionImport(portfolioId);
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [viewing, setViewing] = useState<string | null>(null);
+  const details = useTransactionImportTransactions(portfolioId, viewing);
 
   function formatTradeDate(value: string) {
     return new Intl.DateTimeFormat(i18n.language, {
@@ -113,18 +116,69 @@ export function TransactionImportHistoryDialog({
                         })}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      rollback.reset();
-                      setConfirming(batch.id);
-                    }}
-                    disabled={!batch.provenance_complete || rollback.isPending}
-                    className="min-h-[32px] rounded border border-danger/40 px-3 py-1 text-xs text-danger hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    {t("portfolio.transactions.import_history.rollback")}
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setViewing(viewing === batch.id ? null : batch.id)}
+                      className="min-h-[32px] text-xs text-primary hover:underline"
+                    >
+                      {viewing === batch.id
+                        ? t("portfolio.transactions.import_history.hide_details")
+                        : t("portfolio.transactions.import_history.view_details")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        rollback.reset();
+                        setConfirming(batch.id);
+                      }}
+                      disabled={!batch.provenance_complete || rollback.isPending}
+                      className="min-h-[32px] rounded border border-danger/40 px-3 py-1 text-xs text-danger hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {t("portfolio.transactions.import_history.rollback")}
+                    </button>
+                  </div>
                 </div>
+
+                {viewing === batch.id && (
+                  <div className="mt-3 overflow-x-auto rounded border border-border">
+                    {details.isLoading && (
+                      <p className="p-3 text-xs text-muted-foreground">{t("common.loading")}</p>
+                    )}
+                    {details.isError && (
+                      <p className="p-3 text-xs text-danger">{errorDetail(details.error)}</p>
+                    )}
+                    {!!details.data?.length && (
+                      <table className="w-full min-w-[480px] text-xs">
+                        <thead className="bg-muted text-muted-foreground">
+                          <tr>
+                            <th className="px-2 py-1.5 text-left">{t("portfolio.transactions.executed_at")}</th>
+                            <th className="px-2 py-1.5 text-left">{t("portfolio.holdings.symbol")}</th>
+                            <th className="px-2 py-1.5 text-left">{t("portfolio.transactions.type")}</th>
+                            <th className="px-2 py-1.5 text-right">{t("portfolio.transactions.qty")}</th>
+                            <th className="px-2 py-1.5 text-right">{t("portfolio.transactions.price")}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {details.data.map((transaction) => (
+                            <tr key={transaction.id} className="border-t border-border">
+                              <td className="px-2 py-1.5 text-muted-foreground">{transaction.tx_date}</td>
+                              <td className="px-2 py-1.5 font-medium">{transaction.symbol} · {transaction.market}</td>
+                              <td className="px-2 py-1.5 capitalize">{transaction.tx_type}</td>
+                              <td className="px-2 py-1.5 text-right">{transaction.quantity.toLocaleString()}</td>
+                              <td className="px-2 py-1.5 text-right">{transaction.price.toLocaleString()}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                    {!details.isLoading && !details.isError && !details.data?.length && (
+                      <p className="p-3 text-xs text-muted-foreground">
+                        {t("portfolio.transactions.import_history.no_details")}
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {confirming === batch.id && (
                   <div className="mt-3 rounded bg-warning/10 p-3 text-xs text-foreground">

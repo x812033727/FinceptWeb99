@@ -164,6 +164,14 @@ async def test_transaction_import_previews_then_commits_clean_batch(client: Asyn
         "instruments": [{"symbol": "AAPL", "market": "US"}],
         "imported_at": committed.json()["imported_at"],
     }]
+    batch_transactions = (await client.get(
+        f"/api/portfolio/{pid}/transaction-imports/{import_id}/transactions",
+        headers=_auth(token),
+    )).json()
+    assert [transaction["tx_date"] for transaction in batch_transactions] == [
+        "2024-01-02", "2024-01-03",
+    ]
+    assert {transaction["import_id"] for transaction in batch_transactions} == {import_id}
     detail = (await client.get(f"/api/portfolio/{pid}", headers=_auth(token))).json()
     assert detail["holdings"][0]["quantity"] == 6
 
@@ -187,6 +195,10 @@ async def test_transaction_import_previews_then_commits_clean_batch(client: Asyn
     assert (await client.get(
         f"/api/portfolio/{pid}/transaction-imports", headers=_auth(token),
     )).json() == []
+    assert (await client.get(
+        f"/api/portfolio/{pid}/transaction-imports/{import_id}/transactions",
+        headers=_auth(token),
+    )).status_code == 404
     detail = (await client.get(f"/api/portfolio/{pid}", headers=_auth(token))).json()
     assert detail["holdings"] == []
     cash_entries = (await client.get(
@@ -316,6 +328,13 @@ async def test_transaction_import_unknown_portfolio_returns_404(client: AsyncCli
     )
     assert rollback.status_code == 404
     assert rollback.json()["detail"] == "Transaction import not found"
+    details = await client.get(
+        f"/api/portfolio/{portfolio.json()['id']}/transaction-imports/"
+        "00000000-0000-0000-0000-000000000000/transactions",
+        headers=_auth(token),
+    )
+    assert details.status_code == 404
+    assert details.json()["detail"] == "Transaction import not found"
 
 
 @pytest.mark.asyncio

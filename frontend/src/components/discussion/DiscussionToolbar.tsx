@@ -83,7 +83,7 @@ export function DiscussionToolbar({
         <PopoverContent
           align="start"
           sideOffset={6}
-          className="w-[480px] max-w-[calc(100vw-2rem)] p-3"
+          className="w-[480px] max-w-[calc(100vw-2rem)] max-h-[calc(100vh-5rem)] overflow-y-auto overscroll-contain p-3"
         >
           <AutoRunConfigCard
             agents={agents}

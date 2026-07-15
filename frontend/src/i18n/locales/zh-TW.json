@@ -1051,6 +1051,10 @@
       "fx_rate": "匯率",
       "no_transactions": "尚無交易紀錄",
       "export": "匯出 CSV",
+      "exporting": "匯出中…",
+      "loaded_count": "已載入 {{count}} 筆交易",
+      "load_more": "載入更多",
+      "loading_more": "載入中…",
       "import": {
         "action": "匯入 CSV",
         "title": "匯入交易紀錄",

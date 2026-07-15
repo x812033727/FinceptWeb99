@@ -17,6 +17,7 @@ import {
   useCreatePortfolio,
   useDeletePortfolio,
   useExportTransactionImport,
+  useExportPortfolioTransactions,
   useAddTransaction,
   useImportTransactions,
   useRollbackTransactionImport,
@@ -248,6 +249,30 @@ describe("transaction import history", () => {
     ]) {
       expect(qc.getQueryState([key, "p2"])?.isInvalidated).toBe(true);
     }
+  });
+});
+
+describe("portfolio transaction export", () => {
+  it("fetches every server page instead of exporting only visible rows", async () => {
+    const firstPage = Array.from({ length: 500 }, (_, index) => ({
+      id: `tx-${index}`, import_id: null, symbol: "AAPL", market: "US",
+      tx_type: "buy", quantity: 1, price: 100, fx_rate: 1,
+      tx_date: "2024-01-02", notes: null, created_at: "2024-01-02T00:00:00Z",
+    }));
+    const finalPage = [{ ...firstPage[0], id: "tx-500" }];
+    mock.onGet("/portfolio/p4/transactions", {
+      params: { limit: 500, offset: 0 },
+    }).reply(200, firstPage);
+    mock.onGet("/portfolio/p4/transactions", {
+      params: { limit: 500, offset: 500 },
+    }).reply(200, finalPage);
+
+    const { wrapper } = makeWrapper();
+    const exported = renderHook(() => useExportPortfolioTransactions("p4"), { wrapper });
+    await act(async () => {
+      expect(await exported.result.current.mutateAsync()).toHaveLength(501);
+    });
+    expect(mock.history.get.map((request) => request.params?.offset)).toEqual([0, 500]);
   });
 });
 

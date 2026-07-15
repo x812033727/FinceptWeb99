@@ -6,14 +6,13 @@ import hashlib
 import json
 import math
 from dataclasses import dataclass
-from datetime import UTC, datetime, time
-from zoneinfo import ZoneInfo
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.paper_trading import PaperFill, PaperOrder
-from services import paper_trading_service
+from services import market_calendar_service, paper_trading_service
 
 
 class MarketClosedError(paper_trading_service.PaperTradingConflict):
@@ -36,17 +35,7 @@ class ExecutionPlan:
 
 
 def is_market_open(market: str, at: datetime) -> bool:
-    if at.tzinfo is None:
-        raise ValueError("at must be timezone-aware")
-    if market == "CRYPTO":
-        return True
-    timezone, opens, closes = (
-        (ZoneInfo("Asia/Taipei"), time(9), time(13, 30))
-        if market == "TW"
-        else (ZoneInfo("America/New_York"), time(9, 30), time(16))
-    )
-    local = at.astimezone(timezone)
-    return local.weekday() < 5 and opens <= local.time() < closes
+    return market_calendar_service.is_market_open(market, at)
 
 
 def executable_price(order: PaperOrder, quote: dict) -> float | None:

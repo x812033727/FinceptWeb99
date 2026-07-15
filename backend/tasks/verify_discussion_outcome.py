@@ -34,6 +34,7 @@ Notes on day-1 open snapshot:
   comparison against the original open price even if the upstream
   connector later corrects the bar.
 """
+
 from __future__ import annotations
 
 import logging
@@ -93,11 +94,10 @@ async def run() -> None:
                 extra={"failures": failures, "seconds_remaining": remaining},
             )
             await record_health(
-                JOB_ID, ok=False, row_count=0,
-                error=(
-                    f"skipped (backoff after {failures} failures, "
-                    f"~{mins} min remaining)"
-                ),
+                JOB_ID,
+                ok=False,
+                row_count=0,
+                error=(f"skipped (backoff after {failures} failures, " f"~{mins} min remaining)"),
             )
             return
 
@@ -110,7 +110,9 @@ async def run() -> None:
                 extra={"error": str(exc), "failures": failures},
             )
             await record_health(
-                JOB_ID, ok=False, row_count=0,
+                JOB_ID,
+                ok=False,
+                row_count=0,
                 error=f"{exc} (failure #{failures}; auto-backoff armed)",
             )
             return
@@ -138,6 +140,7 @@ async def _resolve_thresholds(db) -> tuple[float, float, float]:
     big_loss = settings.OUTCOME_BIG_LOSS_THRESHOLD_PCT
     try:
         from services.runtime_config_service import get_float as _get_float
+
         big_win = await _get_float(db, "OUTCOME_BIG_WIN_DAY5_THRESHOLD_PCT")
         win = await _get_float(db, "OUTCOME_WIN_THRESHOLD_PCT")
         big_loss = await _get_float(db, "OUTCOME_BIG_LOSS_THRESHOLD_PCT")
@@ -160,13 +163,14 @@ async def _do_run() -> int:
         # `prior_discussions.verdict` field — without it, every
         # cross-session reference surfaced `verdict: null`, making
         # the consistency-check feature mostly noise.
-        pending = (await db.scalars(
-            select(Discussion).where(
-                Discussion.verdict.is_(None),
-                Discussion.verify_after_date.is_not(None),
-                Discussion.verify_after_date <= today,
+        pending = (
+            await db.scalars(
+                select(Discussion).where(
+                    Discussion.verdict.is_(None),
+                    Discussion.verify_after_date.is_not(None),
+                )
             )
-        )).all()
+        ).all()
         log.info(
             "verify_discussion_outcome.pending",
             extra={
@@ -182,7 +186,8 @@ async def _do_run() -> int:
         for d in pending:
             try:
                 wrote = await _verify_one(
-                    db, d,
+                    db,
+                    d,
                     big_win_pct=big_win_pct,
                     win_pct=win_pct,
                     big_loss_pct=big_loss_pct,
@@ -222,17 +227,14 @@ async def _verify_one(
     `synchronize_session='auto'` expunges the entity after an ORM
     UPDATE."""
     raw_symbols = (d.conclusion or {}).get("recommended_symbols") or []
-    symbols = [
-        str(s).strip()
-        for s in raw_symbols
-        if _TW_SYMBOL_RE.fullmatch(str(s).strip())
-    ]
+    symbols = [str(s).strip() for s in raw_symbols if _TW_SYMBOL_RE.fullmatch(str(s).strip())]
 
     # Edge: no symbols recommended → unverifiable. Set immediately so
     # the cron doesn't keep re-fetching this row forever.
     if not symbols:
         await _set_verdict(
-            db, d,
+            db,
+            d,
             verdict="unverifiable",
             reason="synthesizer returned no symbols",
             day1_opens={},
@@ -262,8 +264,10 @@ async def _verify_one(
             # the archive directly so we don't pull a live snapshot
             # that would miss historical dates.
             from services.ingest.repository import read_ohlcv_range_autosession
+
             bars = await read_ohlcv_range_autosession(
-                "TW", sym,
+                "TW",
+                sym,
                 d.as_of_date,
                 d.as_of_date + timedelta(days=14),
             )
@@ -278,10 +282,7 @@ async def _verify_one(
             key=lambda b: b.get("time", ""),
         )
         window = future_bars[:_WINDOW_TRADING_DAYS]
-        # Need the full 5-bar window before grading — a holiday inside
-        # the 5-day span means the 5th trading-day bar hasn't landed
-        # yet. The cron's daily cadence retries safely once it does.
-        if len(window) < _WINDOW_TRADING_DAYS:
+        if not window:
             continue
 
         if sym not in day1_opens:
@@ -296,18 +297,17 @@ async def _verify_one(
         # Pull all 5 closes for the classifier. The last one is
         # also pinned to day5_close_prices for the frontend's
         # `(D5/D1 -7.3%)` rendering.
-        closes: list[float | None] = [
-            _coerce_float(b.get("close")) for b in window
-        ]
+        observed_closes: list[float | None] = [_coerce_float(b.get("close")) for b in window]
+        closes = observed_closes + [None] * (_WINDOW_TRADING_DAYS - len(observed_closes))
+        daily_closes_persist[sym] = closes
+        if len(window) < _WINDOW_TRADING_DAYS:
+            continue
         if sym not in day5_closes:
             last_close = closes[-1]
             if last_close is not None and last_close > 0:
                 day5_closes[sym] = last_close
         # Also persist the full D1-D5 close array so the scoreboard /
         # Brier paths can reuse it without re-fetching ohlcv.
-        if sym not in daily_closes_persist:
-            daily_closes_persist[sym] = closes
-
         if all(c is None for c in closes):
             continue
 
@@ -331,7 +331,8 @@ async def _verify_one(
                 big_loss_pct=big_loss_pct,
             )
             await _set_verdict(
-                db, d,
+                db,
+                d,
                 verdict=result.band,
                 reason=reason,
                 day1_opens=day1_opens,
@@ -339,6 +340,14 @@ async def _verify_one(
                 daily_closes=daily_closes_persist,
             )
             return True
+
+    if daily_closes_persist:
+        await _set_progress(
+            db,
+            d,
+            day1_opens=day1_opens,
+            daily_closes=daily_closes_persist,
+        )
 
     # PR #223 stale-grace: if no symbol resolved AND we're more than
     # `_STALE_GRACE_DAYS` past the original `verify_after_date`, give
@@ -348,20 +357,19 @@ async def _verify_one(
     # captured in a prior tick — pass them through so the verdict
     # reason can hint at what we did manage to see.
     today = datetime.now(UTC).date()
-    if d.verify_after_date is not None and (
-        (today - d.verify_after_date).days > _STALE_GRACE_DAYS
-    ):
+    if d.verify_after_date is not None and ((today - d.verify_after_date).days > _STALE_GRACE_DAYS):
         log.info(
             "verify_discussion_outcome.unverifiable_stale",
             extra={
-                "id":              str(d.id),
-                "symbols":         symbols,
-                "verify_after":    d.verify_after_date.isoformat(),
-                "days_overdue":    (today - d.verify_after_date).days,
+                "id": str(d.id),
+                "symbols": symbols,
+                "verify_after": d.verify_after_date.isoformat(),
+                "days_overdue": (today - d.verify_after_date).days,
             },
         )
         await _set_verdict(
-            db, d,
+            db,
+            d,
             verdict="unverifiable",
             reason=(
                 f"no OHLCV data for any of {symbols} after "
@@ -378,6 +386,29 @@ async def _verify_one(
         extra={"id": str(d.id), "symbols": symbols},
     )
     return False
+
+
+async def _set_progress(
+    db,
+    d: Discussion,
+    *,
+    day1_opens: dict[str, float],
+    daily_closes: dict[str, list[float | None]],
+) -> None:
+    """Persist D1-D4 outcome progress without finalizing the verdict."""
+    values = {
+        "day1_open_prices": day1_opens or None,
+        "daily_close_prices": daily_closes or None,
+    }
+    await db.execute(
+        update(Discussion)
+        .where(Discussion.id == d.id)
+        .values(**values)
+        .execution_options(synchronize_session=False)
+    )
+    await db.commit()
+    d.day1_open_prices = day1_opens or None
+    d.daily_close_prices = daily_closes or None
 
 
 async def _set_verdict(
@@ -427,6 +458,7 @@ async def _set_verdict(
             from services.lesson_tier_service import (
                 record_lesson_outcome,
             )
+
             await record_lesson_outcome(db, discussion_id=d.id)
         except Exception as exc:
             log.debug(
@@ -482,14 +514,10 @@ def _format_verdict_reason(
         )
     if band == "big_win":
         return (
-            f"{winner_symbol} D5 close {sym_cls.day5_pct:+.2f}% "
-            f"(≥ {big_win_pct:g}% threshold)"
+            f"{winner_symbol} D5 close {sym_cls.day5_pct:+.2f}% " f"(≥ {big_win_pct:g}% threshold)"
         )
     if band == "win":
-        return (
-            f"{winner_symbol} peak close {sym_cls.peak_pct:+.2f}% "
-            f"(≥ {win_pct:g}% threshold)"
-        )
+        return f"{winner_symbol} peak close {sym_cls.peak_pct:+.2f}% " f"(≥ {win_pct:g}% threshold)"
     return (
         f"{winner_symbol} peak {sym_cls.peak_pct:+.2f}% / trough "
         f"{sym_cls.trough_pct:+.2f}% — no band crossed"

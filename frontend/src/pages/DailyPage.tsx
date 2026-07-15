@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, CalendarDays, ShieldAlert, Users } from "lucide-react";
+import { getPersonaIdentity } from "@/components/discussion/personaIdentity";
 
 type QualitySignals = {
   consensus_contradiction?: boolean;
@@ -150,7 +151,7 @@ function StrategyRun({ run }: { run: Result }) {
     <p className="mt-5 whitespace-pre-wrap leading-7 text-slate-200">{run.conclusion.reasoning}</p>
     <div className="mt-5 grid gap-3 sm:grid-cols-2"><Info label="時間框架" value={horizon[run.conclusion.time_horizon ?? ""] ?? run.conclusion.time_horizon ?? "—"} /><Info label="共識度" value={typeof run.conclusion.consensus_score === "number" ? `${Math.round(run.conclusion.consensus_score * 100)}%` : "—"} /></div>
     {!!warnings.length && <div className="mt-5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">{warnings.join("；")}</div>}
-    <details className="mt-6"><summary className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-slate-300"><Users className="h-4 w-4 text-success" />展開五輪完整發言</summary><div className="mt-4 space-y-3">{run.turns.map((turn) => <div key={`${turn.round}-${turn.turn_index}`} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><div className="flex justify-between gap-3 text-sm"><b>{turn.persona_name}</b><span className="text-slate-500">第 {turn.round} 輪 · {stance[turn.stance] ?? turn.stance}</span></div><p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-300">{turn.content || "（本輪無補充發言）"}</p></div>)}</div></details>
+    <details className="mt-6"><summary className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-slate-300"><Users className="h-4 w-4 text-success" />展開五輪完整發言</summary><div className="mt-4 space-y-3">{run.turns.map((turn) => { const identity = getPersonaIdentity(turn.persona_id, turn.persona_name); return <div key={`${turn.round}-${turn.turn_index}`} className="rounded-xl border border-l-[3px] border-slate-800 bg-slate-950/60 p-4" style={{ borderLeftColor: identity.accentColor }}><div className="flex justify-between gap-3 text-sm"><b style={{ color: identity.accentColor }}>{turn.persona_name}</b><span className="text-slate-500">第 {turn.round} 輪 · {stance[turn.stance] ?? turn.stance}</span></div><p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-300">{turn.content || "（本輪無補充發言）"}</p></div>; })}</div></details>
   </article>;
 }
 

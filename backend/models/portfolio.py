@@ -87,6 +87,31 @@ class Transaction(Base):
     portfolio: Mapped["Portfolio"] = relationship("Portfolio", back_populates="transactions")
 
 
+class PortfolioTransactionImport(Base):
+    """One successfully committed CSV batch, used for retry-safe imports."""
+
+    __tablename__ = "portfolio_transaction_imports"
+    __table_args__ = (
+        UniqueConstraint(
+            "portfolio_id", "content_hash",
+            name="uq_portfolio_transaction_import_content",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+    )
+    portfolio_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("portfolios.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    row_count: Mapped[int] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, nullable=False,
+    )
+
+
 class PortfolioCashEntry(Base):
     """Append-only multi-currency cash ledger entry.
 

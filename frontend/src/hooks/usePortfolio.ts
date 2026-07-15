@@ -82,6 +82,9 @@ export interface TransactionImportResult {
   valid: boolean;
   valid_count: number;
   imported_count: number;
+  duplicate: boolean;
+  import_id: string | null;
+  imported_at: string | null;
   errors: { row: number; field: string | null; message: string }[];
 }
 

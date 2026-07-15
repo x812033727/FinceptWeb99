@@ -140,6 +140,9 @@ describe("useAddTransaction", () => {
 
     const { qc, wrapper } = makeWrapper();
     qc.setQueryData(["portfolio", "p2"], { id: "p2", holdings: [] });
+    qc.setQueryData(["portfolio-transactions", "p2", { symbol: "AAPL" }], {});
+    qc.setQueryData(["portfolio-cash", "p2"], {});
+    qc.setQueryData(["portfolio-cash-entries", "p2"], {});
 
     const { result } = renderHook(() => useAddTransaction("p2"), { wrapper });
 
@@ -151,6 +154,11 @@ describe("useAddTransaction", () => {
     });
 
     expect(qc.getQueryState(["portfolio", "p2"])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(
+      ["portfolio-transactions", "p2", { symbol: "AAPL" }],
+    )?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(["portfolio-cash", "p2"])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(["portfolio-cash-entries", "p2"])?.isInvalidated).toBe(true);
   });
 });
 

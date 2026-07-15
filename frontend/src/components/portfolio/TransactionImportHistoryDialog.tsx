@@ -1,0 +1,144 @@
+import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import { errorDetail } from "@/lib/api";
+import {
+  useRollbackTransactionImport,
+  useTransactionImports,
+} from "@/hooks/usePortfolio";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+
+export function TransactionImportHistoryDialog({
+  portfolioId, onClose,
+}: { portfolioId: string; onClose: () => void }) {
+  const { t, i18n } = useTranslation();
+  const imports = useTransactionImports(portfolioId);
+  const rollback = useRollbackTransactionImport(portfolioId);
+  const [confirming, setConfirming] = useState<string | null>(null);
+
+  async function confirmRollback(importId: string) {
+    try {
+      await rollback.mutateAsync(importId);
+      setConfirming(null);
+    } catch {
+      // The mutation retains the API error so the dialog can explain why
+      // the batch cannot be rolled back (for example, a dependent sell).
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
+      <DialogContent className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle>{t("portfolio.transactions.import_history.title")}</DialogTitle>
+          <DialogDescription>
+            {t("portfolio.transactions.import_history.description")}
+          </DialogDescription>
+        </DialogHeader>
+
+        {imports.isLoading && (
+          <p className="py-6 text-center text-sm text-muted-foreground animate-pulse">
+            {t("common.loading")}
+          </p>
+        )}
+        {imports.isError && (
+          <p className="rounded bg-danger/10 p-3 text-sm text-danger">
+            {errorDetail(imports.error)}
+          </p>
+        )}
+        {!imports.isLoading && !imports.isError && !imports.data?.length && (
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            {t("portfolio.transactions.import_history.empty")}
+          </p>
+        )}
+        {!!imports.data?.length && (
+          <div className="max-h-[55vh] space-y-3 overflow-y-auto pr-1">
+            {imports.data.map((batch) => (
+              <div key={batch.id} className="rounded-md border border-border p-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">
+                      {t("portfolio.transactions.import_history.rows", {
+                        count: batch.row_count,
+                      })}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {new Intl.DateTimeFormat(i18n.language, {
+                        dateStyle: "medium", timeStyle: "short",
+                      }).format(new Date(batch.imported_at))}
+                    </p>
+                    <p className={`mt-2 text-xs ${
+                      batch.provenance_complete ? "text-positive" : "text-warning"
+                    }`}>
+                      {batch.provenance_complete
+                        ? t("portfolio.transactions.import_history.complete", {
+                          linked: batch.linked_count, total: batch.row_count,
+                        })
+                        : t("portfolio.transactions.import_history.incomplete", {
+                          linked: batch.linked_count, total: batch.row_count,
+                        })}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      rollback.reset();
+                      setConfirming(batch.id);
+                    }}
+                    disabled={!batch.provenance_complete || rollback.isPending}
+                    className="min-h-[32px] rounded border border-danger/40 px-3 py-1 text-xs text-danger hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {t("portfolio.transactions.import_history.rollback")}
+                  </button>
+                </div>
+
+                {confirming === batch.id && (
+                  <div className="mt-3 rounded bg-warning/10 p-3 text-xs text-foreground">
+                    <p>{t("portfolio.transactions.import_history.confirm", {
+                      count: batch.row_count,
+                    })}</p>
+                    <div className="mt-3 flex justify-end gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setConfirming(null)}
+                        className="text-muted-foreground hover:text-foreground"
+                      >
+                        {t("common.cancel")}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void confirmRollback(batch.id)}
+                        disabled={rollback.isPending}
+                        className="rounded bg-danger px-3 py-1.5 text-white disabled:opacity-50"
+                      >
+                        {rollback.isPending
+                          ? t("common.saving")
+                          : t("portfolio.transactions.import_history.confirm_action")}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {rollback.isError && (
+          <p className="rounded bg-danger/10 p-3 text-sm text-danger">
+            {errorDetail(rollback.error)}
+          </p>
+        )}
+        <DialogFooter>
+          <button
+            type="button"
+            onClick={onClose}
+            className="min-h-[36px] px-4 py-1.5 text-sm text-muted-foreground hover:text-foreground"
+          >
+            {t("common.close")}
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

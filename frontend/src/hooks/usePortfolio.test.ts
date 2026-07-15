@@ -18,6 +18,8 @@ import {
   useDeletePortfolio,
   useAddTransaction,
   useImportTransactions,
+  useRollbackTransactionImport,
+  useTransactionImports,
   useOptimise,
 } from "./usePortfolio";
 
@@ -179,6 +181,46 @@ describe("useImportTransactions", () => {
     });
     expect(qc.getQueryState(["portfolio", "p2"])?.isInvalidated).toBe(true);
     expect(qc.getQueryState(["portfolio-transactions", "p2"])?.isInvalidated).toBe(true);
+  });
+});
+
+describe("transaction import history", () => {
+  it("loads source batches and invalidates accounting data after rollback", async () => {
+    const batches = [{
+      id: "import-1", row_count: 2, linked_count: 2,
+      provenance_complete: true, imported_at: "2026-07-15T14:00:00Z",
+    }];
+    mock.onGet("/portfolio/p2/transaction-imports").reply(200, batches);
+    mock.onDelete("/portfolio/p2/transaction-imports/import-1").reply(200, {
+      import_id: "import-1", removed_count: 2,
+    });
+    const { qc, wrapper } = makeWrapper();
+    const history = renderHook(() => useTransactionImports("p2"), { wrapper });
+    await waitFor(() => expect(history.result.current.isSuccess).toBe(true));
+    expect(history.result.current.data).toEqual(batches);
+
+    for (const key of [
+      "portfolio-transactions", "portfolio", "portfolio-cash",
+      "portfolio-cash-entries",
+    ]) {
+      qc.setQueryData([key, "p2"], {});
+    }
+    const rollback = renderHook(
+      () => useRollbackTransactionImport("p2"), { wrapper },
+    );
+    await act(async () => {
+      await rollback.result.current.mutateAsync("import-1");
+    });
+
+    expect(mock.history.get.filter(
+      (request) => request.url === "/portfolio/p2/transaction-imports",
+    )).toHaveLength(2);
+    for (const key of [
+      "portfolio-transactions", "portfolio", "portfolio-cash",
+      "portfolio-cash-entries",
+    ]) {
+      expect(qc.getQueryState([key, "p2"])?.isInvalidated).toBe(true);
+    }
   });
 });
 

@@ -8,11 +8,13 @@ import { exportCSV } from "./_shared";
 import type { TransactionRow } from "./_shared";
 import { DataTable, type DataTableColumn } from "../ui/table";
 import { ImportTransactionsDialog } from "./ImportTransactionsDialog";
+import { TransactionImportHistoryDialog } from "./TransactionImportHistoryDialog";
 
 export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState<TransactionRow | null>(null);
   const [importing, setImporting] = useState(false);
+  const [viewingImports, setViewingImports] = useState(false);
   const deleteTx = useDeleteTransaction(portfolioId);
   const { data: txns = [], isLoading } = useQuery<TransactionRow[]>({
     queryKey: ["portfolio-transactions", portfolioId],
@@ -140,11 +142,14 @@ export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
 
   return (
     <div className="bg-card border border-border rounded-lg p-5 space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-foreground font-medium">{t("portfolio.transactions.title")}</h2>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap justify-end gap-3">
           <button onClick={() => setImporting(true)} className="text-xs text-primary hover:underline">
             {t("portfolio.transactions.import.action")}
+          </button>
+          <button onClick={() => setViewingImports(true)} className="text-xs text-primary hover:underline">
+            {t("portfolio.transactions.import_history.action")}
           </button>
           <button
             onClick={handleExport}
@@ -182,6 +187,12 @@ export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
         <ImportTransactionsDialog
           portfolioId={portfolioId}
           onClose={() => setImporting(false)}
+        />
+      )}
+      {viewingImports && (
+        <TransactionImportHistoryDialog
+          portfolioId={portfolioId}
+          onClose={() => setViewingImports(false)}
         />
       )}
     </div>

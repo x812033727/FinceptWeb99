@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import "./index.css";
 import { clearQueryCacheOnAuthChange } from "@/lib/authQueryCache";
+import { clearNotificationsOnAuthChange } from "@/store/notificationStore";
 import "@/store/themeStore"; // eagerly initialize theme (applies data-light + data-market-colors attributes)
 import "@/i18n";              // initialize i18next (en + zh-TW, default zh-TW)
 
@@ -17,6 +18,7 @@ const queryClient = new QueryClient({
 });
 
 clearQueryCacheOnAuthChange(queryClient);
+clearNotificationsOnAuthChange();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

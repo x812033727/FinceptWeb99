@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { useNotificationStore } from "./notificationStore";
+import {
+  clearNotificationsOnAuthChange,
+  useNotificationStore,
+} from "./notificationStore";
+import { useAuthStore } from "./authStore";
 
 function resetStore() {
   useNotificationStore.setState({ alerts: [], unreadCount: 0 });
@@ -100,6 +104,53 @@ describe("notificationStore", () => {
       condition: "above", target_price: 1, current_price: 2,
     });
     useNotificationStore.getState().dismiss("nonexistent");
+    expect(useNotificationStore.getState().alerts).toHaveLength(1);
+  });
+});
+
+describe("notification authentication boundary", () => {
+  let unsubscribe: (() => void) | undefined;
+
+  beforeEach(() => {
+    resetStore();
+    useAuthStore.getState().clearAuth();
+  });
+
+  afterEach(() => {
+    unsubscribe?.();
+    unsubscribe = undefined;
+    useAuthStore.getState().clearAuth();
+  });
+
+  function addPrivateAlert() {
+    useNotificationStore.getState().addAlert({
+      id: "private-alert", symbol: "AAPL", market: "US",
+      condition: "above", target_price: 180, current_price: 185,
+    });
+  }
+
+  it("clears alerts when the current user signs out", () => {
+    useAuthStore.getState().setAuth("token-a", {
+      id: "user-a", email: "a@example.com", role: "viewer",
+    });
+    addPrivateAlert();
+    unsubscribe = clearNotificationsOnAuthChange();
+
+    useAuthStore.getState().clearAuth();
+
+    expect(useNotificationStore.getState().alerts).toEqual([]);
+    expect(useNotificationStore.getState().unreadCount).toBe(0);
+  });
+
+  it("preserves alerts when only the same user's access token rotates", () => {
+    const user = { id: "user-a", email: "a@example.com", role: "viewer" as const };
+    useAuthStore.getState().setAuth("old-token", user);
+    addPrivateAlert();
+    unsubscribe = clearNotificationsOnAuthChange();
+
+    useAuthStore.getState().setToken("new-token");
+    useAuthStore.getState().setAuth("new-token", user);
+
     expect(useNotificationStore.getState().alerts).toHaveLength(1);
   });
 });

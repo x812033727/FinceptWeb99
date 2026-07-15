@@ -380,4 +380,34 @@ describe("cleanup", () => {
     act(() => ws.triggerMessage({ type: "delta", symbol: "AAPL", market: "US", data: { price: 183 } }));
     expect(received).toHaveLength(1);  // no new message after unmount
   });
+
+  it("keeps the shared socket alive while an alert consumer remains", async () => {
+    const { useAlertSocket, useWebSocket } = await freshModule();
+    const alerts: unknown[] = [];
+    const quote = renderHook(() => useWebSocket("AAPL:US", () => {}));
+    const alert = renderHook(() => useAlertSocket((data) => alerts.push(data)));
+    const ws = latestSocket();
+
+    quote.unmount();
+    expect(ws.readyState).toBe(FakeWebSocket.OPEN);
+
+    act(() => ws.triggerMessage({
+      type: "alert", id: "alert-1", symbol: "AAPL", market: "US",
+      condition: "above", target_price: 180, current_price: 181,
+    }));
+    expect(alerts).toHaveLength(1);
+
+    alert.unmount();
+    expect(ws.readyState).toBe(FakeWebSocket.CLOSED);
+  });
+
+  it("closes an alert-only socket when its final consumer unmounts", async () => {
+    const { useAlertSocket } = await freshModule();
+    const alert = renderHook(() => useAlertSocket(() => {}));
+    const ws = latestSocket();
+
+    alert.unmount();
+
+    expect(ws.readyState).toBe(FakeWebSocket.CLOSED);
+  });
 });

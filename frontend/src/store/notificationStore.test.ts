@@ -35,6 +35,21 @@ describe("notificationStore", () => {
     expect(s.unreadCount).toBe(1);
   });
 
+  it("preserves dynamic trend alert projection and message", () => {
+    useNotificationStore.getState().addAlert({
+      id: "trend-1", symbol: "AAPL", market: "US",
+      condition: "above", condition_type: "trend_cross_above",
+      target_price: null, projected_price: 203.5, current_price: 204,
+      message: "AAPL crossed above trend line",
+    });
+    expect(useNotificationStore.getState().alerts[0]).toMatchObject({
+      condition_type: "trend_cross_above",
+      target_price: null,
+      projected_price: 203.5,
+      message: "AAPL crossed above trend line",
+    });
+  });
+
   it("new alerts are inserted at the top", () => {
     const { addAlert } = useNotificationStore.getState();
     addAlert({ id: "a1", symbol: "AAPL", market: "US", condition: "above", target_price: 1, current_price: 2 });

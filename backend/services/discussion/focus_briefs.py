@@ -117,6 +117,8 @@ async def _get_tw_peers(
             "price":      r.get("price"),
             "change_pct": r.get("change_pct"),
             "pe":         r.get("pe_ratio"),
+            "data_source": r.get("data_source", "unknown"),
+            "as_of":       r.get("actual_session"),
         })
     return out
 
@@ -176,6 +178,7 @@ async def _build_tw_focus_brief(
             "prev_close": q.get("prev_close"),
             "as_of_session": q.get("as_of_session") or tw_quote_session(),
             "is_intraday": bool(q.get("is_intraday")),
+            "data_source": q.get("data_source", "unavailable"),
         }
     except Exception as exc:
         log.warning("focus_brief.quote.failed",
@@ -194,6 +197,7 @@ async def _build_tw_focus_brief(
         if technicals is not None and bars:
             technicals["as_of_session"] = str(bars[-1].get("time") or "")[:10]
             technicals["is_intraday"] = False
+            technicals["data_source"] = bars[-1].get("data_source", "unknown")
         brief["technicals"] = technicals
     except Exception as exc:
         log.warning("focus_brief.history.failed",
@@ -208,6 +212,8 @@ async def _build_tw_focus_brief(
                 "pb":             f.get("pb_ratio"),
                 "dividend_yield": f.get("dividend_yield"),
                 "eps":            f.get("eps"),
+                "data_source":    f.get("data_source", "unavailable"),
+                "as_of":          f.get("fetched_at"),
             }
     except Exception as exc:
         log.warning("focus_brief.fundamentals.failed",

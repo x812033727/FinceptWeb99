@@ -1,11 +1,13 @@
 import json
 import time
+from typing import Any
+
 import redis.asyncio as aioredis
-from typing import Any, Optional
+
 from config import settings
 
-_redis: Optional[aioredis.Redis] = None
-_token_bucket_sha: Optional[str] = None
+_redis: aioredis.Redis | None = None
+_token_bucket_sha: str | None = None
 
 
 class RedisUnavailable(Exception):
@@ -19,12 +21,12 @@ async def get_redis() -> aioredis.Redis:
     return _redis
 
 
-async def cache_get(key: str) -> Optional[str]:
+async def cache_get(key: str) -> str | None:
     r = await get_redis()
     return await r.get(key)
 
 
-async def cache_mget(keys: list[str]) -> list[Optional[str]]:
+async def cache_mget(keys: list[str]) -> list[str | None]:
     """Batch read — one round-trip for N keys, order-preserving,
     missing keys come back as None. Used by the WebSocket snapshot
     path, which previously issued one GET per subscribed symbol."""
@@ -464,9 +466,37 @@ def key_etf_holdings_tw(symbol: str) -> str:
     return f"tw:etf_holdings:{symbol}"
 
 
-def key_health_tw(symbol: str) -> str:
-    """StatementDog-style 4-light financial health snapshot."""
-    return f"tw:health:{symbol}"
+def key_health_tw(symbol: str, periods: int = 8) -> str:
+    """Versioned TW statement-analysis key, including response window."""
+    return f"tw:health:v2:{symbol}:{periods}"
+
+
+def key_factor_ranking_tw(
+    as_of: str, profile: str, limit: int, sector_neutral: bool = True,
+    model_key: str | None = None,
+) -> str:
+    """Explainable multi-factor ranking, versioned by methodology."""
+    base = f"tw:factor_ranking:v8:{as_of}:{profile}:{limit}:{int(sector_neutral)}"
+    return f"{base}:{model_key}" if model_key else base
+
+
+def key_factor_validation_tw(
+    start_date: str, end_date: str, profile: str, top_n: int,
+    holding_sessions: int, transaction_cost_bps: float,
+    sector_neutral: bool = True,
+    portfolio_notional_twd: float = 10_000_000,
+    max_participation_rate: float = 0.05,
+    impact_coefficient_bps: float = 10,
+    benchmark: str = "taiex_total_return",
+    weight_mode: str = "walk_forward",
+) -> str:
+    """Rolling factor validation with every result-shaping input in the key."""
+    return (
+        f"tw:factor_validation:v8:{start_date}:{end_date}:{profile}:{top_n}:"
+        f"{holding_sessions}:{transaction_cost_bps:g}:{int(sector_neutral)}:"
+        f"{portfolio_notional_twd:g}:{max_participation_rate:g}:"
+        f"{impact_coefficient_bps:g}:{benchmark}:{weight_mode}"
+    )
 
 
 def key_archive_last2_tw(symbol: str) -> str:

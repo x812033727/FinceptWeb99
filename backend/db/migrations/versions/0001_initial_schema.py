@@ -16,6 +16,11 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Fresh PostgreSQL installations do not expose uuid_generate_v4()
+    # until uuid-ossp is enabled. Production images happened to create
+    # this in init.sql, but Alembic must be independently reproducible.
+    op.execute('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"')
+
     # ── Enums (idempotent via DO/EXCEPTION) ───────────────────────
     op.execute("""
     DO $$ BEGIN

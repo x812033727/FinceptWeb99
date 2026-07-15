@@ -128,6 +128,8 @@ def _summarize_revenue(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "month":       (r.get("date") or "")[:7],
             "revenue_yoy": r.get("revenue_yoy"),
             "revenue_mom": r.get("revenue_mom"),
+            "data_source": r.get("data_source", "unknown"),
+            "as_of":       r.get("date"),
         })
     return out
 
@@ -151,6 +153,8 @@ def _summarize_institutional(rows: list[dict[str, Any]]) -> dict[str, Any] | Non
         "sitc_net_5d":   sitc_net,
         "dealer_net_5d": dealer_net,
         "days":          days,
+        "data_source":   rows[-1].get("data_source", "unknown"),
+        "as_of":         rows[-1].get("date"),
     }
 
 
@@ -162,4 +166,5 @@ def _summarize_margin(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
         "as_of":           latest.get("date"),
         "margin_balance":  latest.get("margin_balance"),
         "short_balance":   latest.get("short_balance"),
+        "data_source":     latest.get("data_source", "unknown"),
     }

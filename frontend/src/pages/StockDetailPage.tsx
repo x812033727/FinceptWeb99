@@ -16,6 +16,7 @@ import {
   fetchHistory,
   fetchIntraday,
   fetchQuote,
+  fetchTWSecurityMaster,
   fmt,
   isIntradayTimeframe,
   isTWETF,
@@ -32,6 +33,7 @@ import { NewsFeed } from "@/components/stock/NewsFeed";
 import { OptionsPanel } from "@/components/stock/OptionsPanel";
 import { RevenuePanel } from "@/components/stock/RevenuePanel";
 import { StockAIReportPanel } from "@/components/stock/StockAIReportPanel";
+import { SecurityRuleCard } from "@/components/stock/SecurityRuleCard";
 import { ValuationBandPanel } from "@/components/stock/ValuationBandPanel";
 
 export default function StockDetailPage() {
@@ -73,6 +75,13 @@ export default function StockDetailPage() {
     queryKey: ["quote", mkt, sym],
     queryFn: () => fetchQuote(mkt, sym),
     staleTime: 15_000,
+  });
+
+  const { data: securityRule } = useQuery({
+    queryKey: ["tw-security-master", sym],
+    queryFn: () => fetchTWSecurityMaster(sym),
+    staleTime: 6 * 3_600_000,
+    enabled: mkt === "TW",
   });
 
   const { data: bars = [], isLoading: barsLoading } = useQuery({
@@ -213,6 +222,8 @@ export default function StockDetailPage() {
 
       <LiveQuoteHeader symbol={sym} market={mkt} quote={quote} isETF={isETF} />
 
+      {securityRule && <SecurityRuleCard rule={securityRule} />}
+
       {/* TabStrip collapses tabs 5+ into a "More" dropdown below md
           so 8-tab TW stocks don't force horizontal scroll on phones.
           Active tab is preserved in the visible row even if it would
@@ -278,7 +289,14 @@ export default function StockDetailPage() {
                 // Omitting `height` lets the chart's ResizeObserver track the
                 // flex container, so the canvas fills the viewport in
                 // fullscreen and snaps back to 360px on exit.
-                <CandlestickChart bars={displayBars} height={chartFullscreen ? undefined : 360} />
+                <CandlestickChart
+                  bars={displayBars}
+                  market={mkt}
+                  symbol={symbol}
+                  currentPrice={(quote?.price as number | undefined) ?? null}
+                  currentTime={(quote?.ts as string | undefined) ?? null}
+                  height={chartFullscreen ? undefined : 360}
+                />
               )}
             </div>
           </div>

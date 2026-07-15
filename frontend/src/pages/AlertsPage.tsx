@@ -15,7 +15,7 @@ interface Alert {
   condition: "above" | "below" | null;
   target_price: number | null;
   condition_type: ConditionType;
-  params: Record<string, number> | null;
+  params: Record<string, number | string> | null;
   cooldown_seconds: number;
   repeat: boolean;
   last_fired_at: string | null;
@@ -204,6 +204,30 @@ function RuleSummary({ alert: a }: { alert: Alert }) {
           {t("alerts.summary_streak", { days: p.days })}
         </span>
       );
+    case "trend_cross_above":
+    case "trend_cross_below": {
+      const above = a.condition_type === "trend_cross_above";
+      return (
+        <span className={above ? "text-up" : "text-down"}>
+          {t(above ? "alerts.summary_trend_cross_above" : "alerts.summary_trend_cross_below", {
+            start: p.start_price,
+            end: p.end_price,
+          })}
+        </span>
+      );
+    }
+    case "rsi_cross_above":
+    case "rsi_cross_below": {
+      const above = a.condition_type === "rsi_cross_above";
+      return (
+        <span className={above ? "text-up" : "text-down"}>
+          {t(above ? "alerts.summary_rsi_cross_above" : "alerts.summary_rsi_cross_below", {
+            period: p.period,
+            level: p.level,
+          })}
+        </span>
+      );
+    }
     default:
       return <span className="text-muted-foreground">{a.condition_type}</span>;
   }

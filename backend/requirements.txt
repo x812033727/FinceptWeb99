@@ -1,7 +1,7 @@
 # Web framework
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
-python-multipart==0.0.9
+fastapi==0.139.0
+uvicorn[standard]==0.41.0
+python-multipart==0.0.32
 
 # Database
 sqlalchemy[asyncio]==2.0.35
@@ -12,12 +12,12 @@ alembic==1.13.2
 redis[asyncio]==5.0.8
 
 # Config
-pydantic==2.9.2
-pydantic-settings==2.5.2
+pydantic==2.12.5
+pydantic-settings==2.14.2
 email-validator==2.2.0  # pydantic EmailStr in auth schemas
 
 # Auth (Phase 1)
-python-jose[cryptography]==3.3.0
+PyJWT[crypto]==2.13.0
 passlib[bcrypt]==1.7.4
 # passlib 1.7.4 reads bcrypt.__about__.__version__ which was removed in
 # bcrypt 4.0; without a pin, pip installs bcrypt 4.x/5.x and the library
@@ -51,12 +51,13 @@ yfinance==0.2.66
 # AI: Claude Agent SDK (tool-use agents)
 anthropic==0.97.0
 claude-agent-sdk==0.1.66  # in-process MCP server + streaming Claude tool-use
+mcp==1.28.1  # security floor for SDK's transitive MCP dependency
 
 # Crypto: Kraken WebSocket v2 client (outbound) for sub-second ticker streaming
 websockets==13.1
 
 # Email (daily auto-run discussion report)
-aiosmtplib==3.0.2
+aiosmtplib==5.1.2
 
 # Web Push (browser alert notifications, PR-D3) — sync `webpush()` is
 # called via asyncio.to_thread; pulls py-vapid + http-ece for VAPID

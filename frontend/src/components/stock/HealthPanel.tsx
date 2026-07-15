@@ -91,6 +91,7 @@ export function HealthPanel({ symbol }: { symbol: string }) {
   }
 
   const { periods, summary, lights } = data;
+  const quality = data.quality;
 
   const periodRows = [...periods].reverse();
   const columns: DataTableColumn<HealthPeriod>[] = [
@@ -98,6 +99,13 @@ export function HealthPanel({ symbol }: { symbol: string }) {
       key: "date",
       header: t("stock.health.period"),
       render: (p) => <span className="text-muted-foreground">{p.date}</span>,
+    },
+    {
+      key: "revenue_yoy",
+      header: t("stock.health.quarter_revenue_yoy"),
+      numeric: true,
+      cellClassName: "text-foreground",
+      render: (p) => fmtPct1(p.revenue_yoy),
     },
     {
       key: "gross_margin",
@@ -138,30 +146,84 @@ export function HealthPanel({ symbol }: { symbol: string }) {
 
   return (
     <div className="p-4 space-y-4">
+      {quality && (
+        <div className={`rounded-lg border px-4 py-3 text-sm ${
+          quality.status === "good"
+            ? "border-success/30 bg-success/5"
+            : quality.status === "degraded"
+              ? "border-warning/30 bg-warning/5"
+              : "border-border bg-muted/20"
+        }`}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-medium text-foreground">
+              {t(`stock.health.quality_${quality.status}`)}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {t("stock.health.coverage", { value: quality.latest_core_coverage_pct })}
+              {quality.sources.length > 0 && ` · ${quality.sources.join(", ")}`}
+            </span>
+          </div>
+          {quality.flags.length > 0 && (
+            <div className="mt-1 text-xs text-muted-foreground">
+              {quality.flags.map((flag) => t(`stock.health.quality_flag_${flag}`)).join(" · ")}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* summary strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="bg-background border border-border rounded p-3">
           <div className="text-xs text-muted-foreground">ROE (TTM)</div>
           <div className="text-lg font-semibold text-foreground">{fmtPct1(summary.latest_roe)}</div>
         </div>
         <div className="bg-background border border-border rounded p-3">
-          <div className="text-xs text-muted-foreground">{t("stock.health.debt_ratio")}</div>
-          <div className="text-lg font-semibold text-foreground">{fmtPct1(summary.latest_debt_ratio)}</div>
+          <div className="text-xs text-muted-foreground">ROA (TTM)</div>
+          <div className="text-lg font-semibold text-foreground">{fmtPct1(summary.latest_roa)}</div>
         </div>
         <div className="bg-background border border-border rounded p-3">
-          <div className="text-xs text-muted-foreground">{t("stock.health.gross_margin")}</div>
-          <div className="text-lg font-semibold text-foreground">{fmtPct1(summary.latest_gross_margin)}</div>
+          <div className="text-xs text-muted-foreground">{t("stock.health.ttm_net_margin")}</div>
+          <div className="text-lg font-semibold text-foreground">{fmtPct1(summary.ttm_net_margin)}</div>
         </div>
         <div className="bg-background border border-border rounded p-3">
-          <div className="text-xs text-muted-foreground">{t("stock.health.revenue_yoy")}</div>
-          <div className={`text-lg font-semibold ${
-            summary.revenue_yoy == null ? "text-muted-foreground"
-            : summary.revenue_yoy >= 0 ? "text-up" : "text-down"
-          }`}>
-            {fmtPct1(summary.revenue_yoy)}
+          <div className="text-xs text-muted-foreground">{t("stock.health.cash_conversion")}</div>
+          <div className="text-lg font-semibold text-foreground">
+            {summary.cash_conversion_ttm == null ? "—" : `${summary.cash_conversion_ttm.toFixed(2)}x`}
           </div>
         </div>
       </div>
+
+      <div className="bg-background border border-border rounded-lg p-4">
+        <h4 className="text-sm font-semibold text-foreground mb-3">{t("stock.health.dupont_title")}</h4>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div><div className="text-xs text-muted-foreground">{t("stock.health.ttm_net_margin")}</div><div className="font-medium">{fmtPct1(summary.ttm_net_margin)}</div></div>
+          <div><div className="text-xs text-muted-foreground">{t("stock.health.asset_turnover")}</div><div className="font-medium">{summary.asset_turnover == null ? "—" : `${summary.asset_turnover.toFixed(2)}x`}</div></div>
+          <div><div className="text-xs text-muted-foreground">{t("stock.health.equity_multiplier")}</div><div className="font-medium">{summary.equity_multiplier == null ? "—" : `${summary.equity_multiplier.toFixed(2)}x`}</div></div>
+          <div><div className="text-xs text-muted-foreground">{t("stock.health.dupont_roe")}</div><div className="font-medium">{fmtPct1(summary.dupont_roe)}</div></div>
+        </div>
+        <p className="mt-3 text-xs text-muted-foreground">{t("stock.health.ttm_method_note")}</p>
+      </div>
+
+      {data.signals?.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {data.signals.map((signal) => (
+            <div key={signal.code} className={`rounded border px-4 py-3 text-sm ${
+              signal.direction === "positive"
+                ? "border-success/30 bg-success/5"
+                : "border-danger/30 bg-danger/5"
+            }`}>
+              <div className="font-medium text-foreground">{t(`stock.health.signal_${signal.code}`)}</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                {signal.unit === "percentage_points"
+                  ? t("stock.health.signal_value_pp", { value: signal.value.toFixed(2) })
+                  : signal.unit === "ratio"
+                    ? `${signal.value.toFixed(2)}x`
+                    : signal.value.toLocaleString()}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* four StatementDog sections */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

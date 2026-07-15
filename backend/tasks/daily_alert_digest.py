@@ -1,7 +1,8 @@
 """Daily alert digest email (PR-D5).
 
 Once per UTC day (21:00) aggregate the last 24 h of `alert_events`
-per user and email each user a Markdown summary of what fired.
+for users who explicitly enabled the Email channel's daily-digest
+preference, then send one Markdown summary. Default is off.
 
 Fail-closed everywhere, mirroring `auto_run_discussion`'s report
 email path:
@@ -23,6 +24,7 @@ from sqlalchemy import select
 from cache.redis_cache import acquire_lock, release_lock
 from db.session import AsyncSessionLocal
 from models.alert import AlertEvent
+from models.notification_channel import NotificationChannel
 from models.user import User
 from services import email_service
 from services.ingest.repository import record_health
@@ -78,9 +80,22 @@ async def run_daily_alert_digest() -> dict:
         now = datetime.now(UTC)
         since = now - timedelta(hours=_WINDOW_HOURS)
         async with AsyncSessionLocal() as db:
+            channels = list((await db.scalars(select(NotificationChannel).where(
+                NotificationChannel.kind == "email",
+                NotificationChannel.verified.is_(True),
+            ))).all())
+            opted_in = {
+                channel.user_id for channel in channels
+                if bool((channel.config or {}).get("daily_digest", False))
+            }
+            if not opted_in:
+                return counters
             events = list((await db.scalars(
                 select(AlertEvent)
-                .where(AlertEvent.fired_at >= since)
+                .where(
+                    AlertEvent.fired_at >= since,
+                    AlertEvent.user_id.in_(opted_in),
+                )
                 .order_by(AlertEvent.user_id, AlertEvent.fired_at)
             )).all())
 

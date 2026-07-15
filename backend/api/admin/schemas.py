@@ -3,7 +3,7 @@ from datetime import datetime
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field
 
 
 class AdminUserItem(BaseModel):
@@ -22,6 +22,20 @@ class RoleUpdate(BaseModel):
 
 class ActiveUpdate(BaseModel):
     is_active: bool
+
+
+class InvitationCreate(BaseModel):
+    email: EmailStr
+    role: str = "viewer"
+    expires_hours: int | None = Field(default=None, ge=1, le=720)
+
+
+class InvitationCreated(BaseModel):
+    id: uuid.UUID
+    email: str
+    role: str
+    expires_at: datetime
+    token: str
 
 
 class SystemStats(BaseModel):

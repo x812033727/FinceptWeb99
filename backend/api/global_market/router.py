@@ -9,9 +9,11 @@ as discussion / dashboard context rather than a per-stock detail.
 """
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from api.global_market.schemas import CompareHistoryResponse
 from dependencies import get_current_user
+from limiter import limiter
 
 router = APIRouter()
 CurrentUser = Annotated[dict, Depends(get_current_user)]
@@ -46,3 +48,20 @@ async def overseas_indicators(_: CurrentUser):
     """
     from services.overseas_market_service import get_overseas_snapshot
     return await get_overseas_snapshot()
+
+
+@router.get("/compare-history", response_model=CompareHistoryResponse)
+@limiter.limit("30/minute")
+async def compare_history(
+    request: Request,
+    _: CurrentUser,
+    instruments: str = Query(..., min_length=5, max_length=160),
+    period: str = Query(default="3m", pattern=r"^(1m|3m|6m|1y)$"),
+):
+    """Normalize 2-5 TW/US/crypto histories to a common base of 100."""
+    from services.market_comparison_service import compare_history as compare
+
+    try:
+        return CompareHistoryResponse(**await compare(instruments, period))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

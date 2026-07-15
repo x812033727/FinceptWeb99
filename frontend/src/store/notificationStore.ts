@@ -4,9 +4,12 @@ export interface AlertNotification {
   id: string;
   symbol: string;
   market: string;
-  condition: "above" | "below";
-  target_price: number;
-  current_price: number;
+  condition: "above" | "below" | null;
+  condition_type?: string;
+  target_price: number | null;
+  projected_price?: number;
+  current_price?: number;
+  message?: string;
   ts: number;
 }
 

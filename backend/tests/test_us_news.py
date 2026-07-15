@@ -22,7 +22,8 @@ async def test_get_news_uses_google_when_yfinance_empty():
          patch.object(svc, "_yfinance_news_fallback", new_callable=AsyncMock, return_value=[]) as yf:
         result = await svc.get_news("AAPL", limit=5)
 
-    assert result == google_items
+    assert [{key: value for key, value in row.items() if key != "data_source"} for row in result] == google_items
+    assert result[0]["data_source"] == "google_news"
     g.assert_awaited_once()
     yf.assert_not_called()
 
@@ -38,7 +39,8 @@ async def test_get_news_falls_back_to_yfinance_when_google_empty():
          patch.object(svc, "_yfinance_news_fallback", new_callable=AsyncMock, return_value=yf_items):
         result = await svc.get_news("AAPL", limit=5)
 
-    assert result == yf_items
+    assert [{key: value for key, value in row.items() if key != "data_source"} for row in result] == yf_items
+    assert result[0]["data_source"] == "yfinance"
 
 
 @pytest.mark.asyncio

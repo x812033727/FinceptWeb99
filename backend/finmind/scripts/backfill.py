@@ -14,7 +14,7 @@ Usage (from `backend/`):
     # Specific dataset, full universe (per-symbol fan-out):
     python -m finmind.scripts.backfill \\
         --dataset TaiwanStockPrice --start 2024-01-01 --end 2024-12-31 \\
-        --symbols-file symbols.txt
+        --universe-from-tw-stock-info
 
 The driver itself is single-threaded — concurrency is the operator's
 job (run multiple processes pinned to disjoint dataset_code lists).
@@ -33,7 +33,7 @@ import asyncio
 import logging
 import os
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 _BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -109,6 +109,32 @@ async def _run_symbols(
     ]
     print(
         f"backfill: {dataset_code} × {len(symbols)} symbols "
+        f"{start}..{end}"
+    )
+    for sym in symbols:
+        await _run_one(dataset_code, sym, start, end)
+
+
+async def _run_equity_universe(
+    dataset_code: str, start: date, end: date, *, include_delisted: bool = False,
+) -> None:
+    """Per-symbol fan-out using active equities plus optional delistings."""
+    from sqlalchemy import select
+
+    from finmind.models.master import TwDelisting
+    from finmind.scheduler.runner import get_universe_from_tw_stock_info
+
+    async with FinmindAsyncSessionLocal() as session:
+        symbols = await get_universe_from_tw_stock_info(
+            session, exclude_warrants=True,
+        )
+        if include_delisted:
+            delisted = (await session.scalars(
+                select(TwDelisting.symbol).order_by(TwDelisting.symbol)
+            )).all()
+            symbols = sorted(set(symbols) | set(delisted))
+    print(
+        f"backfill: {dataset_code} × {len(symbols)} equity symbols "
         f"{start}..{end}"
     )
     for sym in symbols:
@@ -225,6 +251,22 @@ async def amain() -> int:
         help="File with one symbol per line (with --dataset)",
     )
     parser.add_argument(
+        "--universe-from-tw-stock-info",
+        action="store_true",
+        help=(
+            "Auto-discover active equities from tw_stock_info for a "
+            "per-symbol dataset; warrants are excluded."
+        ),
+    )
+    parser.add_argument(
+        "--include-delisted",
+        action="store_true",
+        help=(
+            "With --universe-from-tw-stock-info, union symbols from "
+            "tw_delisting for survivorship-bias-aware historical backfills."
+        ),
+    )
+    parser.add_argument(
         "--warrant-symbols-file",
         type=Path,
         help=(
@@ -300,6 +342,13 @@ async def amain() -> int:
             "specify at most one of --warrant-universe-from-tw-stock-info "
             "/ --warrant-symbols-file"
         )
+    if args.universe_from_tw_stock_info and args.symbols_file:
+        parser.error(
+            "specify at most one of --universe-from-tw-stock-info / "
+            "--symbols-file"
+        )
+    if args.include_delisted and not args.universe_from_tw_stock_info:
+        parser.error("--include-delisted requires --universe-from-tw-stock-info")
 
     logging.basicConfig(
         level=logging.INFO,
@@ -307,7 +356,7 @@ async def amain() -> int:
         force=True,
     )
 
-    end = _parse_date(args.end) if args.end else datetime.now(tz=timezone.utc).date()
+    end = _parse_date(args.end) if args.end else datetime.now(tz=UTC).date()
     start = (
         _parse_date(args.start)
         if args.start
@@ -347,6 +396,10 @@ async def amain() -> int:
         await _run_warrant(args, start, end)
     elif args.dataset and args.symbols_file:
         await _run_symbols(args.dataset, args.symbols_file, start, end)
+    elif args.dataset and args.universe_from_tw_stock_info:
+        await _run_equity_universe(
+            args.dataset, start, end, include_delisted=args.include_delisted,
+        )
     elif args.dataset:
         await _run_one(args.dataset, args.symbol, start, end)
     elif args.reset_stuck:
@@ -356,6 +409,8 @@ async def amain() -> int:
     else:
         parser.error(
             "specify one of: --enabled | --dataset [--symbol|--symbols-file"
+            "|--universe-from-tw-stock-info"
+            " [--include-delisted]"
             "|--warrant-symbols-file|--warrant-universe-from-tw-stock-info"
             "|--retry-failed] | --reset-stuck"
         )

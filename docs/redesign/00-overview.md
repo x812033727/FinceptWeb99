@@ -1,6 +1,34 @@
 # FinceptWeb99 架構重規劃藍圖 — 總覽
 
-> 2026-07-11 制定。本藍圖為**文件先行**:先審藍圖、核准後分批動工。所有改動將在 FinceptWeb99(https://fincept99.aibubu.cloud)驗證,不影響原站 FinceptWeb。
+> 2026-07-11 制定，2026-07-15 更新。藍圖已進入實作；本文保留原始設計脈絡，
+> 實際交付狀態以本節與程式碼／migration 為準，不再代表「尚未動工」。
+
+## 0. 交付狀態（2026-07-15）
+
+已交付：排程器分離與健康監控、WS Redis pub/sub、設計 token 與 lazy chunks、
+技術指標／全螢幕圖表／多週期分時／跨市場比較、投組風險、再平衡、回測持久化、AI 個股報告、自然語言選股、討論插話、
+美股選擇權期限結構／IV 曲面／P-C OI／預期波動／最大痛點與資料完整度、
+進階告警（含 RSI 真正穿越判定）／歷史／Email／LINE Messaging API／Web Push、邀請制帳號、操作稽核、DataQualityMeta、AI evidence、
+investment thesis、情境壓力測試、D1/D5/D20 決策日誌、研究工作區與 Beta 指標。
+Investment thesis 已進一步具備結構化 watch condition，可由營收與法人封存資料
+自動觸發 guardrail，並回流研究時間線及每週待處理摘要。
+行情品質 metadata 亦已加入按需雙來源驗證、對稱價差、衝突旗標與 Prometheus
+計數；只有個股詳情頁支付額外 upstream 成本，一般列表仍維持原 waterfall 延遲。
+AI 個股報告已消費相同驗證結果：爭議數值 fail-closed 移除、citation coverage 與
+context reliability 分開計算，報告存檔及歷史列表皆顯示可解釋的可信度。
+每日研究候選亦已交付：只由近期高品質偏多報告進池、保存方法版本與 evidence，
+並從次一交易日自動進入 D1/D5/D20 決策日誌，形成可驗證的研究閉環。
+
+投組第一階段 Modified Dietz 市場／個股貢獻亦已交付。
+
+水平支撐／壓力線、兩點式趨勢線、跨裝置保存、端點重新定位與一鍵轉告警皆已交付。
+趨勢線告警會依時間投影門檻，以持久化 relation state 判斷真正穿越，且幾何更新會
+同步告警並安全重建基準。端點重新定位採兩次點擊，讓桌面與觸控裝置維持相同行為。
+
+LINE 軟體整合已交付，但正式啟用仍需部署者建立 LINE Developers Messaging API
+官方帳號並設定 access token、channel secret 與 webhook；未設定時安全停用。
+仍屬後續候選：完整 Brinson allocation／selection／
+interaction 仍需 point-in-time 基準成分與產業權重。這不是 Professional Beta 上線阻擋項。
 
 ## 1. 目標與範圍決策
 

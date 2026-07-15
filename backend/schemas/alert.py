@@ -10,8 +10,9 @@ params → 422), and `repeat` + `cooldown_seconds` set re-fire
 semantics. The legacy `condition` + `target_price` pair still works:
 it normalizes to condition_type price_above / price_below.
 """
+import math
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
@@ -25,7 +26,7 @@ class PctChangeParams(BaseModel):
     """漲跌幅 % — quote change_pct vs. threshold (signed, e.g. -3.5)."""
     pct: float = Field(..., ge=-100, le=1000)
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
 
 
 class BreakoutParams(BaseModel):
@@ -50,6 +51,62 @@ class StreakParams(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+def parse_trend_time(value: str) -> datetime:
+    """Parse the two timestamp forms emitted by lightweight-charts.
+
+    Daily/business-day points arrive as YYYY-MM-DD; timestamp charts use
+    Unix seconds serialized as a string. ISO datetimes are accepted for API
+    clients as well. All forms normalize to aware UTC datetimes.
+    """
+    text = value.strip()
+    try:
+        if text.isdigit():
+            parsed = datetime.fromtimestamp(int(text), tz=UTC)
+        else:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=UTC)
+            else:
+                parsed = parsed.astimezone(UTC)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ValueError(f"invalid trend timestamp '{value}'") from exc
+    if not math.isfinite(parsed.timestamp()):
+        raise ValueError(f"invalid trend timestamp '{value}'")
+    return parsed
+
+
+class TrendLineParams(BaseModel):
+    """Two anchors defining a line that is extrapolated in calendar time."""
+    start_time: str = Field(..., min_length=1, max_length=40)
+    start_price: float = Field(..., gt=0)
+    end_time: str = Field(..., min_length=1, max_length=40)
+    end_price: float = Field(..., gt=0)
+
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
+
+    @model_validator(mode="after")
+    def validate_anchors(self) -> "TrendLineParams":
+        start = parse_trend_time(self.start_time)
+        end = parse_trend_time(self.end_time)
+        if start == end:
+            raise ValueError("trend line anchors must use different times")
+        return self
+
+
+class RsiCrossAboveParams(BaseModel):
+    period: int = Field(14, ge=2, le=50)
+    level: float = Field(70, gt=0, lt=100)
+
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
+
+
+class RsiCrossBelowParams(BaseModel):
+    period: int = Field(14, ge=2, le=50)
+    level: float = Field(30, gt=0, lt=100)
+
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
+
+
 # condition_type → params model (None = type takes no params).
 # Keys are THE canonical list of known condition types; the evaluator
 # registry in services/alert_rules.py must stay in sync (tested).
@@ -62,6 +119,10 @@ PARAMS_MODELS: dict[str, type[BaseModel] | None] = {
     "breakout_low": BreakoutParams,
     "volume_surge": VolumeSurgeParams,
     "foreign_net_buy_streak": StreakParams,
+    "trend_cross_above": TrendLineParams,
+    "trend_cross_below": TrendLineParams,
+    "rsi_cross_above": RsiCrossAboveParams,
+    "rsi_cross_below": RsiCrossBelowParams,
 }
 
 TW_ONLY_CONDITION_TYPES = ("foreign_net_buy_streak",)

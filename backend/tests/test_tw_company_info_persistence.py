@@ -124,6 +124,9 @@ async def test_refresh_symbol_map_upserts_rows_to_db():
     when Redis is unavailable."""
     import services.tw_market_service as tw
     from db.session import AsyncSessionLocal
+    from models.tw_company_classification_snapshot import (
+        TwCompanyClassificationSnapshot,
+    )
     from models.tw_company_info import TwCompanyInfo
 
     twse_rows = [{"Code": "2330"}, {"Code": "2454"}]
@@ -150,6 +153,49 @@ async def test_refresh_symbol_map_upserts_rows_to_db():
     assert by_sym["2330"].name_zh == "台積電"
     assert by_sym["2330"].industry == "半導體業"
     assert by_sym["2454"].exchange == "TWSE"
+
+    async with AsyncSessionLocal() as db:
+        snapshots = (await db.scalars(
+            select(TwCompanyClassificationSnapshot).order_by(
+                TwCompanyClassificationSnapshot.symbol
+            )
+        )).all()
+    assert [row.symbol for row in snapshots] == ["2330", "2454"]
+    assert snapshots[0].industry == "半導體業"
+    assert snapshots[0].source == "twse_tpex_symbol_map"
+
+
+@pytest.mark.asyncio
+async def test_daily_classification_snapshot_is_idempotent_and_date_partitioned():
+    import services.tw_market_service as tw
+    from db.session import AsyncSessionLocal
+    from models.tw_company_classification_snapshot import (
+        TwCompanyClassificationSnapshot,
+    )
+
+    first = await tw._persist_classification_snapshot_to_db(
+        {"2330": "TWSE"}, {"2330": "半導體業"}, {"2330": "台積電"},
+        snapshot_date=datetime(2025, 1, 1, tzinfo=UTC).date(),
+    )
+    second = await tw._persist_classification_snapshot_to_db(
+        {"2330": "TWSE"}, {"2330": "其他電子業"}, {"2330": "台積電"},
+        snapshot_date=datetime(2025, 1, 1, tzinfo=UTC).date(),
+    )
+    third = await tw._persist_classification_snapshot_to_db(
+        {"2330": "TWSE"}, {"2330": "半導體業"}, {"2330": "台積電"},
+        snapshot_date=datetime(2025, 1, 2, tzinfo=UTC).date(),
+    )
+
+    assert (first, second, third) == (1, 1, 1)
+    async with AsyncSessionLocal() as db:
+        rows = (await db.scalars(
+            select(TwCompanyClassificationSnapshot).order_by(
+                TwCompanyClassificationSnapshot.snapshot_date
+            )
+        )).all()
+    assert len(rows) == 2
+    assert rows[0].industry == "其他電子業"
+    assert rows[1].industry == "半導體業"
 
 
 @pytest.mark.asyncio

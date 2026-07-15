@@ -133,7 +133,10 @@ services:
       # `postgres_finmind` container. Set to `false` if running
       # `docker compose --profile finmind up` for the sidecar DB.
       FINMIND_USE_MAIN_DB:    ${FINMIND_USE_MAIN_DB:-true}
-      FINMIND_AUTO_INIT:      ${FINMIND_AUTO_INIT:-true}
+      # The migrate service above is the single FinMind schema writer. Running
+      # the same Alembic/seed sequence in every Uvicorn worker creates startup
+      # lock contention and intermittent 503s during rolling/cold deploys.
+      FINMIND_AUTO_INIT:      ${FINMIND_AUTO_INIT:-false}
       FINMIND_DATABASE_URL:   ${FINMIND_DATABASE_URL:-postgresql+asyncpg://finmind:finmind_dev_password@postgres_finmind:5432/finmind_clone}
       # SMTP — daily auto-run discussion email report. Leave HOST/FROM
       # empty to disable (the cron skips silently). Same passthrough
@@ -207,6 +210,21 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  # First verified backup runs at startup, then daily. Archives and their
+  # SHA-256 manifests live in a dedicated volume with 35-day retention.
+  db-backup:
+    build: ./backend
+    command: sh -c "while true; do python -m scripts.database_backup --directory /backups; sleep 86400; done"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fincept}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-finceptweb}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-35}
+    volumes:
+      - database_backups:/backups
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend
@@ -262,3 +280,4 @@ volumes:
   redis_data:
   prometheus_data:
   grafana_data:
+  database_backups:

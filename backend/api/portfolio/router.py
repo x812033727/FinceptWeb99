@@ -1,29 +1,37 @@
 import logging
 from datetime import date as _date
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from typing import Annotated
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import services.portfolio_service as svc
 from api.portfolio.schemas import (
+    CashBalanceResponse,
+    CashEntryCreate,
+    CashEntryResponse,
+    CashEntryReverse,
+    OptimiseRequest,
+    OptimiseResponse,
+    PerformancePoint,
+    PortfolioAttributionResponse,
     PortfolioCreate,
     PortfolioListItem,
-    PortfolioUpdate,
-    PerformancePoint,
+    PortfolioRiskResponse,
+    PortfolioSnapshotResponse,
     PortfolioSummary,
+    PortfolioUpdate,
+    RebalancePlanRequest,
+    RebalancePlanResponse,
+    StressTestRequest,
+    StressTestResponse,
     TransactionCreate,
     TransactionResponse,
     TransactionUpdate,
-    OptimiseRequest,
-    OptimiseResponse,
-    PortfolioRiskResponse,
-    RebalancePlanRequest,
-    RebalancePlanResponse,
 )
-from dependencies import get_current_user
 from db.session import get_db
+from dependencies import get_current_user
 from limiter import limiter
-import services.portfolio_service as svc
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +58,8 @@ async def get_portfolio(portfolio_id: str, user: CurrentUser, db: DB):
     try:
         return await svc.get_portfolio_detail(portfolio_id, user["id"], db)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        code = 404 if "not found" in str(e).lower() else 400
+        raise HTTPException(status_code=code, detail=str(e))
     except Exception:
         # Catch-all so any unexpected exception path leaves a stack
         # trace in the logs (instead of just FastAPI's anonymous 500
@@ -110,7 +119,8 @@ async def add_transaction(request: Request, portfolio_id: str, body: Transaction
         )
         return {"id": str(tx.id), "status": "created"}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        code = 404 if "not found" in str(e).lower() else 400
+        raise HTTPException(status_code=code, detail=str(e))
 
 
 @router.post("/{portfolio_id}/optimise", response_model=OptimiseResponse)
@@ -193,6 +203,27 @@ async def portfolio_risk(request: Request, portfolio_id: str, user: CurrentUser,
         )
 
 
+@router.post("/{portfolio_id}/stress-test", response_model=StressTestResponse)
+@limiter.limit("10/minute")
+async def portfolio_stress_test(
+    request: Request, portfolio_id: str, body: StressTestRequest, user: CurrentUser, db: DB,
+):
+    """Apply transparent TAIEX, semiconductor, FX, rate and gap shocks.
+
+    This endpoint is a deterministic preview and never executes trades.
+    """
+    from services.portfolio_stress_service import stress_test_portfolio
+    try:
+        return StressTestResponse(**await stress_test_portfolio(
+            portfolio_id, user["id"], db,
+            scenarios=body.scenarios, gap_symbol=body.gap_symbol, gap_pct=body.gap_pct,
+        ))
+    except ValueError as exc:
+        if "not found" in str(exc).lower():
+            raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.get("/{portfolio_id}/performance", response_model=list[PerformancePoint])
 async def performance(portfolio_id: str, user: CurrentUser, db: DB, days: int = 90):
     """Daily portfolio value snapshots for the last N days."""
@@ -200,6 +231,28 @@ async def performance(portfolio_id: str, user: CurrentUser, db: DB, days: int = 
         return await svc.get_performance(portfolio_id, user["id"], db, days=days)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/{portfolio_id}/attribution", response_model=PortfolioAttributionResponse)
+@limiter.limit("10/minute")
+async def portfolio_attribution(
+    request: Request,
+    portfolio_id: str,
+    user: CurrentUser,
+    db: DB,
+    days: int = Query(default=90),
+):
+    """Transaction-flow-adjusted Modified Dietz return attribution."""
+    from services.portfolio_attribution_service import get_portfolio_attribution
+
+    try:
+        return PortfolioAttributionResponse(**await get_portfolio_attribution(
+            portfolio_id, user["id"], db, days=days,
+        ))
+    except ValueError as exc:
+        if "not found" in str(exc).lower():
+            raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/{portfolio_id}/transactions", response_model=list[TransactionResponse])
@@ -211,6 +264,108 @@ async def list_transactions(portfolio_id: str, user: CurrentUser, db: DB, limit:
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.get("/{portfolio_id}/snapshots", response_model=list[PortfolioSnapshotResponse])
+async def portfolio_snapshots(
+    portfolio_id: str, user: CurrentUser, db: DB,
+    days: int = Query(default=90, ge=1, le=3650),
+):
+    """Rich daily holdings/cash snapshots for audit and historical replay."""
+    try:
+        return await svc.get_portfolio_snapshots(
+            portfolio_id, user["id"], db, days=days,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/{portfolio_id}/cash", response_model=CashBalanceResponse)
+async def cash_balance(
+    portfolio_id: str, user: CurrentUser, db: DB, as_of: _date | None = None,
+):
+    """Multi-currency ledger balance, converted to the portfolio base currency."""
+    from services import portfolio_cash_service as cash_svc
+
+    try:
+        portfolio = await svc.get_portfolio(portfolio_id, user["id"], db)
+        if not portfolio:
+            raise ValueError("Portfolio not found")
+        balances = await cash_svc.get_cash_balances(
+            portfolio_id=portfolio_id, user_id=user["id"], db=db, as_of=as_of,
+        )
+        total = await cash_svc.cash_value_in_currency(
+            balances=balances, target_currency=portfolio.currency,
+        )
+        return {
+            "portfolio_id": portfolio_id, "base_currency": portfolio.currency,
+            "balances": balances, "total_cash_base": round(total, 2),
+            "negative_currencies": sorted(
+                currency for currency, amount in balances.items() if amount < -1e-6
+            ),
+            "as_of": as_of,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/{portfolio_id}/cash-entries", response_model=list[CashEntryResponse])
+async def cash_entries(
+    portfolio_id: str, user: CurrentUser, db: DB,
+    limit: int = Query(default=200, ge=1, le=1000),
+):
+    from services import portfolio_cash_service as cash_svc
+
+    try:
+        return await cash_svc.list_entries(
+            portfolio_id=portfolio_id, user_id=user["id"], db=db, limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post(
+    "/{portfolio_id}/cash-entries", response_model=CashEntryResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+@limiter.limit("30/minute")
+async def create_cash_entry(
+    request: Request, portfolio_id: str, body: CashEntryCreate,
+    user: CurrentUser, db: DB,
+):
+    from services import portfolio_cash_service as cash_svc
+
+    try:
+        return await cash_svc.create_manual_entry(
+            portfolio_id=portfolio_id, user_id=user["id"], currency=body.currency,
+            amount=body.amount, entry_type=body.entry_type,
+            occurred_on=body.occurred_on, notes=body.notes,
+            idempotency_key=body.idempotency_key, db=db,
+        )
+    except ValueError as exc:
+        code = 404 if "not found" in str(exc).lower() else 400
+        raise HTTPException(status_code=code, detail=str(exc))
+
+
+@router.post(
+    "/{portfolio_id}/cash-entries/{entry_id}/reverse",
+    response_model=CashEntryResponse,
+)
+@limiter.limit("30/minute")
+async def reverse_cash_entry(
+    request: Request, portfolio_id: str, entry_id: str, body: CashEntryReverse,
+    user: CurrentUser, db: DB,
+):
+    from services import portfolio_cash_service as cash_svc
+
+    try:
+        return await cash_svc.reverse_entry(
+            portfolio_id=portfolio_id, entry_id=entry_id, user_id=user["id"],
+            db=db, notes=body.notes,
+        )
+    except ValueError as exc:
+        code = 404 if "not found" in str(exc).lower() else 400
+        raise HTTPException(status_code=code, detail=str(exc))
+
+
 @router.patch("/{portfolio_id}/transactions/{tx_id}", response_model=TransactionResponse)
 @limiter.limit("60/minute")
 async def update_transaction(
@@ -218,17 +373,20 @@ async def update_transaction(
 ):
     """Edit fields on an existing transaction. Re-derives the affected
     holding(s); if symbol/market changed, both old and new holdings rebuild."""
-    tx = await svc.update_transaction(
-        portfolio_id, tx_id, user["id"], db,
-        symbol=body.symbol,
-        market=body.market,
-        tx_type=body.tx_type,
-        quantity=body.quantity,
-        price=body.price,
-        fx_rate=body.fx_rate,
-        tx_date=body.tx_date,
-        notes=body.notes,
-    )
+    try:
+        tx = await svc.update_transaction(
+            portfolio_id, tx_id, user["id"], db,
+            symbol=body.symbol,
+            market=body.market,
+            tx_type=body.tx_type,
+            quantity=body.quantity,
+            price=body.price,
+            fx_rate=body.fx_rate,
+            tx_date=body.tx_date,
+            notes=body.notes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
     return tx
@@ -238,7 +396,10 @@ async def update_transaction(
 @limiter.limit("60/minute")
 async def delete_transaction(request: Request, portfolio_id: str, tx_id: str, user: CurrentUser, db: DB):
     """Remove one transaction; rebuilds the affected holding from remaining txs."""
-    deleted = await svc.delete_transaction(portfolio_id, tx_id, user["id"], db)
+    try:
+        deleted = await svc.delete_transaction(portfolio_id, tx_id, user["id"], db)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     if not deleted:
         raise HTTPException(status_code=404, detail="Transaction not found")
 

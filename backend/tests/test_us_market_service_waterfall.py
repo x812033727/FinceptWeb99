@@ -327,6 +327,7 @@ async def test_get_fundamentals_uses_polygon_when_key_set():
     yf_mock.assert_not_called()
     assert out["symbol"] == "AAPL"
     assert out["name"] == "Apple Inc."
+    assert out["data_source"] == "polygon"
     assert out["sector"] == "Tech"
     assert out["market_cap"] == 3.2e12
 
@@ -371,6 +372,7 @@ async def test_get_fundamentals_short_circuits_on_cache_hit():
          patch.object(svc.yfinance, "get_info", new_callable=AsyncMock) as yf_mock:
         out = await svc.get_fundamentals("AAPL")
     assert out["name"] == "Apple Inc."
+    assert out["data_source"] == "cache"
     polygon_mock.assert_not_called()
     yf_mock.assert_not_called()
     cache_set.assert_not_called()

@@ -38,6 +38,7 @@ from typing import Any
 import data.tw.finmind_connector as finmind
 from cache.cache_ttls import TTL_FUNDAMENTALS
 from cache.redis_cache import cache_get_json, cache_set_json, key_health_tw
+from middleware.metrics import FINANCIAL_STATEMENT_ANALYSIS_TOTAL
 
 log = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ _INCOME_ALIASES = {
     "operating_income": ("OperatingIncome", "OperatingProfit", "IncomeFromOperations"),
     "net_income":      (
         "NetIncome", "NetIncomeAttributableToOwnersOfParent",
-        "IncomeAfterTax", "ProfitAfterTax",
+        "IncomeAfterTax", "IncomeAfterTaxes", "ProfitAfterTax",
     ),
     "eps":             ("EPS", "BasicEPS", "EarningsPerShare"),
 }
@@ -62,6 +63,9 @@ _BALANCE_ALIASES = {
     ),
     "current_assets":       ("CurrentAssets",),
     "current_liabilities":  ("CurrentLiabilities",),
+    "cash":                  (
+        "CashAndCashEquivalents", "CashCashEquivalentsAndCurrentFinancialAssets",
+    ),
 }
 
 _CASHFLOW_ALIASES = {
@@ -76,6 +80,7 @@ _CASHFLOW_ALIASES = {
     "capex":         (
         "AcquisitionOfPropertyPlantAndEquipment",
         "PurchaseOfPropertyPlantAndEquipment",
+        "PropertyAndPlantAndEquipment",
     ),
 }
 
@@ -109,6 +114,64 @@ def _safe_div(a: float | None, b: float | None) -> float | None:
     return a / b
 
 
+def _round_pct(value: float | None) -> float | None:
+    return round(value * 100, 2) if value is not None else None
+
+
+def _growth_pct(current: float | None, previous: float | None) -> float | None:
+    """Percentage growth with an explicit zero / missing-data abstention."""
+    ratio = _safe_div(
+        current - previous if current is not None and previous is not None else None,
+        abs(previous) if previous is not None else None,
+    )
+    return _round_pct(ratio)
+
+
+def _complete_sum(periods: list[dict[str, Any]], key: str) -> float | None:
+    """Sum only a complete four-quarter window; never annualise partial data."""
+    if len(periods) != 4 or any(p.get(key) is None for p in periods):
+        return None
+    return sum(float(p[key]) for p in periods)
+
+
+def _quarterize_cash_flow(
+    periods: dict[str, dict[str, float]],
+) -> dict[str, dict[str, float]]:
+    """Convert calendar-year YTD cash-flow facts into standalone quarters.
+
+    Taiwan interim cash-flow statements are year-to-date. Q2/Q3/annual facts
+    must therefore subtract the prior filing in the same year before TTM sums.
+    If an earlier filing is missing, affected flow facts are removed so callers
+    abstain instead of treating an unknown YTD value as one quarter.
+    """
+    target_names = {
+        name
+        for aliases in _CASHFLOW_ALIASES.values()
+        for name in aliases
+    }
+    result: dict[str, dict[str, float]] = {}
+    previous_date: str | None = None
+    previous: dict[str, float] = {}
+    for date_key in sorted(periods):
+        current = dict(periods[date_key])
+        try:
+            year, month = int(date_key[:4]), int(date_key[5:7])
+            previous_year = int(previous_date[:4]) if previous_date else None
+        except (TypeError, ValueError):
+            result[date_key] = current
+            previous_date, previous = date_key, periods[date_key]
+            continue
+        if month > 3:
+            for name in target_names & current.keys():
+                if previous_year == year and name in previous:
+                    current[name] -= previous[name]
+                else:
+                    current.pop(name, None)
+        result[date_key] = current
+        previous_date, previous = date_key, periods[date_key]
+    return result
+
+
 def _light(value: float | None, *, green: float, yellow: float, higher_better: bool = True) -> str:
     """Map a metric to red/yellow/green. Thresholds in original units (eg 15 = 15%)."""
     if value is None:
@@ -140,9 +203,11 @@ async def get_health(symbol: str, periods: int = 8) -> dict[str, Any]:
         "lights":   {"profitability", "safety", "growth", "cash_flow"}
       }
     """
-    key = key_health_tw(symbol)
+    key = key_health_tw(symbol, periods)
     cached = await cache_get_json(key)
     if cached is not None:
+        cached_status = cached.get("quality", {}).get("status", "unavailable")
+        FINANCIAL_STATEMENT_ANALYSIS_TOTAL.labels(outcome=cached_status).inc()
         return cached
 
     try:
@@ -160,9 +225,11 @@ async def get_health(symbol: str, periods: int = 8) -> dict[str, Any]:
 
     income = _pivot_by_period(income_rows)
     bs     = _pivot_by_period(bs_rows)
-    cf     = _pivot_by_period(cf_rows)
+    cf     = _quarterize_cash_flow(_pivot_by_period(cf_rows))
 
-    all_dates = sorted(set(income) | set(bs) | set(cf))[-periods:]
+    # Keep four extra quarters internally for same-quarter YoY and opening
+    # balance-sheet averages, while returning only the caller's window.
+    all_dates = sorted(set(income) | set(bs) | set(cf))[-max(periods + 4, 5):]
 
     out_periods: list[dict[str, Any]] = []
     for d in all_dates:
@@ -190,7 +257,10 @@ async def get_health(symbol: str, periods: int = 8) -> dict[str, Any]:
         net_margin       = _safe_div(net_income, revenue)
         debt_ratio       = _safe_div(total_liabilities, total_assets)
         current_ratio    = _safe_div(current_assets, current_liabilities)
-        free_cf          = (operating_cf + capex) if (operating_cf is not None and capex is not None) else None
+        # XBRL taxonomies disagree on whether acquisition capex is signed.
+        # Treat either representation as an outflow so FCF remains comparable.
+        free_cf          = (operating_cf - abs(capex)) if (operating_cf is not None and capex is not None) else None
+        cash             = _pick(bp, _BALANCE_ALIASES["cash"])
 
         out_periods.append({
             "date":             d,
@@ -205,22 +275,80 @@ async def get_health(symbol: str, periods: int = 8) -> dict[str, Any]:
             "operating_cf":     operating_cf,
             "free_cf":          free_cf,
             "total_equity":     total_equity,
+            "total_assets":     total_assets,
+            "total_liabilities": total_liabilities,
+            "current_assets":   current_assets,
+            "current_liabilities": current_liabilities,
+            "cash":             cash,
+            "capex":            capex,
+            "revenue_yoy":      None,
+            "net_income_yoy":   None,
+            "eps_yoy":          None,
+            "cash_conversion":  round(_safe_div(operating_cf, net_income), 3)
+                                if _safe_div(operating_cf, net_income) is not None else None,
+            "free_cf_margin":   _round_pct(_safe_div(free_cf, revenue)),
         })
+
+    # Same-quarter YoY comparisons. Matching month/day is safer than blindly
+    # taking i-4 when one statement has a missing period.
+    by_month_day_year = {
+        (p["date"][5:], int(p["date"][:4])): p
+        for p in out_periods
+        if len(p.get("date", "")) >= 10 and p["date"][:4].isdigit()
+    }
+    for p in out_periods:
+        d = p.get("date", "")
+        if len(d) < 10 or not d[:4].isdigit():
+            continue
+        prior = by_month_day_year.get((d[5:], int(d[:4]) - 1))
+        if prior is None:
+            continue
+        p["revenue_yoy"] = _growth_pct(p.get("revenue"), prior.get("revenue"))
+        p["net_income_yoy"] = _growth_pct(p.get("net_income"), prior.get("net_income"))
+        p["eps_yoy"] = _growth_pct(p.get("eps"), prior.get("eps"))
 
     # ── Summary metrics ─────────────────────────────────────────
     latest = out_periods[-1] if out_periods else {}
 
-    # ROE on a TTM basis: sum of last 4 quarters' net income / latest equity.
-    ttm_net_income: float | None = None
-    last_4 = [p for p in out_periods[-4:] if p.get("net_income") is not None]
-    if len(last_4) >= 1:
-        ttm_net_income = sum(p["net_income"] for p in last_4)
+    # TTM calculations require a complete four-quarter window. Partial windows
+    # are returned as null rather than being silently annualised.
+    last_4 = out_periods[-4:]
+    ttm_revenue = _complete_sum(last_4, "revenue")
+    ttm_net_income = _complete_sum(last_4, "net_income")
+    ttm_operating_cf = _complete_sum(last_4, "operating_cf")
+    ttm_free_cf = _complete_sum(last_4, "free_cf")
     latest_equity = latest.get("total_equity")
+    latest_assets = latest.get("total_assets")
+    opening = out_periods[-5] if len(out_periods) >= 5 else {}
+    opening_equity = opening.get("total_equity")
+    opening_assets = opening.get("total_assets")
+    avg_equity = (
+        (latest_equity + opening_equity) / 2
+        if latest_equity is not None and opening_equity is not None
+        else latest_equity
+    )
+    avg_assets = (
+        (latest_assets + opening_assets) / 2
+        if latest_assets is not None and opening_assets is not None
+        else latest_assets
+    )
     latest_roe = (
-        round(ttm_net_income / latest_equity * 100, 2)
-        if (ttm_net_income is not None and latest_equity)
+        _round_pct(_safe_div(ttm_net_income, avg_equity))
+        if ttm_net_income is not None
         else None
     )
+    latest_roa = _round_pct(_safe_div(ttm_net_income, avg_assets))
+    ttm_net_margin = _round_pct(_safe_div(ttm_net_income, ttm_revenue))
+    asset_turnover = _safe_div(ttm_revenue, avg_assets)
+    equity_multiplier = _safe_div(avg_assets, avg_equity)
+    dupont_roe = (
+        _round_pct(ttm_net_margin / 100 * asset_turnover * equity_multiplier)
+        if ttm_net_margin is not None
+        and asset_turnover is not None
+        and equity_multiplier is not None
+        else None
+    )
+    cash_conversion_ttm = _safe_div(ttm_operating_cf, ttm_net_income)
 
     # Operating cash-flow positive streak in last 4 periods.
     cf_streak = sum(
@@ -248,6 +376,17 @@ async def get_health(symbol: str, periods: int = 8) -> dict[str, Any]:
         "latest_net_margin": latest.get("net_margin"),
         "revenue_yoy":      revenue_yoy,
         "cf_positive_streak_4q": cf_streak,
+        "latest_roa": latest_roa,
+        "ttm_revenue": ttm_revenue,
+        "ttm_net_income": ttm_net_income,
+        "ttm_operating_cf": ttm_operating_cf,
+        "ttm_free_cf": ttm_free_cf,
+        "ttm_net_margin": ttm_net_margin,
+        "cash_conversion_ttm": round(cash_conversion_ttm, 3)
+                               if cash_conversion_ttm is not None else None,
+        "asset_turnover": round(asset_turnover, 3) if asset_turnover is not None else None,
+        "equity_multiplier": round(equity_multiplier, 3) if equity_multiplier is not None else None,
+        "dupont_roe": dupont_roe,
     }
 
     # ── Traffic-light scoring ───────────────────────────────────
@@ -260,12 +399,93 @@ async def get_health(symbol: str, periods: int = 8) -> dict[str, Any]:
                           "red" if out_periods else "gray"),
     }
 
+    statement_periods = {
+        "income": len(income), "balance_sheet": len(bs), "cash_flow": len(cf),
+    }
+    latest_core = [
+        latest.get(k) for k in (
+            "revenue", "net_income", "gross_margin", "operating_margin",
+            "total_assets", "total_liabilities", "total_equity",
+            "current_assets", "current_liabilities", "operating_cf", "capex",
+        )
+    ]
+    coverage_pct = round(sum(v is not None for v in latest_core) / len(latest_core) * 100, 1)
+    quality_flags: list[str] = []
+    if not income:
+        quality_flags.append("missing_income_statement")
+    if not bs:
+        quality_flags.append("missing_balance_sheet")
+    if not cf:
+        quality_flags.append("missing_cash_flow")
+    if coverage_pct < 80:
+        quality_flags.append("incomplete_latest_period")
+    if len(out_periods) < 5:
+        quality_flags.append("limited_yoy_history")
+    quality_status = (
+        "unavailable" if not out_periods
+        else "good" if coverage_pct >= 80 and all(statement_periods.values())
+        else "degraded"
+    )
+
+    signals: list[dict[str, Any]] = []
+    prior_year = out_periods[-5] if len(out_periods) >= 5 else None
+    if prior_year is not None:
+        margin_change = (
+            latest["gross_margin"] - prior_year["gross_margin"]
+            if latest.get("gross_margin") is not None and prior_year.get("gross_margin") is not None
+            else None
+        )
+        debt_change = (
+            latest["debt_ratio"] - prior_year["debt_ratio"]
+            if latest.get("debt_ratio") is not None and prior_year.get("debt_ratio") is not None
+            else None
+        )
+        if margin_change is not None and abs(margin_change) >= 2:
+            signals.append({
+                "code": "gross_margin_expanding" if margin_change > 0 else "gross_margin_contracting",
+                "direction": "positive" if margin_change > 0 else "risk",
+                "value": round(margin_change, 2), "unit": "percentage_points",
+            })
+        if debt_change is not None and abs(debt_change) >= 5:
+            signals.append({
+                "code": "leverage_improving" if debt_change < 0 else "leverage_rising",
+                "direction": "positive" if debt_change < 0 else "risk",
+                "value": round(debt_change, 2), "unit": "percentage_points",
+            })
+    if cash_conversion_ttm is not None and ttm_net_income is not None and ttm_net_income > 0:
+        if cash_conversion_ttm < 0.8:
+            signals.append({"code": "weak_cash_conversion", "direction": "risk",
+                            "value": round(cash_conversion_ttm, 3), "unit": "ratio"})
+        elif cash_conversion_ttm >= 1:
+            signals.append({"code": "strong_cash_conversion", "direction": "positive",
+                            "value": round(cash_conversion_ttm, 3), "unit": "ratio"})
+    if ttm_free_cf is not None and ttm_free_cf < 0:
+        signals.append({"code": "negative_ttm_free_cash_flow", "direction": "risk",
+                        "value": ttm_free_cf, "unit": "reported_currency"})
+
     result = {
         "symbol":  symbol,
         "market":  "TW",
-        "periods": out_periods,
+        "periods": out_periods[-periods:],
         "summary": summary,
         "lights":  lights,
+        "signals": signals,
+        "quality": {
+            "status": quality_status,
+            "flags": quality_flags,
+            "sources": ["finmind"] if out_periods else [],
+            "statement_periods": statement_periods,
+            "latest_core_coverage_pct": coverage_pct,
+        },
+        "methodology": {
+            "ttm": "sum of four complete standalone quarters; partial windows abstain",
+            "cash_flow_periods": "calendar-year YTD facts are differenced into standalone quarters",
+            "free_cash_flow": "operating cash flow minus absolute acquisition capex",
+            "roe": "TTM net income divided by average opening/latest equity when available",
+            "dupont": "TTM net margin × asset turnover × equity multiplier",
+            "signals": "descriptive thresholds only; not investment advice",
+        },
     }
+    FINANCIAL_STATEMENT_ANALYSIS_TOTAL.labels(outcome=quality_status).inc()
     await cache_set_json(key, result, TTL_FUNDAMENTALS)
     return result

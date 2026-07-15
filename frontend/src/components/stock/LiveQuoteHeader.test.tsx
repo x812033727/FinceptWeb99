@@ -60,6 +60,21 @@ describe("LiveQuoteHeader", () => {
     expect(screen.getByText("-1.20%")).toBeInTheDocument();
   });
 
+  it("warns when independent quote providers materially disagree", () => {
+    render(<LiveQuoteHeader symbol="AAPL" market="US" quote={{
+      ...restQuote,
+      meta: {
+        consistency: "conflict",
+        price_spread_pct: 2.25,
+        cross_checked_sources: ["polygon", "yfinance"],
+      },
+    }} isETF={false} />);
+
+    const warning = screen.getByRole("status");
+    expect(warning).toHaveTextContent("Source conflict");
+    expect(warning).toHaveAttribute("title", expect.stringContaining("2.25"));
+  });
+
   it("switches to the live quote after the first batched tick", () => {
     render(<LiveQuoteHeader symbol="AAPL" market="US" quote={restQuote} isETF={false} />);
     expect(screen.getByText("180.50")).toBeInTheDocument();

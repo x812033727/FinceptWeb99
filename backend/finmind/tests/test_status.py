@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from finmind.models.backfill_progress import BackfillProgress
 from finmind.models.dataset_source import DatasetSource
+from finmind.dataset_catalog import all_entries
 from finmind.scripts.init_db import seed_dataset_sources
 from finmind.scripts.status import (
     collect_status,
@@ -29,9 +30,10 @@ async def test_status_against_empty_db_reports_uninitialized(finmind_session):
     its empty-state shape rather than crashing on missing rows."""
     report = await collect_status(finmind_session)
 
-    # Catalog count is 0 (no seed yet) but expected is the full 80.
+    expected = len(list(all_entries()))
+    # Catalog count is 0 (no seed yet) but expected reflects the catalog.
     assert report.catalog["seeded"] == 0
-    assert report.catalog["expected"] == 80
+    assert report.catalog["expected"] == expected
     assert report.catalog["ok"] is False
 
     # No enabled datasets, no backfill chunks, no errors.
@@ -48,14 +50,15 @@ async def test_status_after_seed_shows_full_catalog(finmind_session):
 
     report = await collect_status(finmind_session)
 
-    assert report.catalog == {"seeded": 80, "expected": 80, "ok": True}
+    expected = len(list(all_entries()))
+    assert report.catalog == {"seeded": expected, "expected": expected, "ok": True}
 
     # Phase 1 coverage: every category present, never more `built` than
     # `total`. (Absolute counts move as Phase 1 batches land — assert
     # the invariant, not the snapshot.)
     assert set(report.phase1_coverage) == {
         "technical", "chip", "fundamental", "derivative",
-        "realtime", "convertible_bond", "other",
+        "realtime", "convertible_bond", "other", "macro", "crypto",
     }
     for cat, s in report.phase1_coverage.items():
         assert 0 <= s["built"] <= s["total"]
@@ -214,8 +217,9 @@ async def test_render_json_round_trips(finmind_session):
     payload = render_json(report)
     parsed = json.loads(payload)
 
-    assert parsed["catalog"]["seeded"] == 80
-    assert parsed["catalog"]["expected"] == 80
+    expected = len(list(all_entries()))
+    assert parsed["catalog"]["seeded"] == expected
+    assert parsed["catalog"]["expected"] == expected
     assert "generated_at" in parsed
 
 

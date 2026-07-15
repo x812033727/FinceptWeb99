@@ -1,10 +1,11 @@
 import hashlib
+import json
 import secrets
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
-from jose import JWTError
+from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, HTTPException, Response, status
+from jwt import InvalidTokenError as JWTError
 from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,9 +16,15 @@ from api.auth.schemas import (
     APIKeyCreateRequest,
     APIKeyCreateResponse,
     APIKeyListItem,
+    AcceptInviteRequest,
     ChangePasswordRequest,
+    ConsentAcceptRequest,
+    ConsentStatus,
+    ForgotPasswordRequest,
     LoginRequest,
     RegisterRequest,
+    ResetPasswordRequest,
+    SessionItem,
     TokenResponse,
     UserResponse,
 )
@@ -39,6 +46,9 @@ from config import settings
 from db.session import get_db
 from dependencies import get_current_user
 from models.user import APIKey, User, UserRole
+from models.auth_security import AuthInvitation, PasswordResetToken
+from models.governance import UserConsent
+from services.email_service import send_password_reset_email
 
 router = APIRouter()
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -57,13 +67,25 @@ def _hash_key(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-async def _set_refresh_cookie(response: Response, user_id: str) -> str:
+def _as_utc(value: datetime) -> datetime:
+    """SQLite drops timezone offsets; PostgreSQL preserves them."""
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+async def _set_refresh_cookie(
+    response: Response, user_id: str, request: Request | None = None,
+) -> str:
     token, jti = create_refresh_token(user_id)
     r = await get_redis()
     # Track jti in a Redis Set for per-user session revocation
     await r.sadd(key_user_sessions(user_id), jti)
     await r.expire(key_user_sessions(user_id), REFRESH_TTL)
-    await cache_set(key_refresh_token(user_id, jti), "1", REFRESH_TTL)
+    metadata = json.dumps({
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "ip_address": request.client.host if request and request.client else None,
+        "user_agent": request.headers.get("user-agent") if request else None,
+    })
+    await cache_set(key_refresh_token(user_id, jti), metadata, REFRESH_TTL)
     response.set_cookie(
         key=REFRESH_COOKIE,
         value=token,
@@ -74,6 +96,16 @@ async def _set_refresh_cookie(response: Response, user_id: str) -> str:
         path="/api/auth",
     )
     return token
+
+
+async def _revoke_all_sessions(user_id: str) -> None:
+    r = await get_redis()
+    session_key = key_user_sessions(user_id)
+    jtis = await r.smembers(session_key)
+    if jtis:
+        keys = [key_refresh_token(user_id, j.decode() if isinstance(j, bytes) else str(j)) for j in jtis]
+        await r.delete(*keys)
+    await r.delete(session_key)
 
 
 async def _get_ai_remaining(user_id: str, role: str) -> int | None:
@@ -98,6 +130,8 @@ async def _get_ai_remaining(user_id: str, role: str) -> int | None:
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit("5/minute")
 async def register(request: Request, body: RegisterRequest, response: Response, db: AsyncSession = Depends(get_db)):
+    if not settings.PUBLIC_REGISTRATION_ENABLED:
+        raise HTTPException(status_code=403, detail="Public registration is disabled")
     existing = await db.scalar(select(User).where(User.email == body.email))
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -110,9 +144,93 @@ async def register(request: Request, body: RegisterRequest, response: Response, 
     db.add(user)
     await db.flush()   # get user.id before commit
 
-    await _set_refresh_cookie(response, str(user.id))
+    await _set_refresh_cookie(response, str(user.id), request)
+    request.state.audit_user_id = str(user.id)
     access_token = create_access_token(str(user.id), user.role.value)
     return TokenResponse(access_token=access_token)
+
+
+@router.post("/accept-invite", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("5/minute")
+async def accept_invite(
+    request: Request,
+    body: AcceptInviteRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    token_hash = _hash_key(body.token)
+    invitation = await db.scalar(
+        select(AuthInvitation).where(AuthInvitation.token_hash == token_hash).with_for_update()
+    )
+    now = datetime.now(timezone.utc)
+    if (
+        not invitation
+        or invitation.used_at is not None
+        or _as_utc(invitation.expires_at) < now
+        or invitation.email.lower() != str(body.email).lower()
+    ):
+        raise HTTPException(400, "Invitation is invalid or expired")
+    if await db.scalar(select(User.id).where(User.email == str(body.email).lower())):
+        raise HTTPException(409, "Email already has an account")
+
+    user = User(
+        email=str(body.email).lower(),
+        hashed_password=pwd_ctx.hash(body.password),
+        role=UserRole(invitation.role),
+    )
+    invitation.used_at = now
+    db.add(user)
+    await db.flush()
+    await _set_refresh_cookie(response, str(user.id), request)
+    request.state.audit_user_id = str(user.id)
+    return TokenResponse(access_token=create_access_token(str(user.id), user.role.value))
+
+
+@router.post("/password/forgot", status_code=status.HTTP_202_ACCEPTED)
+@limiter.limit("5/minute")
+async def forgot_password(
+    request: Request,
+    body: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await db.scalar(select(User).where(User.email == body.email))
+    if user and user.is_active:
+        raw_token = secrets.token_urlsafe(32)
+        db.add(PasswordResetToken(
+            user_id=user.id,
+            token_hash=_hash_key(raw_token),
+            expires_at=datetime.now(timezone.utc) + timedelta(
+                minutes=settings.PASSWORD_RESET_EXPIRE_MINUTES
+            ),
+        ))
+        await db.flush()
+        background_tasks.add_task(send_password_reset_email, user.email, raw_token)
+    # Deliberately identical response for existing and unknown addresses.
+    return {"detail": "If the account exists, reset instructions will be sent"}
+
+
+@router.post("/password/reset", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("5/minute")
+async def reset_password(
+    request: Request,
+    body: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    reset = await db.scalar(
+        select(PasswordResetToken)
+        .where(PasswordResetToken.token_hash == _hash_key(body.token))
+        .with_for_update()
+    )
+    now = datetime.now(timezone.utc)
+    if not reset or reset.used_at is not None or _as_utc(reset.expires_at) < now:
+        raise HTTPException(400, "Reset token is invalid or expired")
+    user = await db.get(User, reset.user_id)
+    if not user or not user.is_active:
+        raise HTTPException(400, "Reset token is invalid or expired")
+    user.hashed_password = pwd_ctx.hash(body.new_password)
+    reset.used_at = now
+    await _revoke_all_sessions(str(user.id))
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -128,7 +246,8 @@ async def login(request: Request, body: LoginRequest, response: Response, db: As
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account disabled")
 
-    await _set_refresh_cookie(response, str(user.id))
+    await _set_refresh_cookie(response, str(user.id), request)
+    request.state.audit_user_id = str(user.id)
     access_token = create_access_token(str(user.id), user.role.value)
     return TokenResponse(access_token=access_token)
 
@@ -164,7 +283,7 @@ async def refresh(
     # Rotate: revoke old jti, issue new refresh token
     await cache_delete(key_refresh_token(user_id, jti))
     await r.srem(key_user_sessions(user_id), jti)
-    await _set_refresh_cookie(response, user_id)
+    await _set_refresh_cookie(response, user_id, request)
 
     access_token = create_access_token(user_id, user.role.value)
     return TokenResponse(access_token=access_token)
@@ -210,6 +329,7 @@ async def me(current_user: dict = Depends(get_current_user), db: AsyncSession = 
 @router.patch("/me", status_code=status.HTTP_204_NO_CONTENT)
 async def change_password(
     body: ChangePasswordRequest,
+    response: Response,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -220,6 +340,118 @@ async def change_password(
         raise HTTPException(status_code=400, detail="Current password is incorrect")
     user.hashed_password = pwd_ctx.hash(body.new_password)
     await db.commit()
+    await _revoke_all_sessions(str(user.id))
+    response.delete_cookie(REFRESH_COOKIE, path="/api/auth")
+
+
+@router.get("/sessions", response_model=list[SessionItem])
+async def list_sessions(
+    refresh_token: str | None = Cookie(default=None, alias=REFRESH_COOKIE),
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user["id"]
+    current_jti = None
+    if refresh_token:
+        try:
+            current_jti = decode_refresh_token(refresh_token)["jti"]
+        except JWTError:
+            pass
+    r = await get_redis()
+    raw_jtis = await r.smembers(key_user_sessions(user_id))
+    sessions = []
+    for raw_jti in raw_jtis:
+        jti = raw_jti.decode() if isinstance(raw_jti, bytes) else str(raw_jti)
+        raw_meta = await r.get(key_refresh_token(user_id, jti))
+        try:
+            meta = json.loads(raw_meta.decode() if isinstance(raw_meta, bytes) else raw_meta or "{}")
+        except (TypeError, ValueError):
+            meta = {}
+        sessions.append(SessionItem(id=jti, current=jti == current_jti, **meta))
+    return sessions
+
+
+@router.delete("/sessions", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_all_sessions(
+    response: Response,
+    current_user: dict = Depends(get_current_user),
+):
+    await _revoke_all_sessions(current_user["id"])
+    response.delete_cookie(REFRESH_COOKIE, path="/api/auth")
+
+
+@router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_session(
+    session_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user["id"]
+    r = await get_redis()
+    if not await r.sismember(key_user_sessions(user_id), session_id):
+        raise HTTPException(404, "Session not found")
+    await r.delete(key_refresh_token(user_id, session_id))
+    await r.srem(key_user_sessions(user_id), session_id)
+
+
+def _required_consents() -> dict[str, str]:
+    return {
+        "terms": settings.TERMS_VERSION,
+        "privacy": settings.PRIVACY_VERSION,
+        "ai_data_disclosure": settings.AI_DATA_DISCLOSURE_VERSION,
+    }
+
+
+@router.get("/consents", response_model=list[ConsentStatus])
+async def list_consents(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    user_id = UUID(current_user["id"])
+    rows = list((await db.scalars(select(UserConsent).where(UserConsent.user_id == user_id))).all())
+    accepted = {(row.document, row.version): row for row in rows}
+    return [
+        ConsentStatus(
+            document=document,
+            required_version=version,
+            accepted=(document, version) in accepted,
+            accepted_at=accepted.get((document, version)).accepted_at
+            if (document, version) in accepted else None,
+        )
+        for document, version in _required_consents().items()
+    ]
+
+
+@router.post("/consents", response_model=ConsentStatus, status_code=status.HTTP_201_CREATED)
+async def accept_consent(
+    request: Request,
+    body: ConsentAcceptRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    required = _required_consents()
+    if body.document not in required or body.version != required[body.document]:
+        raise HTTPException(400, "Consent document or version is not current")
+    user_id = UUID(current_user["id"])
+    consent = await db.scalar(select(UserConsent).where(
+        UserConsent.user_id == user_id,
+        UserConsent.document == body.document,
+        UserConsent.version == body.version,
+    ))
+    if consent is None:
+        consent = UserConsent(
+            user_id=user_id,
+            document=body.document,
+            version=body.version,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+        db.add(consent)
+        await db.flush()
+    return ConsentStatus(
+        document=body.document,
+        required_version=body.version,
+        accepted=True,
+        accepted_at=consent.accepted_at,
+    )
 
 
 # ── API Keys ──────────────────────────────────────────────────────

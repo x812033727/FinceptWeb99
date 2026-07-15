@@ -76,7 +76,7 @@ def main() -> int:
     args = p.parse_args()
 
     print("=" * 64)
-    print(f"  TWSE token bucket pressure test")
+    print("  TWSE token bucket pressure test")
     print(f"  workers={args.workers}  duration={args.duration}s  rate={args.rate:.3f}/s")
     print(f"  redis={args.redis_url}  key={args.key}")
     print("=" * 64)
@@ -116,7 +116,7 @@ def main() -> int:
         print(f"  RESULT: ❌ FAIL — rate limit breached "
               f"(granted {total_granted} > {expected:.1f})")
         return 1
-    print(f"  RESULT: ✅ PASS — global rate respected")
+    print("  RESULT: ✅ PASS — global rate respected")
     return 0
 
 

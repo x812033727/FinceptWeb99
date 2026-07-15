@@ -29,6 +29,7 @@ import json
 import logging
 import re
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,6 +41,7 @@ log = logging.getLogger(__name__)
 # Section headings the model must emit (## 摘要 … ## 結論). Shared by
 # the prompt contract below and the `parse_report_sections` splitter.
 REPORT_SECTIONS = ["摘要", "基本面", "籌碼與資金", "技術面", "風險", "結論"]
+PROMPT_VERSION = "stock-report-v3-source-quality"
 
 _SECTION_HEADING_RE = re.compile(r"^##\s*(.+?)\s*$", re.MULTILINE)
 
@@ -52,6 +54,10 @@ SYSTEM_PROMPT = (
     "撰寫要求:\n"
     "- 只引用 <market_context> 中確實存在的數據;缺漏的欄位請明確寫"
     "「資料不足」,絕對不可虛構數字。\n"
+    "- 每一個數字與具體市場事實後必須緊接其證據編號,格式為 [E1]。"
+    "只能使用 <evidence> 中存在的編號;沒有證據時必須寫「資料不足」。\n"
+    "- 若 <quality_summary> 顯示資料源衝突、過期或未完成交叉驗證,"
+    "必須在「摘要」與「風險」揭露;被移除為 null 的衝突數值不得推測或引用。\n"
     "- 「基本面」涵蓋估值(本益比、淨值比、殖利率、EPS)與營收趨勢;"
     "台股請引用月營收年增率(YoY)。\n"
     "- 「籌碼與資金」台股請引用三大法人買賣超、融資融券與主力分點;"
@@ -121,6 +127,21 @@ async def assemble_report_context(
         ctx, market=market, focus_symbols=focus,
         as_of=None, record_error=record_error,
     )
+    # A report is a high-trust surface, so pay for one explicit independent
+    # quote check even though ordinary market lists stay on the low-cost
+    # waterfall path. Failure degrades to an unverified diagnostic rather than
+    # aborting the remaining context blocks.
+    briefs = ctx.get("focus_briefs") or []
+    if briefs and isinstance(briefs[0], dict) and isinstance(briefs[0].get("quote"), dict):
+        quote = briefs[0]["quote"]
+        try:
+            if market == "TW":
+                from services import tw_market_service as market_service
+            else:
+                from services import us_market_service as market_service
+            quote["quality_check"] = await market_service.verify_quote_consistency(symbol, quote)
+        except Exception as exc:
+            record_error("quote_consistency", exc)
     if market == "TW":
         # 主力分點 — live FinMind read behind a 24h Redis cache.
         await chip.fetch_broker_concentration(
@@ -149,6 +170,174 @@ async def assemble_report_context(
         ctx["corporate_announcements"]["market"] = []
 
     return ctx
+
+
+def prepare_traceable_context(ctx: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], datetime]:
+    """Fail closed on degraded blocks and create a numeric evidence snapshot.
+
+    Every numeric leaf that remains available receives a stable evidence id.
+    The sanitized context and evidence list are stored with the report, making
+    the prompt reproducible without calling an upstream provider again.
+    """
+    evidence: list[dict[str, Any]] = []
+    quality_issues: list[dict[str, str]] = []
+
+    def quality_diagnostic(value: Any) -> Any:
+        """Retain provenance without leaking disputed numeric observations."""
+        if not isinstance(value, dict):
+            return value
+        return {
+            key: child for key, child in value.items()
+            if key in {
+                "status", "consistency", "primary_source", "secondary_source",
+                "cross_checked_sources", "flags", "quality_flags", "checked_at",
+            }
+        }
+
+    def walk(
+        value: Any,
+        path: str,
+        source: str = "context",
+        as_of: str | None = None,
+        *,
+        collect_evidence: bool = True,
+    ) -> Any:
+        if isinstance(value, dict):
+            local_source = str(value.get("data_source") or value.get("source") or source)
+            local_as_of = value.get("as_of_session") or value.get("as_of") \
+                or value.get("fetched_at") or value.get("date") or as_of
+            quality_check = value.get("quality_check") if isinstance(value.get("quality_check"), dict) else {}
+            meta = value.get("meta") if isinstance(value.get("meta"), dict) else {}
+            consistency = quality_check.get("status") or meta.get("consistency")
+            degraded_status = (
+                "conflict" if consistency == "conflict" else
+                "unavailable" if local_source == "unavailable" else
+                "stale" if (
+                    "stale" in local_source
+                    or value.get("is_stale") is True
+                    or meta.get("freshness") in {"stale", "unavailable"}
+                ) else
+                "unverified" if consistency == "unverified" else None
+            )
+            degraded = degraded_status in {"conflict", "stale", "unavailable"}
+            if degraded_status:
+                quality_issues.append({
+                    "path": path or "context",
+                    "status": degraded_status,
+                    "source": local_source,
+                })
+            degraded = degraded or (
+                local_source == "unavailable"
+                or "stale" in local_source
+                or value.get("is_stale") is True
+                or meta.get("freshness") in {"stale", "unavailable"}
+            )
+            out: dict[str, Any] = {}
+            for key, child in value.items():
+                child_path = f"{path}.{key}" if path else key
+                if key in {"quality_check", "meta"}:
+                    out[key] = quality_diagnostic(child)
+                elif degraded and isinstance(child, int | float) and not isinstance(child, bool):
+                    out[key] = None
+                else:
+                    out[key] = walk(
+                        child, child_path, local_source,
+                        str(local_as_of) if local_as_of else None,
+                        collect_evidence=collect_evidence,
+                    )
+            if degraded:
+                out["quality_status"] = degraded_status or "stale"
+            elif degraded_status == "unverified":
+                out["quality_status"] = "unverified"
+            return out
+        if isinstance(value, list):
+            return [
+                walk(child, f"{path}[{i}]", source, as_of, collect_evidence=collect_evidence)
+                for i, child in enumerate(value)
+            ]
+        if collect_evidence and isinstance(value, int | float) and not isinstance(value, bool):
+            evidence.append({
+                "id": f"E{len(evidence) + 1}",
+                "type": "numeric",
+                "path": path,
+                "value": value,
+                "source": source,
+                "as_of": as_of,
+            })
+        elif collect_evidence and isinstance(value, str) and path.rsplit(".", 1)[-1] in {
+            "title", "body", "summary", "category", "label",
+        } and value.strip():
+            evidence.append({
+                "id": f"E{len(evidence) + 1}",
+                "type": "fact",
+                "path": path,
+                "value": value,
+                "source": source,
+                "as_of": as_of,
+            })
+        return value
+
+    sanitized = walk(ctx, "")
+    error_count = len(ctx.get("errors") or []) if isinstance(ctx.get("errors"), list) else 0
+    counts = {
+        status: sum(issue["status"] == status for issue in quality_issues)
+        for status in ("conflict", "stale", "unavailable", "unverified")
+    }
+    penalty = min(
+        0.75,
+        counts["conflict"] * 0.25
+        + counts["stale"] * 0.15
+        + counts["unavailable"] * 0.15
+        + counts["unverified"] * 0.05
+        + error_count * 0.05,
+    )
+    reliability = round(1.0 - penalty, 4)
+    band = "high" if reliability >= 0.9 else "moderate" if reliability >= 0.7 else "low"
+    sanitized["quality_summary"] = {
+        "reliability_score": reliability,
+        "band": band,
+        "issue_counts": counts,
+        "connector_errors": error_count,
+        "issues": quality_issues,
+    }
+    cutoff = datetime.now(UTC)
+    sanitized["data_cutoff"] = cutoff.isoformat()
+    sanitized["evidence"] = evidence
+    return sanitized, evidence, cutoff
+
+
+def report_reliability(ctx: dict[str, Any]) -> float:
+    summary = ctx.get("quality_summary") if isinstance(ctx, dict) else None
+    if not isinstance(summary, dict):
+        return 1.0
+    try:
+        return max(0.0, min(1.0, float(summary.get("reliability_score", 1.0))))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def score_report_quality(content: str, evidence: list[dict[str, Any]]) -> float:
+    """Score line-level numerical consistency against cited evidence."""
+    values = {item["id"]: item.get("value") for item in evidence}
+    total = covered = 0
+    for line in content.splitlines():
+        tokens = re.findall(r"(?<![A-Za-z])[-+]?\d+(?:[.,]\d+)?%?", line)
+        if not tokens:
+            continue
+        citations = re.findall(r"\[(E\d+)\]", line)
+        cited_values = {str(values[c]).replace(",", "") for c in citations if c in values}
+        for token in tokens:
+            total += 1
+            normalized = token.lstrip("+").rstrip("%").replace(",", "")
+            try:
+                number = float(normalized)
+            except ValueError:
+                continue
+            if any(abs(number - float(value)) < 1e-9 for value in cited_values):
+                covered += 1
+    if not total:
+        return 1.0
+    return round(covered / total, 4)
 
 
 def build_report_messages(
@@ -196,6 +385,11 @@ async def persist_report(
     market: str,
     content_md: str,
     model: str,
+    prompt_version: str = PROMPT_VERSION,
+    data_cutoff: datetime | None = None,
+    evidence: list[dict[str, Any]] | None = None,
+    context_snapshot: dict[str, Any] | None = None,
+    quality_score: float | None = None,
 ) -> StockReport:
     """Insert one completed report row (called after the SSE stream
     finished with non-empty content)."""
@@ -205,9 +399,17 @@ async def persist_report(
         market=market,
         content_md=content_md,
         model=model,
+        model_id=model,
+        prompt_version=prompt_version,
+        data_cutoff=data_cutoff,
+        evidence=evidence or [],
+        context_snapshot=context_snapshot,
+        quality_score=quality_score if quality_score is not None else score_report_quality(content_md, evidence or []),
         sections=parse_report_sections(content_md),
     )
     db.add(report)
     await db.commit()
-    await db.refresh(report)
+    # UUID and timestamps use Python-side defaults and are populated by the
+    # commit flush. A post-commit refresh adds no data, while SSE dependency
+    # teardown can detach the instance between awaits under load.
     return report

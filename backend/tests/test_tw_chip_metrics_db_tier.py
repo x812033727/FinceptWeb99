@@ -12,6 +12,10 @@ import pytest
 import services.tw_market_service as tw
 
 
+def _without_source(rows: list[dict]) -> list[dict]:
+    return [{key: value for key, value in row.items() if key != "data_source"} for row in rows]
+
+
 def _institutional_db_rows() -> list[dict]:
     return [
         {
@@ -47,7 +51,8 @@ async def test_institutional_db_hit_short_circuits_upstream():
                       AsyncMock()) as twse_call:
         result = await tw.get_institutional("2330", days=30)
 
-    assert result == _institutional_db_rows()
+    assert _without_source(result) == _institutional_db_rows()
+    assert result[0]["data_source"] == "postgres"
     db_read.assert_awaited_once()
     finmind.assert_not_awaited()
     twse_call.assert_not_awaited()
@@ -68,7 +73,8 @@ async def test_institutional_db_miss_falls_through_to_finmind():
                       AsyncMock()) as twse_call:
         result = await tw.get_institutional("2330", days=30)
 
-    assert result == finmind_rows
+    assert _without_source(result) == finmind_rows
+    assert result[0]["data_source"] == "finmind"
     finmind.assert_awaited_once()
     twse_call.assert_not_awaited()
 
@@ -85,7 +91,8 @@ async def test_margin_db_hit_short_circuits_upstream():
                       AsyncMock()) as twse_call:
         result = await tw.get_margin("2330", days=30)
 
-    assert result == _margin_db_rows()
+    assert _without_source(result) == _margin_db_rows()
+    assert result[0]["data_source"] == "postgres"
     db_read.assert_awaited_once()
     finmind.assert_not_awaited()
     twse_call.assert_not_awaited()
@@ -104,4 +111,5 @@ async def test_margin_db_outage_does_not_hide_upstream():
                       AsyncMock(return_value=finmind_rows)):
         result = await tw.get_margin("2330", days=30)
 
-    assert result == finmind_rows
+    assert _without_source(result) == finmind_rows
+    assert result[0]["data_source"] == "finmind"

@@ -28,6 +28,19 @@ import data.tw.finmind_connector as finmind
 import data.tw.mops_connector as mops
 import data.tw.twse_connector as twse
 import data.tw.twse_mis_connector as twse_mis
+from cache.cache_ttls import (
+    TTL_FUNDAMENTALS,
+    TTL_INSTITUTIONAL,
+    TTL_MARGIN,
+    TTL_REVENUE,
+    TTL_SCREENER,
+)
+from cache.cache_ttls import (
+    TTL_HISTORY_DAILY as TTL_HISTORY,
+)
+from cache.cache_ttls import (
+    TTL_QUOTE_TW as TTL_QUOTE,
+)
 from cache.redis_cache import (
     cache_get_json,
     cache_set_json,
@@ -46,6 +59,7 @@ from cache.redis_cache import (
 )
 from config import settings
 from middleware.metrics import WATERFALL_TIER_FAILED_TOTAL
+from services.quote_consistency import compare_prices, unverified_check
 
 log = logging.getLogger(__name__)
 
@@ -56,19 +70,6 @@ def _tiered(coro):
     return asyncio.wait_for(coro, timeout=settings.WATERFALL_TIER_TIMEOUT_SECONDS)
 
 _TW = pytz.timezone("Asia/Taipei")
-
-# TTLs live in `cache.cache_ttls` so all three market services tune
-# from the same place. Aliases preserve the existing call-site shape
-# inside this module.
-from cache.cache_ttls import (  # noqa: E402
-    TTL_FUNDAMENTALS,
-    TTL_HISTORY_DAILY as TTL_HISTORY,
-    TTL_INSTITUTIONAL,
-    TTL_MARGIN,
-    TTL_QUOTE_TW as TTL_QUOTE,
-    TTL_REVENUE,
-    TTL_SCREENER,
-)
 
 # Symbol-map state + lookups live in `tw_symbol_service` (PR-A split).
 # Re-exported here so external callers that grab `_exchange_map` /
@@ -85,6 +86,7 @@ from services.tw_symbol_service import (  # noqa: E402, F401
     _exchange_map,
     _industry_map,
     _name_map,
+    _persist_classification_snapshot_to_db,
     _persist_symbol_map_to_cache,
     _persist_symbol_map_to_db,
     find_symbol_by_name_in_text,
@@ -511,6 +513,46 @@ def _normalize_quote(symbol: str, raw: dict) -> dict[str, Any]:
     }
 
 
+async def verify_quote_consistency(symbol: str, quote: dict[str, Any]) -> dict[str, Any]:
+    """Compare a settled TW quote with one independent EOD provider.
+
+    FinMind is EOD-only, so comparing it with an MIS tick during regular
+    trading would manufacture false conflicts. Those requests are explicitly
+    marked unverified and can be rechecked after the close.
+    """
+    primary = str(quote.get("data_source") or "unknown")
+    if not quote.get("price") or primary == "unavailable":
+        return unverified_check(primary, flag="primary_unavailable", market="TW")
+    if _is_tw_market_open():
+        return unverified_check(
+            primary, flag="crosscheck_deferred_during_regular_session", market="TW",
+        )
+
+    secondary = "twse" if primary == "finmind" else "finmind"
+    try:
+        if secondary == "twse":
+            alternate = await _tiered(twse.get_realtime_quote(symbol))
+            secondary_price = (alternate or {}).get("close")
+        else:
+            start = (date.today() - timedelta(days=7)).isoformat()
+            bars = await _tiered(finmind.get_daily_ohlcv(symbol, start))
+            secondary_price = bars[-1].get("close") if bars else None
+    except Exception as exc:
+        log.warning("tw.quote.crosscheck_failed", extra={
+            "symbol": symbol, "primary": primary, "secondary": secondary,
+            "error": str(exc),
+        })
+        return unverified_check(
+            primary, secondary_source=secondary,
+            flag="secondary_unavailable", market="TW",
+        )
+    return compare_prices(
+        market="TW", primary_source=primary, primary_price=quote.get("price"),
+        secondary_source=secondary, secondary_price=secondary_price,
+        max_spread_pct=0.5,
+    )
+
+
 # ── History ───────────────────────────────────────────────────────
 
 
@@ -577,7 +619,7 @@ async def get_history(symbol: str, months: int = 12) -> list[dict[str, Any]]:
     key = key_history("tw", symbol, "1d", range_token=f"{months}mo")
     cached = await cache_get_json(key)
     if cached is not None:
-        return cached
+        return [{**bar, "data_source": bar.get("data_source", "cache")} for bar in cached]
 
     today = date.today()
     start = today - timedelta(days=months * 30)
@@ -593,13 +635,13 @@ async def get_history(symbol: str, months: int = 12) -> list[dict[str, Any]]:
         index_bars = await read_ohlcv_range_autosession("TW", symbol, start, today)
         if index_bars:
             await cache_set_json(key, index_bars, TTL_HISTORY)
-        return index_bars
+        return [{**bar, "data_source": "ohlcv_daily"} for bar in index_bars]
 
     # ── Tier 2: Postgres archive ────────────────────────────────
     db_bars = await read_ohlcv_range_autosession("TW", symbol, start, today)
     if _db_bars_are_fresh(db_bars, today):
         await cache_set_json(key, db_bars, TTL_HISTORY)
-        return db_bars
+        return [{**bar, "data_source": "ohlcv_daily"} for bar in db_bars]
 
     # ── Tier 3: upstream waterfall ──
     # Order flips on FinMind token presence (`_finmind_preferred`): with a
@@ -645,13 +687,13 @@ async def get_history(symbol: str, months: int = 12) -> list[dict[str, Any]]:
             if b is not None
         ]
         await upsert_ohlcv_bars_autosession(ohlcv_bars)
-        return bars
+        return [{**bar, "data_source": upstream_source} for bar in bars]
 
     # ── Tier 4: stale DB beats nothing during full upstream outage ──
     if db_bars:
         log.info("tw.history.served_stale_db",
                  extra={"symbol": symbol, "rows": len(db_bars)})
-        return db_bars
+        return [{**bar, "data_source": "db_stale"} for bar in db_bars]
 
     return []
 
@@ -684,7 +726,7 @@ async def get_institutional(
         key = key_institutional(symbol)
         cached = await cache_get_json(key)
         if cached is not None:
-            return cached
+            return [{**row, "data_source": row.get("data_source", "cache")} for row in cached]
 
     end = as_of or date.today()
     start = end - timedelta(days=days)
@@ -703,7 +745,7 @@ async def get_institutional(
                     db_rows,
                     TTL_INSTITUTIONAL,
                 )
-            return db_rows
+            return [{**row, "data_source": "postgres"} for row in db_rows]
     except Exception:
         # Fall through to live waterfall — never let DB outage hide
         # data that the upstream can still produce.
@@ -721,6 +763,7 @@ async def get_institutional(
     # so default to FinMind which returns per-symbol range
     try:
         result = await finmind.get_institutional(symbol, start.isoformat())
+        result = [{**row, "data_source": "finmind"} for row in result]
     except Exception:
         pass
 
@@ -728,7 +771,7 @@ async def get_institutional(
         # TWSE fallback: today only
         try:
             all_rows = await twse.get_institutional()
-            result = [r for r in all_rows if r.get("symbol") == symbol]
+            result = [{**r, "data_source": "twse"} for r in all_rows if r.get("symbol") == symbol]
         except Exception:
             pass
 
@@ -757,7 +800,7 @@ async def get_margin(
         key = key_margin(symbol)
         cached = await cache_get_json(key)
         if cached is not None:
-            return cached
+            return [{**row, "data_source": row.get("data_source", "cache")} for row in cached]
 
     end = as_of or date.today()
     start = end - timedelta(days=days)
@@ -771,7 +814,7 @@ async def get_margin(
                 await cache_set_json(
                     key_margin(symbol), db_rows, TTL_MARGIN,
                 )
-            return db_rows
+            return [{**row, "data_source": "postgres"} for row in db_rows]
     except Exception:
         pass
 
@@ -781,13 +824,14 @@ async def get_margin(
     result: list[dict] = []
     try:
         result = await finmind.get_margin(symbol, start.isoformat())
+        result = [{**row, "data_source": "finmind"} for row in result]
     except Exception:
         pass
 
     if not result:
         try:
             all_rows = await twse.get_margin()
-            result = [r for r in all_rows if r.get("symbol") == symbol]
+            result = [{**r, "data_source": "twse"} for r in all_rows if r.get("symbol") == symbol]
         except Exception:
             pass
 
@@ -813,7 +857,7 @@ async def get_revenue(symbol: str, months: int = 12) -> list[dict[str, Any]]:
     key = key_revenue(symbol)
     cached = await cache_get_json(key)
     if cached is not None:
-        return cached
+        return [{**row, "data_source": row.get("data_source", "cache")} for row in cached]
 
     today = date.today()
     start = today - timedelta(days=months * 31)
@@ -825,13 +869,14 @@ async def get_revenue(symbol: str, months: int = 12) -> list[dict[str, Any]]:
             db_rows = await read_revenue_range(db, "TW", symbol, start, today)
         if db_rows:
             await cache_set_json(key, db_rows, TTL_REVENUE)
-            return db_rows
+            return [{**row, "data_source": "postgres"} for row in db_rows]
     except Exception:
         pass
 
     result: list[dict] = []
     try:
         result = await finmind.get_monthly_revenue(symbol, start.isoformat())
+        result = [{**row, "data_source": "finmind"} for row in result]
     except Exception:
         pass
 
@@ -841,6 +886,7 @@ async def get_revenue(symbol: str, months: int = 12) -> list[dict[str, Any]]:
         # 12-24 months in one call).
         try:
             result = await mops.get_monthly_revenue_recent(symbol)
+            result = [{**row, "data_source": "mops"} for row in result]
         except Exception:
             pass
 
@@ -877,7 +923,7 @@ async def get_fundamentals(symbol: str) -> dict[str, Any]:
     key = key_fundamentals_tw(symbol)
     cached = await cache_get_json(key)
     if cached is not None:
-        return cached
+        return {**cached, "data_source": cached.get("data_source", "cache")}
 
     base = {
         "symbol": symbol,
@@ -911,6 +957,8 @@ async def get_fundamentals(symbol: str) -> dict[str, Any]:
         pass
 
     if have_ratios:
+        base["data_source"] = "twse"
+        base["fetched_at"] = datetime.now(UTC).isoformat()
         await cache_set_json(key, base, TTL_FUNDAMENTALS)
         # Best-effort write-back so the next request serves from DB.
         await upsert_fundamentals_snapshots_autosession([
@@ -939,6 +987,8 @@ async def get_fundamentals(symbol: str) -> dict[str, Any]:
             "data_source":    "db_stale",
         }}
 
+    base["data_source"] = "unavailable"
+    base["fetched_at"] = datetime.now(UTC).isoformat()
     return base
 
 
@@ -948,10 +998,10 @@ async def get_financials(
     """TW financial-statement rows from FinMind (`{date, type, value}`).
 
     `as_of` (backtest mode): bypass Redis (per-as_of cache keys would
-    explode), fetch the full series, then return only rows with
-    `date <= as_of`. Filing dates in FinMind use the period-end date
-    (e.g. "2024-09-30" for Q3 2024 filings), so `as_of=2024-10-15`
-    correctly includes Q3 2024 (filed mid-October) and excludes Q4.
+    explode), fetch the full series, then apply a conservative statutory-
+    deadline availability date. FinMind's `date` is the accounting period
+    end, not the publication date, so filtering it directly would leak future
+    Q1-Q3 filings for as much as 45 days and annual filings for three months.
     """
     if as_of is None:
         key = key_financials_tw(symbol)
@@ -964,8 +1014,8 @@ async def get_financials(
 
     # Backtest mode — direct FinMind call, filter by row date.
     rows = await finmind.get_financials(symbol)
-    cutoff = as_of.isoformat()
-    return [r for r in rows if str(r.get("date", "")) <= cutoff]
+    from services.tw_statement_availability import statement_row_available_as_of
+    return [r for r in rows if statement_row_available_as_of(r, as_of)]
 
 
 # ── Financial health (財務體質) ───────────────────────────────────
@@ -986,10 +1036,10 @@ from services.tw_health_metrics import (  # noqa: E402, F401
     _light,
     _pick,
     _pivot_by_period,
+    _quarterize_cash_flow,
     _safe_div,
     get_health,
 )
-
 
 # ── Screener ──────────────────────────────────────────────────────
 
@@ -1547,9 +1597,10 @@ async def _get_screener_backtest(
     / exchange / ETF filters as live mode. Output shape mirrors live
     so callers don't branch.
     """
+    from sqlalchemy import select
+
     from db.session import AsyncSessionLocal
     from models.ohlcv_daily import OhlcvDaily
-    from sqlalchemy import select
 
     start = as_of - timedelta(days=10)
     try:
@@ -1690,7 +1741,7 @@ async def get_index(
         )
         live_value = result.get("value") if isinstance(result, dict) else None
         if (
-            isinstance(live_value, (int, float))
+            isinstance(live_value, int | float)
             and last_bar_date is not None
             and last_bar_date < end
             and end.weekday() < 5
@@ -1855,7 +1906,7 @@ async def get_news(symbol: str, limit: int = 10) -> list[dict[str, Any]]:
     )
     if db_items:
         await cache_set_json(key, db_items, TTL_NEWS)
-        return db_items
+        return [{**row, "data_source": "finmind_archive"} for row in db_items]
 
     # ── Tier 3: live Google News RSS ────────────────────────────
     name = ""
@@ -1871,12 +1922,14 @@ async def get_news(symbol: str, limit: int = 10) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     try:
         items = await _google_news_rss(query, limit=limit)
+        items = [{**row, "data_source": "google_news"} for row in items]
     except Exception:
         items = []
 
     if not items:
         try:
             items = await _yfinance_news_fallback(symbol, limit)
+            items = [{**row, "data_source": "yfinance"} for row in items]
         except Exception:
             items = []
 
@@ -2046,6 +2099,7 @@ async def get_valuation_band(
 # ── Dividends + ETF holdings ──────────────────────────────────────
 
 from cache.cache_ttls import TTL_DIVIDENDS  # noqa: E402
+
 TTL_ETF_HOLDINGS = 24 * 3600
 
 

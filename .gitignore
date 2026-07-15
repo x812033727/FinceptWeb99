@@ -24,6 +24,9 @@ htmlcov/
 node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/output/
+.playwright-cli/
+output/
 *.tsbuildinfo
 
 # IDE

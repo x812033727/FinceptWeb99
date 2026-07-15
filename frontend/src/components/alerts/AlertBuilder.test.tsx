@@ -54,6 +54,15 @@ describe("AlertBuilder dynamic params sub-form", () => {
     expect(screen.getByLabelText("alerts.param_lookback_days")).toBeTruthy();
   });
 
+  it("shows RSI period and direction-aware default level", () => {
+    setup();
+    fill("alerts.condition_type", "rsi_cross_above");
+    expect(screen.getByLabelText("alerts.param_rsi_period")).toHaveValue(14);
+    expect(screen.getByLabelText("alerts.param_rsi_level")).toHaveValue(70);
+    fill("alerts.condition_type", "rsi_cross_below");
+    expect(screen.getByLabelText("alerts.param_rsi_level")).toHaveValue(30);
+  });
+
   it("only offers the TW-only streak rule when market is TW", () => {
     setup();
     const options = () =>
@@ -144,6 +153,24 @@ describe("AlertBuilder submit payload", () => {
       condition_type: "foreign_net_buy_streak",
       target_price: null,
       params: { days: 5 },
+      repeat: false,
+      cooldown_seconds: 0,
+    });
+  });
+
+  it("builds an RSI crossing payload", () => {
+    const onSubmit = setup();
+    fill("alerts.symbol", "AAPL");
+    fill("alerts.condition_type", "rsi_cross_above");
+    fill("alerts.param_rsi_period", "10");
+    fill("alerts.param_rsi_level", "65");
+    submit();
+    expect(onSubmit).toHaveBeenCalledWith({
+      symbol: "AAPL",
+      market: "US",
+      condition_type: "rsi_cross_above",
+      target_price: null,
+      params: { period: 10, level: 65 },
       repeat: false,
       cooldown_seconds: 0,
     });

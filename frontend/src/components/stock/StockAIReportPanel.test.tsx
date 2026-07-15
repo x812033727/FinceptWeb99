@@ -156,7 +156,7 @@ describe("StockAIReportPanel — streaming", () => {
         'data: {"stage": "generating"}\n\n',
         `data: ${JSON.stringify({ delta: REPORT_MD.slice(0, 30) })}\n\n`,
         `data: ${JSON.stringify({ delta: REPORT_MD.slice(30) })}\n\n`,
-        'data: {"done": {"report_id": "r-1", "created_at": "2026-07-11T00:00:00Z"}}\n\n',
+        'data: {"done": {"report_id": "r-1", "created_at": "2026-07-11T00:00:00Z", "quality_score": 0.75, "quality_details": {"band": "moderate", "issue_counts": {"conflict": 1}}}}\n\n',
         "data: [DONE]\n\n",
       ]),
     );
@@ -184,6 +184,8 @@ describe("StockAIReportPanel — streaming", () => {
         "This report is AI-generated, for research reference only — not investment advice.",
       ),
     ).toBeInTheDocument();
+    expect(await screen.findByRole("status")).toHaveTextContent("Data confidence 75% · moderate");
+    expect(screen.getByRole("status")).toHaveTextContent("1 source conflict");
   });
 
   it("shows the quota-exceeded state and fires the rate-limit toast on 429", async () => {
@@ -246,6 +248,8 @@ describe("StockAIReportPanel — streaming", () => {
             id: "r-9", symbol: "2330", market: "TW", model: "gpt-4o-mini",
             created_at: "2026-07-10T02:00:00Z", preview: "台積電基本面穩健",
             content_md: REPORT_MD,
+            quality_score: 0.75,
+            quality_details: { band: "moderate", issue_counts: { conflict: 1 } },
           },
         });
       }
@@ -254,6 +258,8 @@ describe("StockAIReportPanel — streaming", () => {
           data: [{
             id: "r-9", symbol: "2330", market: "TW", model: "gpt-4o-mini",
             created_at: "2026-07-10T02:00:00Z", preview: "台積電基本面穩健",
+            quality_score: 0.75,
+            quality_details: { band: "moderate", issue_counts: { conflict: 1 } },
           }],
         });
       }
@@ -268,5 +274,6 @@ describe("StockAIReportPanel — streaming", () => {
     await waitFor(() =>
       expect(screen.getByTestId("ai-report-content")).toHaveTextContent("偏多觀察"),
     );
+    expect(screen.getByRole("status")).toHaveTextContent("Data confidence 75% · moderate");
   });
 });

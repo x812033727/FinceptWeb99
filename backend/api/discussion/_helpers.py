@@ -87,6 +87,8 @@ async def _check_quota(user: dict, db: AsyncSession, *, cost: int) -> None:
     if new_count > limit:
         for _ in range(cost):
             await cache_decr(key_ai_counter(user["id"]))
+        from middleware.metrics import AI_QUOTA_REJECTIONS_TOTAL
+        AI_QUOTA_REJECTIONS_TOTAL.labels("discussion", user.get("role", "viewer")).inc()
         raise HTTPException(
             status_code=429,
             detail=(

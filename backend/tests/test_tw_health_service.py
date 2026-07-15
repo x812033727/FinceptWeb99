@@ -164,6 +164,76 @@ async def test_get_health_returns_gray_when_data_missing():
     assert result["lights"]["safety"] == "gray"
     assert result["lights"]["growth"] == "gray"
     assert result["lights"]["cash_flow"] == "gray"
+    assert result["quality"]["status"] == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_get_health_builds_complete_ttm_dupont_quality_and_signals():
+    dates = ["2022-12-31", "2023-03-31", "2023-06-30", "2023-09-30", "2023-12-31"]
+    revenue = [100, 120, 130, 140, 150]
+    gross_profit = [40, 54, 61, 68, 75]
+    income = sum((
+        _income_rows(d, rev, gp, 20, 10, 1.0)
+        for d, rev, gp in zip(dates, revenue, gross_profit, strict=True)
+    ), [])
+    bs = sum((
+        _balance_rows(d, assets, liabilities, equity, 300, 150)
+        for d, assets, liabilities, equity in zip(
+            dates, [800, 850, 900, 950, 1000], [400] * 5, [400, 425, 450, 475, 500],
+            strict=True,
+        )
+    ), [])
+    cf_values = [(12, -2), (12, -2), (24, -4), (36, -6), (48, -8)]
+    cf = sum((_cash_flow_rows(d, ocf, capex) for d, (ocf, capex) in zip(
+        dates, cf_values, strict=True,
+    )), [])
+
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
+         patch.object(svc.finmind, "get_financials", new_callable=AsyncMock, return_value=income), \
+         patch.object(svc.finmind, "get_balance_sheet", new_callable=AsyncMock, return_value=bs), \
+         patch.object(svc.finmind, "get_cash_flow", new_callable=AsyncMock, return_value=cf), \
+         patch.object(svc, "get_revenue", new_callable=AsyncMock, return_value=[]):
+        result = await svc.get_health("2330", periods=8)
+
+    summary = result["summary"]
+    assert summary["ttm_revenue"] == 540
+    assert summary["ttm_net_income"] == 40
+    assert summary["ttm_operating_cf"] == 48
+    assert summary["ttm_free_cf"] == 40
+    assert summary["latest_roe"] == pytest.approx(8.89, abs=0.01)
+    assert summary["latest_roa"] == pytest.approx(4.44, abs=0.01)
+    assert summary["cash_conversion_ttm"] == pytest.approx(1.2)
+    assert summary["dupont_roe"] == pytest.approx(summary["latest_roe"], abs=0.01)
+    assert result["periods"][-1]["revenue_yoy"] == pytest.approx(50.0)
+    assert result["quality"]["status"] == "good"
+    assert result["quality"]["latest_core_coverage_pct"] >= 80
+    assert {s["code"] for s in result["signals"]} == {
+        "gross_margin_expanding", "leverage_improving", "strong_cash_conversion",
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_health_normalizes_positive_capex_and_abstains_on_partial_ttm():
+    dates = ["2023-03-31", "2023-06-30", "2023-09-30"]
+    income = sum((_income_rows(d, 100, 40, 20, 10, 1) for d in dates), [])
+    bs = sum((_balance_rows(d, 1000, 400, 600, 300, 150) for d in dates), [])
+    cf = sum((_cash_flow_rows(d, ocf, capex) for d, ocf, capex in zip(
+        dates, [30, 60, 90], [10, 20, 30], strict=True,
+    )), [])
+
+    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
+         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
+         patch.object(svc.finmind, "get_financials", new_callable=AsyncMock, return_value=income), \
+         patch.object(svc.finmind, "get_balance_sheet", new_callable=AsyncMock, return_value=bs), \
+         patch.object(svc.finmind, "get_cash_flow", new_callable=AsyncMock, return_value=cf), \
+         patch.object(svc, "get_revenue", new_callable=AsyncMock, return_value=[]):
+        result = await svc.get_health("2330", periods=8)
+
+    assert result["periods"][-1]["free_cf"] == 20
+    assert result["summary"]["ttm_revenue"] is None
+    assert result["summary"]["latest_roe"] is None
+    assert "limited_yoy_history" in result["quality"]["flags"]
 
 
 def test_pick_returns_first_non_none_alias():
@@ -181,6 +251,20 @@ def test_safe_div_handles_zero_and_none():
     assert svc._safe_div(None, 2) is None
     assert svc._safe_div(10, 0) is None
     assert svc._safe_div(10, None) is None
+
+
+def test_quarterize_cash_flow_differences_ytd_and_abstains_on_missing_prior():
+    periods = {
+        "2023-03-31": {"CashFlowsFromOperatingActivities": 30},
+        "2023-06-30": {"CashFlowsFromOperatingActivities": 75},
+        "2023-09-30": {"CashFlowsFromOperatingActivities": 120},
+        "2024-06-30": {"CashFlowsFromOperatingActivities": 80},
+    }
+    result = svc._quarterize_cash_flow(periods)
+    assert result["2023-03-31"]["CashFlowsFromOperatingActivities"] == 30
+    assert result["2023-06-30"]["CashFlowsFromOperatingActivities"] == 45
+    assert result["2023-09-30"]["CashFlowsFromOperatingActivities"] == 45
+    assert "CashFlowsFromOperatingActivities" not in result["2024-06-30"]
 
 
 def test_light_higher_better_thresholds():
@@ -536,7 +620,8 @@ async def test_get_news_uses_google_when_yfinance_empty():
          patch.object(svc, "_yfinance_news_fallback", new_callable=AsyncMock, return_value=[]) as yf_mock:
         result = await svc.get_news("2330", limit=5)
 
-    assert result == google_items
+    assert [{key: value for key, value in row.items() if key != "data_source"} for row in result] == google_items
+    assert result[0]["data_source"] == "google_news"
     gmock.assert_awaited_once()
     yf_mock.assert_not_called()
 
@@ -553,7 +638,8 @@ async def test_get_news_falls_back_to_yfinance_when_google_empty():
          patch.object(svc, "_yfinance_news_fallback", new_callable=AsyncMock, return_value=yf_items):
         result = await svc.get_news("2330", limit=5)
 
-    assert result == yf_items
+    assert [{key: value for key, value in row.items() if key != "data_source"} for row in result] == yf_items
+    assert result[0]["data_source"] == "yfinance"
 
 
 @pytest.mark.asyncio

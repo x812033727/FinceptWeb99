@@ -33,10 +33,19 @@ interface ReportSummary {
   model: string;
   created_at: string;
   preview: string;
+  quality_score?: number;
+  quality_details?: QualityDetails;
 }
 
 interface ReportDetail extends ReportSummary {
   content_md: string;
+}
+
+interface QualityDetails {
+  reliability_score?: number;
+  band?: "high" | "moderate" | "low";
+  issue_counts?: Record<string, number>;
+  connector_errors?: number;
 }
 
 type ErrorKind = "quota" | "no_key" | "generic";
@@ -122,6 +131,7 @@ export function StockAIReportPanel({ symbol, market }: { symbol: string; market:
   const [historyOpen, setHistoryOpen] = useState(false);
   // Which saved report is displayed; null = live/most-recent stream.
   const [viewingId, setViewingId] = useState<string | null>(null);
+  const [quality, setQuality] = useState<{ score: number; details: QualityDetails } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const { data: reports = [] } = useQuery({
@@ -135,6 +145,7 @@ export function StockAIReportPanel({ symbol, market }: { symbol: string; market:
     setError(null);
     setContent("");
     setViewingId(null);
+    setQuality(null);
     setStreaming(true);
     setStage("context");
 
@@ -194,6 +205,12 @@ export function StockAIReportPanel({ symbol, market }: { symbol: string; market:
               setContent(assembled);
             }
             if (obj.done) {
+              if (typeof obj.done.quality_score === "number") {
+                setQuality({
+                  score: obj.done.quality_score,
+                  details: obj.done.quality_details ?? {},
+                });
+              }
               // Report archived server-side — refresh the history list.
               void queryClient.invalidateQueries({
                 queryKey: ["stock-reports", market, symbol],
@@ -225,6 +242,10 @@ export function StockAIReportPanel({ symbol, market }: { symbol: string; market:
       const detail = await fetchReport(id);
       setViewingId(id);
       setContent(detail.content_md);
+      setQuality({
+        score: detail.quality_score ?? 1,
+        details: detail.quality_details ?? {},
+      });
     } catch {
       setError({ kind: "generic", message: t("stock.ai_report.load_failed") });
     }
@@ -307,6 +328,32 @@ export function StockAIReportPanel({ symbol, market }: { symbol: string; market:
               })}
             </p>
           )}
+          {quality && (
+            <div
+              role="status"
+              className={`mb-3 rounded border px-3 py-2 text-xs ${
+                quality.details.band === "low"
+                  ? "border-danger/40 bg-danger/10 text-danger"
+                  : quality.details.band === "moderate"
+                    ? "border-warning/40 bg-warning/10 text-warning"
+                    : "border-positive/30 bg-positive/10 text-positive"
+              }`}
+            >
+              <span className="font-medium">
+                {t("stock.ai_report.data_confidence", {
+                  score: Math.round(quality.score * 100),
+                  band: t(`stock.ai_report.quality_${quality.details.band ?? "high"}`),
+                })}
+              </span>
+              {(quality.details.issue_counts?.conflict ?? 0) > 0 && (
+                <span className="ml-2">
+                  {t("stock.ai_report.source_conflicts", {
+                    count: quality.details.issue_counts?.conflict,
+                  })}
+                </span>
+              )}
+            </div>
+          )}
           {renderReportMarkdown(content)}
           {streaming && (
             <span
@@ -354,6 +401,13 @@ export function StockAIReportPanel({ symbol, market }: { symbol: string; market:
                       {r.model ? (
                         <span className="text-muted-foreground"> · {r.model}</span>
                       ) : null}
+                      {typeof r.quality_score === "number" && (
+                        <span className="ml-1 text-muted-foreground">
+                          · {t("stock.ai_report.history_quality", {
+                            score: Math.round(r.quality_score * 100),
+                          })}
+                        </span>
+                      )}
                     </span>
                     <span className="block text-meta text-muted-foreground truncate">
                       {r.preview}

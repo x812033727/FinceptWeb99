@@ -30,7 +30,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -72,6 +72,11 @@ class StockReportSummary(BaseModel):
     symbol: str
     market: str
     model: str
+    model_id: str
+    prompt_version: str
+    data_cutoff: datetime | None
+    quality_score: float
+    quality_details: dict = Field(default_factory=dict)
     created_at: datetime
     preview: str
 
@@ -79,6 +84,7 @@ class StockReportSummary(BaseModel):
 class StockReportDetail(StockReportSummary):
     content_md: str
     sections: dict[str, str] | None = None
+    evidence: list[dict] = Field(default_factory=list)
 
 
 def _preview(content: str) -> str:
@@ -92,9 +98,18 @@ def _preview(content: str) -> str:
 
 
 def _summary(row: StockReport) -> StockReportSummary:
+    quality_details = (
+        row.context_snapshot.get("quality_summary", {})
+        if isinstance(row.context_snapshot, dict) else {}
+    )
     return StockReportSummary(
         id=row.id, symbol=row.symbol, market=row.market,
         model=row.model or "", created_at=row.created_at,
+        model_id=row.model_id or row.model or "",
+        prompt_version=row.prompt_version,
+        data_cutoff=row.data_cutoff,
+        quality_score=row.quality_score,
+        quality_details=quality_details,
         preview=_preview(row.content_md),
     )
 
@@ -142,21 +157,28 @@ async def generate_stock_report(
             assemble_report_context,
             build_report_messages,
             persist_report,
+            prepare_traceable_context,
+            score_report_quality,
+            report_reliability,
         )
 
         produced_content = False
         usage_seen: dict[str, int] | None = None
         parts: list[str] = []
+        evidence: list[dict] = []
+        context_snapshot: dict = {}
+        data_cutoff = None
         try:
             # Context gathering can take seconds (news sentiment /
             # FinMind waterfalls) — surface a stage event so the
             # panel can show "整理市場資料中" instead of going silent.
             yield _sse({"stage": "context"})
-            ctx = await assemble_report_context(
+            raw_ctx = await assemble_report_context(
                 db, market=market, symbol=symbol,
             )
+            context_snapshot, evidence, data_cutoff = prepare_traceable_context(raw_ctx)
             messages = build_report_messages(
-                ctx, market=market, symbol=symbol,
+                context_snapshot, market=market, symbol=symbol,
             )
             yield _sse({"stage": "generating"})
 
@@ -192,6 +214,15 @@ async def generate_stock_report(
                 produced_content = False
                 yield _sse({"error": content.strip("[]").strip()})
             elif produced_content and content:
+                citation_score = score_report_quality(content, evidence)
+                if citation_score < 1.0:
+                    produced_content = False
+                    yield _sse({
+                        "error": "Evidence validation failed: every numeric statement must cite matching evidence.",
+                        "quality_score": citation_score,
+                    })
+                    return
+                quality_score = round(citation_score * report_reliability(context_snapshot), 4)
                 report = await persist_report(
                     db,
                     user_id=uuid.UUID(user["id"]),
@@ -199,10 +230,16 @@ async def generate_stock_report(
                     market=market,
                     content_md=content,
                     model=model,
+                    data_cutoff=data_cutoff,
+                    evidence=evidence,
+                    context_snapshot=context_snapshot,
+                    quality_score=quality_score,
                 )
                 yield _sse({"done": {
                     "report_id": str(report.id),
                     "created_at": report.created_at.isoformat(),
+                    "quality_score": report.quality_score,
+                    "quality_details": context_snapshot.get("quality_summary", {}),
                 }})
         except Exception as exc:  # noqa: BLE001 — must surface as SSE, not a broken pipe
             logger.error(
@@ -271,7 +308,16 @@ async def get_stock_report(
     return StockReportDetail(
         id=row.id, symbol=row.symbol, market=row.market,
         model=row.model or "", created_at=row.created_at,
+        model_id=row.model_id or row.model or "",
+        prompt_version=row.prompt_version,
+        data_cutoff=row.data_cutoff,
+        quality_score=row.quality_score,
+        quality_details=(
+            row.context_snapshot.get("quality_summary", {})
+            if isinstance(row.context_snapshot, dict) else {}
+        ),
         preview=_preview(row.content_md),
         content_md=row.content_md,
         sections=row.sections,
+        evidence=row.evidence or [],
     )

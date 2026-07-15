@@ -93,20 +93,24 @@ function NotificationBell() {
                     {a.symbol} ({a.market})
                   </span>
                   <p className="text-muted-foreground">
-                    {a.condition === "above"
-                      ? t("topbar.price_above")
-                      : t("topbar.price_below")}{" "}
-                    <span
-                      className={
-                        a.condition === "above" ? "text-up" : "text-down"
-                      }
-                    >
-                      {formatNumber(a.target_price)}
-                    </span>{" "}
-                    — {t("topbar.hit")}{" "}
-                    <span className="text-foreground">
-                      {formatNumber(a.current_price)}
-                    </span>
+                    {a.message ?? (
+                      <>
+                        {a.condition === "above"
+                          ? t("topbar.price_above")
+                          : t("topbar.price_below")}{" "}
+                        <span
+                          className={
+                            a.condition === "above" ? "text-up" : "text-down"
+                          }
+                        >
+                          {formatNumber(a.projected_price ?? a.target_price ?? 0)}
+                        </span>{" "}
+                        — {t("topbar.hit")}{" "}
+                        <span className="text-foreground">
+                          {formatNumber(a.current_price ?? 0)}
+                        </span>
+                      </>
+                    )}
                   </p>
                 </div>
                 <button

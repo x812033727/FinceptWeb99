@@ -266,12 +266,22 @@ function WatchlistCard({ wl }: { wl: Watchlist }) {
           {wl.name}
           <span className="text-xs text-muted-foreground font-normal">({wl.items.length})</span>
         </button>
-        <button
-          onClick={() => { if (confirm(`${t("common.delete")} "${wl.name}"?`)) del.mutate(); }}
-          className="text-xs text-muted-foreground hover:text-danger transition-colors"
-        >
-          {t("common.delete")}
-        </button>
+        <div className="flex items-center gap-3">
+          {wl.items.length >= 2 && (
+            <Link
+              to={`/compare?symbols=${encodeURIComponent(wl.items.slice(0, 5).map((item) => `${item.market}:${item.symbol}`).join(","))}`}
+              className="text-xs text-primary hover:underline"
+            >
+              {t("watchlist.compare")}
+            </Link>
+          )}
+          <button
+            onClick={() => { if (confirm(`${t("common.delete")} "${wl.name}"?`)) del.mutate(); }}
+            className="text-xs text-muted-foreground hover:text-danger transition-colors"
+          >
+            {t("common.delete")}
+          </button>
+        </div>
       </div>
 
       {expanded && (

@@ -15,20 +15,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.stock_report import StockReport
 from models.user import User
-from services.stock_report_service import parse_report_sections
+from services.stock_report_service import (
+    assemble_report_context,
+    parse_report_sections,
+    prepare_traceable_context,
+    report_reliability,
+    score_report_quality,
+)
 
 _REPORT_MD = (
     "## 摘要\n台積電基本面穩健。\n\n"
-    "## 基本面\n本益比 18 倍,月營收年增 +25%。\n\n"
-    "## 籌碼與資金\n外資 5 日買超。\n\n"
-    "## 技術面\nRSI 62,站上 20 日均線。\n\n"
+    "## 基本面\n本益比 18 倍 [E1],月營收年增 +25% [E2]。\n\n"
+    "## 籌碼與資金\n外資 5 日買超 [E3]。\n\n"
+    "## 技術面\nRSI 62 [E4],站上 20 日均線 [E5]。\n\n"
     "## 風險\n- 匯率\n- 地緣政治\n- 庫存調整\n\n"
     "## 結論\n偏多觀察。\n**本報告由 AI 產生,僅供研究參考,非投資建議。**"
 )
 
 _FAKE_CTX = {
     "market": "TW", "focus_symbols": ["2330"],
-    "focus_briefs": [{"symbol": "2330", "name_zh": "台積電"}],
+    "focus_briefs": [{
+        "symbol": "2330", "name_zh": "台積電", "data_source": "twse",
+        "pe_ratio": 18, "revenue_yoy": 25, "institutional_days": 5,
+        "rsi": 62, "ma_days": 20,
+    }],
     "short_term_signals": {}, "per_symbol_news_sentiment": {},
     "corporate_announcements": {"market": [], "per_symbol": {}},
     "broker_concentration": [], "errors": [],
@@ -62,6 +72,46 @@ def _ctx_patch():
     return patch(
         "services.stock_report_service.assemble_report_context",
         new=AsyncMock(return_value=_FAKE_CTX),
+    )
+
+
+@pytest.mark.asyncio
+async def test_context_assembly_crosschecks_focus_quote(db_session: AsyncSession):
+    async def seed_focus(ctx, **_kwargs):
+        ctx["focus_briefs"] = [{
+            "symbol": "2330",
+            "quote": {"price": 100, "data_source": "twse"},
+        }]
+
+    check = {
+        "status": "conflict", "primary_source": "twse",
+        "secondary_source": "finmind", "spread_pct": 2.0,
+        "flags": ["price_source_conflict"],
+    }
+    with patch(
+        "services.discussion.context.blocks.http.fetch_focus_briefs",
+        new=AsyncMock(side_effect=seed_focus),
+    ), patch(
+        "services.discussion.context.blocks.chip.fetch_broker_concentration",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.technical.fetch_short_term_signals",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.news.fetch_per_symbol_sentiment",
+        new=AsyncMock(),
+    ), patch(
+        "services.discussion.context.blocks.announcements.fetch_corporate_announcements",
+        new=AsyncMock(),
+    ), patch(
+        "services.tw_market_service.verify_quote_consistency",
+        new=AsyncMock(return_value=check),
+    ) as verify:
+        context = await assemble_report_context(db_session, market="TW", symbol="2330")
+
+    assert context["focus_briefs"][0]["quote"]["quality_check"] == check
+    verify.assert_awaited_once_with(
+        "2330", context["focus_briefs"][0]["quote"],
     )
 
 
@@ -170,8 +220,70 @@ async def test_stream_yields_deltas_and_persists_report(
     assert row.market == "TW"
     assert row.content_md == _REPORT_MD
     assert row.model  # provider default resolved to a non-empty label
+    assert row.model_id == row.model
+    assert row.prompt_version == "stock-report-v3-source-quality"
+    assert row.data_cutoff is not None
+    assert len(row.evidence) == 5
+    assert row.context_snapshot["evidence"] == row.evidence
+    assert row.context_snapshot["quality_summary"]["band"] == "high"
+    assert row.quality_score == 1.0
     assert row.sections is not None
     assert set(row.sections) == {"摘要", "基本面", "籌碼與資金", "技術面", "風險", "結論"}
+
+
+@pytest.mark.asyncio
+async def test_stream_persists_reliability_adjusted_score_for_source_conflict(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    token = await _register_login(client, "sr_conflict@test.com")
+    conflict_ctx = {
+        "market": "TW",
+        "focus_symbols": ["2330"],
+        "focus_briefs": [{
+            "symbol": "2330",
+            "quote": {
+                "price": 100,
+                "change_pct": 2,
+                "data_source": "twse",
+                "quality_check": {
+                    "status": "conflict",
+                    "primary_source": "twse",
+                    "secondary_source": "finmind",
+                    "spread_pct": 2.0,
+                    "flags": ["price_source_conflict"],
+                },
+            },
+            "fundamentals": {"pe": 18, "data_source": "twse"},
+        }],
+        "errors": [],
+    }
+    content = (
+        "## 摘要\n報價來源存在衝突。\n"
+        "## 基本面\n本益比 18 [E1]。\n"
+        "## 籌碼與資金\n資料不足。\n"
+        "## 技術面\n衝突報價已排除。\n"
+        "## 風險\n來源一致性有待確認。\n"
+        "## 結論\n中性觀察。"
+    )
+    with patch(
+        "services.stock_report_service.assemble_report_context",
+        new=AsyncMock(return_value=conflict_ctx),
+    ), patch(
+        "api.ai_agents.stock_report.stream_chat",
+        side_effect=_delta_stream([content]),
+    ):
+        response = await client.post(
+            "/api/ai/stock-report/TW/2330",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    assert '"quality_score": 0.75' in response.text
+    assert '"band": "moderate"' in response.text
+    row = (await db_session.scalars(select(StockReport))).one()
+    assert row.quality_score == 0.75
+    assert row.context_snapshot["focus_briefs"][0]["quote"]["price"] is None
+    assert row.context_snapshot["quality_summary"]["issue_counts"]["conflict"] == 1
 
 
 @pytest.mark.asyncio
@@ -225,6 +337,23 @@ async def test_missing_api_key_placeholder_not_archived(
     refund.assert_awaited_once()
     rows = (await db_session.scalars(select(StockReport))).all()
     assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_uncited_numeric_report_is_rejected(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    tok = await _register_login(client, "sr_uncited@test.com")
+    with _ctx_patch(), patch(
+        "api.ai_agents.stock_report.stream_chat",
+        side_effect=_delta_stream(["## 摘要\n本益比 18 倍。"]),
+    ):
+        r = await client.post(
+            "/api/ai/stock-report/TW/2330",
+            headers={"Authorization": f"Bearer {tok}"},
+        )
+    assert "Evidence validation failed" in r.text
+    assert (await db_session.scalars(select(StockReport))).all() == []
 
 
 # ── list / get endpoints ───────────────────────────────────────────
@@ -327,3 +456,55 @@ def test_parse_report_sections_happy_path():
 
 def test_parse_report_sections_no_headings_returns_none():
     assert parse_report_sections("純文字,沒有標題。") is None
+
+
+def test_traceable_context_removes_stale_numbers_and_snapshots_evidence():
+    ctx = {
+        "fresh": {"data_source": "twse", "price": 100, "as_of": "2026-07-15"},
+        "old": {"data_source": "db_stale", "pe_ratio": 30, "as_of": "2025-01-01"},
+    }
+    sanitized, evidence, cutoff = prepare_traceable_context(ctx)
+    assert sanitized["old"]["pe_ratio"] is None
+    assert sanitized["old"]["quality_status"] == "stale"
+    assert evidence == [{
+        "id": "E1", "type": "numeric", "path": "fresh.price", "value": 100,
+        "source": "twse", "as_of": "2026-07-15",
+    }]
+    assert cutoff.tzinfo is not None
+    assert score_report_quality("價格 100 [E1]。", evidence) == 1.0
+    assert score_report_quality("價格 101 [E1]。", evidence) == 0.0
+
+
+def test_traceable_context_suppresses_conflicted_quote_and_scores_reliability():
+    ctx = {
+        "quote": {
+            "data_source": "polygon",
+            "price": 100,
+            "change_pct": 2.0,
+            "quality_check": {
+                "status": "conflict",
+                "primary_source": "polygon",
+                "secondary_source": "yfinance",
+                "spread_pct": 3.5,
+                "observations": {"polygon": 100, "yfinance": 96.55},
+                "flags": ["price_source_conflict"],
+            },
+        },
+        "fundamentals": {"data_source": "polygon", "pe": 18},
+        "errors": [],
+    }
+
+    sanitized, evidence, _ = prepare_traceable_context(ctx)
+
+    assert sanitized["quote"]["price"] is None
+    assert sanitized["quote"]["change_pct"] is None
+    assert sanitized["quote"]["quality_status"] == "conflict"
+    assert "spread_pct" not in sanitized["quote"]["quality_check"]
+    assert "observations" not in sanitized["quote"]["quality_check"]
+    assert evidence == [{
+        "id": "E1", "type": "numeric", "path": "fundamentals.pe",
+        "value": 18, "source": "polygon", "as_of": None,
+    }]
+    assert sanitized["quality_summary"]["issue_counts"]["conflict"] == 1
+    assert sanitized["quality_summary"]["band"] == "moderate"
+    assert report_reliability(sanitized) == 0.75

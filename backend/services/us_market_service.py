@@ -8,10 +8,27 @@ Rules:
 """
 import asyncio
 import logging
-from datetime import datetime, timezone, date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
+
 import pytz
 
+import data.us.finnhub_connector as finnhub
+import data.us.polygon_connector as polygon
+import data.us.stooq_connector as stooq
+import data.us.yfinance_connector as yfinance
+from cache.cache_ttls import (
+    TTL_EARNINGS,
+    TTL_FUNDAMENTALS,
+    TTL_OPTIONS,
+    TTL_SCREENER,
+)
+from cache.cache_ttls import (
+    TTL_HISTORY_DAILY as TTL_HISTORY,
+)
+from cache.cache_ttls import (
+    TTL_QUOTE_US as TTL_QUOTE,
+)
 from cache.redis_cache import (
     cache_get_json,
     cache_set_json,
@@ -26,30 +43,16 @@ from cache.redis_cache import (
     key_screener_us,
 )
 from config import settings
+from data.us.fred_connector import SERIES, get_series
 from middleware.metrics import WATERFALL_TIER_FAILED_TOTAL
 from services._quote_helpers import sanitize_change_pct
-import data.us.finnhub_connector as finnhub
-import data.us.polygon_connector as polygon
-import data.us.stooq_connector as stooq
-import data.us.yfinance_connector as yfinance
-from data.us.fred_connector import get_series, SERIES
+from services.quote_consistency import compare_prices, unverified_check
 
 log = logging.getLogger(__name__)
 
 _ET = pytz.timezone("America/New_York")
 
 # ── TTLs (seconds) ────────────────────────────────────────────────
-# TTLs centralized in `cache.cache_ttls`. Aliases preserve in-module
-# call-site shape.
-from cache.cache_ttls import (  # noqa: E402
-    TTL_EARNINGS,
-    TTL_FUNDAMENTALS,
-    TTL_HISTORY_DAILY as TTL_HISTORY,
-    TTL_OPTIONS,
-    TTL_QUOTE_US as TTL_QUOTE,
-    TTL_SCREENER,
-)
-
 # Stooq's per-request 0.2s pacing means a batch of 100 symbols takes
 # ~20 seconds — longer than any sane reverse-proxy timeout. We cap the
 # synchronous request path to STOOQ_SYNC_BATCH_LIMIT symbols (~5 s
@@ -65,7 +68,24 @@ STOOQ_SYNC_BATCH_LIMIT = 25
 # same pool, so an ad-hoc `/quote/AAPL` request lands behind the screener
 # queue and blocks for seconds. Cap the screener fan-out at 4 in flight
 # so half the yfinance pool stays free for live quote requests.
-_SCREENER_INFO_CONCURRENCY = asyncio.Semaphore(4)
+_SCREENER_INFO_SEMAPHORE: asyncio.Semaphore | None = None
+_SCREENER_INFO_SEMAPHORE_LOOP: asyncio.AbstractEventLoop | None = None
+
+
+def _screener_info_semaphore() -> asyncio.Semaphore:
+    """Return a loop-local semaphore.
+
+    The service module is imported once, while ASGI workers and test runners
+    may create more than one event loop during that process lifetime. asyncio
+    synchronization primitives cannot be reused after binding to another
+    loop, so initialise lazily and rotate when the active loop changes.
+    """
+    global _SCREENER_INFO_SEMAPHORE, _SCREENER_INFO_SEMAPHORE_LOOP
+    loop = asyncio.get_running_loop()
+    if _SCREENER_INFO_SEMAPHORE is None or _SCREENER_INFO_SEMAPHORE_LOOP is not loop:
+        _SCREENER_INFO_SEMAPHORE = asyncio.Semaphore(4)
+        _SCREENER_INFO_SEMAPHORE_LOOP = loop
+    return _SCREENER_INFO_SEMAPHORE
 
 
 def _is_market_open() -> bool:
@@ -252,9 +272,45 @@ def _normalize_quote(ticker: str, raw: dict) -> dict[str, Any]:
         "prev_close": raw.get("prev_close"),
         "market_cap": raw.get("market_cap"),
         "currency": "USD",
-        "ts": raw.get("ts") or int(datetime.now(timezone.utc).timestamp() * 1000),
+        "ts": raw.get("ts") or int(datetime.now(UTC).timestamp() * 1000),
         "is_market_open": _is_market_open(),
     }
+
+
+async def verify_quote_consistency(ticker: str, quote: dict[str, Any]) -> dict[str, Any]:
+    """Fetch one independent provider and compare it with the served quote."""
+    primary = str(quote.get("data_source") or "unknown")
+    if not quote.get("price") or primary == "unavailable":
+        return unverified_check(primary, flag="primary_unavailable", market="US")
+
+    if primary == "polygon":
+        secondary, fetcher = "yfinance", yfinance.get_quote
+    elif primary == "yfinance":
+        secondary, fetcher = "stooq", stooq.get_quote
+    elif primary == "stooq" and settings.FINNHUB_API_KEY:
+        secondary, fetcher = "finnhub", finnhub.get_quote
+    elif primary in {"ohlcv_daily", "cache", "unknown"}:
+        secondary, fetcher = "yfinance", yfinance.get_quote
+    else:
+        return unverified_check(
+            primary, flag="no_independent_provider_available", market="US",
+        )
+    try:
+        alternate = await _tiered(fetcher(ticker.upper()))
+    except Exception as exc:
+        log.warning("us.quote.crosscheck_failed", extra={
+            "ticker": ticker, "primary": primary, "secondary": secondary,
+            "error": str(exc),
+        })
+        return unverified_check(
+            primary, secondary_source=secondary,
+            flag="secondary_unavailable", market="US",
+        )
+    return compare_prices(
+        market="US", primary_source=primary, primary_price=quote.get("price"),
+        secondary_source=secondary, secondary_price=alternate.get("price"),
+        max_spread_pct=1.0,
+    )
 
 
 # ── History ───────────────────────────────────────────────────────
@@ -263,8 +319,9 @@ async def get_history(ticker: str, period: str = "1y", interval: str = "1d") -> 
     key = key_history("us", ticker, interval, range_token=period)
     cached = await cache_get_json(key)
     if cached is not None:
-        return cached
+        return [{**bar, "data_source": bar.get("data_source", "cache")} for bar in cached]
 
+    source = "polygon" if _use_polygon() else "yfinance"
     try:
         if _use_polygon():
             from_date, to_date = _period_to_dates(period)
@@ -281,6 +338,7 @@ async def get_history(ticker: str, period: str = "1y", interval: str = "1d") -> 
                     extra={"ticker": ticker, "period": period, "interval": interval, "error": str(exc)})
         try:
             bars = await yfinance.get_history(ticker, period=period, interval=interval)
+            source = "yfinance"
         except Exception as exc2:
             WATERFALL_TIER_FAILED_TOTAL.labels(
                 market="us", datatype="history", tier="yfinance",
@@ -290,7 +348,10 @@ async def get_history(ticker: str, period: str = "1y", interval: str = "1d") -> 
             bars = []
 
     # Normalize time to "YYYY-MM-DD" string for daily, Unix ms for intraday
-    result = _normalize_bars(bars, interval)
+    result = [
+        {**bar, "data_source": source}
+        for bar in _normalize_bars(bars, interval)
+    ]
     # Skip cache when empty — avoids locking in 4h of nothing on transient
     # upstream failure (matches the get_quote pattern).
     if result:
@@ -303,7 +364,7 @@ def _normalize_bars(bars: list[dict], interval: str) -> list[dict]:
     for b in bars:
         t = b.get("time")
         if isinstance(t, int) and interval in ("1d", "1wk", "1mo"):
-            t = datetime.fromtimestamp(t / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+            t = datetime.fromtimestamp(t / 1000, tz=UTC).strftime("%Y-%m-%d")
         out.append({"time": t, "open": b["open"], "high": b["high"], "low": b["low"], "close": b["close"], "volume": b["volume"]})
     return out
 
@@ -325,7 +386,7 @@ async def get_fundamentals(ticker: str) -> dict[str, Any]:
     key = key_fundamentals("us", ticker)
     cached = await cache_get_json(key)
     if cached is not None:
-        return cached
+        return {**cached, "data_source": cached.get("data_source", "cache")}
 
     info: dict[str, Any] = {}
     source = "unavailable"
@@ -373,7 +434,7 @@ def _normalize_fundamentals_polygon(ticker: str, d: dict) -> dict[str, Any]:
         "pe_ratio": None, "pb_ratio": None, "eps": None,
         "dividend_yield": None, "beta": None,
         "description": d.get("description"),
-        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "fetched_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -391,7 +452,7 @@ def _normalize_fundamentals_yf(ticker: str, info: dict) -> dict[str, Any]:
         "52w_high": info.get("fiftyTwoWeekHigh"),
         "52w_low": info.get("fiftyTwoWeekLow"),
         "description": info.get("longBusinessSummary"),
-        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "fetched_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -437,8 +498,15 @@ async def get_financials(ticker: str) -> dict[str, Any]:
 
 # ── Options chain ─────────────────────────────────────────────────
 
-async def get_options(ticker: str, expiration_date: str | None = None) -> list[dict[str, Any]]:
+async def get_options(
+    ticker: str,
+    expiration_date: str | None = None,
+    *,
+    max_expiries: int | None = None,
+) -> list[dict[str, Any]]:
     key = key_options_us(ticker, expiration_date)
+    if expiration_date is None and max_expiries is not None:
+        key = f"{key}:nearest{max_expiries}"
     cached = await cache_get_json(key)
     if cached is not None:
         return cached
@@ -458,13 +526,19 @@ async def get_options(ticker: str, expiration_date: str | None = None) -> list[d
                         extra={"ticker": ticker, "expiry": expiration_date, "error": str(exc)})
             data = []
 
-    # yfinance fallback covers the no-Polygon path AND the Polygon-failure path.
-    # yfinance's option_chain returns less metadata than Polygon's reference
-    # endpoint but includes live last_price / IV / OI which Polygon's free
-    # tier doesn't, so it's a useful primary source for retail users too.
+    # yfinance fallback covers the no-Polygon path AND snapshot failure
+    # (including plan/entitlement errors). The analysis caller bounds the
+    # number of expiries so one request cannot fan out across an entire
+    # long-dated chain; the legacy raw-chain endpoint retains all-expiry
+    # behavior for backwards compatibility.
     if not data:
         try:
-            data = await yfinance.get_options(ticker, expiration_date)
+            if expiration_date is None and max_expiries is not None:
+                data = await yfinance.get_options(
+                    ticker, expiration_date, max_expiries=max_expiries,
+                )
+            else:
+                data = await yfinance.get_options(ticker, expiration_date)
             if data:
                 source = "yfinance"
         except Exception as exc:
@@ -683,9 +757,10 @@ async def _get_screener_backtest(
     the latest bar vs the prior bar per symbol. No fundamental fields
     (yield/PE/PB/market_cap) — archive doesn't carry them.
     """
+    from sqlalchemy import select
+
     from db.session import AsyncSessionLocal
     from models.ohlcv_daily import OhlcvDaily
-    from sqlalchemy import select
 
     start = as_of - timedelta(days=10)
     try:
@@ -782,13 +857,14 @@ async def _screener_yfinance(
     limit: int = 100,
 ) -> list[dict]:
     results = []
+    info_semaphore = _screener_info_semaphore()
 
     async def _fetch_one(t: str):
         # See _SCREENER_INFO_CONCURRENCY comment: keep at most 4 .info
         # calls in flight at once so half the yfinance ThreadPool stays
         # free for ad-hoc /quote requests. The outer batch=20 still caps
         # how many tickers we process per gather() round.
-        async with _SCREENER_INFO_CONCURRENCY:
+        async with info_semaphore:
             try:
                 info = await yfinance.get_info(t)
                 cap = info.get("marketCap", 0) or 0
@@ -889,9 +965,10 @@ from cache.cache_ttls import TTL_NEWS  # noqa: E402
 
 async def _google_news_rss(query: str, limit: int = 10) -> list[dict[str, Any]]:
     """Google News RSS in en-US — same shape as the TW helper."""
-    import httpx
     import xml.etree.ElementTree as ET
     from email.utils import parsedate_to_datetime
+
+    import httpx
 
     url = "https://news.google.com/rss/search"
     params = {
@@ -948,7 +1025,7 @@ async def _yfinance_news_fallback(ticker: str, limit: int) -> list[dict[str, Any
                 "publisher":    n.get("publisher", ""),
                 "link":         n.get("link", ""),
                 "published_at": datetime.fromtimestamp(
-                    n.get("providerPublishTime", 0), tz=timezone.utc
+                    n.get("providerPublishTime", 0), tz=UTC
                 ).isoformat(),
                 "thumbnail":    thumbnail,
             })
@@ -971,7 +1048,7 @@ async def get_news(ticker: str, limit: int = 10) -> list[dict[str, Any]]:
     key = key_news_us(ticker)
     cached = await cache_get_json(key)
     if cached is not None:
-        return cached
+        return [{**row, "data_source": row.get("data_source", "cache")} for row in cached]
 
     name = ""
     try:
@@ -991,12 +1068,14 @@ async def get_news(ticker: str, limit: int = 10) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     try:
         items = await _google_news_rss(query, limit=limit)
+        items = [{**row, "data_source": "google_news"} for row in items]
     except Exception:
         items = []
 
     if not items:
         try:
             items = await _yfinance_news_fallback(ticker, limit)
+            items = [{**row, "data_source": "yfinance"} for row in items]
         except Exception:
             items = []
 

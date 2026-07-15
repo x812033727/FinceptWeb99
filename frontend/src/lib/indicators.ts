@@ -110,7 +110,9 @@ export function rsi(values: Series, period = 14): (number | null)[] {
   }
   avgGain /= period;
   avgLoss /= period;
-  const toRsi = (g: number, l: number) => (l === 0 ? 100 : 100 - 100 / (1 + g / l));
+  const toRsi = (g: number, l: number) => (
+    l === 0 ? (g > 0 ? 100 : 50) : 100 - 100 / (1 + g / l)
+  );
   out[start + period] = toRsi(avgGain, avgLoss);
   for (let i = start + period + 1; i < values.length; i++) {
     const prev = values[i - 1];

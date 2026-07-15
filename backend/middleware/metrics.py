@@ -116,6 +116,56 @@ WATERFALL_TIER_FAILED_TOTAL = Counter(
     ["market", "datatype", "tier"],
 )
 
+MARKET_DATA_CONSISTENCY_CHECKS_TOTAL = Counter(
+    "market_data_consistency_checks_total",
+    "Explicit cross-provider quote checks by terminal status. Provider labels "
+    "come from a bounded connector registry, never user-controlled symbols.",
+    ["market", "status", "primary", "secondary"],
+)
+
+DAILY_PICK_RUNS_TOTAL = Counter(
+    "daily_pick_runs_total",
+    "Evidence-backed daily candidate ranking runs by terminal outcome.",
+    ["market", "outcome"],
+)
+DAILY_PICK_CANDIDATES_TOTAL = Counter(
+    "daily_pick_candidates_total",
+    "Candidates admitted after report quality, stance, and recency gates.",
+    ["market"],
+)
+
+TREND_ALERT_EVALUATIONS_TOTAL = Counter(
+    "trend_alert_evaluations_total",
+    "Trend-line alert evaluations by bounded outcome: initialized, same_side, "
+    "crossed, cooldown, or invalid_projection.",
+    ["outcome"],
+)
+INDICATOR_ALERT_EVALUATIONS_TOTAL = Counter(
+    "indicator_alert_evaluations_total",
+    "Stateful indicator alert evaluations by indicator and bounded outcome.",
+    ["indicator", "outcome"],
+)
+NOTIFICATION_DELIVERIES_TOTAL = Counter(
+    "notification_deliveries_total",
+    "Optional notification channel delivery attempts by bounded outcome.",
+    ["channel", "outcome"],
+)
+OPTIONS_ANALYSIS_TOTAL = Counter(
+    "options_analysis_total",
+    "U.S. options-chain analytics responses by bounded data-quality outcome.",
+    ["outcome"],
+)
+FINANCIAL_STATEMENT_ANALYSIS_TOTAL = Counter(
+    "financial_statement_analysis_total",
+    "TW three-statement analytics responses by bounded data-quality outcome.",
+    ["outcome"],
+)
+FACTOR_ANALYSIS_TOTAL = Counter(
+    "factor_analysis_total",
+    "Explainable TW factor ranking and validation responses by bounded outcome.",
+    ["kind", "outcome"],
+)
+
 # ── Walk-forward orchestrator (PR-A1 + post-merge audit) ──────────
 
 WALK_FORWARD_RUNS_TOTAL = Counter(
@@ -278,6 +328,32 @@ WEB_VITAL_SCORE = Histogram(
     "Core Web Vitals unitless score metrics reported by the browser",
     ["name", "path"],
     buckets=[0.01, 0.05, 0.1, 0.15, 0.25, 0.5, 1.0, 2.0],
+)
+
+# ── AI operations / spend ────────────────────────────────────────
+# Emitted only after a usage row is durably committed, so the counters
+# reconcile with the admin usage ledger after a process restart.  Provider
+# and model are intentionally the only dimensions; user ids would create an
+# unbounded, privacy-sensitive label set.
+AI_USAGE_EVENTS_TOTAL = Counter(
+    "ai_usage_events_total",
+    "LLM usage records by persistence outcome.",
+    ["provider", "model", "outcome"],
+)
+AI_TOKENS_TOTAL = Counter(
+    "ai_tokens_total",
+    "LLM tokens from successfully persisted usage records.",
+    ["provider", "model", "direction"],
+)
+AI_COST_USD_TOTAL = Counter(
+    "ai_cost_usd_total",
+    "Estimated LLM spend in USD from persisted usage records.",
+    ["provider", "model"],
+)
+AI_QUOTA_REJECTIONS_TOTAL = Counter(
+    "ai_quota_rejections_total",
+    "AI requests rejected by the daily quota gate.",
+    ["surface", "role"],
 )
 
 # Normalize dynamic path segments to limit cardinality

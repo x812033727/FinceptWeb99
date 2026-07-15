@@ -19,7 +19,10 @@ import { PerformanceChart } from "@/components/portfolio/PerformanceChart";
 import { PortfolioAIReviewCard } from "@/components/portfolio/PortfolioAIReviewCard";
 import { RiskDashboardPanel } from "@/components/portfolio/RiskDashboardPanel";
 import RebalancePanel from "@/components/portfolio/RebalancePanel";
+import StressTestPanel from "@/components/portfolio/StressTestPanel";
+import AttributionPanel from "@/components/portfolio/AttributionPanel";
 import { TransactionHistory } from "@/components/portfolio/TransactionHistory";
+import CashLedgerPanel from "@/components/portfolio/CashLedgerPanel";
 import { exportCSV } from "@/components/portfolio/_shared";
 
 export default function PortfolioPage() {
@@ -30,13 +33,12 @@ export default function PortfolioPage() {
   const [showAddTx, setShowAddTx] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
 
-
-  const { data: detail, isFetching } = usePortfolioDetail(selected);
+  const activeId = selected ?? portfolios?.[0]?.id ?? null;
+  const { data: detail, isFetching } = usePortfolioDetail(activeId);
   const deleteP = useDeletePortfolio();
-  const optimise = useOptimise(selected ?? "");
+  const optimise = useOptimise(activeId ?? "");
 
   const navigate = useNavigate();
-  const activeId = selected ?? portfolios?.[0]?.id ?? null;
 
   function analyseWithAI() {
     navigate("/ai", {
@@ -134,7 +136,7 @@ function PortfolioDetail({
   optimiseResult, optimisePending, onRunOptimise,
 }: any) {
   const { t } = useTranslation();
-  const [detailTab, setDetailTab] = useState<"overview" | "risk" | "rebalance" | "transactions">("overview");
+  const [detailTab, setDetailTab] = useState<"overview" | "cash" | "attribution" | "risk" | "stress" | "rebalance" | "transactions">("overview");
 
   if (!detail) return <div className="text-muted-foreground text-sm">{isFetching ? t("common.loading") : ""}</div>;
 
@@ -160,9 +162,10 @@ function PortfolioDetail({
   return (
     <div className="space-y-6">
       {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         {[
-          { label: t("portfolio.summary.total_value"), value: `${detail.currency} ${detail.total_value.toLocaleString()}` },
+          { label: t("portfolio.summary.net_liquidation_value"), value: `${detail.currency} ${(detail.net_liquidation_value ?? detail.total_value).toLocaleString()}` },
+          { label: t("portfolio.summary.cash"), value: `${detail.currency} ${(detail.cash_value ?? 0).toLocaleString()}` },
           { label: t("portfolio.summary.total_cost"),  value: `${detail.currency} ${detail.total_cost.toLocaleString()}` },
           {
             label: t("portfolio.summary.unrealized_pnl"),
@@ -183,8 +186,8 @@ function PortfolioDetail({
       </div>
 
       {/* Tab selector */}
-      <div className="flex gap-1 bg-secondary/30 p-1 rounded-lg w-fit">
-        {(["overview", "risk", "rebalance", "transactions"] as const).map((tab) => (
+      <div className="flex max-w-full flex-wrap gap-1 rounded-lg bg-secondary/30 p-1 sm:w-fit">
+        {(["overview", "cash", "attribution", "risk", "stress", "rebalance", "transactions"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setDetailTab(tab)}
@@ -196,8 +199,14 @@ function PortfolioDetail({
           >
             {tab === "overview"
               ? t("portfolio.tabs.holdings")
+              : tab === "cash"
+                ? t("portfolio.tabs.cash")
+              : tab === "attribution"
+                ? t("portfolio.tabs.attribution")
               : tab === "risk"
                 ? t("portfolio.tabs.risk")
+                : tab === "stress"
+                  ? "Stress test"
                 : tab === "rebalance"
                   ? t("portfolio.tabs.rebalance")
                   : t("portfolio.tabs.transactions")}
@@ -318,6 +327,12 @@ function PortfolioDetail({
         <RebalancePanel portfolioId={portfolioId} />
       )}
 
+      {detailTab === "cash" && (
+        <CashLedgerPanel portfolioId={portfolioId} defaultCurrency={detail.currency} />
+      )}
+
+      {detailTab === "attribution" && <AttributionPanel portfolioId={portfolioId} />}
+
       {detailTab === "risk" && (
         <>
           <RiskDashboardPanel portfolioId={portfolioId} />
@@ -326,6 +341,8 @@ function PortfolioDetail({
           <PortfolioAIReviewCard portfolioId={portfolioId} />
         </>
       )}
+
+      {detailTab === "stress" && <StressTestPanel portfolioId={portfolioId} />}
 
       {detailTab === "transactions" && (
         <TransactionHistory portfolioId={portfolioId} />

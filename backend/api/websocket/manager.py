@@ -24,7 +24,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import WebSocket, WebSocketDisconnect
-from jose import JWTError
+from jwt import InvalidTokenError as JWTError
 
 from auth.jwt_handler import decode_access_token
 from cache.redis_cache import get_redis
@@ -211,17 +211,32 @@ async def _authenticate(ws: WebSocket) -> dict | None:
             return None
         payload = decode_access_token(msg["token"])
         return payload
-    except (asyncio.TimeoutError, JWTError, json.JSONDecodeError, Exception):
+    except WebSocketDisconnect:
+        # The peer already completed the close handshake. Let the handler
+        # return without attempting to emit a second close frame.
+        raise
+    except (asyncio.TimeoutError, JWTError, json.JSONDecodeError, TypeError, RuntimeError):
         return None
+
+
+async def _safe_close(ws: WebSocket, *, code: int, reason: str) -> None:
+    """Close a socket unless the peer won the disconnect race."""
+    try:
+        await ws.close(code=code, reason=reason)
+    except (RuntimeError, WebSocketDisconnect):
+        pass
 
 
 async def handle_market_ws(ws: WebSocket) -> None:
     await ws.accept()
 
     # ── Auth ─────────────────────────────────────────────────────
-    payload = await _authenticate(ws)
+    try:
+        payload = await _authenticate(ws)
+    except WebSocketDisconnect:
+        return
     if not payload:
-        await ws.close(code=4001, reason="Authentication failed")
+        await _safe_close(ws, code=4001, reason="Authentication failed")
         return
 
     _subscriptions[ws] = set()
@@ -245,6 +260,11 @@ async def handle_market_ws(ws: WebSocket) -> None:
                 raw = await asyncio.wait_for(ws.receive_text(), timeout=HEARTBEAT_INTERVAL + 5)
             except asyncio.TimeoutError:
                 # Client hasn't sent anything — connection is stale
+                break
+            except (WebSocketDisconnect, RuntimeError):
+                # Starlette can surface a peer close as either exception,
+                # depending on whether the close frame was observed before
+                # the next receive call began.
                 break
 
             try:
@@ -271,7 +291,7 @@ async def handle_market_ws(ws: WebSocket) -> None:
             now_epoch = datetime.now(timezone.utc).timestamp()
             if now_epoch >= _ws_token_exp.get(ws, 0):
                 await _safe_send(ws, {"type": "error", "code": "token_expired"})
-                await ws.close(code=4001, reason="Token expired")
+                await _safe_close(ws, code=4001, reason="Token expired")
                 break
 
             if action == "subscribe":

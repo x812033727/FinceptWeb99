@@ -12,10 +12,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-import services.us_market_service as us_svc
 import services.tw_market_service as tw_svc
-from tasks import us_market_refresh as us_task
+import services.us_market_service as us_svc
 from tasks import tw_market_refresh as tw_task
+from tasks import us_market_refresh as us_task
 
 
 class _NoopSession:
@@ -124,6 +124,8 @@ async def test_tw_refresh_falls_through_to_finmind_when_twse_returns_none():
          patch.object(tw_task, "_is_tw_market_open", return_value=True), \
          patch.object(tw_task, "publish_update", new=fake_publish), \
          patch.object(tw_task, "cache_set", new=AsyncMock()), \
+         patch.object(tw_svc.twse_mis, "get_realtime_quote",
+                      new=AsyncMock(return_value=None)), \
          patch.object(tw_svc.twse, "get_realtime_quote",
                       new=AsyncMock(return_value=None)), \
          patch.object(tw_svc.finmind, "get_daily_ohlcv",

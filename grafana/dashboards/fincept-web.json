@@ -230,6 +230,187 @@
       "targets": [{ "expr": "sum(http_requests_total)", "legendFormat": "Total requests", "refId": "A" }],
       "title": "Total Requests",
       "type": "stat"
+    },
+    {
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 33 },
+      "id": 103,
+      "title": "Professional Beta Operations",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.3 }, { "color": "red", "value": 1 }] } } },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 34 },
+      "id": 10,
+      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{path=~\"/api/(us|tw)/(quote|history|fundamentals)/.*\"}[5m])) by (le, path))", "legendFormat": "{{path}}", "refId": "A" }],
+      "title": "Cached Market API p95 (target <300ms)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 34 },
+      "id": 11,
+      "targets": [{ "expr": "ingest_data_freshness_seconds", "legendFormat": "{{job_id}}", "refId": "A" }],
+      "title": "Market Data Freshness",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 34 },
+      "id": 12,
+      "targets": [{ "expr": "sum(rate(scheduler_job_runs_total{outcome=\"ok\"}[24h])) by (job_id) / clamp_min(sum(rate(scheduler_job_runs_total[24h])) by (job_id), 0.000000001)", "legendFormat": "{{job_id}}", "refId": "A" }],
+      "title": "Scheduler Success Rate (24h)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 40 },
+      "id": 13,
+      "targets": [{ "expr": "increase(ws_pubsub_reconnects_total[1h])", "legendFormat": "Reconnects", "refId": "A" }],
+      "title": "WebSocket Reconnects (1h)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 40 },
+      "id": 14,
+      "targets": [{ "expr": "sum(rate(ai_usage_events_total{outcome=\"recorded\"}[1h])) / clamp_min(sum(rate(ai_usage_events_total[1h])), 0.000000001)", "legendFormat": "Recorded", "refId": "A" }],
+      "title": "AI Usage Recording Success",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 40 },
+      "id": 15,
+      "targets": [{ "expr": "sum(increase(ai_tokens_total[24h])) by (direction)", "legendFormat": "{{direction}}", "refId": "A" }],
+      "title": "AI Tokens (24h)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" } },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 40 },
+      "id": 16,
+      "targets": [{ "expr": "sum(increase(ai_cost_usd_total[24h]))", "legendFormat": "USD", "refId": "A" }],
+      "title": "Estimated AI Cost (24h)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 45 },
+      "id": 17,
+      "targets": [{ "expr": "sum(increase(ai_quota_rejections_total[24h])) by (surface, role)", "legendFormat": "{{surface}} / {{role}}", "refId": "A" }],
+      "title": "AI Quota Rejections (24h)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 45 },
+      "id": 18,
+      "targets": [{ "expr": "scheduler_heartbeat_age_seconds", "legendFormat": "Age", "refId": "A" }],
+      "title": "Scheduler Heartbeat Age",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 45 },
+      "id": 19,
+      "targets": [{ "expr": "ws_connections", "legendFormat": "Clients", "refId": "A" }],
+      "title": "Authenticated WebSocket Clients",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 50 },
+      "id": 20,
+      "targets": [
+        { "expr": "sum(increase(market_data_consistency_checks_total[24h])) by (market, status)", "legendFormat": "{{market}} / {{status}}", "refId": "A" }
+      ],
+      "title": "Cross-provider Quote Checks (24h)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 55 },
+      "id": 21,
+      "targets": [
+        { "expr": "sum(increase(daily_pick_runs_total[24h])) by (market, outcome)", "legendFormat": "runs {{market}} / {{outcome}}", "refId": "A" },
+        { "expr": "sum(increase(daily_pick_candidates_total[24h])) by (market)", "legendFormat": "candidates {{market}}", "refId": "B" }
+      ],
+      "title": "Daily Research Candidate Pipeline (24h)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 60 },
+      "id": 22,
+      "targets": [
+        { "expr": "sum(increase(trend_alert_evaluations_total[24h])) by (outcome)", "legendFormat": "{{outcome}}", "refId": "A" }
+      ],
+      "title": "Dynamic Trend Alert Evaluations (24h)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 65 },
+      "id": 23,
+      "targets": [
+        { "expr": "sum(increase(indicator_alert_evaluations_total[24h])) by (indicator, outcome)", "legendFormat": "{{indicator}} / {{outcome}}", "refId": "A" }
+      ],
+      "title": "Indicator Crossing Alert Evaluations (24h)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 70 },
+      "id": 24,
+      "targets": [
+        { "expr": "sum(increase(notification_deliveries_total[24h])) by (channel, outcome)", "legendFormat": "{{channel}} / {{outcome}}", "refId": "A" }
+      ],
+      "title": "Optional Notification Delivery Outcomes (24h)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 75 },
+      "id": 25,
+      "targets": [
+        { "expr": "sum(increase(options_analysis_total[24h])) by (outcome)", "legendFormat": "{{outcome}}", "refId": "A" }
+      ],
+      "title": "Options Analysis Data Quality (24h)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 80 },
+      "id": 26,
+      "targets": [
+        { "expr": "sum(increase(financial_statement_analysis_total[24h])) by (outcome)", "legendFormat": "{{outcome}}", "refId": "A" }
+      ],
+      "title": "TW Statement Analysis Data Quality (24h)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 85 },
+      "id": 27,
+      "targets": [
+        { "expr": "sum(increase(factor_analysis_total[24h])) by (kind, outcome)", "legendFormat": "{{kind}} / {{outcome}}", "refId": "A" }
+      ],
+      "title": "TW Factor Analysis Data Quality (24h)",
+      "type": "timeseries"
     }
   ],
   "refresh": "30s",

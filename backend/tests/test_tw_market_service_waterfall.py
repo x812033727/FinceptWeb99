@@ -24,6 +24,21 @@ import pytest
 import services.tw_market_service as svc
 
 
+@pytest.fixture(autouse=True)
+def _isolate_live_mis_tier():
+    """Never let orchestration tests hit the live intraday MIS endpoint.
+
+    These tests mock the documented TWSE/FinMind seams. Since MIS became
+    Tier 0 during regular hours, an unmocked 09:00-13:30 test run could
+    return the real quote and make expectations depend on wall-clock time.
+    Dedicated connector tests cover MIS itself; this file stays deterministic.
+    """
+    with patch.object(
+        svc.twse_mis, "get_realtime_quote", new=AsyncMock(return_value=None),
+    ):
+        yield
+
+
 # ── Pure helpers ──────────────────────────────────────────────────
 
 @pytest.mark.parametrize("sym,expected", [
@@ -361,7 +376,8 @@ async def test_get_institutional_uses_finmind_first_with_date_range():
          patch.object(svc.twse, "get_institutional", new_callable=AsyncMock) as twse_mock:
         out = await svc.get_institutional("2330")
 
-    assert out == finmind_rows
+    assert [{k: v for k, v in row.items() if k != "data_source"} for row in out] == finmind_rows
+    assert out[0]["data_source"] == "finmind"
     twse_mock.assert_not_called()
 
 
@@ -413,7 +429,9 @@ async def test_get_revenue_uses_finmind_when_available():
          patch.object(svc.mops, "get_monthly_revenue_recent", new_callable=AsyncMock) as mops_mock:
         out = await svc.get_revenue("2330")
 
-    assert out == finmind_rows
+    assert out[0]["date"] == finmind_rows[0]["date"]
+    assert out[0]["revenue"] == finmind_rows[0]["revenue"]
+    assert out[0]["data_source"] == "finmind"
     mops_mock.assert_not_called()
 
 
@@ -425,7 +443,9 @@ async def test_get_revenue_falls_back_to_mops_html_scrape_when_finmind_fails():
          patch.object(svc.finmind, "get_monthly_revenue", new=AsyncMock(side_effect=RuntimeError("quota"))), \
          patch.object(svc.mops, "get_monthly_revenue_recent", new=AsyncMock(return_value=mops_rows)):
         out = await svc.get_revenue("2330")
-    assert out == mops_rows
+    assert out[0]["symbol"] == mops_rows[0]["symbol"]
+    assert out[0]["revenue"] == mops_rows[0]["revenue"]
+    assert out[0]["data_source"] == "mops"
 
 
 # ── get_fundamentals (TWSE only — no fallback) ───────────────────

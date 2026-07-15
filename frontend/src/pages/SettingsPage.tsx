@@ -8,6 +8,7 @@ import { disablePush, enablePush, getPushStatus, type PushStatus } from "@/lib/w
 import { useAuthStore } from "@/store/authStore";
 import { useThemeStore } from "@/store/themeStore";
 import { UsageCard } from "@/components/admin/UsageCard";
+import NotificationChannels from "@/components/settings/NotificationChannels";
 
 interface UserProfile {
   id: string;
@@ -313,6 +314,7 @@ export default function SettingsPage() {
         {pushError && (
           <p className="text-xs text-danger">{t("settings.notifications.error")}</p>
         )}
+        <NotificationChannels />
       </Section>
 
       {/* Change password */}

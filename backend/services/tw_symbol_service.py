@@ -30,7 +30,8 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from zoneinfo import ZoneInfo
 
 import data.tw.twse_connector as twse
 
@@ -243,6 +244,70 @@ async def _persist_symbol_map_to_db(
         log.debug("tw symbol_map DB write skipped: %s", exc)
 
 
+async def _persist_classification_snapshot_to_db(
+    exch: dict[str, str],
+    industry: dict[str, str],
+    name: dict[str, str],
+    *,
+    snapshot_date: date | None = None,
+) -> int:
+    """Persist one idempotent daily point-in-time classification snapshot."""
+    if not (exch or industry or name):
+        return 0
+    try:
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        from db.session import AsyncSessionLocal
+        from models.tw_company_classification_snapshot import (
+            TwCompanyClassificationSnapshot,
+        )
+    except ImportError:
+        return 0
+    day = snapshot_date or datetime.now(UTC).astimezone(
+        ZoneInfo("Asia/Taipei")
+    ).date()
+    symbols = set(exch) | set(industry) | set(name)
+    payload = [
+        {
+            "snapshot_date": day,
+            "symbol": symbol,
+            "exchange": exch.get(symbol) or "TWSE",
+            "industry": industry.get(symbol),
+            "name_zh": name.get(symbol),
+            "source": "twse_tpex_symbol_map",
+        }
+        for symbol in symbols
+        if symbol
+    ]
+    if not payload:
+        return 0
+    try:
+        async with AsyncSessionLocal() as db:
+            dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
+            insert_fn = sqlite_insert if dialect == "sqlite" else pg_insert
+            for index in range(0, len(payload), 4000):
+                stmt = insert_fn(TwCompanyClassificationSnapshot).values(
+                    payload[index:index + 4000]
+                )
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["snapshot_date", "symbol"],
+                    set_={
+                        "exchange": stmt.excluded.exchange,
+                        "industry": stmt.excluded.industry,
+                        "name_zh": stmt.excluded.name_zh,
+                        "source": stmt.excluded.source,
+                        "captured_at": datetime.now(UTC),
+                    },
+                )
+                await db.execute(stmt)
+            await db.commit()
+        return len(payload)
+    except Exception as exc:
+        log.debug("tw classification snapshot DB write skipped: %s", exc)
+        return 0
+
+
 async def refresh_symbol_map() -> None:
     """Called by scheduler daily. Refreshes three in-memory maps:
 
@@ -337,6 +402,22 @@ async def refresh_symbol_map() -> None:
         await _persist_symbol_map_to_db(
             _exchange_map, _industry_map, _name_map,
         )
+        await _persist_classification_snapshot_to_db(
+            _exchange_map, _industry_map, _name_map,
+        )
+        # Materialize effective-dated instrument and trading rules from the
+        # same freshly persisted master. Best-effort like the other recovery
+        # tiers: quote/name refresh must still succeed if the new table has
+        # not been migrated yet.
+        try:
+            from db.session import AsyncSessionLocal
+            from services.tw_security_master_service import sync_security_master
+
+            day = datetime.now(UTC).astimezone(ZoneInfo("Asia/Taipei")).date()
+            async with AsyncSessionLocal() as db:
+                await sync_security_master(db, as_of=day)
+        except Exception as exc:
+            log.debug("tw security master sync skipped: %s", exc)
 
 
 def get_industry(symbol: str) -> str | None:

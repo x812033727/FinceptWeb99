@@ -1,6 +1,8 @@
-from pydantic import BaseModel, Field, field_validator
 from datetime import date, datetime
+from typing import Literal
 from uuid import UUID
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class PortfolioCreate(BaseModel):
@@ -86,6 +88,7 @@ class HoldingResponse(BaseModel):
     unrealized_pnl: float
     unrealized_pnl_pct: float
     weight_pct: float
+    net_weight_pct: float | None = None
 
 
 class PortfolioSummary(BaseModel):
@@ -96,6 +99,9 @@ class PortfolioSummary(BaseModel):
     total_cost: float
     total_pnl: float
     total_pnl_pct: float
+    cash_balances: dict[str, float] = Field(default_factory=dict)
+    cash_value: float = 0
+    net_liquidation_value: float | None = None
     holdings: list[HoldingResponse]
 
 
@@ -108,6 +114,57 @@ class PortfolioListItem(BaseModel):
 class PerformancePoint(BaseModel):
     date: str
     value: float
+
+
+class AttributionPosition(BaseModel):
+    symbol: str
+    market: str
+    start_date: date
+    end_date: date
+    start_quantity: float
+    end_quantity: float
+    start_value: float
+    end_value: float
+    net_cash_flow: float
+    weighted_cash_flow: float
+    pnl_after_flows: float
+    denominator: float
+    position_return_pct: float | None
+    start_weight_pct: float | None
+    contribution_pct: float | None
+
+
+class AttributionExcluded(BaseModel):
+    symbol: str
+    market: str
+    reason: str
+
+
+class AttributionMarket(BaseModel):
+    market: str
+    start_weight_pct: float | None
+    market_return_pct: float | None
+    contribution_pct: float | None
+    pnl_after_flows: float
+
+
+class PortfolioAttributionResponse(BaseModel):
+    portfolio_id: str
+    currency: str
+    methodology_version: str
+    requested_days: int
+    period_start: date
+    period_end: date
+    empty: bool
+    portfolio_return_pct: float | None
+    benchmark: str | None
+    benchmark_return_pct: float | None
+    active_return_pct: float | None
+    denominator: float
+    markets: list[AttributionMarket]
+    positions: list[AttributionPosition]
+    excluded: list[AttributionExcluded]
+    disclaimer: str
 
 
 class OptimiseRequest(BaseModel):
@@ -244,6 +301,59 @@ class PortfolioRiskResponse(BaseModel):
     excluded: list[RiskExcludedHolding] = []
 
 
+# ── Deterministic scenario stress test ───────────────────────────
+
+class StressTestRequest(BaseModel):
+    scenarios: list[str] | None = None
+    gap_symbol: str | None = Field(default=None, min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    gap_pct: float = Field(default=-20.0, ge=-100.0, le=100.0)
+
+    @field_validator("scenarios")
+    @classmethod
+    def unique_scenarios(cls, value: list[str] | None) -> list[str] | None:
+        return list(dict.fromkeys(value)) if value is not None else None
+
+
+class StressHoldingImpact(BaseModel):
+    symbol: str
+    market: str
+    current_value: float
+    shock_pct: float
+    pnl: float
+    risk_contribution_pct: float
+    drivers: list[str]
+
+
+class StressRebalanceSuggestion(BaseModel):
+    symbol: str
+    action: str
+    current_stressed_weight_pct: float
+    target_weight_pct: float
+    indicative_amount: float
+    reason: str
+
+
+class StressScenarioResult(BaseModel):
+    scenario: str
+    label: str
+    pnl: float
+    pnl_pct: float
+    post_scenario_value: float
+    holdings: list[StressHoldingImpact]
+    rebalance_suggestions: list[StressRebalanceSuggestion]
+
+
+class StressTestResponse(BaseModel):
+    portfolio_id: str
+    currency: str
+    as_of: datetime
+    valuation_source: str
+    portfolio_value: float
+    gap_symbol: str | None
+    scenarios: list[StressScenarioResult]
+    disclaimer: str
+
+
 class TransactionResponse(BaseModel):
     id: UUID
     symbol: str
@@ -262,3 +372,69 @@ class TransactionResponse(BaseModel):
     @classmethod
     def enum_to_str(cls, v: object) -> str:
         return v.value if hasattr(v, "value") else str(v)
+
+
+class CashEntryCreate(BaseModel):
+    currency: str = Field(..., min_length=3, max_length=3)
+    amount: float = Field(..., gt=0, le=1_000_000_000_000)
+    entry_type: Literal[
+        "deposit", "withdrawal", "fee", "tax", "interest", "dividend",
+        "refund", "adjustment_credit", "adjustment_debit",
+    ]
+    occurred_on: date = Field(default_factory=date.today)
+    notes: str | None = Field(default=None, max_length=500)
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str) -> str:
+        return value.upper()
+
+
+class CashEntryReverse(BaseModel):
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class CashEntryResponse(BaseModel):
+    id: UUID
+    portfolio_id: UUID
+    currency: str
+    amount: float
+    entry_type: str
+    source: str
+    occurred_on: date
+    transaction_id: UUID | None = None
+    reversal_of: UUID | None = None
+    idempotency_key: str | None = None
+    notes: str | None = None
+    entry_metadata: dict | None = None
+    is_reversed: bool = False
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class CashBalanceResponse(BaseModel):
+    portfolio_id: str
+    base_currency: str
+    balances: dict[str, float]
+    total_cash_base: float
+    negative_currencies: list[str]
+    as_of: date | None = None
+
+
+class PortfolioSnapshotResponse(BaseModel):
+    id: UUID
+    snapshot_date: date
+    portfolio_id: UUID
+    total_value_usd: float
+    base_currency: str | None = None
+    holdings_value_base: float | None = None
+    cash_value_base: float | None = None
+    total_value_base: float | None = None
+    positions: list | None = None
+    cash_balances: dict | None = None
+    valuation_quality: dict | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

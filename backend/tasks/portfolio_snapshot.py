@@ -40,7 +40,11 @@ async def take_all_snapshots() -> None:
 
 
 async def _do_snapshots() -> None:
-    from services.portfolio_service import _get_twd_usd_rate
+    from services.portfolio_cash_service import (
+        cash_value_in_currency,
+        get_cash_balances,
+    )
+    from services.portfolio_service import _to_portfolio_currency
 
     async with AsyncSessionLocal() as db:
         portfolios = list(
@@ -52,25 +56,53 @@ async def _do_snapshots() -> None:
         )
 
         today = date.today()
-        twd_usd = await _get_twd_usd_rate()
-
         for portfolio in portfolios:
+            holdings_value_base = 0.0
             total_usd = 0.0
+            positions: list[dict] = []
+            missing_quotes: list[str] = []
             for holding in portfolio.holdings:
                 market_key = holding.market.value.lower()
                 cached = await cache_get(key_quote(market_key, holding.symbol))
                 if not cached:
+                    missing_quotes.append(holding.symbol)
                     continue
                 try:
                     price = json.loads(cached).get("price", 0) or 0
                 except Exception:
+                    missing_quotes.append(holding.symbol)
+                    continue
+                if price <= 0:
+                    missing_quotes.append(holding.symbol)
                     continue
 
                 value = float(holding.quantity) * price
-                if holding.cost_currency == "TWD":
-                    total_usd += value / twd_usd if twd_usd > 0 else 0
-                else:
-                    total_usd += value
+                value_base = await _to_portfolio_currency(
+                    value, holding.cost_currency, portfolio.currency,
+                )
+                value_usd = await _to_portfolio_currency(
+                    value, holding.cost_currency, "USD",
+                )
+                holdings_value_base += value_base
+                total_usd += value_usd
+                positions.append({
+                    "symbol": holding.symbol, "market": holding.market.value,
+                    "quantity": float(holding.quantity), "price": float(price),
+                    "price_currency": holding.cost_currency,
+                    "market_value_base": round(value_base, 2),
+                })
+
+            cash_balances = await get_cash_balances(
+                portfolio_id=str(portfolio.id), user_id=str(portfolio.user_id), db=db,
+            )
+            cash_value_base = await cash_value_in_currency(
+                balances=cash_balances, target_currency=portfolio.currency,
+            )
+            cash_value_usd = await cash_value_in_currency(
+                balances=cash_balances, target_currency="USD",
+            )
+            total_usd += cash_value_usd
+            total_value_base = holdings_value_base + cash_value_base
 
             existing = await db.scalar(
                 select(PortfolioSnapshot).where(
@@ -82,11 +114,31 @@ async def _do_snapshots() -> None:
             )
             if existing:
                 existing.total_value_usd = total_usd
+                existing.base_currency = portfolio.currency
+                existing.holdings_value_base = holdings_value_base
+                existing.cash_value_base = cash_value_base
+                existing.total_value_base = total_value_base
+                existing.positions = positions
+                existing.cash_balances = cash_balances
+                existing.valuation_quality = {
+                    "status": "complete" if not missing_quotes else "degraded",
+                    "missing_quote_symbols": missing_quotes,
+                }
             else:
                 db.add(PortfolioSnapshot(
                     portfolio_id=portfolio.id,
                     snapshot_date=today,
                     total_value_usd=total_usd,
+                    base_currency=portfolio.currency,
+                    holdings_value_base=holdings_value_base,
+                    cash_value_base=cash_value_base,
+                    total_value_base=total_value_base,
+                    positions=positions,
+                    cash_balances=cash_balances,
+                    valuation_quality={
+                        "status": "complete" if not missing_quotes else "degraded",
+                        "missing_quote_symbols": missing_quotes,
+                    },
                 ))
 
         try:

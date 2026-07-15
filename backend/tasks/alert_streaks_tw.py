@@ -23,7 +23,12 @@ from db.session import AsyncSessionLocal
 from models.alert import PriceAlert
 from models.tw_chip_metrics import TwInstitutionalDaily
 from services.alert_rules import FireResult
-from services.alert_service import cooldown_ok, dispatch_notifications, fire_alert
+from services.alert_service import (
+    cooldown_ok,
+    dispatch_notifications,
+    fire_alert,
+    stage_thesis_alert_events,
+)
 
 log = logging.getLogger(__name__)
 
@@ -98,6 +103,7 @@ async def check_foreign_streak_alerts(db: AsyncSession) -> int:
         fired.append((alert, match))
 
     if fired:
+        await stage_thesis_alert_events(db, fired, now)
         await db.commit()
         await dispatch_notifications(fired)
     return len(fired)

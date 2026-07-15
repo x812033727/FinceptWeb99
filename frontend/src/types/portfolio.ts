@@ -12,6 +12,7 @@ export interface Holding {
   unrealized_pnl?: number;
   unrealized_pnl_pct?: number;
   weight_pct?: number;
+  net_weight_pct?: number;
 }
 
 export interface Portfolio {
@@ -21,7 +22,35 @@ export interface Portfolio {
   total_value?: number;
   total_pnl?: number;
   total_pnl_pct?: number;
+  cash_balances?: Record<string, number>;
+  cash_value?: number;
+  net_liquidation_value?: number;
   holdings: Holding[];
+  created_at: string;
+}
+
+export interface CashBalance {
+  portfolio_id: string;
+  base_currency: string;
+  balances: Record<string, number>;
+  total_cash_base: number;
+  negative_currencies: string[];
+  as_of: string | null;
+}
+
+export interface CashEntry {
+  id: string;
+  portfolio_id: string;
+  currency: string;
+  amount: number;
+  entry_type: string;
+  source: string;
+  occurred_on: string;
+  transaction_id: string | null;
+  reversal_of: string | null;
+  is_reversed: boolean;
+  idempotency_key: string | null;
+  notes: string | null;
   created_at: string;
 }
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { errorDetail } from "@/lib/api";
 import type { AgentInfo, AutoRunConfig, DiscussionMarket, StrategyKey, StrategyRunCounts } from "@/types/discussion";
 import { fetchAutoRunConfig, saveAutoRunConfig } from "./_helpers";
 
@@ -64,6 +65,7 @@ export function AutoRunConfigCard({
       setShowSaved(true);
       setError(null);
     },
+    onError: (err) => setError(errorDetail(err)),
   });
 
   useEffect(() => {
@@ -140,6 +142,26 @@ export function AutoRunConfigCard({
             </p>
           ) : (
             <>
+              {error && (
+                <p className="text-micro text-danger">{error}</p>
+              )}
+
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={saveMut.isPending}
+                className="sticky top-0 z-10 w-full rounded bg-primary px-2.5 py-1.5 text-meta font-medium text-primary-foreground shadow hover:bg-primary/90 transition-colors disabled:opacity-50"
+              >
+                {saveMut.isPending
+                  ? t("common.saving")
+                  : t("discussion.auto_run_save")}
+              </button>
+              {showSaved && (
+                <p className="text-micro text-success text-center">
+                  ✓ {t("discussion.auto_run_saved")}
+                </p>
+              )}
+
               <label className="flex items-center gap-2 text-xs cursor-pointer">
                 <input
                   type="checkbox"
@@ -253,27 +275,6 @@ export function AutoRunConfigCard({
                 </div>
               </div>
 
-              {error && (
-                <p className="text-micro text-danger">{error}</p>
-              )}
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleSave}
-                  disabled={saveMut.isPending}
-                  className="px-2.5 py-1 rounded text-meta bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
-                >
-                  {saveMut.isPending
-                    ? t("common.saving")
-                    : t("discussion.auto_run_save")}
-                </button>
-                {showSaved && (
-                  <span className="text-micro text-success">
-                    ✓ {t("discussion.auto_run_saved")}
-                  </span>
-                )}
-              </div>
             </>
           )}
         </div>

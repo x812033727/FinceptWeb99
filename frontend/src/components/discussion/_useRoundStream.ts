@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import api, { notifyRateLimited } from "@/lib/api";
+import { useSessionAbortController } from "@/hooks/useSessionAbortController";
 import { useAuthStore } from "@/store/authStore";
 import { useToastStore } from "@/store/toastStore";
 import type {
@@ -30,6 +31,7 @@ export function useRoundStream({
 }) {
   const { t } = useTranslation();
   const token = useAuthStore((s) => s.token);
+  const userId = useAuthStore((s) => s.user?.id ?? null);
   const queryClient = useQueryClient();
   const pushToast = useToastStore((s) => s.push);
 
@@ -83,7 +85,7 @@ export function useRoundStream({
       is_error?: boolean;
     }>
   >([]);
-  const abortRef = useRef<AbortController | null>(null);
+  const { abort, renew } = useSessionAbortController();
   // Multi-round driver: lets the user fire N consecutive rounds with
   // one click. `loopProgress` drives the "Round X of N" badge + the
   // graceful-cancel button; `cancelRequestedRef` is a plain ref because
@@ -97,6 +99,13 @@ export function useRoundStream({
   // the user gets immediate visual feedback.
   const cancelRequestedRef = useRef(false);
   const [cancelling, setCancelling] = useState(false);
+
+  // Aborting the current reader is not enough for a multi-round run: its
+  // outer async loop would otherwise advance and start another request after
+  // the component unmounts or the authenticated account changes.
+  useEffect(() => () => {
+    cancelRequestedRef.current = true;
+  }, [userId]);
 
   // Reset all per-session streaming state when the user switches to a
   // different discussion. Keyed on `selectedId` (not `detail`) so the
@@ -127,8 +136,7 @@ export function useRoundStream({
     setStreamingStage(null);
     setStreamingProgress(null);
 
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
+    const ctrl = renew();
     let roundOk = true;
     let rateLimited = false;
 
@@ -454,7 +462,7 @@ export function useRoundStream({
   }
 
   function stopStreaming() {
-    abortRef.current?.abort();
+    abort();
   }
 
   return {

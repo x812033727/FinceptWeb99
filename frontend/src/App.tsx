@@ -47,6 +47,17 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function AuthenticatedShell() {
+  const userId = useAuthStore((state) => state.user?.id);
+  return (
+    <ConsentGate key={userId}>
+      <CommandPaletteProvider>
+        <AppLayout />
+      </CommandPaletteProvider>
+    </ConsentGate>
+  );
+}
+
 type Role = "viewer" | "analyst" | "admin";
 
 // Role hierarchy: admin >= analyst >= viewer. Pages that require analyst
@@ -105,11 +116,7 @@ export default function App() {
           <Route
             element={
               <RequireAuth>
-                <ConsentGate>
-                  <CommandPaletteProvider>
-                    <AppLayout />
-                  </CommandPaletteProvider>
-                </ConsentGate>
+                <AuthenticatedShell />
               </RequireAuth>
             }
           >

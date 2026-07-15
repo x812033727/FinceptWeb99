@@ -12,10 +12,11 @@
  * quota copy; a missing-provider-key SSE error → dedicated hint; the
  * backend's "no holdings" error → dedicated empty-portfolio copy.
  */
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { HeartPulse, Loader2, Sparkles, Square } from "lucide-react";
 import { notifyRateLimited } from "@/lib/api";
+import { useSessionAbortController } from "@/hooks/useSessionAbortController";
 import { useAuthStore } from "@/store/authStore";
 import { renderInlineMarkdown } from "@/components/discussion/_format";
 
@@ -81,7 +82,7 @@ export function PortfolioAIReviewCard({ portfolioId }: { portfolioId: string }) 
   const [streaming, setStreaming] = useState(false);
   const [stage, setStage] = useState<"context" | "generating" | null>(null);
   const [error, setError] = useState<{ kind: ErrorKind; message: string } | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const { abort, renew } = useSessionAbortController();
 
   async function generate() {
     if (streaming) return;
@@ -90,8 +91,7 @@ export function PortfolioAIReviewCard({ portfolioId }: { portfolioId: string }) 
     setStreaming(true);
     setStage("context");
 
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
+    const ctrl = renew();
     let assembled = "";
 
     try {
@@ -161,7 +161,7 @@ export function PortfolioAIReviewCard({ portfolioId }: { portfolioId: string }) 
   }
 
   function stopGeneration() {
-    abortRef.current?.abort();
+    abort();
   }
 
   const showEmpty = !content && !streaming && !error;

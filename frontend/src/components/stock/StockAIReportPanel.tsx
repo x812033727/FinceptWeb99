@@ -14,11 +14,12 @@
  * "[X API key not configured]" placeholder into an SSE error frame)
  * shows a dedicated hint instead of a raw error string.
  */
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { FileText, Loader2, Sparkles, Square } from "lucide-react";
 import api, { notifyRateLimited } from "@/lib/api";
+import { useSessionAbortController } from "@/hooks/useSessionAbortController";
 import { useAuthStore } from "@/store/authStore";
 import { CollapsibleHeader } from "@/components/Collapsible";
 import { renderInlineMarkdown } from "@/components/discussion/_format";
@@ -132,7 +133,7 @@ export function StockAIReportPanel({ symbol, market }: { symbol: string; market:
   // Which saved report is displayed; null = live/most-recent stream.
   const [viewingId, setViewingId] = useState<string | null>(null);
   const [quality, setQuality] = useState<{ score: number; details: QualityDetails } | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const { abort, renew } = useSessionAbortController();
 
   const { data: reports = [] } = useQuery({
     queryKey: ["stock-reports", market, symbol],
@@ -149,8 +150,7 @@ export function StockAIReportPanel({ symbol, market }: { symbol: string; market:
     setStreaming(true);
     setStage("context");
 
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
+    const ctrl = renew();
     let assembled = "";
 
     try {
@@ -232,7 +232,7 @@ export function StockAIReportPanel({ symbol, market }: { symbol: string; market:
   }
 
   function stopGeneration() {
-    abortRef.current?.abort();
+    abort();
   }
 
   async function openReport(id: string) {

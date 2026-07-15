@@ -4,16 +4,124 @@ import {
   useCancelPaperOrder,
   useMatchPaperOrder,
   usePaperOrders,
+  usePaperRiskPolicy,
   useSubmitPaperOrder,
+  useUpdatePaperRiskPolicy,
 } from "@/hooks/usePortfolio";
-import type { PaperOrderCreate } from "@/types/portfolio";
+import type { PaperOrderCreate, PaperRiskPolicyUpdate } from "@/types/portfolio";
 
 const field = "rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground";
 const openStatuses = new Set(["pending", "partially_filled"]);
 
+type RiskField =
+  | "max_order_notional_usd"
+  | "max_order_notional_twd"
+  | "max_position_notional_usd"
+  | "max_position_notional_twd"
+  | "max_daily_loss_usd"
+  | "max_daily_loss_twd"
+  | "max_open_orders"
+  | "max_symbol_concentration_pct";
+type RiskForm = Record<RiskField, string>;
+
+function PaperRiskControls({ portfolioId }: { portfolioId: string }) {
+  const { t } = useTranslation();
+  const policy = usePaperRiskPolicy(portfolioId);
+  const update = useUpdatePaperRiskPolicy(portfolioId);
+  const [form, setForm] = useState<Partial<RiskForm>>({});
+
+  function value(key: RiskField): string {
+    if (form[key] !== undefined) return form[key];
+    const saved = policy.data?.[key];
+    return saved == null ? "" : String(saved);
+  }
+
+  function payload(tradingEnabled: boolean): PaperRiskPolicyUpdate {
+    return {
+      trading_enabled: tradingEnabled,
+      max_order_notional_usd: value("max_order_notional_usd") ? Number(value("max_order_notional_usd")) : null,
+      max_order_notional_twd: value("max_order_notional_twd") ? Number(value("max_order_notional_twd")) : null,
+      max_position_notional_usd: value("max_position_notional_usd") ? Number(value("max_position_notional_usd")) : null,
+      max_position_notional_twd: value("max_position_notional_twd") ? Number(value("max_position_notional_twd")) : null,
+      max_daily_loss_usd: value("max_daily_loss_usd") ? Number(value("max_daily_loss_usd")) : null,
+      max_daily_loss_twd: value("max_daily_loss_twd") ? Number(value("max_daily_loss_twd")) : null,
+      max_open_orders: value("max_open_orders") ? Number(value("max_open_orders")) : null,
+      max_symbol_concentration_pct: value("max_symbol_concentration_pct") ? Number(value("max_symbol_concentration_pct")) : null,
+    };
+  }
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    await update.mutateAsync(payload(policy.data?.trading_enabled ?? true));
+    setForm({});
+  }
+
+  const configs: Array<{ key: RiskField; suffix?: string }> = [
+    { key: "max_order_notional_usd", suffix: "USD" },
+    { key: "max_order_notional_twd", suffix: "TWD" },
+    { key: "max_position_notional_usd", suffix: "USD" },
+    { key: "max_position_notional_twd", suffix: "TWD" },
+    { key: "max_daily_loss_usd", suffix: "USD" },
+    { key: "max_daily_loss_twd", suffix: "TWD" },
+    { key: "max_open_orders" },
+    { key: "max_symbol_concentration_pct", suffix: "%" },
+  ];
+  const enabled = policy.data?.trading_enabled ?? true;
+
+  return (
+    <section className="rounded-lg border border-border bg-card p-5 shadow-highlight">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <h2 className="font-medium text-foreground">{t("portfolio.paper.risk_title")}</h2>
+            <span className={`rounded-full px-2 py-0.5 text-xs ${enabled ? "bg-positive/15 text-positive" : "bg-negative/15 text-negative"}`}>
+              {enabled ? t("portfolio.paper.risk_active") : t("portfolio.paper.risk_paused")}
+            </span>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">{t("portfolio.paper.risk_subtitle")}</p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {t("portfolio.paper.daily_pnl")}: USD {policy.data?.daily_realized_pnl_usd ?? 0} · TWD {policy.data?.daily_realized_pnl_twd ?? 0}
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={update.isPending || policy.isLoading}
+          onClick={() => update.mutate(payload(!enabled))}
+          className={`rounded-md px-3 py-2 text-sm text-white disabled:opacity-50 ${enabled ? "bg-negative" : "bg-positive"}`}
+        >
+          {enabled ? t("portfolio.paper.engage_kill_switch") : t("portfolio.paper.resume_trading")}
+        </button>
+      </div>
+      <form onSubmit={save} className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+        {configs.map(({ key, suffix }) => (
+          <label key={key} className="text-xs text-muted-foreground">
+            {t(`portfolio.paper.${key}`)} {suffix && <span>({suffix})</span>}
+            <input
+              aria-label={`${t(`portfolio.paper.${key}`)}${suffix ? ` ${suffix}` : ""}`}
+              type="number"
+              min={key === "max_open_orders" ? 1 : "0.000001"}
+              max={key === "max_symbol_concentration_pct" ? 100 : undefined}
+              step={key === "max_open_orders" ? 1 : "any"}
+              value={value(key)}
+              onChange={(event) => setForm({ ...form, [key]: event.target.value })}
+              className={`${field} mt-1 w-full`}
+              placeholder={t("portfolio.paper.unlimited")}
+            />
+          </label>
+        ))}
+        <button disabled={update.isPending} className="self-end rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground disabled:opacity-50">
+          {update.isPending ? t("common.loading") : t("portfolio.paper.save_risk")}
+        </button>
+      </form>
+      {update.error && <p role="alert" className="mt-3 text-sm text-negative">{t("portfolio.paper.risk_failed")}</p>}
+    </section>
+  );
+}
+
 export default function PaperTradingPanel({ portfolioId }: { portfolioId: string }) {
   const { t } = useTranslation();
   const orders = usePaperOrders(portfolioId);
+  const risk = usePaperRiskPolicy(portfolioId);
   const submit = useSubmitPaperOrder(portfolioId);
   const cancel = useCancelPaperOrder(portfolioId);
   const match = useMatchPaperOrder(portfolioId);
@@ -46,6 +154,7 @@ export default function PaperTradingPanel({ portfolioId }: { portfolioId: string
 
   return (
     <div className="space-y-5">
+      <PaperRiskControls portfolioId={portfolioId} />
       <section className="rounded-lg border border-border bg-card p-5 shadow-highlight">
         <h2 className="font-medium text-foreground">{t("portfolio.paper.ticket")}</h2>
         <p className="mt-1 text-xs text-muted-foreground">{t("portfolio.paper.subtitle")}</p>
@@ -72,7 +181,7 @@ export default function PaperTradingPanel({ portfolioId }: { portfolioId: string
           <select aria-label={t("portfolio.paper.tif")} value={form.time_in_force} onChange={(event) => setForm({ ...form, time_in_force: event.target.value as PaperOrderCreate["time_in_force"] })} className={field}>
             <option value="day">DAY</option><option value="gtc">GTC</option>
           </select>
-          <button disabled={submit.isPending} className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground disabled:opacity-50">
+          <button disabled={submit.isPending || risk.data?.trading_enabled === false} className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground disabled:opacity-50">
             {submit.isPending ? t("common.loading") : t("portfolio.paper.submit")}
           </button>
         </form>

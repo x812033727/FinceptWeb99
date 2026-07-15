@@ -893,7 +893,9 @@
       "symbol": "商品代號", "market": "市場", "side": "方向", "type": "委託類型", "quantity": "數量", "price": "價格", "limit_price": "限價", "reference_price": "參考價", "tif": "委託效期",
       "buy": "買進", "sell": "賣出", "limit": "限價", "market_order": "市價", "submit": "送出委託", "failed": "目前無法完成模擬交易操作。",
       "orders": "模擬委託", "empty": "尚無模擬委託。", "progress": "已成交／委託量", "status": "狀態", "actions": "操作", "match": "立即撮合", "cancel": "取消",
-      "status_pending": "等待中", "status_partially_filled": "部分成交", "status_filled": "已成交", "status_cancelled": "已取消", "status_expired": "已到期"
+      "status_pending": "等待中", "status_partially_filled": "部分成交", "status_filled": "已成交", "status_cancelled": "已取消", "status_expired": "已到期",
+      "risk_title": "模擬交易風險控制", "risk_subtitle": "送單與每次成交前都會重新檢查限制；每日已實現損益於 UTC 00:00 重置。", "risk_active": "交易已啟用", "risk_paused": "緊急停止中", "daily_pnl": "今日已實現損益", "engage_kill_switch": "啟動緊急停止", "resume_trading": "恢復交易", "save_risk": "儲存限制", "risk_failed": "目前無法更新風險控制。", "unlimited": "不設限",
+      "max_order_notional_usd": "單筆委託上限", "max_order_notional_twd": "單筆委託上限", "max_position_notional_usd": "單一商品曝險上限", "max_position_notional_twd": "單一商品曝險上限", "max_daily_loss_usd": "每日損失上限", "max_daily_loss_twd": "每日損失上限", "max_open_orders": "未完成委託上限", "max_symbol_concentration_pct": "單一商品集中度上限"
     },
     "cash": {
       "title": "多幣別現金帳本",

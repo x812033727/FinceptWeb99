@@ -90,6 +90,27 @@ export interface PaperOrderCreate {
   notes?: string;
 }
 
+export interface PaperRiskPolicyUpdate {
+  trading_enabled: boolean;
+  max_order_notional_usd: number | null;
+  max_order_notional_twd: number | null;
+  max_position_notional_usd: number | null;
+  max_position_notional_twd: number | null;
+  max_daily_loss_usd: number | null;
+  max_daily_loss_twd: number | null;
+  max_open_orders: number | null;
+  max_symbol_concentration_pct: number | null;
+}
+
+export interface PaperRiskPolicy extends PaperRiskPolicyUpdate {
+  portfolio_id: string;
+  configured: boolean;
+  updated_at: string | null;
+  cancelled_open_orders: number;
+  daily_realized_pnl_usd: number;
+  daily_realized_pnl_twd: number;
+}
+
 // ── Risk dashboard (feature C1) — GET /portfolio/{id}/risk ────────
 
 export interface RiskVaREntry {

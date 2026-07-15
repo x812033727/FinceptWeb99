@@ -6,6 +6,8 @@ import type {
   Portfolio,
   PaperOrder,
   PaperOrderCreate,
+  PaperRiskPolicy,
+  PaperRiskPolicyUpdate,
   PortfolioRisk,
   Transaction,
 } from "@/types/portfolio";
@@ -183,6 +185,30 @@ export function usePaperOrders(portfolioId: string) {
     queryFn: () => api.get<PaperOrder[]>(`/portfolio/${portfolioId}/paper-orders`).then((r) => r.data),
     enabled: !!portfolioId,
     refetchInterval: 15_000,
+  });
+}
+
+export function usePaperRiskPolicy(portfolioId: string) {
+  return useQuery({
+    queryKey: ["paper-risk-policy", portfolioId],
+    queryFn: () => api.get<PaperRiskPolicy>(
+      `/portfolio/${portfolioId}/paper-risk-policy`,
+    ).then((r) => r.data),
+    enabled: !!portfolioId,
+    refetchInterval: 15_000,
+  });
+}
+
+export function useUpdatePaperRiskPolicy(portfolioId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: PaperRiskPolicyUpdate) => api.put<PaperRiskPolicy>(
+      `/portfolio/${portfolioId}/paper-risk-policy`, body,
+    ).then((r) => r.data),
+    onSuccess: () => Promise.all([
+      qc.invalidateQueries({ queryKey: ["paper-risk-policy", portfolioId] }),
+      invalidatePaperAccount(qc, portfolioId),
+    ]),
   });
 }
 

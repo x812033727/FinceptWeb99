@@ -1,10 +1,24 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { submitOrder, cancelOrder, matchOrder } = vi.hoisted(() => ({
+const { submitOrder, cancelOrder, matchOrder, updateRisk, riskPolicy } = vi.hoisted(() => ({
   submitOrder: vi.fn(),
   cancelOrder: vi.fn(),
   matchOrder: vi.fn(),
+  updateRisk: vi.fn(),
+  riskPolicy: {
+    trading_enabled: true,
+    max_order_notional_usd: null,
+    max_order_notional_twd: null,
+    max_position_notional_usd: null,
+    max_position_notional_twd: null,
+    max_daily_loss_usd: null,
+    max_daily_loss_twd: null,
+    max_open_orders: null,
+    max_symbol_concentration_pct: null,
+    daily_realized_pnl_usd: -12.5,
+    daily_realized_pnl_twd: 0,
+  },
 }));
 
 vi.mock("@/hooks/usePortfolio", () => ({
@@ -22,6 +36,16 @@ vi.mock("@/hooks/usePortfolio", () => ({
   useSubmitPaperOrder: () => ({ mutateAsync: submitOrder, isPending: false, error: null }),
   useCancelPaperOrder: () => ({ mutate: cancelOrder, isPending: false, error: null }),
   useMatchPaperOrder: () => ({ mutate: matchOrder, isPending: false, error: null }),
+  usePaperRiskPolicy: () => ({
+    isLoading: false,
+    data: riskPolicy,
+  }),
+  useUpdatePaperRiskPolicy: () => ({
+    mutate: updateRisk,
+    mutateAsync: updateRisk,
+    isPending: false,
+    error: null,
+  }),
 }));
 
 import PaperTradingPanel from "./PaperTradingPanel";
@@ -31,6 +55,7 @@ describe("PaperTradingPanel", () => {
     submitOrder.mockReset().mockResolvedValue({});
     cancelOrder.mockReset();
     matchOrder.mockReset();
+    updateRisk.mockReset().mockResolvedValue({});
   });
 
   it("submits a typed order and exposes match and cancel actions", async () => {
@@ -52,5 +77,17 @@ describe("PaperTradingPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(matchOrder).toHaveBeenCalledWith("order-1");
     expect(cancelOrder).toHaveBeenCalledWith("order-1");
+  });
+
+  it("shows realized pnl and exposes the kill switch", () => {
+    render(<PaperTradingPanel portfolioId="portfolio-1" />);
+
+    expect(screen.getByText(/USD -12.5/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Engage kill switch" }));
+    expect(updateRisk).toHaveBeenCalledWith(expect.objectContaining({
+      trading_enabled: false,
+      max_order_notional_usd: null,
+      max_daily_loss_usd: null,
+    }));
   });
 });

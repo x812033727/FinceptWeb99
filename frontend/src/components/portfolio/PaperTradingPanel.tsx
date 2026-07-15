@@ -1,15 +1,16 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, Fragment, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   useCancelPaperOrder,
   useMatchPaperOrder,
+  usePaperFills,
   usePaperOrders,
   usePaperPerformance,
   usePaperRiskPolicy,
   useSubmitPaperOrder,
   useUpdatePaperRiskPolicy,
 } from "@/hooks/usePortfolio";
-import type { PaperOrderCreate, PaperRiskPolicyUpdate } from "@/types/portfolio";
+import type { PaperOrder, PaperOrderCreate, PaperRiskPolicyUpdate } from "@/types/portfolio";
 
 const field = "rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground";
 const openStatuses = new Set(["pending", "partially_filled"]);
@@ -83,6 +84,63 @@ function PaperPerformancePanel({ portfolioId }: { portfolioId: string }) {
         </div>
       )}
     </section>
+  );
+}
+
+function PaperFillAudit({ portfolioId, order }: { portfolioId: string; order: PaperOrder }) {
+  const { t } = useTranslation();
+  const fills = usePaperFills(portfolioId, order.id);
+  if (fills.isLoading) {
+    return <p className="p-4 text-sm text-muted-foreground">{t("common.loading")}</p>;
+  }
+  if (fills.error) {
+    return <p role="alert" className="p-4 text-sm text-negative">{t("portfolio.paper.fills_failed")}</p>;
+  }
+  if (!fills.data?.length) {
+    return <p className="p-4 text-sm text-muted-foreground">{t("portfolio.paper.fills_empty")}</p>;
+  }
+  const totalFee = fills.data.reduce((sum, fill) => sum + fill.fee, 0);
+  const totalPnl = fills.data.reduce((sum, fill) => sum + fill.realized_pnl, 0);
+  const quoted = fills.data.filter((fill) => fill.slippage_bps != null);
+  const quotedQuantity = quoted.reduce((sum, fill) => sum + fill.quantity, 0);
+  const averageSlippage = quotedQuantity > 0
+    ? quoted.reduce((sum, fill) => sum + (fill.slippage_bps ?? 0) * fill.quantity, 0) / quotedQuantity
+    : null;
+  const currency = fills.data[0].currency;
+
+  return (
+    <div className="bg-secondary/10 p-4">
+      <div className="mb-4 grid grid-cols-2 gap-3 text-xs md:grid-cols-4">
+        <div><span className="text-muted-foreground">{t("portfolio.paper.fill_count")}</span><strong className="mt-1 block text-foreground">{fills.data.length}</strong></div>
+        <div><span className="text-muted-foreground">{t("portfolio.paper.total_fees")}</span><strong className="mt-1 block text-foreground">{pnl(totalFee, currency)}</strong></div>
+        <div><span className="text-muted-foreground">{t("portfolio.paper.realized_pnl")}</span><strong className={`mt-1 block ${totalPnl >= 0 ? "text-positive" : "text-negative"}`}>{pnl(totalPnl, currency)}</strong></div>
+        <div><span className="text-muted-foreground">{t("portfolio.paper.average_slippage")}</span><strong className="mt-1 block text-foreground">{averageSlippage == null ? "—" : `${averageSlippage.toFixed(2)} bps`}</strong></div>
+      </div>
+      <div className="overflow-x-auto rounded-md border border-border bg-background">
+        <table className="w-full min-w-[850px] text-xs">
+          <thead className="bg-secondary/30 text-left text-muted-foreground"><tr>
+            <th className="px-3 py-2">{t("portfolio.paper.filled_at")}</th>
+            <th className="px-3 py-2">{t("portfolio.paper.execution")}</th>
+            <th className="px-3 py-2">{t("portfolio.paper.quote")}</th>
+            <th className="px-3 py-2">{t("portfolio.paper.slippage")}</th>
+            <th className="px-3 py-2">{t("portfolio.paper.liquidity")}</th>
+            <th className="px-3 py-2">{t("portfolio.paper.fee_pnl")}</th>
+            <th className="px-3 py-2">{t("portfolio.paper.source")}</th>
+          </tr></thead>
+          <tbody className="divide-y divide-border">{fills.data.map((fill) => (
+            <tr key={fill.id}>
+              <td className="px-3 py-2 text-muted-foreground">{new Date(fill.filled_at).toLocaleString()}</td>
+              <td className="px-3 py-2 text-foreground">{fill.quantity} @ {fill.price}</td>
+              <td className="px-3 py-2 text-muted-foreground">{fill.quote_price ?? "—"}</td>
+              <td className="px-3 py-2 text-muted-foreground">{fill.slippage_bps == null ? "—" : `${fill.slippage_bps.toFixed(2)} bps`}</td>
+              <td className="px-3 py-2 text-muted-foreground">{fill.liquidity_quantity ?? "—"}</td>
+              <td className="px-3 py-2"><span>{pnl(fill.fee, fill.currency)}</span><span className={`ml-2 ${fill.realized_pnl >= 0 ? "text-positive" : "text-negative"}`}>{pnl(fill.realized_pnl, fill.currency)}</span></td>
+              <td className="px-3 py-2 text-muted-foreground"><span className="block text-foreground">{t(`portfolio.paper.source_${fill.execution_source}`, { defaultValue: fill.execution_source })}</span>{fill.quote_key && <code className="block max-w-48 truncate" title={fill.quote_key}>{fill.quote_key}</code>}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
@@ -197,6 +255,7 @@ export default function PaperTradingPanel({ portfolioId }: { portfolioId: string
     fee_bps: 0,
   });
   const [price, setPrice] = useState("");
+  const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
 
   async function createOrder(event: FormEvent) {
     event.preventDefault();
@@ -261,17 +320,23 @@ export default function PaperTradingPanel({ portfolioId }: { portfolioId: string
               <th className="px-4 py-3">{t("portfolio.paper.symbol")}</th><th className="px-4 py-3">{t("portfolio.paper.side")}</th><th className="px-4 py-3">{t("portfolio.paper.type")}</th><th className="px-4 py-3">{t("portfolio.paper.progress")}</th><th className="px-4 py-3">{t("portfolio.paper.status")}</th><th className="px-4 py-3 text-right">{t("portfolio.paper.actions")}</th>
             </tr></thead>
             <tbody className="divide-y divide-border">{orders.data.map((order) => (
-              <tr key={order.id}>
+              <Fragment key={order.id}>
+              <tr>
                 <td className="px-4 py-3 font-medium text-foreground">{order.symbol}<span className="ml-2 text-xs text-muted-foreground">{order.market}</span></td>
                 <td className={`px-4 py-3 ${order.side === "buy" ? "text-positive" : "text-negative"}`}>{t(`portfolio.paper.${order.side}`)}</td>
                 <td className="px-4 py-3 text-muted-foreground">{order.order_type.toUpperCase()} · {order.time_in_force.toUpperCase()}<div>{order.limit_price ?? order.reservation_price}</div></td>
                 <td className="px-4 py-3 text-muted-foreground">{order.filled_quantity} / {order.quantity}{order.average_fill_price && <div>@ {order.average_fill_price}</div>}</td>
                 <td className="px-4 py-3 text-foreground">{t(`portfolio.paper.status_${order.status}`)}</td>
-                <td className="px-4 py-3 text-right">{openStatuses.has(order.status) && <div className="flex justify-end gap-2">
-                  <button onClick={() => match.mutate(order.id)} disabled={match.isPending} className="text-primary hover:underline disabled:opacity-40">{t("portfolio.paper.match")}</button>
-                  <button onClick={() => cancel.mutate(order.id)} disabled={cancel.isPending} className="text-negative hover:underline disabled:opacity-40">{t("portfolio.paper.cancel")}</button>
-                </div>}</td>
+                <td className="px-4 py-3 text-right"><div className="flex justify-end gap-2">
+                  <button type="button" aria-expanded={expandedOrderId === order.id} aria-controls={`paper-fills-${order.id}`} onClick={() => setExpandedOrderId((current) => current === order.id ? null : order.id)} className="text-foreground hover:underline">{expandedOrderId === order.id ? t("portfolio.paper.hide_fills") : t("portfolio.paper.view_fills")}</button>
+                  {openStatuses.has(order.status) && <>
+                    <button type="button" onClick={() => match.mutate(order.id)} disabled={match.isPending} className="text-primary hover:underline disabled:opacity-40">{t("portfolio.paper.match")}</button>
+                    <button type="button" onClick={() => cancel.mutate(order.id)} disabled={cancel.isPending} className="text-negative hover:underline disabled:opacity-40">{t("portfolio.paper.cancel")}</button>
+                  </>}
+                </div></td>
               </tr>
+              {expandedOrderId === order.id && <tr id={`paper-fills-${order.id}`}><td colSpan={6} className="p-0"><PaperFillAudit portfolioId={portfolioId} order={order} /></td></tr>}
+              </Fragment>
             ))}</tbody>
           </table></div>
         )}

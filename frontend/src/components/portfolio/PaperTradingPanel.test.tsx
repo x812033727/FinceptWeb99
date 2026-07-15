@@ -36,6 +36,17 @@ vi.mock("@/hooks/usePortfolio", () => ({
   useSubmitPaperOrder: () => ({ mutateAsync: submitOrder, isPending: false, error: null }),
   useCancelPaperOrder: () => ({ mutate: cancelOrder, isPending: false, error: null }),
   useMatchPaperOrder: () => ({ mutate: matchOrder, isPending: false, error: null }),
+  usePaperFills: () => ({
+    isLoading: false,
+    error: null,
+    data: [{
+      id: "fill-1", order_id: "order-1", transaction_id: "tx-1",
+      quantity: 4, price: 99, fee: 1.5, currency: "USD", realized_pnl: -1.5,
+      quote_price: 100, slippage_bps: -100, liquidity_quantity: 20,
+      quote_key: "polygon:AAPL:2026-07-15T13:00:00Z", execution_source: "matcher",
+      idempotency_key: "fill-key", filled_at: "2026-07-15T13:00:00Z",
+    }],
+  }),
   usePaperRiskPolicy: () => ({
     isLoading: false,
     data: riskPolicy,
@@ -94,6 +105,13 @@ describe("PaperTradingPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(matchOrder).toHaveBeenCalledWith("order-1");
     expect(cancelOrder).toHaveBeenCalledWith("order-1");
+
+    fireEvent.click(screen.getByRole("button", { name: "View fills" }));
+    expect(screen.getByRole("button", { name: "Hide fills" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("4 @ 99")).toBeInTheDocument();
+    expect(screen.getAllByText("-100.00 bps").length).toBeGreaterThan(0);
+    expect(screen.getByText("Quote matcher")).toBeInTheDocument();
+    expect(screen.getByTitle("polygon:AAPL:2026-07-15T13:00:00Z")).toBeInTheDocument();
   });
 
   it("shows realized pnl and exposes the kill switch", () => {

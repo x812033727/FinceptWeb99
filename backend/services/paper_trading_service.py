@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import math
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time, timedelta
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -85,6 +86,25 @@ def _buy_reservation(order: PaperOrder, remaining: float | None = None) -> float
     return qty * float(order.reservation_price) * (1 + float(order.fee_bps) / 10_000)
 
 
+def _day_expiry(market: str, submitted_at: datetime) -> datetime:
+    if market == "CRYPTO":
+        return datetime.combine(
+            submitted_at.astimezone(UTC).date() + timedelta(days=1), time(), UTC
+        )
+    timezone, close = (
+        (ZoneInfo("Asia/Taipei"), time(13, 30))
+        if market == "TW"
+        else (ZoneInfo("America/New_York"), time(16))
+    )
+    local = submitted_at.astimezone(timezone)
+    session_date = local.date()
+    if local.weekday() >= 5 or local.time() >= close:
+        session_date += timedelta(days=1)
+    while session_date.weekday() >= 5:
+        session_date += timedelta(days=1)
+    return datetime.combine(session_date, close, timezone).astimezone(UTC)
+
+
 async def submit_order(
     *,
     portfolio_id: str,
@@ -100,12 +120,14 @@ async def submit_order(
     idempotency_key: str,
     notes: str | None,
     db: AsyncSession,
+    time_in_force: str = "day",
 ) -> PaperOrder:
     await _owned_portfolio_locked(portfolio_id, user_id, db)
     normalized_symbol = symbol.strip().upper()
     normalized_market = market.upper()
     normalized_side = side.lower()
     normalized_type = order_type.lower()
+    normalized_tif = time_in_force.lower()
     if not normalized_symbol:
         raise ValueError("symbol is required")
     if normalized_market not in {"US", "TW", "CRYPTO"}:
@@ -114,6 +136,8 @@ async def submit_order(
         raise ValueError("side must be buy or sell")
     if normalized_type not in {"market", "limit"}:
         raise ValueError("order_type must be market or limit")
+    if normalized_tif not in {"day", "gtc"}:
+        raise ValueError("time_in_force must be day or gtc")
     qty = _finite_positive(quantity, "quantity")
     fee = float(fee_bps)
     if not math.isfinite(fee) or fee < 0 or fee > 10_000:
@@ -143,6 +167,7 @@ async def submit_order(
             float(existing.limit_price) if existing.limit_price else None,
             float(existing.reservation_price),
             float(existing.fee_bps),
+            existing.time_in_force,
         )
         requested = (
             normalized_symbol,
@@ -153,6 +178,7 @@ async def submit_order(
             float(limit_price) if limit_price is not None else None,
             reservation_price,
             fee,
+            normalized_tif,
         )
         if signature != requested:
             raise PaperTradingConflict("idempotency key was already used with different order data")
@@ -193,18 +219,25 @@ async def submit_order(
                 f"insufficient inventory: available {held - reserved:.6f}, required {qty:.6f}"
             )
 
+    submitted_at = datetime.now(UTC)
     order = PaperOrder(
         portfolio_id=UUID(portfolio_id),
         symbol=normalized_symbol,
         market=normalized_market,
         side=normalized_side,
         order_type=normalized_type,
+        time_in_force=normalized_tif,
         quantity=qty,
         limit_price=limit_price,
         reservation_price=reservation_price,
         fee_bps=fee,
         idempotency_key=idempotency_key,
         notes=notes,
+        created_at=submitted_at,
+        updated_at=submitted_at,
+        expires_at=_day_expiry(normalized_market, submitted_at)
+        if normalized_tif == "day"
+        else None,
     )
     db.add(order)
     await db.flush()

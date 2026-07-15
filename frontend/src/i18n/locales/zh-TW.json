@@ -879,6 +879,7 @@
     },
     "tabs": {
       "holdings": "持倉",
+      "paper": "模擬交易",
       "cash": "現金帳本",
       "transactions": "交易紀錄",
       "allocation": "配置",
@@ -886,6 +887,13 @@
       "risk": "風險",
       "attribution": "績效歸因",
       "rebalance": "再平衡"
+    },
+    "paper": {
+      "ticket": "模擬委託單", "subtitle": "依即時行情、投組現金與庫存模擬成交，不會將訂單送往券商。",
+      "symbol": "商品代號", "market": "市場", "side": "方向", "type": "委託類型", "quantity": "數量", "price": "價格", "limit_price": "限價", "reference_price": "參考價", "tif": "委託效期",
+      "buy": "買進", "sell": "賣出", "limit": "限價", "market_order": "市價", "submit": "送出委託", "failed": "目前無法完成模擬交易操作。",
+      "orders": "模擬委託", "empty": "尚無模擬委託。", "progress": "已成交／委託量", "status": "狀態", "actions": "操作", "match": "立即撮合", "cancel": "取消",
+      "status_pending": "等待中", "status_partially_filled": "部分成交", "status_filled": "已成交", "status_cancelled": "已取消", "status_expired": "已到期"
     },
     "cash": {
       "title": "多幣別現金帳本",

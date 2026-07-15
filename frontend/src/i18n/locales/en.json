@@ -879,6 +879,7 @@
     },
     "tabs": {
       "holdings": "Holdings",
+      "paper": "Paper Trading",
       "cash": "Cash Ledger",
       "transactions": "Transactions",
       "allocation": "Allocation",
@@ -886,6 +887,13 @@
       "risk": "Risk",
       "attribution": "Attribution",
       "rebalance": "Rebalance"
+    },
+    "paper": {
+      "ticket": "Paper order ticket", "subtitle": "Simulated execution uses live quotes, portfolio cash and inventory without sending an order to a broker.",
+      "symbol": "Symbol", "market": "Market", "side": "Side", "type": "Order type", "quantity": "Quantity", "price": "Price", "limit_price": "Limit price", "reference_price": "Reference price", "tif": "Time in force",
+      "buy": "Buy", "sell": "Sell", "limit": "Limit", "market_order": "Market", "submit": "Submit order", "failed": "The paper order action could not be completed.",
+      "orders": "Paper orders", "empty": "No paper orders yet.", "progress": "Filled / quantity", "status": "Status", "actions": "Actions", "match": "Match now", "cancel": "Cancel",
+      "status_pending": "Pending", "status_partially_filled": "Partially filled", "status_filled": "Filled", "status_cancelled": "Cancelled", "status_expired": "Expired"
     },
     "cash": {
       "title": "Multi-currency cash ledger",

@@ -4,9 +4,20 @@ import type {
   CashBalance,
   CashEntry,
   Portfolio,
+  PaperOrder,
+  PaperOrderCreate,
   PortfolioRisk,
   Transaction,
 } from "@/types/portfolio";
+
+function invalidatePaperAccount(qc: ReturnType<typeof useQueryClient>, portfolioId: string) {
+  return Promise.all([
+    qc.invalidateQueries({ queryKey: ["paper-orders", portfolioId] }),
+    qc.invalidateQueries({ queryKey: ["portfolio", portfolioId] }),
+    qc.invalidateQueries({ queryKey: ["portfolio-cash", portfolioId] }),
+    qc.invalidateQueries({ queryKey: ["portfolio-cash-entries", portfolioId] }),
+  ]);
+}
 
 export function usePortfolios() {
   return useQuery({
@@ -163,5 +174,45 @@ export function useReverseCashEntry(portfolioId: string) {
       qc.invalidateQueries({ queryKey: ["portfolio-cash-entries", portfolioId] }),
       qc.invalidateQueries({ queryKey: ["portfolio", portfolioId] }),
     ]),
+  });
+}
+
+export function usePaperOrders(portfolioId: string) {
+  return useQuery({
+    queryKey: ["paper-orders", portfolioId],
+    queryFn: () => api.get<PaperOrder[]>(`/portfolio/${portfolioId}/paper-orders`).then((r) => r.data),
+    enabled: !!portfolioId,
+    refetchInterval: 15_000,
+  });
+}
+
+export function useSubmitPaperOrder(portfolioId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: PaperOrderCreate) => api.post<PaperOrder>(
+      `/portfolio/${portfolioId}/paper-orders`,
+      { ...body, idempotency_key: `ui-order-${crypto.randomUUID()}` },
+    ).then((r) => r.data),
+    onSuccess: () => invalidatePaperAccount(qc, portfolioId),
+  });
+}
+
+export function useCancelPaperOrder(portfolioId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (orderId: string) => api.post<PaperOrder>(
+      `/portfolio/${portfolioId}/paper-orders/${orderId}/cancel`, {},
+    ).then((r) => r.data),
+    onSuccess: () => invalidatePaperAccount(qc, portfolioId),
+  });
+}
+
+export function useMatchPaperOrder(portfolioId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (orderId: string) => api.post(
+      `/portfolio/${portfolioId}/paper-orders/${orderId}/match`, {},
+    ).then((r) => r.data),
+    onSuccess: () => invalidatePaperAccount(qc, portfolioId),
   });
 }

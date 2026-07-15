@@ -38,6 +38,15 @@ export function isPushSupported(): boolean {
   );
 }
 
+async function persistPushSubscription(sub: PushSubscription): Promise<void> {
+  const json = sub.toJSON();
+  await api.post("/notifications/push-subscribe", {
+    endpoint: json.endpoint,
+    keys: json.keys,
+    user_agent: navigator.userAgent.slice(0, 255),
+  });
+}
+
 /** Current toggle state, cheap enough to run on Settings mount. */
 export async function getPushStatus(): Promise<PushStatus> {
   if (!isPushSupported()) return "unsupported";
@@ -75,12 +84,7 @@ export async function enablePush(): Promise<PushStatus> {
       applicationServerKey: urlBase64ToUint8Array(data.public_key),
     }));
 
-  const json = sub.toJSON();
-  await api.post("/notifications/push-subscribe", {
-    endpoint: json.endpoint,
-    keys: json.keys,
-    user_agent: navigator.userAgent.slice(0, 255),
-  });
+  await persistPushSubscription(sub);
   return "on";
 }
 
@@ -118,14 +122,35 @@ export async function unsubscribePushLocally(): Promise<void> {
   await sub?.unsubscribe();
 }
 
-/** Prevent a device push subscription from crossing user identities. */
-export function clearPushSubscriptionOnAuthChange() {
+/**
+ * Bind an existing browser subscription to the current authenticated user.
+ * Fail closed: if ownership cannot be synchronized, remove the local endpoint
+ * so notifications for a stale account cannot keep reaching this device.
+ */
+export async function syncExistingPushSubscription(): Promise<void> {
+  if (!isPushSupported()) return;
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.getSubscription();
+  if (!sub) return;
+  try {
+    await persistPushSubscription(sub);
+  } catch (error) {
+    await sub.unsubscribe().catch(() => undefined);
+    throw error;
+  }
+}
+
+/** Keep the device push endpoint aligned with authentication transitions. */
+export function syncPushSubscriptionOnAuthChange() {
   let userId = useAuthStore.getState().user?.id ?? null;
   return useAuthStore.subscribe((state) => {
     const nextUserId = state.user?.id ?? null;
-    if (userId !== null && nextUserId !== userId) {
-      void unsubscribePushLocally().catch(() => undefined);
-    }
+    if (nextUserId === userId) return;
     userId = nextUserId;
+    if (nextUserId === null) {
+      void unsubscribePushLocally().catch(() => undefined);
+    } else {
+      void syncExistingPushSubscription().catch(() => undefined);
+    }
   });
 }

@@ -16,11 +16,12 @@ const { apiMock } = vi.hoisted(() => ({
 vi.mock("@/lib/api", () => ({ default: apiMock }));
 
 import {
-  clearPushSubscriptionOnAuthChange,
   disablePush,
   enablePush,
   getPushStatus,
   isPushSupported,
+  syncExistingPushSubscription,
+  syncPushSubscriptionOnAuthChange,
   unsubscribePushLocally,
   urlBase64ToUint8Array,
 } from "./webPush";
@@ -204,7 +205,7 @@ describe("auth session boundary", () => {
     useAuthStore.getState().setAuth("token-a", {
       id: "user-a", email: "a@example.com", role: "viewer",
     });
-    const stop = clearPushSubscriptionOnAuthChange();
+    const stop = syncPushSubscriptionOnAuthChange();
 
     useAuthStore.getState().clearAuth();
 
@@ -213,34 +214,63 @@ describe("auth session boundary", () => {
     stop();
   });
 
-  it("unsubscribes when one authenticated account replaces another", async () => {
+  it("rebinds an existing subscription when one account replaces another", async () => {
     const sub = makeFakeSubscription();
     stubPushEnv({ subscription: sub });
     useAuthStore.getState().setAuth("token-a", {
       id: "user-a", email: "a@example.com", role: "viewer",
     });
-    const stop = clearPushSubscriptionOnAuthChange();
+    const stop = syncPushSubscriptionOnAuthChange();
 
     useAuthStore.getState().setAuth("token-b", {
       id: "user-b", email: "b@example.com", role: "viewer",
     });
 
-    await vi.waitFor(() => expect(sub.unsubscribe).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(apiMock.post).toHaveBeenCalledWith(
+      "/notifications/push-subscribe",
+      expect.objectContaining({ endpoint: "https://push.example.com/sub/1" }),
+    ));
+    expect(sub.unsubscribe).not.toHaveBeenCalled();
     stop();
   });
 
-  it("preserves push on initial session restore and same-user token rotation", async () => {
+  it("rebinds on initial session restore but not same-user token rotation", async () => {
     const sub = makeFakeSubscription();
     stubPushEnv({ subscription: sub });
-    const stop = clearPushSubscriptionOnAuthChange();
+    const stop = syncPushSubscriptionOnAuthChange();
 
     useAuthStore.getState().setAuth("token-a", {
       id: "user-a", email: "a@example.com", role: "viewer",
     });
+    await vi.waitFor(() => expect(apiMock.post).toHaveBeenCalledTimes(1));
     useAuthStore.getState().setToken("token-refreshed");
     await Promise.resolve();
 
     expect(sub.unsubscribe).not.toHaveBeenCalled();
+    expect(apiMock.post).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("fails closed when an existing subscription cannot be rebound", async () => {
+    const sub = makeFakeSubscription();
+    stubPushEnv({ subscription: sub });
+    apiMock.post.mockRejectedValue(new Error("network unavailable"));
+
+    await expect(syncExistingPushSubscription()).rejects.toThrow("network unavailable");
+
+    expect(sub.unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("does nothing on login when the browser has no subscription", async () => {
+    stubPushEnv({ subscription: null });
+    const stop = syncPushSubscriptionOnAuthChange();
+
+    useAuthStore.getState().setAuth("token-a", {
+      id: "user-a", email: "a@example.com", role: "viewer",
+    });
+    await Promise.resolve();
+
+    expect(apiMock.post).not.toHaveBeenCalled();
     stop();
   });
 

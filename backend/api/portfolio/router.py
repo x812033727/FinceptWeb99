@@ -30,6 +30,7 @@ from api.portfolio.schemas import (
     TransactionImportRequest,
     TransactionImportResponse,
     TransactionImportRollbackResponse,
+    TransactionPageResponse,
     TransactionResponse,
     TransactionUpdate,
 )
@@ -382,6 +383,59 @@ async def list_transactions(
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get(
+    "/{portfolio_id}/transactions/page",
+    response_model=TransactionPageResponse,
+)
+async def page_transactions(
+    portfolio_id: str,
+    user: CurrentUser,
+    db: DB,
+    limit: int = Query(default=100, ge=1, le=500),
+    cursor: str | None = Query(default=None, min_length=1, max_length=512),
+    symbol: str | None = Query(default=None, min_length=1, max_length=20),
+    market: Market | None = Query(default=None),
+    tx_type: TransactionType | None = Query(default=None),
+    date_from: _date | None = Query(default=None),
+    date_to: _date | None = Query(default=None),
+):
+    """Stable cursor page for transaction history and full exports."""
+    if symbol is not None:
+        symbol = symbol.strip()
+        if not symbol:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="symbol must not be blank",
+            )
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="date_from must be on or before date_to",
+        )
+    try:
+        before = svc.decode_transaction_cursor(cursor) if cursor else None
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        )
+    try:
+        rows = await svc.get_transactions(
+            portfolio_id, user["id"], db, limit=limit + 1,
+            symbol=symbol, market=market, tx_type=tx_type,
+            date_from=date_from, date_to=date_to, before=before,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    items = rows[:limit]
+    next_cursor = (
+        svc.encode_transaction_cursor(items[-1])
+        if len(rows) > limit else None
+    )
+    return {"items": items, "next_cursor": next_cursor}
 
 
 @router.get("/{portfolio_id}/snapshots", response_model=list[PortfolioSnapshotResponse])

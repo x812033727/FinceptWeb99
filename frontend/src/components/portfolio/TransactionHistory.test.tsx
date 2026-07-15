@@ -51,12 +51,12 @@ describe("TransactionHistory", () => {
 
   it("loads additional pages and exports the complete server history", async () => {
     const all = Array.from({ length: 101 }, (_, index) => transaction(index));
-    mock.onGet("/portfolio/portfolio-1/transactions", {
-      params: { limit: 101, offset: 0 },
-    }).reply(200, all);
-    mock.onGet("/portfolio/portfolio-1/transactions", {
-      params: { limit: 101, offset: 100 },
-    }).reply(200, all.slice(100));
+    mock.onGet("/portfolio/portfolio-1/transactions/page", {
+      params: { limit: 100 },
+    }).reply(200, { items: all.slice(0, 100), next_cursor: "cursor-100" });
+    mock.onGet("/portfolio/portfolio-1/transactions/page", {
+      params: { limit: 100, cursor: "cursor-100" },
+    }).reply(200, { items: all.slice(100), next_cursor: null });
     mocks.exportMutateAsync.mockResolvedValue(all);
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -82,15 +82,15 @@ describe("TransactionHistory", () => {
   it("applies server-side filters to the table and CSV export", async () => {
     const initial = transaction(0);
     const filtered = { ...transaction(1), symbol: "AAPL", tx_type: "sell" };
-    mock.onGet("/portfolio/portfolio-1/transactions", {
-      params: { limit: 101, offset: 0 },
-    }).reply(200, [initial]);
-    mock.onGet("/portfolio/portfolio-1/transactions", {
+    mock.onGet("/portfolio/portfolio-1/transactions/page", {
+      params: { limit: 100 },
+    }).reply(200, { items: [initial], next_cursor: null });
+    mock.onGet("/portfolio/portfolio-1/transactions/page", {
       params: {
-        limit: 101, offset: 0, symbol: "AAPL", market: "US", tx_type: "sell",
+        limit: 100, symbol: "AAPL", market: "US", tx_type: "sell",
         date_from: "2024-01-01", date_to: "2024-01-31",
       },
-    }).reply(200, [filtered]);
+    }).reply(200, { items: [filtered], next_cursor: null });
     mocks.exportMutateAsync.mockResolvedValue([filtered]);
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },

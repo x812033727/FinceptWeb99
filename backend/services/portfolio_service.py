@@ -8,14 +8,16 @@ Multi-currency rule:
   FX rate is cached 4h in Redis.
 """
 import asyncio
+import base64
+import binascii
 import hashlib
 import json
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cache.cache_ttls import (
@@ -41,6 +43,35 @@ from services.us_market_service import get_quote as us_quote
 logger = logging.getLogger(__name__)
 
 _FX_HARD_FALLBACK = 32.0   # only used on cold cache + FRED failure
+
+TransactionCursor = tuple[date, datetime, UUID]
+
+
+def encode_transaction_cursor(transaction: Transaction) -> str:
+    payload = json.dumps(
+        [
+            transaction.tx_date.isoformat(),
+            transaction.created_at.isoformat(),
+            str(transaction.id),
+        ],
+        separators=(",", ":"),
+    ).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def decode_transaction_cursor(cursor: str) -> TransactionCursor:
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(
+            cursor + "=" * (-len(cursor) % 4),
+        ).decode())
+        if (
+            not isinstance(payload, list) or len(payload) != 3
+            or not all(isinstance(value, str) for value in payload)
+        ):
+            raise ValueError
+        return date.fromisoformat(payload[0]), datetime.fromisoformat(payload[1]), UUID(payload[2])
+    except (ValueError, TypeError, binascii.Error, UnicodeDecodeError) as exc:
+        raise ValueError("Invalid transaction cursor") from exc
 
 
 # ── FX helpers ────────────────────────────────────────────────────
@@ -1063,6 +1094,7 @@ async def get_transactions(
     tx_type: TransactionType | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    before: TransactionCursor | None = None,
 ) -> list[Transaction]:
     portfolio = await get_portfolio(portfolio_id, user_id, db)
     if not portfolio:
@@ -1081,6 +1113,20 @@ async def get_transactions(
         filters.append(Transaction.tx_date >= date_from)
     if date_to:
         filters.append(Transaction.tx_date <= date_to)
+    if before:
+        before_date, before_created_at, before_id = before
+        filters.append(or_(
+            Transaction.tx_date < before_date,
+            and_(
+                Transaction.tx_date == before_date,
+                Transaction.created_at < before_created_at,
+            ),
+            and_(
+                Transaction.tx_date == before_date,
+                Transaction.created_at == before_created_at,
+                Transaction.id < before_id,
+            ),
+        ))
 
     rows = await db.scalars(
         select(Transaction)

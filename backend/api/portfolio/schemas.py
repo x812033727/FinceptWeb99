@@ -419,6 +419,11 @@ class TransactionResponse(BaseModel):
         return v.value if hasattr(v, "value") else str(v)
 
 
+class TransactionPageResponse(BaseModel):
+    items: list[TransactionResponse]
+    next_cursor: str | None = None
+
+
 class CashEntryCreate(BaseModel):
     currency: str = Field(..., min_length=3, max_length=3)
     amount: float = Field(..., gt=0, le=1_000_000_000_000)

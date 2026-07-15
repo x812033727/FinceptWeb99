@@ -43,8 +43,9 @@ export async function logout(): Promise<void> {
   useAuthStore.getState().clearAuth();
 }
 
-/** Attempt a silent refresh using the httpOnly cookie on app load. */
-export async function silentRefresh(): Promise<void> {
+let silentRefreshPromise: Promise<void> | null = null;
+
+async function refreshSession(): Promise<void> {
   try {
     const { data } = await api.post<{ access_token: string }>("/auth/refresh");
     useAuthStore.getState().setToken(data.access_token);
@@ -54,4 +55,22 @@ export async function silentRefresh(): Promise<void> {
     // No valid refresh cookie — user must log in
     useAuthStore.getState().clearAuth();
   }
+}
+
+/**
+ * Attempt a silent refresh using the httpOnly cookie on app load.
+ *
+ * React StrictMode intentionally re-runs effects in development. Refresh
+ * tokens are rotated by the backend, so concurrent boot requests would race:
+ * one succeeds while the other reuses the revoked cookie and clears the
+ * newly-established session. Share the in-flight operation so every caller
+ * observes the same result and only one rotating request reaches the server.
+ */
+export function silentRefresh(): Promise<void> {
+  if (silentRefreshPromise) return silentRefreshPromise;
+
+  silentRefreshPromise = refreshSession().finally(() => {
+    silentRefreshPromise = null;
+  });
+  return silentRefreshPromise;
 }

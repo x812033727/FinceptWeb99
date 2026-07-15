@@ -54,6 +54,42 @@ export interface CashEntry {
   created_at: string;
 }
 
+export interface PaperOrder {
+  id: string;
+  portfolio_id: string;
+  symbol: string;
+  market: "US" | "TW" | "CRYPTO";
+  side: "buy" | "sell";
+  order_type: "market" | "limit";
+  time_in_force: "day" | "gtc";
+  quantity: number;
+  filled_quantity: number;
+  limit_price: number | null;
+  reservation_price: number;
+  average_fill_price: number | null;
+  fee_bps: number;
+  status: "pending" | "partially_filled" | "filled" | "cancelled" | "expired";
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  cancelled_at: string | null;
+  expires_at: string | null;
+  expired_at: string | null;
+}
+
+export interface PaperOrderCreate {
+  symbol: string;
+  market: PaperOrder["market"];
+  side: PaperOrder["side"];
+  order_type: PaperOrder["order_type"];
+  time_in_force: PaperOrder["time_in_force"];
+  quantity: number;
+  limit_price?: number;
+  reference_price?: number;
+  fee_bps: number;
+  notes?: string;
+}
+
 // ── Risk dashboard (feature C1) — GET /portfolio/{id}/risk ────────
 
 export interface RiskVaREntry {

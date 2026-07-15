@@ -23,6 +23,7 @@ import StressTestPanel from "@/components/portfolio/StressTestPanel";
 import AttributionPanel from "@/components/portfolio/AttributionPanel";
 import { TransactionHistory } from "@/components/portfolio/TransactionHistory";
 import CashLedgerPanel from "@/components/portfolio/CashLedgerPanel";
+import PaperTradingPanel from "@/components/portfolio/PaperTradingPanel";
 import { exportCSV } from "@/components/portfolio/_shared";
 
 export default function PortfolioPage() {
@@ -136,7 +137,7 @@ function PortfolioDetail({
   optimiseResult, optimisePending, onRunOptimise,
 }: any) {
   const { t } = useTranslation();
-  const [detailTab, setDetailTab] = useState<"overview" | "cash" | "attribution" | "risk" | "stress" | "rebalance" | "transactions">("overview");
+  const [detailTab, setDetailTab] = useState<"overview" | "paper" | "cash" | "attribution" | "risk" | "stress" | "rebalance" | "transactions">("overview");
 
   if (!detail) return <div className="text-muted-foreground text-sm">{isFetching ? t("common.loading") : ""}</div>;
 
@@ -187,7 +188,7 @@ function PortfolioDetail({
 
       {/* Tab selector */}
       <div className="flex max-w-full flex-wrap gap-1 rounded-lg bg-secondary/30 p-1 sm:w-fit">
-        {(["overview", "cash", "attribution", "risk", "stress", "rebalance", "transactions"] as const).map((tab) => (
+        {(["overview", "paper", "cash", "attribution", "risk", "stress", "rebalance", "transactions"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setDetailTab(tab)}
@@ -199,6 +200,8 @@ function PortfolioDetail({
           >
             {tab === "overview"
               ? t("portfolio.tabs.holdings")
+              : tab === "paper"
+                ? t("portfolio.tabs.paper")
               : tab === "cash"
                 ? t("portfolio.tabs.cash")
               : tab === "attribution"
@@ -326,6 +329,8 @@ function PortfolioDetail({
       {detailTab === "rebalance" && (
         <RebalancePanel portfolioId={portfolioId} />
       )}
+
+      {detailTab === "paper" && <PaperTradingPanel portfolioId={portfolioId} />}
 
       {detailTab === "cash" && (
         <CashLedgerPanel portfolioId={portfolioId} defaultCurrency={detail.currency} />

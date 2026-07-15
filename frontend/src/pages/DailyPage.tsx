@@ -187,7 +187,12 @@ function OutcomeSummary({ run }: { run: Result }) {
   const positive = run.verdict === "win" || run.verdict === "big_win";
   return <section className={`mt-5 rounded-xl border p-4 ${run.verdict ? (positive ? "border-success/30 bg-success/10" : "border-amber-500/30 bg-amber-500/10") : "border-slate-800 bg-slate-950/50"}`}>
     <div className="flex flex-wrap items-center justify-between gap-2"><div><h3 className="font-semibold">本場答案</h3><p className="mt-1 text-lg font-bold text-white">{symbols.length ? symbols.join("、") : "本場沒有推薦標的"}</p></div><div className="text-right"><div className="text-xs text-slate-500">五日績效</div><span className={`mt-1 inline-block rounded-full px-3 py-1 text-sm font-bold ${positive ? "bg-success/20 text-success" : "bg-slate-800 text-slate-300"}`}>{run.verdict ? verdictLabel[run.verdict] ?? run.verdict : run.verify_after_date ? `預計 ${new Date(`${run.verify_after_date}T00:00:00+08:00`).toLocaleDateString("zh-TW", { month: "numeric", day: "numeric" })} 對答案` : "等待驗證"}</span></div></div>
-    {!!rows.length && <div className="mt-3 grid gap-2 sm:grid-cols-3">{rows.map((row) => <div key={row.symbol} className="rounded-lg bg-slate-950/60 p-3 text-sm"><b>{row.symbol}</b><div className="mt-1 text-slate-400">{row.open != null ? row.open.toLocaleString() : "—"} → {row.close != null ? row.close.toLocaleString() : "—"}</div><div className={row.change == null ? "text-slate-500" : row.change >= 0 ? "text-success" : "text-rose-400"}>{row.change == null ? "尚無完整價格" : `${row.change >= 0 ? "+" : ""}${row.change.toFixed(2)}%`}</div></div>)}</div>}
+    {!!rows.length && <div className="mt-3 space-y-2">{rows.map((row) => {
+      const changes = (run.daily_close_prices?.[row.symbol] ?? []).map((close) => row.open && close != null ? (close / row.open - 1) * 100 : null);
+      const observed = changes.filter((value): value is number => value != null);
+      const interim = observed.some((value) => value <= -5) ? "大敗" : observed.some((value) => value >= 5) ? "勝" : observed.length ? "敗" : "等待";
+      return <div key={row.symbol} className="rounded-lg bg-slate-950/60 p-3 text-sm"><b>{row.symbol} {run.verdict ? verdictLabel[run.verdict] ?? run.verdict : interim}</b><div className="mt-1 text-slate-300">{Array.from({ length: 5 }, (_, index) => { const value = changes[index]; return value == null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`; }).join("／")}</div></div>;
+    })}</div>}
     <p className="mt-3 text-sm leading-6 text-slate-400">{run.verdict_reason || "完成五個交易日後，系統會在這裡顯示驗證結果。"}</p>
   </section>;
 }

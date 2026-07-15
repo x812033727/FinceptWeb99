@@ -295,6 +295,25 @@ async def test_transaction_import_unknown_portfolio_returns_404(client: AsyncCli
     assert response.status_code == 404
     assert response.json()["detail"] == "Portfolio not found"
 
+    imports = await client.get(
+        "/api/portfolio/00000000-0000-0000-0000-000000000000/transaction-imports",
+        headers=_auth(token),
+    )
+    assert imports.status_code == 404
+    assert imports.json()["detail"] == "Portfolio not found"
+
+    portfolio = await client.post(
+        "/api/portfolio", json={"name": "Missing import", "currency": "USD"},
+        headers=_auth(token),
+    )
+    rollback = await client.delete(
+        f"/api/portfolio/{portfolio.json()['id']}/transaction-imports/"
+        "00000000-0000-0000-0000-000000000000",
+        headers=_auth(token),
+    )
+    assert rollback.status_code == 404
+    assert rollback.json()["detail"] == "Transaction import not found"
+
 
 @pytest.mark.asyncio
 async def test_list_transactions_empty(client: AsyncClient):

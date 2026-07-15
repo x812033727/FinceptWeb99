@@ -326,6 +326,11 @@ async def fill_order(
     idempotency_key: str,
     filled_at: datetime | None,
     db: AsyncSession,
+    quote_price: float | None = None,
+    slippage_bps: float | None = None,
+    liquidity_quantity: float | None = None,
+    quote_key: str | None = None,
+    execution_source: str = "manual",
 ) -> PaperFill:
     order = await get_order(
         portfolio_id=portfolio_id,
@@ -348,6 +353,21 @@ async def fill_order(
         raise PaperTradingConflict(f"order is already {order.status}")
     qty = _finite_positive(quantity, "quantity")
     fill_price = _finite_positive(price, "price")
+    normalized_quote_price = (
+        _finite_positive(quote_price, "quote_price") if quote_price is not None else None
+    )
+    normalized_liquidity = (
+        _finite_positive(liquidity_quantity, "liquidity_quantity")
+        if liquidity_quantity is not None
+        else None
+    )
+    normalized_slippage = float(slippage_bps) if slippage_bps is not None else None
+    if normalized_slippage is not None and (
+        not math.isfinite(normalized_slippage) or normalized_slippage < 0
+    ):
+        raise ValueError("slippage_bps must be finite and nonnegative")
+    if execution_source not in {"manual", "quote"}:
+        raise ValueError("execution_source must be manual or quote")
     remaining = _remaining(order)
     if qty > remaining + 1e-6:
         raise PaperTradingConflict(f"fill quantity exceeds remaining quantity {remaining:.6f}")
@@ -438,6 +458,11 @@ async def fill_order(
         quantity=qty,
         price=fill_price,
         fee=fee_amount,
+        quote_price=normalized_quote_price,
+        slippage_bps=normalized_slippage,
+        liquidity_quantity=normalized_liquidity,
+        quote_key=quote_key,
+        execution_source=execution_source,
         idempotency_key=idempotency_key,
         filled_at=execution_time,
     )

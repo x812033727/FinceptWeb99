@@ -112,6 +112,9 @@ async def test_buy_order_is_idempotent_reserves_cash_and_supports_partial_fill_c
     assert fill.status_code == duplicate_fill.status_code == 201
     assert fill.json()["id"] == duplicate_fill.json()["id"]
     assert fill.json()["fee"] == pytest.approx(3.96)
+    assert fill.json()["execution_source"] == "manual"
+    assert fill.json()["quote_price"] is None
+    assert fill.json()["slippage_bps"] is None
     fills = (await client.get(f"{endpoint}/{order_id}/fills", headers=headers)).json()
     assert [row["id"] for row in fills] == [fill.json()["id"]]
 

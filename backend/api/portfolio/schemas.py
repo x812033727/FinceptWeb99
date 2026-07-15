@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -40,6 +40,26 @@ class TransactionCreate(BaseModel):
     @classmethod
     def lower_tx_type(cls, v: str) -> str:
         return v.lower()
+
+
+class TransactionImportRequest(BaseModel):
+    """Broker-neutral transaction rows parsed from a CSV by the client."""
+
+    rows: list[dict[str, Any]] = Field(..., min_length=1, max_length=500)
+    dry_run: bool = True
+
+
+class TransactionImportError(BaseModel):
+    row: int
+    field: str | None = None
+    message: str
+
+
+class TransactionImportResponse(BaseModel):
+    valid: bool
+    valid_count: int
+    imported_count: int
+    errors: list[TransactionImportError] = Field(default_factory=list)
 
 
 class PortfolioUpdate(BaseModel):

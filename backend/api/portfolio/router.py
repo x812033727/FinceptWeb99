@@ -26,6 +26,8 @@ from api.portfolio.schemas import (
     StressTestRequest,
     StressTestResponse,
     TransactionCreate,
+    TransactionImportRequest,
+    TransactionImportResponse,
     TransactionResponse,
     TransactionUpdate,
 )
@@ -121,6 +123,32 @@ async def add_transaction(request: Request, portfolio_id: str, body: Transaction
     except ValueError as e:
         code = 404 if "not found" in str(e).lower() else 400
         raise HTTPException(status_code=code, detail=str(e))
+
+
+@router.post(
+    "/{portfolio_id}/transactions/import",
+    response_model=TransactionImportResponse,
+)
+@limiter.limit("10/minute")
+async def import_transactions(
+    request: Request,
+    portfolio_id: str,
+    body: TransactionImportRequest,
+    user: CurrentUser,
+    db: DB,
+):
+    """Validate up to 500 CSV rows, then atomically import a clean batch."""
+    try:
+        return await svc.import_transactions(
+            portfolio_id=portfolio_id,
+            user_id=user["id"],
+            rows=body.rows,
+            dry_run=body.dry_run,
+            db=db,
+        )
+    except ValueError as exc:
+        code = 404 if "not found" in str(exc).lower() else 400
+        raise HTTPException(status_code=code, detail=str(exc))
 
 
 @router.post("/{portfolio_id}/optimise", response_model=OptimiseResponse)

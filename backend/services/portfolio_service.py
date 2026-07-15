@@ -288,6 +288,139 @@ async def add_transaction(
     return tx
 
 
+async def import_transactions(
+    *,
+    portfolio_id: str,
+    user_id: str,
+    rows: list[dict[str, Any]],
+    dry_run: bool,
+    db: AsyncSession,
+) -> dict[str, Any]:
+    """Validate a broker-neutral batch before writing any transaction.
+
+    Structural failures and chronological oversells are returned with the
+    one-based CSV row number (header is row 1). A commit is attempted only
+    when the complete batch is clean, so the request transaction stays
+    all-or-nothing.
+    """
+    from pydantic import ValidationError
+    from api.portfolio.schemas import TransactionCreate
+
+    portfolio = await get_portfolio(portfolio_id, user_id, db)
+    if not portfolio:
+        raise ValueError("Portfolio not found")
+
+    parsed: list[tuple[int, TransactionCreate]] = []
+    errors: list[dict[str, Any]] = []
+    for index, raw in enumerate(rows, start=2):
+        try:
+            parsed.append((index, TransactionCreate.model_validate(raw)))
+        except ValidationError as exc:
+            for issue in exc.errors(include_url=False):
+                location = issue.get("loc", ())
+                errors.append({
+                    "row": index,
+                    "field": str(location[0]) if location else None,
+                    "message": issue["msg"],
+                })
+
+    # Replay existing and candidate trades chronologically. Existing trades
+    # precede imported rows on the same date; imported rows retain CSV order.
+    existing = list((await db.scalars(
+        select(Transaction)
+        .where(Transaction.portfolio_id == UUID(portfolio_id))
+        .order_by(Transaction.tx_date, Transaction.created_at, Transaction.id)
+    )).all())
+    ledger: dict[tuple[str, str], float] = {}
+    timeline: list[tuple[date, int, int, str, str, str, float, int | None]] = []
+    for order, tx in enumerate(existing):
+        timeline.append((
+            tx.tx_date, 0, order, tx.symbol, tx.market.value,
+            tx.tx_type.value, float(tx.quantity), None,
+        ))
+    for order, (row_number, tx) in enumerate(parsed):
+        timeline.append((
+            tx.tx_date, 1, order, tx.symbol.upper(), tx.market.upper(),
+            tx.tx_type.lower(), tx.quantity, row_number,
+        ))
+    rejected_rows: set[int] = set()
+    for _, _, _, symbol, market, tx_type, quantity, row_number in sorted(
+        timeline, key=lambda item: item[:3],
+    ):
+        key = (symbol, market)
+        balance = ledger.get(key, 0.0)
+        if tx_type == "buy":
+            ledger[key] = balance + quantity
+        elif tx_type == "sell":
+            if balance - quantity < -1e-9:
+                if row_number is not None and row_number not in rejected_rows:
+                    errors.append({
+                        "row": row_number,
+                        "field": "quantity",
+                        "message": "Sell quantity exceeds available shares at transaction date",
+                    })
+                    rejected_rows.add(row_number)
+                continue
+            ledger[key] = balance - quantity
+
+    valid_count = len(parsed) - len(rejected_rows)
+    if errors or dry_run:
+        return {
+            "valid": not errors,
+            "valid_count": valid_count if not errors else max(0, valid_count),
+            "imported_count": 0,
+            "errors": errors,
+        }
+
+    # Write the validated batch directly, then rebuild each affected holding
+    # once. Calling add_transaction for every row would repeatedly re-query
+    # ownership and replay the same growing history (quadratic at the 500-row
+    # limit). FX lookups are shared by market/date within this import.
+    from models.portfolio import Market as MarketEnum
+    from services.portfolio_cash_service import replace_transaction_settlement
+
+    fx_cache: dict[tuple[str, date], float] = {}
+    transactions: list[Transaction] = []
+    affected: set[tuple[str, str]] = set()
+    for _, item in sorted(parsed, key=lambda entry: (entry[1].tx_date, entry[0])):
+        market = item.market.upper()
+        fx_rate = item.fx_rate
+        if fx_rate is None or fx_rate == 0:
+            cache_key = (market, item.tx_date)
+            if cache_key not in fx_cache:
+                fx_cache[cache_key] = await get_default_fx_rate(
+                    market, portfolio.currency, item.tx_date,
+                )
+            fx_rate = fx_cache[cache_key]
+        transaction = Transaction(
+            portfolio_id=UUID(portfolio_id),
+            symbol=item.symbol.upper(),
+            market=MarketEnum[market],
+            tx_type=TransactionType[item.tx_type.lower()],
+            quantity=item.quantity,
+            price=item.price,
+            fx_rate=fx_rate,
+            tx_date=item.tx_date,
+            notes=item.notes,
+        )
+        db.add(transaction)
+        transactions.append(transaction)
+        affected.add((transaction.symbol, market))
+    await db.flush()
+    for transaction in transactions:
+        await replace_transaction_settlement(
+            transaction=transaction, db=db, reason="csv_import",
+        )
+    for symbol, market in affected:
+        await _rebuild_holding(portfolio_id, symbol, market, db)
+    return {
+        "valid": True,
+        "valid_count": len(parsed),
+        "imported_count": len(parsed),
+        "errors": [],
+    }
+
+
 async def update_transaction(
     portfolio_id: str,
     tx_id: str,

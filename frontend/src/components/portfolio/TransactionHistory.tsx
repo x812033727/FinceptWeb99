@@ -7,10 +7,12 @@ import { EditTransactionModal } from "./EditTransactionModal";
 import { exportCSV } from "./_shared";
 import type { TransactionRow } from "./_shared";
 import { DataTable, type DataTableColumn } from "../ui/table";
+import { ImportTransactionsDialog } from "./ImportTransactionsDialog";
 
 export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState<TransactionRow | null>(null);
+  const [importing, setImporting] = useState(false);
   const deleteTx = useDeleteTransaction(portfolioId);
   const { data: txns = [], isLoading } = useQuery<TransactionRow[]>({
     queryKey: ["portfolio-transactions", portfolioId],
@@ -140,13 +142,18 @@ export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
     <div className="bg-card border border-border rounded-lg p-5 space-y-3">
       <div className="flex items-center justify-between">
         <h2 className="text-foreground font-medium">{t("portfolio.transactions.title")}</h2>
-        <button
-          onClick={handleExport}
-          disabled={!txns.length}
-          className="text-xs text-primary hover:underline disabled:opacity-40"
-        >
-          CSV
-        </button>
+        <div className="flex gap-3">
+          <button onClick={() => setImporting(true)} className="text-xs text-primary hover:underline">
+            {t("portfolio.transactions.import.action")}
+          </button>
+          <button
+            onClick={handleExport}
+            disabled={!txns.length}
+            className="text-xs text-primary hover:underline disabled:opacity-40"
+          >
+            {t("portfolio.transactions.export")}
+          </button>
+        </div>
       </div>
 
       {isLoading && <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>}
@@ -169,6 +176,12 @@ export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
           portfolioId={portfolioId}
           tx={editing}
           onClose={() => setEditing(null)}
+        />
+      )}
+      {importing && (
+        <ImportTransactionsDialog
+          portfolioId={portfolioId}
+          onClose={() => setImporting(false)}
         />
       )}
     </div>

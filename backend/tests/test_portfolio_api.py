@@ -111,6 +111,100 @@ async def test_add_transaction(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_transaction_import_previews_then_commits_clean_batch(client: AsyncClient):
+    token = await _register_and_login(client, "pf_import@test.com")
+    cr = await client.post(
+        "/api/portfolio", json={"name": "Imported", "currency": "USD"},
+        headers=_auth(token),
+    )
+    pid = cr.json()["id"]
+    # Use the same broker-neutral columns emitted by the frontend exporter.
+    rows = [
+        {"tx_date": "2024-01-02", "symbol": "aapl", "market": "us", "tx_type": "buy",
+         "quantity": 10, "price": 100, "fx_rate": 1, "notes": "opening"},
+        {"tx_date": "2024-01-03", "symbol": "AAPL", "market": "US", "tx_type": "sell",
+         "quantity": 4, "price": 110, "fx_rate": 1},
+    ]
+
+    preview = await client.post(
+        f"/api/portfolio/{pid}/transactions/import",
+        json={"rows": rows, "dry_run": True}, headers=_auth(token),
+    )
+    assert preview.status_code == 200
+    assert preview.json() == {
+        "valid": True, "valid_count": 2, "imported_count": 0, "errors": [],
+    }
+    assert (await client.get(
+        f"/api/portfolio/{pid}/transactions", headers=_auth(token),
+    )).json() == []
+
+    committed = await client.post(
+        f"/api/portfolio/{pid}/transactions/import",
+        json={"rows": rows, "dry_run": False}, headers=_auth(token),
+    )
+    assert committed.status_code == 200
+    assert committed.json()["imported_count"] == 2
+    transactions = (await client.get(
+        f"/api/portfolio/{pid}/transactions", headers=_auth(token),
+    )).json()
+    assert len(transactions) == 2
+    detail = (await client.get(f"/api/portfolio/{pid}", headers=_auth(token))).json()
+    assert detail["holdings"][0]["quantity"] == 6
+
+
+@pytest.mark.asyncio
+async def test_transaction_import_reports_rows_and_writes_nothing(client: AsyncClient):
+    token = await _register_and_login(client, "pf_import_invalid@test.com")
+    cr = await client.post(
+        "/api/portfolio", json={"name": "Invalid import", "currency": "USD"},
+        headers=_auth(token),
+    )
+    pid = cr.json()["id"]
+    response = await client.post(
+        f"/api/portfolio/{pid}/transactions/import",
+        json={
+            "dry_run": False,
+            "rows": [
+                {"tx_date": "2024-01-02", "symbol": "AAPL", "market": "US",
+                 "tx_type": "sell", "quantity": 1, "price": 100},
+                {"tx_date": "not-a-date", "symbol": "BAD!", "market": "EU",
+                 "tx_type": "buy", "quantity": 0, "price": -1},
+            ],
+        },
+        headers=_auth(token),
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["valid"] is False
+    assert {error["row"] for error in result["errors"]} == {2, 3}
+    assert any(
+        error["row"] == 2 and error["field"] == "quantity"
+        for error in result["errors"]
+    )
+    assert (await client.get(
+        f"/api/portfolio/{pid}/transactions", headers=_auth(token),
+    )).json() == []
+
+
+@pytest.mark.asyncio
+async def test_transaction_import_unknown_portfolio_returns_404(client: AsyncClient):
+    token = await _register_and_login(client, "pf_import_missing@test.com")
+    response = await client.post(
+        "/api/portfolio/00000000-0000-0000-0000-000000000000/transactions/import",
+        json={
+            "dry_run": True,
+            "rows": [{
+                "tx_date": "2024-01-02", "symbol": "AAPL", "market": "US",
+                "tx_type": "buy", "quantity": 1, "price": 100,
+            }],
+        },
+        headers=_auth(token),
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Portfolio not found"
+
+
+@pytest.mark.asyncio
 async def test_list_transactions_empty(client: AsyncClient):
     token = await _register_and_login(client, "pf_txlist_empty@test.com")
     cr = await client.post("/api/portfolio", json={"name": "EmptyTx", "currency": "USD"}, headers=_auth(token))

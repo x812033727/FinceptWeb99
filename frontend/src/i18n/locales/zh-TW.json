@@ -1075,6 +1075,8 @@
         "view_details": "查看明細",
         "hide_details": "收合明細",
         "no_details": "此批次沒有可用的交易連結明細。",
+        "export_batch": "下載 CSV",
+        "preparing_export": "準備中…",
         "complete": "來源連結完整（{{linked}}/{{total}}）",
         "incomplete": "來源連結不完整（{{linked}}/{{total}}），無法安全復原此批次。",
         "rollback": "復原批次",

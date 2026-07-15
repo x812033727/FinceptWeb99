@@ -141,15 +141,26 @@ export interface TransactionImportTransaction {
   created_at: string;
 }
 
+function fetchTransactionImportTransactions(portfolioId: string, importId: string) {
+  return api.get<TransactionImportTransaction[]>(
+    `/portfolio/${portfolioId}/transaction-imports/${importId}/transactions`,
+  ).then((response) => response.data);
+}
+
 export function useTransactionImportTransactions(
   portfolioId: string, importId: string | null,
 ) {
   return useQuery({
     queryKey: ["portfolio-transaction-import", portfolioId, importId],
-    queryFn: () => api.get<TransactionImportTransaction[]>(
-      `/portfolio/${portfolioId}/transaction-imports/${importId}/transactions`,
-    ).then((response) => response.data),
+    queryFn: () => fetchTransactionImportTransactions(portfolioId, importId!),
     enabled: Boolean(importId),
+  });
+}
+
+export function useExportTransactionImport(portfolioId: string) {
+  return useMutation({
+    mutationFn: (importId: string) =>
+      fetchTransactionImportTransactions(portfolioId, importId),
   });
 }
 

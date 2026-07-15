@@ -60,7 +60,7 @@ FinceptWeb/
 │   │   ├── us/           # Polygon → yfinance → Stooq → Finnhub；FRED
 │   │   ├── tw/           # TWSE → FinMind → MOPS 瀑布
 │   │   └── crypto/       # Kraken REST / WebSocket 與 Top 20 universe
-│   ├── db/               # Alembic 0001-0087、引擎、seed
+│   ├── db/               # Alembic 0001-0088、引擎、seed
 │   ├── middleware/        # Prometheus metrics 中介層
 │   ├── models/           # SQLAlchemy ORM：User、Portfolio、Holding 等
 │   ├── services/         # 業務邏輯（快取、瀑布、LLM routing）
@@ -512,6 +512,11 @@ POST /api/portfolio/{id}/cash-entries/{entry_id}/reverse # 以反向分錄沖銷
 GET  /api/portfolio/{id}/snapshots   # 每日持倉、現金與估值品質快照
 GET  /api/portfolio/{id}/performance # 績效快照（?days=90）
 POST /api/portfolio/{id}/optimise    # 均值-變異數最佳化（需 analyst 角色）
+POST /api/portfolio/{id}/paper-orders # 冪等建立模擬市價／限價單
+GET  /api/portfolio/{id}/paper-orders # 訂單與狀態查詢
+POST /api/portfolio/{id}/paper-orders/{order_id}/fills # 寫入模擬部分成交
+GET  /api/portfolio/{id}/paper-orders/{order_id}/fills # 不可變成交明細
+POST /api/portfolio/{id}/paper-orders/{order_id}/cancel # 取消未成交餘量
 ```
 
 Migration `0086` 新增多幣別 append-only 現金帳本。台股交易以 TWD、美股／加密交易以
@@ -525,6 +530,14 @@ USD 自動產生原生幣別結算；修改交易會先沖銷舊結算再追加�
 `legacy_total_only`，不偽造不存在的歷史成分。投組頁面的「現金帳本」可新增現金異動、
 查看負現金警示並以反向分錄更正；因子再平衡會直接使用帳本中的實際 TWD 現金，USD
 等外幣預設凍結，不暗中換匯，另填的現金只作假設情境並明確標記。
+
+Migration `0088` 新增 paper trading 訂單狀態機。送單以 portfolio-scoped
+idempotency key 防止重複建立，買單先保留原生幣別資金（含預估費用），賣單先保留可用
+庫存；支援 pending、partially_filled、filled、cancelled、限價保護與多次部分成交。
+每筆 fill 原子地建立既有交易、持倉與 append-only 現金／費用分錄，因此投組績效、快照
+與歸因會直接反映模擬成交；fill 產生的交易不可再由一般交易 API 修改或刪除。現階段
+fills endpoint 是測試／模擬執行入口，不代表券商成交回報；行情驅動撮合與交易時段規則
+列入下一階段。
 
 ### 分析（需 analyst 角色）
 
@@ -648,7 +661,8 @@ POST /api/system/web-vital           # Core Web Vitals → Prometheus
 | ✅ **完成** | 台股三表深度分析（XBRL 損益／資產負債／現金流、TTM、DuPont、現金含金量、同比訊號與資料完整度）|
 | ✅ **完成** | 台股可解釋多因子研究（六因子、point-in-time 財報、受限 walk-forward、模型治理，以及風險／產業／單檔／換手／流動性受限投組）|
 | ✅ **完成** | 有效日期台股商品主檔、債券 ETF 稅則、人工覆寫、因子母體與再平衡共用規則 |
-| 🔄 **規劃中** | 接入 TWSE／TPEx 完整商品分類檔與下市生命週期、券商成交回報／paper trading、公司行動成本基礎與實際財報公告時間 |
+| ✅ **完成** | Paper trading foundation（冪等訂單、資金／庫存保留、部分成交、取消、限價保護、現金帳本整合）|
+| 🔄 **規劃中** | 行情驅動 paper matching、交易時段／TIF、券商成交回報、公司行動成本基礎與實際財報公告時間 |
 
 ---
 

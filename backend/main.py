@@ -29,6 +29,7 @@ from api.discussion.router import router as discussion_router
 from api.global_market.router import router as global_router
 from api.notifications.router import router as notifications_router
 from api.portfolio.router import router as portfolio_router
+from api.paper_trading import router as paper_trading_router
 from api.public_daily import router as public_daily_router
 from api.research.router import router as research_router
 from api.system.router import router as system_router
@@ -314,6 +315,7 @@ app.include_router(crypto_router, prefix="/api/crypto", tags=["Crypto Market"])
 app.include_router(charts_router, prefix="/api/charts/drawings", tags=["Chart Drawings"])
 app.include_router(ws_router)
 app.include_router(portfolio_router, prefix="/api/portfolio", tags=["Portfolio"])
+app.include_router(paper_trading_router, prefix="/api/portfolio", tags=["Paper Trading"])
 app.include_router(research_router, prefix="/api/research", tags=["Research"])
 app.include_router(analytics_router, prefix="/api/analytics", tags=["Analytics"])
 app.include_router(ai_router, prefix="/api/ai", tags=["AI Agents"])

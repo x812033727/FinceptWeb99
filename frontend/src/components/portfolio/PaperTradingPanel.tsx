@@ -4,6 +4,7 @@ import {
   useCancelPaperOrder,
   useMatchPaperOrder,
   usePaperOrders,
+  usePaperPerformance,
   usePaperRiskPolicy,
   useSubmitPaperOrder,
   useUpdatePaperRiskPolicy,
@@ -23,6 +24,67 @@ type RiskField =
   | "max_open_orders"
   | "max_symbol_concentration_pct";
 type RiskForm = Record<RiskField, string>;
+
+function pnl(value: number | null, currency: string): string {
+  if (value == null) return "—";
+  return `${value > 0 ? "+" : ""}${value.toFixed(2)} ${currency}`;
+}
+
+function PaperPerformancePanel({ portfolioId }: { portfolioId: string }) {
+  const { t } = useTranslation();
+  const performance = usePaperPerformance(portfolioId);
+  if (performance.isLoading) {
+    return <section className="rounded-lg border border-border bg-card p-5 text-sm text-muted-foreground">{t("common.loading")}</section>;
+  }
+  if (performance.error) {
+    return <section role="alert" className="rounded-lg border border-border bg-card p-5 text-sm text-negative">{t("portfolio.paper.performance_failed")}</section>;
+  }
+  const data = performance.data;
+  return (
+    <section className="rounded-lg border border-border bg-card p-5 shadow-highlight">
+      <h2 className="font-medium text-foreground">{t("portfolio.paper.performance_title")}</h2>
+      <p className="mt-1 text-xs text-muted-foreground">{t("portfolio.paper.performance_subtitle")}</p>
+      {data?.truncated && <p className="mt-2 text-xs text-warning">{t("portfolio.paper.performance_truncated", { shown: data.window_fill_count, total: data.total_fill_count })}</p>}
+      {!data?.total_fill_count ? <p className="mt-4 text-sm text-muted-foreground">{t("portfolio.paper.performance_empty")}</p> : (
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          {data.summaries.map((summary) => {
+            const points = data.curve.filter((point) => point.currency === summary.currency);
+            const values = points.map((point) => point.cumulative_realized_pnl);
+            const high = Math.max(0, ...values);
+            const low = Math.min(0, ...values);
+            const span = high - low || 1;
+            const polyline = points.map((point, index) => {
+              const x = points.length === 1 ? 50 : (index / (points.length - 1)) * 100;
+              const y = 36 - ((point.cumulative_realized_pnl - low) / span) * 32;
+              return `${x},${y}`;
+            }).join(" ");
+            const zeroY = 36 - ((0 - low) / span) * 32;
+            return (
+              <article key={summary.currency} className="rounded-md border border-border p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div><p className="text-xs text-muted-foreground">{summary.currency}</p><p className={`text-xl font-semibold ${summary.total_realized_pnl >= 0 ? "text-positive" : "text-negative"}`}>{pnl(summary.total_realized_pnl, summary.currency)}</p></div>
+                  <div className="text-right text-xs text-muted-foreground">{t("portfolio.paper.performance_fills", { count: summary.fill_count })}</div>
+                </div>
+                <svg viewBox="0 0 100 40" role="img" aria-label={`${summary.currency} ${t("portfolio.paper.pnl_curve")}`} className="mt-3 h-24 w-full overflow-visible">
+                  <line x1="0" x2="100" y1={zeroY} y2={zeroY} className="stroke-border" strokeWidth="0.5" />
+                  <polyline points={polyline} fill="none" className={summary.total_realized_pnl >= 0 ? "stroke-positive" : "stroke-negative"} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+                </svg>
+                <dl className="grid grid-cols-2 gap-3 text-xs md:grid-cols-3">
+                  <div><dt className="text-muted-foreground">{t("portfolio.paper.win_rate")}</dt><dd className="mt-1 text-foreground">{summary.win_rate_pct == null ? "—" : `${summary.win_rate_pct.toFixed(1)}%`}</dd></div>
+                  <div><dt className="text-muted-foreground">{t("portfolio.paper.profit_factor")}</dt><dd className="mt-1 text-foreground">{summary.profit_factor?.toFixed(2) ?? "—"}</dd></div>
+                  <div><dt className="text-muted-foreground">{t("portfolio.paper.max_drawdown")}</dt><dd className="mt-1 text-negative">{pnl(summary.max_drawdown, summary.currency)}</dd></div>
+                  <div><dt className="text-muted-foreground">{t("portfolio.paper.best_exit")}</dt><dd className="mt-1 text-positive">{pnl(summary.best_exit_pnl, summary.currency)}</dd></div>
+                  <div><dt className="text-muted-foreground">{t("portfolio.paper.worst_exit")}</dt><dd className="mt-1 text-negative">{pnl(summary.worst_exit_pnl, summary.currency)}</dd></div>
+                  <div><dt className="text-muted-foreground">{t("portfolio.paper.total_fees")}</dt><dd className="mt-1 text-foreground">{pnl(summary.total_fees, summary.currency)}</dd></div>
+                </dl>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
 
 function PaperRiskControls({ portfolioId }: { portfolioId: string }) {
   const { t } = useTranslation();
@@ -155,6 +217,7 @@ export default function PaperTradingPanel({ portfolioId }: { portfolioId: string
   return (
     <div className="space-y-5">
       <PaperRiskControls portfolioId={portfolioId} />
+      <PaperPerformancePanel portfolioId={portfolioId} />
       <section className="rounded-lg border border-border bg-card p-5 shadow-highlight">
         <h2 className="font-medium text-foreground">{t("portfolio.paper.ticket")}</h2>
         <p className="mt-1 text-xs text-muted-foreground">{t("portfolio.paper.subtitle")}</p>

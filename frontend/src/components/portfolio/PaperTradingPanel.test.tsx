@@ -40,6 +40,23 @@ vi.mock("@/hooks/usePortfolio", () => ({
     isLoading: false,
     data: riskPolicy,
   }),
+  usePaperPerformance: () => ({
+    isLoading: false,
+    error: null,
+    data: {
+      total_fill_count: 3,
+      window_fill_count: 3,
+      truncated: false,
+      summaries: [
+        { currency: "USD", fill_count: 3, total_realized_pnl: 18.8, win_rate_pct: 50, profit_factor: 1.94, max_drawdown: -20, best_exit_pnl: 38.8, worst_exit_pnl: -20, total_fees: 4.2 },
+        { currency: "TWD", fill_count: 0, total_realized_pnl: 0, win_rate_pct: null, profit_factor: null, max_drawdown: 0, best_exit_pnl: null, worst_exit_pnl: null, total_fees: 0 },
+      ],
+      curve: [
+        { fill_id: "fill-1", currency: "USD", cumulative_realized_pnl: -3 },
+        { fill_id: "fill-2", currency: "USD", cumulative_realized_pnl: 18.8 },
+      ],
+    },
+  }),
   useUpdatePaperRiskPolicy: () => ({
     mutate: updateRisk,
     mutateAsync: updateRisk,
@@ -89,5 +106,8 @@ describe("PaperTradingPanel", () => {
       max_order_notional_usd: null,
       max_daily_loss_usd: null,
     }));
+    expect(screen.getByText("+18.80 USD")).toBeInTheDocument();
+    expect(screen.getByText("50.0%")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "USD Realized P&L curve" })).toBeInTheDocument();
   });
 });

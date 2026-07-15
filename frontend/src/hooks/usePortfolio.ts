@@ -6,6 +6,7 @@ import type {
   Portfolio,
   PaperOrder,
   PaperOrderCreate,
+  PaperPerformance,
   PaperRiskPolicy,
   PaperRiskPolicyUpdate,
   PortfolioRisk,
@@ -15,6 +16,7 @@ import type {
 function invalidatePaperAccount(qc: ReturnType<typeof useQueryClient>, portfolioId: string) {
   return Promise.all([
     qc.invalidateQueries({ queryKey: ["paper-orders", portfolioId] }),
+    qc.invalidateQueries({ queryKey: ["paper-performance", portfolioId] }),
     qc.invalidateQueries({ queryKey: ["portfolio", portfolioId] }),
     qc.invalidateQueries({ queryKey: ["portfolio-cash", portfolioId] }),
     qc.invalidateQueries({ queryKey: ["portfolio-cash-entries", portfolioId] }),
@@ -193,6 +195,17 @@ export function usePaperRiskPolicy(portfolioId: string) {
     queryKey: ["paper-risk-policy", portfolioId],
     queryFn: () => api.get<PaperRiskPolicy>(
       `/portfolio/${portfolioId}/paper-risk-policy`,
+    ).then((r) => r.data),
+    enabled: !!portfolioId,
+    refetchInterval: 15_000,
+  });
+}
+
+export function usePaperPerformance(portfolioId: string) {
+  return useQuery({
+    queryKey: ["paper-performance", portfolioId],
+    queryFn: () => api.get<PaperPerformance>(
+      `/portfolio/${portfolioId}/paper-performance`,
     ).then((r) => r.data),
     enabled: !!portfolioId,
     refetchInterval: 15_000,

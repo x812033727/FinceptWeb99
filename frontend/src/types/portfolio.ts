@@ -111,6 +111,42 @@ export interface PaperRiskPolicy extends PaperRiskPolicyUpdate {
   daily_realized_pnl_twd: number;
 }
 
+export interface PaperPerformanceSummary {
+  currency: "USD" | "TWD";
+  fill_count: number;
+  exit_order_count: number;
+  winning_exit_orders: number;
+  losing_exit_orders: number;
+  breakeven_exit_orders: number;
+  win_rate_pct: number | null;
+  profit_factor: number | null;
+  total_realized_pnl: number;
+  total_fees: number;
+  best_exit_pnl: number | null;
+  worst_exit_pnl: number | null;
+  max_drawdown: number;
+}
+
+export interface PaperPerformancePoint {
+  fill_id: string;
+  filled_at: string;
+  currency: "USD" | "TWD";
+  cumulative_realized_pnl: number;
+  drawdown: number;
+}
+
+export interface PaperPerformance {
+  portfolio_id: string;
+  window_fill_limit: number;
+  window_fill_count: number;
+  total_fill_count: number;
+  truncated: boolean;
+  window_started_at: string | null;
+  window_ended_at: string | null;
+  summaries: PaperPerformanceSummary[];
+  curve: PaperPerformancePoint[];
+}
+
 // ── Risk dashboard (feature C1) — GET /portfolio/{id}/risk ────────
 
 export interface RiskVaREntry {

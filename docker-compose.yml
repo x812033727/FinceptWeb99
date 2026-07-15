@@ -117,6 +117,7 @@ services:
       CORS_ORIGINS:      ${CORS_ORIGINS:-http://localhost}
       ADMIN_EMAIL:       ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD:    ${ADMIN_PASSWORD:-}
+      PUBLIC_DAILY_RESULTS_OWNER_EMAIL: ${PUBLIC_DAILY_RESULTS_OWNER_EMAIL:-}
       # /metrics gate — without this passthrough the in-compose
       # Prometheus scrapes from the docker bridge and gets 403 against
       # the default 127.0.0.1-only allowlist. Same enumerated-keys

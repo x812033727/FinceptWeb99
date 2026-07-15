@@ -32,6 +32,7 @@ const AlertsPage = lazy(pageLoaders.alerts);
 const SettingsPage = lazy(pageLoaders.settings);
 const AdminPage = lazy(pageLoaders.admin);
 const FinmindPage = lazy(pageLoaders.finmind);
+const DailyPage = lazy(() => import("@/pages/DailyPage"));
 
 // ── Protected route ───────────────────────────────────────────────
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -59,9 +60,11 @@ function RequireRole({ role, children }: { role: Role; children: React.ReactNode
 
 // ── App shell ─────────────────────────────────────────────────────
 export default function App() {
-  const [booting, setBooting] = useState(true);
+  const isPublicDaily = window.location.pathname === "/daily";
+  const [booting, setBooting] = useState(!isPublicDaily);
 
   useEffect(() => {
+    if (isPublicDaily) return;
     // Preheat the dashboard chunk while silentRefresh() is on the wire:
     // the boot window is pure network wait, so kicking off the dynamic
     // import now means the landing page's code is usually already in
@@ -69,7 +72,7 @@ export default function App() {
     // dedupes and swallows errors, so this is a pure hint.
     prefetchPage("/dashboard");
     silentRefresh().finally(() => setBooting(false));
-  }, []);
+  }, [isPublicDaily]);
 
   if (booting) {
     return (
@@ -84,6 +87,7 @@ export default function App() {
       <Toaster />
       <ErrorBoundary>
         <Routes>
+          <Route path="/daily" element={<Suspense fallback={<PageSkeleton />}><DailyPage /></Suspense>} />
           <Route path="/login" element={<LoginPage />} />
 
           {/* All authenticated pages share the AppLayout (sidebar + main area).

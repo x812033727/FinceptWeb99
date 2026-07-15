@@ -90,6 +90,24 @@ export interface PaperOrderCreate {
   notes?: string;
 }
 
+export interface PaperFill {
+  id: string;
+  order_id: string;
+  transaction_id: string;
+  quantity: number;
+  price: number;
+  fee: number;
+  currency: "USD" | "TWD";
+  realized_pnl: number;
+  quote_price: number | null;
+  slippage_bps: number | null;
+  liquidity_quantity: number | null;
+  quote_key: string | null;
+  execution_source: "manual" | "matcher" | string;
+  idempotency_key: string;
+  filled_at: string;
+}
+
 export interface PaperRiskPolicyUpdate {
   trading_enabled: boolean;
   max_order_notional_usd: number | null;

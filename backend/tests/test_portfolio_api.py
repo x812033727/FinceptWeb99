@@ -159,6 +159,9 @@ async def test_transaction_import_previews_then_commits_clean_batch(client: Asyn
         "row_count": 2,
         "linked_count": 2,
         "provenance_complete": True,
+        "first_tx_date": "2024-01-02",
+        "last_tx_date": "2024-01-03",
+        "instruments": [{"symbol": "AAPL", "market": "US"}],
         "imported_at": committed.json()["imported_at"],
     }]
     detail = (await client.get(f"/api/portfolio/{pid}", headers=_auth(token))).json()

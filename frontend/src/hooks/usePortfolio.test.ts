@@ -188,7 +188,10 @@ describe("transaction import history", () => {
   it("loads source batches and invalidates accounting data after rollback", async () => {
     const batches = [{
       id: "import-1", row_count: 2, linked_count: 2,
-      provenance_complete: true, imported_at: "2026-07-15T14:00:00Z",
+      provenance_complete: true, first_tx_date: "2024-01-02",
+      last_tx_date: "2024-01-03",
+      instruments: [{ symbol: "AAPL", market: "US" }],
+      imported_at: "2026-07-15T14:00:00Z",
     }];
     mock.onGet("/portfolio/p2/transaction-imports").reply(200, batches);
     mock.onDelete("/portfolio/p2/transaction-imports/import-1").reply(200, {

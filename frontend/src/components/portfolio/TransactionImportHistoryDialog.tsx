@@ -17,6 +17,12 @@ export function TransactionImportHistoryDialog({
   const rollback = useRollbackTransactionImport(portfolioId);
   const [confirming, setConfirming] = useState<string | null>(null);
 
+  function formatTradeDate(value: string) {
+    return new Intl.DateTimeFormat(i18n.language, {
+      dateStyle: "medium", timeZone: "UTC",
+    }).format(new Date(`${value}T00:00:00Z`));
+  }
+
   async function confirmRollback(importId: string) {
     try {
       await rollback.mutateAsync(importId);
@@ -68,6 +74,33 @@ export function TransactionImportHistoryDialog({
                         dateStyle: "medium", timeStyle: "short",
                       }).format(new Date(batch.imported_at))}
                     </p>
+                    {batch.first_tx_date && batch.last_tx_date && (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        {t("portfolio.transactions.import_history.trade_dates", {
+                          start: formatTradeDate(batch.first_tx_date),
+                          end: formatTradeDate(batch.last_tx_date),
+                        })}
+                      </p>
+                    )}
+                    {!!batch.instruments.length && (
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        {batch.instruments.slice(0, 3).map((instrument) => (
+                          <span
+                            key={`${instrument.market}:${instrument.symbol}`}
+                            className="rounded bg-muted px-1.5 py-0.5 text-meta text-foreground"
+                          >
+                            {instrument.symbol} · {instrument.market}
+                          </span>
+                        ))}
+                        {batch.instruments.length > 3 && (
+                          <span className="text-meta text-muted-foreground">
+                            {t("portfolio.transactions.import_history.more_instruments", {
+                              count: batch.instruments.length - 3,
+                            })}
+                          </span>
+                        )}
+                      </div>
+                    )}
                     <p className={`mt-2 text-xs ${
                       batch.provenance_complete ? "text-positive" : "text-warning"
                     }`}>

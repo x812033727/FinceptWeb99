@@ -65,11 +65,19 @@ class TransactionImportResponse(BaseModel):
     errors: list[TransactionImportError] = Field(default_factory=list)
 
 
+class TransactionImportInstrumentResponse(BaseModel):
+    symbol: str
+    market: str
+
+
 class TransactionImportBatchResponse(BaseModel):
     id: UUID
     row_count: int
     linked_count: int
     provenance_complete: bool
+    first_tx_date: date | None
+    last_tx_date: date | None
+    instruments: list[TransactionImportInstrumentResponse]
     imported_at: datetime
 
 

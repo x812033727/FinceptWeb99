@@ -93,6 +93,9 @@ export interface TransactionImportBatch {
   row_count: number;
   linked_count: number;
   provenance_complete: boolean;
+  first_tx_date: string | null;
+  last_tx_date: string | null;
+  instruments: { symbol: string; market: string }[];
   imported_at: string;
 }
 

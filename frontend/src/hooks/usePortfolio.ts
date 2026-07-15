@@ -78,6 +78,30 @@ export function useAddTransaction(portfolioId: string) {
   });
 }
 
+export interface TransactionImportResult {
+  valid: boolean;
+  valid_count: number;
+  imported_count: number;
+  errors: { row: number; field: string | null; message: string }[];
+}
+
+export function useImportTransactions(portfolioId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { rows: Record<string, unknown>[]; dry_run: boolean }) =>
+      api.post<TransactionImportResult>(
+        `/portfolio/${portfolioId}/transactions/import`, body,
+      ).then((response) => response.data),
+    onSuccess: (result) => {
+      if (!result.imported_count) return;
+      qc.invalidateQueries({ queryKey: ["portfolio", portfolioId] });
+      qc.invalidateQueries({ queryKey: ["portfolio-transactions", portfolioId] });
+      qc.invalidateQueries({ queryKey: ["portfolio-cash", portfolioId] });
+      qc.invalidateQueries({ queryKey: ["portfolio-cash-entries", portfolioId] });
+    },
+  });
+}
+
 export function useUpdatePortfolio(portfolioId: string) {
   const qc = useQueryClient();
   return useMutation({

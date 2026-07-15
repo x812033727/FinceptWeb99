@@ -1049,7 +1049,20 @@
       "fee": "手續費",
       "executed_at": "成交時間",
       "fx_rate": "匯率",
-      "no_transactions": "尚無交易紀錄"
+      "no_transactions": "尚無交易紀錄",
+      "export": "匯出 CSV",
+      "import": {
+        "action": "匯入 CSV",
+        "title": "匯入交易紀錄",
+        "description": "整份檔案通過預檢後才會寫入投資組合，不會產生半套資料。",
+        "choose": "選擇 CSV 檔案",
+        "columns": "必填欄位：date、symbol、market、type、quantity、price；選填：fx_rate、notes。上限 500 筆。",
+        "ready": "{{count}} 筆資料已通過驗證，可以匯入。",
+        "invalid": "共發現 {{count}} 個問題，修正後請重新選擇檔案。",
+        "row": "CSV 第 {{row}} 列",
+        "confirm": "確認匯入",
+        "too_many": "單次最多匯入 500 筆交易。"
+      }
     },
     "optimizer": {
       "title": "投資組合最佳化",

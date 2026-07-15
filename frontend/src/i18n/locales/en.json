@@ -1049,7 +1049,20 @@
       "fee": "Fee",
       "executed_at": "Executed At",
       "fx_rate": "FX",
-      "no_transactions": "No transactions yet"
+      "no_transactions": "No transactions yet",
+      "export": "Export CSV",
+      "import": {
+        "action": "Import CSV",
+        "title": "Import transactions",
+        "description": "Preview and validate the entire file before anything is added to this portfolio.",
+        "choose": "Choose a CSV file",
+        "columns": "Required: date, symbol, market, type, quantity, price. Optional: fx_rate, notes. Maximum 500 rows.",
+        "ready": "{{count}} rows passed validation and are ready to import.",
+        "invalid": "Fix {{count}} reported issues, then choose the corrected file.",
+        "row": "CSV row {{row}}",
+        "confirm": "Import transactions",
+        "too_many": "CSV files are limited to 500 transaction rows."
+      }
     },
     "optimizer": {
       "title": "Portfolio Optimizer",

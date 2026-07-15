@@ -17,6 +17,7 @@ import {
   useCreatePortfolio,
   useDeletePortfolio,
   useAddTransaction,
+  useImportTransactions,
   useOptimise,
 } from "./usePortfolio";
 
@@ -145,6 +146,39 @@ describe("useAddTransaction", () => {
     });
 
     expect(qc.getQueryState(["portfolio", "p2"])?.isInvalidated).toBe(true);
+  });
+});
+
+describe("useImportTransactions", () => {
+  it("previews without invalidation, then refreshes account data after import", async () => {
+    mock.onPost("/portfolio/p2/transactions/import").reply((config) => {
+      const body = JSON.parse(config.data as string) as { dry_run: boolean };
+      return [200, {
+        valid: true,
+        valid_count: 1,
+        imported_count: body.dry_run ? 0 : 1,
+        errors: [],
+      }];
+    });
+    const { qc, wrapper } = makeWrapper();
+    qc.setQueryData(["portfolio", "p2"], { id: "p2", holdings: [] });
+    qc.setQueryData(["portfolio-transactions", "p2"], []);
+    const { result } = renderHook(() => useImportTransactions("p2"), { wrapper });
+    const rows = [{
+      tx_date: "2024-01-02", symbol: "AAPL", market: "US", tx_type: "buy",
+      quantity: 1, price: 100,
+    }];
+
+    await act(async () => {
+      await result.current.mutateAsync({ rows, dry_run: true });
+    });
+    expect(qc.getQueryState(["portfolio", "p2"])?.isInvalidated).toBe(false);
+
+    await act(async () => {
+      await result.current.mutateAsync({ rows, dry_run: false });
+    });
+    expect(qc.getQueryState(["portfolio", "p2"])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(["portfolio-transactions", "p2"])?.isInvalidated).toBe(true);
   });
 });
 

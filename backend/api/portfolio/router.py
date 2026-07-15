@@ -348,10 +348,18 @@ async def portfolio_attribution(
 
 
 @router.get("/{portfolio_id}/transactions", response_model=list[TransactionResponse])
-async def list_transactions(portfolio_id: str, user: CurrentUser, db: DB, limit: int = 200):
+async def list_transactions(
+    portfolio_id: str,
+    user: CurrentUser,
+    db: DB,
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
     """All transactions for a portfolio, newest first."""
     try:
-        return await svc.get_transactions(portfolio_id, user["id"], db, limit=limit)
+        return await svc.get_transactions(
+            portfolio_id, user["id"], db, limit=limit, offset=offset,
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

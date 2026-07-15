@@ -390,6 +390,20 @@ async def test_list_transactions_after_add(client: AsyncClient):
     assert len(txns) == 3
     # Newest first
     assert txns[0]["tx_date"] >= txns[-1]["tx_date"]
+    page = await client.get(
+        f"/api/portfolio/{pid}/transactions?limit=2&offset=1",
+        headers=_auth(token),
+    )
+    assert page.status_code == 200
+    assert [transaction["id"] for transaction in page.json()] == [
+        txns[1]["id"], txns[2]["id"],
+    ]
+    assert (await client.get(
+        f"/api/portfolio/{pid}/transactions?limit=501", headers=_auth(token),
+    )).status_code == 422
+    assert (await client.get(
+        f"/api/portfolio/{pid}/transactions?offset=-1", headers=_auth(token),
+    )).status_code == 422
 
 
 @pytest.mark.asyncio

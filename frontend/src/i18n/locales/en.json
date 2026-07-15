@@ -1051,6 +1051,11 @@
       "fx_rate": "FX",
       "no_transactions": "No transactions yet",
       "export": "Export CSV",
+      "exporting": "Exporting…",
+      "loaded_count_one": "{{count}} transaction loaded",
+      "loaded_count_other": "{{count}} transactions loaded",
+      "load_more": "Load more",
+      "loading_more": "Loading…",
       "import": {
         "action": "Import CSV",
         "title": "Import transactions",

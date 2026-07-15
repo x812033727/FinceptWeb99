@@ -164,6 +164,24 @@ export function useExportTransactionImport(portfolioId: string) {
   });
 }
 
+export function useExportPortfolioTransactions(portfolioId: string) {
+  return useMutation({
+    mutationFn: async () => {
+      const transactions: TransactionImportTransaction[] = [];
+      let offset = 0;
+      while (true) {
+        const page = await api.get<TransactionImportTransaction[]>(
+          `/portfolio/${portfolioId}/transactions`,
+          { params: { limit: 500, offset } },
+        ).then((response) => response.data);
+        transactions.push(...page);
+        if (page.length < 500) return transactions;
+        offset += page.length;
+      }
+    },
+  });
+}
+
 export function useRollbackTransactionImport(portfolioId: string) {
   const qc = useQueryClient();
   return useMutation({

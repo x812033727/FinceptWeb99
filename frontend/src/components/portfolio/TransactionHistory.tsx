@@ -1,8 +1,11 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useQuery } from "@tanstack/react-query";
-import api from "@/lib/api";
-import { useDeleteTransaction } from "@/hooks/usePortfolio";
+import { useInfiniteQuery } from "@tanstack/react-query";
+import api, { errorDetail } from "@/lib/api";
+import {
+  useDeleteTransaction,
+  useExportPortfolioTransactions,
+} from "@/hooks/usePortfolio";
 import { EditTransactionModal } from "./EditTransactionModal";
 import { exportCSV } from "./_shared";
 import type { TransactionRow } from "./_shared";
@@ -10,18 +13,31 @@ import { DataTable, type DataTableColumn } from "../ui/table";
 import { ImportTransactionsDialog } from "./ImportTransactionsDialog";
 import { TransactionImportHistoryDialog } from "./TransactionImportHistoryDialog";
 
+const PAGE_SIZE = 100;
+
 export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState<TransactionRow | null>(null);
   const [importing, setImporting] = useState(false);
   const [viewingImports, setViewingImports] = useState(false);
   const deleteTx = useDeleteTransaction(portfolioId);
-  const { data: txns = [], isLoading } = useQuery<TransactionRow[]>({
+  const exportTransactions = useExportPortfolioTransactions(portfolioId);
+  const {
+    data, isLoading, isError, error, hasNextPage, fetchNextPage, isFetchingNextPage,
+  } = useInfiniteQuery({
     queryKey: ["portfolio-transactions", portfolioId],
-    queryFn: () =>
-      api.get(`/portfolio/${portfolioId}/transactions?limit=200`).then((r) => r.data),
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => api.get<TransactionRow[]>(
+      `/portfolio/${portfolioId}/transactions`,
+      { params: { limit: PAGE_SIZE + 1, offset: pageParam } },
+    ).then((response) => ({
+      rows: response.data.slice(0, PAGE_SIZE),
+      nextOffset: response.data.length > PAGE_SIZE ? pageParam + PAGE_SIZE : undefined,
+    })),
+    getNextPageParam: (lastPage) => lastPage.nextOffset,
     staleTime: 30_000,
   });
+  const txns = data?.pages.flatMap((page) => page.rows) ?? [];
 
   const columns: DataTableColumn<TransactionRow>[] = [
     {
@@ -123,21 +139,26 @@ export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
     },
   ];
 
-  function handleExport() {
-    exportCSV(
-      txns.map((tx) => ({
-        date: tx.tx_date,
-        symbol: tx.symbol,
-        market: tx.market,
-        type: tx.tx_type,
-        quantity: tx.quantity,
-        price: tx.price,
-        fx_rate: tx.fx_rate,
-        value: tx.quantity * tx.price,
-        notes: tx.notes ?? "",
-      })),
-      `transactions-${portfolioId}.csv`
-    );
+  async function handleExport() {
+    try {
+      const allTransactions = await exportTransactions.mutateAsync();
+      exportCSV(
+        allTransactions.map((tx) => ({
+          date: tx.tx_date,
+          symbol: tx.symbol,
+          market: tx.market,
+          type: tx.tx_type,
+          quantity: tx.quantity,
+          price: tx.price,
+          fx_rate: tx.fx_rate,
+          value: tx.quantity * tx.price,
+          notes: tx.notes ?? "",
+        })),
+        `transactions-${portfolioId}.csv`,
+      );
+    } catch {
+      // The mutation error is rendered below with the API's explanation.
+    }
   }
 
   return (
@@ -152,28 +173,51 @@ export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
             {t("portfolio.transactions.import_history.action")}
           </button>
           <button
-            onClick={handleExport}
-            disabled={!txns.length}
+            onClick={() => void handleExport()}
+            disabled={!txns.length || exportTransactions.isPending}
             className="text-xs text-primary hover:underline disabled:opacity-40"
           >
-            {t("portfolio.transactions.export")}
+            {exportTransactions.isPending
+              ? t("portfolio.transactions.exporting")
+              : t("portfolio.transactions.export")}
           </button>
         </div>
       </div>
 
       {isLoading && <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>}
-      {!isLoading && txns.length === 0 && (
+      {isError && <p className="text-xs text-danger">{errorDetail(error)}</p>}
+      {!isLoading && !isError && txns.length === 0 && (
         <p className="text-xs text-muted-foreground py-4 text-center">{t("portfolio.transactions.no_transactions")}</p>
       )}
 
       {txns.length > 0 && (
-        <DataTable
-          columns={columns}
-          rows={txns}
-          rowKey={(tx) => tx.id}
-          mobileMode="scroll"
-          aria-label={t("portfolio.transactions.title")}
-        />
+        <>
+          <DataTable
+            columns={columns}
+            rows={txns}
+            rowKey={(tx) => tx.id}
+            mobileMode="scroll"
+            aria-label={t("portfolio.transactions.title")}
+          />
+          <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+            <span>{t("portfolio.transactions.loaded_count", { count: txns.length })}</span>
+            {hasNextPage && (
+              <button
+                type="button"
+                onClick={() => void fetchNextPage()}
+                disabled={isFetchingNextPage}
+                className="min-h-[36px] text-primary hover:underline disabled:opacity-50"
+              >
+                {isFetchingNextPage
+                  ? t("portfolio.transactions.loading_more")
+                  : t("portfolio.transactions.load_more")}
+              </button>
+            )}
+          </div>
+        </>
+      )}
+      {exportTransactions.isError && (
+        <p className="text-xs text-danger">{errorDetail(exportTransactions.error)}</p>
       )}
 
       {editing && (

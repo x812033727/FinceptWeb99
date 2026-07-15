@@ -1052,7 +1052,11 @@ async def get_portfolio_detail(portfolio_id: str, user_id: str, db: AsyncSession
 
 
 async def get_transactions(
-    portfolio_id: str, user_id: str, db: AsyncSession, limit: int = 200
+    portfolio_id: str,
+    user_id: str,
+    db: AsyncSession,
+    limit: int = 200,
+    offset: int = 0,
 ) -> list[Transaction]:
     portfolio = await get_portfolio(portfolio_id, user_id, db)
     if not portfolio:
@@ -1060,7 +1064,12 @@ async def get_transactions(
     rows = await db.scalars(
         select(Transaction)
         .where(Transaction.portfolio_id == portfolio.id)
-        .order_by(Transaction.tx_date.desc(), Transaction.created_at.desc())
+        .order_by(
+            Transaction.tx_date.desc(),
+            Transaction.created_at.desc(),
+            Transaction.id.desc(),
+        )
+        .offset(offset)
         .limit(limit)
     )
     return list(rows.all())

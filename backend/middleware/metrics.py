@@ -311,6 +311,11 @@ SCHEDULER_JOB_RUNS_TOTAL = Counter(
     "(ok / error / missed).",
     ["job_id", "outcome"],
 )
+PAPER_ORDER_MATCH_OUTCOMES_TOTAL = Counter(
+    "paper_order_match_outcomes_total",
+    "Paper orders evaluated by the automatic matcher, grouped by bounded outcome.",
+    ["outcome"],
+)
 
 # ── Core Web Vitals (reported by the frontend) ────────────────────
 # LCP / INP / FCP / TTFB are time metrics in seconds; bucket

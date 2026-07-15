@@ -19,7 +19,9 @@ import {
   useExportTransactionImport,
   useExportPortfolioTransactions,
   useAddTransaction,
+  useAddCashEntry,
   useImportTransactions,
+  useMatchPaperOrder,
   useRollbackTransactionImport,
   useTransactionImportTransactions,
   useTransactionImports,
@@ -143,6 +145,8 @@ describe("useAddTransaction", () => {
     qc.setQueryData(["portfolio-transactions", "p2", { symbol: "AAPL" }], {});
     qc.setQueryData(["portfolio-cash", "p2"], {});
     qc.setQueryData(["portfolio-cash-entries", "p2"], {});
+    qc.setQueryData(["portfolio-risk", "p2"], {});
+    qc.setQueryData(["portfolio-attribution", "p2", 90], {});
 
     const { result } = renderHook(() => useAddTransaction("p2"), { wrapper });
 
@@ -159,6 +163,57 @@ describe("useAddTransaction", () => {
     )?.isInvalidated).toBe(true);
     expect(qc.getQueryState(["portfolio-cash", "p2"])?.isInvalidated).toBe(true);
     expect(qc.getQueryState(["portfolio-cash-entries", "p2"])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(["portfolio-risk", "p2"])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(
+      ["portfolio-attribution", "p2", 90],
+    )?.isInvalidated).toBe(true);
+  });
+});
+
+describe("accounting cache coherence", () => {
+  it("refreshes derived analytics after a manual cash entry", async () => {
+    mock.onPost("/portfolio/p2/cash-entries").reply(201, { id: "cash-1" });
+    const { qc, wrapper } = makeWrapper();
+    qc.setQueryData(["portfolio-risk", "p2"], {});
+    qc.setQueryData(["portfolio-attribution", "p2", 365], {});
+
+    const { result } = renderHook(() => useAddCashEntry("p2"), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({
+        currency: "USD", amount: 1_000, entry_type: "deposit",
+        occurred_on: "2026-07-16",
+      });
+    });
+
+    expect(qc.getQueryState(["portfolio-risk", "p2"])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(
+      ["portfolio-attribution", "p2", 365],
+    )?.isInvalidated).toBe(true);
+  });
+
+  it("refreshes transactions and derived analytics after a paper fill", async () => {
+    mock.onPost("/portfolio/p2/paper-orders/order-1/match").reply(200, {
+      id: "order-1", status: "filled",
+    });
+    const { qc, wrapper } = makeWrapper();
+    qc.setQueryData(["paper-orders", "p2"], []);
+    qc.setQueryData(["portfolio-transactions", "p2", { market: "US" }], []);
+    qc.setQueryData(["portfolio-risk", "p2"], {});
+    qc.setQueryData(["portfolio-attribution", "p2", 30], {});
+
+    const { result } = renderHook(() => useMatchPaperOrder("p2"), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync("order-1");
+    });
+
+    expect(qc.getQueryState(["paper-orders", "p2"])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(
+      ["portfolio-transactions", "p2", { market: "US" }],
+    )?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(["portfolio-risk", "p2"])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(
+      ["portfolio-attribution", "p2", 30],
+    )?.isInvalidated).toBe(true);
   });
 });
 

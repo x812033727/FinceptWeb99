@@ -14,14 +14,15 @@ import type {
   Transaction,
 } from "@/types/portfolio";
 
-function invalidatePaperAccount(qc: ReturnType<typeof useQueryClient>, portfolioId: string) {
+function invalidatePortfolioAccountData(
+  qc: ReturnType<typeof useQueryClient>, portfolioId: string,
+) {
   return Promise.all([
-    qc.invalidateQueries({ queryKey: ["paper-orders", portfolioId] }),
-    qc.invalidateQueries({ queryKey: ["paper-fills", portfolioId] }),
-    qc.invalidateQueries({ queryKey: ["paper-performance", portfolioId] }),
     qc.invalidateQueries({ queryKey: ["portfolio", portfolioId] }),
     qc.invalidateQueries({ queryKey: ["portfolio-cash", portfolioId] }),
     qc.invalidateQueries({ queryKey: ["portfolio-cash-entries", portfolioId] }),
+    qc.invalidateQueries({ queryKey: ["portfolio-risk", portfolioId] }),
+    qc.invalidateQueries({ queryKey: ["portfolio-attribution", portfolioId] }),
   ]);
 }
 
@@ -29,10 +30,22 @@ function invalidatePortfolioTransactionData(
   qc: ReturnType<typeof useQueryClient>, portfolioId: string,
 ) {
   return Promise.all([
-    qc.invalidateQueries({ queryKey: ["portfolio", portfolioId] }),
+    invalidatePortfolioAccountData(qc, portfolioId),
     qc.invalidateQueries({ queryKey: ["portfolio-transactions", portfolioId] }),
-    qc.invalidateQueries({ queryKey: ["portfolio-cash", portfolioId] }),
-    qc.invalidateQueries({ queryKey: ["portfolio-cash-entries", portfolioId] }),
+  ]);
+}
+
+function invalidatePaperAccount(
+  qc: ReturnType<typeof useQueryClient>, portfolioId: string,
+  accountingChanged = false,
+) {
+  return Promise.all([
+    qc.invalidateQueries({ queryKey: ["paper-orders", portfolioId] }),
+    qc.invalidateQueries({ queryKey: ["paper-fills", portfolioId] }),
+    qc.invalidateQueries({ queryKey: ["paper-performance", portfolioId] }),
+    accountingChanged
+      ? invalidatePortfolioTransactionData(qc, portfolioId)
+      : invalidatePortfolioAccountData(qc, portfolioId),
   ]);
 }
 
@@ -301,11 +314,7 @@ export function useAddCashEntry(portfolioId: string) {
       ...body,
       idempotency_key: `manual-${Date.now()}-${crypto.randomUUID()}`,
     }).then((r) => r.data),
-    onSuccess: () => Promise.all([
-      qc.invalidateQueries({ queryKey: ["portfolio-cash", portfolioId] }),
-      qc.invalidateQueries({ queryKey: ["portfolio-cash-entries", portfolioId] }),
-      qc.invalidateQueries({ queryKey: ["portfolio", portfolioId] }),
-    ]),
+    onSuccess: () => invalidatePortfolioAccountData(qc, portfolioId),
   });
 }
 
@@ -315,11 +324,7 @@ export function useReverseCashEntry(portfolioId: string) {
     mutationFn: (entryId: string) => api.post(
       `/portfolio/${portfolioId}/cash-entries/${entryId}/reverse`, {},
     ).then((r) => r.data),
-    onSuccess: () => Promise.all([
-      qc.invalidateQueries({ queryKey: ["portfolio-cash", portfolioId] }),
-      qc.invalidateQueries({ queryKey: ["portfolio-cash-entries", portfolioId] }),
-      qc.invalidateQueries({ queryKey: ["portfolio", portfolioId] }),
-    ]),
+    onSuccess: () => invalidatePortfolioAccountData(qc, portfolioId),
   });
 }
 
@@ -408,6 +413,6 @@ export function useMatchPaperOrder(portfolioId: string) {
     mutationFn: (orderId: string) => api.post(
       `/portfolio/${portfolioId}/paper-orders/${orderId}/match`, {},
     ).then((r) => r.data),
-    onSuccess: () => invalidatePaperAccount(qc, portfolioId),
+    onSuccess: () => invalidatePaperAccount(qc, portfolioId, true),
   });
 }

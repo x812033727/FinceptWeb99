@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, CalendarDays, Clock3, RefreshCw, ShieldAlert, Users } from "lucide-react";
+import { AlertTriangle, CalendarDays, RefreshCw, ShieldAlert, Users } from "lucide-react";
 
 type QualitySignals = {
   consensus_contradiction?: boolean;
@@ -160,10 +160,7 @@ function Info({ label, value }: { label: string; value: string }) {
 
 function StrategyRun({ run }: { run: Result }) {
   const warnings = qualityWarnings(run.conclusion.quality_signals);
-  const candidates = (run.candidates ?? []).map((item) => item.symbol).filter(Boolean).join("、") || "綜合候選池";
   return <article className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5 sm:p-7">
-    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400"><span className="rounded-full bg-success/10 px-3 py-1 font-semibold text-success">第 {run.sequence ?? 1} 場</span><span>{run.market}</span><span className="flex items-center gap-1"><CalendarDays className="h-3.5 w-3.5" />{new Date(run.created_at).toLocaleDateString("zh-TW")}</span>{run.captured_session?.session_date && <span className="flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" />資料截至 {run.captured_session.session_date}</span>}</div>
-    <p className="mt-3 text-sm text-slate-400">候選：{candidates}</p>
     <OutcomeSummary run={run} />
     <div className="mt-4 flex flex-wrap gap-3">{(run.conclusion.recommended_symbols ?? []).map((symbol) => <div key={symbol} className="rounded-xl bg-slate-950 px-4 py-3"><div className="font-bold">{symbol}</div><div className="text-xs text-slate-400">{run.conclusion.symbol_names?.[symbol] ?? ""}</div></div>)}{!(run.conclusion.recommended_symbols?.length) && <p className="text-slate-400">本場沒有推薦標的</p>}</div>
     <p className="mt-5 whitespace-pre-wrap leading-7 text-slate-200">{run.conclusion.reasoning}</p>

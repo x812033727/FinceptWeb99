@@ -28,6 +28,12 @@ type Result = {
   strategy?: string;
   sequence?: number;
   candidates?: Array<{ symbol?: string; strategy_score?: number }>;
+  verdict?: "big_win" | "win" | "big_loss" | "loss" | "unverifiable" | null;
+  verdict_reason?: string | null;
+  verified_at?: string | null;
+  day1_open_prices?: Record<string, number> | null;
+  day5_close_prices?: Record<string, number> | null;
+  daily_close_prices?: Record<string, (number | null)[]> | null;
 };
 type DailyDay = { date: string; strategies: Record<string, Result[]> };
 type Payload = { state: "disabled" | "empty" | "ready"; result: Result | null; strategies?: Record<string, Result[]>; days?: DailyDay[]; disclaimer: string };
@@ -157,10 +163,30 @@ function StrategyRun({ run }: { run: Result }) {
   return <article className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5 sm:p-7">
     <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400"><span className="rounded-full bg-success/10 px-3 py-1 font-semibold text-success">第 {run.sequence ?? 1} 場</span><span>{run.market}</span><span className="flex items-center gap-1"><CalendarDays className="h-3.5 w-3.5" />{new Date(run.created_at).toLocaleDateString("zh-TW")}</span>{run.captured_session?.session_date && <span className="flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" />資料截至 {run.captured_session.session_date}</span>}</div>
     <p className="mt-3 text-sm text-slate-400">候選：{candidates}</p>
+    <OutcomeSummary run={run} />
     <div className="mt-4 flex flex-wrap gap-3">{(run.conclusion.recommended_symbols ?? []).map((symbol) => <div key={symbol} className="rounded-xl bg-slate-950 px-4 py-3"><div className="font-bold">{symbol}</div><div className="text-xs text-slate-400">{run.conclusion.symbol_names?.[symbol] ?? ""}</div></div>)}{!(run.conclusion.recommended_symbols?.length) && <p className="text-slate-400">本場沒有推薦標的</p>}</div>
     <p className="mt-5 whitespace-pre-wrap leading-7 text-slate-200">{run.conclusion.reasoning}</p>
     <div className="mt-5 grid gap-3 sm:grid-cols-2"><Info label="時間框架" value={horizon[run.conclusion.time_horizon ?? ""] ?? run.conclusion.time_horizon ?? "—"} /><Info label="共識度" value={typeof run.conclusion.consensus_score === "number" ? `${Math.round(run.conclusion.consensus_score * 100)}%` : "—"} /></div>
     {!!warnings.length && <div className="mt-5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">{warnings.join("；")}</div>}
     <details className="mt-6"><summary className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-slate-300"><Users className="h-4 w-4 text-success" />展開五輪完整發言</summary><div className="mt-4 space-y-3">{run.turns.map((turn) => <div key={`${turn.round}-${turn.turn_index}`} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><div className="flex justify-between gap-3 text-sm"><b>{turn.persona_name}</b><span className="text-slate-500">第 {turn.round} 輪 · {stance[turn.stance] ?? turn.stance}</span></div><p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-300">{turn.content || "（本輪無補充發言）"}</p></div>)}</div></details>
   </article>;
+}
+
+const verdictLabel: Record<string, string> = { big_win: "大勝", win: "勝", big_loss: "大敗", loss: "敗", unverifiable: "無法驗證" };
+
+function OutcomeSummary({ run }: { run: Result }) {
+  const symbols = run.conclusion.recommended_symbols ?? [];
+  const rows = symbols.map((symbol) => {
+    const open = run.day1_open_prices?.[symbol];
+    const daily = run.daily_close_prices?.[symbol] ?? [];
+    const close = [...daily].reverse().find((value): value is number => typeof value === "number") ?? run.day5_close_prices?.[symbol];
+    const change = open && close ? (close / open - 1) * 100 : null;
+    return { symbol, open, close, change };
+  });
+  const positive = run.verdict === "win" || run.verdict === "big_win";
+  return <section className={`mt-5 rounded-xl border p-4 ${run.verdict ? (positive ? "border-success/30 bg-success/10" : "border-amber-500/30 bg-amber-500/10") : "border-slate-800 bg-slate-950/50"}`}>
+    <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">對答案</h3><span className={`rounded-full px-3 py-1 text-sm font-bold ${positive ? "bg-success/20 text-success" : "bg-slate-800 text-slate-300"}`}>{run.verdict ? verdictLabel[run.verdict] ?? run.verdict : "等待驗證"}</span></div>
+    {!!rows.length && <div className="mt-3 grid gap-2 sm:grid-cols-3">{rows.map((row) => <div key={row.symbol} className="rounded-lg bg-slate-950/60 p-3 text-sm"><b>{row.symbol}</b><div className="mt-1 text-slate-400">{row.open != null ? row.open.toLocaleString() : "—"} → {row.close != null ? row.close.toLocaleString() : "—"}</div><div className={row.change == null ? "text-slate-500" : row.change >= 0 ? "text-success" : "text-rose-400"}>{row.change == null ? "尚無完整價格" : `${row.change >= 0 ? "+" : ""}${row.change.toFixed(2)}%`}</div></div>)}</div>}
+    <p className="mt-3 text-sm leading-6 text-slate-400">{run.verdict_reason || "完成五個交易日後，系統會在這裡顯示驗證結果。"}</p>
+  </section>;
 }

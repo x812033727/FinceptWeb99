@@ -225,6 +225,57 @@ async def test_reauthenticate_rejects_a_token_without_a_subject():
     assert ws.sent == [{"type": "error", "code": "auth_failed"}]
 
 
+@pytest.mark.asyncio
+async def test_reauthenticate_rejects_an_invalid_jwt_without_dropping_identity():
+    ws = FakeWS()
+    mgr._ws_user[ws] = "user-a"
+
+    with patch(
+        "api.websocket.manager.decode_access_token",
+        side_effect=mgr.JWTError("invalid token"),
+    ):
+        assert await mgr._reauthenticate(ws, "invalid-token") is True
+
+    assert mgr._ws_user[ws] == "user-a"
+    assert ws.sent == [{"type": "error", "code": "auth_failed"}]
+
+
+@pytest.mark.asyncio
+async def test_handler_leaves_receive_loop_when_reauth_identity_changes():
+    class ScriptedWS(FakeWS):
+        def __init__(self):
+            super().__init__()
+            self.accepted = False
+            self.incoming = [
+                json.dumps({"action": "auth", "token": "user-a-token"}),
+                json.dumps({"action": "auth", "token": "user-b-token"}),
+            ]
+
+        async def accept(self) -> None:
+            self.accepted = True
+
+        async def receive_text(self) -> str:
+            return self.incoming.pop(0)
+
+    ws = ScriptedWS()
+    payloads = [
+        {"sub": "user-a", "exp": _far_future()},
+        {"sub": "user-b", "exp": _far_future()},
+    ]
+
+    with (
+        patch("api.websocket.manager.decode_access_token", side_effect=payloads),
+        patch("api.websocket.manager._mirror_subs", new_callable=AsyncMock),
+    ):
+        await mgr.handle_market_ws(ws)
+
+    assert ws.accepted is True
+    assert ws.closed == (4003, "Authentication identity changed")
+    assert ws not in mgr._ws_user
+    assert "user-a" not in mgr._user_ws
+    assert ws not in mgr._writer_tasks
+
+
 # ── _dispatch: delta suppression ─────────────────────────────────
 
 @pytest.mark.asyncio

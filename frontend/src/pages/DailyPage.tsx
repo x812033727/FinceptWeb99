@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, CalendarDays, RefreshCw, ShieldAlert, Users } from "lucide-react";
+import { AlertTriangle, CalendarDays, ShieldAlert, Users } from "lucide-react";
 
 type QualitySignals = {
   consensus_contradiction?: boolean;
@@ -59,12 +59,10 @@ function qualityWarnings(q?: QualitySignals): string[] {
 export default function DailyPage() {
   const [payload, setPayload] = useState<Payload | null>(null);
   const [error, setError] = useState("");
-  const [refreshing, setRefreshing] = useState(false);
   const [activeStrategy, setActiveStrategy] = useState("general");
   const [activeDate, setActiveDate] = useState("");
 
   const load = useCallback(async () => {
-    setRefreshing(true);
     try {
       const res = await fetch("/api/public/daily", { credentials: "omit", headers: { Accept: "application/json" } });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -74,8 +72,6 @@ export default function DailyPage() {
       setError("");
     } catch {
       setError("目前無法取得每日圓桌結果，請稍後再試。");
-    } finally {
-      setRefreshing(false);
     }
   }, []);
 
@@ -104,17 +100,6 @@ export default function DailyPage() {
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
       <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6 sm:py-16">
-        <header className="mb-10 border-b border-slate-800 pb-8">
-          <div className="mb-3 flex items-center justify-between gap-4">
-            <p className="text-sm font-semibold tracking-[0.22em] text-success">FINCEPT DAILY</p>
-            <button onClick={() => void load()} disabled={refreshing} aria-label="重新整理" className="rounded-full border border-slate-700 p-2 text-slate-400 hover:text-white disabled:opacity-50">
-              <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
-            </button>
-          </div>
-          <h1 className="text-3xl font-bold tracking-tight sm:text-5xl">每日投資圓桌</h1>
-          <p className="mt-3 max-w-2xl text-slate-400">最新一次成功的自動討論，完整公開原始結論與五輪專家發言。</p>
-        </header>
-
         {!payload && !error && <StateCard>正在取得最新結果…</StateCard>}
         {error && <StateCard icon={<AlertTriangle className="h-6 w-6 text-amber-400" />} action={load}>{error}</StateCard>}
         {payload?.state === "disabled" && <StateCard icon={<ShieldAlert className="h-6 w-6" />}>每日公開結果尚未設定。</StateCard>}

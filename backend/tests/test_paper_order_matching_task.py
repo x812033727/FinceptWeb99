@@ -132,6 +132,26 @@ async def test_matcher_expires_day_orders_skips_closed_markets_and_honors_lock(
     assert locked.scanned == 0
 
 
+@pytest.mark.asyncio
+async def test_matcher_does_not_fetch_stale_quotes_on_exchange_holidays(
+    client, db_session, monkeypatch
+):
+    portfolio_id, user_id = await _account(
+        client, db_session, "paper-holiday-automation@example.com"
+    )
+    await _order(db_session, portfolio_id, user_id, "auto-us-holiday", 100)
+    await db_session.commit()
+
+    quote = AsyncMock(return_value={"ask": 99})
+    monkeypatch.setattr(task.paper_matching_service, "get_market_quote", quote)
+    stats = await task.match_open_paper_orders(now=datetime(2026, 1, 19, 15, 0, tzinfo=UTC))
+
+    assert stats.scanned == 1
+    assert stats.closed == 1
+    assert stats.matched == 0
+    quote.assert_not_awaited()
+
+
 def test_scheduler_registers_automatic_matcher_at_fifteen_seconds():
     from tasks.scheduler import scheduler, setup_jobs
 

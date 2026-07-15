@@ -3,9 +3,10 @@ Integration tests for portfolio endpoints.
 Uses in-memory SQLite + mocked Redis (from conftest).
 Market data calls are mocked so tests run without external APIs.
 """
-from datetime import date
+from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import UUID
 
 import pytest
 from fastapi import HTTPException
@@ -41,6 +42,10 @@ async def test_transaction_service_builds_filters_and_rejects_invalid_range():
             str(portfolio.id), "user-id", db,
             symbol="aapl", market=Market.US, tx_type=TransactionType.buy,
             date_from=date(2024, 1, 1), date_to=date(2024, 1, 31),
+            before=(
+                date(2024, 1, 31), datetime(2024, 1, 31, 12),
+                UUID("00000000-0000-0000-0000-000000000002"),
+            ),
         )
         assert result == []
         db.scalars.assert_awaited_once()
@@ -50,6 +55,64 @@ async def test_transaction_service_builds_filters_and_rejects_invalid_range():
                 str(portfolio.id), "user-id", db,
                 date_from=date(2024, 2, 1), date_to=date(2024, 1, 31),
             )
+
+
+@pytest.mark.asyncio
+async def test_transaction_page_route_success_and_validation(db_session):
+    rows = [
+        SimpleNamespace(
+            id=UUID(f"00000000-0000-0000-0000-{index:012d}"),
+            tx_date=date(2024, 1, 4 - index),
+            created_at=datetime(2024, 1, 4 - index, 12),
+        )
+        for index in range(1, 4)
+    ]
+    with patch.object(
+        portfolio_router.svc, "get_transactions",
+        new=AsyncMock(return_value=rows),
+    ) as get_transactions:
+        page = await portfolio_router.page_transactions(
+            portfolio_id="portfolio-id", user={"id": "user-id"}, db=db_session,
+            limit=2, cursor=None, symbol=" aapl ", market=Market.US,
+            tx_type=TransactionType.buy, date_from=date(2024, 1, 1),
+            date_to=date(2024, 1, 31),
+        )
+    assert page["items"] == rows[:2]
+    assert portfolio_router.svc.decode_transaction_cursor(page["next_cursor"]) == (
+        rows[1].tx_date, rows[1].created_at, rows[1].id,
+    )
+    assert get_transactions.await_args.kwargs["symbol"] == "aapl"
+
+    with pytest.raises(HTTPException) as blank:
+        await portfolio_router.page_transactions(
+            portfolio_id="portfolio-id", user={"id": "user-id"}, db=db_session,
+            limit=2, cursor=None, symbol=" ", market=None, tx_type=None,
+            date_from=None, date_to=None,
+        )
+    assert blank.value.status_code == 422
+
+    with pytest.raises(HTTPException) as reversed_dates:
+        await portfolio_router.page_transactions(
+            portfolio_id="portfolio-id", user={"id": "user-id"}, db=db_session,
+            limit=2, cursor=None, symbol=None, market=None, tx_type=None,
+            date_from=date(2024, 2, 1), date_to=date(2024, 1, 31),
+        )
+    assert reversed_dates.value.status_code == 422
+
+    with patch.object(
+        portfolio_router.svc, "get_transactions",
+        new=AsyncMock(side_effect=ValueError("Portfolio not found")),
+    ):
+        with pytest.raises(HTTPException) as missing:
+            await portfolio_router.page_transactions(
+                portfolio_id="portfolio-id", user={"id": "user-id"}, db=db_session,
+                limit=2, cursor=None, symbol=None, market=None, tx_type=None,
+                date_from=None, date_to=None,
+            )
+    assert missing.value.status_code == 404
+
+    with pytest.raises(ValueError, match="Invalid transaction cursor"):
+        portfolio_router.svc.decode_transaction_cursor("W10")
 
 
 @pytest.mark.asyncio
@@ -419,13 +482,54 @@ async def test_list_transactions_after_add(client: AsyncClient):
     assert len(txns) == 3
     # Newest first
     assert txns[0]["tx_date"] >= txns[-1]["tx_date"]
+
+    first_cursor_page = await client.get(
+        f"/api/portfolio/{pid}/transactions/page",
+        params={"limit": 2}, headers=_auth(token),
+    )
+    assert first_cursor_page.status_code == 200
+    assert [transaction["id"] for transaction in first_cursor_page.json()["items"]] == [
+        txns[0]["id"], txns[1]["id"],
+    ]
+    cursor = first_cursor_page.json()["next_cursor"]
+    assert cursor
+
+    # A newer row inserted between page requests must not shift the cursor page.
+    with patch("services.portfolio_service.us_quote", new_callable=AsyncMock) as mock_q:
+        mock_q.return_value = {"price": 190.0, "currency": "USD"}
+        added = await client.post(
+            f"/api/portfolio/{pid}/transaction",
+            json={
+                "symbol": "AAPL", "market": "US", "tx_type": "buy",
+                "quantity": 1, "price": 190.0, "fx_rate": 1.0,
+                "tx_date": "2024-01-20",
+            },
+            headers=_auth(token),
+        )
+    assert added.status_code == 201
+    second_cursor_page = await client.get(
+        f"/api/portfolio/{pid}/transactions/page",
+        params={"limit": 2, "cursor": cursor}, headers=_auth(token),
+    )
+    assert second_cursor_page.status_code == 200
+    assert [transaction["id"] for transaction in second_cursor_page.json()["items"]] == [
+        txns[2]["id"],
+    ]
+    assert second_cursor_page.json()["next_cursor"] is None
+    invalid_cursor = await client.get(
+        f"/api/portfolio/{pid}/transactions/page",
+        params={"cursor": "not-a-cursor"}, headers=_auth(token),
+    )
+    assert invalid_cursor.status_code == 422
+    assert invalid_cursor.json()["detail"] == "Invalid transaction cursor"
+
     page = await client.get(
         f"/api/portfolio/{pid}/transactions?limit=2&offset=1",
         headers=_auth(token),
     )
     assert page.status_code == 200
     assert [transaction["id"] for transaction in page.json()] == [
-        txns[1]["id"], txns[2]["id"],
+        txns[0]["id"], txns[1]["id"],
     ]
     assert (await client.get(
         f"/api/portfolio/{pid}/transactions?limit=501", headers=_auth(token),

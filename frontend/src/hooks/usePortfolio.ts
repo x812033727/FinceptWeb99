@@ -172,19 +172,24 @@ export interface PortfolioTransactionFilters {
   date_to?: string;
 }
 
+export interface PortfolioTransactionPage {
+  items: TransactionImportTransaction[];
+  next_cursor: string | null;
+}
+
 export function useExportPortfolioTransactions(portfolioId: string) {
   return useMutation({
     mutationFn: async (filters: PortfolioTransactionFilters = {}) => {
       const transactions: TransactionImportTransaction[] = [];
-      let offset = 0;
+      let cursor: string | null = null;
       while (true) {
-        const page = await api.get<TransactionImportTransaction[]>(
-          `/portfolio/${portfolioId}/transactions`,
-          { params: { limit: 500, offset, ...filters } },
+        const page: PortfolioTransactionPage = await api.get<PortfolioTransactionPage>(
+          `/portfolio/${portfolioId}/transactions/page`,
+          { params: { limit: 500, ...filters, ...(cursor ? { cursor } : {}) } },
         ).then((response) => response.data);
-        transactions.push(...page);
-        if (page.length < 500) return transactions;
-        offset += page.length;
+        transactions.push(...page.items);
+        if (!page.next_cursor) return transactions;
+        cursor = page.next_cursor;
       }
     },
   });

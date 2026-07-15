@@ -7,6 +7,7 @@ import {
   useExportPortfolioTransactions,
 } from "@/hooks/usePortfolio";
 import type { PortfolioTransactionFilters } from "@/hooks/usePortfolio";
+import type { PortfolioTransactionPage } from "@/hooks/usePortfolio";
 import { EditTransactionModal } from "./EditTransactionModal";
 import { exportCSV } from "./_shared";
 import type { TransactionRow } from "./_shared";
@@ -33,15 +34,20 @@ export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
     data, isLoading, isError, error, hasNextPage, fetchNextPage, isFetchingNextPage,
   } = useInfiniteQuery({
     queryKey: ["portfolio-transactions", portfolioId, filters],
-    initialPageParam: 0,
-    queryFn: ({ pageParam }) => api.get<TransactionRow[]>(
-      `/portfolio/${portfolioId}/transactions`,
-      { params: { limit: PAGE_SIZE + 1, offset: pageParam, ...filters } },
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => api.get<PortfolioTransactionPage>(
+      `/portfolio/${portfolioId}/transactions/page`,
+      {
+        params: {
+          limit: PAGE_SIZE, ...filters,
+          ...(pageParam ? { cursor: pageParam } : {}),
+        },
+      },
     ).then((response) => ({
-      rows: response.data.slice(0, PAGE_SIZE),
-      nextOffset: response.data.length > PAGE_SIZE ? pageParam + PAGE_SIZE : undefined,
+      rows: response.data.items as TransactionRow[],
+      nextCursor: response.data.next_cursor ?? undefined,
     })),
-    getNextPageParam: (lastPage) => lastPage.nextOffset,
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
     staleTime: 30_000,
   });
   const txns = data?.pages.flatMap((page) => page.rows) ?? [];

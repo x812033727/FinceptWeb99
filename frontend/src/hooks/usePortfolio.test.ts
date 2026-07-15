@@ -264,19 +264,21 @@ describe("portfolio transaction export", () => {
       symbol: "AAPL", market: "US" as const, tx_type: "buy" as const,
       date_from: "2024-01-01", date_to: "2024-12-31",
     };
-    mock.onGet("/portfolio/p4/transactions", {
-      params: { limit: 500, offset: 0, ...filters },
-    }).reply(200, firstPage);
-    mock.onGet("/portfolio/p4/transactions", {
-      params: { limit: 500, offset: 500, ...filters },
-    }).reply(200, finalPage);
+    mock.onGet("/portfolio/p4/transactions/page", {
+      params: { limit: 500, ...filters },
+    }).reply(200, { items: firstPage, next_cursor: "cursor-500" });
+    mock.onGet("/portfolio/p4/transactions/page", {
+      params: { limit: 500, ...filters, cursor: "cursor-500" },
+    }).reply(200, { items: finalPage, next_cursor: null });
 
     const { wrapper } = makeWrapper();
     const exported = renderHook(() => useExportPortfolioTransactions("p4"), { wrapper });
     await act(async () => {
       expect(await exported.result.current.mutateAsync(filters)).toHaveLength(501);
     });
-    expect(mock.history.get.map((request) => request.params?.offset)).toEqual([0, 500]);
+    expect(mock.history.get.map((request) => request.params?.cursor)).toEqual([
+      undefined, "cursor-500",
+    ]);
     expect(mock.history.get.every((request) => request.params?.symbol === "AAPL")).toBe(true);
   });
 });

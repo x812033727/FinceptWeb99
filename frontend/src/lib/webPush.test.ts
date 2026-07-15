@@ -16,12 +16,15 @@ const { apiMock } = vi.hoisted(() => ({
 vi.mock("@/lib/api", () => ({ default: apiMock }));
 
 import {
+  clearPushSubscriptionOnAuthChange,
   disablePush,
   enablePush,
   getPushStatus,
   isPushSupported,
+  unsubscribePushLocally,
   urlBase64ToUint8Array,
 } from "./webPush";
+import { useAuthStore } from "@/store/authStore";
 
 // ── browser API stubs ─────────────────────────────────────────────
 
@@ -58,6 +61,7 @@ function stubPushEnv({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  useAuthStore.getState().clearAuth();
   apiMock.get.mockResolvedValue({ data: { configured: true, public_key: "QUJDRA" } });
   apiMock.post.mockResolvedValue({ data: {} });
   apiMock.delete.mockResolvedValue({ data: {} });
@@ -189,6 +193,64 @@ describe("disablePush", () => {
   it("is a no-op without an active subscription", async () => {
     stubPushEnv({ subscription: null });
     expect(await disablePush()).toBe("off");
+    expect(apiMock.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe("auth session boundary", () => {
+  it("unsubscribes locally after logout without calling the authenticated API", async () => {
+    const sub = makeFakeSubscription();
+    stubPushEnv({ subscription: sub });
+    useAuthStore.getState().setAuth("token-a", {
+      id: "user-a", email: "a@example.com", role: "viewer",
+    });
+    const stop = clearPushSubscriptionOnAuthChange();
+
+    useAuthStore.getState().clearAuth();
+
+    await vi.waitFor(() => expect(sub.unsubscribe).toHaveBeenCalledTimes(1));
+    expect(apiMock.delete).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("unsubscribes when one authenticated account replaces another", async () => {
+    const sub = makeFakeSubscription();
+    stubPushEnv({ subscription: sub });
+    useAuthStore.getState().setAuth("token-a", {
+      id: "user-a", email: "a@example.com", role: "viewer",
+    });
+    const stop = clearPushSubscriptionOnAuthChange();
+
+    useAuthStore.getState().setAuth("token-b", {
+      id: "user-b", email: "b@example.com", role: "viewer",
+    });
+
+    await vi.waitFor(() => expect(sub.unsubscribe).toHaveBeenCalledTimes(1));
+    stop();
+  });
+
+  it("preserves push on initial session restore and same-user token rotation", async () => {
+    const sub = makeFakeSubscription();
+    stubPushEnv({ subscription: sub });
+    const stop = clearPushSubscriptionOnAuthChange();
+
+    useAuthStore.getState().setAuth("token-a", {
+      id: "user-a", email: "a@example.com", role: "viewer",
+    });
+    useAuthStore.getState().setToken("token-refreshed");
+    await Promise.resolve();
+
+    expect(sub.unsubscribe).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("can remove a browser subscription without deleting backend state", async () => {
+    const sub = makeFakeSubscription();
+    stubPushEnv({ subscription: sub });
+
+    await unsubscribePushLocally();
+
+    expect(sub.unsubscribe).toHaveBeenCalledTimes(1);
     expect(apiMock.delete).not.toHaveBeenCalled();
   });
 });

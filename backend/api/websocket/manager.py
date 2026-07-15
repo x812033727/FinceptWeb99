@@ -219,6 +219,31 @@ async def _authenticate(ws: WebSocket) -> dict | None:
         return None
 
 
+async def _reauthenticate(ws: WebSocket, token: str) -> bool:
+    """Refresh one user's credential; reject identity changes in-place.
+
+    A new subject gets a fresh transport so private alerts already queued on
+    the old user's writer cannot cross the authentication boundary. Returns
+    False when the caller must leave its receive loop and prune the socket.
+    """
+    try:
+        payload = decode_access_token(token)
+    except JWTError:
+        await _safe_send(ws, {"type": "error", "code": "auth_failed"})
+        return True
+    user_id = str(payload.get("sub") or "")
+    if not user_id:
+        await _safe_send(ws, {"type": "error", "code": "auth_failed"})
+        return True
+    if user_id != _ws_user.get(ws):
+        await _safe_send(ws, {"type": "error", "code": "identity_changed"})
+        await _safe_close(ws, code=4003, reason="Authentication identity changed")
+        return False
+    _ws_token_exp[ws] = float(payload.get("exp") or 0)
+    await _safe_send(ws, {"type": "auth_ok"})
+    return True
+
+
 async def _safe_close(ws: WebSocket, *, code: int, reason: str) -> None:
     """Close a socket unless the peer won the disconnect race."""
     try:
@@ -278,14 +303,8 @@ async def handle_market_ws(ws: WebSocket) -> None:
             # forcing a reconnect. Anything else requires a non-expired
             # token; otherwise close so the client knows to re-auth.
             if action == "auth":
-                token = msg.get("token", "")
-                try:
-                    new_payload = decode_access_token(token)
-                except JWTError:
-                    await _safe_send(ws, {"type": "error", "code": "auth_failed"})
-                    continue
-                _ws_token_exp[ws] = float(new_payload.get("exp") or 0)
-                await _safe_send(ws, {"type": "auth_ok"})
+                if not await _reauthenticate(ws, msg.get("token", "")):
+                    break
                 continue
 
             now_epoch = datetime.now(timezone.utc).timestamp()

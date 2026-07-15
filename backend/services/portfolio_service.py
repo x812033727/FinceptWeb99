@@ -546,6 +546,30 @@ async def list_transaction_imports(
     } for record in records]
 
 
+async def get_transaction_import_transactions(
+    *, portfolio_id: str, import_id: str, user_id: str, db: AsyncSession,
+) -> list[Transaction]:
+    """Return every transaction linked to one owned CSV import batch."""
+    portfolio = await get_portfolio(portfolio_id, user_id, db)
+    if not portfolio:
+        raise ValueError("Portfolio not found")
+    record = await db.scalar(select(PortfolioTransactionImport).where(
+        PortfolioTransactionImport.id == UUID(import_id),
+        PortfolioTransactionImport.portfolio_id == portfolio.id,
+    ))
+    if not record:
+        raise ValueError("Transaction import not found")
+    rows = await db.scalars(
+        select(Transaction)
+        .where(
+            Transaction.portfolio_id == portfolio.id,
+            Transaction.import_id == record.id,
+        )
+        .order_by(Transaction.tx_date, Transaction.created_at, Transaction.id)
+    )
+    return list(rows.all())
+
+
 async def rollback_transaction_import(
     *,
     portfolio_id: str,

@@ -250,7 +250,40 @@ async def test_import_service_rejects_unknown_portfolio(db_session: AsyncSession
             portfolio_id=missing_portfolio, user_id=missing_user, db=db_session,
         )
     with pytest.raises(ValueError, match="Portfolio not found"):
+        await svc.get_transaction_import_transactions(
+            portfolio_id=missing_portfolio, import_id=str(uuid4()),
+            user_id=missing_user, db=db_session,
+        )
+    with pytest.raises(ValueError, match="Portfolio not found"):
         await svc.rollback_transaction_import(
             portfolio_id=missing_portfolio, import_id=str(uuid4()),
             user_id=missing_user, db=db_session,
+        )
+
+
+@pytest.mark.asyncio
+async def test_import_service_lists_batch_details_and_rejects_unknown_import(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    _, portfolio = await _create_portfolio(
+        client, db_session, "import-service-details@test.com",
+    )
+    imported = await svc.import_transactions(
+        portfolio_id=str(portfolio.id), user_id=str(portfolio.user_id),
+        rows=[{
+            "tx_date": "2024-01-02", "symbol": "AAPL", "market": "US",
+            "tx_type": "buy", "quantity": 1, "price": 100,
+        }],
+        dry_run=False, db=db_session,
+    )
+    details = await svc.get_transaction_import_transactions(
+        portfolio_id=str(portfolio.id), import_id=imported["import_id"],
+        user_id=str(portfolio.user_id), db=db_session,
+    )
+    assert [(tx.symbol, tx.tx_date) for tx in details] == [("AAPL", date(2024, 1, 2))]
+
+    with pytest.raises(ValueError, match="Transaction import not found"):
+        await svc.get_transaction_import_transactions(
+            portfolio_id=str(portfolio.id), import_id=str(uuid4()),
+            user_id=str(portfolio.user_id), db=db_session,
         )

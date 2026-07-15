@@ -19,6 +19,7 @@ import {
   useAddTransaction,
   useImportTransactions,
   useRollbackTransactionImport,
+  useTransactionImportTransactions,
   useTransactionImports,
   useOptimise,
 } from "./usePortfolio";
@@ -201,6 +202,19 @@ describe("transaction import history", () => {
     const history = renderHook(() => useTransactionImports("p2"), { wrapper });
     await waitFor(() => expect(history.result.current.isSuccess).toBe(true));
     expect(history.result.current.data).toEqual(batches);
+
+    const batchDetails = [{
+      id: "tx-1", import_id: "import-1", symbol: "AAPL", market: "US",
+      tx_type: "buy", quantity: 2, price: 190, fx_rate: 1,
+      tx_date: "2024-01-02", notes: null, created_at: "2026-07-15T14:00:00Z",
+    }];
+    mock.onGet("/portfolio/p2/transaction-imports/import-1/transactions")
+      .reply(200, batchDetails);
+    const details = renderHook(
+      () => useTransactionImportTransactions("p2", "import-1"), { wrapper },
+    );
+    await waitFor(() => expect(details.result.current.isSuccess).toBe(true));
+    expect(details.result.current.data).toEqual(batchDetails);
 
     for (const key of [
       "portfolio-transactions", "portfolio", "portfolio-cash",

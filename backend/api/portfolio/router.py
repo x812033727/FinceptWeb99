@@ -172,6 +172,26 @@ async def list_transaction_imports(
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+@router.get(
+    "/{portfolio_id}/transaction-imports/{import_id}/transactions",
+    response_model=list[TransactionResponse],
+)
+async def get_transaction_import_transactions(
+    portfolio_id: str,
+    import_id: str,
+    user: CurrentUser,
+    db: DB,
+):
+    """List the complete transaction detail for one owned CSV batch."""
+    try:
+        return await svc.get_transaction_import_transactions(
+            portfolio_id=portfolio_id, import_id=import_id,
+            user_id=user["id"], db=db,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
 @router.delete(
     "/{portfolio_id}/transaction-imports/{import_id}",
     response_model=TransactionImportRollbackResponse,

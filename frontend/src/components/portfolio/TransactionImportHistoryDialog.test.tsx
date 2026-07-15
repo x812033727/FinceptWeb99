@@ -15,6 +15,11 @@ const mocks = vi.hoisted(() => ({
     imported_at: string;
   }>,
   rollbackError: null as Error | null,
+  details: [{
+    id: "tx-1", import_id: "import-1", symbol: "AAPL", market: "US",
+    tx_type: "buy", quantity: 2, price: 190, fx_rate: 1,
+    tx_date: "2024-01-02", notes: null, created_at: "2026-07-15T14:00:00Z",
+  }],
 }));
 
 vi.mock("@/hooks/usePortfolio", () => ({
@@ -30,6 +35,12 @@ vi.mock("@/hooks/usePortfolio", () => ({
     isPending: false,
     isError: mocks.rollbackError !== null,
     error: mocks.rollbackError,
+  }),
+  useTransactionImportTransactions: (_portfolioId: string, importId: string | null) => ({
+    data: importId ? mocks.details : undefined,
+    isLoading: false,
+    isError: false,
+    error: null,
   }),
 }));
 
@@ -79,6 +90,10 @@ describe("TransactionImportHistoryDialog", () => {
     expect(screen.getByText("Trade dates: Jan 2, 2024 – Jan 3, 2024")).toBeInTheDocument();
     expect(screen.getByText("AAPL · US")).toBeInTheDocument();
     expect(screen.getByText("+1 more instrument")).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "View details" })[0]);
+    expect(screen.getAllByText("AAPL · US")).toHaveLength(2);
+    expect(screen.getByText("190")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Hide details" })).toBeInTheDocument();
     expect(screen.getByText(
       "Source links incomplete (0/3). This batch cannot be rolled back safely.",
     )).toBeInTheDocument();

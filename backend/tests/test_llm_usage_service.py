@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.llm_usage_event import LLMUsageEvent
 from services import llm_usage_service as svc
+from middleware.metrics import AI_COST_USD_TOTAL, AI_TOKENS_TOTAL, AI_USAGE_EVENTS_TOTAL
 
 
 def _evt(
@@ -39,6 +40,32 @@ def _evt(
 
 
 # ── totals + per-provider rollup ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_record_usage_updates_operational_metrics(db_session: AsyncSession):
+    labels = ("openai", "gpt-4o-mini")
+    events = AI_USAGE_EVENTS_TOTAL.labels(*labels, "recorded")
+    prompt = AI_TOKENS_TOTAL.labels(*labels, "prompt")
+    completion = AI_TOKENS_TOTAL.labels(*labels, "completion")
+    cost = AI_COST_USD_TOTAL.labels(*labels)
+    before = tuple(metric._value.get() for metric in (events, prompt, completion, cost))
+
+    await svc.record_usage(
+        db_session,
+        user_id=None,
+        provider=labels[0],
+        model=labels[1],
+        persona_id="market_analyst",
+        prompt_tokens=1000,
+        completion_tokens=500,
+    )
+
+    after = tuple(metric._value.get() for metric in (events, prompt, completion, cost))
+    assert after[0] - before[0] == 1
+    assert after[1] - before[1] == 1000
+    assert after[2] - before[2] == 500
+    assert after[3] - before[3] == pytest.approx(0.00045)
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ external services are needed in CI.
 import os
 
 os.environ.setdefault("JWT_SECRET_KEY", "pytest-local-secret-key-32chars!!")
+os.environ.setdefault("PUBLIC_REGISTRATION_ENABLED", "true")
 
 # Swap passlib's bcrypt scheme for pbkdf2_sha256 in tests. bcrypt 3.2.2 pulls in
 # a cffi C-extension (`_cffi_backend`) that is missing in some dev environments
@@ -49,6 +50,7 @@ from sqlalchemy.ext.asyncio import (  # noqa: E402
 # model being imported by a sibling test — leading to FK-resolution failures
 # when tests run in isolation.
 import models.alert  # noqa: E402,F401
+import models.auth_security  # noqa: E402,F401
 import models.backtest_run  # noqa: E402,F401
 import models.backtest_sweep  # noqa: E402,F401
 import models.corporate_announcement  # noqa: E402,F401
@@ -58,6 +60,7 @@ import models.discussion_lesson  # noqa: E402,F401
 import models.discussion_round_context  # noqa: E402,F401
 import models.discussion_strategy_template  # noqa: E402,F401
 import models.fundamentals_snapshot  # noqa: E402,F401
+import models.governance  # noqa: E402,F401
 import models.ingest_health_history  # noqa: E402,F401
 import models.llm_provider_key  # noqa: E402,F401
 import models.llm_usage_event  # noqa: E402,F401
@@ -76,6 +79,7 @@ import models.strategy_version  # noqa: E402,F401
 import models.system_task_config  # noqa: E402,F401
 import models.tw_chip_metrics  # noqa: E402,F401
 import models.tw_company_info  # noqa: E402,F401
+import models.tw_company_classification_snapshot  # noqa: E402,F401
 import models.tw_govt_bank_flow  # noqa: E402,F401
 import models.tw_holdings_aggregates  # noqa: E402,F401
 import models.tw_revenue_monthly  # noqa: E402,F401
@@ -200,6 +204,8 @@ def mock_redis():
         r.delete.return_value = 1
         r.incr.return_value = 1
         r.expire.return_value = True
+        r.smembers.return_value = set()
+        r.sismember.return_value = False
         r.ping.return_value = True
         mock.return_value = r
         yield r

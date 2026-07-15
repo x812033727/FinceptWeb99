@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.alert import AlertEvent
+from models.notification_channel import NotificationChannel
 from models.user import User, UserRole
 from tasks import daily_alert_digest as cron
 
@@ -37,6 +38,14 @@ async def _add_event(
         user_id=user_id, symbol=symbol, market="US", kind=kind,
         message=f"{symbol} fired",
         fired_at=datetime.now(UTC) - timedelta(hours=hours_ago),
+    ))
+    await db.commit()
+
+
+async def _opt_in(db: AsyncSession, user_id: uuid.UUID) -> None:
+    db.add(NotificationChannel(
+        user_id=user_id, kind="email", enabled=False, verified=True,
+        config={"event_kinds": ["price_alert", "strategy_health"], "daily_digest": True},
     ))
     await db.commit()
 
@@ -84,6 +93,8 @@ async def test_aggregates_per_user_last_24h(db_session: AsyncSession):
     that user's symbols."""
     u1 = await _make_user(db_session)
     u2 = await _make_user(db_session)
+    await _opt_in(db_session, u1.id)
+    await _opt_in(db_session, u2.id)
     await _add_event(db_session, u1.id, "AAA", hours_ago=1)
     await _add_event(db_session, u1.id, "BBB", hours_ago=2, kind="strategy_health")
     await _add_event(db_session, u1.id, "OLD", hours_ago=30)   # outside window
@@ -114,6 +125,8 @@ async def test_aggregates_per_user_last_24h(db_session: AsyncSession):
 async def test_one_bad_address_does_not_poison_loop(db_session: AsyncSession):
     u1 = await _make_user(db_session)
     u2 = await _make_user(db_session)
+    await _opt_in(db_session, u1.id)
+    await _opt_in(db_session, u2.id)
     await _add_event(db_session, u1.id, "ERR1")
     await _add_event(db_session, u2.id, "OK1")
 
@@ -134,6 +147,21 @@ async def test_one_bad_address_does_not_poison_loop(db_session: AsyncSession):
 @pytest.mark.asyncio
 async def test_no_events_sends_nothing(db_session: AsyncSession):
     await _make_user(db_session)
+    send = AsyncMock()
+    with patch.object(cron.email_service, "is_configured", return_value=True), \
+         patch.object(cron.email_service, "send_email", send), \
+         patch.object(cron, "acquire_lock", AsyncMock(return_value=True)), \
+         patch.object(cron, "release_lock", AsyncMock()):
+        out = await cron.run_daily_alert_digest()
+    assert out["users_with_events"] == 0
+    assert out["emails_sent"] == 0
+    send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_digest_is_opt_in_not_an_unsolicited_email(db_session: AsyncSession):
+    user = await _make_user(db_session)
+    await _add_event(db_session, user.id, "NOOPT")
     send = AsyncMock()
     with patch.object(cron.email_service, "is_configured", return_value=True), \
          patch.object(cron.email_service, "send_email", send), \

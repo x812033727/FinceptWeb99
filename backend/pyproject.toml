@@ -14,3 +14,28 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "--disable-socket --allow-unix-socket --allow-hosts=localhost,127.0.0.1,::1"
+filterwarnings = [
+    # Every warning not explicitly classified below is a regression. Pytest
+    # gives the last matching filter precedence.
+    "error",
+    # passlib still imports stdlib crypt on Python 3.11; tracked as a third-party
+    # compatibility warning until the password-hashing backend is migrated.
+    "ignore:'crypt' is deprecated.*:DeprecationWarning",
+    # Read-only bind mounts used by local verification cannot persist pytest's
+    # cache. CI checkouts are writable, so this is environment-only noise.
+    "ignore:cache could not write path.*:_pytest.warning_types.PytestCacheWarning",
+]
+
+[tool.coverage.run]
+source = ["."]
+omit = [
+    "tests/*",
+    "finmind/tests/*",
+    "db/migrations/*",
+]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false

@@ -3,10 +3,10 @@ Integration tests for the US market API endpoints.
 All external data calls (Polygon, yfinance) are mocked so CI runs offline.
 """
 import time
-import pytest
-from httpx import AsyncClient
 from unittest.mock import AsyncMock, patch
 
+import pytest
+from httpx import AsyncClient
 
 # ── helpers ───────────────────────────────────────────────────────
 
@@ -23,13 +23,15 @@ def _mock_quote(symbol: str = "AAPL") -> dict:
         "volume": 55_000_000, "open": 181.0, "high": 183.5, "low": 180.0,
         "prev_close": 181.25, "market_cap": 2.85e12, "currency": "USD",
         "ts": int(time.time() * 1000), "is_market_open": True,
+        "data_source": "polygon",
     }
 
 
 def _mock_bars(n: int = 5) -> list[dict]:
     return [
         {"time": f"2024-01-{i + 1:02d}", "open": 180.0, "high": 185.0,
-         "low": 179.0, "close": 182.0 + i, "volume": 50_000_000}
+         "low": 179.0, "close": 182.0 + i, "volume": 50_000_000,
+         "data_source": "polygon"}
         for i in range(n)
     ]
 
@@ -41,7 +43,7 @@ def _mock_fundamentals(symbol: str = "AAPL") -> dict:
         "market_cap": 2.85e12, "pe_ratio": 28.5, "pb_ratio": 45.2,
         "eps": 6.42, "dividend_yield": 0.0055, "beta": 1.24,
         "52w_high": 199.6, "52w_low": 124.2, "description": "Apple Inc. designs ...",
-        "fetched_at": "2024-01-15T12:00:00Z",
+        "fetched_at": "2024-01-15T12:00:00Z", "data_source": "yfinance",
     }
 
 
@@ -112,6 +114,8 @@ async def test_quote_shape(client: AsyncClient):
     assert "volume" in data
     assert "currency" in data
     assert "is_market_open" in data
+    assert data["meta"]["freshness"] == "fresh"
+    assert data["meta"]["fallback_chain"] == ["polygon", "yfinance", "stooq", "finnhub"]
 
 
 @pytest.mark.asyncio
@@ -123,6 +127,29 @@ async def test_quote_ticker_uppercased(client: AsyncClient):
         await client.get("/api/us/quote/tsla", headers=h)
 
     mock.assert_awaited_once_with("TSLA")
+
+
+@pytest.mark.asyncio
+async def test_quote_verify_surfaces_cross_provider_conflict(client: AsyncClient):
+    h = await _auth_headers(client, "quote_verify@example.com")
+    check = {
+        "status": "conflict", "primary_source": "polygon",
+        "secondary_source": "yfinance", "spread_pct": 2.25,
+        "observations": {"polygon": 182.5, "yfinance": 178.44},
+        "checked_at": "2026-07-15T00:00:00+00:00",
+        "flags": ["price_source_conflict"],
+    }
+    with patch("services.us_market_service.get_quote", new=AsyncMock(return_value=_mock_quote("AAPL"))), \
+         patch("services.us_market_service.verify_quote_consistency", new=AsyncMock(return_value=check)) as verify:
+        response = await client.get("/api/us/quote/aapl?verify=true", headers=h)
+
+    assert response.status_code == 200
+    meta = response.json()["meta"]
+    assert meta["consistency"] == "conflict"
+    assert meta["price_spread_pct"] == 2.25
+    assert meta["cross_checked_sources"] == ["polygon", "yfinance"]
+    assert meta["quality_flags"] == ["price_source_conflict"]
+    verify.assert_awaited_once()
 
 
 # ── history ───────────────────────────────────────────────────────
@@ -141,6 +168,8 @@ async def test_history_returns_bars(client: AsyncClient):
     bar = result[0]
     for field in ("time", "open", "high", "low", "close", "volume"):
         assert field in bar
+    assert bar["meta"]["freshness"] == "stale"
+    assert bar["meta"]["market_session"] == "historical"
 
 
 @pytest.mark.asyncio
@@ -170,6 +199,19 @@ async def test_fundamentals_shape(client: AsyncClient):
     assert "pe_ratio" in data
     assert "market_cap" in data
     assert "fetched_at" in data
+    assert data["meta"]["source"] == "yfinance"
+    assert data["meta"]["freshness"] == "stale"
+
+
+@pytest.mark.asyncio
+async def test_quote_all_sources_failed_is_marked_unavailable(client: AsyncClient):
+    h = await _auth_headers(client, "quote_unavailable@example.com")
+    payload = _mock_quote("FAIL")
+    payload.update(price=0, data_source="unavailable")
+    with patch("services.us_market_service.get_quote", new=AsyncMock(return_value=payload)):
+        r = await client.get("/api/us/quote/FAIL", headers=h)
+    assert r.status_code == 200
+    assert r.json()["meta"]["freshness"] == "unavailable"
 
 
 @pytest.mark.asyncio

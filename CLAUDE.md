@@ -3,11 +3,10 @@
 Professional financial intelligence platform: FastAPI backend + React frontend,
 mirroring the FinceptTerminal C++/Qt6 desktop app as a server-side web service.
 
-> **Mainline branch:** `claude/create-terminal-documentation-iBmfW`.
-> All PRs target this branch (not `main`). The deployed backend / frontend
-> reads from here, so for changes to take effect you must (1) merge the PR
-> into this branch and (2) restart uvicorn / redeploy the container —
-> Python doesn't hot-reload the data-source connector layer.
+> **Mainline branch:** `main`.
+> CI, auto-tag and release workflows target `main`. Production changes still
+> require a reviewed merge plus the normal staged deployment; do not point
+> release automation at historical feature branches.
 
 ## Quick start
 
@@ -38,12 +37,15 @@ FinceptWeb/
 ├── backend/
 │   ├── api/              # FastAPI routers, one package per domain
 │   │   ├── admin/        # User management, system stats (admin role only)
-│   │   ├── auth/         # JWT login/register/refresh/logout, API keys
+│   │   ├── auth/         # Invite-only activation, JWT, reset, sessions, API keys
 │   │   ├── us_market/    # US quotes, history, fundamentals, options, macro, news, search
 │   │   ├── tw_market/    # TW quotes, history, institutional, margin, revenue, news
 │   │   ├── crypto_market/ # Kraken-backed Top 20 crypto: quote, history, screener, search
 │   │   ├── global_market/ # International news (Fed / FOMC / global macro, market='GLOBAL')
 │   │   ├── portfolio/    # Holdings, transactions, P&L, optimizer, performance snapshots
+│   │   ├── theses/       # Owner-scoped thesis CRUD, review and event timeline
+│   │   ├── decision_journal/ # D1/D5/D20 realised decision outcomes
+│   │   ├── research/     # Weekly research and portfolio summary
 │   │   ├── analytics/    # DCF, VaR, backtest
 │   │   ├── ai_agents/    # SSE streaming chat (23 personas, 8 LLM providers)
 │   │   ├── watchlist/    # Multi-watchlist CRUD with live quote enrichment

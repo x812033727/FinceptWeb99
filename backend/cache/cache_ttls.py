@@ -48,6 +48,8 @@ TTL_DERIVATIVES = 4 * 3600          # TAIFEX 三大法人 / 個股期 OI — dai
 
 # ── screener / news / options ────────────────────────────────────
 TTL_SCREENER = 10 * 60               # 10 min — heavy compute upstream
+TTL_FACTOR_RANKING = 15 * 60         # cross-sectional DB scan; refresh after daily archive
+TTL_FACTOR_VALIDATION = 24 * 3600    # historical inputs are immutable within a trading day
 TTL_SCREENER_CRYPTO = 60             # crypto universe is 20 symbols, cheaper
 TTL_NEWS = 5 * 60                    # 5 min — Google News RSS / connector cap
 TTL_OPTIONS = 5 * 60                 # 5 min — chain shifts only with quote

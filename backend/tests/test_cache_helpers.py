@@ -14,8 +14,10 @@ import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from prometheus_client import REGISTRY
 
 from cache import redis_cache as rc
+from middleware.metrics import CACHE_HITS_TOTAL
 
 
 @pytest.mark.asyncio
@@ -96,11 +98,43 @@ def test_endpoint_label_pulls_market_and_datatype(key, expected):
     assert rc._endpoint_label(key) == expected
 
 
+def test_tw_health_cache_key_versions_and_separates_period_windows():
+    assert rc.key_health_tw("2330", 4) == "tw:health:v2:2330:4"
+    assert rc.key_health_tw("2330", 8) != rc.key_health_tw("2330", 4)
+
+
+def test_factor_cache_keys_include_every_result_shaping_parameter():
+    assert rc.key_factor_ranking_tw("2025-06-30", "value", 50) == (
+        "tw:factor_ranking:v8:2025-06-30:value:50:1"
+    )
+    first = rc.key_factor_validation_tw("2024-01-01", "2025-01-01", "balanced", 20, 21, 20)
+    changed_cost = rc.key_factor_validation_tw("2024-01-01", "2025-01-01", "balanced", 20, 21, 30)
+    assert first != changed_cost
+    changed_notional = rc.key_factor_validation_tw(
+        "2024-01-01", "2025-01-01", "balanced", 20, 21, 20,
+        portfolio_notional_twd=50_000_000,
+    )
+    assert first != changed_notional
+    assert first != rc.key_factor_validation_tw(
+        "2024-01-01", "2025-01-01", "balanced", 20, 21, 20,
+        benchmark="equal_weight",
+    )
+    assert first != rc.key_factor_validation_tw(
+        "2024-01-01", "2025-01-01", "balanced", 20, 21, 20,
+        weight_mode="fixed",
+    )
+    assert rc.key_factor_ranking_tw("2025-06-30", "value", 50, True) != (
+        rc.key_factor_ranking_tw("2025-06-30", "value", 50, False)
+    )
+    assert rc.key_factor_ranking_tw(
+        "2025-06-30", "value", 50, model_key="model-a",
+    ) != rc.key_factor_ranking_tw(
+        "2025-06-30", "value", 50, model_key="model-b",
+    )
+
+
 @pytest.mark.asyncio
 async def test_cache_get_json_increments_hit_counter():
-    from middleware.metrics import CACHE_HITS_TOTAL
-    from prometheus_client import REGISTRY
-
     label = "tw.quote"
     before = REGISTRY.get_sample_value("cache_hits_total", {"endpoint": label}) or 0
     with patch.object(rc, "cache_get", AsyncMock(return_value='{"price": 100}')):

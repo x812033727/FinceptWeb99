@@ -265,9 +265,7 @@ async def test_ingest_chunk_records_failure_on_upstream_error(
 
 @pytest.mark.asyncio
 async def test_ingest_chunk_skips_when_no_mapping(finmind_session):
-    """Catalog has TaiwanFutOptDailyInfo but mappings.py doesn't yet —
-    runner must NOT crash, just record 'skipped' so future Phase-2
-    work resumes from a known state."""
+    """A mapped dataset with an empty upstream response completes cleanly."""
     await seed_dataset_sources()
 
     result = await ingest_chunk(
@@ -278,8 +276,9 @@ async def test_ingest_chunk_skips_when_no_mapping(finmind_session):
         range_end=date(2024, 1, 31),
         client=FakeClient([]),
     )
-    assert result.status == "skipped"
-    assert "no ingest mapping" in result.error
+    assert result.status == "done"
+    assert result.rows_written == 0
+    assert result.error is None
 
 
 @pytest.mark.asyncio

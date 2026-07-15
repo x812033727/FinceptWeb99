@@ -139,6 +139,35 @@ async def test_authenticate_times_out():
     assert result is None
 
 
+@pytest.mark.asyncio
+async def test_authenticate_propagates_an_already_closed_socket():
+    ws = MagicMock()
+    ws.receive_text = AsyncMock(side_effect=mgr.WebSocketDisconnect(code=1000))
+
+    with pytest.raises(mgr.WebSocketDisconnect):
+        await mgr._authenticate(ws)
+
+
+@pytest.mark.asyncio
+async def test_authenticate_handles_starlette_disconnected_state():
+    ws = MagicMock()
+    ws.receive_text = AsyncMock(
+        side_effect=RuntimeError('WebSocket is not connected. Need to call "accept" first.'),
+    )
+
+    assert await mgr._authenticate(ws) is None
+
+
+@pytest.mark.asyncio
+async def test_safe_close_ignores_a_completed_close_handshake():
+    ws = MagicMock()
+    ws.close = AsyncMock(side_effect=RuntimeError("close frame already sent"))
+
+    await mgr._safe_close(ws, code=4001, reason="Authentication failed")
+
+    ws.close.assert_awaited_once_with(code=4001, reason="Authentication failed")
+
+
 # ── _dispatch: delta suppression ─────────────────────────────────
 
 @pytest.mark.asyncio

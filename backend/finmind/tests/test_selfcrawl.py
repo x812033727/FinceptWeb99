@@ -105,6 +105,7 @@ async def test_runner_routes_to_stub_after_active_source_flip(
         range_end=date(2024, 1, 31),
     )
 
-    # Mapping not yet written for CB — runner records 'skipped'
-    # before the client is even consulted.
-    assert result.status == "skipped"
+    # The CB mapping now exists, so reaching the explicit connector stub is
+    # evidence that the active_source flip routed away from FinMind.
+    assert result.status == "failed"
+    assert "source='tpex' not wired yet" in result.error

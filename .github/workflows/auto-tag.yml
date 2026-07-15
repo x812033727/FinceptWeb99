@@ -19,7 +19,7 @@ name: Auto-tag mainline
 on:
   push:
     branches:
-      - claude/create-terminal-documentation-iBmfW
+      - main
     # Only run when the version file changes — avoids spending CI
     # minutes on every refactor / docs PR. Path filters apply to the
     # files changed in the push event, not the repo as a whole.
@@ -104,4 +104,11 @@ jobs:
           # need annotated tag metadata.
           git tag "$TAG"
           git push origin "$TAG"
-          echo "Pushed $TAG → release.yml will pick it up."
+          echo "Pushed $TAG."
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: gh release create "$TAG" --verify-tag --generate-notes --title "$TAG"

@@ -23,7 +23,13 @@ from cache.cache_ttls import (
 )
 from cache.redis_cache import cache_get, cache_set
 from data.us.fred_connector import get_latest
-from models.portfolio import Holding, Portfolio, Transaction, TransactionType
+from models.portfolio import (
+    Holding,
+    Portfolio,
+    PortfolioSnapshot,
+    Transaction,
+    TransactionType,
+)
 from services.crypto_market_service import get_quote as crypto_quote
 from services.tw_market_service import get_quote as tw_quote
 from services.us_market_service import get_quote as us_quote
@@ -268,6 +274,15 @@ async def add_transaction(
     db.add(tx)
     await db.flush()
 
+    await _validate_no_short_position(
+        portfolio_id, tx.symbol, tx.market.value, db,
+    )
+
+    from services.portfolio_cash_service import replace_transaction_settlement
+    await replace_transaction_settlement(
+        transaction=tx, db=db, reason="created",
+    )
+
     # Rebuild holding from all transactions
     await _rebuild_holding(portfolio_id, symbol.upper(), market.upper(), db)
     return tx
@@ -304,6 +319,9 @@ async def update_transaction(
     from models.portfolio import Market as MarketEnum
     old_symbol = tx.symbol
     old_market = tx.market.value
+    settlement_changed = any(value is not None for value in (
+        market, tx_type, quantity, price, fx_rate, tx_date,
+    ))
 
     if symbol is not None:
         tx.symbol = symbol.upper()
@@ -332,6 +350,20 @@ async def update_transaction(
 
     await db.flush()
 
+    await _validate_no_short_position(
+        portfolio_id, tx.symbol, tx.market.value, db,
+    )
+    if old_symbol != tx.symbol or old_market != tx.market.value:
+        await _validate_no_short_position(
+            portfolio_id, old_symbol, old_market, db,
+        )
+
+    if settlement_changed:
+        from services.portfolio_cash_service import replace_transaction_settlement
+        await replace_transaction_settlement(
+            transaction=tx, db=db, reason="updated",
+        )
+
     await _rebuild_holding(portfolio_id, tx.symbol, tx.market.value, db)
     if old_symbol != tx.symbol or old_market != tx.market.value:
         await _rebuild_holding(portfolio_id, old_symbol, old_market, db)
@@ -351,6 +383,13 @@ async def delete_transaction(
 
     symbol = tx.symbol
     market = tx.market.value
+    await _validate_no_short_position(
+        portfolio_id, symbol, market, db, exclude_transaction_id=tx.id,
+    )
+    from services.portfolio_cash_service import reverse_transaction_settlement
+    await reverse_transaction_settlement(
+        transaction=tx, db=db, reason="transaction_deleted",
+    )
     await db.delete(tx)
     await db.flush()
     await _rebuild_holding(portfolio_id, symbol, market, db)
@@ -403,6 +442,35 @@ async def _rebuild_holding(portfolio_id: str, symbol: str, market: str, db: Asyn
             cost_currency=cost_currency,
         )
         db.add(h)
+
+
+async def _validate_no_short_position(
+    portfolio_id: str, symbol: str, market: str, db: AsyncSession,
+    *, exclude_transaction_id: UUID | None = None,
+) -> None:
+    """Reject a transaction history that sells shares before they exist."""
+    from models.portfolio import Market as MarketEnum
+
+    stmt = select(Transaction).where(
+        Transaction.portfolio_id == UUID(portfolio_id),
+        Transaction.symbol == symbol,
+        Transaction.market == MarketEnum[market],
+    )
+    if exclude_transaction_id is not None:
+        stmt = stmt.where(Transaction.id != exclude_transaction_id)
+    txs = list((await db.scalars(stmt.order_by(
+        Transaction.tx_date, Transaction.created_at, Transaction.id,
+    ))).all())
+    quantity = 0.0
+    for item in txs:
+        if item.tx_type == TransactionType.buy:
+            quantity += float(item.quantity)
+        elif item.tx_type == TransactionType.sell:
+            quantity -= float(item.quantity)
+            if quantity < -1e-9:
+                raise ValueError(
+                    "Sell quantity exceeds available shares at transaction date"
+                )
 
 
 async def _cost_value_in_portfolio_currency(
@@ -593,9 +661,26 @@ async def get_portfolio_detail(portfolio_id: str, user_id: str, db: AsyncSession
     total_pnl   = total_value - total_cost
     total_pnl_pct = total_pnl / total_cost * 100 if total_cost else 0.0
 
-    # Compute weight per holding
+    from services.portfolio_cash_service import (
+        cash_value_in_currency,
+        get_cash_balances,
+    )
+    cash_balances = await get_cash_balances(
+        portfolio_id=portfolio_id, user_id=user_id, db=db,
+    )
+    cash_value = await cash_value_in_currency(
+        balances=cash_balances, target_currency=p.currency,
+    )
+    net_liquidation_value = total_value + cash_value
+
+    # Preserve the legacy holdings-only weight and add the economically
+    # complete weight against holdings + ledger cash.
     for h in enriched:
         h["weight_pct"] = round(h["current_value"] / total_value * 100, 2) if total_value else 0.0
+        h["net_weight_pct"] = (
+            round(h["current_value"] / net_liquidation_value * 100, 2)
+            if net_liquidation_value > 0 else 0.0
+        )
 
     return {
         "id": portfolio_id,
@@ -605,6 +690,9 @@ async def get_portfolio_detail(portfolio_id: str, user_id: str, db: AsyncSession
         "total_cost":  round(total_cost, 2),
         "total_pnl":   round(total_pnl, 2),
         "total_pnl_pct": round(total_pnl_pct, 4),
+        "cash_balances": cash_balances,
+        "cash_value": round(cash_value, 2),
+        "net_liquidation_value": round(net_liquidation_value, 2),
         "holdings": sorted(enriched, key=lambda x: x["current_value"], reverse=True),
     }
 
@@ -624,6 +712,20 @@ async def get_transactions(
         .order_by(Transaction.tx_date.desc(), Transaction.created_at.desc())
         .limit(limit)
     )
+    return list(rows.all())
+
+
+async def get_portfolio_snapshots(
+    portfolio_id: str, user_id: str, db: AsyncSession, *, days: int = 90,
+) -> list[PortfolioSnapshot]:
+    portfolio = await get_portfolio(portfolio_id, user_id, db)
+    if not portfolio:
+        raise ValueError("Portfolio not found")
+    cutoff = date.today() - timedelta(days=days - 1)
+    rows = await db.scalars(select(PortfolioSnapshot).where(
+        PortfolioSnapshot.portfolio_id == UUID(portfolio_id),
+        PortfolioSnapshot.snapshot_date >= cutoff,
+    ).order_by(PortfolioSnapshot.snapshot_date.desc()))
     return list(rows.all())
 
 

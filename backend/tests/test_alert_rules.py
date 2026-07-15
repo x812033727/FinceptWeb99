@@ -5,16 +5,24 @@ no Redis — so every boundary case is a plain construct-and-assert.
 Cooldown/repeat semantics and threshold resolution are integration-
 tested in test_alert_service.py.
 """
+from datetime import UTC, datetime
+
 from models.alert import PriceAlert
 from schemas.alert import PARAMS_MODELS
 from services.alert_rules import (
     DAILY_CONDITION_TYPES,
     THR_AVG_VOL,
+    THR_CLOSES,
     THR_HIGH,
     THR_LOW,
     TICK_EVALUATORS,
+    RSI_HISTORY_BARS,
     TickContext,
     threshold_needs,
+    rsi_relation,
+    rsi_value,
+    trend_line_projection,
+    trend_relation,
 )
 
 
@@ -26,10 +34,13 @@ def _alert(condition_type: str, *, target_price=None, params=None) -> PriceAlert
     )
 
 
-def _ctx(price=100.0, change_pct=None, volume=None, thresholds=None) -> TickContext:
+def _ctx(
+    price=100.0, change_pct=None, volume=None, thresholds=None, observed_at=None,
+) -> TickContext:
     return TickContext(
         price=price, change_pct=change_pct, volume=volume,
         thresholds=thresholds or {},
+        observed_at=observed_at or datetime(2026, 1, 6, tzinfo=UTC),
     )
 
 
@@ -73,6 +84,54 @@ def test_price_below_fires_at_and_below_target():
 def test_price_rules_abstain_without_target():
     assert TICK_EVALUATORS["price_above"](_alert("price_above"), _ctx()) is None
     assert TICK_EVALUATORS["price_below"](_alert("price_below"), _ctx()) is None
+
+
+# ── trend-line projection / dynamic side ─────────────────────────
+
+def _trend_alert(condition_type="trend_cross_above", **overrides):
+    params = {
+        "start_time": "2026-01-01", "start_price": 100.0,
+        "end_time": "2026-01-11", "end_price": 110.0,
+        **overrides,
+    }
+    return _alert(condition_type, params=params)
+
+
+def test_trend_projection_interpolates_and_extrapolates_calendar_time():
+    alert = _trend_alert()
+    assert trend_line_projection(alert, datetime(2026, 1, 6, tzinfo=UTC)) == 105.0
+    assert trend_line_projection(alert, datetime(2026, 1, 16, tzinfo=UTC)) == 115.0
+    # Anchor input order does not change the same line.
+    reversed_alert = _alert("trend_cross_above", params={
+        "start_time": "2026-01-11", "start_price": 110.0,
+        "end_time": "2026-01-01", "end_price": 100.0,
+    })
+    assert trend_line_projection(reversed_alert, datetime(2026, 1, 6, tzinfo=UTC)) == 105.0
+
+
+def test_trend_relation_and_evaluators_use_projected_target():
+    alert = _trend_alert()
+    at = datetime(2026, 1, 6, tzinfo=UTC)
+    assert trend_relation(alert, _ctx(price=104.0, observed_at=at)) == "below"
+    assert trend_relation(alert, _ctx(price=105.0, observed_at=at)) == "on"
+    assert trend_relation(alert, _ctx(price=106.0, observed_at=at)) == "above"
+    assert TICK_EVALUATORS["trend_cross_above"](
+        alert, _ctx(price=106.0, observed_at=at),
+    ).payload["projected_price"] == 105.0
+    assert TICK_EVALUATORS["trend_cross_above"](
+        alert, _ctx(price=104.0, observed_at=at),
+    ) is None
+    below = _trend_alert("trend_cross_below")
+    assert TICK_EVALUATORS["trend_cross_below"](
+        below, _ctx(price=104.0, observed_at=at),
+    ) is not None
+
+
+def test_trend_projection_abstains_for_malformed_or_non_positive_projection():
+    malformed = _alert("trend_cross_above", params={"start_time": "bad"})
+    assert trend_line_projection(malformed, datetime(2026, 1, 6, tzinfo=UTC)) is None
+    falling = _trend_alert(start_price=10.0, end_price=1.0)
+    assert trend_line_projection(falling, datetime(2026, 2, 1, tzinfo=UTC)) is None
 
 
 # ── pct_change_above / pct_change_below ──────────────────────────
@@ -168,6 +227,40 @@ def test_volume_surge_abstains_without_data():
     assert ev(alert2, _ctx(volume=1.0, thresholds=thr0)) is None
 
 
+# ── RSI crossing ─────────────────────────────────────────────────
+
+def test_rsi_value_uses_prior_closes_plus_live_price():
+    alert = _alert("rsi_cross_above", params={"period": 14, "level": 70})
+    flat = {(THR_CLOSES, RSI_HISTORY_BARS): [100.0] * 14}
+    assert rsi_value(alert, _ctx(price=100.0, thresholds=flat)) == 50.0
+    assert rsi_value(alert, _ctx(price=110.0, thresholds=flat)) == 100.0
+    assert rsi_value(alert, _ctx(price=90.0, thresholds=flat)) == 0.0
+
+
+def test_rsi_evaluators_and_relation_respect_level():
+    thresholds = {(THR_CLOSES, RSI_HISTORY_BARS): [100.0] * 14}
+    above = _alert("rsi_cross_above", params={"period": 14, "level": 70})
+    below = _alert("rsi_cross_below", params={"period": 14, "level": 30})
+    assert rsi_relation(above, _ctx(price=90.0, thresholds=thresholds)) == "below"
+    result = TICK_EVALUATORS["rsi_cross_above"](
+        above, _ctx(price=110.0, thresholds=thresholds),
+    )
+    assert result.payload["rsi"] == 100.0
+    assert result.payload["level"] == 70
+    assert TICK_EVALUATORS["rsi_cross_below"](
+        below, _ctx(price=90.0, thresholds=thresholds),
+    ).payload["rsi"] == 0.0
+
+
+def test_rsi_abstains_without_enough_close_history():
+    alert = _alert("rsi_cross_above", params={"period": 14, "level": 70})
+    short = {(THR_CLOSES, RSI_HISTORY_BARS): [100.0] * 13}
+    assert rsi_value(alert, _ctx(price=110.0, thresholds=short)) is None
+    assert TICK_EVALUATORS["rsi_cross_above"](
+        alert, _ctx(price=110.0, thresholds=short),
+    ) is None
+
+
 # ── threshold_needs ──────────────────────────────────────────────
 
 def test_threshold_needs_collects_per_type_lookbacks():
@@ -178,9 +271,11 @@ def test_threshold_needs_collects_per_type_lookbacks():
         _alert("volume_surge", params={"multiple": 3.0, "lookback_days": 20}),
         _alert("price_above", target_price=1.0),
         _alert("pct_change_above", params={"pct": 5.0}),
+        _alert("rsi_cross_above", params={"period": 14, "level": 70}),
     ]
     assert threshold_needs(alerts) == {
         (THR_HIGH, 20), (THR_HIGH, 60), (THR_LOW, 10), (THR_AVG_VOL, 20),
+        (THR_CLOSES, RSI_HISTORY_BARS),
     }
 
 

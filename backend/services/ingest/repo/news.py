@@ -378,6 +378,8 @@ async def read_recent_announcements(
             "source_url":          r.source_url,
             "sentiment_score":     r.sentiment_score,
             "sentiment_label":     r.sentiment_label,
+            "data_source":         r.source,
+            "as_of":               r.announced_at.isoformat(),
         })
     return out
 

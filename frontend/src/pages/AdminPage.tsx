@@ -35,6 +35,7 @@ import { SystemUpdateCard } from "@/components/admin/SystemUpdateCard";
 import { RedeployCard } from "@/components/admin/RedeployCard";
 import { UsageCard } from "@/components/admin/UsageCard";
 import { DbBrowserTab } from "@/components/admin/DbBrowserTab";
+import InviteUserCard from "@/components/admin/InviteUserCard";
 
 interface AdminUser {
   id: string;
@@ -201,6 +202,7 @@ function UsersTab() {
 
   return (
     <div className="space-y-4">
+      <InviteUserCard />
       {stats && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
           {[

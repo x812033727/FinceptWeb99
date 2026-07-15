@@ -1,6 +1,12 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "@/lib/api";
-import type { Portfolio, PortfolioRisk, Transaction } from "@/types/portfolio";
+import type {
+  CashBalance,
+  CashEntry,
+  Portfolio,
+  PortfolioRisk,
+  Transaction,
+} from "@/types/portfolio";
 
 export function usePortfolios() {
   return useQuery({
@@ -109,5 +115,53 @@ export function useOptimise(portfolioId: string) {
   return useMutation({
     mutationFn: (body: { target_risk: string; max_weight: number }) =>
       api.post(`/portfolio/${portfolioId}/optimise`, body).then((r) => r.data),
+  });
+}
+
+export function useCashBalance(portfolioId: string) {
+  return useQuery({
+    queryKey: ["portfolio-cash", portfolioId],
+    queryFn: () => api.get<CashBalance>(`/portfolio/${portfolioId}/cash`).then((r) => r.data),
+    enabled: !!portfolioId,
+  });
+}
+
+export function useCashEntries(portfolioId: string) {
+  return useQuery({
+    queryKey: ["portfolio-cash-entries", portfolioId],
+    queryFn: () => api.get<CashEntry[]>(`/portfolio/${portfolioId}/cash-entries`).then((r) => r.data),
+    enabled: !!portfolioId,
+  });
+}
+
+export function useAddCashEntry(portfolioId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      currency: string; amount: number; entry_type: string;
+      occurred_on: string; notes?: string;
+    }) => api.post(`/portfolio/${portfolioId}/cash-entries`, {
+      ...body,
+      idempotency_key: `manual-${Date.now()}-${crypto.randomUUID()}`,
+    }).then((r) => r.data),
+    onSuccess: () => Promise.all([
+      qc.invalidateQueries({ queryKey: ["portfolio-cash", portfolioId] }),
+      qc.invalidateQueries({ queryKey: ["portfolio-cash-entries", portfolioId] }),
+      qc.invalidateQueries({ queryKey: ["portfolio", portfolioId] }),
+    ]),
+  });
+}
+
+export function useReverseCashEntry(portfolioId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (entryId: string) => api.post(
+      `/portfolio/${portfolioId}/cash-entries/${entryId}/reverse`, {},
+    ).then((r) => r.data),
+    onSuccess: () => Promise.all([
+      qc.invalidateQueries({ queryKey: ["portfolio-cash", portfolioId] }),
+      qc.invalidateQueries({ queryKey: ["portfolio-cash-entries", portfolioId] }),
+      qc.invalidateQueries({ queryKey: ["portfolio", portfolioId] }),
+    ]),
   });
 }

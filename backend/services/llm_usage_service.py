@@ -124,7 +124,18 @@ async def record_usage(
         )
         db.add(evt)
         await db.commit()
+        from middleware.metrics import (
+            AI_COST_USD_TOTAL,
+            AI_TOKENS_TOTAL,
+            AI_USAGE_EVENTS_TOTAL,
+        )
+        AI_USAGE_EVENTS_TOTAL.labels(provider, model, "recorded").inc()
+        AI_TOKENS_TOTAL.labels(provider, model, "prompt").inc(prompt_tokens)
+        AI_TOKENS_TOTAL.labels(provider, model, "completion").inc(completion_tokens)
+        AI_COST_USD_TOTAL.labels(provider, model).inc(cost)
     except Exception as exc:  # noqa: BLE001
+        from middleware.metrics import AI_USAGE_EVENTS_TOTAL
+        AI_USAGE_EVENTS_TOTAL.labels(provider, model, "failed").inc()
         logger.warning("llm_usage.record_failed", extra={
             "provider": provider, "model": model, "error": str(exc),
         })

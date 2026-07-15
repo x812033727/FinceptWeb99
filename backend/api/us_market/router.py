@@ -1,27 +1,41 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from typing import Annotated
 
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+
+import services.intraday_service as intraday_svc
+import services.us_market_service as svc
+from api.market_data_quality import build_quality_meta
 from api.us_market.schemas import (
-    QuoteResponse,
-    OHLCVBar,
-    FundamentalsResponse,
     FinancialsResponse,
-    ScreenerItem,
+    FundamentalsResponse,
     MacroDataPoint,
+    OHLCVBar,
+    OptionsAnalysisResponse,
+    QuoteResponse,
+    ScreenerItem,
 )
 from dependencies import get_current_user
 from limiter import limiter
-import services.intraday_service as intraday_svc
-import services.us_market_service as svc
 
 router = APIRouter()
 CurrentUser = Annotated[dict, Depends(get_current_user)]
 
 
 @router.get("/quote/{ticker}", response_model=QuoteResponse)
-async def quote(ticker: str, _: CurrentUser):
+async def quote(
+    ticker: str,
+    _: CurrentUser,
+    verify: bool = Query(False, description="Cross-check against an independent provider"),
+):
     try:
-        return await svc.get_quote(ticker.upper())
+        data = await svc.get_quote(ticker.upper())
+        if verify:
+            data["quality_check"] = await svc.verify_quote_consistency(ticker.upper(), data)
+        data["meta"] = build_quality_meta(
+            data, kind="quote",
+            fallback_chain=["polygon", "yfinance", "stooq", "finnhub"],
+        ).model_dump()
+        return data
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Data source error: {e}")
 
@@ -34,7 +48,15 @@ async def history(
     interval: str = Query("1d", description="1m 5m 15m 1h 1d 1wk 1mo"),
 ):
     try:
-        return await svc.get_history(ticker.upper(), period=period, interval=interval)
+        bars = await svc.get_history(ticker.upper(), period=period, interval=interval)
+        anchor = bars[-1].get("time") if bars else None
+        return [
+            {**bar, "meta": build_quality_meta(
+                bar, kind="history", as_of=anchor,
+                fallback_chain=["polygon", "yfinance"],
+            ).model_dump()}
+            for bar in bars
+        ]
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Data source error: {e}")
 
@@ -71,6 +93,11 @@ async def fundamentals(ticker: str, _: CurrentUser):
             fifty_two_week_low=data.get("52w_low"),
             description=data.get("description"),
             fetched_at=data["fetched_at"],
+            data_source=data.get("data_source", "unavailable"),
+            meta=build_quality_meta(
+                data, kind="fundamentals",
+                fallback_chain=["polygon", "yfinance"],
+            ),
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Data source error: {e}")
@@ -95,6 +122,26 @@ async def options(
         return await svc.get_options(ticker.upper(), expiration_date)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Data source error: {e}")
+
+
+@router.get("/options-analysis/{ticker}", response_model=OptionsAnalysisResponse)
+@limiter.limit("30/minute")
+async def options_analysis(
+    request: Request,
+    ticker: str,
+    _: CurrentUser,
+    max_expiries: int = Query(8, ge=1, le=12),
+):
+    """Derived chain analytics with explicit completeness and methodology."""
+    from services.options_analytics_service import get_options_analysis
+
+    try:
+        return await get_options_analysis(ticker.upper(), max_expiries=max_expiries)
+    except Exception as exc:
+        # Provider exceptions may embed request URLs containing API keys;
+        # keep the public error stable. Exception chaining remains available
+        # to configured server-side error reporting without entering JSON.
+        raise HTTPException(status_code=502, detail="Options analysis unavailable") from exc
 
 
 @router.get("/screener", response_model=list[ScreenerItem])
@@ -143,7 +190,15 @@ async def macro(indicator: str, _: CurrentUser):
 @router.get("/news/{ticker}")
 async def news(ticker: str, _: CurrentUser, limit: int = Query(10, le=30)):
     """Recent news headlines for a US stock (via yfinance)."""
-    return await svc.get_news(ticker.upper(), limit=limit)
+    rows = await svc.get_news(ticker.upper(), limit=limit)
+    return [
+        {**row, "meta": build_quality_meta(
+            row, kind="dataset",
+            as_of=row.get("published_at"),
+            fallback_chain=["google_news", "yfinance"],
+        ).model_dump()}
+        for row in rows
+    ]
 
 
 @router.get("/earnings/{ticker}")

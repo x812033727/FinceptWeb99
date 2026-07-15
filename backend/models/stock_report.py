@@ -16,7 +16,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -51,6 +51,12 @@ class StockReport(Base):
     model: Mapped[str] = mapped_column(
         String(128), nullable=False, default="", server_default="",
     )
+    model_id: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False, default="stock-report-v2", server_default="stock-report-v2")
+    data_cutoff: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    context_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    quality_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
     sections: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False,

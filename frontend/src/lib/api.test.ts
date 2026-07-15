@@ -35,6 +35,20 @@ describe("api axios instance", () => {
     expect(r.data).toEqual({ ok: true });
   });
 
+  it("preserves an explicit token while switching authenticated users", async () => {
+    useAuthStore.getState().setAuth("old-admin-token", {
+      id: "admin", email: "admin@example.com", role: "admin",
+    });
+    mock.onGet("/auth/me").reply((cfg) => {
+      expect(cfg.headers?.Authorization).toBe("Bearer invited-analyst-token");
+      return [200, { id: "analyst", email: "analyst@example.com", role: "analyst" }];
+    });
+
+    await api.get("/auth/me", {
+      headers: { Authorization: "Bearer invited-analyst-token" },
+    });
+  });
+
   it("does not attach Authorization when no token is set", async () => {
     mock.onGet("/public/ping").reply((cfg) => {
       expect(cfg.headers?.Authorization).toBeUndefined();

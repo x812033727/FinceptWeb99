@@ -18,29 +18,36 @@ from api.ai_agents.router import router as ai_router
 from api.ai_agents.stock_report import router as stock_report_router
 from api.alerts.router import router as alerts_router
 from api.analytics.router import router as analytics_router
+from api.announcements.router import router as announcements_router
 from api.auth.router import router as auth_router
+from api.beta.router import admin_router as beta_admin_router
+from api.beta.router import feedback_router
+from api.charts.router import router as charts_router
 from api.crypto_market.router import router as crypto_router
+from api.decision_journal.router import router as decision_journal_router
 from api.discussion.router import router as discussion_router
 from api.global_market.router import router as global_router
-from api.announcements.router import router as announcements_router
 from api.notifications.router import router as notifications_router
 from api.portfolio.router import router as portfolio_router
 from api.public_daily import router as public_daily_router
+from api.research.router import router as research_router
 from api.system.router import router as system_router
+from api.theses.router import router as theses_router
 from api.tw_market.router import router as tw_router
 from api.us_market.router import router as us_router
 from api.watchlist.router import router as watchlist_router
 from api.websocket.router import router as ws_router
+from cache.redis_cache import ping as redis_ping
+from config import settings
+from db.seed import seed_admin
+from db.session import AsyncSessionLocal, engine
+
 # FinMind clone subsystem — separate sub-app under `backend/finmind/`,
 # isolated DB. Late-imported here only to mount the router; the
 # subsystem doesn't run any startup side-effects in the main process
 # beyond engine initialization (lazy connect, no DB roundtrip at
 # import time).
 from finmind.api.router import router as finmind_router
-from cache.redis_cache import ping as redis_ping
-from config import settings
-from db.seed import seed_admin
-from db.session import AsyncSessionLocal, engine
 from limiter import limiter
 from logging_config import setup_logging
 from middleware.etag import ETagMiddleware
@@ -69,13 +76,14 @@ async def _auto_init_finmind_clone() -> None:
         return
 
     try:
+        from sqlalchemy import text as _text
+
         from finmind.db.session import finmind_engine
         from finmind.scripts.init_db import (
             run_migrations,
             seed_dataset_sources,
             seed_default_free_plan,
         )
-        from sqlalchemy import text as _text
 
         async with finmind_engine.connect() as conn:
             await conn.execute(_text("SELECT 1"))
@@ -158,6 +166,7 @@ async def lifespan(app: FastAPI):
 
     from api.websocket.manager import publish_alert_to_user, publish_update, start_pubsub_listener
     from services.notification_service import register_push_impl, register_transport
+    from services.channel_notification_service import email_to_user, line_to_user
     from services.web_push_service import push_to_user as web_push_to_user
 
     # Alert push goes through Redis pub/sub in every topology: the fire
@@ -169,6 +178,8 @@ async def lifespan(app: FastAPI):
     # Web Push (PR-D3): browser notifications even with no tab open.
     # No-ops silently until VAPID keys are configured.
     register_transport("web_push", web_push_to_user)
+    register_transport("email", email_to_user)
+    register_transport("line", line_to_user)
     await start_pubsub_listener()
 
     # ── Scheduler + Kraken pump (per-topology) ───────────────────
@@ -177,8 +188,8 @@ async def lifespan(app: FastAPI):
     # N copies of every job. Default true = single-process dev mode.
     crypto_pump = None
     if settings.SCHEDULER_ENABLED:
-        from tasks.scheduler import scheduler, setup_jobs
         from data.crypto.kraken_ws import KrakenTickerPump
+        from tasks.scheduler import scheduler, setup_jobs
 
         setup_jobs()
         scheduler.start()
@@ -260,6 +271,12 @@ app.add_middleware(PrometheusMiddleware)
 # so 304s are still counted per-path by the metrics middleware.
 app.add_middleware(ETagMiddleware)
 
+# Append-only record of every state-changing API call. Registered outside
+# endpoint code so portfolio, key-management and admin writes cannot forget it.
+from middleware.audit import AuditMiddleware  # noqa: E402
+
+app.add_middleware(AuditMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
@@ -268,14 +285,36 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def prevent_auth_response_caching(request: Request, call_next):
+    """Never reuse account-scoped auth responses across token changes.
+
+    Invitation acceptance intentionally replaces the current browser session.
+    Without ``no-store``, a browser can reuse the previous user's ``/me``
+    response even though the Authorization header and refresh cookie changed.
+    """
+    response = await call_next(request)
+    if request.url.path.startswith("/api/auth/"):
+        response.headers["Cache-Control"] = "no-store, private"
+        response.headers["Pragma"] = "no-cache"
+        vary = {part.strip() for part in response.headers.get("Vary", "").split(",") if part.strip()}
+        vary.update({"Authorization", "Cookie"})
+        response.headers["Vary"] = ", ".join(sorted(vary))
+    return response
+
 # ── Routers ───────────────────────────────────────────────────────
 app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
 app.include_router(public_daily_router, prefix="/api/public", tags=["Public"])
+app.include_router(feedback_router, prefix="/api/feedback", tags=["Feedback"])
+app.include_router(beta_admin_router, prefix="/api/admin/beta", tags=["Admin Beta"])
 app.include_router(us_router, prefix="/api/us", tags=["US Market"])
 app.include_router(tw_router, prefix="/api/tw", tags=["TW Market"])
 app.include_router(crypto_router, prefix="/api/crypto", tags=["Crypto Market"])
+app.include_router(charts_router, prefix="/api/charts/drawings", tags=["Chart Drawings"])
 app.include_router(ws_router)
 app.include_router(portfolio_router, prefix="/api/portfolio", tags=["Portfolio"])
+app.include_router(research_router, prefix="/api/research", tags=["Research"])
 app.include_router(analytics_router, prefix="/api/analytics", tags=["Analytics"])
 app.include_router(ai_router, prefix="/api/ai", tags=["AI Agents"])
 # B1 個股 AI 研究報告 — same /api/ai namespace, separate module so the
@@ -288,9 +327,11 @@ app.include_router(watchlist_router, prefix="/api/watchlist", tags=["Watchlist"]
 app.include_router(alerts_router, prefix="/api/alerts", tags=["Alerts"])
 app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
 app.include_router(discussion_router, prefix="/api/discussion", tags=["Discussion"])
+app.include_router(decision_journal_router, prefix="/api/decision-journal", tags=["Decision Journal"])
 app.include_router(global_router, prefix="/api/global", tags=["Global Market"])
 app.include_router(announcements_router, prefix="/api/announcements", tags=["Announcements"])
 app.include_router(system_router, prefix="/api/system", tags=["System"])
+app.include_router(theses_router, prefix="/api/theses", tags=["Investment Theses"])
 app.include_router(notifications_router, prefix="/api/notifications", tags=["Notifications"])
 app.include_router(finmind_router, prefix="/api/finmind", tags=["FinMind Clone"])
 

@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 from email.message import EmailMessage
 from typing import Any, Iterable
+from urllib.parse import urlencode
 
 import aiosmtplib
 
@@ -86,6 +87,24 @@ async def send_email(
         start_tls=bool(settings.SMTP_USE_TLS) and not bool(settings.SMTP_USE_SSL),
         timeout=settings.SMTP_TIMEOUT_SECONDS,
     )
+
+
+async def send_password_reset_email(email: str, token: str) -> None:
+    """Send a short-lived reset link without logging the raw token."""
+    if not is_configured():
+        log.warning("password reset email skipped: SMTP is not configured")
+        return
+    url = f"{settings.PASSWORD_RESET_URL}?{urlencode({'token': token})}"
+    try:
+        await send_email(
+            to=email,
+            subject="Fincept password reset",
+            body_markdown=f"A password reset was requested. This link expires shortly:\n\n{url}",
+        )
+    except Exception:
+        # Background email delivery must not turn the enumeration-safe 202
+        # response into a transport-dependent 500.
+        log.exception("password reset email delivery failed")
 
 
 # ── Markdown rendering ───────────────────────────────────────────

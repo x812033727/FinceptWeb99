@@ -199,7 +199,7 @@ async def get_batch_quotes(tickers: list[str]) -> dict[str, dict[str, Any]]:
 
 
 async def get_options(
-    ticker: str, expiration_date: str | None = None,
+    ticker: str, expiration_date: str | None = None, *, max_expiries: int | None = None,
 ) -> list[dict[str, Any]]:
     """Options chain via yfinance. Pulls calls + puts for one expiry (or all).
 
@@ -220,7 +220,9 @@ async def get_options(
         if not expiries:
             return []
 
-        targets = [expiration_date] if expiration_date else expiries
+        targets = [expiration_date] if expiration_date else (
+            expiries[:max_expiries] if max_expiries is not None else expiries
+        )
         out: list[dict[str, Any]] = []
         for exp in targets:
             if exp not in expiries:

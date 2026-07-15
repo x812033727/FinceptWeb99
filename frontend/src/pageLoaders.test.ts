@@ -16,6 +16,7 @@ const dashboardLoad = vi.fn(() => Promise.resolve({}));
 const marketLoad = vi.fn(() => Promise.resolve({}));
 const stockDetailLoad = vi.fn(() => Promise.resolve({}));
 const screenerLoad = vi.fn(() => Promise.resolve({}));
+const comparisonLoad = vi.fn(() => Promise.resolve({}));
 const portfolioLoad = vi.fn(() => Promise.resolve({}));
 const analyticsLoad = vi.fn(() => Promise.resolve({}));
 const macroLoad = vi.fn(() => Promise.resolve({}));
@@ -29,6 +30,7 @@ vi.mock("@/pages/DashboardPage", () => ({ default: () => null, __load: dashboard
 vi.mock("@/pages/MarketPage", () => ({ default: () => null, __load: marketLoad }));
 vi.mock("@/pages/StockDetailPage", () => ({ default: () => null, __load: stockDetailLoad }));
 vi.mock("@/pages/ScreenerPage", () => ({ default: () => null, __load: screenerLoad }));
+vi.mock("@/pages/ComparisonPage", () => ({ default: () => null, __load: comparisonLoad }));
 vi.mock("@/pages/PortfolioPage", () => ({ default: () => null, __load: portfolioLoad }));
 vi.mock("@/pages/AnalyticsPage", () => ({ default: () => null, __load: analyticsLoad }));
 vi.mock("@/pages/MacroPage", () => ({ default: () => null, __load: macroLoad }));
@@ -70,6 +72,7 @@ describe("prefetchPage", () => {
     ["/stock/US/AAPL", "stockDetail"],
     ["/stock/TW/2330", "stockDetail"],
     ["/screener", "screener"],
+    ["/compare", "comparison"],
     ["/portfolio", "portfolio"],
     ["/analytics", "analytics"],
     ["/macro", "macro"],

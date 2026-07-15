@@ -10,7 +10,11 @@ const api = axios.create({
 // ── Request interceptor: attach Bearer token ──────────────────────
 api.interceptors.request.use((config) => {
   const token = useAuthStore.getState().token;
-  if (token) {
+  // Callers that are deliberately switching identities (invitation
+  // acceptance, explicit token validation) must be able to supply the new
+  // token before authStore has been updated. Never replace that header with
+  // the previous session's token.
+  if (token && !config.headers.Authorization) {
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;

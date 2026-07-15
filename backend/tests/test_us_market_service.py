@@ -100,6 +100,18 @@ async def test_get_options_passes_expiration_date_through():
 
 
 @pytest.mark.asyncio
+async def test_get_options_bounds_yfinance_expiry_fanout_for_analysis():
+    rows = [_yf_chain_row()]
+    with patch.object(svc.settings, "POLYGON_API_KEY", ""), \
+         patch.object(svc, "cache_get_json", AsyncMock(return_value=None)) as cache_get, \
+         patch.object(svc, "cache_set_json", AsyncMock()), \
+         patch.object(svc.yfinance, "get_options", AsyncMock(return_value=rows)) as provider:
+        await svc.get_options("AAPL", max_expiries=8)
+    provider.assert_awaited_once_with("AAPL", None, max_expiries=8)
+    assert cache_get.await_args.args[0].endswith(":all:nearest8")
+
+
+@pytest.mark.asyncio
 async def test_get_options_tags_data_source_yfinance_when_no_polygon():
     """Free-tier deployments (no Polygon key) get the yfinance chain. Each
     row should carry data_source="yfinance" so the OptionsPanel can show

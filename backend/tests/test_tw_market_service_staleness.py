@@ -32,7 +32,10 @@ if "data.us.yfinance_connector" not in _sys.modules:
     _stub = _types.ModuleType("data.us.yfinance_connector")
     async def _stub_batch_quotes(tickers):  # noqa: ARG001
         return {}
+    async def _stub_info(ticker):  # noqa: ARG001
+        return {}
     _stub.get_batch_quotes = _stub_batch_quotes
+    _stub.get_info = _stub_info
     _sys.modules["data.us.yfinance_connector"] = _stub
     import data.us as _data_us
     _data_us.yfinance_connector = _stub
@@ -209,6 +212,14 @@ async def test_get_screener_recovers_from_stale_twse_via_ohlcv():
              svc.twse, "get_all_twse_symbols",
              AsyncMock(return_value=twse_rows),
          ), \
+         patch.object(
+             svc, "_recover_screener_via_finmind",
+             AsyncMock(return_value=None),
+         ), \
+         patch.object(
+             svc, "_recover_screener_via_yfinance",
+             AsyncMock(return_value=None),
+         ), \
          _patch_tw_now(year=2026, month=5, day=27, hh=15):
         result = await svc.get_screener(limit=50, min_volume=1_000_000)
 
@@ -252,6 +263,14 @@ async def test_get_screener_stamps_stale_when_db_cant_recover():
          patch.object(
              svc.twse, "get_all_twse_symbols",
              AsyncMock(return_value=twse_rows),
+         ), \
+         patch.object(
+             svc, "_recover_screener_via_finmind",
+             AsyncMock(return_value=None),
+         ), \
+         patch.object(
+             svc, "_recover_screener_via_yfinance",
+             AsyncMock(return_value=None),
          ), \
          _patch_tw_now(year=2026, month=5, day=27, hh=15):
         result = await svc.get_screener(limit=50, min_volume=1_000_000)

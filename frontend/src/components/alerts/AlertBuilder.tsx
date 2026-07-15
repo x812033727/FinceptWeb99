@@ -20,19 +20,25 @@ export type ConditionType =
   | "breakout_high"
   | "breakout_low"
   | "volume_surge"
-  | "foreign_net_buy_streak";
+  | "foreign_net_buy_streak"
+  | "rsi_cross_above"
+  | "rsi_cross_below"
+  | "trend_cross_above"
+  | "trend_cross_below";
+
+type BuilderConditionType = Exclude<ConditionType, "trend_cross_above" | "trend_cross_below">;
 
 export interface AlertRulePayload {
   symbol: string;
   market: Market;
-  condition_type: ConditionType;
+  condition_type: BuilderConditionType;
   target_price: number | null;
   params: Record<string, number> | null;
   repeat: boolean;
   cooldown_seconds: number;
 }
 
-const CONDITION_TYPES: ConditionType[] = [
+const CONDITION_TYPES: BuilderConditionType[] = [
   "price_above",
   "price_below",
   "pct_change_above",
@@ -41,9 +47,11 @@ const CONDITION_TYPES: ConditionType[] = [
   "breakout_low",
   "volume_surge",
   "foreign_net_buy_streak",
+  "rsi_cross_above",
+  "rsi_cross_below",
 ];
 
-const TW_ONLY: ConditionType[] = ["foreign_net_buy_streak"];
+const TW_ONLY: BuilderConditionType[] = ["foreign_net_buy_streak"];
 
 type Freq = "once" | "5m" | "1h" | "1d";
 const FREQ_TO_COOLDOWN: Record<Freq, number> = {
@@ -64,12 +72,14 @@ export default function AlertBuilder({ onSubmit, isPending, serverError }: Props
   const { t } = useTranslation();
   const [symbol, setSymbol] = useState("");
   const [market, setMarket] = useState<Market>("US");
-  const [conditionType, setConditionType] = useState<ConditionType>("price_above");
+  const [conditionType, setConditionType] = useState<BuilderConditionType>("price_above");
   const [targetPrice, setTargetPrice] = useState("");
   const [pct, setPct] = useState("");
   const [lookbackDays, setLookbackDays] = useState("20");
   const [multiple, setMultiple] = useState("2");
   const [streakDays, setStreakDays] = useState("3");
+  const [rsiPeriod, setRsiPeriod] = useState("14");
+  const [rsiLevel, setRsiLevel] = useState("70");
   const [freq, setFreq] = useState<Freq>("once");
   const [error, setError] = useState("");
 
@@ -82,6 +92,12 @@ export default function AlertBuilder({ onSubmit, isPending, serverError }: Props
     if (next !== "TW" && TW_ONLY.includes(conditionType)) {
       setConditionType("price_above");
     }
+  }
+
+  function handleConditionTypeChange(next: BuilderConditionType) {
+    setConditionType(next);
+    if (next === "rsi_cross_above") setRsiLevel("70");
+    if (next === "rsi_cross_below") setRsiLevel("30");
   }
 
   function buildPayload(): AlertRulePayload | null {
@@ -125,6 +141,13 @@ export default function AlertBuilder({ onSubmit, isPending, serverError }: Props
         const days = parseInt(streakDays, 10);
         if (!(days >= 2)) return null;
         return { ...base, target_price: null, params: { days } };
+      }
+      case "rsi_cross_above":
+      case "rsi_cross_below": {
+        const period = parseInt(rsiPeriod, 10);
+        const level = parseFloat(rsiLevel);
+        if (!(period >= 2 && period <= 50) || !(level > 0 && level < 100)) return null;
+        return { ...base, target_price: null, params: { period, level } };
       }
     }
   }
@@ -187,7 +210,7 @@ export default function AlertBuilder({ onSubmit, isPending, serverError }: Props
             id="ab-condition-type"
             className={inputCls}
             value={conditionType}
-            onChange={(e) => setConditionType(e.target.value as ConditionType)}
+            onChange={(e) => handleConditionTypeChange(e.target.value as BuilderConditionType)}
           >
             {visibleTypes.map((ct) => (
               <option key={ct} value={ct}>
@@ -282,6 +305,40 @@ export default function AlertBuilder({ onSubmit, isPending, serverError }: Props
               onChange={(e) => setStreakDays(e.target.value)}
             />
           </div>
+        )}
+        {(conditionType === "rsi_cross_above" || conditionType === "rsi_cross_below") && (
+          <>
+            <div className="space-y-1">
+              <label className={labelCls} htmlFor="ab-rsi-period">
+                {t("alerts.param_rsi_period")}
+              </label>
+              <input
+                id="ab-rsi-period"
+                type="number"
+                min="2"
+                max="50"
+                step="1"
+                className={inputCls}
+                value={rsiPeriod}
+                onChange={(e) => setRsiPeriod(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className={labelCls} htmlFor="ab-rsi-level">
+                {t("alerts.param_rsi_level")}
+              </label>
+              <input
+                id="ab-rsi-level"
+                type="number"
+                min="1"
+                max="99"
+                step="1"
+                className={inputCls}
+                value={rsiLevel}
+                onChange={(e) => setRsiLevel(e.target.value)}
+              />
+            </div>
+          </>
         )}
         <div className="space-y-1">
           <label className={labelCls} htmlFor="ab-freq">{t("alerts.freq")}</label>

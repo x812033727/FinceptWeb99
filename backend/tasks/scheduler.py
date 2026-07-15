@@ -333,6 +333,51 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # Project newly ingested announcements, news, revenue and institutional
+    # rows into active thesis timelines after the post-close ingest window.
+    from tasks.sync_thesis_events import run as run_sync_thesis_events
+    scheduler.add_job(
+        run_sync_thesis_events,
+        trigger=CronTrigger(hour=8, minute=0, timezone="UTC"),
+        id="sync_thesis_events",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Evidence-backed daily research candidates. TW runs after the local
+    # archive/thesis window; US runs after the regular-session close. Each
+    # run is unique per user/market/date and therefore retry-safe.
+    from tasks.generate_daily_picks import run_tw as run_daily_picks_tw
+    scheduler.add_job(
+        run_daily_picks_tw,
+        trigger=CronTrigger(hour=9, minute=0, timezone="UTC"),
+        id="daily_picks_tw",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    from tasks.generate_daily_picks import run_us as run_daily_picks_us
+    scheduler.add_job(
+        run_daily_picks_us,
+        trigger=CronTrigger(hour=22, minute=30, timezone="UTC"),
+        id="daily_picks_us",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    from tasks.refresh_decision_journal import run as run_refresh_decision_journal
+    scheduler.add_job(
+        run_refresh_decision_journal,
+        trigger=CronTrigger(hour=9, minute=45, timezone="UTC"),
+        id="refresh_decision_journal",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # TAIEX 大盤加權指數 daily history. One FMTQIK call per day
     # returns the full month's index OHLC; idempotent UPSERT into
     # ohlcv_daily under symbol='_TAIEX' so the existing read tier

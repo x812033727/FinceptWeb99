@@ -14,6 +14,12 @@ interface LiveQuoteHeaderProps {
   isETF: boolean;
 }
 
+interface QuoteQualityMeta {
+  consistency?: "verified" | "conflict" | "unverified";
+  price_spread_pct?: number | null;
+  cross_checked_sources?: string[];
+}
+
 /**
  * Price header for StockDetailPage: symbol + name badges on the left,
  * big live price / change / freshness on the right.
@@ -38,6 +44,7 @@ export function LiveQuoteHeader({ symbol, market, quote, isETF }: LiveQuoteHeade
   // source so the hero badge updates as soon as the upstream changes
   // mid-session (e.g. Polygon recovers, primary→fallback switch).
   const source = live?.dataSource ?? (quote?.data_source as string | undefined);
+  const quality = quote?.meta as QuoteQualityMeta | undefined;
 
   return (
     <div className="flex items-start justify-between gap-3">
@@ -45,6 +52,18 @@ export function LiveQuoteHeader({ symbol, market, quote, isETF }: LiveQuoteHeade
         <h1 className="text-xl sm:text-2xl font-bold text-foreground inline-flex items-center">
           {symbol}
           <DataSourceBadge source={source} />
+          {quality?.consistency === "conflict" && (
+            <span
+              role="status"
+              title={t("market.source_badge.conflict_tooltip", {
+                spread: quality.price_spread_pct?.toFixed(2) ?? "—",
+                sources: quality.cross_checked_sources?.join(" / ") || "—",
+              })}
+              className="ml-1.5 rounded border border-danger/40 bg-danger/10 px-1 py-px text-micro font-medium uppercase text-danger"
+            >
+              {t("market.source_badge.conflict_label")}
+            </span>
+          )}
         </h1>
         {Boolean(quote?.name || quote?.name_zh) && (
           <p className="text-xs sm:text-sm text-muted-foreground mt-0.5 truncate">

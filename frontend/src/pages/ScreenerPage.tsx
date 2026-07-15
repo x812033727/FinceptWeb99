@@ -11,6 +11,7 @@ import { FilterBar } from "@/components/screener/FilterBar";
 import type { NLScreenerResult } from "@/components/screener/NLQueryBar";
 import { NLQueryBar } from "@/components/screener/NLQueryBar";
 import { ResultsTable } from "@/components/screener/ResultsTable";
+import { FactorRankingPanel } from "@/components/screener/FactorRankingPanel";
 
 // ── main page ──────────────────────────────────────────────────────
 
@@ -21,6 +22,7 @@ export default function ScreenerPage() {
   // 功能 B2 — natural-language screening result. When set, the table
   // shows the AI-screened rows instead of the manual-filter query.
   const [nlResult, setNlResult] = useState<NLScreenerResult | null>(null);
+  const [mode, setMode] = useState<"filters" | "factors">("filters");
 
   function setFilter<K extends keyof Filters>(key: K, value: Filters[K]) {
     setFilters((prev) => ({ ...prev, [key]: value, strategy: "" }));
@@ -65,6 +67,7 @@ export default function ScreenerPage() {
         sector: applied.sector || undefined,
       });
     },
+    enabled: mode === "filters",
     staleTime: 120_000,
   });
 
@@ -85,30 +88,43 @@ export default function ScreenerPage() {
 
   return (
     <div className="p-gutter sm:p-page flex flex-col gap-stack sm:gap-section h-screen">
-      <div>
-        <h1 className="text-title font-bold text-foreground">{t("screener.title")}</h1>
-        <p className="text-xs sm:text-sm text-muted-foreground mt-1">
-          {t("screener.subtitle")}
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-title font-bold text-foreground">{t("screener.title")}</h1>
+          <p className="text-xs sm:text-sm text-muted-foreground mt-1">
+            {t("screener.subtitle")}
+          </p>
+        </div>
+        <div className="flex rounded-lg border border-border p-1">
+          {(["filters", "factors"] as const).map((item) => (
+            <button key={item} type="button" onClick={() => setMode(item)} className={`rounded px-3 py-1.5 text-sm ${mode === item ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>
+              {t(`screener.mode_${item}`)}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <NLQueryBar onResult={setNlResult} />
+      {mode === "filters" ? (
+        <>
+          <NLQueryBar onResult={setNlResult} />
 
-      <FilterBar
-        filters={filters}
-        setFilter={setFilter}
-        applyStrategy={applyStrategy}
-        applyFilters={applyFilters}
-        resetFilters={resetFilters}
-        isFetching={isFetching}
-        resultsCount={nlResult ? nlResult.rows.length : rows.length}
-      />
+          <FilterBar
+            filters={filters}
+            setFilter={setFilter}
+            applyStrategy={applyStrategy}
+            applyFilters={applyFilters}
+            resetFilters={resetFilters}
+            isFetching={isFetching}
+            resultsCount={nlResult ? nlResult.rows.length : rows.length}
+          />
 
-      <ResultsTable
-        rows={nlResult ? nlResult.rows : rows}
-        applied={nlResult ? { ...applied, market: nlResult.market } : applied}
-        isLoading={!nlResult && isLoading}
-      />
+          <ResultsTable
+            rows={nlResult ? nlResult.rows : rows}
+            applied={nlResult ? { ...applied, market: nlResult.market } : applied}
+            isLoading={!nlResult && isLoading}
+          />
+        </>
+      ) : <FactorRankingPanel />}
     </div>
   );
 }

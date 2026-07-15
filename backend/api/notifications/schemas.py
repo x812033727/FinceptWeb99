@@ -1,9 +1,10 @@
-"""Request/response schemas for the Web Push subscription endpoints
-(PR-D3). Mirrors the browser `PushSubscription.toJSON()` shape."""
+"""Schemas for Web Push subscriptions and Email/LINE preferences."""
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class PushKeys(BaseModel):
@@ -41,3 +42,43 @@ class VapidPublicKeyOut(BaseModel):
     calling pushManager.subscribe with garbage."""
     configured: bool
     public_key: str | None
+
+
+EventKind = Literal["price_alert", "strategy_health"]
+
+
+class ChannelUpdateIn(BaseModel):
+    enabled: bool
+    event_kinds: list[EventKind] = Field(default_factory=lambda: ["price_alert", "strategy_health"])
+    daily_digest: bool = False
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("event_kinds")
+    @classmethod
+    def unique_nonempty(cls, value: list[EventKind]) -> list[EventKind]:
+        if not value:
+            raise ValueError("Select at least one notification event kind")
+        return list(dict.fromkeys(value))
+
+
+class NotificationChannelOut(BaseModel):
+    kind: Literal["email", "line"]
+    enabled: bool
+    verified: bool
+    configured: bool
+    destination_hint: str | None
+    event_kinds: list[EventKind]
+    daily_digest: bool
+    failed_count: int
+    last_success_at: datetime | None
+
+
+class LineBindingOut(BaseModel):
+    token: str
+    expires_at: datetime
+    instruction: str
+
+
+class ChannelTestOut(BaseModel):
+    delivered: bool

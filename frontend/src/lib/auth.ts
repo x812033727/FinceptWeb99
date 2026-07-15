@@ -9,12 +9,26 @@ export async function login(email: string, password: string): Promise<void> {
   useAuthStore.getState().setAuth(data.access_token, me.data);
 }
 
-export async function register(email: string, password: string): Promise<void> {
-  const { data } = await api.post<{ access_token: string }>("/auth/register", { email, password });
+async function establishSession(data: { access_token: string }): Promise<void> {
   const me = await api.get("/auth/me", {
     headers: { Authorization: `Bearer ${data.access_token}` },
   });
   useAuthStore.getState().setAuth(data.access_token, me.data);
+}
+
+export async function acceptInvite(token: string, email: string, password: string): Promise<void> {
+  const { data } = await api.post<{ access_token: string }>("/auth/accept-invite", {
+    token, email, password,
+  });
+  await establishSession(data);
+}
+
+export async function forgotPassword(email: string): Promise<void> {
+  await api.post("/auth/password/forgot", { email });
+}
+
+export async function resetPassword(token: string, newPassword: string): Promise<void> {
+  await api.post("/auth/password/reset", { token, new_password: newPassword });
 }
 
 export async function logout(): Promise<void> {

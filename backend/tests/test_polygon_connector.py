@@ -203,14 +203,30 @@ async def test_get_financials_returns_results_list():
 
 @pytest.mark.asyncio
 async def test_get_options_chain_filters_by_expiration_when_given():
-    payload = {"results": [{"strike": 200}, {"strike": 210}]}
+    payload = {"results": [{
+        "ticker": "O:AAPL241220C00200000",
+        "details": {"contract_type": "call", "expiration_date": "2024-12-20", "strike_price": 200},
+        "last_quote": {"bid": 4.9, "ask": 5.1},
+        "last_trade": {"price": 5.0},
+        "session": {"volume": 123},
+        "open_interest": 456,
+        "implied_volatility": 0.25,
+        "greeks": {"delta": 0.51, "gamma": 0.02},
+        "underlying_asset": {"ticker": "AAPL", "price": 201},
+    }]}
     patcher, fake = install_client(lambda *_a, **_k: FakeResponse(payload))
     with patcher:
         opts = await polygon.get_options_chain("AAPL", "2024-12-20")
 
-    assert len(opts) == 2
+    assert len(opts) == 1
+    assert opts[0]["strike_price"] == 200
+    assert opts[0]["bid"] == 4.9
+    assert opts[0]["implied_volatility"] == 0.25
+    assert opts[0]["open_interest"] == 456
+    assert opts[0]["underlying_price"] == 201
+    assert opts[0]["delta"] == 0.51
+    assert fake.calls[0][0] == "/v3/snapshot/options/AAPL"
     params = fake.calls[0][1]
-    assert params["underlying_ticker"] == "AAPL"
     assert params["expiration_date"] == "2024-12-20"
 
 
@@ -220,6 +236,32 @@ async def test_get_options_chain_omits_expiration_when_none():
     with patcher:
         await polygon.get_options_chain("AAPL")
     assert "expiration_date" not in fake.calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_get_options_chain_follows_pagination_with_hard_page_cap():
+    calls = 0
+
+    def responder(_path, _params):
+        nonlocal calls
+        calls += 1
+        return FakeResponse({
+            "results": [{
+                "ticker": f"O:AAPL{calls}",
+                "details": {"contract_type": "put", "expiration_date": "2026-08-21", "strike_price": calls},
+            }],
+            "next_url": f"https://api.polygon.io/next/{calls}",
+        })
+
+    patcher, fake = install_client(responder)
+    with patcher:
+        rows = await polygon.get_options_chain("AAPL")
+
+    assert len(rows) == 4
+    assert all(row["chain_truncated"] is True for row in rows)
+    assert len(fake.calls) == 4
+    assert fake.calls[1][0] == "https://api.polygon.io/next/1"
+    assert fake.calls[1][1] == {}
 
 
 # ── get_snapshot_all (screener) ───────────────────────────────────

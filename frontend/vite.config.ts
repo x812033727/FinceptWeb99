@@ -3,6 +3,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
 import { readFileSync } from "fs";
+import { configDefaults } from "vitest/config";
 
 const pkg = JSON.parse(readFileSync(path.resolve(__dirname, "package.json"), "utf-8"));
 
@@ -103,9 +104,13 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Playwright writes traces, screenshots and videos under output/.
+    // Watching those artifacts reloads the page in the middle of an auth
+    // journey and can replace the in-memory access token via silentRefresh.
+    watch: { ignored: ["**/output/**"] },
     proxy: {
-      "/api": { target: "http://localhost:8000", changeOrigin: true },
-      "/ws": { target: "ws://localhost:8000", ws: true, changeOrigin: true },
+      "/api": { target: process.env.VITE_API_TARGET ?? "http://localhost:8000", changeOrigin: true },
+      "/ws": { target: (process.env.VITE_API_TARGET ?? "http://localhost:8000").replace(/^http/, "ws"), ws: true, changeOrigin: true },
     },
   },
   test: {
@@ -113,5 +118,8 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
     css: false,
+    // Playwright specs use a different runner and must never be collected by
+    // Vitest's broad `*.spec.ts` include pattern.
+    exclude: [...configDefaults.exclude, "e2e/**"],
   },
 });

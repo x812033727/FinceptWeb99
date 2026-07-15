@@ -185,6 +185,46 @@ describe("AlertsPage rule summaries", () => {
     expect(screen.getByText("alerts.summary_streak")).toBeTruthy();
   });
 
+  it("renders dynamic trend crossing summaries", async () => {
+    mockApiAlerts([
+      baseAlert({
+        condition_type: "trend_cross_above",
+        params: {
+          start_time: "2026-01-01", start_price: 100,
+          end_time: "2026-01-11", end_price: 110,
+        },
+      }),
+      baseAlert({
+        symbol: "2330", market: "TW",
+        condition_type: "trend_cross_below",
+        params: {
+          start_time: "2026-01-01", start_price: 600,
+          end_time: "2026-01-11", end_price: 580,
+        },
+      }),
+    ]);
+    renderPage();
+    expect(await screen.findByText("alerts.summary_trend_cross_above")).toBeTruthy();
+    expect(screen.getByText("alerts.summary_trend_cross_below")).toBeTruthy();
+  });
+
+  it("renders RSI crossing summaries", async () => {
+    mockApiAlerts([
+      baseAlert({
+        condition_type: "rsi_cross_above",
+        params: { period: 14, level: 70 },
+      }),
+      baseAlert({
+        symbol: "2330", market: "TW",
+        condition_type: "rsi_cross_below",
+        params: { period: 10, level: 30 },
+      }),
+    ]);
+    renderPage();
+    expect(await screen.findByText("alerts.summary_rsi_cross_above")).toBeTruthy();
+    expect(screen.getByText("alerts.summary_rsi_cross_below")).toBeTruthy();
+  });
+
   it("shows a repeat badge with cooldown label for repeat alerts", async () => {
     mockApiAlerts([
       baseAlert({

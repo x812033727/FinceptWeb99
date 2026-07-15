@@ -76,6 +76,10 @@ describe("rsi", () => {
   it("returns all nulls when there are not enough changes", () => {
     expectSeries(rsi([1, 2, 3], 14), [null, null, null]);
   });
+
+  it("is neutral for a completely flat window", () => {
+    expectSeries(rsi([100, 100, 100, 100], 3), [null, null, null, 50]);
+  });
 });
 
 describe("macd", () => {

@@ -7,17 +7,18 @@ re-exported through services.alert_service) is mocked so no WebSocket
 infrastructure is needed.
 """
 import uuid
-import pytest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
+
+import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.user import User, UserRole
-from models.alert import AlertCondition, AlertEvent
 from api.alerts.schemas import AlertCreate
+from models.alert import AlertCondition, AlertEvent
+from models.investment_thesis import InvestmentThesis, ThesisEvent
+from models.user import User, UserRole
 from services.alert_service import AlertService
-
 
 # ── helpers ──────────────────────────────────────────────────────────
 
@@ -270,6 +271,34 @@ async def test_check_and_fire_writes_alert_event_row(db_session: AsyncSession):
 
 
 @pytest.mark.asyncio
+async def test_fired_alert_is_linked_only_to_matching_owner_thesis(db_session: AsyncSession):
+    owner = await _make_user(db_session)
+    stranger = await _make_user(db_session)
+    matching = InvestmentThesis(
+        user_id=owner.id, market="US", symbol="LINK", title="Owner thesis", core_case="case",
+    )
+    foreign = InvestmentThesis(
+        user_id=stranger.id, market="US", symbol="LINK", title="Foreign thesis", core_case="case",
+    )
+    closed = InvestmentThesis(
+        user_id=owner.id, market="US", symbol="LINK", title="Closed thesis", core_case="case", status="closed",
+    )
+    db_session.add_all([matching, foreign, closed])
+    await db_session.commit()
+    alert = await AlertService.create(db_session, owner.id, _alert_body("LINK", "US", "above", 100.0))
+
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock):
+        await AlertService.check_and_fire(db_session, "LINK", "US", 110.0)
+
+    events = list((await db_session.scalars(select(ThesisEvent))).all())
+    assert len(events) == 1
+    assert events[0].thesis_id == matching.id
+    assert events[0].user_id == owner.id
+    assert events[0].event_type == "alert_triggered"
+    assert events[0].source_ref.startswith(f"{alert.id}:")
+
+
+@pytest.mark.asyncio
 async def test_check_and_fire_no_event_row_when_not_triggered(db_session: AsyncSession):
     user = await _make_user(db_session)
     await AlertService.create(db_session, user.id, _alert_body("CF10", "US", "above", 200.0))
@@ -287,7 +316,7 @@ async def test_check_and_fire_no_event_row_when_not_triggered(db_session: AsyncS
 async def test_history_newest_first_with_cursor(db_session: AsyncSession):
     """`before` cursor pages strictly-older rows, newest first."""
     user = await _make_user(db_session)
-    base = datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
     for i in range(5):
         db_session.add(AlertEvent(
             user_id=user.id, symbol=f"H{i}", market="US",
@@ -312,7 +341,7 @@ async def test_history_scoped_to_user(db_session: AsyncSession):
     u2 = await _make_user(db_session)
     db_session.add(AlertEvent(
         user_id=u1.id, symbol="MINE", market="US", kind="price", message="x",
-        fired_at=datetime.now(timezone.utc),
+        fired_at=datetime.now(UTC),
     ))
     await db_session.commit()
 
@@ -517,6 +546,185 @@ async def test_foreign_streak_skipped_on_tick(db_session: AsyncSession):
     mock_push.assert_not_awaited()
 
 
+def _trend_params() -> dict:
+    return {
+        "start_time": "2026-01-01", "start_price": 100.0,
+        "end_time": "2026-01-11", "end_price": 100.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_trend_cross_initializes_then_fires_only_on_real_crossing(
+    db_session: AsyncSession,
+):
+    user = await _make_user(db_session)
+    alert = await AlertService.create(
+        db_session, user.id,
+        _rule_body("TREND1", "trend_cross_above", params=_trend_params()),
+    )
+    at = datetime(2026, 1, 20, 12, 0, tzinfo=UTC)
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
+        # First observation establishes a persisted baseline and never fires.
+        await AlertService.check_and_fire(
+            db_session, "TREND1", "US", 99.0, observed_at=at,
+        )
+        await db_session.refresh(alert)
+        assert alert.runtime_state["trend_relation"] == "below"
+        mock_push.assert_not_awaited()
+
+        # Remaining on the same side is not a crossing.
+        await AlertService.check_and_fire(
+            db_session, "TREND1", "US", 99.5,
+            observed_at=at + timedelta(minutes=1),
+        )
+        mock_push.assert_not_awaited()
+
+        await AlertService.check_and_fire(
+            db_session, "TREND1", "US", 101.0,
+            observed_at=at + timedelta(minutes=2),
+        )
+        mock_push.assert_awaited_once()
+
+    await db_session.refresh(alert)
+    assert alert.triggered is True
+    payload = mock_push.call_args[0][1]
+    assert payload["condition_type"] == "trend_cross_above"
+    assert payload["projected_price"] == 100.0
+    assert payload["current_price"] == 101.0
+    (event,) = (await db_session.scalars(
+        select(AlertEvent).where(AlertEvent.alert_id == alert.id)
+    )).all()
+    assert event.payload["projected_price"] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_repeat_trend_alert_requires_recross_not_just_cooldown(
+    db_session: AsyncSession,
+):
+    user = await _make_user(db_session)
+    alert = await AlertService.create(
+        db_session, user.id,
+        _rule_body(
+            "TREND2", "trend_cross_above", params=_trend_params(),
+            repeat=True, cooldown_seconds=0,
+        ),
+    )
+    at = datetime(2026, 1, 20, 12, 0, tzinfo=UTC)
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
+        for minute, price in enumerate((99.0, 101.0, 102.0, 99.0, 101.0)):
+            await AlertService.check_and_fire(
+                db_session, "TREND2", "US", price,
+                observed_at=at + timedelta(minutes=minute),
+            )
+        assert mock_push.await_count == 2
+
+    await db_session.refresh(alert)
+    assert alert.triggered is False
+    events = (await db_session.scalars(
+        select(AlertEvent).where(AlertEvent.alert_id == alert.id)
+    )).all()
+    assert len(events) == 2
+
+
+@pytest.mark.asyncio
+async def test_trend_cross_below_uses_opposite_transition(db_session: AsyncSession):
+    user = await _make_user(db_session)
+    await AlertService.create(
+        db_session, user.id,
+        _rule_body("TREND3", "trend_cross_below", params=_trend_params()),
+    )
+    at = datetime(2026, 1, 20, 12, 0, tzinfo=UTC)
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
+        await AlertService.check_and_fire(
+            db_session, "TREND3", "US", 101.0, observed_at=at,
+        )
+        await AlertService.check_and_fire(
+            db_session, "TREND3", "US", 99.0,
+            observed_at=at + timedelta(minutes=1),
+        )
+    assert mock_push.await_count == 1
+    assert mock_push.call_args[0][1]["condition"] == "below"
+
+
+@pytest.mark.asyncio
+async def test_rsi_cross_initializes_then_fires_from_live_price(db_session: AsyncSession):
+    user = await _make_user(db_session)
+    await _seed_ohlcv(
+        db_session, "RSI1", [(100.0, 100.0, 1000)] * 14,
+    )
+    alert = await AlertService.create(
+        db_session, user.id,
+        _rule_body(
+            "RSI1", "rsi_cross_above",
+            params={"period": 14, "level": 70},
+        ),
+    )
+    at = datetime(2026, 1, 20, 12, 0, tzinfo=UTC)
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
+        await AlertService.check_and_fire(
+            db_session, "RSI1", "US", 90.0, observed_at=at,
+        )
+        await db_session.refresh(alert)
+        assert alert.runtime_state["rsi_relation"] == "below"
+        assert alert.runtime_state["rsi"] == 0.0
+        mock_push.assert_not_awaited()
+
+        await AlertService.check_and_fire(
+            db_session, "RSI1", "US", 110.0,
+            observed_at=at + timedelta(minutes=1),
+        )
+        mock_push.assert_awaited_once()
+
+    await db_session.refresh(alert)
+    assert alert.triggered is True
+    payload = mock_push.call_args[0][1]
+    assert payload["condition_type"] == "rsi_cross_above"
+    assert payload["rsi"] == 100.0
+    assert payload["level"] == 70
+    assert payload["period"] == 14
+
+
+@pytest.mark.asyncio
+async def test_rsi_alert_abstains_without_enough_history(db_session: AsyncSession):
+    user = await _make_user(db_session)
+    await _seed_ohlcv(
+        db_session, "RSI2", [(100.0, 100.0, 1000)] * 13,
+    )
+    alert = await AlertService.create(
+        db_session, user.id,
+        _rule_body(
+            "RSI2", "rsi_cross_below",
+            params={"period": 14, "level": 30},
+        ),
+    )
+    with patch("services.alert_service.notify_user", new_callable=AsyncMock) as mock_push:
+        await AlertService.check_and_fire(db_session, "RSI2", "US", 90.0)
+    await db_session.refresh(alert)
+    assert alert.runtime_state is None
+    assert alert.triggered is False
+    mock_push.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_updating_rsi_params_resets_crossing_baseline(db_session: AsyncSession):
+    user = await _make_user(db_session)
+    alert = await AlertService.create(
+        db_session, user.id,
+        _rule_body(
+            "RSI3", "rsi_cross_above",
+            params={"period": 14, "level": 70},
+        ),
+    )
+    alert.runtime_state = {"rsi_relation": "below", "rsi": 25.0}
+    await db_session.commit()
+    updated = await AlertService.update(
+        db_session, user.id, alert.id,
+        AlertUpdate(params={"period": 10, "level": 65}),
+    )
+    assert updated.params == {"period": 10, "level": 65.0}
+    assert updated.runtime_state is None
+
+
 # ── repeat / cooldown semantics ──────────────────────────────────
 
 @pytest.mark.asyncio
@@ -559,7 +767,7 @@ async def test_repeat_true_refires_after_cooldown(db_session: AsyncSession):
         assert mock_push.await_count == 1
 
         # Manually age last_fired_at past the cooldown (ts injection).
-        alert.last_fired_at = datetime.now(timezone.utc) - timedelta(seconds=601)
+        alert.last_fired_at = datetime.now(UTC) - timedelta(seconds=601)
         await db_session.commit()
 
         await AlertService.check_and_fire(db_session, "RE8", "US", 103.0)
@@ -592,7 +800,7 @@ async def test_repeat_true_cooldown_zero_refires_every_tick(db_session: AsyncSes
 
 
 def test_cooldown_ok_pure_semantics():
-    now = datetime(2026, 7, 11, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 7, 11, 12, 0, tzinfo=UTC)
     # once-only: gate is the triggered flag
     a = PriceAlert(repeat=False, triggered=False, cooldown_seconds=0)
     assert cooldown_ok(a, now) is True

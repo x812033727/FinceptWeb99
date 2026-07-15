@@ -426,7 +426,8 @@ async def test_get_institutional_as_of_skips_cache_and_live_tiers():
     # Live tiers must NOT have been called — would have returned 9999.
     finmind_mock.assert_not_awaited()
     twse_mock.assert_not_awaited()
-    assert result == db_rows
+    assert [{k: v for k, v in row.items() if k != "data_source"} for row in result] == db_rows
+    assert result[0]["data_source"] == "postgres"
 
 
 @pytest.mark.asyncio
@@ -477,20 +478,18 @@ async def test_get_margin_as_of_skips_cache_and_live_tiers():
     cache_get_mock.assert_not_awaited()
     cache_set_mock.assert_not_awaited()
     finmind_mock.assert_not_awaited()
-    assert result == db_rows
+    assert [{k: v for k, v in row.items() if k != "data_source"} for row in result] == db_rows
+    assert result[0]["data_source"] == "postgres"
 
 
 @pytest.mark.asyncio
-async def test_get_financials_as_of_filters_by_period_end_date():
-    """Backtest mode filters FinMind rows by `date <= as_of` so a
-    2024-Q4 anchor never sees Q1-2025 filings (which would be
-    future-leak — the model would cite earnings that hadn't been
-    reported yet at the historical anchor)."""
+async def test_get_financials_as_of_uses_conservative_filing_availability():
+    """Period-end dates are never mistaken for publication timestamps."""
     from datetime import date
 
     rows = [
-        {"date": "2024-09-30", "type": "EPS", "value": 12.3},   # Q3 2024 — keep
-        {"date": "2024-12-31", "type": "EPS", "value": 13.5},   # Q4 2024 — keep
+        {"date": "2024-09-30", "type": "EPS", "value": 12.3},   # available Nov 15
+        {"date": "2024-12-31", "type": "EPS", "value": 13.5},   # available Apr 1
         {"date": "2025-03-31", "type": "EPS", "value": 14.0},   # Q1 2025 — drop
         {"date": "2025-06-30", "type": "EPS", "value": 15.2},   # Q2 2025 — drop
     ]
@@ -506,7 +505,7 @@ async def test_get_financials_as_of_filters_by_period_end_date():
     cache_set_mock.assert_not_awaited()  # ditto for write
     finmind_mock.assert_awaited_once()    # service still hits FinMind
     dates = [r["date"] for r in result]
-    assert dates == ["2024-09-30", "2024-12-31"]
+    assert dates == ["2024-09-30"]
 
 
 @pytest.mark.asyncio

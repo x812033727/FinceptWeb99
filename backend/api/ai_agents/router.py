@@ -69,6 +69,8 @@ async def _check_quota(user: dict, db: AsyncSession) -> None:
         limit = getattr(settings, limit_key)
     count = await cache_incr(key_ai_counter(user["id"]), ttl_seconds=86400)
     if count > limit:
+        from middleware.metrics import AI_QUOTA_REJECTIONS_TOTAL
+        AI_QUOTA_REJECTIONS_TOTAL.labels("chat", role).inc()
         raise HTTPException(
             status_code=429,
             detail=f"Daily AI quota exceeded ({limit} requests/day). Resets at midnight UTC.",

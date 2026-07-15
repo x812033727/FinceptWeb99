@@ -45,7 +45,7 @@ _MAX_VITAL_SCORE = 5.0
 # every beacon; we normalize it through a small allowlist of route
 # shapes so Prometheus doesn't see thousands of distinct labels.
 _ROUTE_PREFIXES = (
-    "/dashboard", "/market/", "/stock/", "/screener", "/portfolio",
+    "/dashboard", "/market/", "/stock/", "/screener", "/compare", "/portfolio",
     "/analytics", "/macro", "/watchlist", "/alerts", "/ai",
     "/settings", "/admin", "/login",
 )

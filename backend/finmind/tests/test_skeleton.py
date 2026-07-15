@@ -32,8 +32,8 @@ def test_catalog_validates_against_finmind_registry():
     assert catalog_codes == finmind_codes
 
 
-def test_catalog_buckets_match_finmind_categories():
-    """Catalog category keys are the same seven FinMind documents."""
+def test_catalog_buckets_match_supported_categories():
+    """Catalog includes FinMind documents and the supported market extensions."""
     assert set(CATALOG.keys()) == {
         "technical",
         "chip",
@@ -42,6 +42,8 @@ def test_catalog_buckets_match_finmind_categories():
         "realtime",
         "convertible_bond",
         "other",
+        "macro",
+        "crypto",
     }
 
 

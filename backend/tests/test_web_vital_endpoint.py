@@ -29,6 +29,7 @@ from middleware.metrics import WEB_VITAL_SCORE, WEB_VITAL_SECONDS
     ("/stock/US/AAPL",        "/stock"),
     ("/stock/TW/2330",        "/stock"),
     ("/screener",             "/screener"),
+    ("/compare",              "/compare"),
     ("/portfolio",            "/portfolio"),
     ("/portfolio/abc-123",    "/portfolio"),  # nested portfolio detail
     ("/analytics",            "/analytics"),

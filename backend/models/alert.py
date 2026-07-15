@@ -61,6 +61,10 @@ class PriceAlert(Base):
         server_default="price_above",
     )
     params: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Evaluator-owned observation state. Trend-cross rules persist the last
+    # side of the projected line here so a process restart cannot turn an
+    # already-breached threshold into a fresh crossing.
+    runtime_state: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     cooldown_seconds: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0",
     )

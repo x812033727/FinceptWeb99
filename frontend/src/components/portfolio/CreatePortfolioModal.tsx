@@ -34,12 +34,12 @@ export function CreatePortfolioModal({ onClose }: { onClose: () => void }) {
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
           <div>
-            <label className="block text-xs text-muted-foreground mb-1">{t("portfolio.portfolio_name")}</label>
-            <input required className="w-full px-3 py-1.5 rounded bg-input border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring" value={name} onChange={(e) => setName(e.target.value)} />
+            <label htmlFor="portfolio-name" className="block text-xs text-muted-foreground mb-1">{t("portfolio.portfolio_name")}</label>
+            <input id="portfolio-name" required className="w-full px-3 py-1.5 rounded bg-input border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
           <div>
-            <label className="block text-xs text-muted-foreground mb-1">{t("portfolio.currency")}</label>
-            <select required className="w-full px-3 py-1.5 rounded bg-input border border-border text-sm text-foreground" value={currency} onChange={(e) => setCurrency(e.target.value)}>
+            <label htmlFor="portfolio-currency" className="block text-xs text-muted-foreground mb-1">{t("portfolio.currency")}</label>
+            <select id="portfolio-currency" required className="w-full px-3 py-1.5 rounded bg-input border border-border text-sm text-foreground" value={currency} onChange={(e) => setCurrency(e.target.value)}>
               <option value="" disabled>{t("portfolio.currency_pick")}</option>
               <option value="USD">USD</option>
               <option value="TWD">TWD</option>

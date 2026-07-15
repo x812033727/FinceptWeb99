@@ -10,6 +10,8 @@ Transports (PR-D3 grew the single seam into a named registry):
     EVERY process via the legacy `register_push_impl` alias.
   - "web_push":  `services.web_push_service.push_to_user` — browser Web
     Push so alerts land even with no tab open.
+  - "email" / "line": opt-in, verified D2 channels backed by per-user
+    preferences; provider credentials remain deployment-level secrets.
 
 Fan-out is best-effort and isolated per transport: one transport
 raising (e.g. the push service is down) must never stop the others or

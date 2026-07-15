@@ -43,18 +43,67 @@ export type CryptoTab = "chart" | "news";
 // ── data shapes ───────────────────────────────────────────────────
 
 export interface OptionRow {
-  strike: number;
-  expiration_date?: string;
-  contract_type: string;
-  bid?: number;
-  ask?: number;
-  last_price?: number;
-  volume?: number;
-  open_interest?: number;
-  implied_volatility?: number;
-  delta?: number;
-  gamma?: number;
-  data_source?: string;
+  ticker: string;
+  strike_price: number;
+  expiration_date: string;
+  contract_type: "call" | "put";
+  bid: number | null;
+  ask: number | null;
+  last_price: number | null;
+  volume: number | null;
+  open_interest: number | null;
+  implied_volatility: number | null;
+  delta: number | null;
+  gamma: number | null;
+  theta: number | null;
+  vega: number | null;
+  data_source: string;
+}
+
+export interface OptionExpiryAnalytics {
+  expiration_date: string;
+  days_to_expiry: number;
+  contract_count: number;
+  call_open_interest: number;
+  put_open_interest: number;
+  put_call_open_interest_ratio: number | null;
+  call_volume: number;
+  put_volume: number;
+  put_call_volume_ratio: number | null;
+  atm_iv: number | null;
+  atm_call_iv: number | null;
+  atm_put_iv: number | null;
+  atm_call_strike: number | null;
+  atm_put_strike: number | null;
+  expected_move: number | null;
+  expected_move_pct: number | null;
+  put_90_iv: number | null;
+  put_90_strike: number | null;
+  call_110_iv: number | null;
+  call_110_strike: number | null;
+  wing_skew_iv_points: number | null;
+  max_pain: number | null;
+  max_pain_distance_pct: number | null;
+  max_pain_total_payout: number | null;
+}
+
+export interface OptionsAnalysisResponse {
+  symbol: string;
+  spot: number | null;
+  spot_source: string | null;
+  as_of: string;
+  contracts: OptionRow[];
+  expiries: OptionExpiryAnalytics[];
+  quality: {
+    status: "good" | "degraded" | "unavailable";
+    flags: string[];
+    sources: string[];
+    rows_received: number;
+    rows_usable: number;
+    iv_coverage_pct: number;
+    open_interest_coverage_pct: number;
+  };
+  methodology: Record<string, string>;
 }
 
 export interface InstitutionalRow {
@@ -97,6 +146,17 @@ export interface HealthPeriod {
   operating_cf: number | null;
   free_cf: number | null;
   total_equity: number | null;
+  total_assets: number | null;
+  total_liabilities: number | null;
+  current_assets: number | null;
+  current_liabilities: number | null;
+  cash: number | null;
+  capex: number | null;
+  revenue_yoy: number | null;
+  net_income_yoy: number | null;
+  eps_yoy: number | null;
+  cash_conversion: number | null;
+  free_cf_margin: number | null;
 }
 
 export interface HealthResponse {
@@ -110,6 +170,16 @@ export interface HealthResponse {
     latest_net_margin: number | null;
     revenue_yoy: number | null;
     cf_positive_streak_4q: number;
+    latest_roa: number | null;
+    ttm_revenue: number | null;
+    ttm_net_income: number | null;
+    ttm_operating_cf: number | null;
+    ttm_free_cf: number | null;
+    ttm_net_margin: number | null;
+    cash_conversion_ttm: number | null;
+    asset_turnover: number | null;
+    equity_multiplier: number | null;
+    dupont_roe: number | null;
   };
   lights: {
     profitability: Light;
@@ -117,6 +187,20 @@ export interface HealthResponse {
     growth: Light;
     cash_flow: Light;
   };
+  signals: Array<{
+    code: string;
+    direction: "positive" | "risk" | "neutral";
+    value: number;
+    unit: string;
+  }>;
+  quality: {
+    status: "good" | "degraded" | "unavailable";
+    flags: string[];
+    sources: string[];
+    statement_periods: { income: number; balance_sheet: number; cash_flow: number };
+    latest_core_coverage_pct: number;
+  };
+  methodology: Record<string, string>;
 }
 
 export interface ValuationBandResponse {
@@ -156,6 +240,28 @@ export interface ETFHoldingsResponse {
   holdings: ETFHolding[];
 }
 
+export interface TWSecurityMaster {
+  symbol: string;
+  effective_from: string;
+  effective_to: string | null;
+  instrument_type: string;
+  asset_class: string;
+  is_etf: boolean;
+  is_bond_etf: boolean;
+  is_leveraged: boolean;
+  is_inverse: boolean;
+  board_lot_size: number;
+  odd_lot_size: number;
+  sell_tax_bps: number;
+  tax_rule_code: string;
+  source: string;
+  classification_source_url: string | null;
+  tax_source_url: string | null;
+  confidence: string;
+  is_manual_override: boolean;
+  fallback: boolean;
+}
+
 // ── helpers ──────────────────────────────────────────────────────
 
 export const isTWETF = (symbol: string) => /^00\d{2,4}[A-Z]?$/.test(symbol);
@@ -190,9 +296,9 @@ export const fetchHistory = (mkt: Market, sym: string, period: Period) =>
 
 export const fetchQuote = (mkt: Market, sym: string) =>
   api.get<Record<string, unknown>>(
-    mkt === "US" ? `/us/quote/${sym}`
+    mkt === "US" ? `/us/quote/${sym}?verify=true`
       : mkt === "CRYPTO" ? `/crypto/quote/${sym}`
-      : `/tw/quote/${sym}`
+      : `/tw/quote/${sym}?verify=true`
   ).then((r) => r.data);
 
 export const fetchFundamentals = (mkt: Market, sym: string) =>
@@ -206,6 +312,10 @@ export const fetchFinancials = (sym: string) =>
 
 export const fetchOptions = (sym: string, expiry?: string) =>
   api.get<OptionRow[]>(`/us/options/${sym}${expiry ? `?expiration_date=${expiry}` : ""}`)
+    .then((r) => r.data);
+
+export const fetchOptionsAnalysis = (sym: string) =>
+  api.get<OptionsAnalysisResponse>(`/us/options-analysis/${sym}?max_expiries=8`)
     .then((r) => r.data);
 
 export const fetchInstitutional = (sym: string) =>
@@ -229,6 +339,9 @@ export const fetchDividends = (sym: string) =>
 
 export const fetchETFHoldings = (sym: string) =>
   api.get<ETFHoldingsResponse>(`/tw/etf/${sym}/holdings`).then((r) => r.data);
+
+export const fetchTWSecurityMaster = (sym: string) =>
+  api.get<TWSecurityMaster>(`/tw/security-master/${sym}`).then((r) => r.data);
 
 export const fetchEarnings = (sym: string) =>
   api.get<{ earnings_date: string | null; eps_estimate: number | null; revenue_estimate: number | null }>(

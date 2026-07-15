@@ -4,6 +4,7 @@ Called from main.py lifespan after DB is ready.
 """
 from passlib.context import CryptContext
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
@@ -27,4 +28,15 @@ async def seed_admin(db: AsyncSession) -> None:
         is_active=True,
     )
     db.add(admin)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Multiple web workers run lifespan concurrently. Another worker can
+        # insert the same configured admin after our SELECT but before COMMIT.
+        # The unique email constraint is the arbiter; recover the session and
+        # continue startup when the winning row now exists.
+        await db.rollback()
+        existing = await db.scalar(select(User).where(User.email == settings.ADMIN_EMAIL))
+        if existing:
+            return
+        raise

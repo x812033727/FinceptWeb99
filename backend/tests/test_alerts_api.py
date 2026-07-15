@@ -257,6 +257,69 @@ async def test_create_non_price_rule_rejects_target_price(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_create_trend_cross_rule_validates_two_anchors(client: AsyncClient):
+    h = await _auth_headers(client, "rule_trend@example.com")
+    params = {
+        "start_time": "2026-01-01", "start_price": 100,
+        "end_time": "2026-01-11", "end_price": 110,
+    }
+    r = await client.post("/api/alerts", json={
+        "symbol": "AAPL", "market": "US",
+        "condition_type": "trend_cross_above", "params": params,
+    }, headers=h)
+    assert r.status_code == 201, r.text
+    assert r.json()["params"] == {
+        "start_time": "2026-01-01", "start_price": 100.0,
+        "end_time": "2026-01-11", "end_price": 110.0,
+    }
+    assert r.json()["target_price"] is None
+
+    for invalid_params in (
+        {**params, "end_time": "2026-01-01"},
+        {**params, "start_time": "not-a-date"},
+        {**params, "end_price": -1},
+        {**params, "unexpected": 1},
+    ):
+        bad = await client.post("/api/alerts", json={
+            "symbol": "AAPL", "market": "US",
+            "condition_type": "trend_cross_below", "params": invalid_params,
+        }, headers=h)
+        assert bad.status_code == 422, bad.text
+
+
+@pytest.mark.asyncio
+async def test_create_rsi_cross_rules_fills_defaults_and_rejects_bad_params(
+    client: AsyncClient,
+):
+    h = await _auth_headers(client, "rule_rsi@example.com")
+    above = await client.post("/api/alerts", json={
+        "symbol": "AAPL", "market": "US",
+        "condition_type": "rsi_cross_above",
+    }, headers=h)
+    assert above.status_code == 201, above.text
+    assert above.json()["params"] == {"period": 14, "level": 70.0}
+
+    below = await client.post("/api/alerts", json={
+        "symbol": "2330", "market": "TW",
+        "condition_type": "rsi_cross_below",
+    }, headers=h)
+    assert below.status_code == 201, below.text
+    assert below.json()["params"] == {"period": 14, "level": 30.0}
+
+    for params in (
+        {"period": 1, "level": 70},
+        {"period": 14, "level": 100},
+        {"period": 14, "level": 0},
+        {"period": 14, "level": 70, "unknown": 1},
+    ):
+        invalid = await client.post("/api/alerts", json={
+            "symbol": "AAPL", "market": "US",
+            "condition_type": "rsi_cross_above", "params": params,
+        }, headers=h)
+        assert invalid.status_code == 422, invalid.text
+
+
+@pytest.mark.asyncio
 async def test_create_streak_alert_tw_only(client: AsyncClient):
     h = await _auth_headers(client, "rule_twonly@example.com")
     r = await client.post("/api/alerts", json={

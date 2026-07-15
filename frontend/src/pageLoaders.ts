@@ -17,7 +17,9 @@ export const pageLoaders = {
   market: () => import("@/pages/MarketPage"),
   stockDetail: () => import("@/pages/StockDetailPage"),
   screener: () => import("@/pages/ScreenerPage"),
+  comparison: () => import("@/pages/ComparisonPage"),
   portfolio: () => import("@/pages/PortfolioPage"),
+  research: () => import("@/pages/ResearchWorkspacePage"),
   analytics: () => import("@/pages/AnalyticsPage"),
   macro: () => import("@/pages/MacroPage"),
   watchlist: () => import("@/pages/WatchlistPage"),
@@ -39,7 +41,9 @@ function loaderForPath(path: string): keyof typeof pageLoaders | undefined {
   if (path.startsWith("/market/")) return "market";
   if (path.startsWith("/stock/")) return "stockDetail";
   if (path === "/screener") return "screener";
+  if (path === "/compare") return "comparison";
   if (path === "/portfolio") return "portfolio";
+  if (path === "/research") return "research";
   if (path === "/analytics") return "analytics";
   if (path === "/macro") return "macro";
   if (path === "/watchlist") return "watchlist";

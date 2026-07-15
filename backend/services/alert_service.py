@@ -5,7 +5,7 @@ PR-D1: `check_and_fire` grew from a fixed above/below comparator into
 a registry-driven rule engine (`services/alert_rules.py`). Per tick it:
 
 1. loads untriggered alerts for (symbol, market),
-2. resolves any daily thresholds the batch needs (N-day high/low/均量
+2. resolves any daily thresholds/series the batch needs (N-day high/low/均量/收盤
    from `ohlcv_daily`, cached in Redis per symbol per day so the hot
    tick path costs zero extra DB queries after the first),
 3. runs each alert's evaluator against the quote tick,
@@ -21,6 +21,7 @@ via the shared `fire_alert` / `dispatch_notifications` helpers.
 """
 import uuid
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,17 +29,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cache.cache_ttls import TTL_ALERT_THRESHOLD
 from cache.redis_cache import cache_get_json, cache_set_json
 from models.alert import AlertEvent, PriceAlert
+from models.investment_thesis import InvestmentThesis, ThesisEvent
 from models.ohlcv_daily import OhlcvDaily
 from schemas.alert import AlertCreate, AlertUpdate, validate_rule_fields
 from services.alert_rules import (
     DAILY_CONDITION_TYPES,
+    RSI_CONDITION_TYPES,
+    STATEFUL_CONDITION_TYPES,
     THR_AVG_VOL,
+    THR_CLOSES,
     THR_HIGH,
     THR_LOW,
     TICK_EVALUATORS,
+    TREND_CONDITION_TYPES,
     FireResult,
     TickContext,
     threshold_needs,
+    rsi_relation,
+    rsi_value,
+    trend_relation,
 )
 from services.notification_service import notify_user
 
@@ -80,6 +89,36 @@ def fire_alert(
         fired_at=now,
         payload={"condition_type": alert.condition_type, **result.payload},
     ))
+
+
+async def stage_thesis_alert_events(
+    db: AsyncSession,
+    fired: list[tuple[PriceAlert, FireResult]],
+    now: datetime,
+) -> None:
+    """Atomically link fired alerts to matching owner-scoped theses."""
+    for alert, result in fired:
+        theses = await db.scalars(select(InvestmentThesis).where(
+            InvestmentThesis.user_id == alert.user_id,
+            InvestmentThesis.market == alert.market,
+            InvestmentThesis.symbol == alert.symbol,
+            InvestmentThesis.status.in_(("active", "watching")),
+        ))
+        for thesis in theses:
+            db.add(ThesisEvent(
+                thesis_id=thesis.id,
+                user_id=alert.user_id,
+                event_type="alert_triggered",
+                title=result.message[:240],
+                details={
+                    "alert_id": str(alert.id),
+                    "condition_type": alert.condition_type,
+                    **result.payload,
+                },
+                source="alert_engine",
+                source_ref=f"{alert.id}:{now.isoformat()}",
+                occurred_at=now,
+            ))
 
 
 async def dispatch_notifications(
@@ -158,6 +197,10 @@ class AlertService:
                 market=alert.market, target_price=new_target,
             )
             alert.target_price = new_target
+            if alert.condition_type in STATEFUL_CONDITION_TYPES:
+                # Geometry changed: the next tick establishes a fresh side
+                # baseline and cannot be mistaken for a crossing.
+                alert.runtime_state = None
         if "cooldown_seconds" in fields and fields["cooldown_seconds"] is not None:
             alert.cooldown_seconds = fields["cooldown_seconds"]
         if "repeat" in fields and fields["repeat"] is not None:
@@ -206,6 +249,7 @@ class AlertService:
         market: str,
         current_price: float,
         quote: dict | None = None,
+        observed_at: datetime | None = None,
     ) -> None:
         """
         Evaluate untriggered alerts for this symbol+market against the
@@ -226,7 +270,7 @@ class AlertService:
                     # single filter covers both firing semantics.
                     PriceAlert.triggered.is_(False),
                 )
-            )
+            ).with_for_update()
         )
         alerts = [
             a for a in result.scalars().all()
@@ -236,6 +280,9 @@ class AlertService:
             return
 
         quote = quote or {}
+        now = observed_at or datetime.now(UTC)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=UTC)
         ctx = TickContext(
             price=current_price,
             change_pct=quote.get("change_pct"),
@@ -243,13 +290,95 @@ class AlertService:
             thresholds=await _resolve_thresholds(
                 db, market, symbol, threshold_needs(alerts),
             ),
+            observed_at=now,
         )
 
-        now = datetime.now(UTC)
         fired: list[tuple[PriceAlert, FireResult]] = []
+        state_dirty = False
         for alert in alerts:
             evaluator = TICK_EVALUATORS.get(alert.condition_type)
-            if evaluator is None or not cooldown_ok(alert, now):
+            if evaluator is None:
+                continue
+            if alert.condition_type in TREND_CONDITION_TYPES:
+                from middleware.metrics import TREND_ALERT_EVALUATIONS_TOTAL
+
+                relation = trend_relation(alert, ctx)
+                if relation is None:
+                    TREND_ALERT_EVALUATIONS_TOTAL.labels(outcome="invalid_projection").inc()
+                    continue
+                previous = (alert.runtime_state or {}).get("trend_relation")
+                if previous != relation:
+                    alert.runtime_state = {
+                        "trend_relation": relation,
+                        "observed_at": now.isoformat(),
+                        "price": current_price,
+                    }
+                    state_dirty = True
+                if previous is None:
+                    TREND_ALERT_EVALUATIONS_TOTAL.labels(outcome="initialized").inc()
+                    continue
+                crosses = (
+                    alert.condition_type == "trend_cross_above"
+                    and previous == "below"
+                    and relation in ("above", "on")
+                ) or (
+                    alert.condition_type == "trend_cross_below"
+                    and previous == "above"
+                    and relation in ("below", "on")
+                )
+                if not crosses:
+                    TREND_ALERT_EVALUATIONS_TOTAL.labels(outcome="same_side").inc()
+                    continue
+                if not cooldown_ok(alert, now):
+                    TREND_ALERT_EVALUATIONS_TOTAL.labels(outcome="cooldown").inc()
+                    continue
+                TREND_ALERT_EVALUATIONS_TOTAL.labels(outcome="crossed").inc()
+            elif alert.condition_type in RSI_CONDITION_TYPES:
+                from middleware.metrics import INDICATOR_ALERT_EVALUATIONS_TOTAL
+
+                relation = rsi_relation(alert, ctx)
+                if relation is None:
+                    INDICATOR_ALERT_EVALUATIONS_TOTAL.labels(
+                        indicator="rsi", outcome="insufficient_data",
+                    ).inc()
+                    continue
+                previous = (alert.runtime_state or {}).get("rsi_relation")
+                if previous != relation:
+                    alert.runtime_state = {
+                        "rsi_relation": relation,
+                        "rsi": rsi_value(alert, ctx),
+                        "observed_at": now.isoformat(),
+                        "price": current_price,
+                    }
+                    state_dirty = True
+                if previous is None:
+                    INDICATOR_ALERT_EVALUATIONS_TOTAL.labels(
+                        indicator="rsi", outcome="initialized",
+                    ).inc()
+                    continue
+                crosses = (
+                    alert.condition_type == "rsi_cross_above"
+                    and previous == "below"
+                    and relation in ("above", "on")
+                ) or (
+                    alert.condition_type == "rsi_cross_below"
+                    and previous == "above"
+                    and relation in ("below", "on")
+                )
+                if not crosses:
+                    INDICATOR_ALERT_EVALUATIONS_TOTAL.labels(
+                        indicator="rsi", outcome="same_side",
+                    ).inc()
+                    continue
+                if not cooldown_ok(alert, now):
+                    INDICATOR_ALERT_EVALUATIONS_TOTAL.labels(
+                        indicator="rsi", outcome="cooldown",
+                    ).inc()
+                    continue
+                INDICATOR_ALERT_EVALUATIONS_TOTAL.labels(
+                    indicator="rsi", outcome="crossed",
+                ).inc()
+            elif not cooldown_ok(alert, now):
                 continue
             match = evaluator(alert, ctx)
             if match is None:
@@ -258,7 +387,10 @@ class AlertService:
             fired.append((alert, match))
 
         if fired:
+            await stage_thesis_alert_events(db, fired, now)
+        if fired or state_dirty:
             await db.commit()
+        if fired:
             await dispatch_notifications(fired)
 
 
@@ -276,7 +408,7 @@ async def _resolve_thresholds(
     market: str,
     symbol: str,
     needs: set[tuple[str, int]],
-) -> dict[tuple[str, int], float | None]:
+) -> dict[tuple[str, int], Any]:
     """Resolve every (kind, lookback) threshold the alert batch needs.
 
     Redis-cached per symbol per day (key embeds today's date) so the
@@ -285,7 +417,7 @@ async def _resolve_thresholds(
     bars") is cached too, wrapped in {"value": None}, so symbols
     without history don't re-query the DB 390 times a session.
     """
-    out: dict[tuple[str, int], float | None] = {}
+    out: dict[tuple[str, int], Any] = {}
     if not needs:
         return out
     today = date.today()
@@ -308,7 +440,7 @@ async def _compute_threshold(
     kind: str,
     lookback: int,
     today: date,
-) -> float | None:
+) -> float | list[float] | None:
     """N-day high / low / avg volume over the last `lookback` daily
     bars strictly before today (today's live bar must not count as
     its own breakout reference)."""
@@ -323,6 +455,12 @@ async def _compute_threshold(
         .limit(lookback)
     )
     rows = (await db.scalars(stmt)).all()
+    if kind == THR_CLOSES:
+        closes = [float(row.close) for row in reversed(rows) if row.close is not None]
+        # RSI validates its own period-specific minimum. Cache a shorter
+        # history too so newly listed symbols abstain without re-querying on
+        # every tick until they accumulate enough bars.
+        return closes
     if kind == THR_HIGH:
         vals = [float(r.high) for r in rows if r.high is not None]
         return max(vals) if vals else None

@@ -103,6 +103,7 @@ env:
     CLAUDE_AGENT_ENABLED: "true"
     JWT_SECRET_KEY: ""
     CORS_ORIGINS: "https://fincept.example.com"
+    # Existing active account published anonymously at /daily. Empty disables.
     PUBLIC_DAILY_RESULTS_OWNER_EMAIL: ""
     # FinMind clone subsystem.
     # USE_MAIN_DB=true (default) shares the main Postgres via a

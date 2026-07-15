@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173"
     PUBLIC_DAILY_RESULTS_OWNER_EMAIL: str = ""
 
+    # Optional publisher for the anonymous latest daily round-table page.
+    # Empty disables GET /api/public/daily. The value must match an existing
+    # active user's email; no public endpoint accepts an owner override.
+    PUBLIC_DAILY_RESULTS_OWNER_EMAIL: str = ""
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",")]
@@ -359,6 +364,13 @@ class Settings(BaseSettings):
     # Admin seed (optional — created on first boot)
     ADMIN_EMAIL: str = ""
     ADMIN_PASSWORD: str = ""
+    PUBLIC_REGISTRATION_ENABLED: bool = False
+    INVITATION_EXPIRE_HOURS: int = 72
+    PASSWORD_RESET_EXPIRE_MINUTES: int = 30
+    PASSWORD_RESET_URL: str = "http://localhost:5173/reset-password"
+    TERMS_VERSION: str = "2026-07-15"
+    PRIVACY_VERSION: str = "2026-07-15"
+    AI_DATA_DISCLOSURE_VERSION: str = "2026-07-15"
 
     # Auto-update / GitHub release polling
     GITHUB_OWNER: str = "x812033727"
@@ -441,6 +453,14 @@ class Settings(BaseSettings):
     SMTP_USE_TLS: bool = True
     SMTP_USE_SSL: bool = False
     SMTP_TIMEOUT_SECONDS: int = 20
+
+    # LINE Messaging API (D2). The channel access token is a deployment
+    # secret shared by the official account; individual users bind only
+    # their opaque LINE user id through the signed webhook flow. Both
+    # values must be present before LINE can be enabled.
+    LINE_CHANNEL_ACCESS_TOKEN: str = ""
+    LINE_CHANNEL_SECRET: str = ""
+    LINE_API_TIMEOUT_SECONDS: int = 10
 
     # Web Push (PR-D3 瀏覽器推播) — VAPID keypair identifying THIS
     # deployment to browser push services (self-hosted, no third-party

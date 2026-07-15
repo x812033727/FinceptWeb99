@@ -19,6 +19,11 @@ def _bars(start: str, end: str) -> list[dict]:
     ]
 
 
+def _assert_bars_with_source(actual: list[dict], expected: list[dict], source: str) -> None:
+    assert [{k: v for k, v in row.items() if k != "data_source"} for row in actual] == expected
+    assert {row["data_source"] for row in actual} == {source}
+
+
 @pytest.fixture
 def patch_io():
     """Stub out everything tw.get_history touches: cache, DB, upstream."""
@@ -46,7 +51,7 @@ async def test_redis_hit_skips_db_and_upstream(patch_io):
 
     out = await tw.get_history("2330", months=1)
 
-    assert out == cached_bars
+    _assert_bars_with_source(out, cached_bars, "cache")
     patch_io["db_read"].assert_not_awaited()
     patch_io["twse_hist"].assert_not_awaited()
     patch_io["finmind_hist"].assert_not_awaited()
@@ -72,7 +77,7 @@ async def test_db_fresh_skips_upstream(patch_io):
 
     out = await tw.get_history("2330", months=1)
 
-    assert out == fresh_bars
+    _assert_bars_with_source(out, fresh_bars, "ohlcv_daily")
     patch_io["twse_hist"].assert_not_awaited()
     patch_io["finmind_hist"].assert_not_awaited()
     patch_io["cache_set_json"].assert_awaited_once()
@@ -96,7 +101,7 @@ async def test_db_stale_falls_through_to_upstream(patch_io):
 
     out = await tw.get_history("2330", months=1)
 
-    assert out == fresh_upstream
+    _assert_bars_with_source(out, fresh_upstream, "twse")
     patch_io["twse_hist"].assert_awaited()
     patch_io["db_write"].assert_awaited_once()
     patch_io["cache_set_json"].assert_awaited()
@@ -117,7 +122,7 @@ async def test_upstream_failure_returns_stale_db(patch_io):
 
     out = await tw.get_history("2330", months=1)
 
-    assert out == stale
+    _assert_bars_with_source(out, stale, "db_stale")
     patch_io["db_write"].assert_not_awaited()
 
 
@@ -142,7 +147,7 @@ async def test_twse_empty_falls_through_to_finmind(patch_io):
 
     out = await tw.get_history("9999", months=1)
 
-    assert out == finmind_bars
+    _assert_bars_with_source(out, finmind_bars, "finmind")
     patch_io["finmind_hist"].assert_awaited()
     patch_io["db_write"].assert_awaited_once()
 
@@ -164,7 +169,7 @@ async def test_history_finmind_first_when_token_present(patch_io):
 
     out = await tw.get_history("2330", months=1)
 
-    assert out == finmind_bars
+    _assert_bars_with_source(out, finmind_bars, "finmind")
     patch_io["finmind_hist"].assert_awaited()
     patch_io["twse_hist"].assert_not_awaited()  # FinMind won; TWSE not tried
     patch_io["db_write"].assert_awaited_once()
@@ -186,7 +191,7 @@ async def test_history_finmind_failure_falls_back_to_twse_when_preferred(patch_i
 
     out = await tw.get_history("2330", months=1)
 
-    assert out == twse_bars
+    _assert_bars_with_source(out, twse_bars, "twse")
     patch_io["twse_hist"].assert_awaited()
 
 
@@ -207,4 +212,4 @@ async def test_db_read_error_does_not_break_request(patch_io):
     patch_io["twse_hist"].return_value = fresh
 
     out = await tw.get_history("2330", months=1)
-    assert out == fresh
+    _assert_bars_with_source(out, fresh, "twse")

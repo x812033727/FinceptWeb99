@@ -32,7 +32,11 @@ from cache.redis_cache import acquire_lock, release_lock
 from data.tw.finmind_connector import FinMindSilentDeny
 from data.tw.finmind_paywall import (
     extract_body_message as _extract_body_message,
+)
+from data.tw.finmind_paywall import (
     looks_like_paywall as _looks_like_paywall,
+)
+from data.tw.finmind_paywall import (
     raise_if_silent_denied,
 )
 from db.session import AsyncSessionLocal
@@ -55,10 +59,10 @@ TAIEX_TR_SYMBOL = "_TAIEX_TR"
 
 _LOCK_KEY = "lock:ingest_taiex_tr_history"
 _LOCK_TTL = 3 * 60
-# Pull a generous lookback so a fresh deploy gets enough TR history
-# to render PerformanceChart's longest period (1Y). Daily upsert
-# means the trailing 365 days re-write is cheap.
-_LOOKBACK_DAYS = 400
+# Keep enough history for the factor-validation API's five-year maximum,
+# plus forward-execution headroom. This index is only one row per session,
+# and idempotent upserts make the wider daily refresh inexpensive.
+_LOOKBACK_DAYS = 5 * 366 + 120
 
 
 def _format_error(exc: BaseException) -> str:

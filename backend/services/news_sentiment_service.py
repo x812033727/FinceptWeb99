@@ -1130,6 +1130,8 @@ async def read_recent_market_sentiment(
     head_rows = list((await db.scalars(head_stmt)).all())
 
     return {
+        "data_source": "news_archive",
+        "as_of": head_rows[0].published_at.isoformat() if head_rows else None,
         "avg_score":  round(avg, 3),
         "bullish":    counts["bullish"],
         "bearish":    counts["bearish"],
@@ -1143,6 +1145,7 @@ async def read_recent_market_sentiment(
                 "label":        r.sentiment_label,
                 "published_at": r.published_at.isoformat(),
                 "has_fulltext": r.body is not None,
+                "data_source":  r.source,
             }
             for r in head_rows
         ],
@@ -1212,6 +1215,8 @@ async def read_symbol_sentiment(
     head_rows = list((await db.scalars(head_stmt)).all())
 
     return {
+        "data_source": "news_archive",
+        "as_of": head_rows[0].published_at.isoformat() if head_rows else None,
         "symbol":     symbol,
         "considered": considered,
         "count":      considered,   # retained for backward-compat callers
@@ -1230,6 +1235,7 @@ async def read_symbol_sentiment(
                 # still flag body-backed items so the reader knows which
                 # sentiment was scored with full text.
                 "has_fulltext": r.body is not None,
+                "data_source":  r.source,
             }
             for r in head_rows
         ],

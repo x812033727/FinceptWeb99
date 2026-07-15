@@ -33,7 +33,8 @@ async def test_redis_hit_skips_db_and_upstream(patch_io):
 
     out = await tw.get_fundamentals("2330")
 
-    assert out == cached
+    assert {key: value for key, value in out.items() if key != "data_source"} == cached
+    assert out["data_source"] == "cache"
     patch_io["db_read"].assert_not_awaited()
     patch_io["upstream"].assert_not_awaited()
 

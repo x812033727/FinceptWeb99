@@ -9,6 +9,10 @@ import { PageSkeleton } from "@/components/Skeleton";
 import Toaster from "@/components/Toaster";
 import { CommandPaletteProvider } from "@/components/CommandPalette";
 import LoginPage from "@/pages/LoginPage";
+import AcceptInvitePage from "@/pages/AcceptInvitePage";
+import ForgotPasswordPage from "@/pages/ForgotPasswordPage";
+import ResetPasswordPage from "@/pages/ResetPasswordPage";
+import ConsentGate from "@/components/ConsentGate";
 import { pageLoaders, prefetchPage } from "@/pageLoaders";
 
 // Authenticated pages are split into their own chunks so the initial
@@ -20,7 +24,9 @@ const DashboardPage = lazy(pageLoaders.dashboard);
 const MarketPage = lazy(pageLoaders.market);
 const StockDetailPage = lazy(pageLoaders.stockDetail);
 const ScreenerPage = lazy(pageLoaders.screener);
+const ComparisonPage = lazy(pageLoaders.comparison);
 const PortfolioPage = lazy(pageLoaders.portfolio);
+const ResearchWorkspacePage = lazy(pageLoaders.research);
 const AnalyticsPage = lazy(pageLoaders.analytics);
 const MacroPage = lazy(pageLoaders.macro);
 const WatchlistPage = lazy(pageLoaders.watchlist);
@@ -89,6 +95,9 @@ export default function App() {
         <Routes>
           <Route path="/daily" element={<Suspense fallback={<PageSkeleton />}><DailyPage /></Suspense>} />
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/accept-invite" element={<AcceptInvitePage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
 
           {/* All authenticated pages share the AppLayout (sidebar + main area).
               CommandPaletteProvider sits inside RequireAuth so its global
@@ -96,9 +105,11 @@ export default function App() {
           <Route
             element={
               <RequireAuth>
-                <CommandPaletteProvider>
-                  <AppLayout />
-                </CommandPaletteProvider>
+                <ConsentGate>
+                  <CommandPaletteProvider>
+                    <AppLayout />
+                  </CommandPaletteProvider>
+                </ConsentGate>
               </RequireAuth>
             }
           >
@@ -106,7 +117,9 @@ export default function App() {
             <Route path="/market/:market" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><MarketPage /></Suspense></ErrorBoundary>} />
             <Route path="/stock/:market/:symbol" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><StockDetailPage /></Suspense></ErrorBoundary>} />
             <Route path="/screener" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><ScreenerPage /></Suspense></ErrorBoundary>} />
+            <Route path="/compare" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><ComparisonPage /></Suspense></ErrorBoundary>} />
             <Route path="/portfolio" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><PortfolioPage /></Suspense></ErrorBoundary>} />
+            <Route path="/research" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><ResearchWorkspacePage /></Suspense></ErrorBoundary>} />
             <Route path="/analytics" element={<RequireRole role="analyst"><ErrorBoundary><Suspense fallback={<PageSkeleton />}><AnalyticsPage /></Suspense></ErrorBoundary></RequireRole>} />
             <Route path="/macro" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><MacroPage /></Suspense></ErrorBoundary>} />
             <Route path="/watchlist" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><WatchlistPage /></Suspense></ErrorBoundary>} />

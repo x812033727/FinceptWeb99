@@ -3,10 +3,11 @@ Integration tests for the TW market API endpoints.
 External calls (TWSE, FinMind, MOPS, yfinance) are mocked so CI runs offline.
 """
 import time
-import pytest
-from httpx import AsyncClient
+from datetime import date
 from unittest.mock import AsyncMock, patch
 
+import pytest
+from httpx import AsyncClient
 
 # ── helpers ───────────────────────────────────────────────────────
 
@@ -23,13 +24,15 @@ def _mock_quote(symbol: str = "2330") -> dict:
         "volume": 25_000_000, "open": 818.0, "high": 825.0, "low": 815.0,
         "currency": "TWD", "ts": int(time.time() * 1000),
         "tz": "Asia/Taipei", "is_market_open": True,
+        "data_source": "twse_mis",
     }
 
 
 def _mock_bars(n: int = 5) -> list[dict]:
     return [
         {"time": f"2024-01-{i + 1:02d}", "open": 800.0, "high": 830.0,
-         "low": 795.0, "close": 820.0 + i, "volume": 20_000_000}
+         "low": 795.0, "close": 820.0 + i, "volume": 20_000_000,
+         "data_source": "ohlcv_daily"}
         for i in range(n)
     ]
 
@@ -85,6 +88,35 @@ async def test_fundamentals_requires_auth(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_security_master_requires_auth(client: AsyncClient):
+    r = await client.get("/api/tw/security-master/00980B")
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_security_master_exposes_effective_tax_rule_and_source(client: AsyncClient):
+    headers = await _auth_headers(client, "security_master@example.com")
+    r = await client.get(
+        "/api/tw/security-master/00980B?as_of=2026-07-15",
+        headers=headers,
+    )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["instrument_type"] == "etf_bond"
+    assert payload["sell_tax_bps"] == 0
+    assert payload["effective_from"] == "2026-07-15"
+    assert payload["source"] == "runtime_fallback"
+    assert payload["tax_source_url"].startswith("https://www.etax.nat.gov.tw/")
+
+
+@pytest.mark.asyncio
+async def test_security_master_sync_is_admin_only(client: AsyncClient):
+    headers = await _auth_headers(client, "security_sync_viewer@example.com")
+    r = await client.post("/api/tw/security-master/sync", headers=headers)
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_institutional_requires_auth(client: AsyncClient):
     r = await client.get("/api/tw/institutional/2330")
     assert r.status_code == 401
@@ -137,6 +169,28 @@ async def test_quote_shape(client: AsyncClient):
     assert data["currency"] == "TWD"
     assert data["tz"] == "Asia/Taipei"
     assert "is_market_open" in data
+    assert data["meta"]["freshness"] == "fresh"
+    assert data["meta"]["fallback_chain"][0] == "twse_mis"
+
+
+@pytest.mark.asyncio
+async def test_quote_verify_surfaces_verified_sources(client: AsyncClient):
+    h = await _auth_headers(client, "tw_quote_verify@example.com")
+    check = {
+        "status": "verified", "primary_source": "twse",
+        "secondary_source": "finmind", "spread_pct": 0.08,
+        "observations": {"twse": 100, "finmind": 100.08},
+        "checked_at": "2026-07-15T00:00:00+00:00", "flags": [],
+    }
+    with patch("services.tw_market_service.get_quote", new=AsyncMock(return_value=_mock_quote("2330"))), \
+         patch("services.tw_market_service.verify_quote_consistency", new=AsyncMock(return_value=check)) as verify:
+        response = await client.get("/api/tw/quote/2330?verify=true", headers=h)
+
+    assert response.status_code == 200
+    meta = response.json()["meta"]
+    assert meta["consistency"] == "verified"
+    assert meta["cross_checked_sources"] == ["twse", "finmind"]
+    verify.assert_awaited_once()
 
 
 # ── history ───────────────────────────────────────────────────────
@@ -154,6 +208,7 @@ async def test_history_returns_bars(client: AsyncClient):
     assert len(result) == 10
     for field in ("time", "open", "high", "low", "close", "volume"):
         assert field in result[0]
+    assert result[0]["meta"]["freshness"] == "stale"
 
 
 @pytest.mark.asyncio
@@ -193,6 +248,7 @@ async def test_fundamentals_returns_data(client: AsyncClient):
     data = r.json()
     assert data["symbol"] == "2330"
     assert data["pe_ratio"] == pytest.approx(20.5)
+    assert data["meta"]["freshness"] == "stale"
 
 
 # ── institutional ────────────────────────────────────────────────
@@ -638,3 +694,350 @@ async def test_etf_holdings_response_shape(client: AsyncClient):
     assert body["as_of"] == "2024-01-31"
     assert body["holdings"][0]["symbol"] == "2330"
     mock.assert_awaited_once_with("0050")
+
+
+# ── explainable multi-factor ranking ──────────────────────────────
+
+def _factor_quality(status: str = "good") -> dict:
+    return {
+        "status": status, "flags": ["unadjusted_price_history"],
+        "sources": ["fundamentals_snapshots", "ohlcv_daily", "tw_company_info"],
+        "universe_size": 100, "eligible_count": 80, "returned_count": 1,
+        "momentum_coverage_pct": 90, "stale_fundamentals_excluded": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_factor_ranking_requires_auth(client: AsyncClient):
+    response = await client.get("/api/tw/factor-ranking")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_factor_ranking_response_and_query_forwarding(client: AsyncClient):
+    h = await _auth_headers(client, "tw_factor@example.com")
+    payload = {
+        "market": "TW", "as_of": "2025-06-30", "profile": "value",
+        "methodology_version": "tw-explainable-multifactor-v8",
+        "sector_neutral": False,
+        "weights": {"value": .45, "quality": .15, "momentum": .1,
+                    "low_volatility": .1, "income": .1, "liquidity": .1},
+        "candidates": [{
+            "rank": 1, "symbol": "2330", "name_zh": "台積電", "industry": "半導體",
+            "price": 1000, "price_session": "2025-06-30", "fundamentals_as_of": "2025-06-27",
+            "score": 100, "composite_z": 1.5, "raw_composite_z": 1.8,
+            "sector_adjustment": .3, "factor_coverage": 1,
+            "missing_factors": [],
+            "factors": {name: {"raw": 1, "z": 1} for name in
+                        ("value", "quality", "momentum", "low_volatility", "income", "liquidity")},
+        }],
+        "quality": _factor_quality(),
+        "methodology": {"model": "deterministic ranking; not machine learning"},
+    }
+    with patch("services.tw_factor_service.get_factor_ranking", new_callable=AsyncMock) as mock:
+        mock.return_value = payload
+        response = await client.get(
+            "/api/tw/factor-ranking?as_of=2025-06-30&profile=value&limit=25"
+            "&sector_neutral=false", headers=h,
+        )
+
+    assert response.status_code == 200
+    assert response.json()["candidates"][0]["factors"]["value"]["z"] == 1
+    mock.assert_awaited_once_with(
+        as_of=date(2025, 6, 30), profile="value", limit=25,
+        sector_neutral=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_factor_ranking_rejects_unknown_profile(client: AsyncClient):
+    h = await _auth_headers(client, "tw_factor_bad@example.com")
+    response = await client.get("/api/tw/factor-ranking?profile=magic", headers=h)
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_factor_portfolio_forwards_constraints_and_returns_diagnostics(
+    client: AsyncClient,
+):
+    h = await _auth_headers(client, "tw_factor_portfolio@example.com")
+    ranking = {
+        "market": "TW", "as_of": "2025-06-30", "profile": "balanced",
+        "methodology_version": "tw-explainable-multifactor-v8",
+        "weights": {"value": .25}, "candidates": [{"symbol": "2330"}],
+        "quality": _factor_quality(), "methodology": {}, "sector_neutral": True,
+        "weight_source": "profile", "model_id": None,
+    }
+    portfolio = {
+        "market": "TW", "as_of": "2025-06-30", "profile": "balanced",
+        "methodology_version": "tw-factor-portfolio-v1",
+        "factor_methodology_version": "tw-explainable-multifactor-v8",
+        "weight_source": "profile", "model_id": None, "converged": True,
+        "solver_message": "Optimization terminated successfully",
+        "positions": [{
+            "symbol": "2330", "name_zh": "台積電", "industry": "半導體",
+            "weight": .1, "notional_twd": 1_000_000, "factor_score": 99,
+            "liquidity_cap": .1, "average_daily_value_twd": 10_000_000_000,
+            "risk_contribution": .2,
+        }],
+        "summary": {"invested_weight": .8, "cash_weight": .2,
+                    "annual_volatility": .15, "tracking_error": .08,
+                    "turnover": 0, "weighted_factor_score": 75},
+        "sector_weights": {"半導體": .3},
+        "constraints": [{"name": "target_volatility", "actual": .15,
+                         "limit": .2, "operator": "<=", "passed": True,
+                         "binding": False}],
+        "quality": {"status": "good", "flags": [],
+                    "requested_candidate_count": 30, "eligible_candidate_count": 25,
+                    "return_observations": 252, "excluded": [],
+                    "benchmark": "taiex_total_return",
+                    "adjusted_price_history_used": True,
+                    "adjusted_price_coverage_pct": 100},
+        "methodology": {"objective": "factor utility"},
+    }
+    with patch(
+        "services.tw_factor_service.get_factor_ranking",
+        new_callable=AsyncMock, return_value=ranking,
+    ) as rank_mock, patch(
+        "services.tw_factor_portfolio_service.construct_factor_portfolio",
+        new_callable=AsyncMock, return_value=portfolio,
+    ) as portfolio_mock:
+        response = await client.post("/api/tw/factor-portfolio", json={
+            "as_of": "2025-06-30", "candidate_count": 30,
+            "max_position_weight": .1, "max_sector_weight": .3,
+            "target_volatility": .2, "max_tracking_error": .12,
+        }, headers=h)
+    assert response.status_code == 200
+    assert response.json()["positions"][0]["weight"] == pytest.approx(.1)
+    rank_mock.assert_awaited_once_with(
+        as_of=date(2025, 6, 30), profile="balanced", limit=30,
+        sector_neutral=True,
+    )
+    call = portfolio_mock.await_args.kwargs
+    assert call["max_position_weight"] == pytest.approx(.1)
+    assert call["max_sector_weight"] == pytest.approx(.3)
+    assert call["target_volatility"] == pytest.approx(.2)
+    assert call["max_tracking_error"] == pytest.approx(.12)
+
+
+@pytest.mark.asyncio
+async def test_factor_rebalance_preview_is_owner_scoped_and_never_executes(client: AsyncClient):
+    h = await _auth_headers(client, "tw_factor_rebalance@example.com")
+    portfolio_id = "11111111-1111-4111-8111-111111111111"
+    ranking = {
+        "market": "TW", "as_of": "2025-06-30", "profile": "balanced",
+        "methodology_version": "tw-explainable-multifactor-v8",
+        "weights": {"value": .25}, "candidates": [],
+        "quality": _factor_quality(), "methodology": {}, "sector_neutral": True,
+    }
+    target = {
+        "market": "TW", "as_of": "2025-06-30", "profile": "balanced",
+        "methodology_version": "tw-factor-portfolio-v1",
+        "factor_methodology_version": "tw-explainable-multifactor-v8",
+        "weight_source": "profile", "model_id": None, "converged": True,
+        "solver_message": "ok", "positions": [],
+        "summary": {}, "risk_comparison": {}, "sector_weights": {},
+        "constraints": [], "quality": {
+            "status": "good", "flags": [], "requested_candidate_count": 30,
+            "eligible_candidate_count": 20, "return_observations": 252,
+            "excluded": [], "benchmark": "taiex_total_return",
+            "adjusted_price_history_used": True, "adjusted_price_coverage_pct": 100,
+        }, "methodology": {},
+    }
+    preview = {
+        "portfolio_id": portfolio_id, "currency": "TWD", "portfolio_name": "核心",
+        "portfolio_base_currency": "TWD", "portfolio_notional_twd": 200_000,
+        "target_portfolio": target, "trades": [], "post_positions": [],
+        "cost_scenarios": [], "frozen": [], "excluded": [],
+        "summary": {"funded": True}, "quality_flags": [], "methodology": {},
+        "preview_only": True,
+    }
+    with patch(
+        "services.tw_factor_service.get_factor_ranking",
+        new_callable=AsyncMock, return_value=ranking,
+    ), patch(
+        "services.tw_factor_rebalance_service.build_factor_rebalance_preview",
+        new_callable=AsyncMock, return_value=preview,
+    ) as preview_mock:
+        response = await client.post("/api/tw/factor-portfolio/rebalance-preview", json={
+            "portfolio_id": portfolio_id,
+            "weight_source": "profile", "additional_cash_twd": 100_000,
+            "allow_odd_lot": False,
+        }, headers=h)
+    assert response.status_code == 200
+    assert response.json()["preview_only"] is True
+    call = preview_mock.await_args.kwargs
+    assert call["portfolio_id"] == portfolio_id
+    assert call["additional_cash_twd"] == 100_000
+    assert call["allow_odd_lot"] is False
+    assert call["user_id"]
+
+
+@pytest.mark.asyncio
+async def test_factor_rebalance_preview_rejects_historical_date(client: AsyncClient):
+    h = await _auth_headers(client, "tw_factor_rebalance_history@example.com")
+    response = await client.post("/api/tw/factor-portfolio/rebalance-preview", json={
+        "portfolio_id": "11111111-1111-4111-8111-111111111111",
+        "as_of": "2020-01-01", "weight_source": "profile",
+    }, headers=h)
+    assert response.status_code == 400
+    assert "historical holdings" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_factor_validation_response_and_cost_forwarding(client: AsyncClient):
+    h = await _auth_headers(client, "tw_factor_validation@example.com")
+    payload = {
+        "market": "TW", "profile": "balanced",
+        "methodology_version": "tw-explainable-multifactor-v8",
+        "sector_neutral": True,
+        "start_date": "2024-01-01", "end_date": "2025-01-01",
+        "top_n": 20, "holding_sessions": 21, "transaction_cost_bps": 25,
+        "portfolio_notional_twd": 10_000_000,
+        "max_participation_rate": .05, "impact_coefficient_bps": 10,
+        "benchmark_requested": "taiex_total_return",
+        "benchmark_used": "taiex_total_return",
+        "weight_mode": "walk_forward",
+        "periods": [{
+            "anchor": "2024-06-03", "holdings": ["2330"], "holding_count": 20,
+            "turnover": 1, "gross_return_pct": 3, "cost_pct": .25,
+            "net_return_pct": 2.75, "benchmark_return_pct": 1,
+            "excess_return_pct": 1.75, "quality_status": "good",
+        }],
+        "summary": {"period_count": 1, "cumulative_return_pct": 2.75},
+        "regime_analysis": {"bull": {"period_count": 1}},
+        "factor_diagnostics": {
+            "composite": {"period_count": 1, "average_rank_ic": .1},
+        },
+        "factor_correlation_matrix": {"value": {"value": 1}},
+        "quantile_analysis": {
+            "period_count": 1, "average_returns_pct": [0, .5, 1, 1.5, 2],
+            "average_top_bottom_spread_pct": 2,
+        },
+        "sensitivity_analysis": {
+            "holding_sessions": {"21": {"period_count": 1, "average_rank_ic": .1}},
+            "top_n": {"20": {"period_count": 1, "average_forward_return_pct": 2}},
+        },
+        "factor_decay_analysis": {
+            "composite": {
+                "average_rank_ic_by_horizon": {"5": .05, "21": .1, "63": .04},
+                "peak_absolute_ic_horizon": 21,
+                "direction_consistent": True,
+            },
+        },
+        "weight_stability": {
+            "mode": "walk_forward",
+            "base_weights": {"value": .2, "quality": .2, "momentum": .2,
+                             "low_volatility": .15, "income": .1, "liquidity": .15},
+            "adaptive_period_count": 1, "fallback_period_count": 0,
+            "average_weight_turnover_pct": 2.5,
+            "maximum_weight_turnover_pct": 2.5,
+            "factor_ranges": {
+                "value": {"minimum": .19, "maximum": .21, "latest": .21},
+            },
+        },
+        "quality": _factor_quality("degraded"),
+        "methodology": {"validation": "rolling out-of-sample forward returns"},
+    }
+    with patch("services.tw_factor_service.validate_factor_ranking", new_callable=AsyncMock) as mock:
+        mock.return_value = payload
+        response = await client.get(
+            "/api/tw/factor-validation?start_date=2024-01-01&end_date=2025-01-01"
+            "&profile=balanced&top_n=20&holding_sessions=21&transaction_cost_bps=25",
+            headers=h,
+        )
+
+    assert response.status_code == 200
+    assert response.json()["periods"][0]["net_return_pct"] == pytest.approx(2.75)
+    mock.assert_awaited_once_with(
+        start_date=date(2024, 1, 1), end_date=date(2025, 1, 1), profile="balanced",
+        top_n=20, holding_sessions=21, transaction_cost_bps=25,
+        sector_neutral=True,
+        portfolio_notional_twd=10_000_000,
+        max_participation_rate=.05, impact_coefficient_bps=10,
+        benchmark="taiex_total_return",
+        weight_mode="walk_forward",
+    )
+
+
+@pytest.mark.asyncio
+async def test_factor_research_registry_persists_gates_and_promotes(client: AsyncClient):
+    h = await _auth_headers(client, "tw_factor_registry@example.com")
+    validation = {
+        "market": "TW", "profile": "balanced",
+        "methodology_version": "tw-explainable-multifactor-v8",
+        "benchmark_requested": "taiex_total_return",
+        "benchmark_used": "taiex_total_return",
+        "summary": {
+            "period_count": 30, "average_excess_return_pct": .6,
+            "positive_excess_rate_pct": 60, "max_drawdown_pct": -8,
+            "average_fill_pct": 92,
+        },
+        "factor_diagnostics": {"composite": {
+            "average_rank_ic": .08, "significant_after_holm_5pct": True,
+        }},
+        "weight_stability": {
+            "adaptive_period_count": 18, "maximum_weight_turnover_pct": 4,
+            "factor_ranges": {
+                "value": {"latest": .24}, "quality": {"latest": .17},
+                "momentum": {"latest": .19}, "low_volatility": {"latest": .15},
+                "income": {"latest": .10}, "liquidity": {"latest": .15},
+            },
+        },
+        "quality": {"status": "good", "flags": []},
+    }
+    body = {
+        "name": "governed challenger", "start_date": "2021-01-01",
+        "end_date": "2025-01-01", "auto_promote": False,
+    }
+    with patch(
+        "services.tw_factor_service.validate_factor_ranking",
+        new_callable=AsyncMock, return_value=validation,
+    ) as mock:
+        response = await client.post("/api/tw/factor-research-runs", json=body, headers=h)
+    assert response.status_code == 200
+    created = response.json()
+    assert created["run"]["gate_result"]["eligible"] is True
+    assert created["model"]["status"] == "candidate"
+    assert sum(created["model"]["weights"].values()) == pytest.approx(1)
+    mock.assert_awaited_once()
+
+    listed = await client.get("/api/tw/factor-research-runs", headers=h)
+    assert listed.status_code == 200
+    assert listed.json()["total"] == 1
+    models = await client.get("/api/tw/factor-models?profile=balanced", headers=h)
+    assert models.status_code == 200
+    assert len(models.json()) == 1
+
+    promoted = await client.post(
+        f"/api/tw/factor-models/{created['model']['id']}/promote", headers=h,
+    )
+    assert promoted.status_code == 200
+    assert promoted.json()["status"] == "champion"
+
+    ranking = {
+        "market": "TW", "as_of": "2025-01-01", "profile": "balanced",
+        "methodology_version": "tw-explainable-multifactor-v8",
+        "weights": created["model"]["weights"], "candidates": [],
+        "quality": _factor_quality(), "methodology": {}, "sector_neutral": True,
+        "weight_source": "champion", "model_id": created["model"]["id"],
+    }
+    with patch(
+        "services.tw_factor_service.get_factor_ranking",
+        new_callable=AsyncMock, return_value=ranking,
+    ) as rank_mock:
+        ranked = await client.get("/api/tw/factor-ranking?profile=balanced", headers=h)
+    assert ranked.status_code == 200
+    assert ranked.json()["weight_source"] == "champion"
+    call = rank_mock.await_args.kwargs
+    assert call["model_id"] == created["model"]["id"]
+    assert call["weights_override"]["quality"] == pytest.approx(.17)
+
+
+@pytest.mark.asyncio
+async def test_factor_validation_caps_window(client: AsyncClient):
+    h = await _auth_headers(client, "tw_factor_window@example.com")
+    response = await client.get(
+        "/api/tw/factor-validation?start_date=2019-01-01&end_date=2025-01-01", headers=h,
+    )
+    assert response.status_code == 400

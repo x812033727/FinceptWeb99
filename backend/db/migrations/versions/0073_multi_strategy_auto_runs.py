@@ -20,7 +20,14 @@ def upgrade() -> None:
         "discussion_auto_run_configs", sa.Column("strategy_run_counts", sa.JSON(), nullable=True)
     )
     op.execute(
-        """UPDATE discussion_auto_run_configs SET strategy_run_counts = CASE WHEN enabled THEN '{\"general\":1,\"chip_momentum\":0,\"quality_growth\":0,\"breakout\":0,\"oversold_reversal\":0}' ELSE '{\"general\":0,\"chip_momentum\":0,\"quality_growth\":0,\"breakout\":0,\"oversold_reversal\":0}' END"""
+        """UPDATE discussion_auto_run_configs
+        SET strategy_run_counts = CASE WHEN enabled THEN
+          json_build_object('general', 1, 'chip_momentum', 0,
+            'quality_growth', 0, 'breakout', 0, 'oversold_reversal', 0)
+        ELSE
+          json_build_object('general', 0, 'chip_momentum', 0,
+            'quality_growth', 0, 'breakout', 0, 'oversold_reversal', 0)
+        END"""
     )
     op.alter_column("discussion_auto_run_configs", "strategy_run_counts", nullable=False)
     op.add_column("discussions", sa.Column("auto_run_strategy", sa.String(32), nullable=True))

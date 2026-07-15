@@ -1,7 +1,7 @@
 """add invitation and password-reset token tables
 
-Revision ID: 0073
-Revises: 0072
+Revision ID: 0074
+Revises: 0073
 """
 from collections.abc import Sequence
 
@@ -9,8 +9,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0073"
-down_revision: str | None = "0072"
+revision: str = "0074"
+down_revision: str | None = "0073"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

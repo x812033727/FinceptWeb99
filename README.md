@@ -60,7 +60,7 @@ FinceptWeb/
 │   │   ├── us/           # Polygon → yfinance → Stooq → Finnhub；FRED
 │   │   ├── tw/           # TWSE → FinMind → MOPS 瀑布
 │   │   └── crypto/       # Kraken REST / WebSocket 與 Top 20 universe
-│   ├── db/               # Alembic 0001-0078、引擎、seed
+│   ├── db/               # Alembic 0001-0087、引擎、seed
 │   ├── middleware/        # Prometheus metrics 中介層
 │   ├── models/           # SQLAlchemy ORM：User、Portfolio、Holding 等
 │   ├── services/         # 業務邏輯（快取、瀑布、LLM routing）
@@ -319,7 +319,7 @@ owner-scoped `chart_drawings` 保存並跨裝置同步。趨勢線可用端點�
 告警。趨勢線則依日曆時間插值／外推目標價，現價在線下時建立向上穿越告警、在線上
 時建立向下穿越告警；首次 tick 只保存 relation 基準，後續真正換側才觸發。端點更新
 會同步告警幾何並重建基準，`alert_id` 保證重複點擊不會建立多筆規則。評估結果以
-`trend_alert_evaluations_total{outcome}` 監控，runtime state 由 migration 0081 持久化。
+`trend_alert_evaluations_total{outcome}` 監控，runtime state 由 migration 0082 持久化。
 
 進階告警亦支援 RSI 向上／向下穿越：以最多 252 筆已封存日收盤加當前即時價做
 Wilder 平滑計算（至少需 `period` 筆歷史），首次 tick 只建立門檻上下側基準，真正換側才觸發；資料不足時明確 abstain，
@@ -408,11 +408,11 @@ python -m finmind.scripts.backfill --dataset TaiwanStockCashFlowsStatement --day
 API 的 `quality.adjusted_price_coverage_pct` 與 `point_in_time_universe` 會揭露
 回填完整度；未完成時自動降級並保留偏誤警示，不會把原始價格誤稱為還原價。
 
-自 migration `0083` 起，每次台股公司主檔 refresh 也會將當日名稱、交易所與產業
+自 migration `0084` 起，每次台股公司主檔 refresh 也會將當日名稱、交易所與產業
 寫入 `tw_company_classification_snapshots`。多因子 v3 預設啟用產業中性排名：先算
 五因子 composite，再扣除同產業平均並重新標準化；每個產業至少需要 2 檔合格股票，
 總產業覆蓋至少需 60%。API 會回傳 `classification_coverage_pct`、
-`sector_coverage_pct` 與 `sector_neutral_applied`。歷史快照只從部署 `0083` 後開始累積，
+`sector_coverage_pct` 與 `sector_neutral_applied`。歷史快照只從部署 `0084` 後開始累積，
 不會用今天的分類回填過去日期；舊期間會保留 `sector_classification_not_point_in_time`
 警示。
 
@@ -474,7 +474,7 @@ constraint，並揭露產業曝險、風險貢獻、流動性上限與排除原�
 由於目前尚未保存歷史持倉與現金快照，實際持倉預覽只接受今日日期，拒絕把今日部位與
 歷史因子價格混算；缺少 ADV 的既有部位則保守套用設定的最大市場衝擊並回傳品質旗標。
 
-Migration `0086` 新增有效日期商品主檔。每日 TWSE／TPEx 代號更新後會同步股票、股票型
+Migration `0087` 新增有效日期商品主檔。每日 TWSE／TPEx 代號更新後會同步股票、股票型
 ETF、債券 ETF、主動式、多資產、期貨、槓桿與反向型分類，以及整張／零股單位和賣出
 稅率；每筆規則保留來源、生效／失效日與信心狀態。管理員可用帶原因、操作者及日期區間
 的人工覆寫修正特殊商品。再平衡以主檔為準，僅在缺資料時回退公開代號規則並回傳品質
@@ -514,7 +514,7 @@ GET  /api/portfolio/{id}/performance # 績效快照（?days=90）
 POST /api/portfolio/{id}/optimise    # 均值-變異數最佳化（需 analyst 角色）
 ```
 
-Migration `0085` 新增多幣別 append-only 現金帳本。台股交易以 TWD、美股／加密交易以
+Migration `0086` 新增多幣別 append-only 現金帳本。台股交易以 TWD、美股／加密交易以
 USD 自動產生原生幣別結算；修改交易會先沖銷舊結算再追加新分錄，刪除交易只追加反向
 分錄，帳本紀錄本身不做覆寫或刪除。系統拒絕任何在交易時點造成負庫存的賣出，避免
 持倉被歸零但現金仍虛增。舊交易會回填結算分錄，並按各投組／幣別推定「不讓歷史現金

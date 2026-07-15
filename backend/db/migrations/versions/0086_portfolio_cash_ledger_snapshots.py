@@ -1,7 +1,7 @@
 """add append-only portfolio cash ledger and rich EOD snapshots
 
-Revision ID: 0085
-Revises: 0084
+Revision ID: 0086
+Revises: 0085
 """
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0085"
-down_revision: str | None = "0084"
+revision: str = "0086"
+down_revision: str | None = "0085"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -1,7 +1,7 @@
 """add data quality feedback for beta operations
 
-Revision ID: 0078
-Revises: 0077
+Revision ID: 0079
+Revises: 0078
 """
 from collections.abc import Sequence
 
@@ -9,8 +9,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0078"
-down_revision: str | None = "0077"
+revision: str = "0079"
+down_revision: str | None = "0078"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

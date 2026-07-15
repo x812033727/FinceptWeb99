@@ -1,7 +1,7 @@
 """add owner-scoped chart drawings
 
-Revision ID: 0080
-Revises: 0079
+Revision ID: 0081
+Revises: 0080
 """
 from collections.abc import Sequence
 
@@ -9,8 +9,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0080"
-down_revision: str | None = "0079"
+revision: str = "0081"
+down_revision: str | None = "0080"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

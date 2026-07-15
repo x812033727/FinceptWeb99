@@ -1,7 +1,7 @@
 """add traceable daily stock pick runs
 
-Revision ID: 0079
-Revises: 0078
+Revision ID: 0080
+Revises: 0079
 """
 from collections.abc import Sequence
 
@@ -9,8 +9,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0079"
-down_revision: str | None = "0078"
+revision: str = "0080"
+down_revision: str | None = "0079"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

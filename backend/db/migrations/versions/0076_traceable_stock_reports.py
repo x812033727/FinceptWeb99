@@ -1,7 +1,7 @@
 """add provenance and quality fields to stock reports
 
-Revision ID: 0075
-Revises: 0074
+Revision ID: 0076
+Revises: 0075
 """
 from collections.abc import Sequence
 
@@ -9,8 +9,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0075"
-down_revision: str | None = "0074"
+revision: str = "0076"
+down_revision: str | None = "0075"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

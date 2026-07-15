@@ -1,7 +1,7 @@
 """add D1 D5 D20 decision journal
 
-Revision ID: 0077
-Revises: 0076
+Revision ID: 0078
+Revises: 0077
 """
 from collections.abc import Sequence
 
@@ -9,8 +9,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0077"
-down_revision: str | None = "0076"
+revision: str = "0078"
+down_revision: str | None = "0077"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

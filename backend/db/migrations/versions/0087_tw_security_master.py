@@ -1,15 +1,15 @@
 """add effective-dated Taiwan security master and trading rules
 
-Revision ID: 0086
-Revises: 0085
+Revision ID: 0087
+Revises: 0086
 """
 from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0086"
-down_revision: str | None = "0085"
+revision: str = "0087"
+down_revision: str | None = "0086"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

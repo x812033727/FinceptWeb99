@@ -25,6 +25,26 @@ function invalidatePaperAccount(qc: ReturnType<typeof useQueryClient>, portfolio
   ]);
 }
 
+function invalidatePortfolioTransactionData(
+  qc: ReturnType<typeof useQueryClient>, portfolioId: string,
+) {
+  return Promise.all([
+    qc.invalidateQueries({ queryKey: ["portfolio", portfolioId] }),
+    qc.invalidateQueries({ queryKey: ["portfolio-transactions", portfolioId] }),
+    qc.invalidateQueries({ queryKey: ["portfolio-cash", portfolioId] }),
+    qc.invalidateQueries({ queryKey: ["portfolio-cash-entries", portfolioId] }),
+  ]);
+}
+
+function invalidatePortfolioImportData(
+  qc: ReturnType<typeof useQueryClient>, portfolioId: string,
+) {
+  return Promise.all([
+    invalidatePortfolioTransactionData(qc, portfolioId),
+    qc.invalidateQueries({ queryKey: ["portfolio-transaction-imports", portfolioId] }),
+  ]);
+}
+
 export function usePortfolios() {
   return useQuery({
     queryKey: ["portfolios"],
@@ -74,7 +94,7 @@ export function useAddTransaction(portfolioId: string) {
   return useMutation({
     mutationFn: (tx: Omit<Transaction, "id">) =>
       api.post(`/portfolio/${portfolioId}/transaction`, tx).then((r) => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["portfolio", portfolioId] }),
+    onSuccess: () => invalidatePortfolioTransactionData(qc, portfolioId),
   });
 }
 
@@ -108,11 +128,7 @@ export function useImportTransactions(portfolioId: string) {
       ).then((response) => response.data),
     onSuccess: (result) => {
       if (!result.imported_count) return;
-      qc.invalidateQueries({ queryKey: ["portfolio", portfolioId] });
-      qc.invalidateQueries({ queryKey: ["portfolio-transactions", portfolioId] });
-      qc.invalidateQueries({ queryKey: ["portfolio-cash", portfolioId] });
-      qc.invalidateQueries({ queryKey: ["portfolio-cash-entries", portfolioId] });
-      qc.invalidateQueries({ queryKey: ["portfolio-transaction-imports", portfolioId] });
+      return invalidatePortfolioImportData(qc, portfolioId);
     },
   });
 }
@@ -204,13 +220,7 @@ export function useRollbackTransactionImport(portfolioId: string) {
     }>(`/portfolio/${portfolioId}/transaction-imports/${importId}`).then(
       (response) => response.data,
     ),
-    onSuccess: () => Promise.all([
-      qc.invalidateQueries({ queryKey: ["portfolio-transaction-imports", portfolioId] }),
-      qc.invalidateQueries({ queryKey: ["portfolio-transactions", portfolioId] }),
-      qc.invalidateQueries({ queryKey: ["portfolio", portfolioId] }),
-      qc.invalidateQueries({ queryKey: ["portfolio-cash", portfolioId] }),
-      qc.invalidateQueries({ queryKey: ["portfolio-cash-entries", portfolioId] }),
-    ]),
+    onSuccess: () => invalidatePortfolioImportData(qc, portfolioId),
   });
 }
 
@@ -245,13 +255,7 @@ export function useUpdateTransaction(portfolioId: string) {
   return useMutation({
     mutationFn: ({ txId, patch }: { txId: string; patch: TransactionPatch }) =>
       api.patch(`/portfolio/${portfolioId}/transactions/${txId}`, patch).then((r) => r.data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["portfolio", portfolioId] });
-      qc.invalidateQueries({ queryKey: ["portfolio-transactions", portfolioId] });
-      qc.invalidateQueries({ queryKey: ["portfolio-transaction-imports", portfolioId] });
-      qc.invalidateQueries({ queryKey: ["portfolio-cash", portfolioId] });
-      qc.invalidateQueries({ queryKey: ["portfolio-cash-entries", portfolioId] });
-    },
+    onSuccess: () => invalidatePortfolioImportData(qc, portfolioId),
   });
 }
 
@@ -260,13 +264,7 @@ export function useDeleteTransaction(portfolioId: string) {
   return useMutation({
     mutationFn: (txId: string) =>
       api.delete(`/portfolio/${portfolioId}/transactions/${txId}`),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["portfolio", portfolioId] });
-      qc.invalidateQueries({ queryKey: ["portfolio-transactions", portfolioId] });
-      qc.invalidateQueries({ queryKey: ["portfolio-transaction-imports", portfolioId] });
-      qc.invalidateQueries({ queryKey: ["portfolio-cash", portfolioId] });
-      qc.invalidateQueries({ queryKey: ["portfolio-cash-entries", portfolioId] });
-    },
+    onSuccess: () => invalidatePortfolioImportData(qc, portfolioId),
   });
 }
 

@@ -78,4 +78,50 @@ describe("TransactionHistory", () => {
     expect(mocks.exportCSV.mock.calls[0][0]).toHaveLength(101);
     expect(mocks.exportCSV.mock.calls[0][1]).toBe("transactions-portfolio-1.csv");
   });
+
+  it("applies server-side filters to the table and CSV export", async () => {
+    const initial = transaction(0);
+    const filtered = { ...transaction(1), symbol: "AAPL", tx_type: "sell" };
+    mock.onGet("/portfolio/portfolio-1/transactions", {
+      params: { limit: 101, offset: 0 },
+    }).reply(200, [initial]);
+    mock.onGet("/portfolio/portfolio-1/transactions", {
+      params: {
+        limit: 101, offset: 0, symbol: "AAPL", market: "US", tx_type: "sell",
+        date_from: "2024-01-01", date_to: "2024-01-31",
+      },
+    }).reply(200, [filtered]);
+    mocks.exportMutateAsync.mockResolvedValue([filtered]);
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <TransactionHistory portfolioId="portfolio-1" />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText("SYM0");
+    fireEvent.change(screen.getByRole("textbox", { name: "Symbol" }), {
+      target: { value: "aapl" },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "Market" }), {
+      target: { value: "US" },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "Transaction type" }), {
+      target: { value: "sell" },
+    });
+    fireEvent.change(screen.getByLabelText("From"), { target: { value: "2024-01-01" } });
+    fireEvent.change(screen.getByLabelText("To"), { target: { value: "2024-01-31" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply filters" }));
+
+    await screen.findByText("AAPL");
+    expect(screen.queryByText("SYM0")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Export CSV" }));
+    await waitFor(() => expect(mocks.exportMutateAsync).toHaveBeenCalledWith({
+      symbol: "AAPL", market: "US", tx_type: "sell",
+      date_from: "2024-01-01", date_to: "2024-01-31",
+    }));
+    expect(mocks.exportCSV.mock.calls[0][0]).toHaveLength(1);
+  });
 });

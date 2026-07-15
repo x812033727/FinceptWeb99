@@ -36,6 +36,7 @@ from api.portfolio.schemas import (
 from db.session import get_db
 from dependencies import get_current_user
 from limiter import limiter
+from models.portfolio import Market, TransactionType
 
 log = logging.getLogger(__name__)
 
@@ -354,11 +355,30 @@ async def list_transactions(
     db: DB,
     limit: int = Query(default=200, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    symbol: str | None = Query(default=None, min_length=1, max_length=20),
+    market: Market | None = Query(default=None),
+    tx_type: TransactionType | None = Query(default=None),
+    date_from: _date | None = Query(default=None),
+    date_to: _date | None = Query(default=None),
 ):
     """All transactions for a portfolio, newest first."""
+    if symbol is not None:
+        symbol = symbol.strip()
+        if not symbol:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="symbol must not be blank",
+            )
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="date_from must be on or before date_to",
+        )
     try:
         return await svc.get_transactions(
             portfolio_id, user["id"], db, limit=limit, offset=offset,
+            symbol=symbol, market=market, tx_type=tx_type,
+            date_from=date_from, date_to=date_to,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

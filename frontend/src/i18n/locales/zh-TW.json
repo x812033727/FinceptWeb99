@@ -895,6 +895,7 @@
       "orders": "模擬委託", "empty": "尚無模擬委託。", "progress": "已成交／委託量", "status": "狀態", "actions": "操作", "match": "立即撮合", "cancel": "取消",
       "status_pending": "等待中", "status_partially_filled": "部分成交", "status_filled": "已成交", "status_cancelled": "已取消", "status_expired": "已到期",
       "risk_title": "模擬交易風險控制", "risk_subtitle": "送單與每次成交前都會重新檢查限制；每日已實現損益於 UTC 00:00 重置。", "risk_active": "交易已啟用", "risk_paused": "緊急停止中", "daily_pnl": "今日已實現損益", "engage_kill_switch": "啟動緊急停止", "resume_trading": "恢復交易", "save_risk": "儲存限制", "risk_failed": "目前無法更新風險控制。", "unlimited": "不設限",
+      "performance_title": "已實現績效", "performance_subtitle": "依交割幣別計算成交績效；勝率與獲利因子以賣出委託彙總，不估算未平倉損益。", "performance_failed": "無法載入已實現績效。", "performance_empty": "完成模擬成交後即可開始衡量已實現績效。", "performance_truncated": "顯示最近 {{shown}}／{{total}} 筆成交；指標僅適用此資料視窗。", "performance_fills": "{{count}} 筆成交", "pnl_curve": "已實現損益曲線", "win_rate": "出場勝率", "profit_factor": "獲利因子", "max_drawdown": "最大回撤", "best_exit": "最佳出場", "worst_exit": "最差出場", "total_fees": "手續費",
       "max_order_notional_usd": "單筆委託上限", "max_order_notional_twd": "單筆委託上限", "max_position_notional_usd": "單一商品曝險上限", "max_position_notional_twd": "單一商品曝險上限", "max_daily_loss_usd": "每日損失上限", "max_daily_loss_twd": "每日損失上限", "max_open_orders": "未完成委託上限", "max_symbol_concentration_pct": "單一商品集中度上限"
     },
     "cash": {

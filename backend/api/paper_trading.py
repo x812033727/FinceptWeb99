@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.session import get_db
 from dependencies import get_current_user
 from limiter import limiter
+from services import paper_performance_service, paper_risk_service
 from services import paper_trading_service as svc
-from services import paper_risk_service
 
 router = APIRouter()
 CurrentUser = Annotated[dict, Depends(get_current_user)]
@@ -115,6 +115,42 @@ class PaperRiskPolicyResponse(PaperRiskPolicyUpdate):
     daily_realized_pnl_twd: float
 
 
+class PaperPerformanceSummary(BaseModel):
+    currency: Literal["USD", "TWD"]
+    fill_count: int
+    exit_order_count: int
+    winning_exit_orders: int
+    losing_exit_orders: int
+    breakeven_exit_orders: int
+    win_rate_pct: float | None
+    profit_factor: float | None
+    total_realized_pnl: float
+    total_fees: float
+    best_exit_pnl: float | None
+    worst_exit_pnl: float | None
+    max_drawdown: float
+
+
+class PaperPerformancePoint(BaseModel):
+    fill_id: UUID
+    filled_at: datetime
+    currency: Literal["USD", "TWD"]
+    cumulative_realized_pnl: float
+    drawdown: float
+
+
+class PaperPerformanceResponse(BaseModel):
+    portfolio_id: UUID
+    window_fill_limit: int
+    window_fill_count: int
+    total_fill_count: int
+    truncated: bool
+    window_started_at: datetime | None
+    window_ended_at: datetime | None
+    summaries: list[PaperPerformanceSummary]
+    curve: list[PaperPerformancePoint]
+
+
 def _error(exc: ValueError) -> HTTPException:
     message = str(exc)
     if "not found" in message.lower():
@@ -149,6 +185,24 @@ async def update_paper_risk_policy(
             user_id=user["id"],
             db=db,
             **body.model_dump(),
+        )
+    except ValueError as exc:
+        raise _error(exc)
+
+
+@router.get("/{portfolio_id}/paper-performance", response_model=PaperPerformanceResponse)
+async def get_paper_performance(
+    portfolio_id: str,
+    user: CurrentUser,
+    db: DB,
+    fill_limit: int = Query(default=2000, ge=1, le=20_000),
+):
+    try:
+        return await paper_performance_service.performance(
+            portfolio_id=portfolio_id,
+            user_id=user["id"],
+            db=db,
+            fill_limit=fill_limit,
         )
     except ValueError as exc:
         raise _error(exc)

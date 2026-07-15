@@ -23,6 +23,7 @@ class PaperOrderCreate(BaseModel):
     market: Literal["US", "TW", "CRYPTO"]
     side: Literal["buy", "sell"]
     order_type: Literal["market", "limit"]
+    time_in_force: Literal["day", "gtc"] = "day"
     quantity: float = Field(..., gt=0)
     limit_price: float | None = Field(default=None, gt=0)
     reference_price: float | None = Field(default=None, gt=0)
@@ -53,6 +54,7 @@ class PaperOrderResponse(BaseModel):
     market: str
     side: str
     order_type: str
+    time_in_force: str
     quantity: float
     filled_quantity: float
     limit_price: float | None
@@ -65,6 +67,8 @@ class PaperOrderResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     cancelled_at: datetime | None
+    expires_at: datetime | None
+    expired_at: datetime | None
 
     model_config = {"from_attributes": True}
 
@@ -155,9 +159,7 @@ async def get_paper_order(
     "/{portfolio_id}/paper-orders/{order_id}/fills",
     response_model=list[PaperFillResponse],
 )
-async def list_paper_fills(
-    portfolio_id: str, order_id: str, user: CurrentUser, db: DB
-):
+async def list_paper_fills(portfolio_id: str, order_id: str, user: CurrentUser, db: DB):
     try:
         return await svc.list_fills(
             portfolio_id=portfolio_id,
@@ -209,6 +211,31 @@ async def cancel_paper_order(
 ):
     try:
         return await svc.cancel_order(
+            portfolio_id=portfolio_id,
+            order_id=order_id,
+            user_id=user["id"],
+            db=db,
+        )
+    except ValueError as exc:
+        raise _error(exc)
+
+
+@router.post(
+    "/{portfolio_id}/paper-orders/{order_id}/match",
+    response_model=PaperFillResponse | None,
+)
+@limiter.limit("120/minute")
+async def match_paper_order(
+    request: Request,
+    portfolio_id: str,
+    order_id: str,
+    user: CurrentUser,
+    db: DB,
+):
+    from services import paper_matching_service as matching
+
+    try:
+        return await matching.match_order(
             portfolio_id=portfolio_id,
             order_id=order_id,
             user_id=user["id"],

@@ -41,6 +41,7 @@ class PaperOrder(Base):
     market: Mapped[str] = mapped_column(String(10), nullable=False)
     side: Mapped[str] = mapped_column(String(4), nullable=False)
     order_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    time_in_force: Mapped[str] = mapped_column(String(3), nullable=False, default="day")
     quantity: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
     filled_quantity: Mapped[float] = mapped_column(
         Numeric(18, 6),
@@ -69,6 +70,8 @@ class PaperOrder(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class PaperFill(Base):

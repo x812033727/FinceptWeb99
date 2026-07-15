@@ -9,6 +9,9 @@ const mocks = vi.hoisted(() => ({
     row_count: number;
     linked_count: number;
     provenance_complete: boolean;
+    first_tx_date: string | null;
+    last_tx_date: string | null;
+    instruments: { symbol: string; market: string }[];
     imported_at: string;
   }>,
   rollbackError: null as Error | null,
@@ -44,6 +47,14 @@ describe("TransactionImportHistoryDialog", () => {
         row_count: 2,
         linked_count: 2,
         provenance_complete: true,
+        first_tx_date: "2024-01-02",
+        last_tx_date: "2024-01-03",
+        instruments: [
+          { symbol: "AAPL", market: "US" },
+          { symbol: "MSFT", market: "US" },
+          { symbol: "2330", market: "TW" },
+          { symbol: "BTC", market: "CRYPTO" },
+        ],
         imported_at: "2026-07-15T14:00:00Z",
       },
       {
@@ -51,6 +62,9 @@ describe("TransactionImportHistoryDialog", () => {
         row_count: 3,
         linked_count: 0,
         provenance_complete: false,
+        first_tx_date: null,
+        last_tx_date: null,
+        instruments: [],
         imported_at: "2026-07-14T14:00:00Z",
       },
     ];
@@ -62,6 +76,9 @@ describe("TransactionImportHistoryDialog", () => {
     );
 
     expect(screen.getByText("Source links complete (2/2)")).toBeInTheDocument();
+    expect(screen.getByText("Trade dates: Jan 2, 2024 – Jan 3, 2024")).toBeInTheDocument();
+    expect(screen.getByText("AAPL · US")).toBeInTheDocument();
+    expect(screen.getByText("+1 more instrument")).toBeInTheDocument();
     expect(screen.getByText(
       "Source links incomplete (0/3). This batch cannot be rolled back safely.",
     )).toBeInTheDocument();

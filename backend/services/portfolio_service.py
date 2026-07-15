@@ -505,18 +505,43 @@ async def list_transaction_imports(
         .limit(limit)
     )).all())
     import_ids = [record.id for record in records]
-    counts = dict((await db.execute(
-        select(Transaction.import_id, func.count(Transaction.id))
-        .where(Transaction.import_id.in_(import_ids))
-        .group_by(Transaction.import_id)
-    )).all()) if import_ids else {}
+    aggregates: dict[UUID, tuple[int, date | None, date | None]] = {
+        import_id: (count, first_tx_date, last_tx_date)
+        for import_id, count, first_tx_date, last_tx_date in (await db.execute(
+            select(
+                Transaction.import_id,
+                func.count(Transaction.id),
+                func.min(Transaction.tx_date),
+                func.max(Transaction.tx_date),
+            )
+            .where(Transaction.import_id.in_(import_ids))
+            .group_by(Transaction.import_id)
+        )).all()
+    } if import_ids else {}
+    instruments: dict[UUID, list[dict[str, str]]] = {}
+    if import_ids:
+        instrument_rows = (await db.execute(
+            select(Transaction.import_id, Transaction.symbol, Transaction.market)
+            .where(Transaction.import_id.in_(import_ids))
+            .distinct()
+            .order_by(Transaction.import_id, Transaction.market, Transaction.symbol)
+        )).all()
+        for import_id, symbol, market in instrument_rows:
+            instruments.setdefault(import_id, []).append({
+                "symbol": symbol,
+                "market": market.value,
+            })
     return [{
         "id": record.id,
         "row_count": record.row_count,
-        "linked_count": counts.get(record.id, 0),
+        "linked_count": aggregates.get(record.id, (0, None, None))[0],
         "provenance_complete": (
-            record.row_count > 0 and counts.get(record.id, 0) == record.row_count
+            record.row_count > 0
+            and aggregates.get(record.id, (0, None, None))[0] == record.row_count
         ),
+        "first_tx_date": aggregates.get(record.id, (0, None, None))[1],
+        "last_tx_date": aggregates.get(record.id, (0, None, None))[2],
+        "instruments": instruments.get(record.id, []),
         "imported_at": record.created_at,
     } for record in records]
 

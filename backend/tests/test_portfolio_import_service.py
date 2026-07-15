@@ -185,6 +185,9 @@ async def test_import_rollback_rejects_legacy_record_without_provenance(
     )
     assert batches[0]["linked_count"] == 0
     assert batches[0]["provenance_complete"] is False
+    assert batches[0]["first_tx_date"] is None
+    assert batches[0]["last_tx_date"] is None
+    assert batches[0]["instruments"] == []
     with pytest.raises(ValueError, match="provenance is incomplete"):
         await svc.rollback_transaction_import(
             portfolio_id=str(portfolio.id), import_id=str(record.id),

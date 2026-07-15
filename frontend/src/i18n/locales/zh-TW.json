@@ -1063,6 +1063,18 @@
         "row": "CSV 第 {{row}} 列",
         "confirm": "確認匯入",
         "too_many": "單次最多匯入 500 筆交易。"
+      },
+      "import_history": {
+        "action": "匯入紀錄",
+        "title": "交易匯入紀錄",
+        "description": "檢視 CSV 匯入批次並安全復原完整批次；若後續賣單依賴該批庫存，系統會拒絕復原。",
+        "empty": "尚無已完成的 CSV 匯入批次。",
+        "rows": "匯入 {{count}} 筆交易",
+        "complete": "來源連結完整（{{linked}}/{{total}}）",
+        "incomplete": "來源連結不完整（{{linked}}/{{total}}），無法安全復原此批次。",
+        "rollback": "復原批次",
+        "confirm": "確定復原此批次的 {{count}} 筆交易？系統會沖銷現金結算並重建受影響持倉。",
+        "confirm_action": "確認復原"
       }
     },
     "optimizer": {

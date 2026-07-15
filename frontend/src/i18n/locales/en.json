@@ -1063,6 +1063,18 @@
         "row": "CSV row {{row}}",
         "confirm": "Import transactions",
         "too_many": "CSV files are limited to 500 transaction rows."
+      },
+      "import_history": {
+        "action": "Import history",
+        "title": "Transaction import history",
+        "description": "Review CSV batches and safely roll back a complete batch. Rollback is blocked if a later sell depends on its shares.",
+        "empty": "No committed CSV imports yet.",
+        "rows": "{{count}} imported transactions",
+        "complete": "Source links complete ({{linked}}/{{total}})",
+        "incomplete": "Source links incomplete ({{linked}}/{{total}}). This batch cannot be rolled back safely.",
+        "rollback": "Roll back",
+        "confirm": "Roll back all {{count}} transactions in this batch? Cash settlements will be reversed and affected holdings rebuilt.",
+        "confirm_action": "Confirm rollback"
       }
     },
     "optimizer": {

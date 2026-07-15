@@ -2,10 +2,12 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { errorDetail } from "@/lib/api";
 import {
+  useExportTransactionImport,
   useRollbackTransactionImport,
   useTransactionImportTransactions,
   useTransactionImports,
 } from "@/hooks/usePortfolio";
+import { exportCSV, transactionImportExportRows } from "./_shared";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -16,6 +18,7 @@ export function TransactionImportHistoryDialog({
   const { t, i18n } = useTranslation();
   const imports = useTransactionImports(portfolioId);
   const rollback = useRollbackTransactionImport(portfolioId);
+  const exportBatch = useExportTransactionImport(portfolioId);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [viewing, setViewing] = useState<string | null>(null);
   const details = useTransactionImportTransactions(portfolioId, viewing);
@@ -33,6 +36,20 @@ export function TransactionImportHistoryDialog({
     } catch {
       // The mutation retains the API error so the dialog can explain why
       // the batch cannot be rolled back (for example, a dependent sell).
+    }
+  }
+
+  async function downloadBatch(batch: {
+    id: string; first_tx_date: string | null;
+  }) {
+    try {
+      const transactions = await exportBatch.mutateAsync(batch.id);
+      exportCSV(
+        transactionImportExportRows(transactions),
+        `transaction-import-${batch.first_tx_date ?? "unknown"}-${batch.id}.csv`,
+      );
+    } catch {
+      // The mutation error is rendered below with the API's explanation.
     }
   }
 
@@ -117,6 +134,16 @@ export function TransactionImportHistoryDialog({
                     </p>
                   </div>
                   <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => void downloadBatch(batch)}
+                      disabled={!batch.provenance_complete || exportBatch.isPending}
+                      className="min-h-[32px] text-xs text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {exportBatch.isPending
+                        ? t("portfolio.transactions.import_history.preparing_export")
+                        : t("portfolio.transactions.import_history.export_batch")}
+                    </button>
                     <button
                       type="button"
                       onClick={() => setViewing(viewing === batch.id ? null : batch.id)}
@@ -214,6 +241,11 @@ export function TransactionImportHistoryDialog({
         {rollback.isError && (
           <p className="rounded bg-danger/10 p-3 text-sm text-danger">
             {errorDetail(rollback.error)}
+          </p>
+        )}
+        {exportBatch.isError && (
+          <p className="rounded bg-danger/10 p-3 text-sm text-danger">
+            {errorDetail(exportBatch.error)}
           </p>
         )}
         <DialogFooter>

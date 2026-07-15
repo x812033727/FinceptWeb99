@@ -1076,6 +1076,8 @@
         "view_details": "View details",
         "hide_details": "Hide details",
         "no_details": "No linked transaction details are available for this batch.",
+        "export_batch": "Download CSV",
+        "preparing_export": "Preparing…",
         "complete": "Source links complete ({{linked}}/{{total}})",
         "incomplete": "Source links incomplete ({{linked}}/{{total}}). This batch cannot be rolled back safely.",
         "rollback": "Roll back",

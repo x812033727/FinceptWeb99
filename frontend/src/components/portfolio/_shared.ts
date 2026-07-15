@@ -55,21 +55,26 @@ export interface TransactionRow {
   created_at: string;
 }
 
-export function exportCSV(rows: Record<string, unknown>[], filename: string) {
-  if (!rows.length) return;
+export function serializeCSV(rows: Record<string, unknown>[]): string {
+  if (!rows.length) return "";
   const headers = Object.keys(rows[0]);
-  const csv = [
+  return `\uFEFF${[
     headers.join(","),
     ...rows.map((r) =>
       headers
         .map((h) => {
           const v = r[h];
           const s = String(v ?? "");
-          return s.includes(",") || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
+          return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
         })
         .join(",")
     ),
-  ].join("\n");
+  ].join("\r\n")}`;
+}
+
+export function exportCSV(rows: Record<string, unknown>[], filename: string) {
+  const csv = serializeCSV(rows);
+  if (!csv) return;
   const blob = new Blob([csv], { type: "text/csv" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -89,6 +94,30 @@ export interface ImportedTransactionRow {
   price: number;
   fx_rate?: number;
   notes?: string;
+}
+
+export function transactionImportExportRows(
+  rows: Array<{
+    tx_date: string;
+    symbol: string;
+    market: string;
+    tx_type: string;
+    quantity: number;
+    price: number;
+    fx_rate: number;
+    notes: string | null;
+  }>,
+): Record<string, unknown>[] {
+  return rows.map((row) => ({
+    date: row.tx_date,
+    symbol: row.symbol,
+    market: row.market,
+    type: row.tx_type,
+    quantity: row.quantity,
+    price: row.price,
+    fx_rate: row.fx_rate,
+    notes: row.notes ?? "",
+  }));
 }
 
 /** Parse RFC-4180-style CSV and map both exported and API column names. */

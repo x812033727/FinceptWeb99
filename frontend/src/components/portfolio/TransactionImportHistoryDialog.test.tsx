@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   mutateAsync: vi.fn(),
+  exportMutateAsync: vi.fn(),
+  exportCSV: vi.fn(),
   reset: vi.fn(),
   batches: [] as Array<{
     id: string;
@@ -42,6 +44,26 @@ vi.mock("@/hooks/usePortfolio", () => ({
     isError: false,
     error: null,
   }),
+  useExportTransactionImport: () => ({
+    mutateAsync: mocks.exportMutateAsync,
+    isPending: false,
+    isError: false,
+    error: null,
+  }),
+}));
+
+vi.mock("./_shared", () => ({
+  exportCSV: mocks.exportCSV,
+  transactionImportExportRows: (rows: typeof mocks.details) => rows.map((row) => ({
+    date: row.tx_date,
+    symbol: row.symbol,
+    market: row.market,
+    type: row.tx_type,
+    quantity: row.quantity,
+    price: row.price,
+    fx_rate: row.fx_rate,
+    notes: row.notes ?? "",
+  })),
 }));
 
 import { TransactionImportHistoryDialog } from "./TransactionImportHistoryDialog";
@@ -49,8 +71,11 @@ import { TransactionImportHistoryDialog } from "./TransactionImportHistoryDialog
 describe("TransactionImportHistoryDialog", () => {
   beforeEach(() => {
     mocks.mutateAsync.mockReset();
+    mocks.exportMutateAsync.mockReset();
+    mocks.exportCSV.mockReset();
     mocks.reset.mockReset();
     mocks.mutateAsync.mockResolvedValue({ import_id: "import-1", removed_count: 2 });
+    mocks.exportMutateAsync.mockResolvedValue(mocks.details);
     mocks.rollbackError = null;
     mocks.batches = [
       {
@@ -90,6 +115,17 @@ describe("TransactionImportHistoryDialog", () => {
     expect(screen.getByText("Trade dates: Jan 2, 2024 – Jan 3, 2024")).toBeInTheDocument();
     expect(screen.getByText("AAPL · US")).toBeInTheDocument();
     expect(screen.getByText("+1 more instrument")).toBeInTheDocument();
+    const exportButtons = screen.getAllByRole("button", { name: "Download CSV" });
+    expect(exportButtons[0]).toBeEnabled();
+    expect(exportButtons[1]).toBeDisabled();
+    fireEvent.click(exportButtons[0]);
+    await waitFor(() => expect(mocks.exportCSV).toHaveBeenCalledWith(
+      [{
+        date: "2024-01-02", symbol: "AAPL", market: "US", type: "buy",
+        quantity: 2, price: 190, fx_rate: 1, notes: "",
+      }],
+      "transaction-import-2024-01-02-import-1.csv",
+    ));
     fireEvent.click(screen.getAllByRole("button", { name: "View details" })[0]);
     expect(screen.getAllByText("AAPL · US")).toHaveLength(2);
     expect(screen.getByText("190")).toBeInTheDocument();

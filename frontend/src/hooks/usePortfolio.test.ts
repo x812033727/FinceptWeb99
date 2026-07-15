@@ -16,6 +16,7 @@ import {
   usePortfolioDetail,
   useCreatePortfolio,
   useDeletePortfolio,
+  useExportTransactionImport,
   useAddTransaction,
   useImportTransactions,
   useRollbackTransactionImport,
@@ -215,6 +216,15 @@ describe("transaction import history", () => {
     );
     await waitFor(() => expect(details.result.current.isSuccess).toBe(true));
     expect(details.result.current.data).toEqual(batchDetails);
+
+    const batchExport = renderHook(() => useExportTransactionImport("p2"), { wrapper });
+    await act(async () => {
+      expect(await batchExport.result.current.mutateAsync("import-1"))
+        .toEqual(batchDetails);
+    });
+    expect(mock.history.get.filter(
+      (request) => request.url === "/portfolio/p2/transaction-imports/import-1/transactions",
+    )).toHaveLength(2);
 
     for (const key of [
       "portfolio-transactions", "portfolio", "portfolio-cash",

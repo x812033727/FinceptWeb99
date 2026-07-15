@@ -183,3 +183,27 @@ def market_session(market: str, at: datetime) -> MarketSession:
 
 def is_market_open(market: str, at: datetime) -> bool:
     return market_session(market, at).is_open
+
+
+def next_market_close(market: str, submitted_at: datetime) -> datetime:
+    """Return the UTC close for the session that owns a new day order."""
+    if submitted_at.tzinfo is None:
+        raise ValueError("submitted_at must be timezone-aware")
+    utc = ZoneInfo("UTC")
+    if market == "CRYPTO":
+        submitted_utc = submitted_at.astimezone(utc)
+        return datetime.combine(submitted_utc.date() + timedelta(days=1), time(), utc)
+    if market not in {"US", "TW"}:
+        raise ValueError(f"unsupported market {market}")
+
+    timezone = _NY if market == "US" else _TW
+    local = submitted_at.astimezone(timezone)
+    for offset in range(371):
+        candidate_day = local.date() + timedelta(days=offset)
+        # Noon is inside every regular and announced early-close session.
+        session = market_session(market, datetime.combine(candidate_day, time(12), timezone))
+        if session.reason in {"weekend", "holiday"} or session.closes_at is None:
+            continue
+        if local < session.closes_at:
+            return session.closes_at.astimezone(utc)
+    raise RuntimeError(f"no {market} session found within one year")

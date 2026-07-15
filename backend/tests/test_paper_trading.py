@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
@@ -7,6 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models.portfolio import Portfolio
 from services import paper_trading_service as paper_svc
 from services import portfolio_service
+
+
+def test_day_order_expiry_uses_exchange_calendar():
+    submitted = datetime(2026, 11, 27, 14, tzinfo=UTC)
+    assert paper_svc._day_expiry("US", submitted) == datetime(2026, 11, 27, 18, tzinfo=UTC)
 
 
 async def _login(client: AsyncClient, email: str) -> dict[str, str]:

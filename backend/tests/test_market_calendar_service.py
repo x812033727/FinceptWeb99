@@ -68,3 +68,29 @@ def test_crypto_is_continuous_and_invalid_inputs_fail_closed():
         calendar.market_session("US", datetime(2026, 7, 15, 14))
     with pytest.raises(ValueError, match="unsupported market"):
         calendar.market_session("XX", datetime(2026, 7, 15, 14, tzinfo=UTC))
+
+
+def test_next_market_close_skips_holidays_and_honors_early_close():
+    before_mlk_weekend = datetime(2026, 1, 16, 22, tzinfo=UTC)
+    assert calendar.next_market_close("US", before_mlk_weekend) == datetime(
+        2026, 1, 20, 21, tzinfo=UTC
+    )
+
+    before_early_close = datetime(2026, 11, 27, 14, tzinfo=UTC)
+    assert calendar.next_market_close("US", before_early_close) == datetime(
+        2026, 11, 27, 18, tzinfo=UTC
+    )
+    assert calendar.next_market_close("US", datetime(2026, 11, 27, 18, tzinfo=UTC)) == datetime(
+        2026, 11, 30, 21, tzinfo=UTC
+    )
+
+
+def test_next_market_close_handles_twse_lunar_break_and_crypto_day():
+    assert calendar.next_market_close("TW", datetime(2026, 2, 11, 6, tzinfo=UTC)) == datetime(
+        2026, 2, 23, 5, 30, tzinfo=UTC
+    )
+    assert calendar.next_market_close("CRYPTO", datetime(2026, 12, 31, 23, tzinfo=UTC)) == datetime(
+        2027, 1, 1, tzinfo=UTC
+    )
+    with pytest.raises(ValueError, match="timezone-aware"):
+        calendar.next_market_close("US", datetime(2026, 7, 15, 14))

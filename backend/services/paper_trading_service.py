@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import math
 import uuid
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.paper_trading import PaperFill, PaperOrder
 from models.portfolio import Holding, Market, Portfolio
+from services import market_calendar_service
 
 OPEN_STATUSES = ("pending", "partially_filled")
 
@@ -87,22 +87,7 @@ def _buy_reservation(order: PaperOrder, remaining: float | None = None) -> float
 
 
 def _day_expiry(market: str, submitted_at: datetime) -> datetime:
-    if market == "CRYPTO":
-        return datetime.combine(
-            submitted_at.astimezone(UTC).date() + timedelta(days=1), time(), UTC
-        )
-    timezone, close = (
-        (ZoneInfo("Asia/Taipei"), time(13, 30))
-        if market == "TW"
-        else (ZoneInfo("America/New_York"), time(16))
-    )
-    local = submitted_at.astimezone(timezone)
-    session_date = local.date()
-    if local.weekday() >= 5 or local.time() >= close:
-        session_date += timedelta(days=1)
-    while session_date.weekday() >= 5:
-        session_date += timedelta(days=1)
-    return datetime.combine(session_date, close, timezone).astimezone(UTC)
+    return market_calendar_service.next_market_close(market, submitted_at)
 
 
 async def submit_order(

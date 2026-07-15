@@ -8,7 +8,7 @@
  * when the user has opted in, and (c) clicking 「+ 新討論」 fires
  * the parent's reset handler.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -31,18 +31,14 @@ beforeEach(() => {
   mockFetchAutoRunConfig.mockReset();
 });
 
-afterEach(() => {
-  // Clean up DOM between tests so multiple Popover content portals
-  // don't leak across test cases.
-  document.body.innerHTML = "";
-});
-
 function renderToolbar({
   autoRunEnabled = false,
   onNewDiscussion = vi.fn(),
+  withAgents = false,
 }: {
   autoRunEnabled?: boolean;
   onNewDiscussion?: () => void;
+  withAgents?: boolean;
 } = {}) {
   mockFetchAutoRunConfig.mockResolvedValue({
     enabled: autoRunEnabled,
@@ -50,6 +46,8 @@ function renderToolbar({
     topic: "",
     rules: "",
     market: "TW",
+    send_email: false,
+    strategy_run_counts: { general: 0, chip_momentum: 0, quality_growth: 0, breakout: 0, oversold_reversal: 0 },
   });
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -57,7 +55,10 @@ function renderToolbar({
   return render(
     <QueryClientProvider client={client}>
       <DiscussionToolbar
-        agents={[]}
+        agents={withAgents ? [
+          { id: "buffett", name: "Buffett", description: "", default_provider: "openai" },
+          { id: "lynch", name: "Lynch", description: "", default_provider: "openai" },
+        ] : []}
         personaName={(id) => id}
         onNewDiscussion={onNewDiscussion}
         topic=""
@@ -100,5 +101,21 @@ describe("DiscussionToolbar", () => {
   it("uses role=toolbar for assistive tech grouping", () => {
     renderToolbar();
     expect(screen.getByRole("toolbar")).toBeInTheDocument();
+  });
+
+  it("opens auto-run as an interactive dialog", async () => {
+    renderToolbar({ withAgents: true });
+    fireEvent.click(screen.getByRole("button", { name: /Auto-run/i }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+
+    const buffett = await screen.findByRole("checkbox", { name: "buffett" });
+    fireEvent.click(buffett);
+    expect(buffett).toBeChecked();
+
+    const general = screen.getByRole("checkbox", { name: "啟用綜合選股" });
+    fireEvent.click(general);
+    expect(general).toBeChecked();
+
+    expect(screen.getByRole("button", { name: /Save settings/i })).toBeEnabled();
   });
 });

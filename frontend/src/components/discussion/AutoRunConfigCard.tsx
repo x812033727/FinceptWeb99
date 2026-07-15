@@ -162,6 +162,31 @@ export function AutoRunConfigCard({
                 </p>
               )}
 
+              <fieldset className="rounded border border-border bg-card p-2">
+                <legend className="px-1 text-meta text-muted-foreground">
+                  {t("discussion.auto_run_personas_label")} ({personaIds.length}/8)
+                </legend>
+                <div className="mt-1 grid grid-cols-2 gap-1.5">
+                  {agents.map((agent) => {
+                    const selected = personaIds.includes(agent.id);
+                    return (
+                      <label
+                        key={agent.id}
+                        className={`flex min-h-9 cursor-pointer items-center gap-2 rounded border px-2 py-1.5 text-xs transition-colors ${selected ? "border-primary bg-primary/15 text-primary" : "border-border bg-card text-foreground hover:border-primary/40"}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={() => togglePersona(agent.id)}
+                          className="h-4 w-4 shrink-0 accent-primary"
+                        />
+                        <span>{personaName(agent.id)}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </fieldset>
+
               <label className="flex items-center gap-2 text-xs cursor-pointer">
                 <input
                   type="checkbox"
@@ -248,31 +273,6 @@ export function AutoRunConfigCard({
                   placeholder={t("discussion.auto_run_rules_placeholder")}
                   className="w-full mt-0.5 resize-none bg-card border border-border rounded px-2 py-1 text-meta text-foreground font-mono focus:outline-none focus:border-primary/50"
                 />
-              </div>
-
-              <div>
-                <label className="text-meta text-muted-foreground">
-                  {t("discussion.auto_run_personas_label")} ({personaIds.length})
-                </label>
-                <div className="mt-1 flex flex-wrap gap-1">
-                  {agents.map((a) => {
-                    const selected = personaIds.includes(a.id);
-                    return (
-                      <button
-                        key={a.id}
-                        type="button"
-                        onClick={() => togglePersona(a.id)}
-                        className={`px-1.5 py-0.5 rounded text-micro border transition-colors ${
-                          selected
-                            ? "border-primary bg-primary/15 text-primary"
-                            : "border-border bg-card text-muted-foreground hover:border-primary/40"
-                        }`}
-                      >
-                        {personaName(a.id)}
-                      </button>
-                    );
-                  })}
-                </div>
               </div>
 
             </>

@@ -316,6 +316,11 @@ async def update_transaction(
     if not tx or str(tx.portfolio_id) != portfolio_id:
         return None
 
+    from models.paper_trading import PaperFill
+
+    if await db.scalar(select(PaperFill.id).where(PaperFill.transaction_id == tx.id)):
+        raise ValueError("Paper trading fill transactions are immutable")
+
     from models.portfolio import Market as MarketEnum
     old_symbol = tx.symbol
     old_market = tx.market.value
@@ -380,6 +385,11 @@ async def delete_transaction(
     tx = await db.get(Transaction, UUID(tx_id))
     if not tx or str(tx.portfolio_id) != portfolio_id:
         return False
+
+    from models.paper_trading import PaperFill
+
+    if await db.scalar(select(PaperFill.id).where(PaperFill.transaction_id == tx.id)):
+        raise ValueError("Paper trading fill transactions are immutable")
 
     symbol = tx.symbol
     market = tx.market.value

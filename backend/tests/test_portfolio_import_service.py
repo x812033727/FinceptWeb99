@@ -71,6 +71,9 @@ async def test_import_service_writes_batch_and_shares_fx_lookup(
     get_fx.assert_awaited_once_with("US", "USD", date(2024, 1, 2))
     transactions = list((await db_session.scalars(select(Transaction))).all())
     assert len(transactions) == 2
+    assert {str(transaction.import_id) for transaction in transactions} == {
+        result["import_id"]
+    }
     assert {float(transaction.fx_rate) for transaction in transactions} == {1.0}
     holding = await db_session.scalar(select(Holding))
     assert holding is not None
@@ -164,13 +167,87 @@ async def test_import_service_valid_dry_run_is_read_only(
 
 
 @pytest.mark.asyncio
+async def test_import_rollback_rejects_legacy_record_without_provenance(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    _, portfolio = await _create_portfolio(
+        client, db_session, "import-service-legacy@test.com",
+    )
+    record = PortfolioTransactionImport(
+        portfolio_id=portfolio.id, content_hash="a" * 64, row_count=1,
+    )
+    db_session.add(record)
+    await db_session.flush()
+
+    batches = await svc.list_transaction_imports(
+        portfolio_id=str(portfolio.id), user_id=str(portfolio.user_id),
+        db=db_session,
+    )
+    assert batches[0]["linked_count"] == 0
+    assert batches[0]["provenance_complete"] is False
+    with pytest.raises(ValueError, match="provenance is incomplete"):
+        await svc.rollback_transaction_import(
+            portfolio_id=str(portfolio.id), import_id=str(record.id),
+            user_id=str(portfolio.user_id), db=db_session,
+        )
+    with pytest.raises(ValueError, match="Transaction import not found"):
+        await svc.rollback_transaction_import(
+            portfolio_id=str(portfolio.id), import_id=str(uuid4()),
+            user_id=str(portfolio.user_id), db=db_session,
+        )
+
+
+@pytest.mark.asyncio
+async def test_import_service_rolls_back_complete_multi_symbol_batch(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    _, portfolio = await _create_portfolio(
+        client, db_session, "import-service-rollback@test.com",
+    )
+    imported = await svc.import_transactions(
+        portfolio_id=str(portfolio.id), user_id=str(portfolio.user_id),
+        rows=[
+            {"tx_date": "2024-01-02", "symbol": "AAPL", "market": "US",
+             "tx_type": "buy", "quantity": 2, "price": 100, "fx_rate": 1},
+            {"tx_date": "2024-01-03", "symbol": "MSFT", "market": "US",
+             "tx_type": "buy", "quantity": 3, "price": 200, "fx_rate": 1},
+        ],
+        dry_run=False, db=db_session,
+    )
+
+    result = await svc.rollback_transaction_import(
+        portfolio_id=str(portfolio.id), import_id=imported["import_id"],
+        user_id=str(portfolio.user_id), db=db_session,
+    )
+    assert result == {
+        "import_id": UUID(imported["import_id"]), "removed_count": 2,
+    }
+    assert list((await db_session.scalars(select(Transaction))).all()) == []
+    assert list((await db_session.scalars(select(Holding))).all()) == []
+    entries = list((await db_session.scalars(select(PortfolioCashEntry))).all())
+    assert len(entries) == 4
+    assert sum(float(entry.amount) for entry in entries) == 0
+
+
+@pytest.mark.asyncio
 async def test_import_service_rejects_unknown_portfolio(db_session: AsyncSession):
+    missing_portfolio = str(uuid4())
+    missing_user = str(uuid4())
     with pytest.raises(ValueError, match="Portfolio not found"):
         await svc.import_transactions(
-            portfolio_id=str(uuid4()), user_id=str(uuid4()),
+            portfolio_id=missing_portfolio, user_id=missing_user,
             rows=[{
                 "tx_date": "2024-01-02", "symbol": "AAPL", "market": "US",
                 "tx_type": "buy", "quantity": 1, "price": 100,
             }],
             dry_run=True, db=db_session,
+        )
+    with pytest.raises(ValueError, match="Portfolio not found"):
+        await svc.list_transaction_imports(
+            portfolio_id=missing_portfolio, user_id=missing_user, db=db_session,
+        )
+    with pytest.raises(ValueError, match="Portfolio not found"):
+        await svc.rollback_transaction_import(
+            portfolio_id=missing_portfolio, import_id=str(uuid4()),
+            user_id=missing_user, db=db_session,
         )

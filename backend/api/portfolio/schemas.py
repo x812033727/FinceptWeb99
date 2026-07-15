@@ -65,6 +65,19 @@ class TransactionImportResponse(BaseModel):
     errors: list[TransactionImportError] = Field(default_factory=list)
 
 
+class TransactionImportBatchResponse(BaseModel):
+    id: UUID
+    row_count: int
+    linked_count: int
+    provenance_complete: bool
+    imported_at: datetime
+
+
+class TransactionImportRollbackResponse(BaseModel):
+    import_id: UUID
+    removed_count: int
+
+
 class PortfolioUpdate(BaseModel):
     """All fields optional — PATCH semantics. Empty body is a no-op."""
     name: str | None = Field(default=None, min_length=1, max_length=100)
@@ -379,6 +392,7 @@ class StressTestResponse(BaseModel):
 
 class TransactionResponse(BaseModel):
     id: UUID
+    import_id: UUID | None = None
     symbol: str
     market: str
     tx_type: str

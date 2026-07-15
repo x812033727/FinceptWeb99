@@ -124,7 +124,6 @@ export default function DailyPage() {
             </nav>
 
             <section role="tabpanel" aria-label={strategyNames[activeStrategy]}>
-              <div className="mb-5 flex items-center justify-between"><h2 className="text-2xl font-semibold">{strategyNames[activeStrategy]}</h2><span className="text-sm text-slate-400">完成 {activeResults.length} 場</span></div>
               {activeResults.length === 0 ? <StateCard icon={<CalendarDays className="h-6 w-6" />}>今日無符合安全條件的候選股。</StateCard> : <div className="space-y-6">{activeResults.map((run) => <StrategyRun key={`${activeStrategy}-${run.sequence}`} run={run} />)}</div>}
             </section>
 

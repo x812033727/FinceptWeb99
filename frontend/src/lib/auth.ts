@@ -1,5 +1,6 @@
 import api from "./api";
 import { useAuthStore } from "@/store/authStore";
+import { disablePush } from "@/lib/webPush";
 
 export async function login(email: string, password: string): Promise<void> {
   const { data } = await api.post<{ access_token: string }>("/auth/login", { email, password });
@@ -32,7 +33,13 @@ export async function resetPassword(token: string, newPassword: string): Promise
 }
 
 export async function logout(): Promise<void> {
-  await api.post("/auth/logout").catch(() => null);
+  // Revoke this device's push endpoint while the access token still belongs
+  // to the outgoing user. Both operations are best-effort: local auth state
+  // must always be cleared even if either network/browser API is unavailable.
+  await Promise.allSettled([
+    disablePush(),
+    api.post("/auth/logout"),
+  ]);
   useAuthStore.getState().clearAuth();
 }
 

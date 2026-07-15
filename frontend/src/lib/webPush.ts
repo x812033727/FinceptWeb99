@@ -6,6 +6,7 @@
  * backend persist) is unit-testable with mocked globals.
  */
 import api from "@/lib/api";
+import { useAuthStore } from "@/store/authStore";
 
 export type PushStatus =
   | "on"            // active subscription exists
@@ -102,4 +103,29 @@ export async function disablePush(): Promise<PushStatus> {
     // the first 404/410 from the push service.
   }
   return "off";
+}
+
+/**
+ * Remove the browser-side subscription without making an authenticated API
+ * call. This is the safe fallback after a session has already expired: the
+ * backend row may linger until its next 404/410 delivery, but the signed-out
+ * browser can no longer receive another user's notifications.
+ */
+export async function unsubscribePushLocally(): Promise<void> {
+  if (!isPushSupported()) return;
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.getSubscription();
+  await sub?.unsubscribe();
+}
+
+/** Prevent a device push subscription from crossing user identities. */
+export function clearPushSubscriptionOnAuthChange() {
+  let userId = useAuthStore.getState().user?.id ?? null;
+  return useAuthStore.subscribe((state) => {
+    const nextUserId = state.user?.id ?? null;
+    if (userId !== null && nextUserId !== userId) {
+      void unsubscribePushLocally().catch(() => undefined);
+    }
+    userId = nextUserId;
+  });
 }

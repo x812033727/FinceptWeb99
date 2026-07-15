@@ -53,10 +53,12 @@ describe("TransactionHistory", () => {
     const all = Array.from({ length: 101 }, (_, index) => transaction(index));
     mock.onGet("/portfolio/portfolio-1/transactions/page", {
       params: { limit: 100 },
-    }).reply(200, { items: all.slice(0, 100), next_cursor: "cursor-100" });
+    }).reply(200, {
+      items: all.slice(0, 100), next_cursor: "cursor-100", total_count: 101,
+    });
     mock.onGet("/portfolio/portfolio-1/transactions/page", {
       params: { limit: 100, cursor: "cursor-100" },
-    }).reply(200, { items: all.slice(100), next_cursor: null });
+    }).reply(200, { items: all.slice(100), next_cursor: null, total_count: null });
     mocks.exportMutateAsync.mockResolvedValue(all);
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -67,10 +69,10 @@ describe("TransactionHistory", () => {
       </QueryClientProvider>,
     );
 
-    await screen.findByText("100 transactions loaded");
+    await screen.findByText("100 of 101 transactions loaded");
     expect(screen.queryByText("SYM100")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Load more" }));
-    await screen.findByText("101 transactions loaded");
+    await screen.findByText("101 of 101 transactions loaded");
     expect(screen.getByText("SYM100")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Export CSV" }));
@@ -84,13 +86,13 @@ describe("TransactionHistory", () => {
     const filtered = { ...transaction(1), symbol: "AAPL", tx_type: "sell" };
     mock.onGet("/portfolio/portfolio-1/transactions/page", {
       params: { limit: 100 },
-    }).reply(200, { items: [initial], next_cursor: null });
+    }).reply(200, { items: [initial], next_cursor: null, total_count: 1 });
     mock.onGet("/portfolio/portfolio-1/transactions/page", {
       params: {
         limit: 100, symbol: "AAPL", market: "US", tx_type: "sell",
         date_from: "2024-01-01", date_to: "2024-01-31",
       },
-    }).reply(200, { items: [filtered], next_cursor: null });
+    }).reply(200, { items: [filtered], next_cursor: null, total_count: 1 });
     mocks.exportMutateAsync.mockResolvedValue([filtered]);
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },

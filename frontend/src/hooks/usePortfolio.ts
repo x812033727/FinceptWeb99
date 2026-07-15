@@ -175,6 +175,7 @@ export interface PortfolioTransactionFilters {
 export interface PortfolioTransactionPage {
   items: TransactionImportTransaction[];
   next_cursor: string | null;
+  total_count: number | null;
 }
 
 export function useExportPortfolioTransactions(portfolioId: string) {

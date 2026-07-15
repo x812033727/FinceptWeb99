@@ -1053,6 +1053,7 @@
       "export": "匯出 CSV",
       "exporting": "匯出中…",
       "loaded_count": "已載入 {{count}} 筆交易",
+      "loaded_count_total": "已載入 {{loaded}} / {{total}} 筆交易",
       "load_more": "載入更多",
       "loading_more": "載入中…",
       "filters": {

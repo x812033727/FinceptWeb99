@@ -1142,6 +1142,39 @@ async def get_transactions(
     return list(rows.all())
 
 
+async def count_transactions(
+    portfolio_id: str,
+    user_id: str,
+    db: AsyncSession,
+    symbol: str | None = None,
+    market: Market | None = None,
+    tx_type: TransactionType | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> int:
+    portfolio = await get_portfolio(portfolio_id, user_id, db)
+    if not portfolio:
+        raise ValueError("Portfolio not found")
+    if date_from and date_to and date_from > date_to:
+        raise ValueError("date_from must be on or before date_to")
+
+    filters = [Transaction.portfolio_id == portfolio.id]
+    if symbol:
+        filters.append(func.upper(Transaction.symbol) == symbol.strip().upper())
+    if market:
+        filters.append(Transaction.market == market)
+    if tx_type:
+        filters.append(Transaction.tx_type == tx_type)
+    if date_from:
+        filters.append(Transaction.tx_date >= date_from)
+    if date_to:
+        filters.append(Transaction.tx_date <= date_to)
+    result = await db.scalar(
+        select(func.count()).select_from(Transaction).where(*filters),
+    )
+    return int(result or 0)
+
+
 async def get_portfolio_snapshots(
     portfolio_id: str, user_id: str, db: AsyncSession, *, days: int = 90,
 ) -> list[PortfolioSnapshot]:

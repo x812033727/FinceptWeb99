@@ -50,10 +50,33 @@ async def test_transaction_service_builds_filters_and_rejects_invalid_range():
         assert result == []
         db.scalars.assert_awaited_once()
 
+        db.scalar.return_value = 7
+        count = await portfolio_router.svc.count_transactions(
+            str(portfolio.id), "user-id", db,
+            symbol="aapl", market=Market.US, tx_type=TransactionType.buy,
+            date_from=date(2024, 1, 1), date_to=date(2024, 1, 31),
+        )
+        assert count == 7
+        db.scalar.assert_awaited_once()
+
         with pytest.raises(ValueError, match="date_from must be on or before date_to"):
             await portfolio_router.svc.get_transactions(
                 str(portfolio.id), "user-id", db,
                 date_from=date(2024, 2, 1), date_to=date(2024, 1, 31),
+            )
+        with pytest.raises(ValueError, match="date_from must be on or before date_to"):
+            await portfolio_router.svc.count_transactions(
+                str(portfolio.id), "user-id", db,
+                date_from=date(2024, 2, 1), date_to=date(2024, 1, 31),
+            )
+
+    with patch.object(
+        portfolio_router.svc, "get_portfolio",
+        new=AsyncMock(return_value=None),
+    ):
+        with pytest.raises(ValueError, match="Portfolio not found"):
+            await portfolio_router.svc.count_transactions(
+                str(portfolio.id), "user-id", db,
             )
 
 
@@ -70,7 +93,10 @@ async def test_transaction_page_route_success_and_validation(db_session):
     with patch.object(
         portfolio_router.svc, "get_transactions",
         new=AsyncMock(return_value=rows),
-    ) as get_transactions:
+    ) as get_transactions, patch.object(
+        portfolio_router.svc, "count_transactions",
+        new=AsyncMock(return_value=3),
+    ) as count_transactions:
         page = await portfolio_router.page_transactions(
             portfolio_id="portfolio-id", user={"id": "user-id"}, db=db_session,
             limit=2, cursor=None, symbol=" aapl ", market=Market.US,
@@ -78,10 +104,12 @@ async def test_transaction_page_route_success_and_validation(db_session):
             date_to=date(2024, 1, 31),
         )
     assert page["items"] == rows[:2]
+    assert page["total_count"] == 3
     assert portfolio_router.svc.decode_transaction_cursor(page["next_cursor"]) == (
         rows[1].tx_date, rows[1].created_at, rows[1].id,
     )
     assert get_transactions.await_args.kwargs["symbol"] == "aapl"
+    count_transactions.assert_awaited_once()
 
     with pytest.raises(HTTPException) as blank:
         await portfolio_router.page_transactions(
@@ -491,6 +519,7 @@ async def test_list_transactions_after_add(client: AsyncClient):
     assert [transaction["id"] for transaction in first_cursor_page.json()["items"]] == [
         txns[0]["id"], txns[1]["id"],
     ]
+    assert first_cursor_page.json()["total_count"] == 3
     cursor = first_cursor_page.json()["next_cursor"]
     assert cursor
 
@@ -516,6 +545,7 @@ async def test_list_transactions_after_add(client: AsyncClient):
         txns[2]["id"],
     ]
     assert second_cursor_page.json()["next_cursor"] is None
+    assert second_cursor_page.json()["total_count"] is None
     invalid_cursor = await client.get(
         f"/api/portfolio/{pid}/transactions/page",
         params={"cursor": "not-a-cursor"}, headers=_auth(token),
@@ -556,6 +586,13 @@ async def test_list_transactions_after_add(client: AsyncClient):
     assert [transaction["tx_date"] for transaction in filtered.json()] == [
         "2024-01-16",
     ]
+    filtered_page = await client.get(
+        f"/api/portfolio/{pid}/transactions/page",
+        params={"date_from": "2024-01-16", "date_to": "2024-01-16"},
+        headers=_auth(token),
+    )
+    assert filtered_page.status_code == 200
+    assert filtered_page.json()["total_count"] == 1
     for params in ({"symbol": "MSFT"}, {"market": "TW"}, {"tx_type": "sell"}):
         response = await client.get(
             f"/api/portfolio/{pid}/transactions",

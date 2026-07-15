@@ -266,10 +266,12 @@ describe("portfolio transaction export", () => {
     };
     mock.onGet("/portfolio/p4/transactions/page", {
       params: { limit: 500, ...filters },
-    }).reply(200, { items: firstPage, next_cursor: "cursor-500" });
+    }).reply(200, {
+      items: firstPage, next_cursor: "cursor-500", total_count: 501,
+    });
     mock.onGet("/portfolio/p4/transactions/page", {
       params: { limit: 500, ...filters, cursor: "cursor-500" },
-    }).reply(200, { items: finalPage, next_cursor: null });
+    }).reply(200, { items: finalPage, next_cursor: null, total_count: null });
 
     const { wrapper } = makeWrapper();
     const exported = renderHook(() => useExportPortfolioTransactions("p4"), { wrapper });

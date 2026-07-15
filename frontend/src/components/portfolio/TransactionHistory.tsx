@@ -46,11 +46,13 @@ export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
     ).then((response) => ({
       rows: response.data.items as TransactionRow[],
       nextCursor: response.data.next_cursor ?? undefined,
+      totalCount: response.data.total_count,
     })),
     getNextPageParam: (lastPage) => lastPage.nextCursor,
     staleTime: 30_000,
   });
   const txns = data?.pages.flatMap((page) => page.rows) ?? [];
+  const totalCount = data?.pages[0]?.totalCount;
   const hasFilters = Object.values(filters).some(Boolean);
 
   function applyFilters(event: FormEvent) {
@@ -293,7 +295,13 @@ export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
             aria-label={t("portfolio.transactions.title")}
           />
           <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-            <span>{t("portfolio.transactions.loaded_count", { count: txns.length })}</span>
+            <span>
+              {totalCount == null
+                ? t("portfolio.transactions.loaded_count", { count: txns.length })
+                : t("portfolio.transactions.loaded_count_total", {
+                    loaded: txns.length, total: totalCount,
+                  })}
+            </span>
             {hasNextPage && (
               <button
                 type="button"

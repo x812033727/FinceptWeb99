@@ -1054,6 +1054,7 @@
       "exporting": "Exporting…",
       "loaded_count_one": "{{count}} transaction loaded",
       "loaded_count_other": "{{count}} transactions loaded",
+      "loaded_count_total": "{{loaded}} of {{total}} transactions loaded",
       "load_more": "Load more",
       "loading_more": "Loading…",
       "filters": {

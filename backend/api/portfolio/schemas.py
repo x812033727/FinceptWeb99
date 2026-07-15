@@ -422,6 +422,7 @@ class TransactionResponse(BaseModel):
 class TransactionPageResponse(BaseModel):
     items: list[TransactionResponse]
     next_cursor: str | None = None
+    total_count: int | None = None
 
 
 class CashEntryCreate(BaseModel):

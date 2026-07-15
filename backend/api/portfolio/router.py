@@ -427,6 +427,13 @@ async def page_transactions(
             symbol=symbol, market=market, tx_type=tx_type,
             date_from=date_from, date_to=date_to, before=before,
         )
+        total_count = None
+        if cursor is None:
+            total_count = await svc.count_transactions(
+                portfolio_id, user["id"], db,
+                symbol=symbol, market=market, tx_type=tx_type,
+                date_from=date_from, date_to=date_to,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -435,7 +442,11 @@ async def page_transactions(
         svc.encode_transaction_cursor(items[-1])
         if len(rows) > limit else None
     )
-    return {"items": items, "next_cursor": next_cursor}
+    return {
+        "items": items,
+        "next_cursor": next_cursor,
+        "total_count": total_count,
+    }
 
 
 @router.get("/{portfolio_id}/snapshots", response_model=list[PortfolioSnapshotResponse])

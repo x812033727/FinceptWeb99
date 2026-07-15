@@ -26,8 +26,10 @@ from api.portfolio.schemas import (
     StressTestRequest,
     StressTestResponse,
     TransactionCreate,
+    TransactionImportBatchResponse,
     TransactionImportRequest,
     TransactionImportResponse,
+    TransactionImportRollbackResponse,
     TransactionResponse,
     TransactionUpdate,
 )
@@ -148,6 +150,48 @@ async def import_transactions(
         )
     except ValueError as exc:
         code = 404 if "not found" in str(exc).lower() else 400
+        raise HTTPException(status_code=code, detail=str(exc))
+
+
+@router.get(
+    "/{portfolio_id}/transaction-imports",
+    response_model=list[TransactionImportBatchResponse],
+)
+async def list_transaction_imports(
+    portfolio_id: str,
+    user: CurrentUser,
+    db: DB,
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    """List committed CSV batches and whether each has complete provenance."""
+    try:
+        return await svc.list_transaction_imports(
+            portfolio_id=portfolio_id, user_id=user["id"], db=db, limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.delete(
+    "/{portfolio_id}/transaction-imports/{import_id}",
+    response_model=TransactionImportRollbackResponse,
+)
+@limiter.limit("10/minute")
+async def rollback_transaction_import(
+    request: Request,
+    portfolio_id: str,
+    import_id: str,
+    user: CurrentUser,
+    db: DB,
+):
+    """Atomically reverse one imported batch when later trades remain valid."""
+    try:
+        return await svc.rollback_transaction_import(
+            portfolio_id=portfolio_id, import_id=import_id,
+            user_id=user["id"], db=db,
+        )
+    except ValueError as exc:
+        code = 404 if "not found" in str(exc).lower() else 409
         raise HTTPException(status_code=code, detail=str(exc))
 
 

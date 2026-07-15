@@ -149,6 +149,18 @@ async def test_transaction_import_previews_then_commits_clean_batch(client: Asyn
         f"/api/portfolio/{pid}/transactions", headers=_auth(token),
     )).json()
     assert len(transactions) == 2
+    import_id = committed.json()["import_id"]
+    assert {transaction["import_id"] for transaction in transactions} == {import_id}
+    imports = (await client.get(
+        f"/api/portfolio/{pid}/transaction-imports", headers=_auth(token),
+    )).json()
+    assert imports == [{
+        "id": import_id,
+        "row_count": 2,
+        "linked_count": 2,
+        "provenance_complete": True,
+        "imported_at": committed.json()["imported_at"],
+    }]
     detail = (await client.get(f"/api/portfolio/{pid}", headers=_auth(token))).json()
     assert detail["holdings"][0]["quantity"] == 6
 
@@ -159,6 +171,77 @@ async def test_transaction_import_previews_then_commits_clean_batch(client: Asyn
     assert duplicate.status_code == 200
     assert duplicate.json()["duplicate"] is True
     assert duplicate.json()["imported_count"] == 0
+
+    rollback = await client.delete(
+        f"/api/portfolio/{pid}/transaction-imports/{import_id}",
+        headers=_auth(token),
+    )
+    assert rollback.status_code == 200
+    assert rollback.json() == {"import_id": import_id, "removed_count": 2}
+    assert (await client.get(
+        f"/api/portfolio/{pid}/transactions", headers=_auth(token),
+    )).json() == []
+    assert (await client.get(
+        f"/api/portfolio/{pid}/transaction-imports", headers=_auth(token),
+    )).json() == []
+    detail = (await client.get(f"/api/portfolio/{pid}", headers=_auth(token))).json()
+    assert detail["holdings"] == []
+    cash_entries = (await client.get(
+        f"/api/portfolio/{pid}/cash-entries", headers=_auth(token),
+    )).json()
+    assert len(cash_entries) == 4
+    assert sum(entry["amount"] for entry in cash_entries) == 0
+
+    retry_after_rollback = await client.post(
+        f"/api/portfolio/{pid}/transactions/import",
+        json={"rows": rows, "dry_run": True}, headers=_auth(token),
+    )
+    assert retry_after_rollback.status_code == 200
+    assert retry_after_rollback.json()["duplicate"] is False
+
+
+@pytest.mark.asyncio
+async def test_transaction_import_rollback_rejects_dependent_later_sell(
+    client: AsyncClient,
+):
+    token = await _register_and_login(client, "pf_import_rollback_conflict@test.com")
+    portfolio = await client.post(
+        "/api/portfolio", json={"name": "Rollback guard", "currency": "USD"},
+        headers=_auth(token),
+    )
+    pid = portfolio.json()["id"]
+    imported = await client.post(
+        f"/api/portfolio/{pid}/transactions/import",
+        json={
+            "dry_run": False,
+            "rows": [{
+                "tx_date": "2024-01-02", "symbol": "AAPL", "market": "US",
+                "tx_type": "buy", "quantity": 5, "price": 100, "fx_rate": 1,
+            }],
+        },
+        headers=_auth(token),
+    )
+    assert imported.status_code == 200
+    added = await client.post(
+        f"/api/portfolio/{pid}/transaction",
+        json={
+            "tx_date": "2024-01-03", "symbol": "AAPL", "market": "US",
+            "tx_type": "sell", "quantity": 4, "price": 110, "fx_rate": 1,
+        },
+        headers=_auth(token),
+    )
+    assert added.status_code == 201
+
+    rollback = await client.delete(
+        f"/api/portfolio/{pid}/transaction-imports/{imported.json()['import_id']}",
+        headers=_auth(token),
+    )
+    assert rollback.status_code == 409
+    assert "exceeds available shares" in rollback.json()["detail"]
+    transactions = (await client.get(
+        f"/api/portfolio/{pid}/transactions", headers=_auth(token),
+    )).json()
+    assert len(transactions) == 2
 
 
 @pytest.mark.asyncio

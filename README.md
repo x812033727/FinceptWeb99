@@ -505,6 +505,9 @@ POST /api/portfolio                  # 建立投資組合
 GET  /api/portfolio/{id}             # 投資組合詳情（持倉、P&L）
 DELETE /api/portfolio/{id}           # 刪除投資組合
 POST /api/portfolio/{id}/transaction # 新增交易（buy / sell）
+POST /api/portfolio/{id}/transactions/import # 預覽／原子匯入最多 500 筆 CSV 交易
+GET  /api/portfolio/{id}/transaction-imports # 匯入批次與來源連結完整性
+DELETE /api/portfolio/{id}/transaction-imports/{import_id} # 安全復原整批匯入
 GET  /api/portfolio/{id}/cash        # 多幣別現金餘額與基準幣別換算
 GET  /api/portfolio/{id}/cash-entries # append-only 現金帳本
 POST /api/portfolio/{id}/cash-entries # 入金／出金／費用／稅款等現金異動
@@ -530,6 +533,11 @@ USD 自動產生原生幣別結算；修改交易會先沖銷舊結算再追加�
 `legacy_total_only`，不偽造不存在的歷史成分。投組頁面的「現金帳本」可新增現金異動、
 查看負現金警示並以反向分錄更正；因子再平衡會直接使用帳本中的實際 TWD 現金，USD
 等外幣預設凍結，不暗中換匯，另填的現金只作假設情境並明確標記。
+
+Migration `0092` 以投組範圍的正規化內容雜湊防止 CSV 重試重複入帳；Migration `0093`
+把每筆匯入交易連回來源批次。批次復原會先重播移除後的完整交易歷史，若後續賣單會造成
+負庫存便以衝突回應拒絕且不修改資料；成功時刪除該批交易、以反向分錄沖銷結算並重建
+受影響持倉。無法回填交易來源的舊批次會標記為來源不完整，不允許推測性復原。
 
 Migration `0088` 新增 paper trading 訂單狀態機。送單以 portfolio-scoped
 idempotency key 防止重複建立，買單先保留原生幣別資金（含預估費用），賣單先保留可用

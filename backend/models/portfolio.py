@@ -74,6 +74,12 @@ class Transaction(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     portfolio_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("portfolios.id"), nullable=False, index=True)
+    import_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("portfolio_transaction_imports.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     symbol: Mapped[str] = mapped_column(String(20), nullable=False)
     market: Mapped[Market] = mapped_column(Enum(Market), nullable=False)
     tx_type: Mapped[TransactionType] = mapped_column(Enum(TransactionType), nullable=False)

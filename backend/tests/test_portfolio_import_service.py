@@ -71,6 +71,9 @@ async def test_import_service_writes_batch_and_shares_fx_lookup(
     get_fx.assert_awaited_once_with("US", "USD", date(2024, 1, 2))
     transactions = list((await db_session.scalars(select(Transaction))).all())
     assert len(transactions) == 2
+    assert {str(transaction.import_id) for transaction in transactions} == {
+        result["import_id"]
+    }
     assert {float(transaction.fx_rate) for transaction in transactions} == {1.0}
     holding = await db_session.scalar(select(Holding))
     assert holding is not None
@@ -161,6 +164,32 @@ async def test_import_service_valid_dry_run_is_read_only(
         "duplicate": False, "import_id": None, "imported_at": None, "errors": [],
     }
     assert await db_session.scalar(select(Transaction.id)) is None
+
+
+@pytest.mark.asyncio
+async def test_import_rollback_rejects_legacy_record_without_provenance(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    _, portfolio = await _create_portfolio(
+        client, db_session, "import-service-legacy@test.com",
+    )
+    record = PortfolioTransactionImport(
+        portfolio_id=portfolio.id, content_hash="a" * 64, row_count=1,
+    )
+    db_session.add(record)
+    await db_session.flush()
+
+    batches = await svc.list_transaction_imports(
+        portfolio_id=str(portfolio.id), user_id=str(portfolio.user_id),
+        db=db_session,
+    )
+    assert batches[0]["linked_count"] == 0
+    assert batches[0]["provenance_complete"] is False
+    with pytest.raises(ValueError, match="provenance is incomplete"):
+        await svc.rollback_transaction_import(
+            portfolio_id=str(portfolio.id), import_id=str(record.id),
+            user_id=str(portfolio.user_id), db=db_session,
+        )
 
 
 @pytest.mark.asyncio

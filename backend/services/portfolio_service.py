@@ -15,7 +15,7 @@ from datetime import date, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cache.cache_ttls import (
@@ -206,6 +206,20 @@ async def get_portfolio(portfolio_id: str, user_id: str, db: AsyncSession) -> Po
     return p
 
 
+async def _lock_owned_portfolio(
+    portfolio_id: str, user_id: str, db: AsyncSession,
+) -> Portfolio | None:
+    """Serialize transaction mutations within one owned portfolio."""
+    return await db.scalar(
+        select(Portfolio)
+        .where(
+            Portfolio.id == UUID(portfolio_id),
+            Portfolio.user_id == UUID(user_id),
+        )
+        .with_for_update()
+    )
+
+
 async def delete_portfolio(portfolio_id: str, user_id: str, db: AsyncSession) -> bool:
     p = await get_portfolio(portfolio_id, user_id, db)
     if not p:
@@ -252,7 +266,7 @@ async def add_transaction(
     notes: str | None,
     db: AsyncSession,
 ) -> Transaction:
-    p = await get_portfolio(portfolio_id, user_id, db)
+    p = await _lock_owned_portfolio(portfolio_id, user_id, db)
     if not p:
         raise ValueError("Portfolio not found")
 
@@ -310,14 +324,7 @@ async def import_transactions(
 
     from api.portfolio.schemas import TransactionCreate
 
-    portfolio = await db.scalar(
-        select(Portfolio)
-        .where(
-            Portfolio.id == UUID(portfolio_id),
-            Portfolio.user_id == UUID(user_id),
-        )
-        .with_for_update()
-    )
+    portfolio = await _lock_owned_portfolio(portfolio_id, user_id, db)
     if not portfolio:
         raise ValueError("Portfolio not found")
 
@@ -429,6 +436,14 @@ async def import_transactions(
     fx_cache: dict[tuple[str, date], float] = {}
     transactions: list[Transaction] = []
     affected: set[tuple[str, str]] = set()
+    assert content_hash is not None
+    import_record = PortfolioTransactionImport(
+        portfolio_id=UUID(portfolio_id),
+        content_hash=content_hash,
+        row_count=len(parsed),
+    )
+    db.add(import_record)
+    await db.flush()
     for _, item in sorted(parsed, key=lambda entry: (entry[1].tx_date, entry[0])):
         market = item.market.upper()
         fx_rate = item.fx_rate
@@ -441,6 +456,7 @@ async def import_transactions(
             fx_rate = fx_cache[cache_key]
         transaction = Transaction(
             portfolio_id=UUID(portfolio_id),
+            import_id=import_record.id,
             symbol=item.symbol.upper(),
             market=MarketEnum[market],
             tx_type=TransactionType[item.tx_type.lower()],
@@ -460,14 +476,6 @@ async def import_transactions(
         )
     for symbol, market in affected:
         await _rebuild_holding(portfolio_id, symbol, market, db)
-    assert content_hash is not None
-    import_record = PortfolioTransactionImport(
-        portfolio_id=UUID(portfolio_id),
-        content_hash=content_hash,
-        row_count=len(parsed),
-    )
-    db.add(import_record)
-    await db.flush()
     return {
         "valid": True,
         "valid_count": len(parsed),
@@ -477,6 +485,95 @@ async def import_transactions(
         "imported_at": import_record.created_at,
         "errors": [],
     }
+
+
+async def list_transaction_imports(
+    *,
+    portfolio_id: str,
+    user_id: str,
+    db: AsyncSession,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Return newest import batches with linked-transaction completeness."""
+    portfolio = await get_portfolio(portfolio_id, user_id, db)
+    if not portfolio:
+        raise ValueError("Portfolio not found")
+    records = list((await db.scalars(
+        select(PortfolioTransactionImport)
+        .where(PortfolioTransactionImport.portfolio_id == portfolio.id)
+        .order_by(PortfolioTransactionImport.created_at.desc())
+        .limit(limit)
+    )).all())
+    import_ids = [record.id for record in records]
+    counts = dict((await db.execute(
+        select(Transaction.import_id, func.count(Transaction.id))
+        .where(Transaction.import_id.in_(import_ids))
+        .group_by(Transaction.import_id)
+    )).all()) if import_ids else {}
+    return [{
+        "id": record.id,
+        "row_count": record.row_count,
+        "linked_count": counts.get(record.id, 0),
+        "provenance_complete": (
+            record.row_count > 0 and counts.get(record.id, 0) == record.row_count
+        ),
+        "imported_at": record.created_at,
+    } for record in records]
+
+
+async def rollback_transaction_import(
+    *,
+    portfolio_id: str,
+    import_id: str,
+    user_id: str,
+    db: AsyncSession,
+) -> dict[str, Any]:
+    """Reverse a complete imported batch without invalidating later history."""
+    portfolio = await _lock_owned_portfolio(portfolio_id, user_id, db)
+    if not portfolio:
+        raise ValueError("Portfolio not found")
+    record = await db.scalar(
+        select(PortfolioTransactionImport)
+        .where(
+            PortfolioTransactionImport.id == UUID(import_id),
+            PortfolioTransactionImport.portfolio_id == portfolio.id,
+        )
+        .with_for_update()
+    )
+    if not record:
+        raise ValueError("Transaction import not found")
+    transactions = list((await db.scalars(
+        select(Transaction)
+        .where(Transaction.import_id == record.id)
+        .order_by(Transaction.tx_date, Transaction.created_at, Transaction.id)
+        .with_for_update()
+    )).all())
+    if not transactions or len(transactions) != record.row_count:
+        raise ValueError(
+            "Import batch provenance is incomplete and cannot be rolled back"
+        )
+
+    affected = {(tx.symbol, tx.market.value) for tx in transactions}
+    excluded_ids = {tx.id for tx in transactions}
+    for symbol, market in affected:
+        await _validate_no_short_position(
+            portfolio_id, symbol, market, db,
+            exclude_transaction_ids=excluded_ids,
+        )
+
+    from services.portfolio_cash_service import reverse_transaction_settlement
+
+    for transaction in transactions:
+        await reverse_transaction_settlement(
+            transaction=transaction, db=db, reason="csv_import_rollback",
+        )
+        await db.delete(transaction)
+    await db.flush()
+    for symbol, market in affected:
+        await _rebuild_holding(portfolio_id, symbol, market, db)
+    await db.delete(record)
+    await db.flush()
+    return {"import_id": record.id, "removed_count": len(transactions)}
 
 
 async def update_transaction(
@@ -500,7 +597,7 @@ async def update_transaction(
     holdings are rebuilt — otherwise the old holding would still reflect
     the now-removed transaction.
     """
-    p = await get_portfolio(portfolio_id, user_id, db)
+    p = await _lock_owned_portfolio(portfolio_id, user_id, db)
     if not p:
         return None
     tx = await db.get(Transaction, UUID(tx_id))
@@ -570,7 +667,7 @@ async def delete_transaction(
     portfolio_id: str, tx_id: str, user_id: str, db: AsyncSession,
 ) -> bool:
     """Remove a transaction. Rebuilds the affected holding from remaining txs."""
-    p = await get_portfolio(portfolio_id, user_id, db)
+    p = await _lock_owned_portfolio(portfolio_id, user_id, db)
     if not p:
         return False
     tx = await db.get(Transaction, UUID(tx_id))
@@ -647,7 +744,9 @@ async def _rebuild_holding(portfolio_id: str, symbol: str, market: str, db: Asyn
 
 async def _validate_no_short_position(
     portfolio_id: str, symbol: str, market: str, db: AsyncSession,
-    *, exclude_transaction_id: UUID | None = None,
+    *,
+    exclude_transaction_id: UUID | None = None,
+    exclude_transaction_ids: set[UUID] | None = None,
 ) -> None:
     """Reject a transaction history that sells shares before they exist."""
     from models.portfolio import Market as MarketEnum
@@ -659,6 +758,8 @@ async def _validate_no_short_position(
     )
     if exclude_transaction_id is not None:
         stmt = stmt.where(Transaction.id != exclude_transaction_id)
+    if exclude_transaction_ids:
+        stmt = stmt.where(Transaction.id.not_in(exclude_transaction_ids))
     txs = list((await db.scalars(stmt.order_by(
         Transaction.tx_date, Transaction.created_at, Transaction.id,
     ))).all())

@@ -4,10 +4,11 @@ from uuid import UUID, uuid4
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.paper_trading import PaperOrder, PaperRiskPolicy
-from models.portfolio import Holding, Market
+from models.portfolio import Holding, Market, Portfolio
 from services import paper_risk_service
 
 
@@ -443,3 +444,61 @@ async def test_zero_capital_concentration_and_disabled_policy_are_blocked(
     policy.trading_enabled = False
     with pytest.raises(paper_risk_service.PaperRiskViolation, match="kill switch"):
         await paper_risk_service._enforce_common(policy, portfolio_id, "USD", db_session)
+
+
+@pytest.mark.asyncio
+async def test_service_policy_lifecycle_reports_limits_and_cancelled_orders(
+    client: AsyncClient,
+    db_session: AsyncSession,
+):
+    headers = await _login(client, "risk-policy-lifecycle@example.com")
+    portfolio_id = await _portfolio(client, headers, usd=1_000)
+    created = await client.post(
+        f"/api/portfolio/{portfolio_id}/paper-orders",
+        json=_order("risk-policy-lifecycle-order"),
+        headers=headers,
+    )
+    assert created.status_code == 201
+    portfolio = await db_session.scalar(
+        select(Portfolio).where(Portfolio.id == UUID(portfolio_id))
+    )
+    assert portfolio is not None
+
+    disabled = await paper_risk_service.update_policy(
+        portfolio_id=portfolio_id,
+        user_id=str(portfolio.user_id),
+        trading_enabled=False,
+        db=db_session,
+        max_order_notional_usd=500,
+        max_order_notional_twd=10_000,
+        max_position_notional_usd=750,
+        max_position_notional_twd=20_000,
+        max_daily_loss_usd=100,
+        max_daily_loss_twd=3_000,
+        max_open_orders=3,
+        max_symbol_concentration_pct=25,
+    )
+
+    assert disabled["configured"] is True
+    assert disabled["trading_enabled"] is False
+    assert disabled["cancelled_open_orders"] == 1
+    assert disabled["max_open_orders"] == 3
+    assert disabled["max_order_notional_usd"] == pytest.approx(500)
+    assert disabled["daily_realized_pnl_usd"] == 0
+    assert disabled["daily_realized_pnl_twd"] == 0
+
+    enabled = await paper_risk_service.update_policy(
+        portfolio_id=portfolio_id,
+        user_id=str(portfolio.user_id),
+        trading_enabled=True,
+        db=db_session,
+    )
+    assert enabled["trading_enabled"] is True
+    assert enabled["cancelled_open_orders"] == 0
+
+    with pytest.raises(ValueError, match="Portfolio not found"):
+        await paper_risk_service.get_policy_state(
+            portfolio_id=str(uuid4()),
+            user_id=str(portfolio.user_id),
+            db=db_session,
+        )

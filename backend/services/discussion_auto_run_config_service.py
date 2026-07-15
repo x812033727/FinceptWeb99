@@ -30,6 +30,24 @@ from services.discussion_service import (
 
 log = logging.getLogger(__name__)
 
+STRATEGY_KEYS = (
+    "general", "chip_momentum", "quality_growth", "breakout",
+    "oversold_reversal",
+)
+
+
+def normalize_strategy_run_counts(value: dict[str, int] | None, *, legacy_enabled: bool = False) -> dict[str, int]:
+    """Return the complete, fixed strategy map and reject unknown keys."""
+    if value is None:
+        return {key: (1 if key == "general" and legacy_enabled else 0) for key in STRATEGY_KEYS}
+    unknown = set(value) - set(STRATEGY_KEYS)
+    if unknown:
+        raise ValueError(f"unknown strategy: {sorted(unknown)[0]}")
+    result = {key: int(value.get(key, 0)) for key in STRATEGY_KEYS}
+    if any(count < 0 or count > 5 for count in result.values()):
+        raise ValueError("strategy run count must be between 0 and 5")
+    return result
+
 
 async def get_config(
     db: AsyncSession, *, user_id: uuid.UUID,
@@ -51,6 +69,7 @@ async def upsert_config(
     rules: str,
     market: str | None = None,
     send_email: bool = False,
+    strategy_run_counts: dict[str, int] | None = None,
 ) -> DiscussionAutoRunConfig:
     """Insert or update a user's auto-run config.
 
@@ -62,6 +81,7 @@ async def upsert_config(
     topic = _validate_text(topic, field="topic", max_chars=_MAX_TOPIC_CHARS)
     rules = _validate_text(rules, field="rules", max_chars=_MAX_RULES_CHARS)
     market = _normalize_market(market)
+    counts = normalize_strategy_run_counts(strategy_run_counts, legacy_enabled=enabled)
 
     row = await get_config(db, user_id=user_id)
     now = datetime.now(UTC)
@@ -74,6 +94,7 @@ async def upsert_config(
             topic=topic,
             rules=rules,
             market=market,
+            strategy_run_counts=counts,
         )
         db.add(row)
     else:
@@ -83,6 +104,7 @@ async def upsert_config(
         row.topic = topic
         row.rules = rules
         row.market = market
+        row.strategy_run_counts = counts
         row.updated_at = now
     await db.commit()
     await db.refresh(row)

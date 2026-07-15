@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { AgentInfo, AutoRunConfig, DiscussionMarket } from "@/types/discussion";
+import type { AgentInfo, AutoRunConfig, DiscussionMarket, StrategyKey, StrategyRunCounts } from "@/types/discussion";
 import { fetchAutoRunConfig, saveAutoRunConfig } from "./_helpers";
 
 // Sits at the top of the sidebar. Lets each user opt themselves into
@@ -37,6 +37,7 @@ export function AutoRunConfigCard({
   const [personaIds, setPersonaIds] = useState<string[]>([]);
   const [market, setMarket] = useState<DiscussionMarket>("TW");
   const [sendEmail, setSendEmail] = useState(false);
+  const [strategyRunCounts, setStrategyRunCounts] = useState<StrategyRunCounts>({ general: 0, chip_momentum: 0, quality_growth: 0, breakout: 0, oversold_reversal: 0 });
   const [error, setError] = useState<string | null>(null);
   const [showSaved, setShowSaved] = useState(false);
 
@@ -53,6 +54,7 @@ export function AutoRunConfigCard({
     setPersonaIds(cfg.persona_ids);
     setMarket(cfg.market ?? "TW");
     setSendEmail(!!cfg.send_email);
+    setStrategyRunCounts(cfg.strategy_run_counts ?? { general: cfg.enabled ? 1 : 0, chip_momentum: 0, quality_growth: 0, breakout: 0, oversold_reversal: 0 });
   }, [cfg]);
 
   const saveMut = useMutation({
@@ -97,6 +99,7 @@ export function AutoRunConfigCard({
       rules: rules.trim(),
       market,
       send_email: sendEmail,
+      strategy_run_counts: strategyRunCounts,
     });
   }
 
@@ -146,6 +149,26 @@ export function AutoRunConfigCard({
                 />
                 <span>{t("discussion.auto_run_enabled")}</span>
               </label>
+
+              <div className="grid gap-1.5">
+                {([
+                  ["general", "綜合選股", "綜合價格、籌碼、成長與估值；沿用下方自訂題目與規則。"],
+                  ["chip_momentum", "籌碼動能", "外資近五日持續買超，搭配量價動能。"],
+                  ["quality_growth", "品質成長", "營收、ROE、現金流與合理估值。"],
+                  ["breakout", "突破追價", "突破二十日高點並有量能確認。"],
+                  ["oversold_reversal", "超跌反轉", "明顯回落後出現止跌與籌碼轉向。"],
+                ] as Array<[StrategyKey, string, string]>).map(([key, name, description]) => {
+                  const count = strategyRunCounts[key];
+                  return <div key={key} className="rounded border border-border bg-card p-2">
+                    <div className="flex items-center gap-2">
+                      <input aria-label={`啟用${name}`} type="checkbox" checked={count > 0} onChange={(e) => setStrategyRunCounts((old) => ({ ...old, [key]: e.target.checked ? Math.max(1, old[key]) : 0 }))} className="accent-primary" />
+                      <span className="text-xs font-medium flex-1">{name}</span>
+                      <input aria-label={`${name}每日場數`} type="number" min={0} max={5} value={count} onChange={(e) => setStrategyRunCounts((old) => ({ ...old, [key]: Math.max(0, Math.min(5, Number(e.target.value) || 0)) }))} className="w-12 rounded border border-border bg-card px-1 text-xs" />
+                    </div>
+                    <p className="mt-1 text-micro text-muted-foreground">{description}</p>
+                  </div>;
+                })}
+              </div>
 
               <label className="flex items-start gap-2 text-xs cursor-pointer">
                 <input

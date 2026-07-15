@@ -322,6 +322,7 @@ export async function saveAutoRunConfig(body: {
   rules: string;
   market?: string;
   send_email?: boolean;
+  strategy_run_counts?: AutoRunConfig["strategy_run_counts"];
 }): Promise<AutoRunConfig> {
   const res = await api.put<AutoRunConfig>("/discussion/auto-run/config", body);
   return res.data;

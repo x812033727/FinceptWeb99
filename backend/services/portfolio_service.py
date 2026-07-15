@@ -27,6 +27,7 @@ from cache.redis_cache import cache_get, cache_set
 from data.us.fred_connector import get_latest
 from models.portfolio import (
     Holding,
+    Market,
     Portfolio,
     PortfolioSnapshot,
     PortfolioTransactionImport,
@@ -1057,13 +1058,33 @@ async def get_transactions(
     db: AsyncSession,
     limit: int = 200,
     offset: int = 0,
+    symbol: str | None = None,
+    market: Market | None = None,
+    tx_type: TransactionType | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> list[Transaction]:
     portfolio = await get_portfolio(portfolio_id, user_id, db)
     if not portfolio:
         raise ValueError("Portfolio not found")
+    if date_from and date_to and date_from > date_to:
+        raise ValueError("date_from must be on or before date_to")
+
+    filters = [Transaction.portfolio_id == portfolio.id]
+    if symbol:
+        filters.append(func.upper(Transaction.symbol) == symbol.strip().upper())
+    if market:
+        filters.append(Transaction.market == market)
+    if tx_type:
+        filters.append(Transaction.tx_type == tx_type)
+    if date_from:
+        filters.append(Transaction.tx_date >= date_from)
+    if date_to:
+        filters.append(Transaction.tx_date <= date_to)
+
     rows = await db.scalars(
         select(Transaction)
-        .where(Transaction.portfolio_id == portfolio.id)
+        .where(*filters)
         .order_by(
             Transaction.tx_date.desc(),
             Transaction.created_at.desc(),

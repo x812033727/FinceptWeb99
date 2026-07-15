@@ -1056,6 +1056,18 @@
       "loaded_count_other": "{{count}} transactions loaded",
       "load_more": "Load more",
       "loading_more": "Loading…",
+      "filters": {
+        "symbol": "Symbol",
+        "market": "Market",
+        "type": "Transaction type",
+        "from": "From",
+        "to": "To",
+        "all": "All",
+        "dividend": "Dividend",
+        "apply": "Apply filters",
+        "clear": "Clear",
+        "no_matches": "No transactions match these filters"
+      },
       "import": {
         "action": "Import CSV",
         "title": "Import transactions",

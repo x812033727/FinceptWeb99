@@ -3,13 +3,16 @@ Integration tests for portfolio endpoints.
 Uses in-memory SQLite + mocked Redis (from conftest).
 Market data calls are mocked so tests run without external APIs.
 """
-from unittest.mock import AsyncMock, patch
+from datetime import date
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 from httpx import AsyncClient
 
 import api.portfolio.router as portfolio_router
+from models.portfolio import Market, TransactionType
 
 # ── helpers ───────────────────────────────────────────────────────
 
@@ -21,6 +24,32 @@ async def _register_and_login(client: AsyncClient, email: str) -> str:
 
 def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.mark.asyncio
+async def test_transaction_service_builds_filters_and_rejects_invalid_range():
+    db = AsyncMock()
+    scalar_result = MagicMock()
+    scalar_result.all.return_value = []
+    db.scalars.return_value = scalar_result
+    portfolio = SimpleNamespace(id="00000000-0000-0000-0000-000000000001")
+    with patch.object(
+        portfolio_router.svc, "get_portfolio",
+        new=AsyncMock(return_value=portfolio),
+    ):
+        result = await portfolio_router.svc.get_transactions(
+            str(portfolio.id), "user-id", db,
+            symbol="aapl", market=Market.US, tx_type=TransactionType.buy,
+            date_from=date(2024, 1, 1), date_to=date(2024, 1, 31),
+        )
+        assert result == []
+        db.scalars.assert_awaited_once()
+
+        with pytest.raises(ValueError, match="date_from must be on or before date_to"):
+            await portfolio_router.svc.get_transactions(
+                str(portfolio.id), "user-id", db,
+                date_from=date(2024, 2, 1), date_to=date(2024, 1, 31),
+            )
 
 
 @pytest.mark.asyncio
@@ -404,6 +433,43 @@ async def test_list_transactions_after_add(client: AsyncClient):
     assert (await client.get(
         f"/api/portfolio/{pid}/transactions?offset=-1", headers=_auth(token),
     )).status_code == 422
+    blank_symbol = await client.get(
+        f"/api/portfolio/{pid}/transactions",
+        params={"symbol": " "}, headers=_auth(token),
+    )
+    assert blank_symbol.status_code == 422
+    assert blank_symbol.json()["detail"] == "symbol must not be blank"
+
+    filtered = await client.get(
+        f"/api/portfolio/{pid}/transactions",
+        params={
+            "symbol": "aapl", "market": "US", "tx_type": "buy",
+            "date_from": "2024-01-16", "date_to": "2024-01-16",
+        },
+        headers=_auth(token),
+    )
+    assert filtered.status_code == 200
+    assert [transaction["tx_date"] for transaction in filtered.json()] == [
+        "2024-01-16",
+    ]
+    for params in ({"symbol": "MSFT"}, {"market": "TW"}, {"tx_type": "sell"}):
+        response = await client.get(
+            f"/api/portfolio/{pid}/transactions",
+            params=params, headers=_auth(token),
+        )
+        assert response.status_code == 200
+        assert response.json() == []
+    assert (await client.get(
+        f"/api/portfolio/{pid}/transactions",
+        params={"market": "INVALID"}, headers=_auth(token),
+    )).status_code == 422
+    invalid_range = await client.get(
+        f"/api/portfolio/{pid}/transactions",
+        params={"date_from": "2024-01-17", "date_to": "2024-01-15"},
+        headers=_auth(token),
+    )
+    assert invalid_range.status_code == 422
+    assert invalid_range.json()["detail"] == "date_from must be on or before date_to"
 
 
 @pytest.mark.asyncio

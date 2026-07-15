@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import api, { errorDetail } from "@/lib/api";
@@ -6,6 +6,7 @@ import {
   useDeleteTransaction,
   useExportPortfolioTransactions,
 } from "@/hooks/usePortfolio";
+import type { PortfolioTransactionFilters } from "@/hooks/usePortfolio";
 import { EditTransactionModal } from "./EditTransactionModal";
 import { exportCSV } from "./_shared";
 import type { TransactionRow } from "./_shared";
@@ -14,22 +15,28 @@ import { ImportTransactionsDialog } from "./ImportTransactionsDialog";
 import { TransactionImportHistoryDialog } from "./TransactionImportHistoryDialog";
 
 const PAGE_SIZE = 100;
+type FilterDraft = Record<keyof Required<PortfolioTransactionFilters>, string>;
+const EMPTY_FILTERS: FilterDraft = {
+  symbol: "", market: "", tx_type: "", date_from: "", date_to: "",
+};
 
 export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState<TransactionRow | null>(null);
   const [importing, setImporting] = useState(false);
   const [viewingImports, setViewingImports] = useState(false);
+  const [filterDraft, setFilterDraft] = useState<FilterDraft>(EMPTY_FILTERS);
+  const [filters, setFilters] = useState<PortfolioTransactionFilters>({});
   const deleteTx = useDeleteTransaction(portfolioId);
   const exportTransactions = useExportPortfolioTransactions(portfolioId);
   const {
     data, isLoading, isError, error, hasNextPage, fetchNextPage, isFetchingNextPage,
   } = useInfiniteQuery({
-    queryKey: ["portfolio-transactions", portfolioId],
+    queryKey: ["portfolio-transactions", portfolioId, filters],
     initialPageParam: 0,
     queryFn: ({ pageParam }) => api.get<TransactionRow[]>(
       `/portfolio/${portfolioId}/transactions`,
-      { params: { limit: PAGE_SIZE + 1, offset: pageParam } },
+      { params: { limit: PAGE_SIZE + 1, offset: pageParam, ...filters } },
     ).then((response) => ({
       rows: response.data.slice(0, PAGE_SIZE),
       nextOffset: response.data.length > PAGE_SIZE ? pageParam + PAGE_SIZE : undefined,
@@ -38,6 +45,23 @@ export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
     staleTime: 30_000,
   });
   const txns = data?.pages.flatMap((page) => page.rows) ?? [];
+  const hasFilters = Object.values(filters).some(Boolean);
+
+  function applyFilters(event: FormEvent) {
+    event.preventDefault();
+    setFilters({
+      symbol: filterDraft.symbol.trim().toUpperCase() || undefined,
+      market: (filterDraft.market || undefined) as PortfolioTransactionFilters["market"],
+      tx_type: (filterDraft.tx_type || undefined) as PortfolioTransactionFilters["tx_type"],
+      date_from: filterDraft.date_from || undefined,
+      date_to: filterDraft.date_to || undefined,
+    });
+  }
+
+  function clearFilters() {
+    setFilterDraft(EMPTY_FILTERS);
+    setFilters({});
+  }
 
   const columns: DataTableColumn<TransactionRow>[] = [
     {
@@ -141,7 +165,7 @@ export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
 
   async function handleExport() {
     try {
-      const allTransactions = await exportTransactions.mutateAsync();
+      const allTransactions = await exportTransactions.mutateAsync(filters);
       exportCSV(
         allTransactions.map((tx) => ({
           date: tx.tx_date,
@@ -184,10 +208,73 @@ export function TransactionHistory({ portfolioId }: { portfolioId: string }) {
         </div>
       </div>
 
+      <form onSubmit={applyFilters} className="flex flex-wrap items-end gap-2 rounded-md border border-border bg-background/40 p-3">
+        <label className="min-w-[130px] flex-1 text-xs text-muted-foreground">
+          {t("portfolio.transactions.filters.symbol")}
+          <input
+            value={filterDraft.symbol}
+            onChange={(event) => setFilterDraft({ ...filterDraft, symbol: event.target.value })}
+            maxLength={20}
+            placeholder="AAPL"
+            className="mt-1 w-full rounded border border-border bg-background px-2 py-1.5 text-sm uppercase text-foreground"
+          />
+        </label>
+        <label className="min-w-[120px] text-xs text-muted-foreground">
+          {t("portfolio.transactions.filters.market")}
+          <select
+            value={filterDraft.market}
+            onChange={(event) => setFilterDraft({ ...filterDraft, market: event.target.value })}
+            className="mt-1 w-full rounded border border-border bg-background px-2 py-1.5 text-sm text-foreground"
+          >
+            <option value="">{t("portfolio.transactions.filters.all")}</option>
+            <option value="US">US</option><option value="TW">TW</option><option value="CRYPTO">CRYPTO</option>
+          </select>
+        </label>
+        <label className="min-w-[120px] text-xs text-muted-foreground">
+          {t("portfolio.transactions.filters.type")}
+          <select
+            value={filterDraft.tx_type}
+            onChange={(event) => setFilterDraft({ ...filterDraft, tx_type: event.target.value })}
+            className="mt-1 w-full rounded border border-border bg-background px-2 py-1.5 text-sm text-foreground"
+          >
+            <option value="">{t("portfolio.transactions.filters.all")}</option>
+            <option value="buy">{t("portfolio.transactions.buy")}</option>
+            <option value="sell">{t("portfolio.transactions.sell")}</option>
+            <option value="dividend">{t("portfolio.transactions.filters.dividend")}</option>
+          </select>
+        </label>
+        <label className="text-xs text-muted-foreground">
+          {t("portfolio.transactions.filters.from")}
+          <input
+            type="date" value={filterDraft.date_from} max={filterDraft.date_to || undefined}
+            onChange={(event) => setFilterDraft({ ...filterDraft, date_from: event.target.value })}
+            className="mt-1 block rounded border border-border bg-background px-2 py-1.5 text-sm text-foreground"
+          />
+        </label>
+        <label className="text-xs text-muted-foreground">
+          {t("portfolio.transactions.filters.to")}
+          <input
+            type="date" value={filterDraft.date_to} min={filterDraft.date_from || undefined}
+            onChange={(event) => setFilterDraft({ ...filterDraft, date_to: event.target.value })}
+            className="mt-1 block rounded border border-border bg-background px-2 py-1.5 text-sm text-foreground"
+          />
+        </label>
+        <button type="submit" className="min-h-[34px] rounded bg-primary px-3 py-1.5 text-xs text-primary-foreground">
+          {t("portfolio.transactions.filters.apply")}
+        </button>
+        {hasFilters && (
+          <button type="button" onClick={clearFilters} className="min-h-[34px] px-2 text-xs text-muted-foreground hover:text-foreground">
+            {t("portfolio.transactions.filters.clear")}
+          </button>
+        )}
+      </form>
+
       {isLoading && <p className="text-xs text-muted-foreground animate-pulse">{t("common.loading")}</p>}
       {isError && <p className="text-xs text-danger">{errorDetail(error)}</p>}
       {!isLoading && !isError && txns.length === 0 && (
-        <p className="text-xs text-muted-foreground py-4 text-center">{t("portfolio.transactions.no_transactions")}</p>
+        <p className="text-xs text-muted-foreground py-4 text-center">
+          {t(hasFilters ? "portfolio.transactions.filters.no_matches" : "portfolio.transactions.no_transactions")}
+        </p>
       )}
 
       {txns.length > 0 && (

@@ -24,10 +24,13 @@ with `status=draft` (run_round's finally-block atomic reset, PR #114),
 ignores it. The next-day idempotency check also ignores it (different
 created_at date). Health is recorded with a per-user error summary.
 """
+
 from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +41,7 @@ from models.discussion import Discussion, DiscussionTurn
 from models.discussion_auto_run_config import DiscussionAutoRunConfig
 from models.user import User
 from services import discussion_auto_run_config_service, discussion_service, email_service
+from services.daily_stock_strategies import build_topic, candidate_batches, rank_candidates
 from services.ingest.repository import (
     backoff_remaining_seconds,
     clear_failures,
@@ -76,11 +80,10 @@ async def run() -> None:
                 extra={"failures": failures, "seconds_remaining": remaining},
             )
             await record_health(
-                JOB_ID, ok=False, row_count=0,
-                error=(
-                    f"skipped (backoff after {failures} failures, "
-                    f"~{mins} min remaining)"
-                ),
+                JOB_ID,
+                ok=False,
+                row_count=0,
+                error=(f"skipped (backoff after {failures} failures, " f"~{mins} min remaining)"),
             )
             return
 
@@ -93,7 +96,9 @@ async def run() -> None:
                 extra={"error": str(exc), "failures": failures},
             )
             await record_health(
-                JOB_ID, ok=False, row_count=0,
+                JOB_ID,
+                ok=False,
+                row_count=0,
                 error=f"{exc} (failure #{failures}; auto-backoff armed)",
             )
             return
@@ -109,7 +114,9 @@ async def run() -> None:
                 extra={"rows_processed": row_count, "errors": errors},
             )
             await record_health(
-                JOB_ID, ok=True, row_count=row_count,
+                JOB_ID,
+                ok=True,
+                row_count=row_count,
                 error="; ".join(errors)[:500],
             )
         else:
@@ -156,7 +163,8 @@ async def _do_run() -> tuple[int, list[str]]:
 
 
 async def _run_for_user(
-    db: AsyncSession, cfg: DiscussionAutoRunConfig,
+    db: AsyncSession,
+    cfg: DiscussionAutoRunConfig,
 ) -> bool:
     """Run one auto-run discussion for a single enabled user.
 
@@ -166,6 +174,145 @@ async def _run_for_user(
     on any failure so the caller can record it and move on to the next
     user without aborting the whole tick.
     """
+    user_id = cfg.user_id
+    counts = discussion_auto_run_config_service.normalize_strategy_run_counts(
+        getattr(cfg, "strategy_run_counts", None),
+        legacy_enabled=True,
+    )
+    run_date = datetime.now(ZoneInfo("Asia/Taipei")).date()
+    candidate_rows = await load_candidate_rows(db)
+    ran = False
+    for strategy, count in counts.items():
+        if count <= 0:
+            continue
+        batches = candidate_batches(rank_candidates(strategy, candidate_rows), count)
+        # Backward-compatible general discussion when the deployment's market
+        # snapshot provider has not produced a universe yet.
+        if strategy == "general" and not batches:
+            batches = [[]]
+        for sequence, batch in enumerate(batches, 1):
+            exists = await db.scalar(
+                select(Discussion.id).where(
+                    Discussion.owner_id == user_id,
+                    Discussion.auto_run_date == run_date,
+                    Discussion.auto_run_strategy == strategy,
+                    Discussion.auto_run_sequence == sequence,
+                )
+            )
+            if exists:
+                continue
+            await _run_strategy_slot(db, cfg, strategy, sequence, run_date, batch)
+            ran = True
+    return ran
+
+
+async def load_candidate_rows(db: AsyncSession) -> list[dict]:
+    """Build one settled-data snapshot from the local TW archives."""
+    from collections import defaultdict
+
+    from models.fundamentals_snapshot import FundamentalsSnapshot
+    from models.ohlcv_daily import OhlcvDaily
+    from models.tw_chip_metrics import TwInstitutionalDaily
+    from models.tw_revenue_monthly import TwRevenueMonthly
+
+    bars = (
+        await db.scalars(
+            select(OhlcvDaily)
+            .where(OhlcvDaily.market == "TW")
+            .order_by(OhlcvDaily.symbol, OhlcvDaily.ts.desc())
+        )
+    ).all()
+    by_symbol: dict[str, list] = defaultdict(list)
+    for bar in bars:
+        if len(by_symbol[bar.symbol]) < 40:
+            by_symbol[bar.symbol].append(bar)
+
+    def latest_by_symbol(items):
+        result = {}
+        for item in items:
+            if item.symbol not in result:
+                result[item.symbol] = item
+        return result
+
+    fundamentals = latest_by_symbol(
+        (
+            await db.scalars(
+                select(FundamentalsSnapshot)
+                .where(FundamentalsSnapshot.market == "TW")
+                .order_by(FundamentalsSnapshot.as_of.desc())
+            )
+        ).all()
+    )
+    revenues = latest_by_symbol(
+        (
+            await db.scalars(
+                select(TwRevenueMonthly)
+                .where(TwRevenueMonthly.market == "TW")
+                .order_by(TwRevenueMonthly.ts.desc())
+            )
+        ).all()
+    )
+    chip_rows = (
+        await db.scalars(
+            select(TwInstitutionalDaily)
+            .where(TwInstitutionalDaily.market == "TW")
+            .order_by(TwInstitutionalDaily.symbol, TwInstitutionalDaily.ts.desc())
+        )
+    ).all()
+    chips: dict[str, list] = defaultdict(list)
+    for item in chip_rows:
+        if len(chips[item.symbol]) < 5:
+            chips[item.symbol].append(item)
+
+    snapshots = []
+    for symbol, newest_first in by_symbol.items():
+        if len(newest_first) < 21:
+            continue
+        series = list(reversed(newest_first))
+        closes = [float(x.close) for x in series if x.close is not None]
+        if len(closes) < 21:
+            continue
+        last = series[-1]
+        volumes = [int(x.volume or 0) for x in series[-21:-1]]
+        gains = [closes[i] - closes[i - 1] for i in range(max(1, len(closes) - 14), len(closes))]
+        avg_gain = sum(max(x, 0) for x in gains) / 14
+        avg_loss = sum(max(-x, 0) for x in gains) / 14
+        rsi = 100 if avg_loss == 0 else 100 - 100 / (1 + avg_gain / avg_loss)
+        institutionals = chips.get(symbol, [])
+        nets = [int(x.fini_buy or 0) - int(x.fini_sell or 0) for x in institutionals]
+        fund = fundamentals.get(symbol)
+        payload = (fund.payload or {}) if fund else {}
+        revenue = revenues.get(symbol)
+        snapshots.append(
+            {
+                "symbol": symbol,
+                "close": float(last.close),
+                "history_days": len(series),
+                "avg_volume_20d": sum(volumes) / len(volumes),
+                "volume_ratio": int(last.volume or 0) / max(1, sum(volumes) / len(volumes)),
+                "prior_high_20d": max(float(x.high or x.close) for x in series[-21:-1]),
+                "return_1d": closes[-1] / closes[-2] - 1,
+                "return_5d": closes[-1] / closes[-6] - 1,
+                "return_20d": closes[-1] / closes[-21] - 1,
+                "rsi": rsi,
+                "stabilizing": closes[-1] >= closes[-2],
+                "foreign_buy_days_5d": sum(n > 0 for n in nets),
+                "foreign_net_buy_5d": sum(nets),
+                "foreign_net_buy_1d": nets[0] if nets else 0,
+                "pe": float(fund.pe_ratio) if fund and fund.pe_ratio is not None else None,
+                "revenue_yoy": float(revenue.revenue_yoy)
+                if revenue and revenue.revenue_yoy is not None
+                else None,
+                "roe": payload.get("roe"),
+                "operating_cash_flow": payload.get("operating_cash_flow"),
+                "ocf_positive_quarters": payload.get("ocf_positive_quarters", 0),
+                "debt_ratio": payload.get("debt_ratio", 100),
+            }
+        )
+    return snapshots
+
+
+async def _run_strategy_slot(db, cfg, strategy, sequence, run_date, batch) -> None:
     user_id = cfg.user_id
 
     # Live mode (no `as_of_date`): this is a forward-looking daily call,
@@ -178,10 +325,11 @@ async def _run_for_user(
     # self-heal (mirrors the screener fast-path) — so personas read the
     # prior session's settled close without the pre-market TWSE feed's
     # publication-lag staleness, and without pretending to be a backtest.
+    topic = cfg.topic if not batch else build_topic(strategy, batch, cfg.topic)
     discussion = await discussion_service.create_discussion(
         db,
         owner_id=user_id,
-        topic=cfg.topic,
+        topic=topic,
         rules=cfg.rules,
         persona_ids=list(cfg.persona_ids or []),
         market=cfg.market,
@@ -192,7 +340,13 @@ async def _run_for_user(
     await db.execute(
         update(Discussion)
         .where(Discussion.id == discussion.id)
-        .values(auto_run=True)
+        .values(
+            auto_run=True,
+            auto_run_strategy=strategy,
+            auto_run_sequence=sequence,
+            auto_run_date=run_date,
+            candidate_snapshot={"strategy": strategy, "sequence": sequence, "candidates": batch},
+        )
         .execution_options(synchronize_session=False)
     )
     await db.commit()
@@ -204,8 +358,10 @@ async def _run_for_user(
     # compiled defaults if no DB override exists. Routing all personas
     # through one cheap model is the single cost knob for the system.
     from services.system_task_config_service import resolve as _resolve_task
+
     persona_provider, persona_model = await _resolve_task(
-        db, "auto_run_discussion_persona",
+        db,
+        "auto_run_discussion_persona",
     )
     log.info(
         "auto_run_discussion.persona_llm_resolved",
@@ -218,7 +374,8 @@ async def _run_for_user(
 
     for _round_idx in range(_AUTO_ROUNDS):
         async for _ev in discussion_service.run_round(
-            db, discussion,
+            db,
+            discussion,
             user_id=str(user_id),
             provider_override=persona_provider,
             model_override=persona_model,
@@ -226,7 +383,9 @@ async def _run_for_user(
             pass
 
     conclusion = await discussion_service.synthesize_conclusion(
-        db, discussion, user_id=str(user_id),
+        db,
+        discussion,
+        user_id=str(user_id),
     )
 
     symbols = [
@@ -253,7 +412,7 @@ async def _run_for_user(
     # numerically correct). Trust the service-layer set; if a test
     # explicitly bypasses it via direct DB writes, that test owns
     # setting verify_after_date too.
-    return True
+    return None
 
 
 async def _maybe_send_report_email(
@@ -288,27 +447,32 @@ async def _maybe_send_report_email(
         )
         return
 
-    turns = list((await db.scalars(
-        select(DiscussionTurn)
-        .where(DiscussionTurn.discussion_id == discussion.id)
-        .order_by(DiscussionTurn.round, DiscussionTurn.turn_index)
-    )).all())
+    turns = list(
+        (
+            await db.scalars(
+                select(DiscussionTurn)
+                .where(DiscussionTurn.discussion_id == discussion.id)
+                .order_by(DiscussionTurn.round, DiscussionTurn.turn_index)
+            )
+        ).all()
+    )
 
     from ai.agents import get_agent
+
     persona_name: dict[str, str] = {}
-    for pid in (discussion.persona_ids or []):
+    for pid in discussion.persona_ids or []:
         try:
             persona_name[pid] = get_agent(pid).name
         except ValueError:
             persona_name[pid] = pid
 
     body = email_service.render_discussion_report_markdown(
-        discussion, conclusion, turns, persona_name=persona_name,
+        discussion,
+        conclusion,
+        turns,
+        persona_name=persona_name,
     )
-    created_tw = (
-        discussion.created_at.strftime("%Y-%m-%d")
-        if discussion.created_at else ""
-    )
+    created_tw = discussion.created_at.strftime("%Y-%m-%d") if discussion.created_at else ""
     subject = f"[Fincept] 每日專家圓桌討論 {created_tw}".strip()
 
     try:

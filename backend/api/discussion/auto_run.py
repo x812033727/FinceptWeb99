@@ -23,6 +23,13 @@ from services import discussion_auto_run_config_service
 router = APIRouter()
 
 
+def _counts(row=None):
+    return discussion_auto_run_config_service.normalize_strategy_run_counts(
+        getattr(row, "strategy_run_counts", None),
+        legacy_enabled=bool(getattr(row, "enabled", False)),
+    )
+
+
 @router.get("/auto-run/config", response_model=AutoRunConfigResponse)
 async def get_auto_run_config(
     user: CurrentUser,
@@ -43,6 +50,7 @@ async def get_auto_run_config(
             rules="",
             market="TW",
             send_email=False,
+            strategy_run_counts=_counts(),
             updated_at=None,
         )
     return AutoRunConfigResponse(
@@ -53,6 +61,7 @@ async def get_auto_run_config(
         market=row.market,
         send_email=bool(row.send_email),
         updated_at=row.updated_at,
+        strategy_run_counts=_counts(row),
     )
 
 
@@ -72,6 +81,7 @@ async def put_auto_run_config(
             rules=body.rules,
             market=body.market,
             send_email=body.send_email,
+            strategy_run_counts=body.strategy_run_counts,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -83,4 +93,5 @@ async def put_auto_run_config(
         market=row.market,
         send_email=bool(row.send_email),
         updated_at=row.updated_at,
+        strategy_run_counts=_counts(row),
     )

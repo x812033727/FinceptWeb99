@@ -120,6 +120,7 @@ class AutoRunConfigRequest(BaseModel):
     # deployment has no SMTP credentials configured (see
     # `services.email_service.is_configured`).
     send_email: bool = False
+    strategy_run_counts: dict[str, int] | None = None
 
 
 class AutoRunConfigResponse(BaseModel):
@@ -129,6 +130,7 @@ class AutoRunConfigResponse(BaseModel):
     rules: str
     market: str
     send_email: bool = False
+    strategy_run_counts: dict[str, int]
     updated_at: datetime | None = None
 
 

@@ -120,6 +120,10 @@ class Discussion(Base):
     auto_run: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false(),
     )
+    auto_run_strategy: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    auto_run_sequence: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    auto_run_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    candidate_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     day1_open_prices: Mapped[dict[str, float] | None] = mapped_column(
         JSON, nullable=True,
     )

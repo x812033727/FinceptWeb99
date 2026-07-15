@@ -319,7 +319,11 @@ export interface AutoRunConfig {
   market: DiscussionMarket;
   send_email: boolean;
   updated_at: string | null;
+  strategy_run_counts: StrategyRunCounts;
 }
+
+export type StrategyKey = "general" | "chip_momentum" | "quality_growth" | "breakout" | "oversold_reversal";
+export type StrategyRunCounts = Record<StrategyKey, number>;
 
 /**
  * Admin LLM-routing config for system tasks (news_sentiment,

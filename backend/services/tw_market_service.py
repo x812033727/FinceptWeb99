@@ -506,7 +506,8 @@ def _normalize_quote(symbol: str, raw: dict) -> dict[str, Any]:
         "high":          raw.get("high"),
         "low":           raw.get("low"),
         "currency":      "TWD",
-        "ts":            int(datetime.now(UTC).timestamp() * 1000),
+        "ts":            raw.get("tlong") or raw.get("ts")
+                         or int(datetime.now(UTC).timestamp() * 1000),
         "tz":            "Asia/Taipei",
         "is_market_open": _is_tw_market_open(),
         "is_etf":        is_etf(symbol),

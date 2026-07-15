@@ -12,11 +12,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.paper_trading import PaperFill, PaperOrder
-from services import market_calendar_service, paper_trading_service
+from services import (
+    market_calendar_service,
+    paper_trading_service,
+    quote_freshness_service,
+)
 
 
 class MarketClosedError(paper_trading_service.PaperTradingConflict):
     """The order cannot match outside its market session."""
+
+
+class StaleQuoteError(paper_trading_service.PaperTradingConflict):
+    """The quote cannot safely drive a simulated execution."""
 
 
 MAX_VOLUME_PARTICIPATION = 0.01
@@ -171,6 +179,11 @@ async def match_order(
     market_quote = (
         quote if quote is not None else await get_market_quote(order.market, order.symbol)
     )
+    freshness = quote_freshness_service.assess_quote_freshness(
+        order.market, market_quote, now=execution_time
+    )
+    if not freshness.is_fresh:
+        raise StaleQuoteError(f"quote is not executable: {freshness.reason}")
     plan = plan_execution(order, market_quote)
     if plan is None:
         return None

@@ -62,6 +62,7 @@ async def test_get_quote_cache_miss_tags_data_source_kraken():
          patch.object(svc, "_k_quote", AsyncMock(return_value=fresh)):
         result = await svc.get_quote("BTC")
     assert result["data_source"] == "kraken"
+    assert isinstance(result["ts"], int)
 
 
 # ── get_history ───────────────────────────────────────────────────

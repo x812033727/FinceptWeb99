@@ -8,10 +8,11 @@
  *  - Other JS/CSS:           Stale-while-revalidate.
  *  - HTML (SPA routes):      Network-first, fallback to cached "/".
  *  - Static assets:          Cache-first, long TTL.
- *  - API /api/* (read):      Network-first w/ 10 s timeout. Offline
- *                            fallback only if cached response is < 5 min
- *                            old — financial data going stale silently
- *                            is worse than failing visibly.
+ *  - Public API /api/* read: Network-first w/ 10 s timeout. Offline
+ *                            fallback only if cached response is < 5 min old.
+ *  - Authenticated API read: Network-only. Cache Storage keys requests by
+ *                            URL, not bearer identity, so sharing this cache
+ *                            across sessions could disclose owner-scoped data.
  *  - API /api/auth/*:        Network-only (auth must never be served
  *                            from cache).
  *
@@ -45,7 +46,9 @@ self.addEventListener("install", (event) => {
 
 // ── Activate: purge old caches + enable navigation preload ───────
 self.addEventListener("activate", (event) => {
-  const current = new Set([SHELL_CACHE, API_CACHE, STATIC_CACHE]);
+  // API_CACHE is deliberately omitted so this worker upgrade purges legacy
+  // entries created before authenticated requests became network-only.
+  const current = new Set([SHELL_CACHE, STATIC_CACHE]);
   event.waitUntil(
     Promise.all([
       caches.keys().then((keys) =>
@@ -110,6 +113,10 @@ self.addEventListener("fetch", (event) => {
   // the previous 3 s ceiling was timing out → falling back to a
   // cached all-zero response from a previous failed warm cycle.
   if (url.pathname.startsWith("/api/")) {
+    // Cache Storage matching does not partition entries by Authorization.
+    // Owner-scoped responses must therefore stay entirely outside the shared
+    // service-worker cache; returning lets the browser use the network.
+    if (request.headers.has("Authorization")) return;
     event.respondWith(networkFirstWithCache(request, API_CACHE, 10000));
     return;
   }

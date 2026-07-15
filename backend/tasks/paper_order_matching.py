@@ -29,13 +29,22 @@ class MatchRunStats:
     expired: int = 0
     untriggered: int = 0
     closed: int = 0
+    stale: int = 0
     conflicted: int = 0
     failed: int = 0
     lock_held: bool = False
 
 
 def _observe(stats: MatchRunStats) -> None:
-    for outcome in ("matched", "expired", "untriggered", "closed", "conflicted", "failed"):
+    for outcome in (
+        "matched",
+        "expired",
+        "untriggered",
+        "closed",
+        "stale",
+        "conflicted",
+        "failed",
+    ):
         count = getattr(stats, outcome)
         if count:
             PAPER_ORDER_MATCH_OUTCOMES_TOTAL.labels(outcome).inc(count)
@@ -117,6 +126,12 @@ async def match_open_paper_orders(*, now: datetime | None = None) -> MatchRunSta
                     stats.expired += 1
                 else:
                     stats.untriggered += 1
+            except paper_matching_service.StaleQuoteError as exc:
+                stats.stale += 1
+                log.info(
+                    "paper_order_matching.stale_quote",
+                    extra={"order_id": str(order_id), "error": str(exc)},
+                )
             except paper_trading_service.PaperTradingConflict as exc:
                 stats.conflicted += 1
                 log.info(

@@ -61,12 +61,17 @@ async def test_matcher_reuses_quotes_and_isolates_order_failures(client, db_sess
     await db_session.commit()
 
     quote_calls = 0
+    execution_time = datetime(2026, 7, 15, 14, 0, tzinfo=UTC)
 
     async def quote_stub(market, symbol):
         nonlocal quote_calls
         quote_calls += 1
         assert (market, symbol) == ("US", "AAPL")
-        return {"ask": 99}
+        return {
+            "ask": 99,
+            "ts": int(execution_time.timestamp() * 1_000),
+            "data_source": "polygon",
+        }
 
     original_match = task.paper_matching_service.match_order
 
@@ -77,7 +82,7 @@ async def test_matcher_reuses_quotes_and_isolates_order_failures(client, db_sess
 
     monkeypatch.setattr(task.paper_matching_service, "get_market_quote", quote_stub)
     monkeypatch.setattr(task.paper_matching_service, "match_order", isolated_failure)
-    stats = await task.match_open_paper_orders(now=datetime(2026, 7, 15, 14, 0, tzinfo=UTC))
+    stats = await task.match_open_paper_orders(now=execution_time)
 
     assert stats.scanned == 3
     assert stats.matched == 1
@@ -150,6 +155,33 @@ async def test_matcher_does_not_fetch_stale_quotes_on_exchange_holidays(
     assert stats.closed == 1
     assert stats.matched == 0
     quote.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_matcher_classifies_stale_quotes_without_failing_orders(
+    client, db_session, monkeypatch
+):
+    portfolio_id, user_id = await _account(client, db_session, "paper-stale-automation@example.com")
+    order = await _order(db_session, portfolio_id, user_id, "auto-stale", 100)
+    await db_session.commit()
+    now = datetime(2026, 7, 15, 14, 0, tzinfo=UTC)
+    quote = AsyncMock(
+        return_value={
+            "ask": 99,
+            "ts": int((now - timedelta(minutes=5)).timestamp() * 1_000),
+            "data_source": "polygon",
+        }
+    )
+    monkeypatch.setattr(task.paper_matching_service, "get_market_quote", quote)
+
+    stats = await task.match_open_paper_orders(now=now)
+
+    assert stats.scanned == 1
+    assert stats.stale == 1
+    assert stats.failed == 0
+    async with task.AsyncSessionLocal() as verify:
+        persisted = await verify.get(PaperOrder, order.id)
+        assert persisted.status == "pending"
 
 
 def test_scheduler_registers_automatic_matcher_at_fifteen_seconds():

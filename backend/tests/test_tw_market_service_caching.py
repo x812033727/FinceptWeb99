@@ -160,6 +160,11 @@ async def test_get_quote_real_price_is_cached():
     assert result["is_intraday"] is False  # STOCK_DAY_ALL = EOD
 
 
+def test_normalize_quote_preserves_mis_last_trade_timestamp():
+    result = svc._normalize_quote("2330", {"close": 820, "tlong": "1716797400000"})
+    assert result["ts"] == "1716797400000"
+
+
 # ── get_quote closed-market ohlcv_daily self-heal ─────────────────
 #
 # When TW is not trading and `ohlcv_daily` already holds the latest

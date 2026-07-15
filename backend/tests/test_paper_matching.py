@@ -124,12 +124,13 @@ async def test_match_order_fills_triggered_quote_and_leaves_untriggered_open(
         db=db_session,
     )
     open_time = datetime(2026, 7, 15, 14, 0, tzinfo=UTC)
+    quote_time = int(open_time.timestamp() * 1_000)
     assert (
         await matching.match_order(
             portfolio_id=portfolio_id,
             order_id=str(order.id),
             user_id=user_id,
-            quote={"ask": 101},
+            quote={"ask": 101, "ts": quote_time, "data_source": "polygon"},
             now=open_time,
             db=db_session,
         )
@@ -139,7 +140,11 @@ async def test_match_order_fills_triggered_quote_and_leaves_untriggered_open(
         portfolio_id=portfolio_id,
         order_id=str(order.id),
         user_id=user_id,
-        quote={"ask": 99},
+        quote={
+            "ask": 99,
+            "ts": quote_time + 1_000,
+            "data_source": "polygon",
+        },
         now=open_time + timedelta(seconds=1),
         db=db_session,
     )
@@ -179,10 +184,23 @@ async def test_same_quote_snapshot_only_consumes_liquidity_once(client, db_sessi
         "now": datetime(2026, 7, 15, 14, 0, tzinfo=UTC),
         "db": db_session,
     }
-    first = await matching.match_order(**kwargs, quote={"ask": 99, "volume": 200, "ts": 123})
-    duplicate = await matching.match_order(**kwargs, quote={"ask": 99, "volume": 200, "ts": 123})
+    quote_time = int(kwargs["now"].timestamp() * 1_000)
+    first = await matching.match_order(
+        **kwargs,
+        quote={"ask": 99, "volume": 200, "ts": quote_time, "data_source": "polygon"},
+    )
+    duplicate = await matching.match_order(
+        **kwargs,
+        quote={"ask": 99, "volume": 200, "ts": quote_time, "data_source": "polygon"},
+    )
     next_snapshot = await matching.match_order(
-        **kwargs, quote={"ask": 99, "volume": 200, "ts": 124}
+        **kwargs,
+        quote={
+            "ask": 99,
+            "volume": 200,
+            "ts": quote_time + 1,
+            "data_source": "polygon",
+        },
     )
     assert first is not None and float(first.quantity) == 2
     assert duplicate is None
@@ -276,7 +294,11 @@ async def test_match_endpoint_uses_live_matcher(client, db_session: AsyncSession
 
     async def quote_stub(market, symbol):
         assert (market, symbol) == ("CRYPTO", "BTC-USD")
-        return {"price": 100}
+        return {
+            "price": 100,
+            "ts": int(datetime.now(UTC).timestamp() * 1_000),
+            "data_source": "kraken",
+        }
 
     monkeypatch.setattr(matching, "get_market_quote", quote_stub)
     response = await client.post(

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 from cache.redis_cache import (
@@ -57,6 +58,7 @@ async def get_quote(symbol: str, *, bypass_cache: bool = False) -> dict[str, Any
                 "data_source": "unavailable"}
 
     quote["data_source"] = "kraken"
+    quote["ts"] = int(datetime.now(UTC).timestamp() * 1000)
     await cache_set_json(key, quote, TTL_QUOTE)
     return quote
 

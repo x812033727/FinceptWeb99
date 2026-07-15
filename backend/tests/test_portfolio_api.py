@@ -187,6 +187,24 @@ async def test_transaction_import_reports_rows_and_writes_nothing(client: AsyncC
 
 
 @pytest.mark.asyncio
+async def test_transaction_import_unknown_portfolio_returns_404(client: AsyncClient):
+    token = await _register_and_login(client, "pf_import_missing@test.com")
+    response = await client.post(
+        "/api/portfolio/00000000-0000-0000-0000-000000000000/transactions/import",
+        json={
+            "dry_run": True,
+            "rows": [{
+                "tx_date": "2024-01-02", "symbol": "AAPL", "market": "US",
+                "tx_type": "buy", "quantity": 1, "price": 100,
+            }],
+        },
+        headers=_auth(token),
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Portfolio not found"
+
+
+@pytest.mark.asyncio
 async def test_list_transactions_empty(client: AsyncClient):
     token = await _register_and_login(client, "pf_txlist_empty@test.com")
     cr = await client.post("/api/portfolio", json={"name": "EmptyTx", "currency": "USD"}, headers=_auth(token))

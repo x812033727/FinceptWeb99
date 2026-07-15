@@ -49,14 +49,17 @@ def executable_price(order: PaperOrder, quote: dict) -> float | None:
     return None
 
 
-async def _get_quote(order: PaperOrder) -> dict:
-    if order.market == "TW":
+async def get_market_quote(market: str, symbol: str) -> dict:
+    """Resolve a normalized quote through the market's existing cache waterfall."""
+    if market == "TW":
         from services.tw_market_service import get_quote
-    elif order.market == "US":
+    elif market == "US":
         from services.us_market_service import get_quote
-    else:
+    elif market == "CRYPTO":
         from services.crypto_market_service import get_quote
-    return await get_quote(order.symbol)
+    else:
+        raise ValueError(f"unsupported market {market}")
+    return await get_quote(symbol)
 
 
 async def match_order(
@@ -80,7 +83,10 @@ async def match_order(
     )
     if order.status not in paper_trading_service.OPEN_STATUSES:
         raise paper_trading_service.PaperTradingConflict(f"order is already {order.status}")
-    if order.expires_at and execution_time >= order.expires_at:
+    expires_at = order.expires_at
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if expires_at and execution_time >= expires_at:
         order.status = "expired"
         order.expired_at = execution_time
         order.updated_at = execution_time
@@ -88,7 +94,9 @@ async def match_order(
         return None
     if not is_market_open(order.market, execution_time):
         raise MarketClosedError(f"{order.market} market is closed")
-    market_quote = quote if quote is not None else await _get_quote(order)
+    market_quote = (
+        quote if quote is not None else await get_market_quote(order.market, order.symbol)
+    )
     price = executable_price(order, market_quote)
     if price is None:
         return None

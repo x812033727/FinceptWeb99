@@ -205,10 +205,11 @@ async def test_match_endpoint_uses_live_matcher(client, db_session: AsyncSession
     )
     order_id = created.json()["id"]
 
-    async def quote_stub(order):
+    async def quote_stub(market, symbol):
+        assert (market, symbol) == ("CRYPTO", "BTC-USD")
         return {"price": 100}
 
-    monkeypatch.setattr(matching, "_get_quote", quote_stub)
+    monkeypatch.setattr(matching, "get_market_quote", quote_stub)
     response = await client.post(
         f"/api/portfolio/{portfolio_id}/paper-orders/{order_id}/match", headers=headers
     )

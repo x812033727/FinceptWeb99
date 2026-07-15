@@ -606,6 +606,19 @@ def setup_jobs() -> None:
         max_instances=1,
     )
 
+    # ── Automatic paper-order matching ───────────────────────────
+    # Quote services already cache at market-appropriate TTLs. The task
+    # owns a cross-pod Redis lock and isolates each order transaction.
+    from tasks.paper_order_matching import match_open_paper_orders
+    scheduler.add_job(
+        match_open_paper_orders,
+        trigger=IntervalTrigger(seconds=15),
+        id="paper_order_matching",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── GitHub release polling ────────────────────────────────────
     # Pre-warms the Redis cache so GET /api/system/version is fast.
     from config import settings

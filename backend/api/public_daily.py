@@ -48,6 +48,7 @@ class PublicDailyResult(BaseModel):
     verdict: str | None = None
     verdict_reason: str | None = None
     verified_at: str | None = None
+    verify_after_date: str | None = None
     day1_open_prices: dict[str, float] | None = None
     day5_close_prices: dict[str, float] | None = None
     daily_close_prices: dict[str, list[float | None]] | None = None
@@ -209,6 +210,9 @@ async def get_public_daily(
             verdict=row.verdict,
             verdict_reason=row.verdict_reason,
             verified_at=row.verified_at.isoformat() if row.verified_at else None,
+            verify_after_date=(
+                row.verify_after_date.isoformat() if row.verify_after_date else None
+            ),
             day1_open_prices=row.day1_open_prices,
             day5_close_prices=row.day5_close_prices,
             daily_close_prices=row.daily_close_prices,
@@ -278,6 +282,7 @@ async def get_public_daily(
             verdict=legacy.verdict,
             verdict_reason=legacy.verdict_reason,
             verified_at=legacy.verified_at,
+            verify_after_date=legacy.verify_after_date,
             day1_open_prices=legacy.day1_open_prices,
             day5_close_prices=legacy.day5_close_prices,
             daily_close_prices=legacy.daily_close_prices,

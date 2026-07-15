@@ -5,8 +5,9 @@
  * the closure variables became hook parameters; the bodies are
  * unchanged so behavior is identical.
  */
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { notifyRateLimited } from "@/lib/api";
+import { useSessionAbortController } from "@/hooks/useSessionAbortController";
 import { useAuthStore } from "@/store/authStore";
 import type { ChatMessage, ToolCallEvent } from "@/components/ai/types";
 import type { AgentInfo } from "@/types/discussion";
@@ -33,7 +34,7 @@ export function useChatStream({
   const [input, setInput] = useState(initialInput);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const { abort, renew } = useSessionAbortController();
 
   async function sendMessage() {
     const text = input.trim();
@@ -52,8 +53,7 @@ export function useChatStream({
         ? "claude_agent"
         : undefined;
 
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
+    const ctrl = renew();
     let assembled = "";
 
     const updateLastAssistant = (mutator: (m: ChatMessage) => ChatMessage) => {
@@ -158,7 +158,7 @@ export function useChatStream({
   }
 
   function stopGeneration() {
-    abortRef.current?.abort();
+    abort();
   }
 
   return {

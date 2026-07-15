@@ -1,9 +1,10 @@
 import { Bot } from "lucide-react";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import api, { notifyRateLimited } from "@/lib/api";
+import { useSessionAbortController } from "@/hooks/useSessionAbortController";
 import { useAuthStore } from "@/store/authStore";
 import type { AgentInfo } from "@/types/discussion";
 
@@ -51,7 +52,7 @@ export function ExpertEvaluationCard({ detail }: { portfolioId: string; detail: 
   const [toolCalls, setToolCalls] = useState<InlineToolCall[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [hasResult, setHasResult] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
+  const { abort, renew } = useSessionAbortController();
 
   const activeAgent = agents.find((a) => a.id === selectedAgent);
 
@@ -63,8 +64,7 @@ export function ExpertEvaluationCard({ detail }: { portfolioId: string; detail: 
     setError(null);
     setHasResult(true);
 
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
+    const ctrl = renew();
     let assembled = "";
 
     try {
@@ -141,7 +141,7 @@ export function ExpertEvaluationCard({ detail }: { portfolioId: string; detail: 
   }
 
   function stop() {
-    abortRef.current?.abort();
+    abort();
   }
 
   function openInAIPage() {

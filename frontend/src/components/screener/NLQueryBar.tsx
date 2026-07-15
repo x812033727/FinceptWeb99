@@ -13,6 +13,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { notifyRateLimited } from "@/lib/api";
+import { useSessionAbortController } from "@/hooks/useSessionAbortController";
 import { useAuthStore } from "@/store/authStore";
 import type { Market, ScreenerResult } from "@/types/market";
 
@@ -80,6 +81,7 @@ export function NLQueryBar({
 }) {
   const { t } = useTranslation();
   const token = useAuthStore((s) => s.token);
+  const { renew } = useSessionAbortController();
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [summary, setSummary] = useState<string | null>(null);
@@ -103,6 +105,7 @@ export function NLQueryBar({
     let assembled = "";
     let mapped: NLScreenerResult | null = null;
     let streamError: string | null = null;
+    const ctrl = renew();
 
     try {
       const resp = await fetch("/api/ai/chat", {
@@ -119,6 +122,7 @@ export function NLQueryBar({
           messages: [{ role: "user", content: text }],
           context: NL_SCREENER_NUDGE,
         }),
+        signal: ctrl.signal,
       });
 
       if (!resp.ok) {

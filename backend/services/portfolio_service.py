@@ -8,6 +8,8 @@ Multi-currency rule:
   FX rate is cached 4h in Redis.
 """
 import asyncio
+import hashlib
+import json
 import logging
 from datetime import date, timedelta
 from typing import Any
@@ -27,6 +29,7 @@ from models.portfolio import (
     Holding,
     Portfolio,
     PortfolioSnapshot,
+    PortfolioTransactionImport,
     Transaction,
     TransactionType,
 )
@@ -304,9 +307,17 @@ async def import_transactions(
     all-or-nothing.
     """
     from pydantic import ValidationError
+
     from api.portfolio.schemas import TransactionCreate
 
-    portfolio = await get_portfolio(portfolio_id, user_id, db)
+    portfolio = await db.scalar(
+        select(Portfolio)
+        .where(
+            Portfolio.id == UUID(portfolio_id),
+            Portfolio.user_id == UUID(user_id),
+        )
+        .with_for_update()
+    )
     if not portfolio:
         raise ValueError("Portfolio not found")
 
@@ -323,6 +334,39 @@ async def import_transactions(
                     "field": str(location[0]) if location else None,
                     "message": issue["msg"],
                 })
+
+    # Hash normalized Pydantic output rather than raw CSV spellings, so a
+    # retry remains identical across aliases/casing and 1 vs 1.0. Preserve
+    # row order because same-day buy/sell ordering is semantically relevant.
+    content_hash: str | None = None
+    if not errors:
+        canonical_rows = []
+        for _, item in parsed:
+            normalized = item.model_dump(mode="json")
+            normalized["symbol"] = item.symbol.upper()
+            if normalized["fx_rate"] == 0:
+                normalized["fx_rate"] = None
+            canonical_rows.append(normalized)
+        payload = json.dumps(
+            canonical_rows, sort_keys=True, separators=(",", ":"),
+        ).encode()
+        content_hash = hashlib.sha256(payload).hexdigest()
+        previous = await db.scalar(
+            select(PortfolioTransactionImport).where(
+                PortfolioTransactionImport.portfolio_id == UUID(portfolio_id),
+                PortfolioTransactionImport.content_hash == content_hash,
+            )
+        )
+        if previous:
+            return {
+                "valid": True,
+                "valid_count": previous.row_count,
+                "imported_count": 0,
+                "duplicate": True,
+                "import_id": str(previous.id),
+                "imported_at": previous.created_at,
+                "errors": [],
+            }
 
     # Replay existing and candidate trades chronologically. Existing trades
     # precede imported rows on the same date; imported rows retain CSV order.
@@ -369,6 +413,9 @@ async def import_transactions(
             "valid": not errors,
             "valid_count": valid_count if not errors else max(0, valid_count),
             "imported_count": 0,
+            "duplicate": False,
+            "import_id": None,
+            "imported_at": None,
             "errors": errors,
         }
 
@@ -413,10 +460,21 @@ async def import_transactions(
         )
     for symbol, market in affected:
         await _rebuild_holding(portfolio_id, symbol, market, db)
+    assert content_hash is not None
+    import_record = PortfolioTransactionImport(
+        portfolio_id=UUID(portfolio_id),
+        content_hash=content_hash,
+        row_count=len(parsed),
+    )
+    db.add(import_record)
+    await db.flush()
     return {
         "valid": True,
         "valid_count": len(parsed),
         "imported_count": len(parsed),
+        "duplicate": False,
+        "import_id": str(import_record.id),
+        "imported_at": import_record.created_at,
         "errors": [],
     }
 

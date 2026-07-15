@@ -72,9 +72,11 @@ export function ImportTransactionsDialog({
           </p>
         )}
         {preview && (
-          <div className={`rounded p-3 text-sm ${preview.valid ? "bg-positive/10 text-positive" : "bg-danger/10 text-danger"}`}>
-            <p>{preview.valid
-              ? t("portfolio.transactions.import.ready", { count: preview.valid_count })
+          <div className={`rounded p-3 text-sm ${preview.duplicate ? "bg-warning/10 text-warning" : preview.valid ? "bg-positive/10 text-positive" : "bg-danger/10 text-danger"}`}>
+            <p>{preview.duplicate
+              ? t("portfolio.transactions.import.duplicate", { count: preview.valid_count })
+              : preview.valid
+                ? t("portfolio.transactions.import.ready", { count: preview.valid_count })
               : t("portfolio.transactions.import.invalid", { count: preview.errors.length })}
             </p>
             {!!preview.errors.length && (
@@ -96,7 +98,7 @@ export function ImportTransactionsDialog({
           <button
             type="button"
             onClick={() => void commit()}
-            disabled={!preview?.valid || mutation.isPending}
+            disabled={!preview?.valid || preview.duplicate || mutation.isPending}
             className="min-h-[36px] rounded bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50"
           >
             {mutation.isPending ? t("common.saving") : t("portfolio.transactions.import.confirm")}

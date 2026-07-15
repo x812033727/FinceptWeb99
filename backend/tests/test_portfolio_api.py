@@ -3,10 +3,10 @@ Integration tests for portfolio endpoints.
 Uses in-memory SQLite + mocked Redis (from conftest).
 Market data calls are mocked so tests run without external APIs.
 """
-import pytest
-from httpx import AsyncClient
 from unittest.mock import AsyncMock, patch
 
+import pytest
+from httpx import AsyncClient
 
 # ── helpers ───────────────────────────────────────────────────────
 
@@ -132,7 +132,8 @@ async def test_transaction_import_previews_then_commits_clean_batch(client: Asyn
     )
     assert preview.status_code == 200
     assert preview.json() == {
-        "valid": True, "valid_count": 2, "imported_count": 0, "errors": [],
+        "valid": True, "valid_count": 2, "imported_count": 0,
+        "duplicate": False, "import_id": None, "imported_at": None, "errors": [],
     }
     assert (await client.get(
         f"/api/portfolio/{pid}/transactions", headers=_auth(token),
@@ -150,6 +151,14 @@ async def test_transaction_import_previews_then_commits_clean_batch(client: Asyn
     assert len(transactions) == 2
     detail = (await client.get(f"/api/portfolio/{pid}", headers=_auth(token))).json()
     assert detail["holdings"][0]["quantity"] == 6
+
+    duplicate = await client.post(
+        f"/api/portfolio/{pid}/transactions/import",
+        json={"rows": rows, "dry_run": True}, headers=_auth(token),
+    )
+    assert duplicate.status_code == 200
+    assert duplicate.json()["duplicate"] is True
+    assert duplicate.json()["imported_count"] == 0
 
 
 @pytest.mark.asyncio

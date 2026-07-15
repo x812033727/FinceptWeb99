@@ -1058,6 +1058,7 @@
         "choose": "Choose a CSV file",
         "columns": "Required: date, symbol, market, type, quantity, price. Optional: fx_rate, notes. Maximum 500 rows.",
         "ready": "{{count}} rows passed validation and are ready to import.",
+        "duplicate": "These {{count}} transactions were already imported. No data will be added again.",
         "invalid": "Fix {{count}} reported issues, then choose the corrected file.",
         "row": "CSV row {{row}}",
         "confirm": "Import transactions",

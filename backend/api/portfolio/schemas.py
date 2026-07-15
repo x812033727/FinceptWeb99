@@ -59,6 +59,9 @@ class TransactionImportResponse(BaseModel):
     valid: bool
     valid_count: int
     imported_count: int
+    duplicate: bool = False
+    import_id: str | None = None
+    imported_at: datetime | None = None
     errors: list[TransactionImportError] = Field(default_factory=list)
 
 

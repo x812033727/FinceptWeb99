@@ -1058,6 +1058,7 @@
         "choose": "選擇 CSV 檔案",
         "columns": "必填欄位：date、symbol、market、type、quantity、price；選填：fx_rate、notes。上限 500 筆。",
         "ready": "{{count}} 筆資料已通過驗證，可以匯入。",
+        "duplicate": "這 {{count}} 筆交易先前已匯入，不會再次入帳。",
         "invalid": "共發現 {{count}} 個問題，修正後請重新選擇檔案。",
         "row": "CSV 第 {{row}} 列",
         "confirm": "確認匯入",

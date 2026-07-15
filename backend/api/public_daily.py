@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
@@ -52,7 +51,13 @@ class PublicDailyResponse(BaseModel):
     state: Literal["disabled", "empty", "ready"]
     result: PublicDailyResult | None = None
     strategies: dict[str, list[PublicDailyResult]] = Field(default_factory=dict)
+    days: list[PublicDailyDay] = Field(default_factory=list)
     disclaimer: str = DISCLAIMER
+
+
+class PublicDailyDay(BaseModel):
+    date: str
+    strategies: dict[str, list[PublicDailyResult]] = Field(default_factory=dict)
 
 
 def _public_conclusion(value: dict[str, Any], market: str) -> dict[str, Any]:
@@ -144,15 +149,18 @@ async def get_public_daily(
     if discussion is None:
         return PublicDailyResponse(state="empty")
 
-    today_tw = datetime.now(ZoneInfo("Asia/Taipei")).date()
-    todays = [
+    valid_rows = [
         row
         for row in rows
-        if (row.auto_run_date or row.created_at.astimezone(ZoneInfo("Asia/Taipei")).date())
-        == today_tw
-        and isinstance(row.conclusion, dict)
+        if isinstance(row.conclusion, dict)
         and not row.conclusion.get("_parse_error")
+        and isinstance(row.conclusion.get("reasoning"), str)
     ]
+
+    def run_date(row: Discussion):
+        return row.auto_run_date or row.created_at.astimezone(ZoneInfo("Asia/Taipei")).date()
+
+    recent_dates = sorted({run_date(row) for row in valid_rows}, reverse=True)[:5]
 
     async def project(row: Discussion) -> PublicDailyResult:
         row_turns = (
@@ -194,14 +202,26 @@ async def get_public_daily(
             else [],
         )
 
-    grouped: dict[str, list[PublicDailyResult]] = {
-        key: []
-        for key in ("general", "chip_momentum", "quality_growth", "breakout", "oversold_reversal")
-    }
-    for row in sorted(
-        todays, key=lambda r: ((r.auto_run_strategy or "general"), r.auto_run_sequence or 1)
-    ):
-        grouped.setdefault(row.auto_run_strategy or "general", []).append(await project(row))
+    strategy_keys = (
+        "general",
+        "chip_momentum",
+        "quality_growth",
+        "breakout",
+        "oversold_reversal",
+    )
+    days: list[PublicDailyDay] = []
+    for day in recent_dates:
+        day_grouped: dict[str, list[PublicDailyResult]] = {key: [] for key in strategy_keys}
+        day_rows = sorted(
+            (row for row in valid_rows if run_date(row) == day),
+            key=lambda row: ((row.auto_run_strategy or "general"), row.auto_run_sequence or 1),
+        )
+        for row in day_rows:
+            day_grouped.setdefault(row.auto_run_strategy or "general", []).append(
+                await project(row)
+            )
+        days.append(PublicDailyDay(date=day.isoformat(), strategies=day_grouped))
+    grouped = days[0].strategies if days else {key: [] for key in strategy_keys}
 
     turns = (
         await db.scalars(
@@ -222,6 +242,7 @@ async def get_public_daily(
     return PublicDailyResponse(
         state="ready",
         strategies=grouped,
+        days=days,
         result=PublicDailyResult(
             market=discussion.market,
             topic=discussion.topic,

@@ -29,7 +29,8 @@ type Result = {
   sequence?: number;
   candidates?: Array<{ symbol?: string; strategy_score?: number }>;
 };
-type Payload = { state: "disabled" | "empty" | "ready"; result: Result | null; strategies?: Record<string, Result[]>; disclaimer: string };
+type DailyDay = { date: string; strategies: Record<string, Result[]> };
+type Payload = { state: "disabled" | "empty" | "ready"; result: Result | null; strategies?: Record<string, Result[]>; days?: DailyDay[]; disclaimer: string };
 
 const strategyNames: Record<string, string> = { general: "綜合選股", chip_momentum: "籌碼動能", quality_growth: "品質成長", breakout: "突破追價", oversold_reversal: "超跌反轉" };
 
@@ -53,13 +54,16 @@ export default function DailyPage() {
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [activeStrategy, setActiveStrategy] = useState("general");
+  const [activeDate, setActiveDate] = useState("");
 
   const load = useCallback(async () => {
     setRefreshing(true);
     try {
       const res = await fetch("/api/public/daily", { credentials: "omit", headers: { Accept: "application/json" } });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setPayload(await res.json() as Payload);
+      const next = await res.json() as Payload;
+      setPayload(next);
+      setActiveDate((current) => current && next.days?.some((day) => day.date === current) ? current : (next.days?.[0]?.date ?? ""));
       setError("");
     } catch {
       setError("目前無法取得每日圓桌結果，請稍後再試。");
@@ -85,7 +89,9 @@ export default function DailyPage() {
   }, [load]);
 
   const result = payload?.result;
-  const strategies = payload?.strategies ?? {};
+  const days = payload?.days ?? [];
+  const selectedDay = days.find((day) => day.date === activeDate) ?? days[0];
+  const strategies = selectedDay?.strategies ?? payload?.strategies ?? {};
   const activeResults = strategies[activeStrategy] ?? [];
 
   return (
@@ -109,6 +115,16 @@ export default function DailyPage() {
 
         {payload?.state === "ready" && result && (
           <div className="space-y-8">
+            {days.length > 0 && <nav aria-label="最近五個工作日" className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+              {days.map((day, index) => {
+                const selected = day.date === (selectedDay?.date ?? activeDate);
+                const date = new Date(`${day.date}T00:00:00+08:00`);
+                return <button key={day.date} onClick={() => setActiveDate(day.date)} className={`rounded-xl border px-3 py-3 text-left transition ${selected ? "border-success bg-success/10 text-white" : "border-slate-800 bg-slate-900 text-slate-400 hover:border-slate-700"}`}>
+                  <span className="block text-xs">{index === 0 ? "最新工作日" : date.toLocaleDateString("zh-TW", { weekday: "short" })}</span>
+                  <span className="mt-1 block font-semibold">{date.toLocaleDateString("zh-TW", { month: "numeric", day: "numeric" })}</span>
+                </button>;
+              })}
+            </nav>}
             <nav role="tablist" aria-label="每日選股策略" className="flex gap-2 overflow-x-auto border-b border-slate-800 pb-3">
               {Object.entries(strategyNames).map(([key, name]) => <button key={key} role="tab" aria-selected={activeStrategy === key} onClick={() => setActiveStrategy(key)} className={`shrink-0 rounded-xl px-4 py-2.5 text-sm font-semibold transition ${activeStrategy === key ? "bg-success text-slate-950" : "bg-slate-900 text-slate-400 hover:text-white"}`}>
                 {name}<span className={`ml-2 rounded-full px-2 py-0.5 text-xs ${activeStrategy === key ? "bg-slate-950/15" : "bg-slate-800"}`}>{(strategies[key] ?? []).length}</span>

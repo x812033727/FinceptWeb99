@@ -33,6 +33,7 @@ class FakeWS:
     def __init__(self, fail_on_send: bool = False):
         self.sent: list[dict] = []
         self.fail_on_send = fail_on_send
+        self.closed: tuple[int, str] | None = None
 
     async def send_text(self, text: str) -> None:
         if self.fail_on_send:
@@ -41,6 +42,9 @@ class FakeWS:
 
     async def receive_text(self) -> str:
         raise NotImplementedError("subclasses should override")
+
+    async def close(self, code: int, reason: str) -> None:
+        self.closed = (code, reason)
 
 
 def _register(ws, keys: set[str]) -> None:
@@ -166,6 +170,110 @@ async def test_safe_close_ignores_a_completed_close_handshake():
     await mgr._safe_close(ws, code=4001, reason="Authentication failed")
 
     ws.close.assert_awaited_once_with(code=4001, reason="Authentication failed")
+
+
+@pytest.mark.asyncio
+async def test_reauthenticate_refreshes_expiry_for_the_same_user():
+    ws = FakeWS()
+    mgr._ws_user[ws] = "user-a"
+    mgr._user_ws["user-a"] = {ws}
+    mgr._ws_token_exp[ws] = _far_future()
+
+    new_exp = _far_future() + 60
+    with patch(
+        "api.websocket.manager.decode_access_token",
+        return_value={"sub": "user-a", "exp": new_exp},
+    ):
+        assert await mgr._reauthenticate(ws, "new-token") is True
+
+    assert mgr._ws_token_exp[ws] == new_exp
+    assert mgr._ws_user[ws] == "user-a"
+    assert ws.sent == [{"type": "auth_ok"}]
+    assert ws.closed is None
+
+
+@pytest.mark.asyncio
+async def test_reauthenticate_closes_when_the_tokens_subject_changes():
+    ws = FakeWS()
+    mgr._ws_user[ws] = "user-a"
+    mgr._user_ws["user-a"] = {ws}
+
+    with patch(
+        "api.websocket.manager.decode_access_token",
+        return_value={"sub": "user-b", "exp": _far_future()},
+    ):
+        assert await mgr._reauthenticate(ws, "other-users-token") is False
+
+    assert mgr._ws_user[ws] == "user-a"
+    assert "user-b" not in mgr._user_ws
+    assert ws.sent == [{"type": "error", "code": "identity_changed"}]
+    assert ws.closed == (4003, "Authentication identity changed")
+
+
+@pytest.mark.asyncio
+async def test_reauthenticate_rejects_a_token_without_a_subject():
+    ws = FakeWS()
+    mgr._ws_user[ws] = "user-a"
+
+    with patch(
+        "api.websocket.manager.decode_access_token",
+        return_value={"exp": _far_future()},
+    ):
+        assert await mgr._reauthenticate(ws, "subjectless-token") is True
+
+    assert mgr._ws_user[ws] == "user-a"
+    assert ws.sent == [{"type": "error", "code": "auth_failed"}]
+
+
+@pytest.mark.asyncio
+async def test_reauthenticate_rejects_an_invalid_jwt_without_dropping_identity():
+    ws = FakeWS()
+    mgr._ws_user[ws] = "user-a"
+
+    with patch(
+        "api.websocket.manager.decode_access_token",
+        side_effect=mgr.JWTError("invalid token"),
+    ):
+        assert await mgr._reauthenticate(ws, "invalid-token") is True
+
+    assert mgr._ws_user[ws] == "user-a"
+    assert ws.sent == [{"type": "error", "code": "auth_failed"}]
+
+
+@pytest.mark.asyncio
+async def test_handler_leaves_receive_loop_when_reauth_identity_changes():
+    class ScriptedWS(FakeWS):
+        def __init__(self):
+            super().__init__()
+            self.accepted = False
+            self.incoming = [
+                json.dumps({"action": "auth", "token": "user-a-token"}),
+                json.dumps({"action": "auth", "token": "user-b-token"}),
+            ]
+
+        async def accept(self) -> None:
+            self.accepted = True
+
+        async def receive_text(self) -> str:
+            return self.incoming.pop(0)
+
+    ws = ScriptedWS()
+    payloads = [
+        {"sub": "user-a", "exp": _far_future()},
+        {"sub": "user-b", "exp": _far_future()},
+    ]
+
+    with (
+        patch("api.websocket.manager.decode_access_token", side_effect=payloads),
+        patch("api.websocket.manager._mirror_subs", new_callable=AsyncMock),
+    ):
+        await mgr.handle_market_ws(ws)
+
+    assert ws.accepted is True
+    assert ws.closed == (4003, "Authentication identity changed")
+    assert ws not in mgr._ws_user
+    assert "user-a" not in mgr._user_ws
+    assert ws not in mgr._writer_tasks
 
 
 # ── _dispatch: delta suppression ─────────────────────────────────

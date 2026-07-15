@@ -180,10 +180,21 @@ function disconnect(): void {
     clearTimeout(authAckTimer);
     authAckTimer = null;
   }
-  socket?.close();
+  // Detach the normal close handler before an intentional shutdown. The
+  // handler schedules reconnects for network failures; running it here would
+  // reopen a user-session socket after every consumer had unmounted.
+  const closingSocket = socket;
   socket = null;
+  if (closingSocket) {
+    closingSocket.onclose = null;
+    closingSocket.close();
+  }
   authenticated = false;
   notifyWsState(false);
+}
+
+function disconnectIfIdle(): void {
+  if (subscribers.size === 0 && alertCallbacks.size === 0) disconnect();
 }
 
 // ── React hooks ───────────────────────────────────────────────────
@@ -207,7 +218,7 @@ export function useWebSocket(key: string, callback: Callback): void {
     return () => {
       subscribers.get(key)?.delete(cb);
       if (!subscribers.get(key)?.size) subscribers.delete(key);
-      if (subscribers.size === 0) disconnect();
+      disconnectIfIdle();
     };
   }, [key, token]);
 }
@@ -253,6 +264,9 @@ export function useAlertSocket(callback: AlertCallback): void {
     const cb: AlertCallback = (alert) => cbRef.current(alert);
     alertCallbacks.add(cb);
     connect(token);
-    return () => { alertCallbacks.delete(cb); };
+    return () => {
+      alertCallbacks.delete(cb);
+      disconnectIfIdle();
+    };
   }, [token]);
 }

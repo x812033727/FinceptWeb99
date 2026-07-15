@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useAuthStore } from "./authStore";
 
 export interface AlertNotification {
   id: string;
@@ -19,6 +20,7 @@ interface NotificationState {
   addAlert: (alert: Omit<AlertNotification, "ts">) => void;
   markAllRead: () => void;
   dismiss: (id: string) => void;
+  clear: () => void;
 }
 
 export const useNotificationStore = create<NotificationState>((set) => ({
@@ -32,4 +34,16 @@ export const useNotificationStore = create<NotificationState>((set) => ({
   markAllRead: () => set({ unreadCount: 0 }),
   dismiss: (id) =>
     set((s) => ({ alerts: s.alerts.filter((a) => a.id !== id) })),
+  clear: () => set({ alerts: [], unreadCount: 0 }),
 }));
+
+/** Prevent realtime alerts from surviving logout or account replacement. */
+export function clearNotificationsOnAuthChange() {
+  let userId = useAuthStore.getState().user?.id ?? null;
+  return useAuthStore.subscribe((state) => {
+    const nextUserId = state.user?.id ?? null;
+    if (nextUserId === userId) return;
+    userId = nextUserId;
+    useNotificationStore.getState().clear();
+  });
+}

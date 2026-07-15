@@ -6,6 +6,13 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import type { AgentInfo, AutoRunConfig, DiscussionMarket } from "@/types/discussion";
 import { AutoRunConfigCard } from "./AutoRunConfigCard";
 import { BacktestSweepCard } from "./BacktestSweepCard";
@@ -65,8 +72,8 @@ export function DiscussionToolbar({
 
       <span className="h-5 w-px bg-border/60" aria-hidden="true" />
 
-      <Popover>
-        <PopoverTrigger asChild>
+      <Dialog>
+        <DialogTrigger asChild>
           <button
             type="button"
             className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-border bg-card text-xs text-foreground hover:border-primary/40 transition-colors min-h-[28px]"
@@ -79,12 +86,12 @@ export function DiscussionToolbar({
               </span>
             )}
           </button>
-        </PopoverTrigger>
-        <PopoverContent
-          align="start"
-          sideOffset={6}
-          className="w-[480px] max-w-[calc(100vw-2rem)] max-h-[calc(100vh-5rem)] overflow-y-auto overscroll-contain p-3"
-        >
+        </DialogTrigger>
+        <DialogContent className="max-h-[90vh] max-w-[520px] overflow-y-auto overscroll-contain p-4">
+          <DialogTitle>{t("discussion.auto_run_title", "每日自動討論")}</DialogTitle>
+          <DialogDescription className="sr-only">
+            {t("discussion.auto_run_subtitle")}
+          </DialogDescription>
           <AutoRunConfigCard
             agents={agents}
             collapsed={false}
@@ -92,8 +99,8 @@ export function DiscussionToolbar({
             personaName={personaName}
             hideHeader
           />
-        </PopoverContent>
-      </Popover>
+        </DialogContent>
+      </Dialog>
 
       <Popover>
         <PopoverTrigger asChild>

@@ -6,7 +6,10 @@ Market data calls are mocked so tests run without external APIs.
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 from httpx import AsyncClient
+
+import api.portfolio.router as portfolio_router
 
 # ── helpers ───────────────────────────────────────────────────────
 
@@ -18,6 +21,21 @@ async def _register_and_login(client: AsyncClient, email: str) -> str:
 
 def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.mark.asyncio
+async def test_import_detail_route_translates_service_error(db_session):
+    with patch.object(
+        portfolio_router.svc, "get_transaction_import_transactions",
+        new=AsyncMock(side_effect=ValueError("Transaction import not found")),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await portfolio_router.get_transaction_import_transactions(
+                portfolio_id="portfolio-id", import_id="import-id",
+                user={"id": "user-id"}, db=db_session,
+            )
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Transaction import not found"
 
 
 # ── portfolio CRUD ────────────────────────────────────────────────

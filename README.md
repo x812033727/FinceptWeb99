@@ -421,6 +421,12 @@ POST /api/system/web-vital           # Core Web Vitals → Prometheus
 
 ---
 
+## 公開每日圓桌
+
+設定 `PUBLIC_DAILY_RESULTS_OWNER_EMAIL` 為一個既有且啟用每日自動圓桌的帳號 email，重新部署後即可透過 `/daily` 免登入分享最近一次成功結果。空值代表停用。
+
+公開 API 為 `GET /api/public/daily`，只公開結論與前五輪自動發言，不包含帳號資料、規則、內部 context、手動提問或事後檢討。
+
 ## 貢獻指南
 
 歡迎貢獻新的資料連接器、AI 代理人、分析模組或前端元件。

@@ -25,6 +25,7 @@ from api.global_market.router import router as global_router
 from api.announcements.router import router as announcements_router
 from api.notifications.router import router as notifications_router
 from api.portfolio.router import router as portfolio_router
+from api.public_daily import router as public_daily_router
 from api.system.router import router as system_router
 from api.tw_market.router import router as tw_router
 from api.us_market.router import router as us_router
@@ -269,6 +270,7 @@ app.add_middleware(
 
 # ── Routers ───────────────────────────────────────────────────────
 app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
+app.include_router(public_daily_router, prefix="/api/public", tags=["Public"])
 app.include_router(us_router, prefix="/api/us", tags=["US Market"])
 app.include_router(tw_router, prefix="/api/tw", tags=["TW Market"])
 app.include_router(crypto_router, prefix="/api/crypto", tags=["Crypto Market"])

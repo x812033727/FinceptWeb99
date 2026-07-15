@@ -80,6 +80,11 @@ class PaperFillResponse(BaseModel):
     quantity: float
     price: float
     fee: float
+    quote_price: float | None
+    slippage_bps: float | None
+    liquidity_quantity: float | None
+    quote_key: str | None
+    execution_source: str
     idempotency_key: str
     filled_at: datetime
 

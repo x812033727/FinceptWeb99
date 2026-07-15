@@ -52,6 +52,33 @@ def test_executable_price_uses_side_aware_quotes_and_limits(order, quote, expect
     assert matching.executable_price(order, quote) == expected
 
 
+def test_execution_plan_caps_volume_applies_slippage_and_preserves_limit():
+    order = _order()
+    order.quantity = 10
+    plan = matching.plan_execution(
+        order, {"ask": 99, "volume": 200, "ts": 123, "data_source": "test"}
+    )
+    assert plan is not None
+    assert plan.quantity == 2
+    assert plan.liquidity_quantity == 2
+    assert plan.quote_price == 99
+    assert plan.price == pytest.approx(99.099)
+    assert plan.slippage_bps == pytest.approx(10)
+
+    protected = matching.plan_execution(order, {"ask": 99.99, "ask_size": 5, "ts": 124})
+    assert protected is not None
+    assert protected.quantity == 5
+    assert protected.price == 100
+    assert protected.slippage_bps < 2
+
+
+def test_quote_identity_is_stable_for_one_snapshot_and_changes_with_timestamp():
+    quote = {"price": 100, "volume": 500, "ts": 123, "data_source": "test"}
+    first = matching.quote_identity("US", "AAPL", quote)
+    assert first == matching.quote_identity("US", "AAPL", dict(reversed(quote.items())))
+    assert first != matching.quote_identity("US", "AAPL", {**quote, "ts": 124})
+
+
 async def _login_and_portfolio(client, email: str) -> tuple[dict[str, str], str]:
     await client.post("/api/auth/register", json={"email": email, "password": "Test1234!"})
     login = await client.post("/api/auth/login", json={"email": email, "password": "Test1234!"})
@@ -117,9 +144,51 @@ async def test_match_order_fills_triggered_quote_and_leaves_untriggered_open(
         db=db_session,
     )
     assert fill is not None
-    assert float(fill.price) == 99
+    assert float(fill.price) == pytest.approx(99.099)
     assert float(fill.quantity) == 2
+    assert float(fill.quote_price) == 99
+    assert float(fill.slippage_bps) == pytest.approx(10)
+    assert fill.execution_source == "quote"
     assert order.status == "filled"
+
+
+@pytest.mark.asyncio
+async def test_same_quote_snapshot_only_consumes_liquidity_once(client, db_session: AsyncSession):
+    _, portfolio_id = await _login_and_portfolio(client, "snapshot-idempotency@example.com")
+    portfolio = await db_session.get(Portfolio, UUID(portfolio_id))
+    order = await trading.submit_order(
+        portfolio_id=portfolio_id,
+        user_id=str(portfolio.user_id),
+        symbol="AAPL",
+        market="US",
+        side="buy",
+        order_type="limit",
+        quantity=10,
+        limit_price=100,
+        reference_price=None,
+        fee_bps=0,
+        idempotency_key="snapshot-liquidity-order",
+        notes=None,
+        time_in_force="gtc",
+        db=db_session,
+    )
+    kwargs = {
+        "portfolio_id": portfolio_id,
+        "order_id": str(order.id),
+        "user_id": str(portfolio.user_id),
+        "now": datetime(2026, 7, 15, 14, 0, tzinfo=UTC),
+        "db": db_session,
+    }
+    first = await matching.match_order(**kwargs, quote={"ask": 99, "volume": 200, "ts": 123})
+    duplicate = await matching.match_order(**kwargs, quote={"ask": 99, "volume": 200, "ts": 123})
+    next_snapshot = await matching.match_order(
+        **kwargs, quote={"ask": 99, "volume": 200, "ts": 124}
+    )
+    assert first is not None and float(first.quantity) == 2
+    assert duplicate is None
+    assert next_snapshot is not None and float(next_snapshot.quantity) == 2
+    assert float(order.filled_quantity) == 4
+    assert order.status == "partially_filled"
 
 
 @pytest.mark.asyncio
@@ -214,4 +283,7 @@ async def test_match_endpoint_uses_live_matcher(client, db_session: AsyncSession
         f"/api/portfolio/{portfolio_id}/paper-orders/{order_id}/match", headers=headers
     )
     assert response.status_code == 200
-    assert response.json()["price"] == 100
+    assert response.json()["price"] == pytest.approx(100.1)
+    assert response.json()["quote_price"] == 100
+    assert response.json()["slippage_bps"] == pytest.approx(10)
+    assert response.json()["execution_source"] == "quote"

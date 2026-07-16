@@ -34,6 +34,16 @@ updates:
       # PR down with it. Drop this once typescript-eslint supports TS 7.
       - dependency-name: typescript
         update-types: ["version-update:semver-major"]
+      # Tailwind v4 is a rewrite, not a bump: PostCSS plugin split into
+      # @tailwindcss/postcss, `@tailwind` directives become `@import`, and
+      # the 138-line JS config moves to CSS-first. It breaks `npm run build`
+      # in the grouped PR and, unlike the JS-library majors, its damage is
+      # invisible to tsc and the test suite — a broken style only shows up
+      # by eye, across every page. That needs its own migration and its own
+      # visual review, not a dependabot merge. (tailwind-merge is a
+      # separate package and upgrades cleanly; only tailwindcss is held.)
+      - dependency-name: tailwindcss
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:

@@ -1,20 +1,20 @@
 # Web framework
 fastapi==0.139.0
-uvicorn[standard]==0.41.0
+uvicorn[standard]==0.51.0
 python-multipart==0.0.32
 
 # Database
-sqlalchemy[asyncio]==2.0.35
-asyncpg==0.29.0
-alembic==1.13.2
+sqlalchemy[asyncio]==2.0.51
+asyncpg==0.31.0
+alembic==1.18.5
 
 # Redis
-redis[asyncio]==5.0.8
+redis[asyncio]==8.0.1
 
 # Config
-pydantic==2.12.5
+pydantic==2.13.4
 pydantic-settings==2.14.2
-email-validator==2.2.0  # pydantic EmailStr in auth schemas
+email-validator==2.3.0  # pydantic EmailStr in auth schemas
 
 # Auth (Phase 1)
 PyJWT[crypto]==2.13.0
@@ -22,39 +22,39 @@ passlib[bcrypt]==1.7.4
 # passlib 1.7.4 reads bcrypt.__about__.__version__ which was removed in
 # bcrypt 4.0; without a pin, pip installs bcrypt 4.x/5.x and the library
 # fails at import. Stay on the 3.2 line until passlib 1.8 ships.
-bcrypt==3.2.2
+bcrypt==5.0.0
 
 # HTTP client (for data connectors)
-httpx==0.27.2
+httpx==0.28.1
 
 # Data processing
-pandas==2.2.3
-numpy==2.1.1
-scipy==1.14.1  # analytics/risk (stats), analytics/portfolio_optimizer (optimize.minimize)
+pandas==3.0.3
+numpy==2.4.6
+scipy==1.18.0  # analytics/risk (stats), analytics/portfolio_optimizer (optimize.minimize)
 
 # Rate limiting
-slowapi==0.1.9
+slowapi==0.1.10
 
 # Scheduling (Phase 5)
-apscheduler==3.10.4
+apscheduler==3.11.3
 
 # Utilities
 python-dateutil==2.9.0.post0  # .post0 required by htmldate (trafilatura dep); API-identical to 2.9.0
-pytz==2024.2
-beautifulsoup4==4.12.3  # MOPS scraper
+pytz==2026.2
+beautifulsoup4==4.15.0  # MOPS scraper
 defusedxml==0.7.1  # safe RSS/Atom parsing (XXE / entity-expansion guard)
 trafilatura==2.1.0  # news article full-text extraction (G5)
 
 # US market data
-yfinance==0.2.66
+yfinance==1.5.1
 
 # AI: Claude Agent SDK (tool-use agents)
-anthropic==0.97.0
-claude-agent-sdk==0.1.66  # in-process MCP server + streaming Claude tool-use
+anthropic==0.116.0
+claude-agent-sdk==0.2.120  # in-process MCP server + streaming Claude tool-use
 mcp==1.28.1  # security floor for SDK's transitive MCP dependency
 
 # Crypto: Kraken WebSocket v2 client (outbound) for sub-second ticker streaming
-websockets==13.1
+websockets==16.1
 
 # Email (daily auto-run discussion report)
 aiosmtplib==5.1.2
@@ -65,5 +65,5 @@ aiosmtplib==5.1.2
 pywebpush==2.3.0
 
 # Observability
-prometheus-client==0.21.0
-python-json-logger==2.0.7
+prometheus-client==0.25.0
+python-json-logger==4.1.0

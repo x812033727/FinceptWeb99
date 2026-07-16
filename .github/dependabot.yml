@@ -7,6 +7,13 @@ updates:
     groups:
       python-dependencies:
         patterns: ["*"]
+    ignore:
+      # numpy >= 2.5 requires Python >= 3.12; the backend image is
+      # python:3.11-slim-bookworm, so pip cannot resolve it at all and
+      # the whole grouped PR dies at install. Drop this once the runtime
+      # moves to 3.12 — CI already runs a 3.12 compatibility job.
+      - dependency-name: numpy
+        versions: [">=2.5"]
   - package-ecosystem: npm
     directory: /frontend
     schedule:
@@ -14,6 +21,12 @@ updates:
     groups:
       frontend-dependencies:
         patterns: ["*"]
+    ignore:
+      # typescript-eslint 8.x pins peer typescript ">=4.8.4 <6.1.0", so a
+      # TS 7 bump makes `npm ci` fail ERESOLVE and takes the whole grouped
+      # PR down with it. Drop this once typescript-eslint supports TS 7.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:

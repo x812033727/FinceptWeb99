@@ -782,7 +782,6 @@ async def test_get_news_maps_finmind_fields_to_canonical_shape():
     ("get_balance_sheet", "TaiwanStockBalanceSheet"),
     ("get_cash_flow", "TaiwanStockCashFlowsStatement"),
     ("get_dividends", "TaiwanStockDividend"),
-    ("get_etf_holdings", "TaiwanStockHoldingSharesPer"),
 ])
 @pytest.mark.asyncio
 async def test_pass_through_methods_call_query_with_correct_dataset(method, dataset):

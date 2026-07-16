@@ -26,7 +26,6 @@ import type { CryptoTab, Period, TWTab, USTab } from "@/components/stock/_shared
 import { DividendsPanel } from "@/components/stock/DividendsPanel";
 import { FinancialsPanel } from "@/components/stock/FinancialsPanel";
 import { HealthPanel } from "@/components/stock/HealthPanel";
-import { HoldingsPanel } from "@/components/stock/HoldingsPanel";
 import { InstitutionalPanel } from "@/components/stock/InstitutionalPanel";
 import { MarginPanel } from "@/components/stock/MarginPanel";
 import { NewsFeed } from "@/components/stock/NewsFeed";
@@ -187,7 +186,6 @@ export default function StockDetailPage() {
     if (isETF) {
       return [
         { key: "chart", label: t("stock.history"), active: twTab === "chart", onClick: () => setTwTab("chart") },
-        { key: "holdings", label: t("stock.etf.holdings_tab"), active: twTab === "holdings", onClick: () => setTwTab("holdings") },
         { key: "dividends", label: t("stock.dividends.tab"), active: twTab === "dividends", onClick: () => setTwTab("dividends") },
         { key: "institutional", label: t("stock.tab_institutional"), active: twTab === "institutional", onClick: () => setTwTab("institutional") },
         { key: "margin", label: t("stock.tab_margin"), active: twTab === "margin", onClick: () => setTwTab("margin") },
@@ -390,11 +388,6 @@ export default function StockDetailPage() {
           {twTab === "valuation" && (
             <div className="bg-card shadow-highlight border border-border rounded-lg overflow-hidden">
               <ValuationBandPanel symbol={sym} />
-            </div>
-          )}
-          {twTab === "holdings" && (
-            <div className="bg-card shadow-highlight border border-border rounded-lg overflow-hidden">
-              <HoldingsPanel symbol={sym} />
             </div>
           )}
           {twTab === "dividends" && (

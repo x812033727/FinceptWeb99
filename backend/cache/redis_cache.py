@@ -461,11 +461,6 @@ def key_dividends_tw(symbol: str) -> str:
     return f"tw:dividends:{symbol}"
 
 
-def key_etf_holdings_tw(symbol: str) -> str:
-    """ETF underlying holdings (FinMind / TWSE)."""
-    return f"tw:etf_holdings:{symbol}"
-
-
 def key_health_tw(symbol: str, periods: int = 8) -> str:
     """Versioned TW statement-analysis key, including response window."""
     return f"tw:health:v2:{symbol}:{periods}"

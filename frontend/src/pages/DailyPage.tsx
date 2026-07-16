@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, CalendarDays, ShieldAlert, Users } from "lucide-react";
 import { getPersonaIdentity } from "@/components/discussion/personaIdentity";
 import { BAND_LABELS, classifySymbolBand } from "@/components/discussion/format/symbols";
+import { dedupeBySymbol } from "./dailyCandidates";
 
 type QualitySignals = {
   consensus_contradiction?: boolean;
@@ -157,18 +158,6 @@ function StateCard({ children, icon, action }: { children: React.ReactNode; icon
 }
 function Info({ label, value }: { label: string; value: string }) {
   return <div className="rounded-xl bg-slate-950/50 p-4"><div className="text-xs text-slate-500">{label}</div><div className="mt-1 font-semibold">{value}</div></div>;
-}
-
-type PoolItem = { symbol?: string; strategy_score?: number; signal_type?: string };
-
-export function dedupeBySymbol(items: PoolItem[]): PoolItem[] {
-  const best = new Map<string, PoolItem>();
-  for (const item of items) {
-    if (!item.symbol) continue;
-    const prev = best.get(item.symbol);
-    if (!prev || (item.strategy_score ?? -Infinity) > (prev.strategy_score ?? -Infinity)) best.set(item.symbol, item);
-  }
-  return [...best.values()].sort((a, b) => (b.strategy_score ?? -Infinity) - (a.strategy_score ?? -Infinity));
 }
 
 function CandidatePool({ results }: { results: Result[] }) {

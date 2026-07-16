@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dedupeBySymbol } from "./DailyPage";
+import { dedupeBySymbol } from "./dailyCandidates";
 
 describe("dedupeBySymbol", () => {
   it("keeps the highest-scored entry per symbol and sorts descending", () => {

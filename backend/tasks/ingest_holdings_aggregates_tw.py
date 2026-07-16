@@ -3,10 +3,15 @@
 Combined cron for two FinMind sponsor-tier datasets that share a
 discussion-context block:
 
-  * `TaiwanStockShareholding` (股權分散) — fan-out into long-form
-    (market, symbol, ts, bucket_id) rows
+  * `TaiwanStockHoldingSharesPer` (集保股權分散表) — fan-out into
+    long-form (market, symbol, ts, bucket_id) rows. Weekly.
   * `TaiwanStockTotalInstitutionalInvestors` (全市場三大法人) —
-    aggregated into one row per (market, ts)
+    aggregated into one row per (market, ts). Daily.
+
+The two datasets disagree about dates: holding-shares is a one-day
+market-wide snapshot that must be walked day by day, while
+total-institutional honours start/end ranges. Hence the asymmetry
+between the two sub-steps.
 
 Same shape as `tasks.ingest_risk_signals_tw` (PR #192): per-substep
 fail-soft, paywalled subset reports `skipped:` while the rest still
@@ -21,6 +26,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 
 import httpx
+from sqlalchemy import select
 
 import data.tw.finmind_connector as finmind
 from cache.redis_cache import acquire_lock, release_lock
@@ -31,6 +37,8 @@ from data.tw.finmind_paywall import (
     raise_if_silent_denied,
 )
 from db.session import AsyncSessionLocal
+from models.tw_holdings_aggregates import TwStockShareholding
+from tasks._market_wide import collect_market_wide, pending_days_since_newest
 from services.ingest.repository import (
     MarketInstitutionalRow,
     ShareholdingRow,
@@ -98,52 +106,116 @@ def _format_error(exc: BaseException) -> str:
 
 # ── shareholding sub-step ────────────────────────────────────────
 
-def _normalize_shareholding(items: list[dict]) -> list[ShareholdingRow]:
-    """FinMind's `TaiwanStockShareholding` rows carry one bucket per
-    row (`level`-numbered) — flatten into ShareholdingRow.
+# 集保's holding-size levels, in the order TDCC numbers them. The
+# reader contract is already fixed: `read_holdings_concentration_trend`
+# documents "bucket_id 1-15 ascending by holding-size, 15 = > 1,000
+# lots which is the canonical 千張大戶 threshold" and sums 13/14/15 for
+# its concentration signal — so these ids are not ours to renumber.
+#
+# Mapping by label rather than by response order: FinMind returns the
+# levels in order today, but a silently reordered response would
+# mis-assign every bucket and the numbers would still look plausible.
+# An unknown label is dropped loudly (see below) instead of guessing.
+_HOLDING_LEVEL_BUCKETS: dict[str, int] = {
+    "1-999": 1,
+    "1,000-5,000": 2,
+    "5,001-10,000": 3,
+    "10,001-15,000": 4,
+    "15,001-20,000": 5,
+    "20,001-30,000": 6,
+    "30,001-40,000": 7,
+    "40,001-50,000": 8,
+    "50,001-100,000": 9,
+    "100,001-200,000": 10,
+    "200,001-400,000": 11,
+    "400,001-600,000": 12,
+    "600,001-800,000": 13,
+    "800,001-1,000,000": 14,
+    "more than 1,000,001": 15,   # 千張大戶
+}
 
-    Tolerant of two field-name conventions: long-form (`level`,
-    `count`, `percent`) and abbreviated (`HoldingSharesLevel`,
-    `holders`, `pct`). Rows missing date or symbol drop silently.
+# Not buckets: `total` is the sum of 1-15 (a 100% row that would
+# double any consumer's total), and 差異數調整 is TDCC's reconciliation
+# line. Both are derivable or meaningless as distribution rows, so
+# they're dropped quietly rather than counted as unknown levels.
+_HOLDING_LEVEL_NON_BUCKETS = frozenset({"total", "差異數調整（說明4）"})
+
+
+def _normalize_shareholding(items: list[dict]) -> list[ShareholdingRow]:
+    """`TaiwanStockHoldingSharesPer` rows carry one holding-size level
+    per row — map the level onto its bucket id and fan out into
+    ShareholdingRow. Rows missing date or symbol drop silently.
     """
     out: list[ShareholdingRow] = []
+    unknown: set[str] = set()
     for r in items:
-        sym = (r.get("stock_id") or r.get("symbol") or "").strip()
+        sym = (r.get("stock_id") or "").strip()
         if not sym:
             continue
         ts = _parse_date(r.get("date"))
         if ts is None:
             continue
-        bucket_id = _to_int(
-            r.get("level") or r.get("HoldingSharesLevel")
-            or r.get("HoldingShareLevel")
-        )
+        level = (r.get("HoldingSharesLevel") or "").strip()
+        if level in _HOLDING_LEVEL_NON_BUCKETS:
+            continue
+        bucket_id = _HOLDING_LEVEL_BUCKETS.get(level)
         if bucket_id is None:
+            unknown.add(level)
             continue
         out.append(ShareholdingRow(
             market=MARKET, symbol=sym, ts=ts,
             bucket_id=bucket_id,
-            bucket_label=(r.get("label") or r.get("HoldingShares") or None),
-            holders_count=_to_int(
-                r.get("holders") or r.get("People") or r.get("count")
-            ),
-            shares_count=_to_int(
-                r.get("shares") or r.get("Stock") or r.get("share_count")
-            ),
-            shares_percent=_to_float(
-                r.get("percent") or r.get("Percent") or r.get("pct")
-            ),
+            bucket_label=level[:40],
+            holders_count=_to_int(r.get("people")),
+            shares_count=_to_int(r.get("unit")),
+            shares_percent=_to_float(r.get("percent")),
             source="finmind",
         ))
+    if unknown:
+        # A renamed or added level means the mapping is stale and the
+        # archive is quietly losing a bucket — the exact class of
+        # silence that kept this table empty. Say so.
+        log.warning(
+            "ingest_holdings_aggregates_tw.unknown_holding_levels",
+            extra={"levels": sorted(unknown)},
+        )
     return out
 
 
+async def _archived_shareholding_days() -> set[date]:
+    cutoff = date.today() - timedelta(days=_SHAREHOLDING_LOOKBACK_DAYS)
+    async with AsyncSessionLocal() as db:
+        rows = await db.scalars(
+            select(TwStockShareholding.ts)
+            .where(
+                TwStockShareholding.market == MARKET,
+                TwStockShareholding.ts >= cutoff,
+            )
+            .distinct()
+        )
+        return set(rows.all())
+
+
 async def _ingest_shareholding() -> dict[str, object]:
-    start = (date.today() - timedelta(days=_SHAREHOLDING_LOOKBACK_DAYS)).isoformat()
+    # Market-wide is a one-day snapshot here (an end_date returns
+    # nothing at all), so the window has to be walked a day at a time.
+    # Weekly publication means `pending_market_days` would re-ask the
+    # non-publication weekdays forever — anchor on the newest archived
+    # publication instead. See tasks/_market_wide.
+    days = pending_days_since_newest(
+        date.today(), _SHAREHOLDING_LOOKBACK_DAYS,
+        await _archived_shareholding_days(),
+    )
+    if not days:
+        return {"rows": 0, "fetched": 0}
     items = raise_if_silent_denied(
-        await finmind.get_shareholding_market_wide(start),
+        await collect_market_wide(finmind.get_shareholding_market_wide, days),
     )
     payload = _normalize_shareholding(items)
+    # One publication per requested day means a repeated key shouldn't
+    # happen, but one costs the whole batch to Postgres' "cannot affect
+    # row a second time".
+    payload = list({(r.symbol, r.ts, r.bucket_id): r for r in payload}.values())
     if not payload:
         return {"rows": 0, "fetched": len(items)}
     async with AsyncSessionLocal() as db:

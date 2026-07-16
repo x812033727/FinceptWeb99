@@ -629,18 +629,27 @@ async def get_etf_holdings(symbol: str, start_date: str = "2024-01-01") -> list[
 
 # ── Holdings + market institutional aggregates (PR #193) ─────────
 
-async def get_shareholding_market_wide(
-    start_date: str, end_date: str | None = None,
-) -> list[dict[str, Any]]:
-    """`TaiwanStockShareholding` — share-distribution buckets per
-    (symbol, date). FinMind's response shape varies; this returns
-    the rows largely as-is and lets the cron's `_normalize_*`
-    helpers fan them out into the long-form table.
+async def get_shareholding_market_wide(publish_date: str) -> list[dict[str, Any]]:
+    """`TaiwanStockHoldingSharesPer` — 集保股權分散表: one row per
+    (symbol, date, holding-size level). Returned as-is; the cron's
+    `_normalize_shareholding` maps the levels onto bucket ids.
 
-    Sponsor-tier. Published weekly by TWSE/TPEx so a daily cron is
-    fine; UPSERT is idempotent on the (symbol, ts, bucket_id) PK.
+    NOT `TaiwanStockShareholding` — that name is FinMind's *foreign*
+    investment holdings (ForeignInvestmentShares / ...Ratio /
+    NumberOfSharesIssued), a different dataset with no distribution
+    buckets at all. This function asked for it for months while the
+    cron parsed for buckets, so every row was dropped and
+    `tw_stock_shareholding` never held a single row.
+
+    ⚠️ Market-wide is a ONE-DAY SNAPSHOT and stricter than most: it
+    returns only rows dated exactly `publish_date`, and passing an
+    end_date returns **nothing at all** (not even the start date's
+    rows) — hence the single-date signature. See tasks/_market_wide.
+
+    Published weekly (Fridays, shifting around holidays), ~4,000
+    symbols x 17 levels per publication.
     """
-    return await _query("TaiwanStockShareholding", "", start_date, end_date)
+    return await _query("TaiwanStockHoldingSharesPer", "", publish_date)
 
 
 async def get_total_institutional_market_wide(

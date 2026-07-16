@@ -11,7 +11,7 @@ mirroring the FinceptTerminal C++/Qt6 desktop app as a server-side web service.
 ## Quick start
 
 ```bash
-# Backend (Python 3.11+)
+# Backend (Python 3.12+)
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt

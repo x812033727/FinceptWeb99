@@ -1,13 +1,13 @@
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
 ignore = ["E501"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = false
 ignore_missing_imports = true
 
@@ -19,8 +19,11 @@ filterwarnings = [
     # Every warning not explicitly classified below is a regression. Pytest
     # gives the last matching filter precedence.
     "error",
-    # passlib still imports stdlib crypt on Python 3.11; tracked as a third-party
-    # compatibility warning until the password-hashing backend is migrated.
+    # passlib still imports stdlib crypt, deprecated since 3.11 and still
+    # present in 3.12. It is REMOVED in 3.13, so this stops being a warning
+    # and starts being an ImportError — the password-hashing backend has to
+    # migrate before the next runtime bump, not merely eventually. (Same
+    # passlib that pins bcrypt to the 3.2 line; see .github/dependabot.yml.)
     "ignore:'crypt' is deprecated.*:DeprecationWarning",
     # Read-only bind mounts used by local verification cannot persist pytest's
     # cache. CI checkouts are writable, so this is environment-only noise.

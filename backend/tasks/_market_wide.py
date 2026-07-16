@@ -48,6 +48,39 @@ def pending_market_days(
     return days
 
 
+def pending_days_since_newest(
+    today: date,
+    lookback_days: int,
+    already_have: Collection[date] = (),
+) -> list[date]:
+    """Weekdays after the newest archived day, up to `today`.
+
+    `pending_market_days` skips what it already has, which converges for
+    a daily dataset: every trading day eventually carries rows, so it
+    eventually gets archived and stops being asked. A *weekly* dataset
+    never converges — its ~34 non-publication weekdays in a 60-day
+    window carry nothing, so they're never archived, so they'd be
+    re-asked on every single run, forever.
+
+    Anchoring on the newest archived publication bounds the steady state
+    to the handful of days since it, and a late or shifted publication
+    still lands after the anchor. Falls back to the full window while
+    nothing is archived yet, which is what backfills a cold table.
+    """
+    have = {d for d in already_have}
+    start = (
+        max(have) + timedelta(days=1) if have
+        else today - timedelta(days=lookback_days)
+    )
+    days: list[date] = []
+    day = start
+    while day <= today:
+        if day.weekday() < 5:
+            days.append(day)
+        day += timedelta(days=1)
+    return days
+
+
 async def collect_market_wide(
     fetch: Callable[[str], Awaitable[list[dict[str, Any]]]],
     days: Collection[date],

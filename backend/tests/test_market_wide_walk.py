@@ -3,7 +3,11 @@ from datetime import date
 
 import pytest
 
-from tasks._market_wide import collect_market_wide, pending_market_days
+from tasks._market_wide import (
+    collect_market_wide,
+    pending_days_since_newest,
+    pending_market_days,
+)
 
 
 def test_walks_every_weekday_in_the_window():
@@ -65,3 +69,41 @@ async def test_collect_lets_errors_propagate():
 
     with pytest.raises(RuntimeError):
         await collect_market_wide(_fetch, [date(2026, 7, 13), date(2026, 7, 14)])
+
+
+def test_since_newest_walks_the_whole_window_when_nothing_archived():
+    """A cold table backfills."""
+    days = pending_days_since_newest(date(2026, 7, 15), 7)
+
+    assert days[0] == date(2026, 7, 8)
+    assert days[-1] == date(2026, 7, 15)
+
+
+def test_since_newest_anchors_on_the_latest_publication():
+    """Weekly data never archives its non-publication weekdays, so
+    `pending_market_days` would re-ask them on every run forever. This
+    asks only what came after the last publication."""
+    have = {date(2026, 7, 3), date(2026, 7, 9)}
+
+    days = pending_days_since_newest(date(2026, 7, 15), 60, have)
+
+    assert days == [
+        date(2026, 7, 10), date(2026, 7, 13),
+        date(2026, 7, 14), date(2026, 7, 15),
+    ]
+    assert date(2026, 7, 6) not in days, "must not re-ask a pre-anchor gap"
+
+
+def test_since_newest_still_catches_a_shifted_publication():
+    """Publication slips off its usual Friday around holidays — the new
+    date is still after the anchor, so it's still asked for."""
+    have = {date(2026, 7, 9)}
+
+    days = pending_days_since_newest(date(2026, 7, 16), 60, have)
+
+    assert date(2026, 7, 16) in days
+    assert all(d > date(2026, 7, 9) for d in days)
+
+
+def test_since_newest_is_empty_when_the_anchor_is_today():
+    assert pending_days_since_newest(date(2026, 7, 15), 60, {date(2026, 7, 15)}) == []

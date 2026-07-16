@@ -12,6 +12,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 
 import httpx
+from sqlalchemy import select
 
 import data.tw.finmind_connector as finmind
 from cache.redis_cache import acquire_lock, release_lock
@@ -22,6 +23,7 @@ from data.tw.finmind_paywall import (
     raise_if_silent_denied,
 )
 from db.session import AsyncSessionLocal
+from models.tw_govt_bank_flow import TwGovtBankFlowDaily
 from services.ingest.repository import (
     GovtBankFlowRow,
     backoff_remaining_seconds,
@@ -32,6 +34,7 @@ from services.ingest.repository import (
     record_health,
     upsert_govt_bank_flows,
 )
+from tasks._market_wide import collect_market_wide, pending_market_days
 
 log = logging.getLogger(__name__)
 
@@ -172,10 +175,32 @@ async def run() -> None:
         await release_lock(_LOCK_KEY)
 
 
+async def _archived_days() -> set[date]:
+    cutoff = date.today() - timedelta(days=_LOOKBACK_DAYS)
+    async with AsyncSessionLocal() as db:
+        rows = await db.scalars(
+            select(TwGovtBankFlowDaily.ts)
+            .where(
+                TwGovtBankFlowDaily.market == MARKET,
+                TwGovtBankFlowDaily.ts >= cutoff,
+            )
+            .distinct()
+        )
+        return set(rows.all())
+
+
 async def _do_run() -> int:
-    start = (date.today() - timedelta(days=_LOOKBACK_DAYS)).isoformat()
+    # `get_government_bank_flow_market_wide` is a one-day snapshot — it
+    # ignores end_date (400s on it, in fact), so the old
+    # `today - lookback` start fetched exactly the day at the far end of
+    # the window and nothing since. See tasks/_market_wide.
+    days = pending_market_days(
+        date.today(), _LOOKBACK_DAYS, await _archived_days(),
+    )
+    if not days:
+        return 0
     items = raise_if_silent_denied(
-        await finmind.get_government_bank_flow_market_wide(start),
+        await collect_market_wide(finmind.get_government_bank_flow_market_wide, days),
     )
     if not items:
         return 0

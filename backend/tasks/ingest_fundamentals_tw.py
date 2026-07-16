@@ -125,7 +125,7 @@ async def _load_statement_payloads() -> dict[str, dict]:
 
     TWSE's BWIBBU_ALL carries only PE / PB / yield — it has no ROE and no
     cash flow, which is why `payload` was hard-coded to None and why the
-    quality_growth daily strategy (needing `roe > 0` and
+    chip_quality daily strategy (needing `roe > 0` and
     `operating_cash_flow > 0`) had never produced a candidate.
 
     FinMind's statement datasets answer market-wide, so the whole market
@@ -183,7 +183,7 @@ async def _carry_forward_payloads(db) -> dict[str, dict]:
     This job rewrites every symbol's row daily, so a statement pull that
     comes back empty — FinMind down, hourly quota spent — would
     overwrite a good payload with None and silently un-qualify every
-    quality_growth candidate until the next successful run. Statements
+    chip_quality candidate until the next successful run. Statements
     only change quarterly, so carrying the last known one forward is
     what the data actually means, not a workaround.
     """

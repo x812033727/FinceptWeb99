@@ -47,7 +47,7 @@ function renderToolbar({
     rules: "",
     market: "TW",
     send_email: false,
-    strategy_run_counts: { general: 0, chip_momentum: 0, quality_growth: 0, breakout: 0, oversold_reversal: 0 },
+    strategy_run_counts: { general: 0, chip_quality: 0, price_signal: 0 },
   });
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },

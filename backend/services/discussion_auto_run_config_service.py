@@ -30,10 +30,7 @@ from services.discussion_service import (
 
 log = logging.getLogger(__name__)
 
-STRATEGY_KEYS = (
-    "general", "chip_momentum", "quality_growth", "breakout",
-    "oversold_reversal",
-)
+STRATEGY_KEYS = ("general", "chip_quality", "price_signal")
 
 
 def normalize_strategy_run_counts(value: dict[str, int] | None, *, legacy_enabled: bool = False) -> dict[str, int]:

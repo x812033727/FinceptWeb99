@@ -67,3 +67,31 @@ async def test_public_daily_selects_latest_valid_auto_run_and_redacts(client, db
     for forbidden in ("Publisher@", "internal_context", "secret", "手動回覆", "事後輪次", "post_mortem", "rules"):
         assert forbidden not in serialized
 
+
+@pytest.mark.asyncio
+async def test_public_daily_keeps_retired_strategy_groups_visible(client, db_session, monkeypatch):
+    """Rows written before the 5→3 strategy merge carry retired keys
+    (e.g. "breakout"); the day grouping must still surface them next to
+    the merged keys instead of dropping them from the payload."""
+    owner = User(id=uuid.uuid4(), email="pub@example.com", hashed_password="x", role=UserRole.viewer, is_active=True)
+    db_session.add(owner)
+    await db_session.flush()
+    conclusion = {
+        "recommended_symbols": ["2330"], "reasoning": "理由", "risks": ["波動"],
+        "time_horizon": "short_term", "consensus_score": .8,
+    }
+    legacy = discussion(owner.id, created_at=datetime(2026, 7, 14, tzinfo=UTC), conclusion=conclusion)
+    legacy.auto_run_strategy = "breakout"
+    legacy.auto_run_date = datetime(2026, 7, 14, tzinfo=UTC).date()
+    db_session.add(legacy)
+    await db_session.commit()
+    monkeypatch.setattr(settings, "PUBLIC_DAILY_RESULTS_OWNER_EMAIL", "pub@example.com")
+
+    response = await client.get("/api/public/daily")
+    assert response.status_code == 200
+    body = response.json()
+    day = body["days"][0]
+    for key in ("general", "chip_quality", "price_signal"):
+        assert key in day["strategies"]
+    assert [r["strategy"] for r in day["strategies"]["breakout"]] == ["breakout"]
+

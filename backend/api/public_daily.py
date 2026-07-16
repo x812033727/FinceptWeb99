@@ -218,13 +218,9 @@ async def get_public_daily(
             daily_close_prices=row.daily_close_prices,
         )
 
-    strategy_keys = (
-        "general",
-        "chip_momentum",
-        "quality_growth",
-        "breakout",
-        "oversold_reversal",
-    )
+    # Historical rows may still carry retired keys (chip_momentum, ...);
+    # the setdefault below keeps those groups visible in the payload.
+    strategy_keys = ("general", "chip_quality", "price_signal")
     days: list[PublicDailyDay] = []
     for day in recent_dates:
         day_grouped: dict[str, list[PublicDailyResult]] = {key: [] for key in strategy_keys}

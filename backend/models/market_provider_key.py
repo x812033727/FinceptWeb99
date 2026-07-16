@@ -13,7 +13,7 @@ Finnhub via env keep working with no migration step on the operator's
 side; the admin UI is purely additive.
 """
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, String, Text
@@ -36,7 +36,7 @@ class MarketProviderKey(Base):
     last_validation_ok: Mapped[bool | None] = mapped_column(nullable=True)
     last_validation_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow,
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC),
     )
     updated_by_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True,

@@ -12,8 +12,23 @@ strict = false
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
+# The only pytest config. A `pytest.ini` used to sit alongside this and
+# won outright — pytest takes the highest-precedence file and ignores the
+# rest wholesale, announcing it on every run:
+#     configfile: pytest.ini (WARNING: ignoring pytest config in pyproject.toml!)
+# Everything below was therefore inert, including two policies that read
+# as active: the socket ban and warnings-as-errors. Keep this the single
+# source; a second config file silently disables all of it again.
 asyncio_mode = "auto"
 testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+# No test needs the network — the whole suite passes with sockets banned,
+# and ~20% faster for it. Without the ban, tests reach real upstreams
+# (FinMind especially), the calls get swallowed by the code's own
+# try/except, and the suite goes green either way — until an upstream
+# hiccup makes it flake.
 addopts = "--disable-socket --allow-unix-socket --allow-hosts=localhost,127.0.0.1,::1"
 filterwarnings = [
     # Every warning not explicitly classified below is a regression. Pytest

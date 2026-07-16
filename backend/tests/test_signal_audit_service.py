@@ -820,7 +820,7 @@ async def test_read_signal_history_returns_sorted_series(
     from datetime import datetime as _dt, timedelta as _td
 
     from models.signal_audit_history import SignalAuditHistory
-    today = _dt.utcnow().date()
+    today = _dt.now(UTC).date()
 
     # Seed three days of snapshots for one signal — anchored at
     # today minus offsets so the read window catches them.
@@ -859,7 +859,7 @@ async def test_read_signal_history_filters_by_market(
     from datetime import datetime as _dt
 
     from models.signal_audit_history import SignalAuditHistory
-    today = _dt.utcnow().date()
+    today = _dt.now(UTC).date()
 
     db_session.add(SignalAuditHistory(
         captured_at=today, market="TW",
@@ -894,7 +894,7 @@ async def test_read_all_signals_history_groups_by_signal(
     ascending."""
     from models.signal_audit_history import SignalAuditHistory
     from datetime import datetime as _dt, timedelta as _td
-    today = _dt.utcnow().date()
+    today = _dt.now(UTC).date()
 
     for sig, cited in [
         ("short_term_signals.rsi_14", 5),

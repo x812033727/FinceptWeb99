@@ -21,7 +21,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
 import httpx
@@ -238,7 +238,7 @@ async def record_user_validation(
     row = await db.get(UserLLMProviderKey, (user_id, provider))
     if row is None:
         return
-    row.last_validated_at = datetime.utcnow()
+    row.last_validated_at = datetime.now(UTC)
     row.last_validation_ok = result.ok
     row.last_validation_message = result.message[:500]
     await db.commit()
@@ -380,7 +380,7 @@ async def record_validation(
     row = await db.get(LLMProviderKey, provider)
     if row is None:
         return
-    row.last_validated_at = datetime.utcnow()
+    row.last_validated_at = datetime.now(UTC)
     row.last_validation_ok = result.ok
     row.last_validation_message = result.message[:500]
     await db.commit()

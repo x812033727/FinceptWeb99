@@ -5,7 +5,7 @@ which in turn beats the .env fallback. Same Fernet encryption as the system
 table; key derived from JWT_SECRET_KEY via auth/llm_key_crypto.py.
 """
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
@@ -28,5 +28,5 @@ class UserLLMProviderKey(Base):
     last_validation_ok: Mapped[bool | None] = mapped_column(nullable=True)
     last_validation_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow,
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC),
     )

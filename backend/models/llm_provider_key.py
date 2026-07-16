@@ -6,7 +6,7 @@ provider has no row, the LLM router falls back to the `.env`-supplied key in
 `services/llm_key_service.py` using a Fernet key derived from JWT_SECRET_KEY.
 """
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, String, Text
@@ -29,7 +29,7 @@ class LLMProviderKey(Base):
     last_validation_ok: Mapped[bool | None] = mapped_column(nullable=True)
     last_validation_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow,
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC),
     )
     updated_by_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True,

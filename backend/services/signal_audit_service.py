@@ -663,7 +663,7 @@ async def snapshot_audit_to_history(
     the snapshot represents "the last 7 days of activity, rolled up
     on UTC day X".
     """
-    from datetime import datetime as _dt
+    from datetime import UTC as _UTC, datetime as _dt
     from sqlalchemy.dialects.postgresql import insert as pg_insert
     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -676,7 +676,7 @@ async def snapshot_audit_to_history(
     summary = await audit_recent_discussions(
         db, limit=days_window * 10, market=market,
     )
-    when = captured_at or _dt.utcnow().date()
+    when = captured_at or _dt.now(_UTC).date()
 
     all_signals = (
         set(summary.coverage.keys())
@@ -748,11 +748,11 @@ async def read_all_signals_history(
     all signals' trends in one round-trip instead of N parallel
     requests per row.
     """
-    from datetime import datetime as _dt, timedelta as _td
+    from datetime import UTC as _UTC, datetime as _dt, timedelta as _td
 
     from models.signal_audit_history import SignalAuditHistory
 
-    today = _dt.utcnow().date()
+    today = _dt.now(_UTC).date()
     cutoff = today - _td(days=days)
     stmt = (
         select(SignalAuditHistory)
@@ -819,11 +819,11 @@ async def read_signal_history(
     signal per day regardless of activity. Days where the cron
     didn't run are simply absent (gap in series).
     """
-    from datetime import datetime as _dt, timedelta as _td
+    from datetime import UTC as _UTC, datetime as _dt, timedelta as _td
 
     from models.signal_audit_history import SignalAuditHistory
 
-    today = _dt.utcnow().date()
+    today = _dt.now(_UTC).date()
     cutoff = today - _td(days=days)
     stmt = (
         select(SignalAuditHistory)

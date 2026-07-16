@@ -76,7 +76,7 @@ class PriceAlert(Base):
     )
     triggered: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     user: Mapped["User"] = relationship("User")  # type: ignore[name-defined]
 

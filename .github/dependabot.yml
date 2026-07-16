@@ -20,6 +20,15 @@ updates:
         versions: [">=2.5"]
       - dependency-name: scipy
         versions: [">=1.18"]
+      # bcrypt is deliberately held on the 3.2 line — requirements.txt
+      # says why, right above the pin: passlib 1.7.4 reads
+      # `bcrypt.__about__.__version__`, removed in bcrypt 4.0, so the
+      # library fails at import. Dependabot proposed 5.0.0 anyway and CI
+      # confirmed the documented breakage, twice. Honour the existing
+      # decision rather than re-litigate it every week; lift when
+      # passlib 1.8 ships.
+      - dependency-name: bcrypt
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
     directory: /frontend
     schedule:

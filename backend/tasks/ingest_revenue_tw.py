@@ -264,11 +264,35 @@ async def _enrich_growth_rates(
     return enriched
 
 
+def _month_starts_in_window(today: date, lookback_days: int) -> list[date]:
+    """Every first-of-month between `today - lookback_days` and `today`,
+    oldest first. These are the only dates a market-wide revenue query
+    can match — see `_do_run`."""
+    oldest = today - timedelta(days=lookback_days)
+    months: list[date] = []
+    cursor = date(oldest.year, oldest.month, 1)
+    while cursor <= today:
+        if cursor >= oldest:
+            months.append(cursor)
+        cursor = _shift_month(cursor, 1)
+    return months
+
+
 async def _do_run() -> int:
-    start = (date.today() - timedelta(days=_LOOKBACK_DAYS)).isoformat()
-    items = raise_if_silent_denied(
-        await finmind.get_monthly_revenue_market_wide(start),
-    )
+    # FinMind's market-wide mode (`data_id=""`) returns rows for the
+    # single `start_date` and silently ignores `end_date` — it is a
+    # one-day snapshot, not a range (per-symbol queries do honour
+    # ranges). Revenue rows only ever land on a first-of-month, so the
+    # old `today - 90d` start matched nothing ~29 days out of 30 and
+    # the job logged ok/row_count=0 every day. Ask for each month-first
+    # in the window instead.
+    items: list[dict] = []
+    for month in _month_starts_in_window(date.today(), _LOOKBACK_DAYS):
+        items.extend(
+            raise_if_silent_denied(
+                await finmind.get_monthly_revenue_market_wide(month.isoformat()),
+            )
+        )
     if not items:
         return 0
 
@@ -300,9 +324,14 @@ async def _do_run() -> int:
             source="finmind",
         ))
 
-    if not payload:
+    # One month-first per upstream call means duplicates shouldn't
+    # occur, but a repeated (symbol, ts) in a single bulk upsert makes
+    # Postgres raise "ON CONFLICT DO UPDATE command cannot affect row a
+    # second time" — too sharp an edge to leave to upstream goodwill.
+    deduped = list({(r.symbol, r.ts): r for r in payload}.values())
+    if not deduped:
         return 0
 
     async with AsyncSessionLocal() as db:
-        enriched = await _enrich_growth_rates(db, payload)
+        enriched = await _enrich_growth_rates(db, deduped)
         return await upsert_revenue_monthly(db, enriched)

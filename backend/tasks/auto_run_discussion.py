@@ -41,7 +41,12 @@ from models.discussion import Discussion, DiscussionTurn
 from models.discussion_auto_run_config import DiscussionAutoRunConfig
 from models.user import User
 from services import discussion_auto_run_config_service, discussion_service, email_service
-from services.daily_stock_strategies import build_topic, candidate_batches, rank_candidates
+from services.daily_stock_strategies import (
+    build_topic,
+    candidate_batches,
+    candidate_pool,
+    rank_candidates,
+)
 from services.ingest.repository import (
     backoff_remaining_seconds,
     clear_failures,
@@ -185,7 +190,11 @@ async def _run_for_user(
     for strategy, count in counts.items():
         if count <= 0:
             continue
-        batches = candidate_batches(rank_candidates(strategy, candidate_rows), count)
+        ranked = rank_candidates(strategy, candidate_rows)
+        batches = candidate_batches(ranked, count)
+        # The full (capped, slim) pool is a per-day per-strategy fact, so
+        # it rides on the sequence-1 snapshot only.
+        pool = candidate_pool(ranked)
         # Backward-compatible general discussion when the deployment's market
         # snapshot provider has not produced a universe yet.
         if strategy == "general" and not batches:
@@ -201,7 +210,10 @@ async def _run_for_user(
             )
             if exists:
                 continue
-            await _run_strategy_slot(db, cfg, strategy, sequence, run_date, batch)
+            await _run_strategy_slot(
+                db, cfg, strategy, sequence, run_date, batch,
+                pool=pool if sequence == 1 else None,
+            )
             ran = True
     return ran
 
@@ -315,7 +327,9 @@ async def load_candidate_rows(db: AsyncSession) -> list[dict]:
     return snapshots
 
 
-async def _run_strategy_slot(db, cfg, strategy, sequence, run_date, batch) -> None:
+async def _run_strategy_slot(
+    db, cfg, strategy, sequence, run_date, batch, pool: list | None = None
+) -> None:
     user_id = cfg.user_id
 
     # Live mode (no `as_of_date`): this is a forward-looking daily call,
@@ -348,7 +362,12 @@ async def _run_strategy_slot(db, cfg, strategy, sequence, run_date, batch) -> No
             auto_run_strategy=strategy,
             auto_run_sequence=sequence,
             auto_run_date=run_date,
-            candidate_snapshot={"strategy": strategy, "sequence": sequence, "candidates": batch},
+            candidate_snapshot={
+                "strategy": strategy,
+                "sequence": sequence,
+                "candidates": batch,
+                **({"pool": pool} if pool is not None else {}),
+            },
         )
         .execution_options(synchronize_session=False)
     )

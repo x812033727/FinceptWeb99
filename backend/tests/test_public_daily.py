@@ -95,3 +95,56 @@ async def test_public_daily_keeps_retired_strategy_groups_visible(client, db_ses
         assert key in day["strategies"]
     assert [r["strategy"] for r in day["strategies"]["breakout"]] == ["breakout"]
 
+
+@pytest.mark.asyncio
+async def test_public_daily_passes_candidate_pool_through(client, db_session, monkeypatch):
+    owner = User(id=uuid.uuid4(), email="pub@example.com", hashed_password="x", role=UserRole.viewer, is_active=True)
+    db_session.add(owner)
+    await db_session.flush()
+    conclusion = {
+        "recommended_symbols": ["2330"], "reasoning": "理由", "risks": [],
+        "time_horizon": "short_term", "consensus_score": .8,
+    }
+    pool = [{"symbol": "2330", "strategy_score": 12.3, "signal_type": "breakout"}]
+    with_pool = discussion(owner.id, created_at=datetime(2026, 7, 14, tzinfo=UTC), conclusion=conclusion)
+    with_pool.auto_run_strategy = "price_signal"
+    with_pool.auto_run_sequence = 1
+    with_pool.auto_run_date = datetime(2026, 7, 14, tzinfo=UTC).date()
+    with_pool.candidate_snapshot = {"strategy": "price_signal", "sequence": 1, "candidates": [], "pool": pool}
+    without_pool = discussion(owner.id, created_at=datetime(2026, 7, 14, 1, tzinfo=UTC), conclusion=conclusion)
+    without_pool.auto_run_strategy = "price_signal"
+    without_pool.auto_run_sequence = 2
+    without_pool.auto_run_date = with_pool.auto_run_date
+    without_pool.candidate_snapshot = {"strategy": "price_signal", "sequence": 2, "candidates": []}
+    db_session.add_all([with_pool, without_pool])
+    await db_session.commit()
+    monkeypatch.setattr(settings, "PUBLIC_DAILY_RESULTS_OWNER_EMAIL", "pub@example.com")
+
+    body = (await client.get("/api/public/daily")).json()
+    runs = body["days"][0]["strategies"]["price_signal"]
+    assert [r["candidate_pool"] for r in runs] == [pool, []]
+
+
+@pytest.mark.asyncio
+async def test_public_daily_shows_seven_recent_days(client, db_session, monkeypatch):
+    owner = User(id=uuid.uuid4(), email="pub@example.com", hashed_password="x", role=UserRole.viewer, is_active=True)
+    db_session.add(owner)
+    await db_session.flush()
+    conclusion = {
+        "recommended_symbols": ["2330"], "reasoning": "理由", "risks": [],
+        "time_horizon": "short_term", "consensus_score": .8,
+    }
+    for day in range(8, 16):  # 8 distinct run dates
+        row = discussion(owner.id, created_at=datetime(2026, 7, day, tzinfo=UTC), conclusion=conclusion)
+        row.auto_run_strategy = "general"
+        row.auto_run_date = datetime(2026, 7, day, tzinfo=UTC).date()
+        db_session.add(row)
+    await db_session.commit()
+    monkeypatch.setattr(settings, "PUBLIC_DAILY_RESULTS_OWNER_EMAIL", "pub@example.com")
+
+    body = (await client.get("/api/public/daily")).json()
+    dates = [d["date"] for d in body["days"]]
+    assert len(dates) == 7
+    assert dates == sorted(dates, reverse=True)
+    assert "2026-07-08" not in dates  # oldest of the 8 rolls off
+

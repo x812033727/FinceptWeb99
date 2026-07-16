@@ -11,9 +11,11 @@ import pytest
 
 from services.daily_stock_strategies import (
     LABELS,
+    POOL_LIMIT,
     STRATEGIES,
     build_topic,
     candidate_batches,
+    candidate_pool,
     rank_candidates,
 )
 
@@ -138,3 +140,33 @@ def test_build_topic_chip_quality_plain_symbols():
 def test_old_strategy_keys_are_retired(old_key):
     with pytest.raises(ValueError, match="unknown strategy"):
         rank_candidates(old_key, [_safe_row()])
+
+
+def test_candidate_pool_slims_rows_and_keeps_order():
+    rows = [
+        _safe_row(symbol=str(2000 + i),
+                  **{**_chip_fields(), "foreign_net_buy_5d": 2000 + i},
+                  **_quality_fields())
+        for i in range(60)
+    ]
+    ranked = rank_candidates("chip_quality", rows)
+    pool = candidate_pool(ranked)
+    assert len(pool) == POOL_LIMIT == 50
+    assert [p["symbol"] for p in pool] == [r["symbol"] for r in ranked[:50]]
+    # Slim projection only — no raw indicator fields leak through.
+    assert set(pool[0]) == {"symbol", "strategy_score"}
+
+
+def test_candidate_pool_carries_signal_type_for_price_signal():
+    breakout = _safe_row(close=105.0, prior_high_20d=100.0, volume_ratio=2.0,
+                         rsi=65.0, return_20d=0.04)
+    ranked = rank_candidates("price_signal", [breakout])
+    pool = candidate_pool(ranked)
+    assert pool == [
+        {"symbol": "2330", "strategy_score": ranked[0]["strategy_score"],
+         "signal_type": "breakout"},
+    ]
+
+
+def test_candidate_pool_empty_for_empty_ranking():
+    assert candidate_pool([]) == []

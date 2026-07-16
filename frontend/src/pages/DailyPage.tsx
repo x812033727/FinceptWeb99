@@ -30,6 +30,7 @@ type Result = {
   strategy?: string;
   sequence?: number;
   candidates?: Array<{ symbol?: string; strategy_score?: number; signal_type?: string }>;
+  candidate_pool?: Array<{ symbol?: string; strategy_score?: number; signal_type?: string }>;
   verdict?: "big_win" | "win" | "big_loss" | "loss" | "unverifiable" | null;
   verdict_reason?: string | null;
   verified_at?: string | null;
@@ -123,7 +124,7 @@ export default function DailyPage() {
 
         {payload?.state === "ready" && result && (
           <div className="space-y-8">
-            {days.length > 0 && <nav aria-label="最近五個工作日" className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+            {days.length > 0 && <nav aria-label="最近七個工作日" className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
               {days.map((day, index) => {
                 const selected = day.date === (selectedDay?.date ?? activeDate);
                 const date = new Date(`${day.date}T00:00:00+08:00`);
@@ -140,7 +141,7 @@ export default function DailyPage() {
             </nav>
 
             <section role="tabpanel" aria-label={strategyNames[currentStrategy] ?? legacyStrategyNames[currentStrategy]}>
-              {activeResults.length === 0 ? <StateCard icon={<CalendarDays className="h-6 w-6" />}>今日無符合安全條件的候選股。</StateCard> : <div className="space-y-6">{activeResults.map((run) => <StrategyRun key={`${currentStrategy}-${run.sequence}`} run={run} />)}</div>}
+              {activeResults.length === 0 ? <StateCard icon={<CalendarDays className="h-6 w-6" />}>今日無符合安全條件的候選股。</StateCard> : <div className="space-y-6"><CandidatePool results={activeResults} />{activeResults.map((run) => <StrategyRun key={`${currentStrategy}-${run.sequence}`} run={run} />)}</div>}
             </section>
 
             <footer className="border-t border-slate-800 pt-6 text-xs leading-6 text-slate-500">{payload.disclaimer}</footer>
@@ -156,6 +157,37 @@ function StateCard({ children, icon, action }: { children: React.ReactNode; icon
 }
 function Info({ label, value }: { label: string; value: string }) {
   return <div className="rounded-xl bg-slate-950/50 p-4"><div className="text-xs text-slate-500">{label}</div><div className="mt-1 font-semibold">{value}</div></div>;
+}
+
+type PoolItem = { symbol?: string; strategy_score?: number; signal_type?: string };
+
+export function dedupeBySymbol(items: PoolItem[]): PoolItem[] {
+  const best = new Map<string, PoolItem>();
+  for (const item of items) {
+    if (!item.symbol) continue;
+    const prev = best.get(item.symbol);
+    if (!prev || (item.strategy_score ?? -Infinity) > (prev.strategy_score ?? -Infinity)) best.set(item.symbol, item);
+  }
+  return [...best.values()].sort((a, b) => (b.strategy_score ?? -Infinity) - (a.strategy_score ?? -Infinity));
+}
+
+function CandidatePool({ results }: { results: Result[] }) {
+  const stored = results.find((r) => (r.candidate_pool ?? []).length > 0)?.candidate_pool;
+  // Days published before pool snapshots existed fall back to the batches
+  // that actually entered discussions (deduped across runs).
+  const items = stored ?? dedupeBySymbol(results.flatMap((r) => r.candidates ?? []));
+  if (!items.length) return null;
+  return <details className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
+    <summary className="cursor-pointer text-sm font-semibold text-slate-300">
+      完整候選池（{items.length} 支）{!stored && <span className="ml-2 font-normal text-xs text-slate-500">僅顯示已進入討論的批次候選</span>}
+    </summary>
+    <div className="mt-4 flex flex-wrap gap-2">{items.map((c) => (
+      <span key={c.symbol} className="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-xs text-slate-300">
+        {c.symbol}{typeof c.strategy_score === "number" && <> · {c.strategy_score.toFixed(1)}</>}
+        {c.signal_type && signalNames[c.signal_type] && <span className="ml-1 text-amber-300">{signalNames[c.signal_type]}</span>}
+      </span>
+    ))}</div>
+  </details>;
 }
 
 function StrategyRun({ run }: { run: Result }) {

@@ -266,12 +266,15 @@ async def load_candidate_rows(db: AsyncSession) -> list[dict]:
 
     snapshots = []
     for symbol, newest_first in by_symbol.items():
-        if len(newest_first) < 21:
+        # No-trade sessions (suspended symbols, cash-settled beneficiary
+        # certificates) arrive from TWSE as NULL-priced rows. Drop them up
+        # front: every window below indexes `series` positionally and reads
+        # `.close` unguarded, so a sparse series either raises or silently
+        # measures non-adjacent sessions against each other.
+        series = [x for x in reversed(newest_first) if x.close is not None]
+        if len(series) < 21:
             continue
-        series = list(reversed(newest_first))
-        closes = [float(x.close) for x in series if x.close is not None]
-        if len(closes) < 21:
-            continue
+        closes = [float(x.close) for x in series]
         last = series[-1]
         volumes = [int(x.volume or 0) for x in series[-21:-1]]
         gains = [closes[i] - closes[i - 1] for i in range(max(1, len(closes) - 14), len(closes))]

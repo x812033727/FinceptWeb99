@@ -3,6 +3,17 @@ replicaCount:
   frontend: 2
 
 image:
+  # ⚠️ Nothing publishes these. CI used to try — the workflow failed on
+  # every push to main for months with `permission_denied: write_package`
+  # and the packages were never created, so a Helm deploy would have
+  # pulled a 404 regardless. The workflow is gone; build and push the
+  # images yourself before deploying this chart:
+  #
+  #   docker build -t ghcr.io/<owner>/finceptweb-backend:<tag> ./backend
+  #   docker push  ghcr.io/<owner>/finceptweb-backend:<tag>
+  #
+  # (The compose deployment doesn't use these at all — it builds locally.)
+  #
   # Tags are intentionally empty so Helm fails fast if a deploy doesn't pin
   # a specific version (e.g. `--set image.backend.tag=v0.2.0` or use a
   # @sha256 digest). The `latest` floating tag is unsafe in production

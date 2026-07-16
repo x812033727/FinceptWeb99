@@ -29,8 +29,8 @@ httpx==0.28.1
 
 # Data processing
 pandas==3.0.3
-numpy==2.4.6
-scipy==1.17.1  # analytics/risk (stats), analytics/portfolio_optimizer (optimize.minimize)
+numpy==2.5.1
+scipy==1.18.0  # analytics/risk (stats), analytics/portfolio_optimizer (optimize.minimize)
 
 # Rate limiting
 slowapi==0.1.10

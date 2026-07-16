@@ -817,15 +817,6 @@
       "percentile": "Percentile",
       "no_data": "Not enough data to compute the valuation band"
     },
-    "etf": {
-      "holdings_tab": "Holdings",
-      "no_holdings": "Holdings data is not available for this ETF",
-      "as_of": "As of {{date}}",
-      "top10_concentration": "Top 10 concentration",
-      "constituent": "Symbol",
-      "weight": "Weight",
-      "others": "Others"
-    },
     "dividends": {
       "tab": "Dividends",
       "no_data": "No dividend history available",

@@ -468,46 +468,6 @@ async def test_get_dividends_normalizes_and_sorts():
     assert result[0]["stock_dividend"] == pytest.approx(0.1)
 
 
-@pytest.mark.asyncio
-async def test_get_etf_holdings_returns_empty_for_non_etf():
-    """Regular stock symbols short-circuit to empty without hitting FinMind."""
-    with patch.object(svc.finmind, "get_etf_holdings", new_callable=AsyncMock) as mock:
-        result = await svc.get_etf_holdings("2330")
-
-    assert result == {"as_of": None, "holdings": []}
-    mock.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_get_etf_holdings_picks_latest_snapshot_and_sorts():
-    raw = [
-        {"date": "2024-01-31", "stock_id": "2330", "stock_name": "台積電", "weight": 25.0},
-        {"date": "2024-01-31", "stock_id": "2317", "stock_name": "鴻海", "weight": 5.0},
-        {"date": "2024-01-31", "stock_id": "2454", "stock_name": "聯發科", "weight": 10.0},
-        # Older snapshot — should be ignored.
-        {"date": "2023-12-31", "stock_id": "2330", "stock_name": "台積電", "weight": 22.0},
-    ]
-    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc, "cache_set_json", new_callable=AsyncMock), \
-         patch.object(svc.finmind, "get_etf_holdings", new_callable=AsyncMock, return_value=raw):
-        result = await svc.get_etf_holdings("0050")
-
-    assert result["as_of"] == "2024-01-31"
-    weights = [h["weight"] for h in result["holdings"]]
-    # Sorted descending by weight
-    assert weights == [25.0, 10.0, 5.0]
-    assert result["holdings"][0]["symbol"] == "2330"
-
-
-@pytest.mark.asyncio
-async def test_get_etf_holdings_empty_when_finmind_returns_nothing():
-    with patch.object(svc, "cache_get_json", new_callable=AsyncMock, return_value=None), \
-         patch.object(svc.finmind, "get_etf_holdings", new_callable=AsyncMock, return_value=[]):
-        result = await svc.get_etf_holdings("00713")
-
-    assert result == {"as_of": None, "holdings": []}
-
-
 def test_normalize_quote_flags_etf():
     """ETF symbols get is_etf=True, regular stocks get is_etf=False."""
     raw = {"close": 100.0, "name_zh": "元大台灣高息低波"}

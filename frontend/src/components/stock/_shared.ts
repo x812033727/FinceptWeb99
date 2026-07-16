@@ -37,7 +37,7 @@ export const CRYPTO_PERIOD: Record<Period, { interval: string; limit: number }> 
 // ── tab unions ────────────────────────────────────────────────────
 
 export type USTab = "chart" | "financials" | "options" | "news" | "ai_report";
-export type TWTab = "chart" | "health" | "valuation" | "holdings" | "dividends" | "institutional" | "margin" | "revenue" | "news" | "ai_report";
+export type TWTab = "chart" | "health" | "valuation" | "dividends" | "institutional" | "margin" | "revenue" | "news" | "ai_report";
 export type CryptoTab = "chart" | "news";
 
 // ── data shapes ───────────────────────────────────────────────────
@@ -235,11 +235,6 @@ export interface ETFHolding {
   weight: number;
 }
 
-export interface ETFHoldingsResponse {
-  as_of: string | null;
-  holdings: ETFHolding[];
-}
-
 export interface TWSecurityMaster {
   symbol: string;
   effective_from: string;
@@ -336,9 +331,6 @@ export const fetchValuationBand = (sym: string, metric: "pe" | "pb") =>
 
 export const fetchDividends = (sym: string) =>
   api.get<DividendRow[]>(`/tw/dividends/${sym}`).then((r) => r.data);
-
-export const fetchETFHoldings = (sym: string) =>
-  api.get<ETFHoldingsResponse>(`/tw/etf/${sym}/holdings`).then((r) => r.data);
 
 export const fetchTWSecurityMaster = (sym: string) =>
   api.get<TWSecurityMaster>(`/tw/security-master/${sym}`).then((r) => r.data);

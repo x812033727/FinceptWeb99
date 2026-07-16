@@ -45,7 +45,6 @@ from cache.redis_cache import (
     cache_get_json,
     cache_set_json,
     key_dividends_tw,
-    key_etf_holdings_tw,
     key_financials_tw,
     key_fundamentals_tw,
     key_history,
@@ -2101,7 +2100,6 @@ async def get_valuation_band(
 
 from cache.cache_ttls import TTL_DIVIDENDS  # noqa: E402
 
-TTL_ETF_HOLDINGS = 24 * 3600
 
 
 def _normalize_dividend(r: dict) -> dict[str, Any]:
@@ -2149,58 +2147,3 @@ async def get_dividends(symbol: str) -> list[dict[str, Any]]:
     return out
 
 
-async def get_etf_holdings(symbol: str) -> dict[str, Any]:
-    """
-    Top constituents with weights, latest snapshot only. Returns
-    {"as_of": None, "holdings": []} if FinMind doesn't expose holdings
-    for this ETF (free-tier restriction or not-an-ETF). Frontend
-    renders an empty state in that case.
-    """
-    empty: dict[str, Any] = {"as_of": None, "holdings": []}
-    if not is_etf(symbol):
-        return empty
-
-    key = key_etf_holdings_tw(symbol)
-    cached = await cache_get_json(key)
-    if cached is not None:
-        return cached
-
-    rows: list[dict] = []
-    try:
-        rows = await finmind.get_etf_holdings(symbol)
-    except Exception:
-        rows = []
-
-    if not rows:
-        return empty
-
-    latest_date = max(r.get("date", "") for r in rows)
-    snapshot = [r for r in rows if r.get("date") == latest_date]
-
-    out: list[dict[str, Any]] = []
-    for r in snapshot:
-        # FinMind field names vary: stock_id / SecurityCode and
-        # weight / Weight / shares_per. Try several.
-        sym = r.get("stock_id") or r.get("SecurityCode") or r.get("symbol", "")
-        weight = (
-            r.get("weight")
-            or r.get("Weight")
-            or r.get("shares_per")
-            or r.get("HoldingPct")
-        )
-        try:
-            weight_f = float(weight) if weight is not None else None
-        except (TypeError, ValueError):
-            weight_f = None
-        if not sym or weight_f is None:
-            continue
-        out.append({
-            "symbol":   sym,
-            "name_zh":  r.get("stock_name") or r.get("name_zh") or "",
-            "weight":   round(weight_f, 4),
-        })
-
-    out.sort(key=lambda r: r["weight"], reverse=True)
-    result = {"as_of": latest_date, "holdings": out}
-    await cache_set_json(key, result, TTL_ETF_HOLDINGS)
-    return result

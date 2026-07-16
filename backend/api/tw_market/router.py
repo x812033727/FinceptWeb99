@@ -267,13 +267,6 @@ async def dividends(symbol: str, _: CurrentUser):
         raise HTTPException(status_code=502, detail=f"Data source error: {e}")
 
 
-@router.get("/etf/{symbol}/holdings")
-async def etf_holdings(symbol: str, _: CurrentUser):
-    """ETF 持股明細 — latest snapshot of constituents and weights."""
-    try:
-        return await svc.get_etf_holdings(symbol)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Data source error: {e}")
 
 
 @router.get("/screener", response_model=list[TWScreenerItem])

@@ -617,14 +617,6 @@ async def get_dividends(symbol: str, start_date: str = "2018-01-01") -> list[dic
 
 # ── ETF holdings ──────────────────────────────────────────────────
 
-async def get_etf_holdings(symbol: str, start_date: str = "2024-01-01") -> list[dict[str, Any]]:
-    """
-    ETF underlying-stock weights (持股明細). FinMind exposes this under
-    the 付費專案 datasets, but the free tier returns the latest month
-    for most popular ETFs. Returns [] silently if the dataset is not
-    accessible — caller renders an empty state.
-    """
-    return await _query("TaiwanStockHoldingSharesPer", symbol, start_date)
 
 
 # ── Holdings + market institutional aggregates (PR #193) ─────────

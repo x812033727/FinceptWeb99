@@ -23,6 +23,7 @@ import logging
 from datetime import date, datetime, timedelta
 
 import httpx
+from sqlalchemy import select
 
 import data.tw.finmind_connector as finmind
 from cache.redis_cache import acquire_lock, release_lock
@@ -33,6 +34,8 @@ from data.tw.finmind_paywall import (
     raise_if_silent_denied,
 )
 from db.session import AsyncSessionLocal
+from models.tw_risk_signals import TwStockDayTradingDaily
+from tasks._market_wide import collect_market_wide, pending_market_days
 from services.ingest.repository import (
     DayTradingRow,
     DispositionRow,
@@ -148,10 +151,32 @@ async def _ingest_suspended() -> dict[str, object]:
         return {"rows": await upsert_suspensions(db, payload), "fetched": len(items)}
 
 
+async def _archived_day_trading_days() -> set[date]:
+    cutoff = date.today() - timedelta(days=_DAY_TRADING_LOOKBACK_DAYS)
+    async with AsyncSessionLocal() as db:
+        rows = await db.scalars(
+            select(TwStockDayTradingDaily.ts)
+            .where(
+                TwStockDayTradingDaily.market == MARKET,
+                TwStockDayTradingDaily.ts >= cutoff,
+            )
+            .distinct()
+        )
+        return set(rows.all())
+
+
 async def _ingest_day_trading() -> dict[str, object]:
-    start = (date.today() - timedelta(days=_DAY_TRADING_LOOKBACK_DAYS)).isoformat()
+    # Unlike this job's disposition and suspended sub-steps — whose
+    # datasets do honour start/end ranges — `TaiwanStockDayTrading` is a
+    # one-day snapshot market-wide, so `today - lookback` archived only
+    # that one stale session. See tasks/_market_wide.
+    days = pending_market_days(
+        date.today(), _DAY_TRADING_LOOKBACK_DAYS, await _archived_day_trading_days(),
+    )
+    if not days:
+        return {"rows": 0, "fetched": 0}
     items = raise_if_silent_denied(
-        await finmind.get_day_trading_market_wide(start),
+        await collect_market_wide(finmind.get_day_trading_market_wide, days),
     )
     payload: list[DayTradingRow] = []
     for r in items:
@@ -168,6 +193,12 @@ async def _ingest_day_trading() -> dict[str, object]:
             sell_amount=_to_int(r.get("sell_amount")),
             source="finmind",
         ))
+    # We ask day by day, so a repeated (symbol, ts) shouldn't happen —
+    # but FinMind does sometimes answer with a date other than the one
+    # asked for (TaiwanStockSuspended does), and a repeated key inside
+    # one bulk upsert makes Postgres raise "ON CONFLICT DO UPDATE
+    # command cannot affect row a second time", losing the batch.
+    payload = list({(r.symbol, r.ts): r for r in payload}.values())
     if not payload:
         return {"rows": 0, "fetched": len(items)}
     async with AsyncSessionLocal() as db:

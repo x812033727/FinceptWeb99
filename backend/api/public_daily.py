@@ -25,6 +25,9 @@ DISCLAIMER = (
     "請自行查證並依個人財務狀況審慎決策。"
 )
 
+# How many recent run dates the public page shows.
+RECENT_DAYS = 7
+
 
 class PublicTurn(BaseModel):
     round: int
@@ -45,6 +48,8 @@ class PublicDailyResult(BaseModel):
     strategy: str = "general"
     sequence: int = 1
     candidates: list[dict[str, Any]] = Field(default_factory=list)
+    # Full ranked pool (slim, capped) — carried on the sequence-1 row only.
+    candidate_pool: list[dict[str, Any]] = Field(default_factory=list)
     verdict: str | None = None
     verdict_reason: str | None = None
     verified_at: str | None = None
@@ -167,7 +172,7 @@ async def get_public_daily(
     def run_date(row: Discussion):
         return row.auto_run_date or row.created_at.astimezone(ZoneInfo("Asia/Taipei")).date()
 
-    recent_dates = sorted({run_date(row) for row in valid_rows}, reverse=True)[:5]
+    recent_dates = sorted({run_date(row) for row in valid_rows}, reverse=True)[:RECENT_DAYS]
 
     async def project(row: Discussion) -> PublicDailyResult:
         row_turns = (
@@ -206,6 +211,9 @@ async def get_public_daily(
             sequence=row.auto_run_sequence or 1,
             candidates=snapshot.get("candidates", [])
             if isinstance(snapshot.get("candidates", []), list)
+            else [],
+            candidate_pool=snapshot.get("pool", [])
+            if isinstance(snapshot.get("pool", []), list)
             else [],
             verdict=row.verdict,
             verdict_reason=row.verdict_reason,
@@ -275,6 +283,7 @@ async def get_public_daily(
             strategy=legacy.strategy,
             sequence=legacy.sequence,
             candidates=legacy.candidates,
+            candidate_pool=legacy.candidate_pool,
             verdict=legacy.verdict,
             verdict_reason=legacy.verdict_reason,
             verified_at=legacy.verified_at,

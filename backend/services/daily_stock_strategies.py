@@ -14,6 +14,23 @@ LABELS = {
 
 SIGNAL_LABELS = {"breakout": "突破", "oversold": "超跌"}
 
+# The public daily page shows each strategy's full ranked pool; general
+# qualifies hundreds of symbols, so the stored snapshot is capped.
+POOL_LIMIT = 50
+
+
+def candidate_pool(
+    ranked: list[dict[str, Any]], limit: int = POOL_LIMIT
+) -> list[dict[str, Any]]:
+    """Slim, capped projection of rank_candidates output for snapshots."""
+    pool = []
+    for row in ranked[:limit]:
+        item = {"symbol": str(row["symbol"]), "strategy_score": row["strategy_score"]}
+        if row.get("signal_type"):
+            item["signal_type"] = row["signal_type"]
+        pool.append(item)
+    return pool
+
 
 def _n(row: dict[str, Any], *keys: str, default: float = 0.0) -> float:
     for key in keys:

@@ -183,6 +183,9 @@ async def test_creates_discussion_with_auto_run_flag(
     # determinism is provided by `tw_market_service.get_quote`'s
     # closed-market `ohlcv_daily` self-heal, not by an as_of anchor.
     assert d.as_of_date is None
+    # Empty universe: the general fallback slot still records an (empty)
+    # ranked pool so "no pool that day" is distinguishable from legacy rows.
+    assert d.candidate_snapshot["pool"] == []
     # `verify_after_date` is now seeded inside `synthesize_conclusion`
     # (PR #218) — the auto-run task no longer sets it explicitly
     # (PR #222). This test mocks `synthesize_conclusion` so the real
@@ -737,6 +740,62 @@ async def test_email_send_failure_doesnt_break_run(
     last = health.await_args_list[-1]
     assert last.kwargs["ok"] is True
     assert last.kwargs["row_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_candidate_pool_stored_slim_on_sequence_one_only(
+    patch_session, db_session: AsyncSession,
+):
+    """The full ranked pool is a per-day per-strategy fact: sequence 1
+    carries a slim {symbol, strategy_score} snapshot, later sequences
+    don't repeat it."""
+    from tasks import auto_run_discussion
+
+    user = await _make_user(db_session)
+    cfg = await _enable_for(db_session, user)
+    cfg.strategy_run_counts = {"general": 0, "chip_quality": 2, "price_signal": 0}
+    await db_session.commit()
+
+    rows = [
+        {
+            "symbol": str(2000 + i), "close": 100.0, "history_days": 60,
+            "avg_volume_20d": 5_000_000, "foreign_buy_days_5d": 4,
+            "foreign_net_buy_5d": 2000 + i, "return_5d": 0.03,
+            "revenue_yoy": 15.0, "roe": 20.0, "operating_cash_flow": 5e8,
+            "pe": 18.0,
+        }
+        for i in range(12)
+    ]
+
+    async def _fake_run_round(*_a, **_kw):
+        return
+        yield  # pragma: no cover
+
+    synth = AsyncMock(return_value={
+        "recommended_symbols": ["2000"], "reasoning": "x", "risks": [],
+        "time_horizon": "short_term", "consensus_score": 0.7,
+    })
+    patches = _stub_lock_helpers() + [
+        patch("tasks.auto_run_discussion.is_today_likely_trading_day",
+              AsyncMock(return_value=True)),
+        patch("tasks.auto_run_discussion.load_candidate_rows",
+              AsyncMock(return_value=rows)),
+        patch.object(discussion_service, "run_round", _fake_run_round),
+        patch.object(discussion_service, "synthesize_conclusion", synth),
+    ]
+    _enter_all(patches)
+    try:
+        await auto_run_discussion.run()
+    finally:
+        _exit_all(patches)
+
+    discussions = (await db_session.scalars(select(Discussion))).all()
+    snapshots = {d.auto_run_sequence: d.candidate_snapshot for d in discussions}
+    assert set(snapshots) == {1, 2}
+    pool = snapshots[1]["pool"]
+    assert len(pool) == 12
+    assert set(pool[0]) == {"symbol", "strategy_score"}  # slim, no raw fields
+    assert "pool" not in snapshots[2]
 
 
 @pytest.mark.asyncio

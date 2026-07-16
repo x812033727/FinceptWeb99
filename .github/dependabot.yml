@@ -8,12 +8,18 @@ updates:
       python-dependencies:
         patterns: ["*"]
     ignore:
-      # numpy >= 2.5 requires Python >= 3.12; the backend image is
-      # python:3.11-slim-bookworm, so pip cannot resolve it at all and
-      # the whole grouped PR dies at install. Drop this once the runtime
-      # moves to 3.12 — CI already runs a 3.12 compatibility job.
+      # The scientific stack has moved to Python >= 3.12 while the backend
+      # image is still python:3.11-slim-bookworm. pip cannot resolve these
+      # at all, so one of them fails `pip install` and takes the whole
+      # grouped PR — every other bump included — down with it.
+      #
+      # Both entries come off together when the runtime moves to 3.12; CI
+      # already runs a passing 3.12 compatibility job. Expect this list to
+      # grow until then, which is the argument for doing the upgrade.
       - dependency-name: numpy
         versions: [">=2.5"]
+      - dependency-name: scipy
+        versions: [">=1.18"]
   - package-ecosystem: npm
     directory: /frontend
     schedule:

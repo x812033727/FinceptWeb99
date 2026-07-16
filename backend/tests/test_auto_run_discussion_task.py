@@ -737,3 +737,38 @@ async def test_email_send_failure_doesnt_break_run(
     last = health.await_args_list[-1]
     assert last.kwargs["ok"] is True
     assert last.kwargs["row_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_chip_quality_empty_intersection_is_a_clean_noop(
+    patch_session, db_session: AsyncSession,
+):
+    """chip_quality requires the chip AND quality gates; on a day where
+    no stock passes both, the slot must simply not run — no discussion
+    row, no error (only general gets the [[]] fallback)."""
+    from tasks import auto_run_discussion
+
+    user = await _make_user(db_session)
+    cfg = await _enable_for(db_session, user)
+    cfg.strategy_run_counts = {"general": 0, "chip_quality": 1, "price_signal": 0}
+    await db_session.commit()
+
+    chip_only_row = {
+        "symbol": "2330", "close": 100.0, "history_days": 60,
+        "avg_volume_20d": 5_000_000, "foreign_buy_days_5d": 4,
+        "foreign_net_buy_5d": 2000, "return_5d": 0.03,
+    }
+    patches = _stub_lock_helpers() + [
+        patch("tasks.auto_run_discussion.is_today_likely_trading_day",
+              AsyncMock(return_value=True)),
+        patch("tasks.auto_run_discussion.load_candidate_rows",
+              AsyncMock(return_value=[chip_only_row])),
+    ]
+    _enter_all(patches)
+    try:
+        await auto_run_discussion.run()
+    finally:
+        _exit_all(patches)
+
+    rows = (await db_session.scalars(select(Discussion))).all()
+    assert rows == []

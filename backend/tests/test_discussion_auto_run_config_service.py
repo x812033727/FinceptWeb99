@@ -170,3 +170,26 @@ async def test_list_enabled_filters_disabled(
 
     rows = await svc.list_enabled(db_session)
     assert {r.user_id for r in rows} == {a.id}
+
+
+def test_normalize_counts_defaults_to_merged_strategy_keys():
+    assert svc.normalize_strategy_run_counts(None, legacy_enabled=True) == {
+        "general": 1, "chip_quality": 0, "price_signal": 0,
+    }
+    assert svc.normalize_strategy_run_counts(None) == {
+        "general": 0, "chip_quality": 0, "price_signal": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    "old_key", ["chip_momentum", "quality_growth", "breakout", "oversold_reversal"]
+)
+def test_normalize_counts_rejects_retired_keys(old_key):
+    with pytest.raises(ValueError, match="unknown strategy"):
+        svc.normalize_strategy_run_counts({old_key: 1})
+
+
+def test_normalize_counts_bounds_on_new_keys():
+    assert svc.normalize_strategy_run_counts({"chip_quality": 5})["chip_quality"] == 5
+    with pytest.raises(ValueError, match="between 0 and 5"):
+        svc.normalize_strategy_run_counts({"price_signal": 6})

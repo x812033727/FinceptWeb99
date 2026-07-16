@@ -1,7 +1,7 @@
 """Tests for the statement-derived payload half of ingest_fundamentals_tw.
 
 TWSE's BWIBBU_ALL has no ROE and no cash flow, so `payload` used to be
-hard-coded None and the quality_growth strategy could never qualify a
+hard-coded None and the chip_quality strategy could never qualify a
 candidate. These cover the FinMind market-wide statement path that fills
 it.
 """
@@ -162,7 +162,7 @@ async def test_carry_forward_keeps_last_payload_when_statements_unavailable(
 ):
     """A quota-exhausted FinMind must not wipe a good payload — this job
     rewrites every row daily, so None would un-qualify every
-    quality_growth candidate until the next successful pull."""
+    chip_quality candidate until the next successful pull."""
     from models.fundamentals_snapshot import FundamentalsSnapshot
     from tasks.ingest_fundamentals_tw import _carry_forward_payloads
 

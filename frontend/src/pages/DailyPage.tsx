@@ -29,7 +29,7 @@ type Result = {
   turns: Turn[];
   strategy?: string;
   sequence?: number;
-  candidates?: Array<{ symbol?: string; strategy_score?: number }>;
+  candidates?: Array<{ symbol?: string; strategy_score?: number; signal_type?: string }>;
   verdict?: "big_win" | "win" | "big_loss" | "loss" | "unverifiable" | null;
   verdict_reason?: string | null;
   verified_at?: string | null;
@@ -41,7 +41,11 @@ type Result = {
 type DailyDay = { date: string; strategies: Record<string, Result[]> };
 type Payload = { state: "disabled" | "empty" | "ready"; result: Result | null; strategies?: Record<string, Result[]>; days?: DailyDay[]; disclaimer: string };
 
-const strategyNames: Record<string, string> = { general: "綜合選股", chip_momentum: "籌碼動能", quality_growth: "品質成長", breakout: "突破追價", oversold_reversal: "超跌反轉" };
+const strategyNames: Record<string, string> = { general: "綜合選股", chip_quality: "籌碼品質", price_signal: "量價訊號" };
+// Days published before the 5→3 strategy merge still carry these keys;
+// their tabs only render while such a day is in the 5-day window.
+const legacyStrategyNames: Record<string, string> = { chip_momentum: "籌碼動能", quality_growth: "品質成長", breakout: "突破追價", oversold_reversal: "超跌反轉" };
+const signalNames: Record<string, string> = { breakout: "突破", oversold: "超跌" };
 
 const horizon: Record<string, string> = {
   short_term: "短期", medium_term: "中期", long_term: "長期",
@@ -102,7 +106,12 @@ export default function DailyPage() {
   const days = payload?.days ?? [];
   const selectedDay = days.find((day) => day.date === activeDate) ?? days[0];
   const strategies = selectedDay?.strategies ?? payload?.strategies ?? {};
-  const activeResults = strategies[activeStrategy] ?? [];
+  const strategyTabs: Array<[string, string]> = [
+    ...Object.entries(strategyNames),
+    ...Object.entries(legacyStrategyNames).filter(([key]) => (strategies[key] ?? []).length > 0),
+  ];
+  const currentStrategy = strategyTabs.some(([key]) => key === activeStrategy) ? activeStrategy : "general";
+  const activeResults = strategies[currentStrategy] ?? [];
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
@@ -125,13 +134,13 @@ export default function DailyPage() {
               })}
             </nav>}
             <nav role="tablist" aria-label="每日選股策略" className="flex gap-2 overflow-x-auto border-b border-slate-800 pb-3">
-              {Object.entries(strategyNames).map(([key, name]) => <button key={key} role="tab" aria-selected={activeStrategy === key} onClick={() => setActiveStrategy(key)} className={`shrink-0 rounded-xl px-4 py-2.5 text-sm font-semibold transition ${activeStrategy === key ? "bg-success text-slate-950" : "bg-slate-900 text-slate-400 hover:text-white"}`}>
-                {name}<span className={`ml-2 rounded-full px-2 py-0.5 text-xs ${activeStrategy === key ? "bg-slate-950/15" : "bg-slate-800"}`}>{(strategies[key] ?? []).length}</span>
+              {strategyTabs.map(([key, name]) => <button key={key} role="tab" aria-selected={currentStrategy === key} onClick={() => setActiveStrategy(key)} className={`shrink-0 rounded-xl px-4 py-2.5 text-sm font-semibold transition ${currentStrategy === key ? "bg-success text-slate-950" : "bg-slate-900 text-slate-400 hover:text-white"}`}>
+                {name}<span className={`ml-2 rounded-full px-2 py-0.5 text-xs ${currentStrategy === key ? "bg-slate-950/15" : "bg-slate-800"}`}>{(strategies[key] ?? []).length}</span>
               </button>)}
             </nav>
 
-            <section role="tabpanel" aria-label={strategyNames[activeStrategy]}>
-              {activeResults.length === 0 ? <StateCard icon={<CalendarDays className="h-6 w-6" />}>今日無符合安全條件的候選股。</StateCard> : <div className="space-y-6">{activeResults.map((run) => <StrategyRun key={`${activeStrategy}-${run.sequence}`} run={run} />)}</div>}
+            <section role="tabpanel" aria-label={strategyNames[currentStrategy] ?? legacyStrategyNames[currentStrategy]}>
+              {activeResults.length === 0 ? <StateCard icon={<CalendarDays className="h-6 w-6" />}>今日無符合安全條件的候選股。</StateCard> : <div className="space-y-6">{activeResults.map((run) => <StrategyRun key={`${currentStrategy}-${run.sequence}`} run={run} />)}</div>}
             </section>
 
             <footer className="border-t border-slate-800 pt-6 text-xs leading-6 text-slate-500">{payload.disclaimer}</footer>
@@ -151,7 +160,9 @@ function Info({ label, value }: { label: string; value: string }) {
 
 function StrategyRun({ run }: { run: Result }) {
   const warnings = qualityWarnings(run.conclusion.quality_signals);
+  const signalCandidates = (run.candidates ?? []).filter((c) => c.symbol && c.signal_type && signalNames[c.signal_type]);
   return <article className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5 sm:p-7">
+    {signalCandidates.length > 0 && <div className="mb-4 flex flex-wrap gap-2">{signalCandidates.map((c) => <span key={c.symbol} className="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-xs text-slate-300">{c.symbol} · {signalNames[c.signal_type!]}</span>)}</div>}
     <OutcomeSummary run={run} />
     <div className="mt-4 flex flex-wrap gap-3">{(run.conclusion.recommended_symbols ?? []).map((symbol) => <div key={symbol} className="rounded-xl bg-amber-900/40 px-4 py-3 text-amber-100 ring-1 ring-amber-800/60"><div className="font-bold">{symbol}</div><div className="text-xs text-amber-200/70">{run.conclusion.symbol_names?.[symbol] ?? ""}</div></div>)}{!(run.conclusion.recommended_symbols?.length) && <p className="text-slate-400">本場沒有推薦標的</p>}</div>
     <p className="mt-5 whitespace-pre-wrap leading-7 text-slate-200">{run.conclusion.reasoning}</p>

@@ -322,7 +322,7 @@ export interface AutoRunConfig {
   strategy_run_counts: StrategyRunCounts;
 }
 
-export type StrategyKey = "general" | "chip_momentum" | "quality_growth" | "breakout" | "oversold_reversal";
+export type StrategyKey = "general" | "chip_quality" | "price_signal";
 export type StrategyRunCounts = Record<StrategyKey, number>;
 
 /**

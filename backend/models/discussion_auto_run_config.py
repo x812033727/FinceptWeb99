@@ -56,8 +56,7 @@ class DiscussionAutoRunConfig(Base):
     )
     strategy_run_counts: Mapped[dict[str, int]] = mapped_column(
         JSON, nullable=False, default=lambda: {
-            "general": 1, "chip_momentum": 0, "quality_growth": 0,
-            "breakout": 0, "oversold_reversal": 0,
+            "general": 1, "chip_quality": 0, "price_signal": 0,
         },
     )
     persona_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)

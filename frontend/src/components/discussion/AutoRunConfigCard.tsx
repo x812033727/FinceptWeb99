@@ -38,7 +38,7 @@ export function AutoRunConfigCard({
   const [personaIds, setPersonaIds] = useState<string[]>([]);
   const [market, setMarket] = useState<DiscussionMarket>("TW");
   const [sendEmail, setSendEmail] = useState(false);
-  const [strategyRunCounts, setStrategyRunCounts] = useState<StrategyRunCounts>({ general: 0, chip_momentum: 0, quality_growth: 0, breakout: 0, oversold_reversal: 0 });
+  const [strategyRunCounts, setStrategyRunCounts] = useState<StrategyRunCounts>({ general: 0, chip_quality: 0, price_signal: 0 });
   const [error, setError] = useState<string | null>(null);
   const [showSaved, setShowSaved] = useState(false);
 
@@ -55,7 +55,7 @@ export function AutoRunConfigCard({
     setPersonaIds(cfg.persona_ids);
     setMarket(cfg.market ?? "TW");
     setSendEmail(!!cfg.send_email);
-    setStrategyRunCounts(cfg.strategy_run_counts ?? { general: cfg.enabled ? 1 : 0, chip_momentum: 0, quality_growth: 0, breakout: 0, oversold_reversal: 0 });
+    setStrategyRunCounts(cfg.strategy_run_counts ?? { general: cfg.enabled ? 1 : 0, chip_quality: 0, price_signal: 0 });
   }, [cfg]);
 
   const saveMut = useMutation({
@@ -200,10 +200,8 @@ export function AutoRunConfigCard({
               <div className="grid gap-1.5">
                 {([
                   ["general", "綜合選股", "綜合價格、籌碼、成長與估值；沿用下方自訂題目與規則。"],
-                  ["chip_momentum", "籌碼動能", "外資近五日持續買超，搭配量價動能。"],
-                  ["quality_growth", "品質成長", "營收、ROE、現金流與合理估值。"],
-                  ["breakout", "突破追價", "突破二十日高點並有量能確認。"],
-                  ["oversold_reversal", "超跌反轉", "明顯回落後出現止跌與籌碼轉向。"],
+                  ["chip_quality", "籌碼品質", "外資連續買超且營收、ROE、現金流體質達標的交集。"],
+                  ["price_signal", "量價訊號", "突破二十日高點或超跌止跌反轉，符合任一即入選。"],
                 ] as Array<[StrategyKey, string, string]>).map(([key, name, description]) => {
                   const count = strategyRunCounts[key];
                   return <div key={key} className="rounded border border-border bg-card p-2">

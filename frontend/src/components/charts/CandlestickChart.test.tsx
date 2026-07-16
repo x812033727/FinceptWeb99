@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { createChart } from "lightweight-charts";
+import {
+  createChart,
+  CandlestickSeries,
+  HistogramSeries,
+  LineSeries,
+} from "lightweight-charts";
 import CandlestickChart from "./CandlestickChart";
 import { INDICATOR_STORAGE_KEY } from "./indicatorPrefs";
 import type { OHLCVBar } from "@/types/market";
@@ -26,9 +31,11 @@ vi.mock("lightweight-charts", () => {
   const makeChart = () => {
     const priceScales = new Map<string, { applyOptions: ReturnType<typeof vi.fn> }>();
     return {
-      addCandlestickSeries: vi.fn(() => makeSeries()),
-      addHistogramSeries: vi.fn(() => makeSeries()),
-      addLineSeries: vi.fn(() => makeSeries()),
+      // v5 replaced addCandlestickSeries/addHistogramSeries/addLineSeries
+      // with one addSeries(SeriesType, options). The series type is now the
+      // first argument rather than part of the method name, so the tests
+      // assert on it via `callsOf()` below.
+      addSeries: vi.fn(() => makeSeries()),
       removeSeries: vi.fn(),
       priceScale: vi.fn((id: string) => {
         if (!priceScales.has(id)) priceScales.set(id, { applyOptions: vi.fn() });
@@ -43,15 +50,34 @@ vi.mock("lightweight-charts", () => {
   };
   return {
     createChart: vi.fn(() => makeChart()),
+    // v5 requires the series types to be imported and passed to addSeries.
+    // Identity is all the component needs and all the tests match on.
+    CandlestickSeries: { type: "Candlestick" },
+    HistogramSeries: { type: "Histogram" },
+    LineSeries: { type: "Line" },
     ColorType: { Solid: "solid" },
     LineStyle: { Solid: 0, Dotted: 1, Dashed: 2 },
   };
 });
 
+/** The addSeries calls for one series type — v5's replacement for asking
+ *  "how many times was addLineSeries called?". */
+function callsOf(chart: ChartMock, seriesType: unknown): unknown[][] {
+  return chart.addSeries.mock.calls.filter((call: unknown[]) => call[0] === seriesType);
+}
+
+/** The series object addSeries returned for the Nth call of a given type.
+ *  Every series now comes back through the same mock, so the call index
+ *  has to be matched rather than assuming results[0]. */
+function seriesOf(chart: ChartMock, seriesType: unknown, nth = 0) {
+  const indexes = chart.addSeries.mock.calls
+    .map((call: unknown[], i: number) => (call[0] === seriesType ? i : -1))
+    .filter((i: number) => i >= 0);
+  return chart.addSeries.mock.results[indexes[nth]].value;
+}
+
 interface ChartMock {
-  addCandlestickSeries: ReturnType<typeof vi.fn>;
-  addLineSeries: ReturnType<typeof vi.fn>;
-  addHistogramSeries: ReturnType<typeof vi.fn>;
+  addSeries: ReturnType<typeof vi.fn>;
   removeSeries: ReturnType<typeof vi.fn>;
   priceScale: ((id: string) => { applyOptions: ReturnType<typeof vi.fn> }) &
     ReturnType<typeof vi.fn>;
@@ -92,9 +118,9 @@ describe("CandlestickChart indicators", () => {
     for (const label of ["MA", "EMA", "BOLL", "RSI", "MACD", "KD", "Off"]) {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
-    expect(lastChart().addLineSeries).not.toHaveBeenCalled();
+    expect(callsOf(lastChart(), LineSeries)).toHaveLength(0);
     // volume histogram only
-    expect(lastChart().addHistogramSeries).toHaveBeenCalledTimes(1);
+    expect(callsOf(lastChart(), HistogramSeries)).toHaveLength(1);
   });
 
   it("adds three MA line series when the MA chip is toggled on, and persists the choice", async () => {
@@ -103,9 +129,10 @@ describe("CandlestickChart indicators", () => {
     await user.click(screen.getByRole("button", { name: "MA" }));
 
     const chart = lastChart();
-    expect(chart.addLineSeries).toHaveBeenCalledTimes(3); // MA5 / MA10 / MA20
-    for (const call of chart.addLineSeries.mock.calls) {
-      expect(call[0]).toMatchObject({
+    expect(callsOf(chart, LineSeries)).toHaveLength(3); // MA5 / MA10 / MA20
+    for (const call of callsOf(chart, LineSeries)) {
+      // addSeries(SeriesType, options) — options is the second argument now.
+      expect(call[1]).toMatchObject({
         lineWidth: 1,
         priceScaleId: "right",
         priceLineVisible: false,
@@ -126,9 +153,9 @@ describe("CandlestickChart indicators", () => {
 
     const chart = lastChart();
     // 3 MA + 3 BOLL (mid/upper/lower) + MACD line + signal = 8 line series
-    expect(chart.addLineSeries).toHaveBeenCalledTimes(8);
+    expect(callsOf(chart, LineSeries)).toHaveLength(8);
     // volume + MACD histogram
-    expect(chart.addHistogramSeries).toHaveBeenCalledTimes(2);
+    expect(callsOf(chart, HistogramSeries)).toHaveLength(2);
     // sub-pane band carved via its own priceScaleId, volume band shrunk
     expect(chart.priceScale).toHaveBeenCalledWith("sub");
     const volScale = chart.priceScale("vol");
@@ -148,7 +175,7 @@ describe("CandlestickChart indicators", () => {
     render(<CandlestickChart bars={makeBars(40)} height={300} />);
 
     const chart = lastChart();
-    expect(chart.addLineSeries).toHaveBeenCalledTimes(1); // RSI line
+    expect(callsOf(chart, LineSeries)).toHaveLength(1); // RSI line
 
     await user.click(screen.getByRole("button", { name: "Off" }));
     expect(chart.removeSeries).toHaveBeenCalledTimes(1);
@@ -165,7 +192,7 @@ describe("CandlestickChart indicators", () => {
   it("still renders the empty state without crashing when there are no bars", () => {
     render(<CandlestickChart bars={[]} height={300} />);
     expect(screen.getByText("No price data available")).toBeInTheDocument();
-    expect(lastChart().addLineSeries).not.toHaveBeenCalled();
+    expect(callsOf(lastChart(), LineSeries)).toHaveLength(0);
   });
 
   it("places a persisted horizontal line from chart coordinates", async () => {
@@ -181,7 +208,7 @@ describe("CandlestickChart indicators", () => {
     await waitFor(() => expect(api.post).toHaveBeenCalledWith("/charts/drawings", expect.objectContaining({
       market: "TW", symbol: "2330", kind: "horizontal", points: [{ price: 246 }],
     })));
-    const candle = lastChart().addCandlestickSeries.mock.results[0].value;
+    const candle = seriesOf(lastChart(), CandlestickSeries);
     await waitFor(() => expect(candle.createPriceLine).toHaveBeenCalledWith(expect.objectContaining({ price: 246 })));
   });
 
@@ -224,8 +251,8 @@ describe("CandlestickChart indicators", () => {
         { time: "2024-01-10", price: 240 },
       ],
     })));
-    await waitFor(() => expect(lastChart().addLineSeries).toHaveBeenCalledTimes(1));
-    const trend = lastChart().addLineSeries.mock.results[0].value;
+    await waitFor(() => expect(callsOf(lastChart(), LineSeries)).toHaveLength(1));
+    const trend = seriesOf(lastChart(), LineSeries);
     const rendered = trend.setData.mock.calls[0][0];
     expect(rendered.slice(0, 2)).toEqual([
       { time: "2024-01-03", value: 200 },

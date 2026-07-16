@@ -1,6 +1,6 @@
 import enum
 import uuid
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import (
     JSON,
@@ -45,7 +45,7 @@ class Portfolio(Base):
     # Existing rows are unaffected (this only changes ORM-default
     # behaviour for new inserts; DB column stays NOT NULL).
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     holdings: Mapped[list["Holding"]] = relationship("Holding", back_populates="portfolio", cascade="all, delete-orphan")
     transactions: Mapped[list["Transaction"]] = relationship("Transaction", back_populates="portfolio", cascade="all, delete-orphan")
@@ -64,7 +64,7 @@ class Holding(Base):
     quantity: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
     avg_cost: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
     cost_currency: Mapped[str] = mapped_column(String(3), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     portfolio: Mapped["Portfolio"] = relationship("Portfolio", back_populates="holdings")
 
@@ -94,7 +94,7 @@ class Transaction(Base):
     fx_rate: Mapped[float] = mapped_column(Numeric(18, 6), default=1.0, nullable=False)
     tx_date: Mapped[date] = mapped_column(Date, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     portfolio: Mapped["Portfolio"] = relationship("Portfolio", back_populates="transactions")
 
@@ -120,7 +120,7 @@ class PortfolioTransactionImport(Base):
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     row_count: Mapped[int] = mapped_column(nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, nullable=False,
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False,
     )
 
 
@@ -167,7 +167,7 @@ class PortfolioCashEntry(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     entry_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, nullable=False,
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False,
     )
 
     portfolio: Mapped["Portfolio"] = relationship(
@@ -199,6 +199,6 @@ class PortfolioSnapshot(Base):
     positions: Mapped[list | None] = mapped_column(JSON, nullable=True)
     cash_balances: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     valuation_quality: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     portfolio: Mapped["Portfolio"] = relationship("Portfolio")

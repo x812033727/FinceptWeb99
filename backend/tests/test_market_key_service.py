@@ -122,10 +122,10 @@ async def test_upsert_creates_row_with_encrypted_payload(db_session, test_admin)
 async def test_upsert_replaces_existing_row_and_resets_validation(db_session, test_admin):
     """Re-saving must clear last_validated_at / ok / message — caller may
     immediately call /test again."""
-    from datetime import datetime
+    from datetime import UTC, datetime
     await svc.upsert_key(db_session, "finnhub", "v1", test_admin.id)
     row = await db_session.get(MarketProviderKey, "finnhub")
-    row.last_validated_at = datetime.utcnow()
+    row.last_validated_at = datetime.now(UTC)
     row.last_validation_ok = True
     row.last_validation_message = "OK"
     await db_session.commit()

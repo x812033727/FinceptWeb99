@@ -68,7 +68,9 @@ def setup_logging() -> None:
     else:
         handler = logging.StreamHandler(sys.stdout)
         try:
-            from pythonjsonlogger import jsonlogger
+            # `pythonjsonlogger.jsonlogger` is a deprecated shim that warns
+            # on import and forwards here.
+            from pythonjsonlogger import json as jsonlogger
 
             handler.setFormatter(
                 jsonlogger.JsonFormatter(

@@ -3,7 +3,7 @@ Integration tests for portfolio endpoints.
 Uses in-memory SQLite + mocked Redis (from conftest).
 Market data calls are mocked so tests run without external APIs.
 """
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
@@ -21,6 +21,18 @@ async def _register_and_login(client: AsyncClient, email: str) -> str:
     await client.post("/api/auth/register", json={"email": email, "password": "Test1234!"})
     r = await client.post("/api/auth/login", json={"email": email, "password": "Test1234!"})
     return r.json()["access_token"]
+
+
+def _as_instant(value: str) -> datetime:
+    """Parse an API timestamp to a tz-aware instant.
+
+    SQLite (the test backend) has no timezone type, so a value written
+    aware comes back naive; Postgres' timestamptz round-trips it aware.
+    Treat a naive value as the UTC it was written as, so a comparison
+    tests the instant rather than the backend's formatting.
+    """
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def _auth(token: str) -> dict:
@@ -292,7 +304,9 @@ async def test_transaction_import_previews_then_commits_clean_batch(client: Asyn
     imports = (await client.get(
         f"/api/portfolio/{pid}/transaction-imports", headers=_auth(token),
     )).json()
-    assert imports == [{
+    assert len(imports) == 1
+    listed = imports[0]
+    assert {k: v for k, v in listed.items() if k != "imported_at"} == {
         "id": import_id,
         "row_count": 2,
         "linked_count": 2,
@@ -300,8 +314,17 @@ async def test_transaction_import_previews_then_commits_clean_batch(client: Asyn
         "first_tx_date": "2024-01-02",
         "last_tx_date": "2024-01-03",
         "instruments": [{"symbol": "AAPL", "market": "US"}],
-        "imported_at": committed.json()["imported_at"],
-    }]
+    }
+    # Same record, so the same instant — but not necessarily the same
+    # string. The commit response serialises the in-memory default
+    # (tz-aware, so "...Z"), while the list re-reads from the DB, and
+    # SQLite has no tz type: it hands back a naive value that serialises
+    # without the suffix. Postgres' timestamptz round-trips aware (proven
+    # against the live DB), so production agrees on both paths and only
+    # the test backend can tell them apart. Compare instants, not text.
+    assert _as_instant(listed["imported_at"]) == _as_instant(
+        committed.json()["imported_at"],
+    )
     batch_transactions = (await client.get(
         f"/api/portfolio/{pid}/transaction-imports/{import_id}/transactions",
         headers=_auth(token),

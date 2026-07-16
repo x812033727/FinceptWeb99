@@ -215,7 +215,7 @@ async def record_validation(
     row = await db.get(MarketProviderKey, provider)
     if row is None:
         return
-    row.last_validated_at = datetime.utcnow()
+    row.last_validated_at = datetime.now(UTC)
     row.last_validation_ok = result.ok
     row.last_validation_message = result.message[:500]
     await db.commit()

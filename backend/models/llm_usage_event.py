@@ -3,7 +3,7 @@ final usage chunk (where available); cost computed via a hardcoded rate table
 in services/llm_usage_service.py.
 """
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, Numeric, String
@@ -44,7 +44,7 @@ class LLMUsageEvent(Base):
     )
     round: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True,
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False, index=True,
     )
 
     user: Mapped["User | None"] = relationship("User")  # type: ignore[name-defined]

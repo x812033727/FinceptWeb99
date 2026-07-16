@@ -8,7 +8,7 @@ rows carrying outcome_vector data (the surface PR-C1 writes).
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from uuid import UUID
 
 import pytest
@@ -238,8 +238,8 @@ async def _seed_sweep_with_outcomes(
             for i, (conf, outcome) in enumerate(outcomes)
         ],
         brier_score=0.1,   # placeholder — fit doesn't read this
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
     )
     db.add(disc)
     await db.commit()

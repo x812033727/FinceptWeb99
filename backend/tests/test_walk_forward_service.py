@@ -22,7 +22,7 @@ Coverage:
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -306,8 +306,8 @@ async def test_execute_freezes_weights_from_train_into_test(
                     persona_ids=["a"], market="TW", status="done",
                     current_round=1, sweep_id=sw.id,
                     verdict="win",
-                    created_at=datetime.utcnow(),
-                    updated_at=datetime.utcnow(),
+                    created_at=datetime.now(UTC),
+                    updated_at=datetime.now(UTC),
                 )
                 db.add(d)
             d_loss = Discussion(
@@ -316,8 +316,8 @@ async def test_execute_freezes_weights_from_train_into_test(
                 persona_ids=["b"], market="TW", status="done",
                 current_round=1, sweep_id=sw.id,
                 verdict="loss",
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
             )
             db.add(d_loss)
             await db.commit()

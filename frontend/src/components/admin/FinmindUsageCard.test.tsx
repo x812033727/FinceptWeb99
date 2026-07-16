@@ -49,9 +49,12 @@ vi.mock("recharts", async (importActual) => {
       // Pass static width/height into the only child (the actual chart)
       // so its internal layout calc works without measuring the DOM.
       const child = Children.only(children);
+      // `isValidElement` already narrowed this branch to "not an element",
+      // so the old `as React.ReactElement` was asserting the opposite of
+      // what the guard proved. React 19's stricter types caught it.
       return isValidElement(child)
         ? cloneElement(child, { width: 600, height: 220 } as never)
-        : (child as React.ReactElement);
+        : child;
     },
   };
 });

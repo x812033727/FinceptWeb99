@@ -73,7 +73,9 @@ export function TranscriptPane({
   liveRoundUsageDetail: Record<number, PersonaUsageDetail[]>;
   postMortemMut: { data: PostMortemResponse | undefined };
   persistedPostMortem: PostMortemResponse | null;
-  bottomRef: React.RefObject<HTMLDivElement>;
+  // Null until the div mounts. React 19's useRef types say so; this used
+  // to claim non-null and quietly disagree with its own caller.
+  bottomRef: React.RefObject<HTMLDivElement | null>;
   /** B4: current interjection mode — "running" renders the interject
    *  form under the live streaming card, "followup" renders the 追問
    *  form under the conclusion. Omitted / "between" renders nothing

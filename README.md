@@ -3,7 +3,7 @@
 <div align="center">
 
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-C06524)](LICENSE)
-[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![React](https://img.shields.io/badge/React-18+-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
@@ -159,7 +159,7 @@ docker compose up -d
 
 | 工具 | 版本 |
 |------|------|
-| Python | 3.11+ |
+| Python | 3.12+ |
 | Node.js | 20+ |
 | PostgreSQL | 15+ |
 | Redis | 7+ |
@@ -597,7 +597,7 @@ POST /api/system/web-vital           # Core Web Vitals → Prometheus
 
 | 層級 | 技術 |
 |------|------|
-| **後端框架** | FastAPI 0.110+、Python 3.11+ |
+| **後端框架** | FastAPI 0.110+、Python 3.12+ |
 | **資料庫** | PostgreSQL 15+（非同步，asyncpg）|
 | **快取** | Redis 7（報價 15s、歷史 4h、基本面 24h）|
 | **即時串流** | WebSocket（FastAPI 原生）+ Redis Pub/Sub + Kraken ticker pump |

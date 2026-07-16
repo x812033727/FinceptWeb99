@@ -8,18 +8,10 @@ updates:
       python-dependencies:
         patterns: ["*"]
     ignore:
-      # The scientific stack has moved to Python >= 3.12 while the backend
-      # image is still python:3.11-slim-bookworm. pip cannot resolve these
-      # at all, so one of them fails `pip install` and takes the whole
-      # grouped PR — every other bump included — down with it.
+      # numpy >= 2.5 and scipy >= 1.18 were held back for needing Python
+      # >= 3.12 against a 3.11 runtime. The runtime is 3.12 now, so both
+      # entries are gone — that was the whole point of the upgrade.
       #
-      # Both entries come off together when the runtime moves to 3.12; CI
-      # already runs a passing 3.12 compatibility job. Expect this list to
-      # grow until then, which is the argument for doing the upgrade.
-      - dependency-name: numpy
-        versions: [">=2.5"]
-      - dependency-name: scipy
-        versions: [">=1.18"]
       # bcrypt is deliberately held on the 3.2 line — requirements.txt
       # says why, right above the pin: passlib 1.7.4 reads
       # `bcrypt.__about__.__version__`, removed in bcrypt 4.0, so the

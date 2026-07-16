@@ -1,5 +1,5 @@
 # ── Stage 1: dependency builder ──────────────────────────────────
-FROM python:3.11-slim-bookworm AS builder
+FROM python:3.12-slim-bookworm AS builder
 
 WORKDIR /build
 
@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 
 # ── Stage 2: runtime ─────────────────────────────────────────────
-FROM python:3.11-slim-bookworm AS runtime
+FROM python:3.12-slim-bookworm AS runtime
 
 # libpq needed at runtime for asyncpg
 RUN apt-get update && apt-get install -y --no-install-recommends libpq5 postgresql-client \

@@ -574,6 +574,29 @@ async def get_cash_flow(symbol: str, start_date: str = "2020-01-01") -> list[dic
     return await _query("TaiwanStockCashFlowsStatement", symbol, start_date)
 
 
+# Market-wide statement pulls. Each returns every listed company's filing
+# for ONE quarter-end in a single call (~2000 companies), so a caller that
+# needs the whole market pays 1 request per quarter instead of 1 per
+# symbol. Rows come back in FinMind's long form — {date, stock_id, type,
+# value, origin_name} — unchanged, which is what `tw_health_metrics.
+# _pivot_by_period` already consumes.
+#
+# ⚠️ `quarter_end` must be an exact filing date (a quarter-end: -03-31,
+# -06-30, -09-30, -12-31). Market-wide mode returns only rows dated
+# exactly that day and ignores any range; any other date returns [].
+
+async def get_financials_market_wide(quarter_end: str) -> list[dict[str, Any]]:
+    return await _query("TaiwanStockFinancialStatements", "", quarter_end)
+
+
+async def get_balance_sheet_market_wide(quarter_end: str) -> list[dict[str, Any]]:
+    return await _query("TaiwanStockBalanceSheet", "", quarter_end)
+
+
+async def get_cash_flow_market_wide(quarter_end: str) -> list[dict[str, Any]]:
+    return await _query("TaiwanStockCashFlowsStatement", "", quarter_end)
+
+
 # ── Dividends ─────────────────────────────────────────────────────
 
 async def get_dividends(symbol: str, start_date: str = "2018-01-01") -> list[dict[str, Any]]:

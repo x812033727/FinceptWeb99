@@ -223,6 +223,47 @@ async def get_health(symbol: str, periods: int = 8) -> dict[str, Any]:
     except Exception:
         cf_rows = []
 
+    # Revenue YoY: pull latest from the monthly_revenue series (already
+    # YoY-computed). Avoids re-deriving from quarterly snapshots. Lazy
+    # import — get_revenue lives in tw_market_service and re-exporting
+    # the other direction would create a load-time circular import.
+    revenue_yoy: float | None = None
+    try:
+        from services.tw_market_service import get_revenue
+        rev_rows = await get_revenue(symbol, months=3)
+        if rev_rows:
+            revenue_yoy = rev_rows[-1].get("revenue_yoy")
+    except Exception:
+        pass
+
+    result = compute_health(
+        symbol, income_rows, bs_rows, cf_rows,
+        periods=periods, revenue_yoy=revenue_yoy,
+    )
+    FINANCIAL_STATEMENT_ANALYSIS_TOTAL.labels(
+        outcome=result["quality"]["status"],
+    ).inc()
+    await cache_set_json(key, result, TTL_FUNDAMENTALS)
+    return result
+
+
+def compute_health(
+    symbol: str,
+    income_rows: list[dict],
+    bs_rows: list[dict],
+    cf_rows: list[dict],
+    *,
+    periods: int = 8,
+    revenue_yoy: float | None = None,
+) -> dict[str, Any]:
+    """Pure statement-math half of `get_health` — no I/O, no cache.
+
+    Split out so bulk callers can drive it from FinMind's market-wide
+    statement datasets (one call per quarter for ~2000 companies) rather
+    than fanning out three per-symbol fetches. `revenue_yoy` is injected
+    because its source is the monthly-revenue archive, not the
+    statements; bulk callers that don't need it pass None.
+    """
     income = _pivot_by_period(income_rows)
     bs     = _pivot_by_period(bs_rows)
     cf     = _quarterize_cash_flow(_pivot_by_period(cf_rows))
@@ -356,19 +397,6 @@ async def get_health(symbol: str, periods: int = 8) -> dict[str, Any]:
         if p.get("operating_cf") is not None and p["operating_cf"] > 0
     )
 
-    # Revenue YoY: pull latest from the monthly_revenue series (already
-    # YoY-computed). Avoids re-deriving from quarterly snapshots. Lazy
-    # import — get_revenue lives in tw_market_service and re-exporting
-    # the other direction would create a load-time circular import.
-    revenue_yoy: float | None = None
-    try:
-        from services.tw_market_service import get_revenue
-        rev_rows = await get_revenue(symbol, months=3)
-        if rev_rows:
-            revenue_yoy = rev_rows[-1].get("revenue_yoy")
-    except Exception:
-        pass
-
     summary = {
         "latest_roe":       latest_roe,
         "latest_debt_ratio": latest.get("debt_ratio"),
@@ -486,6 +514,4 @@ async def get_health(symbol: str, periods: int = 8) -> dict[str, Any]:
             "signals": "descriptive thresholds only; not investment advice",
         },
     }
-    FINANCIAL_STATEMENT_ANALYSIS_TOTAL.labels(outcome=quality_status).inc()
-    await cache_set_json(key, result, TTL_FUNDAMENTALS)
     return result

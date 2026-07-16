@@ -40,7 +40,12 @@ export default function AllocationPie({ holdings }: Props) {
           ))}
         </Pie>
         <Tooltip
-          formatter={(v: number) => [`${v.toFixed(1)}%`, "Weight"]}
+          // recharts 3 widened the formatter's value type to number | string
+          // | array; narrow before formatting rather than assuming number.
+          formatter={(value) => {
+            const n = typeof value === "number" ? value : Number(value);
+            return [`${n.toFixed(1)}%`, "Weight"];
+          }}
           contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
           labelStyle={{ color: "hsl(var(--foreground))" }}
         />

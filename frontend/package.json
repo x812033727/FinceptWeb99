@@ -34,7 +34,7 @@
     "react-dom": "^19.2.7",
     "react-i18next": "^17.0.4",
     "react-router-dom": "^6.26.2",
-    "recharts": "^2.12.7",
+    "recharts": "^3.9.2",
     "tailwind-merge": "^2.5.2",
     "tailwindcss-animate": "^1.0.7",
     "web-vitals": "^5.2.0",

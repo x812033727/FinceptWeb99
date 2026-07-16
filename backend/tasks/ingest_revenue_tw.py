@@ -56,6 +56,13 @@ _LOCK_KEY = "lock:ingest_revenue_tw"
 _LOCK_TTL = 10 * 60   # one FinMind call + bulk write
 _LOOKBACK_DAYS = 90
 
+# `tw_revenue_monthly.revenue_yoy` / `.revenue_mom` are Numeric(8, 2), so
+# anything past this can't be stored: asyncpg raises
+# NumericValueOutOfRange and the whole bulk upsert dies. Only a
+# near-zero baseline gets you there — a dormant month or a shell
+# company — where the percentage is noise, not signal.
+_PCT_STORABLE_MAX = 999_999.99
+
 # Paywall detection lives in `data.tw.finmind_paywall` so all
 # FinMind-backed crons (ingest_ohlcv_tw, tw_etf_yields_refresh, …)
 # can opt into the same fail-soft path with a one-line check.
@@ -200,10 +207,18 @@ def _shift_month(d: date, delta_months: int) -> date:
 def _pct_change(current: int | None, base: int | None) -> float | None:
     """`((current - base) / base) * 100` rounded to 4 dp. Returns None
     when either is missing or `base` is zero (fresh-IPO no-baseline +
-    division-by-zero protection)."""
+    division-by-zero protection), or when the ratio is too large to
+    store (see `_PCT_STORABLE_MAX`)."""
     if current is None or base is None or base == 0:
         return None
-    return round((current - base) / base * 100, 4)
+    pct = round((current - base) / base * 100, 4)
+    if abs(pct) > _PCT_STORABLE_MAX:
+        log.info(
+            "ingest_revenue_tw.growth_unrepresentable",
+            extra={"current": current, "base": base, "pct": pct},
+        )
+        return None
+    return pct
 
 
 async def _enrich_growth_rates(

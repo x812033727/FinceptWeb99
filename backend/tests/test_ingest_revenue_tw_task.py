@@ -212,6 +212,25 @@ def test_pct_change_handles_zero_and_none_baseline():
     assert _pct_change(100, 0) is None
 
 
+def test_pct_change_abstains_when_the_ratio_cannot_be_stored():
+    """`revenue_yoy` / `revenue_mom` are Numeric(8, 2) — anything past
+    999999.99 makes asyncpg raise NumericValueOutOfRange and takes the
+    whole bulk upsert down with it. A baseline that small (a dormant
+    month, a shell company) makes the percentage noise anyway, so
+    abstain exactly like a zero baseline does.
+    """
+    from tasks.ingest_revenue_tw import _pct_change
+
+    # 1 thousand NTD a year ago, 10 billion today — real shape in the
+    # TW universe, and ~1,000,000,000% once divided out.
+    assert _pct_change(10_000_000_000, 1_000) is None
+    assert _pct_change(-10_000_000_000, 1_000) is None
+
+    # The boundary itself still stores.
+    assert _pct_change(1_000_000, 100) == 999_900.0
+    assert _pct_change(999, 100) == 899.0
+
+
 @pytest.mark.asyncio
 async def test_enrich_growth_rates_computes_yoy_from_db_history(
     db_session: AsyncSession,

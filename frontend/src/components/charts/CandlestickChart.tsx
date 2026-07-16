@@ -3,6 +3,9 @@ import { Bell, Minus, Pencil, TrendingUp, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
   createChart,
+  CandlestickSeries,
+  HistogramSeries,
+  LineSeries,
   ColorType,
   LineStyle,
   type IChartApi,
@@ -271,7 +274,7 @@ export default function CandlestickChart({ bars, height, market, symbol, current
 
     // Candlestick series — up/down come from the --up/--down CSS vars so
     // candles follow the market colour convention (台股紅漲綠跌 vs intl).
-    const candle = chart.addCandlestickSeries({
+    const candle = chart.addSeries(CandlestickSeries, {
       upColor: t.up,
       downColor: t.down,
       borderUpColor: t.up,
@@ -292,7 +295,7 @@ export default function CandlestickChart({ bars, height, market, symbol, current
     chart.subscribeClick(onChartClick);
 
     // Volume histogram (overlay in lower 20% of price scale)
-    const vol = chart.addHistogramSeries({
+    const vol = chart.addSeries(HistogramSeries, {
       color: t.grid,
       priceFormat: { type: "volume" },
       priceScaleId: "vol",
@@ -343,7 +346,7 @@ export default function CandlestickChart({ bars, height, market, symbol, current
       }));
     for (const drawing of visibleDrawings.filter((row) => row.kind === "trend")) {
       if (drawing.points.length !== 2 || drawing.points.some((point) => !point.time || point.price <= 0)) continue;
-      const series = chart.addLineSeries({
+      const series = chart.addSeries(LineSeries, {
         color: drawing.color,
         lineWidth: 2,
         priceScaleId: "right",
@@ -526,7 +529,7 @@ export default function CandlestickChart({ bars, height, market, symbol, current
       priceScaleId: "right" | "sub",
       lineStyle: LineStyle = LineStyle.Solid
     ): ISeriesApi<"Line"> => {
-      const s = chart.addLineSeries({
+      const s = chart.addSeries(LineSeries, {
         color,
         lineWidth: 1,
         lineStyle,
@@ -570,7 +573,7 @@ export default function CandlestickChart({ bars, height, market, symbol, current
     } else if (prefs.sub === "macd") {
       const { macd: line, signal, histogram } = macd(closes, 12, 26, 9);
       // Histogram first so the MACD / signal lines draw on top of it.
-      const hist = chart.addHistogramSeries({
+      const hist = chart.addSeries(HistogramSeries, {
         priceScaleId: "sub",
         priceLineVisible: false,
         lastValueVisible: false,

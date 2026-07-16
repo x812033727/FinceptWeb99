@@ -190,6 +190,24 @@ async def run() -> None:
             "ingest_revenue_tw.done",
             extra={"rows_processed": row_count},
         )
+        if row_count == 0:
+            # We asked FinMind for every month-first in a 90-day window;
+            # each of those months has revenue for ~2,300 companies. Zero
+            # rows means the fetch is broken, not that there was nothing
+            # to fetch — no holiday can empty a whole quarter. Recording
+            # ok=True here is exactly how the old `today - 90d` start hid
+            # an empty `tw_revenue_monthly` for months while the
+            # dashboard read green.
+            log.warning("ingest_revenue_tw.empty_result")
+            await record_health(
+                JOB_ID, ok=False, row_count=0,
+                error=(
+                    "upstream returned no rows for any month in the "
+                    f"{_LOOKBACK_DAYS}-day window — every month there "
+                    "should carry ~2,300 companies"
+                ),
+            )
+            return
         await record_health(JOB_ID, ok=True, row_count=row_count)
     finally:
         await release_lock(_LOCK_KEY)

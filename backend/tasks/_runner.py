@@ -73,12 +73,19 @@ class TaskOutcome:
         identical to omitting the kwarg.
       * ``done_extra`` — structured payload for the task's ``.done`` info
         log; defaults to the canonical ``{"rows_processed": row_count}``.
+      * ``empty_is_stale`` — set when the body asked upstream for data it
+        expected to exist. A ``row_count`` of 0 then records ``ok=False``
+        instead of a green tick. Only the body knows the difference
+        between "upstream gave us nothing" and "there was nothing to
+        ask for" (a holiday, a window already archived), so the runner
+        can't infer it. Defaults to today's behaviour: 0 rows is ok.
     """
 
     row_count: int
     latest_data_ts: date | datetime | None = None
     status: str | None = None
     done_extra: dict | None = None
+    empty_is_stale: bool = False
 
     def log_extra(self) -> dict:
         if self.done_extra is not None:
@@ -155,8 +162,23 @@ async def run_ingest_task(
             )
             return
 
+        # The upstream answered, so no failure to arm a backoff on — a
+        # cooldown would only delay tomorrow's attempt, which is the
+        # opposite of what an empty table needs.
         await clear_failures(job_id)
         log.info(f"{job_id}.done", extra=outcome.log_extra())
+        if outcome.row_count == 0 and outcome.empty_is_stale:
+            log.warning(f"{job_id}.empty_result")
+            await record_health(
+                job_id, ok=False, row_count=0,
+                latest_data_ts=outcome.latest_data_ts,
+                error=(
+                    "upstream returned no rows for a window that should "
+                    "have carried some"
+                    + (f" — {outcome.status}" if outcome.status else "")
+                ),
+            )
+            return
         await record_health(
             job_id, ok=True, row_count=outcome.row_count,
             latest_data_ts=outcome.latest_data_ts, error=outcome.status,

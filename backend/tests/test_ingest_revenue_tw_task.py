@@ -547,3 +547,76 @@ async def test_genuine_outage_still_arms_backoff(patch_session):
 # `test_finmind_paywall.py` since PR #188 — the helpers moved to
 # `data.tw.finmind_paywall` so other FinMind cron tasks can adopt
 # the same fail-soft pattern without re-implementing.
+
+
+@pytest.mark.asyncio
+async def test_queries_month_first_dates_not_a_lookback_offset(
+    patch_session, db_session: AsyncSession,
+):
+    """FinMind's market-wide mode (`data_id=""`) returns rows for the
+    single `start_date` and ignores `end_date`, and revenue rows only
+    ever land on the first of a month. Passing `today - 90d` therefore
+    matched nothing on ~29 days out of 30 — the job has to ask for each
+    month-first in the window explicitly.
+    """
+    from tasks import ingest_revenue_tw
+
+    seen: list[str] = []
+
+    async def _fake_market_wide(start_date, end_date=None):
+        seen.append(start_date)
+        return [_row("2330", start_date, revenue=100_000_000)]
+
+    with patch(
+        "tasks.ingest_revenue_tw.acquire_lock", AsyncMock(return_value=True),
+    ), patch(
+        "tasks.ingest_revenue_tw.release_lock", AsyncMock(),
+    ), patch(
+        "tasks.ingest_revenue_tw.backoff_remaining_seconds",
+        AsyncMock(return_value=0),
+    ), patch(
+        "tasks.ingest_revenue_tw.clear_failures", AsyncMock(),
+    ), patch(
+        "tasks.ingest_revenue_tw.finmind.get_monthly_revenue_market_wide",
+        _fake_market_wide,
+    ), patch(
+        "tasks.ingest_revenue_tw.record_health", AsyncMock(),
+    ):
+        await ingest_revenue_tw.run()
+
+    assert seen, "job made no upstream call"
+    assert all(d.endswith("-01") for d in seen), (
+        f"every market-wide query must target a month-first, got {seen}"
+    )
+    assert len(seen) == len(set(seen)), f"duplicate queries: {seen}"
+    # 90-day window spans 3-4 month-firsts depending on today's date.
+    assert 3 <= len(seen) <= 4, f"unexpected window: {seen}"
+
+
+@pytest.mark.asyncio
+async def test_empty_upstream_across_all_months_is_recorded_not_swallowed(
+    patch_session, db_session: AsyncSession,
+):
+    """Zero rows from every month-first means the upstream gave us
+    nothing — that must reach the health row as row_count=0 rather than
+    looking like a healthy write."""
+    from tasks import ingest_revenue_tw
+
+    with patch(
+        "tasks.ingest_revenue_tw.acquire_lock", AsyncMock(return_value=True),
+    ), patch(
+        "tasks.ingest_revenue_tw.release_lock", AsyncMock(),
+    ), patch(
+        "tasks.ingest_revenue_tw.backoff_remaining_seconds",
+        AsyncMock(return_value=0),
+    ), patch(
+        "tasks.ingest_revenue_tw.clear_failures", AsyncMock(),
+    ), patch(
+        "tasks.ingest_revenue_tw.finmind.get_monthly_revenue_market_wide",
+        AsyncMock(return_value=[]),
+    ), patch(
+        "tasks.ingest_revenue_tw.record_health", AsyncMock(),
+    ) as health:
+        await ingest_revenue_tw.run()
+
+    assert health.await_args.kwargs["row_count"] == 0

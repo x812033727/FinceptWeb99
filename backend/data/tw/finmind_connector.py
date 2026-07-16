@@ -513,6 +513,12 @@ async def get_monthly_revenue_market_wide(
     company's monthly revenue in a single FinMind call. Saves ~2000×
     quota vs per-symbol fan-out — used by the daily ingest task.
 
+    ⚠️ Market-wide mode is a ONE-DAY SNAPSHOT: FinMind returns only the
+    rows dated exactly `start_date` and silently ignores `end_date`
+    (per-symbol queries do honour ranges). Revenue rows only ever land
+    on a first-of-month, so `start_date` must be one — any other date
+    returns []. Call once per month you want.
+
     Each FinMind row carries its own `stock_id`, so we don't have to
     thread a symbol through. Rows with missing stock_id are dropped
     rather than poisoning the upsert with empty PKs.

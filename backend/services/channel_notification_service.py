@@ -25,7 +25,7 @@ from services.email_service import send_email
 
 log = logging.getLogger(__name__)
 
-DEFAULT_EVENT_KINDS = ["price_alert", "strategy_health"]
+DEFAULT_EVENT_KINDS = ["price_alert", "strategy_health", "daily_picks_ready"]
 ALLOWED_EVENT_KINDS = frozenset(DEFAULT_EVENT_KINDS)
 MAX_CONSECUTIVE_FAILURES = 5
 LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
@@ -48,6 +48,8 @@ def provider_is_configured(kind: str) -> bool:
 def event_kind(payload: dict[str, Any]) -> str:
     if payload.get("kind") == "strategy_health_alert":
         return "strategy_health"
+    if payload.get("kind") == "daily_picks_ready":
+        return "daily_picks_ready"
     if payload.get("type") == "alert":
         return "price_alert"
     return "system"

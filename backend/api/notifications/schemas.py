@@ -44,12 +44,16 @@ class VapidPublicKeyOut(BaseModel):
     public_key: str | None
 
 
-EventKind = Literal["price_alert", "strategy_health"]
+EventKind = Literal["price_alert", "strategy_health", "daily_picks_ready"]
 
 
 class ChannelUpdateIn(BaseModel):
     enabled: bool
-    event_kinds: list[EventKind] = Field(default_factory=lambda: ["price_alert", "strategy_health"])
+    event_kinds: list[EventKind] = Field(
+        default_factory=lambda: [
+            "price_alert", "strategy_health", "daily_picks_ready",
+        ]
+    )
     daily_digest: bool = False
 
     model_config = ConfigDict(extra="forbid")

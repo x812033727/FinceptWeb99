@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 
 import api from "@/lib/api";
 
-type EventKind = "price_alert" | "strategy_health";
+type EventKind = "price_alert" | "strategy_health" | "daily_picks_ready";
 type ChannelKind = "email" | "line";
 
 interface Channel {
@@ -129,7 +129,7 @@ export default function NotificationChannels() {
             </div>
 
             <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs">
-              {(["price_alert", "strategy_health"] as EventKind[]).map((kind) => (
+              {(["price_alert", "strategy_health", "daily_picks_ready"] as EventKind[]).map((kind) => (
                 <label key={kind} className="inline-flex items-center gap-1.5">
                   <input
                     type="checkbox"

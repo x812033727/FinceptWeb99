@@ -50,7 +50,9 @@ async def test_channel_list_has_virtual_defaults(client: AsyncClient, monkeypatc
     assert rows["email"]["daily_digest"] is False
     assert rows["email"]["destination_hint"].endswith("@example.com")
     assert rows["line"]["verified"] is False
-    assert rows["line"]["event_kinds"] == ["price_alert", "strategy_health"]
+    assert rows["line"]["event_kinds"] == [
+        "price_alert", "strategy_health", "daily_picks_ready",
+    ]
 
 
 @pytest.mark.asyncio

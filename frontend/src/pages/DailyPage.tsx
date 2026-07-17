@@ -42,6 +42,19 @@ type Result = {
 };
 type DailyDay = { date: string; strategies: Record<string, Result[]> };
 type Payload = { state: "disabled" | "empty" | "ready"; result: Result | null; strategies?: Record<string, Result[]>; days?: DailyDay[]; disclaimer: string };
+type ScoreboardEntry = {
+  strategy: string;
+  samples: number;
+  wins: number;
+  losses: number;
+  big_wins: number;
+  big_losses: number;
+  unverifiable: number;
+  win_rate?: number | null;
+  avg_return_pct?: number | null;
+  pool_samples: number;
+  avg_alpha_pct?: number | null;
+};
 
 const strategyNames: Record<string, string> = { general: "綜合選股", chip_quality: "籌碼品質", price_signal: "量價訊號" };
 // Days published before the 5→3 strategy merge still carry these keys;
@@ -71,6 +84,7 @@ function qualityWarnings(q?: QualitySignals): string[] {
 
 export default function DailyPage() {
   const [payload, setPayload] = useState<Payload | null>(null);
+  const [scoreboard, setScoreboard] = useState<ScoreboardEntry[]>([]);
   const [error, setError] = useState("");
   const [activeStrategy, setActiveStrategy] = useState("general");
   const [activeDate, setActiveDate] = useState("");
@@ -85,6 +99,16 @@ export default function DailyPage() {
       setError("");
     } catch {
       setError("目前無法取得每日圓桌結果，請稍後再試。");
+    }
+    // The scoreboard is a bonus panel — its failure must not blank the page.
+    try {
+      const res = await fetch("/api/public/daily/scoreboard", { credentials: "omit", headers: { Accept: "application/json" } });
+      if (res.ok) {
+        const body = await res.json() as { state: string; entries?: ScoreboardEntry[] };
+        setScoreboard(body.state === "ready" ? body.entries ?? [] : []);
+      }
+    } catch {
+      /* keep whatever we had */
     }
   }, []);
 
@@ -125,6 +149,7 @@ export default function DailyPage() {
 
         {payload?.state === "ready" && result && (
           <div className="space-y-8">
+            <Scoreboard entries={scoreboard} />
             {days.length > 0 && <nav aria-label="最近七個工作日" className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
               {days.map((day, index) => {
                 const selected = day.date === (selectedDay?.date ?? activeDate);
@@ -158,6 +183,53 @@ function StateCard({ children, icon, action }: { children: React.ReactNode; icon
 }
 function Info({ label, value }: { label: string; value: string }) {
   return <div className="rounded-xl bg-slate-950/50 p-4"><div className="text-xs text-slate-500">{label}</div><div className="mt-1 font-semibold">{value}</div></div>;
+}
+
+function Scoreboard({ entries }: { entries: ScoreboardEntry[] }) {
+  if (!entries.length) return null;
+  const pct = (value?: number | null, signed = false) =>
+    typeof value === "number" ? `${signed && value >= 0 ? "+" : ""}${value.toFixed(1)}%` : "—";
+  return <details className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
+    <summary className="cursor-pointer text-sm font-semibold text-slate-300">策略計分板（歷史勝率與五日報酬）</summary>
+    <div className="mt-4 overflow-x-auto">
+      <table className="w-full min-w-[560px] text-sm">
+        <thead>
+          <tr className="text-left text-xs text-slate-500">
+            <th className="py-1.5 pr-4 font-medium">策略</th>
+            <th className="py-1.5 pr-4 font-medium">勝率</th>
+            <th className="py-1.5 pr-4 font-medium">平均五日報酬</th>
+            <th className="py-1.5 pr-4 font-medium">大勝／大敗</th>
+            <th className="py-1.5 pr-4 font-medium">樣本</th>
+            <th className="py-1.5 font-medium">AI−池 α</th>
+          </tr>
+        </thead>
+        <tbody>
+          {entries.map((entry) => {
+            const decided = entry.wins + entry.losses;
+            return <tr key={entry.strategy} className="border-t border-slate-800/60 text-slate-200">
+              <td className="py-2 pr-4 font-semibold">
+                {strategyNames[entry.strategy] ?? legacyStrategyNames[entry.strategy] ?? entry.strategy}
+                {entry.samples < 5 && <span className="ml-2 rounded-full border border-slate-700 px-1.5 py-0.5 text-micro text-slate-500">樣本累積中</span>}
+              </td>
+              <td className="py-2 pr-4">
+                {typeof entry.win_rate === "number" ? `${Math.round(entry.win_rate * 100)}%` : "—"}
+                {decided > 0 && <span className="ml-1 text-xs text-slate-500">({entry.wins}勝{entry.losses}敗)</span>}
+              </td>
+              <td className={`py-2 pr-4 ${typeof entry.avg_return_pct === "number" ? (entry.avg_return_pct >= 0 ? "text-up" : "text-down") : ""}`}>
+                {pct(entry.avg_return_pct, true)}
+              </td>
+              <td className="py-2 pr-4 text-xs">{entry.big_wins}／{entry.big_losses}</td>
+              <td className="py-2 pr-4">{entry.samples}{entry.unverifiable > 0 && <span className="ml-1 text-xs text-slate-500">(無法驗證 {entry.unverifiable})</span>}</td>
+              <td className={`py-2 ${typeof entry.avg_alpha_pct === "number" ? (entry.avg_alpha_pct >= 0 ? "text-up" : "text-down") : "text-slate-500"}`}>
+                {entry.pool_samples > 0 ? pct(entry.avg_alpha_pct, true) : "累積中"}
+              </td>
+            </tr>;
+          })}
+        </tbody>
+      </table>
+    </div>
+    <p className="mt-3 text-xs leading-5 text-slate-500">勝率＝已分出勝負場次中的獲勝比例（不含無法驗證）；AI−池 α＝AI 精選的五日報酬減去該場完整候選池的平均報酬，僅統計已留存候選池表現的場次。歷史統計僅供參考，不構成投資建議。</p>
+  </details>;
 }
 
 function CandidatePool({ results }: { results: Result[] }) {

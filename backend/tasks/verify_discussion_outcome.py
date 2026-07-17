@@ -333,6 +333,15 @@ async def _verify_one(
                 win_pct=win_pct,
                 big_loss_pct=big_loss_pct,
             )
+            pool_perf: dict[str, Any] | None = None
+            try:
+                pool_perf = await _compute_pool_performance(d, anchor_tw)
+            except Exception:
+                # Pool stats are a bonus metric — never block the verdict.
+                log.exception(
+                    "verify_discussion_outcome.pool_performance_failed",
+                    extra={"id": str(d.id)},
+                )
             await _set_verdict(
                 db,
                 d,
@@ -341,6 +350,7 @@ async def _verify_one(
                 day1_opens=day1_opens,
                 day5_closes=day5_closes,
                 daily_closes=daily_closes_persist,
+                pool_performance=pool_perf,
             )
             return True
 
@@ -391,6 +401,55 @@ async def _verify_one(
     return False
 
 
+async def _compute_pool_performance(
+    d: Discussion, anchor_tw: date,
+) -> dict[str, Any] | None:
+    """Average 5-trading-day close-over-open return of the stored
+    sequence-1 candidate pool, read from the local OHLCV archive (no
+    live fetches — at verify time the ingest pipeline has these bars).
+    None when the row carries no pool; a zero-`resolved` dict when the
+    pool exists but no symbol had a complete window yet."""
+    snapshot = d.candidate_snapshot if isinstance(d.candidate_snapshot, dict) else {}
+    pool = snapshot.get("pool")
+    if not isinstance(pool, list) or not pool:
+        return None
+    symbols = [
+        str(item.get("symbol", "")).strip()
+        for item in pool
+        if isinstance(item, dict)
+    ]
+    symbols = [s for s in symbols if _TW_SYMBOL_RE.fullmatch(s)]
+    if not symbols:
+        return None
+
+    from services.ingest.repository import read_ohlcv_range_autosession
+
+    returns: list[float] = []
+    for sym in symbols:
+        bars = await read_ohlcv_range_autosession(
+            "TW", sym, anchor_tw, anchor_tw + timedelta(days=14),
+        )
+        window = sorted(
+            (b for b in bars if _bar_date(b) >= anchor_tw),
+            key=lambda b: b.get("time", ""),
+        )[:_WINDOW_TRADING_DAYS]
+        if len(window) < _WINDOW_TRADING_DAYS:
+            continue
+        day1_open = _coerce_float(window[0].get("open"))
+        day5_close = _coerce_float(window[-1].get("close"))
+        if day1_open is None or day1_open <= 0 or day5_close is None:
+            continue
+        returns.append((day5_close / day1_open - 1.0) * 100.0)
+
+    return {
+        "avg_return_pct": (
+            round(sum(returns) / len(returns), 4) if returns else None
+        ),
+        "resolved": len(returns),
+        "pool_size": len(symbols),
+    }
+
+
 async def _set_progress(
     db,
     d: Discussion,
@@ -423,6 +482,7 @@ async def _set_verdict(
     day1_opens: dict[str, float],
     day5_closes: dict[str, float] | None = None,
     daily_closes: dict[str, list[float | None]] | None = None,
+    pool_performance: dict[str, Any] | None = None,
 ) -> None:
     now = datetime.now(UTC)
     closes = day5_closes if day5_closes is not None else {}
@@ -435,6 +495,8 @@ async def _set_verdict(
     }
     if daily_closes is not None:
         values["daily_close_prices"] = daily_closes or None
+    if pool_performance is not None:
+        values["pool_performance"] = pool_performance
     await db.execute(
         update(Discussion)
         .where(Discussion.id == d.id)
@@ -451,6 +513,8 @@ async def _set_verdict(
     d.day5_close_prices = closes or None
     if daily_closes is not None:
         d.daily_close_prices = daily_closes or None
+    if pool_performance is not None:
+        d.pool_performance = pool_performance
 
     # PR-B2: bump hit_count on every lesson cited by this discussion's
     # round contexts when the verdict is a winning band (legacy "win"

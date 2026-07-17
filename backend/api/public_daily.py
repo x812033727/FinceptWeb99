@@ -20,6 +20,7 @@ from db.session import get_db
 from limiter import limiter
 from models.discussion import Discussion, DiscussionTurn
 from models.user import User
+from services.daily_scoreboard_service import build_scoreboard
 from services.discussion.symbol_names import enrich_conclusion_with_names
 
 router = APIRouter()
@@ -130,6 +131,69 @@ def _public_conclusion(value: dict[str, Any], market: str) -> dict[str, Any]:
             if key in quality
         }
     return public
+
+
+class ScoreboardEntry(BaseModel):
+    strategy: str
+    samples: int
+    wins: int
+    losses: int
+    big_wins: int
+    big_losses: int
+    unverifiable: int
+    win_rate: float | None = None
+    avg_return_pct: float | None = None
+    pool_samples: int = 0
+    avg_alpha_pct: float | None = None
+
+
+class PublicScoreboardResponse(BaseModel):
+    state: Literal["disabled", "empty", "ready"]
+    entries: list[ScoreboardEntry] = Field(default_factory=list)
+    disclaimer: str = DISCLAIMER
+
+
+_SCOREBOARD_CACHE_KEY = "public:daily:scoreboard:v1"
+_SCOREBOARD_CACHE_TTL_SECONDS = 300
+
+
+@router.get("/daily/scoreboard", response_model=PublicScoreboardResponse)
+@limiter.limit("30/minute")
+async def get_public_daily_scoreboard(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> PublicScoreboardResponse:
+    """Aggregate win rate / realized 5-day return / pick-vs-pool alpha
+    per daily strategy — same anonymous projection rules as /daily."""
+    response.headers["Cache-Control"] = "public, max-age=300, s-maxage=300"
+    response.headers["X-Robots-Tag"] = "noindex, nofollow"
+
+    email = settings.PUBLIC_DAILY_RESULTS_OWNER_EMAIL.strip().lower()
+    if not email:
+        return PublicScoreboardResponse(state="disabled")
+
+    cached = await cache_get_json(_SCOREBOARD_CACHE_KEY)
+    if cached is not None:
+        return PublicScoreboardResponse.model_validate(cached)
+
+    owner_id = await db.scalar(
+        select(User.id).where(func.lower(User.email) == email, User.is_active.is_(True))
+    )
+    if owner_id is None:
+        payload = PublicScoreboardResponse(state="empty")
+    else:
+        entries = await build_scoreboard(db, owner_id)
+        payload = PublicScoreboardResponse(
+            state="ready" if entries else "empty",
+            entries=[ScoreboardEntry(**entry) for entry in entries],
+        )
+    await cache_set_json(
+        _SCOREBOARD_CACHE_KEY,
+        payload.model_dump(mode="json"),
+        _SCOREBOARD_CACHE_TTL_SECONDS,
+    )
+    return payload
 
 
 @router.get("/daily", response_model=PublicDailyResponse)

@@ -245,3 +245,61 @@ async def test_public_daily_window_anchored_on_newest_row(client, db_session, mo
     dates = [d["date"] for d in body["days"]]
     assert dates == ["2026-07-14"]
 
+
+
+@pytest.mark.asyncio
+async def test_public_scoreboard_endpoint(client, db_session, monkeypatch):
+    owner = User(id=uuid.uuid4(), email="sb-pub@example.com", hashed_password="x", role=UserRole.viewer, is_active=True)
+    db_session.add(owner)
+    await db_session.flush()
+    row = discussion(owner.id, created_at=datetime(2026, 7, 14, tzinfo=UTC), conclusion={"reasoning": "x"})
+    row.auto_run_strategy = "general"
+    row.verdict = "win"
+    row.day1_open_prices = {"2330": 100.0}
+    row.day5_close_prices = {"2330": 106.0}
+    db_session.add(row)
+    await db_session.commit()
+    monkeypatch.setattr(settings, "PUBLIC_DAILY_RESULTS_OWNER_EMAIL", "sb-pub@example.com")
+
+    body = (await client.get("/api/public/daily/scoreboard")).json()
+    assert body["state"] == "ready"
+    entry = body["entries"][0]
+    assert entry["strategy"] == "general"
+    assert entry["win_rate"] == 1.0
+    assert entry["avg_return_pct"] == 6.0
+
+    # Direct-call the handler path pieces for tracer-proof coverage.
+    from services.daily_scoreboard_service import build_scoreboard
+    entries = await build_scoreboard(db_session, owner.id)
+    assert entries[0]["strategy"] == "general"
+
+
+@pytest.mark.asyncio
+async def test_public_scoreboard_disabled_and_empty(client, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "PUBLIC_DAILY_RESULTS_OWNER_EMAIL", "")
+    assert (await client.get("/api/public/daily/scoreboard")).json()["state"] == "disabled"
+
+    monkeypatch.setattr(settings, "PUBLIC_DAILY_RESULTS_OWNER_EMAIL", "ghost-sb@example.com")
+    assert (await client.get("/api/public/daily/scoreboard")).json()["state"] == "empty"
+
+
+@pytest.mark.asyncio
+async def test_public_scoreboard_serves_cache_and_writes_it(client, monkeypatch):
+    calls = []
+
+    async def fake_set(key, value, ttl_seconds):
+        calls.append((key, value, ttl_seconds))
+
+    monkeypatch.setattr("api.public_daily.cache_set_json", fake_set)
+    monkeypatch.setattr(settings, "PUBLIC_DAILY_RESULTS_OWNER_EMAIL", "ghost-sb2@example.com")
+    body = (await client.get("/api/public/daily/scoreboard")).json()
+    assert body["state"] == "empty"
+    scoreboard_calls = [c for c in calls if "scoreboard" in c[0]]
+    assert len(scoreboard_calls) == 1 and scoreboard_calls[0][2] == 300
+
+    async def fake_get(key):
+        return {"state": "ready", "entries": [], "disclaimer": "cached-sb"}
+
+    monkeypatch.setattr("api.public_daily.cache_get_json", fake_get)
+    body = (await client.get("/api/public/daily/scoreboard")).json()
+    assert body["disclaimer"] == "cached-sb"

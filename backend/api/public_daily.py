@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
+from datetime import timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
@@ -9,8 +11,10 @@ from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from ai.agents import list_agents
+from cache.redis_cache import cache_get_json, cache_set_json
 from config import settings
 from db.session import get_db
 from limiter import limiter
@@ -27,6 +31,20 @@ DISCLAIMER = (
 
 # How many recent run dates the public page shows.
 RECENT_DAYS = 7
+
+# Calendar-day bound on the driving query, anchored on the newest
+# discussion (not on today — the page keeps showing the last runs even
+# after a long publishing gap): generously covers RECENT_DAYS workdays
+# plus holidays while keeping the scan from growing with all-time
+# history.
+QUERY_WINDOW_DAYS = 45
+
+# The page is anonymous and identical for every visitor, so the whole
+# response is shared in Redis for a minute — one query storm per TTL
+# instead of per visitor. (The Cache-Control s-maxage below has no
+# shared cache in front of it in this deployment.)
+_CACHE_KEY = "public:daily:v1"
+_CACHE_TTL_SECONDS = 60
 
 
 class PublicTurn(BaseModel):
@@ -130,20 +148,61 @@ async def get_public_daily(
     if not email:
         return PublicDailyResponse(state="disabled")
 
+    cached = await cache_get_json(_CACHE_KEY)
+    if cached is not None:
+        return PublicDailyResponse.model_validate(cached)
+
+    payload = await _build_response(db, email)
+    await cache_set_json(_CACHE_KEY, payload.model_dump(mode="json"), _CACHE_TTL_SECONDS)
+    return payload
+
+
+async def _build_response(db: AsyncSession, email: str) -> PublicDailyResponse:
     owner_id = await db.scalar(
         select(User.id).where(func.lower(User.email) == email, User.is_active.is_(True))
     )
     if owner_id is None:
         return PublicDailyResponse(state="empty")
 
+    latest_created = await db.scalar(
+        select(func.max(Discussion.created_at)).where(
+            Discussion.owner_id == owner_id,
+            Discussion.auto_run.is_(True),
+            Discussion.status == "done",
+            Discussion.conclusion.is_not(None),
+        )
+    )
+    if latest_created is None:
+        return PublicDailyResponse(state="empty")
+
+    cutoff = latest_created - timedelta(days=QUERY_WINDOW_DAYS)
     rows = (
         await db.scalars(
             select(Discussion)
+            .options(load_only(
+                Discussion.id,
+                Discussion.market,
+                Discussion.topic,
+                Discussion.created_at,
+                Discussion.conclusion,
+                Discussion.candidate_snapshot,
+                Discussion.auto_run_strategy,
+                Discussion.auto_run_sequence,
+                Discussion.auto_run_date,
+                Discussion.verdict,
+                Discussion.verdict_reason,
+                Discussion.verified_at,
+                Discussion.verify_after_date,
+                Discussion.day1_open_prices,
+                Discussion.day5_close_prices,
+                Discussion.daily_close_prices,
+            ))
             .where(
                 Discussion.owner_id == owner_id,
                 Discussion.auto_run.is_(True),
                 Discussion.status == "done",
                 Discussion.conclusion.is_not(None),
+                Discussion.created_at >= cutoff,
             )
             .order_by(Discussion.created_at.desc())
         )
@@ -174,20 +233,31 @@ async def get_public_daily(
 
     recent_dates = sorted({run_date(row) for row in valid_rows}, reverse=True)[:RECENT_DAYS]
 
-    async def project(row: Discussion) -> PublicDailyResult:
-        row_turns = (
-            await db.scalars(
-                select(DiscussionTurn)
-                .where(
-                    DiscussionTurn.discussion_id == row.id,
-                    DiscussionTurn.round.between(1, 5),
-                    DiscussionTurn.injected_by_user.is_(False),
-                    ~DiscussionTurn.persona_id.startswith("_system:"),
-                )
-                .order_by(DiscussionTurn.round, DiscussionTurn.turn_index)
+    # One batched turns query for every discussion the page shows —
+    # previously each projected row issued its own round-trip.
+    recent_set = set(recent_dates)
+    projected_rows = [row for row in valid_rows if run_date(row) in recent_set]
+    projected_ids = {row.id for row in projected_rows} | {discussion.id}
+    turns_by_discussion: dict[Any, list[DiscussionTurn]] = defaultdict(list)
+    all_turns = (
+        await db.scalars(
+            select(DiscussionTurn)
+            .where(
+                DiscussionTurn.discussion_id.in_(projected_ids),
+                DiscussionTurn.round.between(1, 5),
+                DiscussionTurn.injected_by_user.is_(False),
+                ~DiscussionTurn.persona_id.startswith("_system:"),
             )
-        ).all()
-        names = {item["id"]: item["name"] for item in list_agents()}
+            .order_by(DiscussionTurn.round, DiscussionTurn.turn_index)
+        )
+    ).all()
+    for turn in all_turns:
+        turns_by_discussion[turn.discussion_id].append(turn)
+
+    names = {item["id"]: item["name"] for item in list_agents()}
+
+    def project(row: Discussion) -> PublicDailyResult:
+        row_turns = turns_by_discussion.get(row.id, [])
         captured = row.conclusion.get("captured_session")
         snapshot = row.candidate_snapshot if isinstance(row.candidate_snapshot, dict) else {}
         return PublicDailyResult(
@@ -238,58 +308,17 @@ async def get_public_daily(
         )
         for row in day_rows:
             day_grouped.setdefault(row.auto_run_strategy or "general", []).append(
-                await project(row)
+                project(row)
             )
         days.append(PublicDailyDay(date=day.isoformat(), strategies=day_grouped))
     grouped = days[0].strategies if days else {key: [] for key in strategy_keys}
 
-    turns = (
-        await db.scalars(
-            select(DiscussionTurn)
-            .where(
-                DiscussionTurn.discussion_id == discussion.id,
-                DiscussionTurn.round.between(1, 5),
-                DiscussionTurn.injected_by_user.is_(False),
-                ~DiscussionTurn.persona_id.startswith("_system:"),
-            )
-            .order_by(DiscussionTurn.round, DiscussionTurn.turn_index)
-        )
-    ).all()
-    names = {item["id"]: item["name"] for item in list_agents()}
-    conclusion = _public_conclusion(discussion.conclusion, discussion.market)
-    captured = discussion.conclusion.get("captured_session")
-    legacy = await project(discussion)
+    # `result` predates the multi-day/multi-strategy shape and mirrors
+    # the newest valid discussion — same projection, kept for older
+    # clients.
     return PublicDailyResponse(
         state="ready",
         strategies=grouped,
         days=days,
-        result=PublicDailyResult(
-            market=discussion.market,
-            topic=discussion.topic,
-            created_at=discussion.created_at.isoformat(),
-            captured_session=captured if isinstance(captured, dict) else None,
-            conclusion=conclusion,
-            turns=[
-                PublicTurn(
-                    round=turn.round,
-                    turn_index=turn.turn_index,
-                    persona_id=turn.persona_id,
-                    persona_name=names.get(turn.persona_id, turn.persona_id),
-                    stance=turn.stance,
-                    content=turn.content,
-                )
-                for turn in turns
-            ],
-            strategy=legacy.strategy,
-            sequence=legacy.sequence,
-            candidates=legacy.candidates,
-            candidate_pool=legacy.candidate_pool,
-            verdict=legacy.verdict,
-            verdict_reason=legacy.verdict_reason,
-            verified_at=legacy.verified_at,
-            verify_after_date=legacy.verify_after_date,
-            day1_open_prices=legacy.day1_open_prices,
-            day5_close_prices=legacy.day5_close_prices,
-            daily_close_prices=legacy.daily_close_prices,
-        ),
+        result=project(discussion),
     )

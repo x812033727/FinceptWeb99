@@ -150,6 +150,44 @@ async def test_public_daily_shows_seven_recent_days(client, db_session, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_build_response_direct(db_session):
+    """Direct-call coverage of the projection builder — the HTTP tests
+    exercise it too, but the coverage tracer doesn't reliably see lines
+    run inside the ASGI dispatch."""
+    from api.public_daily import _build_response
+
+    owner = User(id=uuid.uuid4(), email="direct@example.com", hashed_password="x", role=UserRole.viewer, is_active=True)
+    idle = User(id=uuid.uuid4(), email="idle@example.com", hashed_password="x", role=UserRole.viewer, is_active=True)
+    db_session.add_all([owner, idle])
+    await db_session.flush()
+    conclusion = {
+        "recommended_symbols": ["2330"], "reasoning": "理由", "risks": [],
+        "time_horizon": "short_term", "consensus_score": .8,
+    }
+    row = discussion(owner.id, created_at=datetime(2026, 7, 14, tzinfo=UTC), conclusion=conclusion)
+    row.auto_run_strategy = "general"
+    row.auto_run_date = datetime(2026, 7, 14, tzinfo=UTC).date()
+    db_session.add(row)
+    await db_session.flush()
+    db_session.add(DiscussionTurn(
+        discussion_id=row.id, round=1, turn_index=0,
+        persona_id="market_analyst", stance="agree", content="直呼發言",
+    ))
+    await db_session.commit()
+
+    # Unknown email → empty; known publisher with no discussions → empty.
+    assert (await _build_response(db_session, "ghost@example.com")).state == "empty"
+    assert (await _build_response(db_session, "idle@example.com")).state == "empty"
+
+    resp = await _build_response(db_session, "direct@example.com")
+    assert resp.state == "ready"
+    assert [d.date for d in resp.days] == ["2026-07-14"]
+    run = resp.days[0].strategies["general"][0]
+    assert [t.content for t in run.turns] == ["直呼發言"]
+    assert resp.result is not None and resp.result.topic == run.topic
+
+
+@pytest.mark.asyncio
 async def test_public_daily_serves_cached_payload(client, monkeypatch):
     async def fake_get(key):
         return {

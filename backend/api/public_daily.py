@@ -21,7 +21,10 @@ from limiter import limiter
 from models.discussion import Discussion, DiscussionTurn
 from models.user import User
 from services.daily_scoreboard_service import build_scoreboard
-from services.discussion.symbol_names import enrich_conclusion_with_names
+from services.discussion.symbol_names import (
+    enrich_conclusion_with_names,
+    resolve_display_name,
+)
 
 router = APIRouter()
 
@@ -320,6 +323,21 @@ async def _build_response(db: AsyncSession, email: str) -> PublicDailyResponse:
 
     names = {item["id"]: item["name"] for item in list_agents()}
 
+    def _with_company_names(items: Any, market: str) -> list[dict[str, Any]]:
+        """Attach the 公司簡稱 to each candidate/pool item. Names come
+        from the in-memory TW symbol map (O(1), no I/O); items whose
+        symbol has no known name pass through unchanged."""
+        if not isinstance(items, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for item in items:
+            if isinstance(item, dict) and item.get("symbol"):
+                name = resolve_display_name(market, str(item["symbol"]))
+                if name:
+                    item = {**item, "name": name}
+            out.append(item)
+        return out
+
     def project(row: Discussion) -> PublicDailyResult:
         row_turns = turns_by_discussion.get(row.id, [])
         captured = row.conclusion.get("captured_session")
@@ -343,12 +361,12 @@ async def _build_response(db: AsyncSession, email: str) -> PublicDailyResponse:
             ],
             strategy=row.auto_run_strategy or "general",
             sequence=row.auto_run_sequence or 1,
-            candidates=snapshot.get("candidates", [])
-            if isinstance(snapshot.get("candidates", []), list)
-            else [],
-            candidate_pool=snapshot.get("pool", [])
-            if isinstance(snapshot.get("pool", []), list)
-            else [],
+            candidates=_with_company_names(
+                snapshot.get("candidates", []), row.market,
+            ),
+            candidate_pool=_with_company_names(
+                snapshot.get("pool", []), row.market,
+            ),
             verdict=row.verdict,
             verdict_reason=row.verdict_reason,
             verified_at=row.verified_at.isoformat() if row.verified_at else None,

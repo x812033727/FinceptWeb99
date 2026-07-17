@@ -30,8 +30,8 @@ type Result = {
   turns: Turn[];
   strategy?: string;
   sequence?: number;
-  candidates?: Array<{ symbol?: string; strategy_score?: number; signal_type?: string }>;
-  candidate_pool?: Array<{ symbol?: string; strategy_score?: number; signal_type?: string }>;
+  candidates?: Array<{ symbol?: string; name?: string; strategy_score?: number; signal_type?: string }>;
+  candidate_pool?: Array<{ symbol?: string; name?: string; strategy_score?: number; signal_type?: string }>;
   verdict?: "big_win" | "win" | "big_loss" | "loss" | "unverifiable" | null;
   verdict_reason?: string | null;
   verified_at?: string | null;
@@ -244,7 +244,7 @@ function CandidatePool({ results }: { results: Result[] }) {
     </summary>
     <div className="mt-4 flex flex-wrap gap-2">{items.map((c) => (
       <span key={c.symbol} className="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-xs text-slate-300">
-        {c.symbol}{typeof c.strategy_score === "number" && <> · {c.strategy_score.toFixed(1)}</>}
+        {c.symbol}{c.name && <span className="ml-1 text-slate-400">{c.name}</span>}{typeof c.strategy_score === "number" && <> · {c.strategy_score.toFixed(1)}</>}
         {c.signal_type && signalNames[c.signal_type] && <span className="ml-1 text-amber-300">{signalNames[c.signal_type]}</span>}
       </span>
     ))}</div>
@@ -255,7 +255,7 @@ function StrategyRun({ run }: { run: Result }) {
   const warnings = qualityWarnings(run.conclusion.quality_signals);
   const signalCandidates = (run.candidates ?? []).filter((c) => c.symbol && c.signal_type && signalNames[c.signal_type]);
   return <article className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5 sm:p-7">
-    {signalCandidates.length > 0 && <div className="mb-4 flex flex-wrap gap-2">{signalCandidates.map((c) => <span key={c.symbol} className="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-xs text-slate-300">{c.symbol} · {signalNames[c.signal_type!]}</span>)}</div>}
+    {signalCandidates.length > 0 && <div className="mb-4 flex flex-wrap gap-2">{signalCandidates.map((c) => <span key={c.symbol} className="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-xs text-slate-300">{c.symbol}{c.name && <span className="ml-1 text-slate-400">{c.name}</span>} · {signalNames[c.signal_type!]}</span>)}</div>}
     <OutcomeSummary run={run} />
     <div className="mt-4 flex flex-wrap gap-3">{(run.conclusion.recommended_symbols ?? []).map((symbol) => <div key={symbol} className="rounded-xl bg-amber-900/40 px-4 py-3 text-amber-100 ring-1 ring-amber-800/60"><div className="font-bold">{symbol}</div><div className="text-xs text-amber-200/70">{run.conclusion.symbol_names?.[symbol] ?? ""}</div></div>)}{!(run.conclusion.recommended_symbols?.length) && <p className="text-slate-400">本場沒有推薦標的</p>}</div>
     <p className="mt-5 whitespace-pre-wrap leading-7 text-slate-200">{run.conclusion.reasoning}</p>
@@ -277,12 +277,12 @@ function OutcomeSummary({ run }: { run: Result }) {
     return { symbol, open, close, change };
   });
   return <section className="mt-5 rounded-xl border border-slate-800 bg-slate-950/50 p-4 text-slate-100">
-    <div className="flex flex-wrap items-center justify-between gap-2"><div><h3 className="font-semibold text-amber-300">本場答案</h3><p className="mt-1 text-lg font-bold text-amber-100">{symbols.length ? symbols.join("、") : "本場沒有推薦標的"}</p></div><div className="text-right"><div className="text-xs text-slate-500">五日績效</div><span className={`mt-1 inline-block rounded-full bg-slate-800 px-3 py-1 text-sm font-bold ${run.verdict ? BAND_LABELS[run.verdict]?.cls ?? "text-slate-300" : "text-slate-300"}`}>{run.verdict ? verdictLabel[run.verdict] ?? run.verdict : run.verify_after_date ? `預計 ${new Date(`${run.verify_after_date}T00:00:00+08:00`).toLocaleDateString("zh-TW", { month: "numeric", day: "numeric" })} 對答案` : "等待驗證"}</span></div></div>
+    <div className="flex flex-wrap items-center justify-between gap-2"><div><h3 className="font-semibold text-amber-300">本場答案</h3><p className="mt-1 text-lg font-bold text-amber-100">{symbols.length ? symbols.map((s) => run.conclusion.symbol_names?.[s] ? `${s} ${run.conclusion.symbol_names[s]}` : s).join("、") : "本場沒有推薦標的"}</p></div><div className="text-right"><div className="text-xs text-slate-500">五日績效</div><span className={`mt-1 inline-block rounded-full bg-slate-800 px-3 py-1 text-sm font-bold ${run.verdict ? BAND_LABELS[run.verdict]?.cls ?? "text-slate-300" : "text-slate-300"}`}>{run.verdict ? verdictLabel[run.verdict] ?? run.verdict : run.verify_after_date ? `預計 ${new Date(`${run.verify_after_date}T00:00:00+08:00`).toLocaleDateString("zh-TW", { month: "numeric", day: "numeric" })} 對答案` : "等待驗證"}</span></div></div>
     {!!rows.length && <div className="mt-3 space-y-2">{rows.map((row) => {
       const changes = (run.daily_close_prices?.[row.symbol] ?? []).map((close) => row.open && close != null ? (close / row.open - 1) * 100 : null);
       const band = run.verdict ?? classifySymbolBand(changes.map((value) => value == null ? null : value / 100));
       const display = band ? BAND_LABELS[band] : { mark: "等待", cls: "text-slate-400" };
-      return <div key={row.symbol} className="rounded-lg bg-slate-950/60 p-3 text-sm"><b className={display.cls}>{row.symbol} {display.mark}</b><div className="mt-1">{Array.from({ length: 5 }, (_, index) => { const value = changes[index]; return <span key={index}><span className={value == null ? "text-slate-500" : value >= 0 ? "text-up" : "text-down"}>{value == null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`}</span>{index < 4 && <span className="text-slate-600">／</span>}</span>; })}</div></div>;
+      return <div key={row.symbol} className="rounded-lg bg-slate-950/60 p-3 text-sm"><b className={display.cls}>{row.symbol}{run.conclusion.symbol_names?.[row.symbol] ? ` ${run.conclusion.symbol_names[row.symbol]}` : ""} {display.mark}</b><div className="mt-1">{Array.from({ length: 5 }, (_, index) => { const value = changes[index]; return <span key={index}><span className={value == null ? "text-slate-500" : value >= 0 ? "text-up" : "text-down"}>{value == null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`}</span>{index < 4 && <span className="text-slate-600">／</span>}</span>; })}</div></div>;
     })}</div>}
     <p className="mt-3 text-sm leading-6 text-slate-400">{run.verdict_reason || "完成五個交易日後，系統會在這裡顯示驗證結果。"}</p>
   </section>;

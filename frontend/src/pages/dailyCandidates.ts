@@ -1,4 +1,4 @@
-export type PoolItem = { symbol?: string; strategy_score?: number; signal_type?: string };
+export type PoolItem = { symbol?: string; name?: string; strategy_score?: number; signal_type?: string };
 
 /** Keep the highest-scored entry per symbol, sorted by score descending. */
 export function dedupeBySymbol(items: PoolItem[]): PoolItem[] {

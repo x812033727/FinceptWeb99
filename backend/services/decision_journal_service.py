@@ -3,6 +3,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from models.decision_journal import DecisionJournalEntry
 from models.discussion import Discussion
@@ -63,7 +64,22 @@ def calculate_outcomes(bars: list[dict[str, Any]], transaction_cost_bps: float) 
 
 
 async def refresh_decision_journal(db: AsyncSession) -> int:
-    discussions = list((await db.scalars(select(Discussion).where(Discussion.conclusion.is_not(None)))).all())
+    # load_only: this walk touches every concluded discussion; without
+    # it each row also materializes the big unused JSON columns
+    # (post-mortems, outcome vectors, candidate snapshots).
+    discussions = list((await db.scalars(
+        select(Discussion)
+        .options(load_only(
+            Discussion.id,
+            Discussion.owner_id,
+            Discussion.market,
+            Discussion.conclusion,
+            Discussion.created_at,
+            Discussion.as_of_date,
+            Discussion.auto_run,
+        ))
+        .where(Discussion.conclusion.is_not(None))
+    )).all())
     changed = 0
     for discussion in discussions:
         if discussion.market not in {"TW", "US"}:

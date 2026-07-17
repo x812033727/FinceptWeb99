@@ -168,6 +168,9 @@ async def _do_run() -> int:
                 select(Discussion).where(
                     Discussion.verdict.is_(None),
                     Discussion.verify_after_date.is_not(None),
+                    # Future-dated rows can't verify yet — bound them out
+                    # in SQL instead of pulling and re-filtering in Python.
+                    Discussion.verify_after_date <= today,
                 )
             )
         ).all()

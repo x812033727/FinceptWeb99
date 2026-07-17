@@ -52,6 +52,11 @@ _LOCK_TTL = 10 * 60   # plenty of headroom for ~hundreds of pending rows
 # already fully resolved are stable and stay skipped.
 _REFRESH_WINDOW_DAYS = 14
 
+# Absolute scan bound: rows older than this are never (re)scored —
+# their bar window closed long ago, and without this floor the
+# never-scored branch is an unbounded full-table scan on every tick.
+_SCAN_WINDOW_DAYS = 60
+
 
 async def run() -> None:
     if not await acquire_lock(_LOCK_KEY, _LOCK_TTL):
@@ -134,9 +139,16 @@ async def _do_run() -> tuple[int, list[str]]:
             Discussion.daily_close_prices.is_(None),
             cast(Discussion.daily_close_prices, String) == "null",
         )
+        # Hard 60-day scan floor: the never-scored branch used to walk
+        # ALL history on every tick (the cast comparisons above are
+        # non-sargable, so this was a growing full-table scan). Rows
+        # older than that can't gain new bars anyway — the verifier's
+        # stale-grace gives up on them long before 60 days.
+        scan_floor = datetime.now(UTC) - timedelta(days=_SCAN_WINDOW_DAYS)
         stmt = (
             select(Discussion)
             .where(
+                Discussion.created_at >= scan_floor,
                 Discussion.conclusion.isnot(None),
                 conclusion_present,
                 or_(

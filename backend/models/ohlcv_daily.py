@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Date, DateTime, Index, Numeric, String, func
+from sqlalchemy import BigInteger, Date, DateTime, Numeric, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base
@@ -12,11 +12,11 @@ class OhlcvDaily(Base):
     Composite PK (market, symbol, ts) makes the daily upsert idempotent
     and matches TimescaleDB's "partitioning column must appear in every
     UNIQUE index" rule. Read path: services.ingest.repository.read_ohlcv_range.
+    All lookups filter on the PK columns — a former secondary index on
+    the same (market, symbol, ts) tuple was dropped in migration 0097
+    as a pure duplicate.
     """
     __tablename__ = "ohlcv_daily"
-    __table_args__ = (
-        Index("ix_ohlcv_daily_lookup", "market", "symbol", "ts"),
-    )
 
     market: Mapped[str] = mapped_column(String(12), primary_key=True)
     symbol: Mapped[str] = mapped_column(String(20), primary_key=True)

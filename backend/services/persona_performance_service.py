@@ -30,6 +30,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from models.discussion import Discussion, DiscussionTurn
 from models.discussion_strategy_template import DiscussionStrategyTemplate
@@ -62,7 +63,10 @@ async def _gather_persona_participation(
     discussion's verdict column. SQLAlchemy's expression API gives
     us that in two queries instead of N+1.
     """
-    base = select(Discussion).where(
+    # Only id + verdict are read off these rows; skip the heavy JSON.
+    base = select(Discussion).options(
+        load_only(Discussion.id, Discussion.verdict)
+    ).where(
         Discussion.owner_id == owner_id,
         Discussion.created_at >= since,
     )

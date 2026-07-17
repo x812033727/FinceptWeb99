@@ -666,6 +666,35 @@ async def test_pool_performance_computed_on_verdict(
 
 
 @pytest.mark.asyncio
+async def test_future_dated_rows_stay_untouched(
+    patch_session,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Rows whose verify_after_date is still in the future are bounded
+    out in SQL — no bar fetches, no partial progress writes."""
+    d = await _make_pending(
+        db_session, owner.id, symbols=["2330"], verify_after_offset=3,
+    )
+    history = AsyncMock(return_value=[])
+    patches = _stub_lock_helpers() + [
+        patch("services.tw_market_service.get_history", history),
+    ]
+    _enter_all(patches)
+    try:
+        from tasks import verify_discussion_outcome
+
+        await verify_discussion_outcome.run()
+    finally:
+        _exit_all(patches)
+
+    history.assert_not_awaited()
+    refreshed = await db_session.get(Discussion, d.id)
+    await db_session.refresh(refreshed)
+    assert refreshed.verdict is None
+
+
+@pytest.mark.asyncio
 async def test_pool_performance_absent_without_pool(
     patch_session,
     db_session: AsyncSession,

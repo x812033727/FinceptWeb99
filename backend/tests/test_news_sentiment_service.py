@@ -103,6 +103,27 @@ def test_parse_response_object_instead_of_array_returns_empty():
     assert parsed == []
 
 
+def test_parse_response_survives_chatty_preamble_before_fence():
+    """Regression: the claude_sub gateway prefixes prose before the
+    fence. This exact shape armed the provider cooldown for days and
+    zeroed the whole sentiment lane."""
+    raw = (
+        "This is a straightforward classification task, not one "
+        "requiring the skills catalog (no code, no creative work). "
+        "I'll proceed directly."
+        '```json\n[{"id": 99809, "score": 0.7, "reason": "法人調升"},'
+        ' {"id": 99749, "score": -1.0, "reason": "重挫"}]\n```'
+    )
+    parsed = news_sentiment_service._parse_response(raw)
+    assert [p["id"] for p in parsed] == [99809, 99749]
+
+
+def test_parse_response_salvages_prose_wrapped_array_without_fence():
+    raw = '好的，以下是結果： [{"id": 3, "score": 0.0, "reason": "中性"}] 供參考。'
+    parsed = news_sentiment_service._parse_response(raw)
+    assert parsed == [{"id": 3, "score": 0.0, "reason": "中性"}]
+
+
 # ── _format_items: full-text lead + JSON escaping (G5 R8-3) ─────────
 
 

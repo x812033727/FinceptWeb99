@@ -40,6 +40,7 @@ from db.session import AsyncSessionLocal
 from models.corporate_announcement import CorporateAnnouncement
 from models.news_article import NewsArticle
 from services.llm_parsing_utils import (
+    extract_json_array,
     extract_json_object,
     loads_lenient,
     strip_code_fence,
@@ -321,7 +322,13 @@ def _parse_response(text: str) -> list[dict]:
     try:
         data = loads_lenient(cleaned)
     except json.JSONDecodeError:
-        salvaged = extract_json_object(cleaned) if cleaned else None
+        # Array first — this scorer expects a JSON array, and the
+        # object extractor would salvage a prose-wrapped array into
+        # just its first element (a dict → "unexpected_shape").
+        salvaged = (
+            (extract_json_array(cleaned) or extract_json_object(cleaned))
+            if cleaned else None
+        )
         if salvaged is not None:
             try:
                 data = loads_lenient(salvaged)

@@ -611,3 +611,82 @@ async def test_filters_non_numeric_symbols(
     assert refreshed.verdict == "win"
     # Verifier only fetched history for the valid TW symbol
     assert history_calls == ["2330"]
+
+
+@pytest.mark.asyncio
+async def test_pool_performance_computed_on_verdict(
+    patch_session,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """A verified seq-1 row with a stored candidate pool gets a
+    pool_performance snapshot computed from the local OHLCV archive:
+    +10% and -10% legs average to 0%."""
+    d = await _make_pending(db_session, owner.id, symbols=["2330"])
+    d.candidate_snapshot = {
+        "strategy": "general", "sequence": 1, "candidates": [],
+        "pool": [
+            {"symbol": "1101", "strategy_score": 2.0},
+            {"symbol": "1102", "strategy_score": 1.0},
+            {"symbol": "not-a-symbol", "strategy_score": 0.5},
+        ],
+    }
+    await db_session.commit()
+    created_date = d.created_at.date()
+
+    pick_bars = _bars(created_date, 5, open_=100.0, closes=[106.0, 106.0, 106.0, 103.0, 102.0])
+    pool_bars = {
+        "1101": _bars(created_date, 5, open_=100.0, closes=[101, 102, 104, 108, 110.0]),
+        "1102": _bars(created_date, 5, open_=100.0, closes=[99, 97, 95, 92, 90.0]),
+    }
+
+    async def _fake_archive(_market, sym, _start, _end):
+        return pool_bars.get(sym, [])
+
+    patches = _stub_lock_helpers() + [
+        patch("services.tw_market_service.get_history",
+              AsyncMock(return_value=pick_bars)),
+        patch("services.ingest.repository.read_ohlcv_range_autosession",
+              AsyncMock(side_effect=_fake_archive)),
+    ]
+    _enter_all(patches)
+    try:
+        from tasks import verify_discussion_outcome
+
+        await verify_discussion_outcome.run()
+    finally:
+        _exit_all(patches)
+
+    refreshed = await db_session.get(Discussion, d.id)
+    await db_session.refresh(refreshed)
+    assert refreshed.verdict == "win"
+    assert refreshed.pool_performance == {
+        "avg_return_pct": 0.0, "resolved": 2, "pool_size": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_pool_performance_absent_without_pool(
+    patch_session,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """No stored pool → pool_performance stays NULL (legacy rows)."""
+    d = await _make_pending(db_session, owner.id, symbols=["2330"])
+    created_date = d.created_at.date()
+    bars = _bars(created_date, 5, open_=100.0, closes=[106.0, 106.0, 106.0, 103.0, 102.0])
+    patches = _stub_lock_helpers() + [
+        patch("services.tw_market_service.get_history", AsyncMock(return_value=bars)),
+    ]
+    _enter_all(patches)
+    try:
+        from tasks import verify_discussion_outcome
+
+        await verify_discussion_outcome.run()
+    finally:
+        _exit_all(patches)
+
+    refreshed = await db_session.get(Discussion, d.id)
+    await db_session.refresh(refreshed)
+    assert refreshed.verdict == "win"
+    assert refreshed.pool_performance is None

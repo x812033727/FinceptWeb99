@@ -66,6 +66,9 @@ _MAX_PAGE_SIZE = 500
 # through the app in one request.
 _EXPORT_MAX_ROWS = 10_000
 
+# Flush the CSV buffer to the stream once it grows past this.
+_CSV_FLUSH_BYTES = 64 * 1024
+
 
 class TableInfo(BaseModel):
     schema_name: str
@@ -357,7 +360,7 @@ async def export_csv(
                 "***" if i in masked_idx and value is not None else _jsonable(value)
                 for i, value in enumerate(row)
             ])
-            if buf.tell() > 64 * 1024:
+            if buf.tell() > _CSV_FLUSH_BYTES:
                 yield buf.getvalue()
                 buf.seek(0)
                 buf.truncate()

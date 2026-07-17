@@ -216,6 +216,66 @@ async def test_export_csv_rejects_garbage(client, db_session):
 
 
 @pytest.mark.asyncio
+async def test_query_parts_default_order_direct(db_session, client):
+    """Direct-call coverage of the shared validation helper: the
+    HTTP-layer tests above exercise it too, but the coverage tracer
+    doesn't always see lines run inside the ASGI dispatch."""
+    from api.admin.db_browser import _validated_query_parts
+
+    await client.post(
+        "/api/auth/register",
+        json={"email": "seed_direct@test.com", "password": "Test1234!"},
+    )
+    columns, qualified, filter_sql, order_sql, params = await _validated_query_parts(
+        db_session, "public", "users", None, "desc", None, None, None,
+    )
+    first_col = columns[0][0]
+    assert order_sql == f' ORDER BY "{first_col}" DESC'
+    assert filter_sql == "" and params == {}
+    assert qualified == '"users"'  # SQLite: unqualified
+
+
+@pytest.mark.asyncio
+async def test_rows_and_export_direct(db_session, client, monkeypatch):
+    from api.admin.db_browser import export_csv, table_rows
+
+    email = "seed_export_direct@test.com"
+    await client.post(
+        "/api/auth/register", json={"email": email, "password": "Test1234!"},
+    )
+    admin = {"id": "test-admin"}
+
+    page = await table_rows(
+        "public", "users", admin, db_session,
+        page=1, page_size=99999, order_by=None, order_dir="desc",
+        filter_col=None, filter_op=None, filter_val=None,
+    )
+    assert page.page_size == 500  # clamp
+    assert page.total >= 1
+
+    # Tiny flush threshold → exercises the mid-stream buffer flush.
+    # (The generator reads the module global at iteration time, so the
+    # monkeypatch must stay active until the chunks are consumed.)
+    import api.admin.db_browser as mod
+    monkeypatch.setattr(mod, "_CSV_FLUSH_BYTES", 1)
+    resp = await export_csv(
+        "public", "users", admin, db_session,
+        order_by="email", order_dir="asc",
+        filter_col="email", filter_op="eq", filter_val=email,
+    )
+    assert resp.media_type.startswith("text/csv")
+    chunks = [chunk async for chunk in resp.body_iterator]
+    text = "".join(c if isinstance(c, str) else c.decode() for c in chunks)
+    import csv as _csv
+    import io as _io
+
+    rows = list(_csv.reader(_io.StringIO(text)))
+    header, data = rows[0], rows[1:]
+    assert len(data) == 1
+    assert data[0][header.index("email")] == email
+
+
+@pytest.mark.asyncio
 async def test_page_size_clamped_to_500(client, db_session):
     email = "db_admin_clamp@test.com"
     await _register_login(client, email)

@@ -177,3 +177,18 @@ async def test_get_history_short_circuits_for_synthetic_symbols(
     # Critical: NEITHER upstream was called.
     twse_mock.assert_not_called()
     finmind_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_tr_connector_queries_taiex_data_id():
+    """Regression: data_id must be "TAIEX" — "IR0001" returns
+    success + zero rows on this dataset, which kept _TAIEX_TR empty
+    since the job shipped."""
+    import data.tw.finmind_connector as fm
+
+    q = AsyncMock(return_value=[{"date": "2026-07-01", "price": 107781.17}])
+    with patch.object(fm, "_query", q):
+        rows = await fm.get_taiex_total_return_index("2026-07-01")
+    assert q.await_args.args[0] == "TaiwanStockTotalReturnIndex"
+    assert q.await_args.args[1] == "TAIEX"
+    assert rows[0]["close"] == 107781.17

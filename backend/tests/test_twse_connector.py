@@ -688,3 +688,39 @@ async def test_get_securities_lending_daily_returns_empty_on_holiday():
     with patcher:
         rows = await twse.get_securities_lending_daily(date(2024, 1, 1))
     assert rows == []
+
+
+# ── TAIEX history: openapi key rotation (Chinese → English) ────────
+
+@pytest.mark.asyncio
+async def test_get_taiex_history_parses_english_keys_and_compact_roc():
+    """The openapi FMTQIK report rotated to English keys with compact
+    ROC dates ("Date": "1150701") — the previous Chinese-key parser
+    skipped every row and the ingest silently wrote zero bars."""
+    payload = [
+        {"Date": "1150701", "TradeVolume": "14683404939",
+         "TradeValue": "1367817795171", "Transaction": "6457744",
+         "TAIEX": "47018.99", "Change": "893.08"},
+        {"Date": "bad", "TAIEX": "1.0"},  # unparseable date → skipped
+    ]
+    patcher, _ = install_get(payload)
+    with patcher:
+        rows = await twse.get_taiex_history()
+    assert len(rows) == 1
+    assert rows[0]["time"] == "2026-07-01"
+    assert rows[0]["close"] == 47018.99
+    assert rows[0]["volume"] == 1367817795171
+
+
+@pytest.mark.asyncio
+async def test_get_taiex_history_still_parses_legacy_chinese_keys():
+    payload = [
+        {"日期": "115/07/01", "發行量加權股價指數": "47,018.99",
+         "成交金額": "1,367,817,795,171"},
+    ]
+    patcher, _ = install_get(payload)
+    with patcher:
+        rows = await twse.get_taiex_history()
+    assert len(rows) == 1
+    assert rows[0]["time"] == "2026-07-01"
+    assert rows[0]["close"] == 47018.99

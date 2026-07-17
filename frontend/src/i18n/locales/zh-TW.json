@@ -363,6 +363,7 @@
       "connected": "已連結",
       "event_price_alert": "價格告警",
       "event_strategy_health": "策略健康",
+      "event_daily_picks_ready": "每日 AI 選股",
       "daily_digest": "每日 Email 摘要",
       "connect_line": "連結 LINE",
       "send_test": "傳送測試",

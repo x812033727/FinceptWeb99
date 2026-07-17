@@ -363,6 +363,7 @@
       "connected": "Connected",
       "event_price_alert": "Price alerts",
       "event_strategy_health": "Strategy health",
+      "event_daily_picks_ready": "Daily AI picks",
       "daily_digest": "Daily email digest",
       "connect_line": "Connect LINE",
       "send_test": "Send test",

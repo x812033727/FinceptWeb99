@@ -831,3 +831,103 @@ async def test_chip_quality_empty_intersection_is_a_clean_noop(
 
     rows = (await db_session.scalars(select(Discussion))).all()
     assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_notifies_user_when_daily_run_completes(
+    patch_session, db_session: AsyncSession,
+):
+    """After the slots run, one daily_picks_ready notification fans out
+    to the user via notify_user; the fallback general slot counts."""
+    from tasks import auto_run_discussion
+
+    user = await _make_user(db_session)
+    await _enable_for(db_session, user)
+
+    async def _fake_run_round(*_a, **_kw):
+        return
+        yield  # pragma: no cover
+
+    synth = AsyncMock(return_value={
+        "recommended_symbols": ["2330"], "reasoning": "x", "risks": [],
+        "time_horizon": "short_term", "consensus_score": 0.7,
+    })
+    notify = AsyncMock()
+
+    patches = _stub_lock_helpers() + [
+        patch("tasks.auto_run_discussion.is_today_likely_trading_day",
+              AsyncMock(return_value=True)),
+        patch.object(discussion_service, "run_round", _fake_run_round),
+        patch.object(discussion_service, "synthesize_conclusion", synth),
+        patch("tasks.auto_run_discussion.notify_user", notify),
+    ]
+    _enter_all(patches)
+    try:
+        await auto_run_discussion.run()
+    finally:
+        _exit_all(patches)
+
+    notify.assert_awaited_once()
+    user_id, payload = notify.await_args.args
+    assert user_id == str(user.id)
+    assert payload["kind"] == "daily_picks_ready"
+    assert payload["strategies"] == ["general"]
+    assert payload["discussions"] == 1
+
+    # Second tick the same day: the idempotency check skips every slot,
+    # so no second notification goes out.
+    notify.reset_mock()
+    _enter_all(patches)
+    try:
+        await auto_run_discussion.run()
+    finally:
+        _exit_all(patches)
+    notify.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_notify_failure_does_not_fail_the_run(
+    patch_session, db_session: AsyncSession,
+):
+    from tasks import auto_run_discussion
+
+    user = await _make_user(db_session)
+    await _enable_for(db_session, user)
+
+    async def _fake_run_round(*_a, **_kw):
+        return
+        yield  # pragma: no cover
+
+    synth = AsyncMock(return_value={
+        "recommended_symbols": ["2330"], "reasoning": "x", "risks": [],
+        "time_horizon": "short_term", "consensus_score": 0.7,
+    })
+
+    patches = _stub_lock_helpers() + [
+        patch("tasks.auto_run_discussion.is_today_likely_trading_day",
+              AsyncMock(return_value=True)),
+        patch.object(discussion_service, "run_round", _fake_run_round),
+        patch.object(discussion_service, "synthesize_conclusion", synth),
+        patch("tasks.auto_run_discussion.notify_user",
+              AsyncMock(side_effect=RuntimeError("push down"))),
+    ]
+    _enter_all(patches)
+    try:
+        await auto_run_discussion.run()
+    finally:
+        _exit_all(patches)
+
+    rows = (await db_session.scalars(select(Discussion))).all()
+    assert len([r for r in rows if r.auto_run]) == 1  # run still succeeded
+
+
+@pytest.mark.asyncio
+async def test_daily_picks_event_kind_mapping():
+    from services.channel_notification_service import (
+        DEFAULT_EVENT_KINDS,
+        event_kind,
+    )
+
+    assert "daily_picks_ready" in DEFAULT_EVENT_KINDS
+    assert event_kind({"kind": "daily_picks_ready"}) == "daily_picks_ready"
+    assert event_kind({"type": "alert"}) == "price_alert"

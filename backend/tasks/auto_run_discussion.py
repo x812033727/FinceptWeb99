@@ -54,6 +54,7 @@ from services.ingest.repository import (
     record_failure,
     record_health,
 )
+from services.notification_service import notify_user
 from services.tw_trading_calendar import is_today_likely_trading_day
 
 log = logging.getLogger(__name__)
@@ -186,7 +187,7 @@ async def _run_for_user(
     )
     run_date = datetime.now(ZoneInfo("Asia/Taipei")).date()
     candidate_rows = await load_candidate_rows(db)
-    ran = False
+    ran_strategies: dict[str, int] = {}
     for strategy, count in counts.items():
         if count <= 0:
             continue
@@ -214,8 +215,36 @@ async def _run_for_user(
                 db, cfg, strategy, sequence, run_date, batch,
                 pool=pool if sequence == 1 else None,
             )
-            ran = True
-    return ran
+            ran_strategies[strategy] = ran_strategies.get(strategy, 0) + 1
+    if ran_strategies:
+        await _notify_daily_ready(str(user_id), run_date, ran_strategies)
+    return bool(ran_strategies)
+
+
+async def _notify_daily_ready(
+    user_id: str, run_date, ran_strategies: dict[str, int],
+) -> None:
+    """Best-effort 'your daily picks are ready' fan-out over the
+    existing notification transports (websocket / web push / email /
+    LINE, each per user opt-in). Must never fail the run itself."""
+    slots = sum(ran_strategies.values())
+    try:
+        await notify_user(user_id, {
+            "kind": "daily_picks_ready",
+            "type": "daily_picks",
+            "title": "今日 AI 選股完成",
+            "message": (
+                f"{run_date.isoformat()} 已完成 {len(ran_strategies)} 個策略"
+                f"共 {slots} 場討論，歡迎查看每日精選。"
+            ),
+            "run_date": run_date.isoformat(),
+            "strategies": sorted(ran_strategies),
+            "discussions": slots,
+        })
+    except Exception:
+        log.exception(
+            "auto_run_discussion.notify_failed", extra={"user_id": user_id},
+        )
 
 
 async def load_candidate_rows(db: AsyncSession) -> list[dict]:

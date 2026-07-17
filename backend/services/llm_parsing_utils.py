@@ -24,6 +24,7 @@ from typing import Any
 
 _THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*\n(.*?)\n```\s*$", re.DOTALL)
+_EMBEDDED_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)\n?\s*```", re.DOTALL)
 _TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
 
 
@@ -35,10 +36,21 @@ def strip_think_blocks(text: str) -> str:
 
 def strip_code_fence(text: str) -> str:
     """Strip a single outer ```` ```json … ``` ```` (or unlabelled)
-    code fence. Returns ``text`` unchanged if no fence."""
+    code fence. When the fence is EMBEDDED in surrounding prose
+    ("Sure, here's the JSON: ```json … ``` hope that helps") the
+    fenced content is extracted — but only when the text doesn't
+    already start with ``{`` / ``[``, so valid JSON that merely
+    contains a fence inside a string value is never mangled.
+    Returns ``text`` unchanged if no fence."""
     text = text.strip()
     fence = _CODE_FENCE_RE.match(text)
-    return fence.group(1).strip() if fence else text
+    if fence:
+        return fence.group(1).strip()
+    if text[:1] not in ("{", "["):
+        embedded = _EMBEDDED_FENCE_RE.search(text)
+        if embedded:
+            return embedded.group(1).strip()
+    return text
 
 
 def extract_json_object(text: str) -> str | None:
@@ -74,6 +86,46 @@ def extract_json_object(text: str) -> str | None:
         if c == "{":
             depth += 1
         elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
+def extract_json_array(text: str) -> str | None:
+    """Return the first balanced top-level ``[…]`` substring of
+    ``text`` (or ``None`` if no balanced array exists).
+
+    Array twin of :func:`extract_json_object` — the salvage path for
+    flows that expect a JSON ARRAY wrapped in prose. Without it, a
+    prose-wrapped array would get salvaged by the object extractor
+    into its first element (a dict), which the caller then rejects
+    as the wrong shape. Same string/escape tracking rules.
+    """
+    start = text.find("[")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if escape:
+            escape = False
+            continue
+        if in_string:
+            if c == "\\":
+                escape = True
+                continue
+            if c == '"':
+                in_string = False
+            continue
+        if c == '"':
+            in_string = True
+            continue
+        if c == "[":
+            depth += 1
+        elif c == "]":
             depth -= 1
             if depth == 0:
                 return text[start:i + 1]

@@ -11,6 +11,7 @@ import json
 import pytest
 
 from services.llm_parsing_utils import (
+    extract_json_array,
     extract_json_object,
     loads_lenient,
     relax_json,
@@ -129,3 +130,45 @@ def test_loads_lenient_preserves_url_double_slash_in_value():
 def test_loads_lenient_raises_on_truly_unparseable():
     with pytest.raises(json.JSONDecodeError):
         loads_lenient("not even close")
+
+
+# ── embedded fence + array salvage (claude_sub preamble regression) ─
+
+def test_strip_code_fence_extracts_embedded_fence_after_preamble():
+    """The claude_sub gateway prefixes chatty prose before the fence
+    ("This is a straightforward classification task... ```json [...]
+    ```"). The fenced payload must still come out."""
+    text = (
+        "This is a straightforward classification task, not one "
+        "requiring the skills catalog. I'll proceed directly."
+        "```json\n[{\"id\": 1, \"score\": 0.5}]\n```"
+    )
+    assert strip_code_fence(text) == '[{"id": 1, "score": 0.5}]'
+
+
+def test_strip_code_fence_embedded_with_postamble():
+    text = "Here you go:\n```json\n{\"a\": 1}\n```\nHope that helps!"
+    assert strip_code_fence(text) == '{"a": 1}'
+
+
+def test_strip_code_fence_leaves_json_containing_fence_string_alone():
+    """Valid JSON whose STRING VALUE contains a fence pair must not be
+    mangled — embedded extraction only kicks in when the text doesn't
+    already start as JSON."""
+    payload = '{"reasoning": "use ```json\\n...\\n``` blocks", "x": 1}'
+    assert strip_code_fence(payload) == payload
+
+
+def test_extract_json_array_from_prose_wrapper():
+    text = 'Sure! [ {"id": 1}, {"id": 2} ] — anything else?'
+    assert extract_json_array(text) == '[ {"id": 1}, {"id": 2} ]'
+
+
+def test_extract_json_array_tracks_strings_and_nesting():
+    text = 'x ["a]b", ["nested"]] y'
+    assert extract_json_array(text) == '["a]b", ["nested"]]'
+
+
+def test_extract_json_array_none_when_unbalanced_or_absent():
+    assert extract_json_array("no array here") is None
+    assert extract_json_array('[ {"id": 1}, {"id": 2}') is None

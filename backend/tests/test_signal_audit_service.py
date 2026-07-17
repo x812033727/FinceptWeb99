@@ -942,3 +942,33 @@ async def test_audit_recent_discussions_respects_limit(
     summary = await svc.audit_recent_discussions(db_session, limit=2)
     assert summary.discussions_audited == 2
     assert len(summary.discussion_ids) == 2
+
+
+@pytest.mark.asyncio
+async def test_snapshot_all_markets_roundtrip_uses_sentinel(
+    db_session: AsyncSession, owner: User,
+):
+    """market=None snapshots must store the "ALL" sentinel (market is
+    part of the Postgres PK — NULL was a NOT NULL violation the moment
+    the audit produced its first real row) and the market=None readers
+    must find them again."""
+    from models.signal_audit_history import SignalAuditHistory
+
+    await _seed_concluded_discussion(
+        db_session, owner_id=owner.id, topic="哨兵測試", cite_rsi=True,
+    )
+
+    written = await svc.snapshot_audit_to_history(db_session)
+    assert written > 0
+
+    rows = (await db_session.scalars(
+        select(SignalAuditHistory)
+    )).all()
+    assert rows and all(r.market == svc.ALL_MARKETS_SENTINEL for r in rows)
+
+    bulk = await svc.read_all_signals_history(db_session, market=None, days=7)
+    assert "short_term_signals.rsi_14" in bulk
+    single = await svc.read_signal_history(
+        db_session, signal="short_term_signals.rsi_14", market=None, days=7,
+    )
+    assert len(single) == 1

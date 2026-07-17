@@ -39,6 +39,14 @@ from models.discussion_round_context import DiscussionRoundContext
 
 log = logging.getLogger(__name__)
 
+# Stored `market` value for the all-markets aggregate snapshot. The
+# original design used NULL, but `market` is part of the Postgres
+# primary key and PK columns are implicitly NOT NULL — every
+# all-markets snapshot insert violated the constraint (masked for
+# months because the audit query matched zero discussions and never
+# produced rows to write).
+ALL_MARKETS_SENTINEL = "ALL"
+
 
 # Keyword/regex patterns per signal. Match in either Chinese or
 # English so personas writing in either language still register.
@@ -688,7 +696,7 @@ async def snapshot_audit_to_history(
         hall = summary.hallucinations.get(sig, {})
         rows.append({
             "captured_at":            when,
-            "market":                 market,
+            "market":                 market or ALL_MARKETS_SENTINEL,
             "signal":                 sig,
             "discussions_audited":    summary.discussions_audited,
             "present_count":          cov.get("present", 0),
@@ -762,10 +770,9 @@ async def read_all_signals_history(
             SignalAuditHistory.captured_at.asc(),
         )
     )
-    if market is None:
-        stmt = stmt.where(SignalAuditHistory.market.is_(None))
-    else:
-        stmt = stmt.where(SignalAuditHistory.market == market)
+    stmt = stmt.where(
+        SignalAuditHistory.market == (market or ALL_MARKETS_SENTINEL)
+    )
     rows = (await db.scalars(stmt)).all()
 
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -833,10 +840,9 @@ async def read_signal_history(
         )
         .order_by(SignalAuditHistory.captured_at.asc())
     )
-    if market is None:
-        stmt = stmt.where(SignalAuditHistory.market.is_(None))
-    else:
-        stmt = stmt.where(SignalAuditHistory.market == market)
+    stmt = stmt.where(
+        SignalAuditHistory.market == (market or ALL_MARKETS_SENTINEL)
+    )
     rows = (await db.scalars(stmt)).all()
 
     out: list[dict[str, Any]] = []

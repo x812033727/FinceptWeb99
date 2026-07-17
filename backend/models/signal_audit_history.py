@@ -26,12 +26,13 @@ class SignalAuditHistory(Base):
     )
 
     captured_at: Mapped[date] = mapped_column(Date, primary_key=True)
-    # NULL = all-markets aggregate; otherwise scoped to TW / US / GLOBAL.
-    # SQLite treats NULL in PK as distinct rows, which is fine for tests
-    # — production Postgres declares this PK with `NULLS NOT DISTINCT`
-    # via the migration so the upsert remains idempotent.
-    market: Mapped[str | None] = mapped_column(
-        String(12), primary_key=True, nullable=True,
+    # "ALL" (signal_audit_service.ALL_MARKETS_SENTINEL) = all-markets
+    # aggregate; otherwise scoped to TW / US / GLOBAL. The original
+    # NULL-means-all design could never work: this column is part of
+    # the Postgres primary key, and PK columns are implicitly NOT
+    # NULL — every all-markets insert violated the constraint.
+    market: Mapped[str] = mapped_column(
+        String(12), primary_key=True, nullable=False,
     )
     signal: Mapped[str] = mapped_column(String(64), primary_key=True)
 

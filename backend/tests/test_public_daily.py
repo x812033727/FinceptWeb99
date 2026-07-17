@@ -303,3 +303,41 @@ async def test_public_scoreboard_serves_cache_and_writes_it(client, monkeypatch)
     monkeypatch.setattr("api.public_daily.cache_get_json", fake_get)
     body = (await client.get("/api/public/daily/scoreboard")).json()
     assert body["disclaimer"] == "cached-sb"
+
+
+@pytest.mark.asyncio
+async def test_public_daily_enriches_candidates_with_company_names(client, db_session, monkeypatch):
+    owner = User(id=uuid.uuid4(), email="names@example.com", hashed_password="x", role=UserRole.viewer, is_active=True)
+    db_session.add(owner)
+    await db_session.flush()
+    conclusion = {
+        "recommended_symbols": ["2330"], "reasoning": "x", "risks": [],
+        "time_horizon": "short_term", "consensus_score": .8,
+    }
+    row = discussion(owner.id, created_at=datetime(2026, 7, 14, tzinfo=UTC), conclusion=conclusion)
+    row.auto_run_strategy = "price_signal"
+    row.auto_run_sequence = 1
+    row.candidate_snapshot = {
+        "strategy": "price_signal", "sequence": 1,
+        "candidates": [{"symbol": "2330", "strategy_score": 9.0, "signal_type": "breakout"}],
+        "pool": [
+            {"symbol": "2330", "strategy_score": 9.0, "signal_type": "breakout"},
+            {"symbol": "9999", "strategy_score": 1.0},  # unknown → no name key
+        ],
+    }
+    db_session.add(row)
+    await db_session.commit()
+
+    fake_names = {"2330": "台積電"}
+    monkeypatch.setattr(
+        "api.public_daily.resolve_display_name",
+        lambda market, symbol: fake_names.get(symbol),
+    )
+    monkeypatch.setattr(settings, "PUBLIC_DAILY_RESULTS_OWNER_EMAIL", "names@example.com")
+
+    body = (await client.get("/api/public/daily")).json()
+    run = body["days"][0]["strategies"]["price_signal"][0]
+    assert run["candidates"][0]["name"] == "台積電"
+    pool_by_symbol = {p["symbol"]: p for p in run["candidate_pool"]}
+    assert pool_by_symbol["2330"]["name"] == "台積電"
+    assert "name" not in pool_by_symbol["9999"]

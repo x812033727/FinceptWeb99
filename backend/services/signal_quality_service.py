@@ -41,6 +41,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from models.discussion import Discussion
 from models.discussion_round_context import DiscussionRoundContext
@@ -296,8 +297,15 @@ async def compute_signal_quality(
     state where the daily_close_prices cron has fired.
     """
     cutoff = datetime.now(UTC) - timedelta(days=lookback_days)
+    # The audit only reads id + the two price maps; don't materialize
+    # the rest of the row's JSON columns.
     stmt = (
         select(Discussion)
+        .options(load_only(
+            Discussion.id,
+            Discussion.day1_open_prices,
+            Discussion.daily_close_prices,
+        ))
         .where(
             Discussion.status == status,
             Discussion.created_at >= cutoff,

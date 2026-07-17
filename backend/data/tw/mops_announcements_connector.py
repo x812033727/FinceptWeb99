@@ -17,17 +17,20 @@ Why MOPS over FinMind:
     + reliably-categorised. Free tier: no token, no quota beyond
     the standard TWSE rate budget.
 
-Endpoint: `https://mopsov.twse.com.tw/mops/web/ajax_t05st02`. The
-SPA backend serves the same data via the newer
-`mops.interinfo.com.tw:8443/mops/api` family but the legacy ajax
-form is more stable across MOPS UI revisions. POST form-encoded;
-returns JSON with a `data` array of disclosure rows.
+Endpoint: `https://mops.twse.com.tw/mops/api/t05st02` — the JSON API
+the post-2024 MOPS SPA itself calls (POST JSON `{"year","month","day"}`
+in ROC calendar; full-day 重大訊息 listing). The legacy
+`mopsov.twse.com.tw/mops/web/ajax_t05st02` form endpoint this
+connector originally used now answers with the SPA's HTML shell —
+it never returned a single row after the MOPS redesign, so a
+non-JSON body or a non-200 envelope `code` is now a RAISED failure
+(red health row), never a silent "ok / 0 rows".
 
-The connector is intentionally tolerant — every shape change MOPS
-introduces (column reorder, encoding, new optional fields) gets
-flagged via per-row try/except + a structured `err_count` counter
-the cron surfaces in the health row, NOT a hard failure that drops
-the whole batch.
+Per-ROW problems stay tolerant — every shape change MOPS introduces
+(column reorder, encoding, new optional fields) gets flagged via
+per-row try/except + a structured `err_count` counter the cron
+surfaces in the health row, NOT a hard failure that drops the whole
+batch.
 """
 from __future__ import annotations
 
@@ -37,12 +40,27 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
 log = logging.getLogger(__name__)
 
-_MOPS_ENDPOINT = "https://mopsov.twse.com.tw/mops/web/ajax_t05st02"
+_MOPS_ENDPOINT = "https://mops.twse.com.tw/mops/api/t05st02"
+
+# MOPS envelope code for "no rows for this query" (weekends /
+# holidays before the first filing of the day). Not an error.
+_MOPS_NO_DATA_CODE = 406
+
+# `marketKind` in the detail parameters → human category. Falls back
+# to the generic label when MOPS rotates values.
+_MARKET_KIND_LABELS = {
+    "sii": "上市重大訊息",
+    "otc": "上櫃重大訊息",
+    "rotc": "興櫃重大訊息",
+    "pub": "公開發行重大訊息",
+}
+_DEFAULT_CATEGORY = "重大訊息"
 
 # Per-call HTTP timeout. MOPS responds in ~1-2 s on a normal day,
 # but the ajax endpoint is occasionally slow during market open.
@@ -219,32 +237,78 @@ def _normalize_row(raw: dict[str, Any]) -> AnnouncementRow | None:
     )
 
 
+def _array_row_to_dict(raw: list[Any]) -> dict[str, Any] | None:
+    """The t05st02 API returns positional array rows:
+
+        [date "115/07/16", time "17:32:14", companyId "3504",
+         abbreviation "揚明光", subject "公告...",
+         {"parameters": {"enterDate": "1150714", "serialNumber": 1,
+                         "companyId": "3504", "marketKind": "sii"},
+          "apiName": "t05st02_detail"}]
+
+    Convert to the field-name shape `_normalize_row` consumes.
+    Returns None when the row is too short to carry the required
+    (date, time, companyId, subject) columns."""
+    if len(raw) < 5:
+        return None
+    date_part, time_part, company_id, _abbr, subject = raw[:5]
+    detail = raw[5] if len(raw) > 5 and isinstance(raw[5], dict) else {}
+    params = detail.get("parameters") if isinstance(detail.get("parameters"), dict) else {}
+
+    category = _MARKET_KIND_LABELS.get(
+        str(params.get("marketKind", "")).strip(), _DEFAULT_CATEGORY,
+    )
+    # Deep link into the SPA's per-day listing. The extra parameters
+    # also make the URL unique per filing, which the dedup hash needs
+    # to tell same-title refilings on different days apart.
+    source_url = None
+    enter_date = params.get("enterDate")
+    serial = params.get("serialNumber")
+    if company_id and enter_date is not None and serial is not None:
+        source_url = (
+            "https://mops.twse.com.tw/mops/#/web/t05st02"
+            f"?companyId={company_id}&date={enter_date}&serialNumber={serial}"
+        )
+
+    return {
+        "companyId": company_id,
+        "announce_date_time": f"{date_part} {time_part}",
+        "subject": subject,
+        "category": category,
+        "link": source_url,
+    }
+
+
 def _extract_rows(payload: Any) -> Iterable[dict[str, Any]]:
     """MOPS sometimes nests rows under `.data`, sometimes under
-    `.result.rows`, sometimes is the array itself. Yield whatever
-    looks row-shaped; non-dict items are skipped so a malformed
-    payload doesn't cascade into a crash."""
-    if isinstance(payload, list):
-        for r in payload:
+    `.result.rows`, sometimes is the array itself; the t05st02 API
+    additionally uses positional ARRAY rows instead of dicts. Yield
+    whatever looks row-shaped; unrecognizable items are skipped so a
+    malformed payload doesn't cascade into a crash."""
+    def _emit(items: list[Any]) -> Iterable[dict[str, Any]]:
+        for r in items:
             if isinstance(r, dict):
                 yield r
+            elif isinstance(r, list):
+                converted = _array_row_to_dict(r)
+                if converted is not None:
+                    yield converted
+
+    if isinstance(payload, list):
+        yield from _emit(payload)
         return
     if not isinstance(payload, dict):
         return
     for key in ("data", "rows", "items"):
         sub = payload.get(key)
         if isinstance(sub, list):
-            for r in sub:
-                if isinstance(r, dict):
-                    yield r
+            yield from _emit(sub)
             return
     result = payload.get("result")
     if isinstance(result, dict):
         sub = result.get("rows") or result.get("data")
         if isinstance(sub, list):
-            for r in sub:
-                if isinstance(r, dict):
-                    yield r
+            yield from _emit(sub)
 
 
 async def get_recent_announcements(
@@ -259,15 +323,23 @@ async def get_recent_announcements(
     can see "MOPS column rotation in flight, half the rows are
     being dropped" without staring at logs.
 
-    Raises `httpx.HTTPError` on transport failure — the cron's
-    error handler converts it into a structured failure with the
-    HTTP status / hint preserved (mirroring `ingest_news_tw`).
+    Raises `httpx.HTTPError` on transport failure and `RuntimeError`
+    on a non-JSON body or a failure envelope `code` — the cron's
+    error handler converts either into a structured red health row
+    (mirroring `ingest_news_tw`). The legacy connector treated the
+    HTML-shell response as "ok / 0 rows", which hid a totally-broken
+    endpoint behind a green health card for days.
     """
-    body = {"step": "0", "TYPEK": "all", "co_id": "", "year": "", "month": ""}
+    today_tw = datetime.now(ZoneInfo("Asia/Taipei")).date()
+    body = {
+        "year": str(today_tw.year - 1911),  # ROC calendar
+        "month": str(today_tw.month),
+        "day": str(today_tw.day),
+    }
     async with httpx.AsyncClient(
         timeout=_HTTP_TIMEOUT_S, headers=_DEFAULT_HEADERS,
     ) as client:
-        resp = await client.post(_MOPS_ENDPOINT, data=body)
+        resp = await client.post(_MOPS_ENDPOINT, json=body)
     resp.raise_for_status()
     try:
         payload = resp.json()
@@ -276,7 +348,19 @@ async def get_recent_announcements(
             "mops_announcements.non_json_response",
             extra={"snippet": resp.text[:200]},
         )
-        return [], 0
+        raise RuntimeError(
+            "MOPS returned non-JSON (HTML shell?) — endpoint moved or blocked"
+        ) from None
+
+    if isinstance(payload, dict) and "code" in payload:
+        code = payload.get("code")
+        if code == _MOPS_NO_DATA_CODE:
+            # 查無資料 — weekend / holiday / nothing filed yet today.
+            return [], 0
+        if code != 200:
+            raise RuntimeError(
+                f"MOPS envelope code={code} message={payload.get('message')!r}"
+            )
 
     rows: list[AnnouncementRow] = []
     err_count = 0

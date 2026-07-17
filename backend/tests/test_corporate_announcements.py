@@ -164,6 +164,113 @@ async def test_get_recent_announcements_returns_parsed_rows():
     assert {r.symbol for r in rows} == {"2330", "2454"}
 
 
+def _client_returning(fake_response):
+    client = MagicMock()
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    client.post = AsyncMock(return_value=fake_response)
+    return client
+
+
+def _fake_response(payload=None, *, json_error: bool = False):
+    fake = MagicMock()
+    fake.status_code = 200
+    fake.text = "<html>公開資訊觀測站</html>" if json_error else "ok"
+    fake.raise_for_status = MagicMock()
+    if json_error:
+        fake.json = MagicMock(side_effect=ValueError("not json"))
+    else:
+        fake.json = MagicMock(return_value=payload)
+    return fake
+
+
+@pytest.mark.asyncio
+async def test_get_recent_announcements_parses_t05st02_array_rows():
+    """The live t05st02 API wraps positional array rows in a
+    code/result envelope, and the request body must carry today's ROC
+    date."""
+    payload = {
+        "code": 200,
+        "message": "查詢成功",
+        "result": {"data": [
+            ["115/07/16", "17:32:14", "3504", "揚明光",
+             "公告本公司115年上半年度財務報告董事會召開日期",
+             {"parameters": {"enterDate": "1150714", "serialNumber": 1,
+                             "companyId": "3504", "marketKind": "sii"},
+              "apiName": "t05st02_detail"}],
+            ["115/07/17", "10:19:00", "4416", "三圓", "澄清媒體報導",
+             {"parameters": {"enterDate": "1150717", "serialNumber": 1,
+                             "companyId": "4416", "marketKind": "otc"},
+              "apiName": "t05st02_detail"}],
+            ["115/07/17"],  # too short → dropped, not crashed
+        ]},
+    }
+    client = _client_returning(_fake_response(payload))
+    with patch(
+        "data.tw.mops_announcements_connector.httpx.AsyncClient",
+        return_value=client,
+    ):
+        rows, err_count = await mops_announcements.get_recent_announcements()
+
+    assert err_count == 0
+    assert [r.symbol for r in rows] == ["3504", "4416"]
+    assert rows[0].category == "上市重大訊息"
+    assert rows[1].category == "上櫃重大訊息"
+    # ROC 115/07/16 17:32 Taipei → UTC
+    assert rows[0].announced_at.isoformat() == "2026-07-16T09:32:00+00:00"
+    assert "companyId=3504" in (rows[0].source_url or "")
+    assert "serialNumber=1" in (rows[0].source_url or "")
+    # Distinct source_urls keep same-title refilings dedup-distinct.
+    assert rows[0].dedup_hash != rows[1].dedup_hash
+
+    body = client.post.await_args.kwargs["json"]
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _zi
+    today_tw = _dt.now(_zi("Asia/Taipei")).date()
+    assert body == {
+        "year": str(today_tw.year - 1911),
+        "month": str(today_tw.month),
+        "day": str(today_tw.day),
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_recent_announcements_raises_on_html_shell():
+    """Non-JSON body = broken/moved endpoint. It must RAISE so the
+    health row goes red — the legacy silent 'ok / 0 rows' hid a dead
+    endpoint for days."""
+    client = _client_returning(_fake_response(json_error=True))
+    with patch(
+        "data.tw.mops_announcements_connector.httpx.AsyncClient",
+        return_value=client,
+    ), pytest.raises(RuntimeError, match="non-JSON"):
+        await mops_announcements.get_recent_announcements()
+
+
+@pytest.mark.asyncio
+async def test_get_recent_announcements_raises_on_error_envelope():
+    payload = {"code": 500, "message": "傳入參數異常", "result": None}
+    client = _client_returning(_fake_response(payload))
+    with patch(
+        "data.tw.mops_announcements_connector.httpx.AsyncClient",
+        return_value=client,
+    ), pytest.raises(RuntimeError, match="code=500"):
+        await mops_announcements.get_recent_announcements()
+
+
+@pytest.mark.asyncio
+async def test_get_recent_announcements_no_data_code_is_empty_success():
+    """code=406 查無資料 (weekend / holiday) is a clean empty run."""
+    payload = {"code": 406, "message": "查無相符資料", "result": None}
+    client = _client_returning(_fake_response(payload))
+    with patch(
+        "data.tw.mops_announcements_connector.httpx.AsyncClient",
+        return_value=client,
+    ):
+        rows, err_count = await mops_announcements.get_recent_announcements()
+    assert rows == [] and err_count == 0
+
+
 # ── repository: insert + read ─────────────────────────────────────
 
 

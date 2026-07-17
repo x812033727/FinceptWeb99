@@ -152,6 +152,70 @@ async def test_rejects_schema_table_column_and_op_garbage(client, db_session):
 
 
 @pytest.mark.asyncio
+async def test_default_order_is_first_column_desc(client, db_session):
+    email = "db_admin_order@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.get(
+        "/api/admin/db/tables/public/users/rows", headers=_auth(token),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    first_col = body["columns"][0]["name"]
+    values = [str(row[0]) for row in body["rows"] if row[0] is not None]
+    assert values == sorted(values, reverse=True), (
+        f"rows not ordered by {first_col} desc"
+    )
+
+
+@pytest.mark.asyncio
+async def test_export_csv_masks_and_filters(client, db_session):
+    email = "db_admin_export@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+
+    r = await client.get(
+        "/api/admin/db/tables/public/users/export.csv"
+        f"?filter_col=email&filter_op=eq&filter_val={email}",
+        headers=_auth(token),
+    )
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    assert 'filename="public.users.csv"' in r.headers["content-disposition"]
+
+    import csv as _csv
+    import io as _io
+
+    rows = list(_csv.reader(_io.StringIO(r.text)))
+    header, data = rows[0], rows[1:]
+    assert len(data) == 1
+    assert data[0][header.index("email")] == email
+    pw_cols = [c for c in header if "password" in c.lower()]
+    assert pw_cols
+    pw_val = data[0][header.index(pw_cols[0])]
+    assert pw_val in ("***", "")
+
+
+@pytest.mark.asyncio
+async def test_export_csv_rejects_garbage(client, db_session):
+    email = "db_admin_export_bad@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client)
+    h = _auth(token)
+
+    r = await client.get(
+        "/api/admin/db/tables/pg_catalog/pg_class/export.csv", headers=h,
+    )
+    assert r.status_code == 404
+    r = await client.get(
+        "/api/admin/db/tables/public/users/export.csv?order_by=no_such_col",
+        headers=h,
+    )
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_page_size_clamped_to_500(client, db_session):
     email = "db_admin_clamp@test.com"
     await _register_login(client, email)

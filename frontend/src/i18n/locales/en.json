@@ -497,7 +497,20 @@
     "latest": "latest",
     "backToTables": "Back to tables",
     "noTables": "No tables",
-    "noRows": "No rows"
+    "noRows": "No rows",
+    "searchTables": "Search tables",
+    "sortBy": "Sort by",
+    "expandCell": "Click to expand",
+    "filterField": "Field",
+    "filterOp": "Condition",
+    "filterValue": "Value",
+    "apply": "Apply",
+    "clear": "Clear",
+    "exportCsv": "Export CSV",
+    "perPage": "/page",
+    "page": "Page",
+    "opEq": "equals",
+    "opContains": "contains"
   },
   "dashboard": {
     "title": "Dashboard",

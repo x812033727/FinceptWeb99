@@ -1,8 +1,10 @@
 """Admin read-only database browser.
 
 Backs the AdminPage「DB」tab: list every table in the allowlisted
-schemas with size/row estimates, and page through any table's rows
-with optional ordering and a single-column filter.
+schemas with size/row estimates, page through any table's rows with
+optional ordering and a single-column filter (first catalog column
+DESC when no order is given, so pagination is deterministic), and
+export the current view as CSV (capped, same masking).
 
 Security model (this endpoint hands an admin arbitrary-table reads, so
 every layer is belt-and-braces):
@@ -30,10 +32,13 @@ every layer is belt-and-braces):
 """
 from __future__ import annotations
 
+import csv
+import io
 import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -56,6 +61,10 @@ _MASK_FRAGMENTS = ("password", "secret", "token", "encrypted", "hashed", "creden
 _FILTER_OPS = {"eq": "=", "ilike": "ILIKE", "gte": ">=", "lte": "<="}
 
 _MAX_PAGE_SIZE = 500
+
+# CSV export is bounded so an admin can't pull a 100M-row finmind table
+# through the app in one request.
+_EXPORT_MAX_ROWS = 10_000
 
 
 class TableInfo(BaseModel):
@@ -154,25 +163,19 @@ def _qualified(db: AsyncSession, schema: str, table: str) -> str:
     return _quote_ident(table)
 
 
-@router.get("/tables", response_model=list[TableInfo])
-async def list_tables(_: AdminUser, db: DB):
-    return await _catalog_tables(db)
-
-
-@router.get("/tables/{schema}/{table}/rows", response_model=RowsPage)
-async def table_rows(
+async def _validated_query_parts(
+    db: AsyncSession,
     schema: str,
     table: str,
-    user: AdminUser,
-    db: DB,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1),
-    order_by: str | None = Query(None),
-    order_dir: str = Query("desc"),
-    filter_col: str | None = Query(None),
-    filter_op: str | None = Query(None),
-    filter_val: str | None = Query(None),
-):
+    order_by: str | None,
+    order_dir: str,
+    filter_col: str | None,
+    filter_op: str | None,
+    filter_val: str | None,
+) -> tuple[list[tuple[str, str]], str, str, str, dict[str, Any]]:
+    """Validate every name against the catalog and assemble the shared
+    SQL fragments: (columns, qualified, filter_sql, order_sql, params).
+    Raises HTTPException on anything that doesn't check out."""
     if schema not in SCHEMA_ALLOWLIST:
         raise HTTPException(404, detail=f"schema {schema!r} not browsable")
 
@@ -181,7 +184,6 @@ async def table_rows(
         raise HTTPException(404, detail=f"table {schema}.{table} not found")
 
     col_names = {name for name, _ in columns}
-    page_size = min(page_size, _MAX_PAGE_SIZE)
 
     if order_dir not in ("asc", "desc"):
         raise HTTPException(400, detail="order_dir must be asc|desc")
@@ -203,13 +205,42 @@ async def table_rows(
         filter_sql = f" WHERE {_quote_ident(filter_col)} {sql_op} :filter_val"
         params["filter_val"] = filter_val
 
+    # Always order: without it Postgres is free to return pages in any
+    # order, so page 2 could repeat/skip rows. The catalog's first
+    # column (ordinal 1 — usually the PK or timestamp) DESC is the
+    # "newest first" default.
+    effective_order = order_by or columns[0][0]
+    order_sql = f" ORDER BY {_quote_ident(effective_order)} {order_dir.upper()}"
+
+    return columns, _qualified(db, schema, table), filter_sql, order_sql, params
+
+
+@router.get("/tables", response_model=list[TableInfo])
+async def list_tables(_: AdminUser, db: DB):
+    return await _catalog_tables(db)
+
+
+@router.get("/tables/{schema}/{table}/rows", response_model=RowsPage)
+async def table_rows(
+    schema: str,
+    table: str,
+    user: AdminUser,
+    db: DB,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1),
+    order_by: str | None = Query(None),
+    order_dir: str = Query("desc"),
+    filter_col: str | None = Query(None),
+    filter_op: str | None = Query(None),
+    filter_val: str | None = Query(None),
+):
+    columns, qualified, filter_sql, order_sql, params = await _validated_query_parts(
+        db, schema, table, order_by, order_dir, filter_col, filter_op, filter_val,
+    )
+    page_size = min(page_size, _MAX_PAGE_SIZE)
+
     if _is_postgres(db):
         await db.execute(text("SET LOCAL statement_timeout = '5000ms'"))
-
-    qualified = _qualified(db, schema, table)
-    order_sql = ""
-    if order_by:
-        order_sql = f" ORDER BY {_quote_ident(order_by)} {order_dir.upper()}"
 
     select_list = ", ".join(_quote_ident(name) for name, _ in columns)
     result = await db.execute(text(
@@ -272,6 +303,71 @@ async def table_rows(
         page_size=page_size,
         total=total,
         latest_at=latest_at,
+    )
+
+
+@router.get("/tables/{schema}/{table}/export.csv")
+async def export_csv(
+    schema: str,
+    table: str,
+    user: AdminUser,
+    db: DB,
+    order_by: str | None = Query(None),
+    order_dir: str = Query("desc"),
+    filter_col: str | None = Query(None),
+    filter_op: str | None = Query(None),
+    filter_val: str | None = Query(None),
+):
+    """CSV dump of the current view (same filter/order as the row
+    endpoint), capped at _EXPORT_MAX_ROWS. Masking applies here too —
+    export must not be a side door around it."""
+    columns, qualified, filter_sql, order_sql, params = await _validated_query_parts(
+        db, schema, table, order_by, order_dir, filter_col, filter_op, filter_val,
+    )
+
+    if _is_postgres(db):
+        await db.execute(text("SET LOCAL statement_timeout = '5000ms'"))
+
+    select_list = ", ".join(_quote_ident(name) for name, _ in columns)
+    result = await db.execute(text(
+        f"SELECT {select_list} FROM {qualified}{filter_sql}{order_sql} LIMIT :limit"
+    ), {**params, "limit": _EXPORT_MAX_ROWS})
+    raw_rows = result.all()
+
+    log.info(
+        "db_browser.export",
+        extra={
+            "admin_id": str(user.get("id", "")),
+            "schema": schema,
+            "table": table,
+            "rows": len(raw_rows),
+            "filter_col": filter_col,
+            "filter_op": filter_op,
+        },
+    )
+
+    masked_idx = {i for i, (name, _) in enumerate(columns) if _is_masked(name)}
+
+    def _iter_csv():
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow([name for name, _ in columns])
+        for row in raw_rows:
+            writer.writerow([
+                "***" if i in masked_idx and value is not None else _jsonable(value)
+                for i, value in enumerate(row)
+            ])
+            if buf.tell() > 64 * 1024:
+                yield buf.getvalue()
+                buf.seek(0)
+                buf.truncate()
+        yield buf.getvalue()
+
+    filename = f"{schema}.{table}.csv"
+    return StreamingResponse(
+        _iter_csv(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

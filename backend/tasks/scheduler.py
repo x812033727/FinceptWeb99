@@ -303,7 +303,11 @@ def setup_jobs() -> None:
     from tasks.ingest_institutional_tw import run as run_ingest_institutional_tw
     scheduler.add_job(
         run_ingest_institutional_tw,
-        trigger=CronTrigger(hour=6, minute=50, timezone="UTC"),
+        # 09:10 UTC = 17:10 Taipei — AFTER TWSE publishes the day's
+        # 三大法人 data (~16:00). The previous 14:50 Taipei slot ran
+        # before publication, so every tick captured T-1 and the
+        # 04:00 stock-picking run scored chips on T-2 data.
+        trigger=CronTrigger(hour=9, minute=10, timezone="UTC"),
         id="ingest_institutional_tw",
         replace_existing=True,
         max_instances=1,

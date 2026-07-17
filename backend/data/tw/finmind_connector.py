@@ -743,8 +743,8 @@ async def get_day_trading_market_wide(
 async def get_taiex_total_return_index(
     start_date: str, end_date: str | None = None,
 ) -> list[dict[str, Any]]:
-    """`TaiwanStockTotalReturnIndex` (TAIEX TR variant `IR0001` —
-    台灣加權股價報酬指數). Unlike the price-only TAIEX archived under
+    """`TaiwanStockTotalReturnIndex` (data_id `TAIEX` — 發行量加權
+    股價報酬指數). Unlike the price-only TAIEX archived under
     `_TAIEX` in `ohlcv_daily`, this version reinvests dividends, so
     long-window comparisons against a TW portfolio are meaningfully
     closer to apples-to-apples.
@@ -756,7 +756,10 @@ async def get_taiex_total_return_index(
     cron can upsert into `ohlcv_daily` under the synthetic symbol
     `_TAIEX_TR` (mirrors how PR #132 stores `_TAIEX`).
     """
-    rows = await _query("TaiwanStockTotalReturnIndex", "IR0001", start_date, end_date)
+    # data_id is "TAIEX" for the TR variant — "IR0001" (the exchange's
+    # own index code) returns success + zero rows on this dataset, a
+    # silent mismatch that kept _TAIEX_TR empty since the job shipped.
+    rows = await _query("TaiwanStockTotalReturnIndex", "TAIEX", start_date, end_date)
     return [
         {
             "time":   r.get("date"),

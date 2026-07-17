@@ -410,8 +410,14 @@ async def get_taiex_history(query_date: date | None = None) -> list[dict[str, An
     rows = data if isinstance(data, list) else []
     result: list[dict[str, Any]] = []
     for r in rows:
-        roc_date = r.get("日期", "")
-        parts = str(roc_date).split("/")
+        # The openapi host rotated this report's keys from Chinese
+        # ("日期" as "115/07/01") to English ("Date" as "1150701",
+        # compact ROC, no slashes) — accept both so another rotation
+        # back doesn't zero the ingest again.
+        roc_date = str(r.get("日期") or r.get("Date") or "")
+        parts = roc_date.split("/")
+        if len(parts) != 3 and len(roc_date) == 7 and roc_date.isdigit():
+            parts = [roc_date[:3], roc_date[3:5], roc_date[5:7]]
         if len(parts) != 3:
             continue
         try:
@@ -419,7 +425,7 @@ async def get_taiex_history(query_date: date | None = None) -> list[dict[str, An
         except (ValueError, TypeError):
             continue
 
-        close = _tw_num(r.get("發行量加權股價指數"))
+        close = _tw_num(r.get("發行量加權股價指數") or r.get("TAIEX"))
         # FMTQIK doesn't expose open / high / low — flatten everything
         # to the close. Good enough for a 30-day chart context; we
         # accept the cost of no intraday range.
@@ -432,7 +438,7 @@ async def get_taiex_history(query_date: date | None = None) -> list[dict[str, An
             # 成交金額 (億) → reuse `volume` slot. Reader can rename
             # downstream if needed — within `ohlcv_daily` this column
             # is BigInteger, so it'll get truncated to int NTD-millions.
-            "volume": _tw_int(r.get("成交金額")),
+            "volume": _tw_int(r.get("成交金額") or r.get("TradeValue")),
         })
     return result
 

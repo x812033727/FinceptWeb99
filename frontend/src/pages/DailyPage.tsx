@@ -244,7 +244,7 @@ function CandidatePool({ results }: { results: Result[] }) {
     </summary>
     <div className="mt-4 flex flex-wrap gap-2">{items.map((c) => (
       <span key={c.symbol} className="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-xs text-slate-300">
-        {c.symbol}{c.name && <span className="ml-1 text-slate-400">{c.name}</span>}{typeof c.strategy_score === "number" && <> · {c.strategy_score.toFixed(1)}</>}
+        {c.symbol}{c.name && <span className="ml-1 text-slate-400">{c.name}</span>}
         {c.signal_type && signalNames[c.signal_type] && <span className="ml-1 text-amber-300">{signalNames[c.signal_type]}</span>}
       </span>
     ))}</div>

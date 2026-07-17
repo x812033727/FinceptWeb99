@@ -497,7 +497,20 @@
     "latest": "最新",
     "backToTables": "返回清單",
     "noTables": "沒有資料表",
-    "noRows": "沒有資料"
+    "noRows": "沒有資料",
+    "searchTables": "搜尋資料表",
+    "sortBy": "排序",
+    "expandCell": "點擊展開",
+    "filterField": "欄位",
+    "filterOp": "條件",
+    "filterValue": "值",
+    "apply": "套用",
+    "clear": "清除",
+    "exportCsv": "匯出 CSV",
+    "perPage": "筆/頁",
+    "page": "頁碼",
+    "opEq": "等於",
+    "opContains": "包含"
   },
   "dashboard": {
     "title": "儀表板",

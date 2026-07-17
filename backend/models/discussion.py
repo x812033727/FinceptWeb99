@@ -139,6 +139,15 @@ class Discussion(Base):
     daily_close_prices: Mapped[dict[str, list[float | None]] | None] = mapped_column(
         JSON, nullable=True,
     )
+    # Verify-time snapshot of the sequence-1 candidate pool's own
+    # 5-day performance (migration 0096):
+    # {"avg_return_pct": float, "resolved": int, "pool_size": int}.
+    # NULL when the row has no stored pool or predates the feature.
+    # This is what lets the scoreboard say "AI picks vs whole pool"
+    # without re-fetching OHLCV.
+    pool_performance: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True,
+    )
     # PR-C1: Brier score + per-symbol outcome breakdown computed once
     # the D1-D5 window resolves. NULL until then (the cron retries on
     # the next tick) and on every pre-PR-C0 row that has no per-symbol

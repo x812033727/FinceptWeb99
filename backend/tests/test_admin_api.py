@@ -333,7 +333,7 @@ async def test_signal_audit_aggregates_real_discussion(
         id=disc_id, owner_id=user.id, topic="2330 短線分析",
         rules="", market="TW",
         persona_ids=["market_analyst"],
-        status="concluded", current_round=1,
+        status="done", current_round=1,
     ))
     db_session.add(DiscussionRoundContext(
         discussion_id=disc_id, round=1,

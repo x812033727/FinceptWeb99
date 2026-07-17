@@ -440,7 +440,7 @@ async def test_audit_discussion_returns_none_when_no_round_contexts(
     db_session.add(Discussion(
         id=disc_id, owner_id=owner.id, topic="test", rules="",
         market="TW", persona_ids=["market_analyst"],
-        status="concluded", current_round=0,
+        status="done", current_round=0,
     ))
     await db_session.commit()
 
@@ -461,7 +461,7 @@ async def test_audit_discussion_walks_full_path(
         id=disc_id, owner_id=owner.id, topic="2330 短線分析",
         rules="", market="TW",
         persona_ids=["market_analyst", "buffett"],
-        status="concluded", current_round=1,
+        status="done", current_round=1,
     ))
     db_session.add(DiscussionRoundContext(
         discussion_id=disc_id, round=1,
@@ -532,7 +532,7 @@ async def test_audit_for_synthesis_empty_when_no_contexts(
     db_session.add(Discussion(
         id=disc_id, owner_id=owner.id, topic="t", rules="",
         market="TW", persona_ids=["market_analyst"],
-        status="concluded", current_round=0,
+        status="done", current_round=0,
     ))
     await db_session.commit()
 
@@ -551,7 +551,7 @@ async def test_audit_for_synthesis_surfaces_hallucinated_triples(
     db_session.add(Discussion(
         id=disc_id, owner_id=owner.id, topic="2330", rules="",
         market="TW", persona_ids=["market_analyst", "soros"],
-        status="concluded", current_round=1,
+        status="done", current_round=1,
     ))
     db_session.add(DiscussionRoundContext(
         discussion_id=disc_id, round=1,
@@ -600,7 +600,7 @@ async def _seed_concluded_discussion(
         id=disc_id, owner_id=owner_id, topic=topic,
         rules="", market=market,
         persona_ids=["market_analyst"],
-        status="concluded", current_round=1,
+        status="done", current_round=1,
     ))
     db_session.add(DiscussionRoundContext(
         discussion_id=disc_id, round=1,
@@ -699,7 +699,7 @@ async def test_audit_recent_discussions_carries_hallucinations(
         id=disc_id, owner_id=owner.id, topic="hall",
         rules="", market="TW",
         persona_ids=["market_analyst"],
-        status="concluded", current_round=1,
+        status="done", current_round=1,
     ))
     db_session.add(DiscussionRoundContext(
         discussion_id=disc_id, round=1,

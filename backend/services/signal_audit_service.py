@@ -582,7 +582,7 @@ async def audit_recent_discussions(
     *,
     limit: int = 30,
     market: str | None = None,
-    status: str = "concluded",
+    status: str = "done",
 ) -> BulkAuditSummary:
     """Roll up signal-citation stats across the most recent `limit`
     discussions matching `market` / `status`. Default is last 30

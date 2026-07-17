@@ -88,7 +88,7 @@ async def _add_discussions_with_brier(
             id=uuid4(), owner_id=owner_id, sweep_id=sweep_id,
             topic="x", rules="", market="TW",
             persona_ids=["market_analyst"],
-            status="concluded", current_round=1,
+            status="done", current_round=1,
             brier_score=b,
             created_at=base + timedelta(hours=i),
             updated_at=base + timedelta(hours=i),

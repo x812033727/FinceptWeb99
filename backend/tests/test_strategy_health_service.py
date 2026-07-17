@@ -94,7 +94,7 @@ async def _add_sweep_with_briers(
             id=uuid4(), owner_id=owner_id, sweep_id=sweep.id,
             topic="x", rules="", market="TW",
             persona_ids=["market_analyst"],
-            status="concluded", current_round=1,
+            status="done", current_round=1,
             brier_score=b,
             calibrated_brier_score=(
                 calibrated[i] if calibrated and i < len(calibrated) else None

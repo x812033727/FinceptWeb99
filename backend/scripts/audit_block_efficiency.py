@@ -74,7 +74,7 @@ async def _collect_block_bytes(
     char counts out of `input_breakdown`."""
     disc_q = (
         select(Discussion.id)
-        .where(Discussion.status == "concluded")
+        .where(Discussion.status == "done")
         .order_by(Discussion.created_at.desc())
         .limit(limit)
     )

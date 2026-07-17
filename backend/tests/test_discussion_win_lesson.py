@@ -39,7 +39,7 @@ def _backtest_discussion(owner_id: uuid.UUID) -> Discussion:
         id=uuid4(), owner_id=owner_id,
         topic="2330 backtest", rules="",
         market="TW", persona_ids=["market_analyst"],
-        status="concluded", current_round=1,
+        status="done", current_round=1,
         as_of_date=date(2026, 4, 1),
         conclusion={
             "recommended_symbols": ["2330"],

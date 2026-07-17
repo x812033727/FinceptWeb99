@@ -172,7 +172,7 @@ async def _seed_concluded_discussion(
         id=disc_id, owner_id=owner_id,
         topic=f"test {symbol}", rules="", market=market,
         persona_ids=["market_analyst"],
-        status="concluded", current_round=1,
+        status="done", current_round=1,
         day1_open_prices={symbol: day1_open},
         daily_close_prices={
             symbol: [
@@ -295,7 +295,7 @@ async def test_compute_signal_quality_skips_discussions_without_d5_data(
         id=disc_id, owner_id=owner.id,
         topic="not-yet-scored", rules="", market="TW",
         persona_ids=["market_analyst"],
-        status="concluded", current_round=1,
+        status="done", current_round=1,
         day1_open_prices=None,
         daily_close_prices=None,
     ))

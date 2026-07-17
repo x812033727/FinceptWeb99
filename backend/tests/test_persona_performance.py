@@ -43,7 +43,7 @@ async def _make_discussion(
         id=uuid4(), owner_id=owner_id, sweep_id=sweep_id,
         topic="x", rules="", market=market,
         persona_ids=persona_ids,
-        status="concluded", current_round=1,
+        status="done", current_round=1,
         verdict=verdict,
         created_at=now, updated_at=now,
     )

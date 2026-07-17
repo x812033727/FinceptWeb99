@@ -284,7 +284,7 @@ async def compute_signal_quality(
     *,
     lookback_days: int = 60,
     market: str | None = None,
-    status: str = "concluded",
+    status: str = "done",
 ) -> SignalQualityReport:
     """Roll up signal-vs-D5 statistics across discussions concluded
     in the lookback window. Discussions without persisted round
@@ -293,7 +293,7 @@ async def compute_signal_quality(
     already resolved).
 
     `market` filters discussion rows by market when set; default is
-    all-markets. `status` defaults to `concluded` — that's the only
+    all-markets. `status` defaults to `done` — that's the only
     state where the daily_close_prices cron has fired.
     """
     cutoff = datetime.now(UTC) - timedelta(days=lookback_days)

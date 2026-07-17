@@ -234,7 +234,7 @@ async def analyze_recent_post_mortems(
     """
     stmt = (
         select(Discussion.id)
-        .where(Discussion.status == "concluded")
+        .where(Discussion.status == "done")
     )
     if market is not None:
         stmt = stmt.where(Discussion.market == market)

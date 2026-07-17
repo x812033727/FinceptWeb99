@@ -152,7 +152,7 @@ async def _seed_outcomes(
             id=uuid4(), owner_id=owner_id, sweep_id=sweep.id,
             topic="x", rules="", market="TW",
             persona_ids=["market_analyst"],
-            status="concluded", current_round=1,
+            status="done", current_round=1,
             outcome_vector=[
                 {"symbol": f"sym{i}", "confidence": conf,
                  "outcome_binary": outcome},

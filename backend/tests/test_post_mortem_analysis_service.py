@@ -61,7 +61,7 @@ async def _seed_discussion_with_pm(
         id=disc_id, owner_id=owner_id,
         topic="post-mortem test", rules="", market=market,
         persona_ids=[p for p, _ in persona_replies],
-        status="concluded",
+        status="done",
         current_round=2 if has_pm_injection else 1,
     ))
     # Round 1: existing persona turns (placeholder; not analysed).
@@ -103,7 +103,7 @@ async def test_find_post_mortem_round_detects_user_input(
     db_session.add(Discussion(
         id=disc_id, owner_id=owner.id,
         topic="t", rules="", market="TW",
-        persona_ids=["a"], status="concluded", current_round=2,
+        persona_ids=["a"], status="done", current_round=2,
     ))
     # Earlier user_input that isn't a post-mortem.
     db_session.add(DiscussionTurn(
@@ -132,7 +132,7 @@ async def test_find_post_mortem_round_returns_none_when_absent(
     db_session.add(Discussion(
         id=disc_id, owner_id=owner.id,
         topic="t", rules="", market="TW",
-        persona_ids=["a"], status="concluded", current_round=1,
+        persona_ids=["a"], status="done", current_round=1,
     ))
     db_session.add(DiscussionTurn(
         discussion_id=disc_id, round=1, turn_index=0,

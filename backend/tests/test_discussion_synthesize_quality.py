@@ -42,7 +42,7 @@ def _make_discussion(owner_id: uuid.UUID) -> Discussion:
     return Discussion(
         id=uuid4(), owner_id=owner_id, topic="t", rules="",
         market="TW", persona_ids=["a", "b"],
-        status="concluded", current_round=1,
+        status="done", current_round=1,
     )
 
 
@@ -295,7 +295,7 @@ async def test_real_audit_path_writes_hallucination_for_seeded_turn(
     disc = Discussion(
         id=disc_id, owner_id=owner.id, topic="2330", rules="",
         market="TW", persona_ids=["market_analyst", "soros"],
-        status="concluded", current_round=1,
+        status="done", current_round=1,
     )
     db_session.add(disc)
     db_session.add(DiscussionRoundContext(

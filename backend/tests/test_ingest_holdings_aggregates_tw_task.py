@@ -9,7 +9,7 @@ Pinned scenarios:
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -68,6 +68,12 @@ def _holding_shares_stub(by_date: dict[str, list[dict]]):
     return _fetch
 
 
+def _latest_weekday() -> date:
+    """Match the task's weekday walk even when the suite runs on a weekend."""
+    today = date.today()
+    return today - timedelta(days=max(0, today.weekday() - 4))
+
+
 @pytest.fixture
 def patch_session(db_session: AsyncSession):
     class _CM:
@@ -103,7 +109,7 @@ async def test_shareholding_fans_out_to_long_form(
 ):
     from tasks import ingest_holdings_aggregates_tw
 
-    today = date.today().isoformat()
+    publication_day = _latest_weekday().isoformat()
     with patch("tasks.ingest_holdings_aggregates_tw.acquire_lock",
                AsyncMock(return_value=True)), \
          patch("tasks.ingest_holdings_aggregates_tw.release_lock", AsyncMock()), \
@@ -112,7 +118,7 @@ async def test_shareholding_fans_out_to_long_form(
          patch("tasks.ingest_holdings_aggregates_tw.clear_failures", AsyncMock()), \
          patch("tasks.ingest_holdings_aggregates_tw.record_health", AsyncMock()), \
          patch("tasks.ingest_holdings_aggregates_tw.finmind.get_shareholding_market_wide",
-               _holding_shares_stub({today: _real_levels("2330")})), \
+               _holding_shares_stub({publication_day: _real_levels("2330")})), \
          patch("tasks.ingest_holdings_aggregates_tw.finmind.get_total_institutional_market_wide",
                AsyncMock(return_value=[])):
         await ingest_holdings_aggregates_tw.run()
@@ -141,7 +147,7 @@ async def test_total_and_adjustment_levels_are_not_stored_as_buckets(
     distribution bucket."""
     from tasks import ingest_holdings_aggregates_tw
 
-    today = date.today().isoformat()
+    publication_day = _latest_weekday().isoformat()
     with patch("tasks.ingest_holdings_aggregates_tw.acquire_lock",
                AsyncMock(return_value=True)), \
          patch("tasks.ingest_holdings_aggregates_tw.release_lock", AsyncMock()), \
@@ -150,7 +156,7 @@ async def test_total_and_adjustment_levels_are_not_stored_as_buckets(
          patch("tasks.ingest_holdings_aggregates_tw.clear_failures", AsyncMock()), \
          patch("tasks.ingest_holdings_aggregates_tw.record_health", AsyncMock()), \
          patch("tasks.ingest_holdings_aggregates_tw.finmind.get_shareholding_market_wide",
-               _holding_shares_stub({today: _real_levels("2330")})), \
+               _holding_shares_stub({publication_day: _real_levels("2330")})), \
          patch("tasks.ingest_holdings_aggregates_tw.finmind.get_total_institutional_market_wide",
                AsyncMock(return_value=[])):
         await ingest_holdings_aggregates_tw.run()

@@ -4,11 +4,12 @@ Covers:
   - Signature verification: valid, malformed header, stale timestamp,
     rotation (multiple v1 sigs), wrong secret
   - Event recording is idempotent (Stripe re-deliveries dedup)
-  - Subscription lifecycle: created → updated → deleted → past_due
+  - Subscription lifecycle: pending → paid/active → updated → deleted
   - Out-of-order delivery (`updated` arrives before `created`) handled
   - End-to-end POST /webhooks/stripe — 200 on valid sig, 401 on bad
     sig, 503 when secret unset
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -30,7 +31,6 @@ from finmind.billing.stripe_webhook import (
 )
 from finmind.db.session import get_finmind_db
 from finmind.models.billing import PaymentEvent, Subscription
-
 
 _TEST_SECRET = "whsec_test_dontuse_for_real"
 
@@ -141,9 +141,7 @@ async def test_process_event_records_unhandled_type_as_received(
     outcome = await process_event(finmind_session, event)
     assert outcome.status == "unhandled"
 
-    n = (
-        await finmind_session.execute(select(PaymentEvent))
-    ).scalars().all()
+    n = (await finmind_session.execute(select(PaymentEvent))).scalars().all()
     assert len(n) == 1
     assert n[0].event_id == "evt_test_unknown"
     assert n[0].processed_at is not None  # marked done (no handler error)
@@ -160,7 +158,8 @@ async def test_process_event_records_unhandled_type_as_received(
     ],
 )
 async def test_known_but_unhandled_event_types_round_trip(
-    finmind_session, event_type,
+    finmind_session,
+    event_type,
 ):
     """Stripe sends these events in normal subscription lifecycles.
     We don't currently act on them (no notification system wired) but
@@ -181,10 +180,14 @@ async def test_known_but_unhandled_event_types_round_trip(
     assert outcome.event_type == event_type
 
     persisted = (
-        await finmind_session.execute(
-            select(PaymentEvent).where(PaymentEvent.event_type == event_type)
+        (
+            await finmind_session.execute(
+                select(PaymentEvent).where(PaymentEvent.event_type == event_type)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(persisted) == 1
     assert persisted[0].processed_at is not None
     assert persisted[0].error is None
@@ -197,12 +200,14 @@ async def test_process_event_dedups_redelivery(finmind_session):
     event = {
         "id": "evt_dedup",
         "type": "customer.subscription.created",
-        "data": {"object": {
-            "id": "sub_dedup_1",
-            "metadata": {"owner_email": "x@y.com", "plan_code": "pro"},
-            "start_date": int(time.time()),
-            "current_period_end": int(time.time()) + 86400,
-        }},
+        "data": {
+            "object": {
+                "id": "sub_dedup_1",
+                "metadata": {"owner_email": "x@y.com", "plan_code": "pro"},
+                "start_date": int(time.time()),
+                "current_period_end": int(time.time()) + 86400,
+            }
+        },
     }
 
     out1 = await process_event(finmind_session, event)
@@ -216,6 +221,161 @@ async def test_process_event_dedups_redelivery(finmind_session):
     assert len(subs) == 1
 
 
+@pytest.mark.asyncio
+async def test_in_progress_redelivery_is_not_acknowledged_as_duplicate(finmind_session):
+    event = {
+        "id": "evt_in_progress",
+        "type": "invoice.paid",
+        "data": {"object": {"subscription": "sub_in_progress"}},
+    }
+    finmind_session.add(
+        PaymentEvent(
+            provider="stripe",
+            event_id=event["id"],
+            event_type=event["type"],
+            payload=event,
+        )
+    )
+    await finmind_session.commit()
+
+    with pytest.raises(RuntimeError, match="already being processed"):
+        await process_event(finmind_session, event)
+
+    recorded = await finmind_session.scalar(
+        select(PaymentEvent).where(PaymentEvent.event_id == event["id"])
+    )
+    assert recorded.processed_at is None
+    assert recorded.error is None
+
+
+@pytest.mark.asyncio
+async def test_failed_event_retries_after_dependency_arrives(finmind_session):
+    paid_evt = {
+        "id": "evt_paid_out_of_order",
+        "created": 200,
+        "type": "invoice.paid",
+        "data": {"object": {"subscription": "sub_paid_out_of_order"}},
+    }
+
+    with pytest.raises(RuntimeError, match="not yet recorded"):
+        await process_event(finmind_session, paid_evt)
+
+    recorded = await finmind_session.scalar(
+        select(PaymentEvent).where(PaymentEvent.event_id == "evt_paid_out_of_order")
+    )
+    assert recorded.error is not None
+    assert recorded.processed_at is None
+
+    await process_event(
+        finmind_session,
+        {
+            "id": "evt_created_after_paid",
+            "created": 100,
+            "type": "customer.subscription.created",
+            "data": {
+                "object": {
+                    "id": "sub_paid_out_of_order",
+                    "metadata": {
+                        "owner_email": "out-of-order@example.com",
+                        "plan_code": "pro",
+                    },
+                    "status": "incomplete",
+                }
+            },
+        },
+    )
+
+    outcome = await process_event(finmind_session, paid_evt)
+
+    assert outcome.status == "processed"
+    sub = await finmind_session.scalar(
+        select(Subscription).where(Subscription.external_sub_id == "sub_paid_out_of_order")
+    )
+    assert sub.status == "active"
+    await finmind_session.refresh(recorded)
+    assert recorded.error is None
+    assert recorded.processed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_older_payment_failure_cannot_regress_paid_subscription(finmind_session):
+    await process_event(
+        finmind_session,
+        {
+            "id": "evt_ordered_created",
+            "created": 100,
+            "type": "customer.subscription.created",
+            "data": {
+                "object": {
+                    "id": "sub_ordered",
+                    "metadata": {"owner_email": "ordered@example.com", "plan_code": "pro"},
+                    "status": "incomplete",
+                }
+            },
+        },
+    )
+    await process_event(
+        finmind_session,
+        {
+            "id": "evt_ordered_paid",
+            "created": 300,
+            "type": "invoice.paid",
+            "data": {"object": {"subscription": "sub_ordered"}},
+        },
+    )
+
+    outcome = await process_event(
+        finmind_session,
+        {
+            "id": "evt_ordered_failed",
+            "created": 200,
+            "type": "invoice.payment_failed",
+            "data": {"object": {"subscription": "sub_ordered"}},
+        },
+    )
+
+    sub = await finmind_session.scalar(
+        select(Subscription).where(Subscription.external_sub_id == "sub_ordered")
+    )
+    assert outcome.note == "ignored stale invoice.payment_failed"
+    assert sub.status == "active"
+    assert sub.last_external_event_created_at == 300
+
+
+@pytest.mark.asyncio
+async def test_same_second_restrictive_status_wins(finmind_session):
+    await process_event(
+        finmind_session,
+        {
+            "id": "evt_same_second_canceled",
+            "created": 500,
+            "type": "customer.subscription.created",
+            "data": {
+                "object": {
+                    "id": "sub_same_second",
+                    "metadata": {"owner_email": "tie@example.com", "plan_code": "pro"},
+                    "status": "canceled",
+                }
+            },
+        },
+    )
+    outcome = await process_event(
+        finmind_session,
+        {
+            "id": "evt_same_second_active",
+            "created": 500,
+            "type": "customer.subscription.updated",
+            "data": {"object": {"id": "sub_same_second", "status": "active"}},
+        },
+    )
+
+    sub = await finmind_session.scalar(
+        select(Subscription).where(Subscription.external_sub_id == "sub_same_second")
+    )
+    assert outcome.note == "ignored same-second access relaxation"
+    assert sub.status == "canceled"
+
+
 # ── Subscription lifecycle ──────────────────────────────────────
 
 
@@ -224,12 +384,15 @@ async def test_subscription_created_inserts_row(finmind_session):
     event = {
         "id": "evt_created_1",
         "type": "customer.subscription.created",
-        "data": {"object": {
-            "id": "sub_xyz_1",
-            "metadata": {"owner_email": "user@example.com", "plan_code": "pro"},
-            "start_date": 1714521600,         # 2024-05-01
-            "current_period_end": 1717113600, # 2024-05-31
-        }},
+        "data": {
+            "object": {
+                "id": "sub_xyz_1",
+                "metadata": {"owner_email": "user@example.com", "plan_code": "pro"},
+                "status": "active",
+                "start_date": 1714521600,  # 2024-05-01
+                "current_period_end": 1717113600,  # 2024-05-31
+            }
+        },
     }
     outcome = await process_event(finmind_session, event)
     assert outcome.status == "processed"
@@ -246,26 +409,182 @@ async def test_subscription_created_inserts_row(finmind_session):
 
 
 @pytest.mark.asyncio
+async def test_subscription_created_incomplete_stays_pending(finmind_session):
+    event = {
+        "id": "evt_created_pending",
+        "type": "customer.subscription.created",
+        "data": {
+            "object": {
+                "id": "sub_pending",
+                "metadata": {"owner_email": "pending@example.com", "plan_code": "pro"},
+                "status": "incomplete",
+                "start_date": 1714521600,
+            }
+        },
+    }
+
+    await process_event(finmind_session, event)
+
+    sub = await finmind_session.scalar(
+        select(Subscription).where(Subscription.external_sub_id == "sub_pending")
+    )
+    assert sub.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_subscription_created_unknown_status_fails_closed(finmind_session):
+    event = {
+        "id": "evt_created_unknown_status",
+        "type": "customer.subscription.created",
+        "data": {
+            "object": {
+                "id": "sub_unknown_status",
+                "metadata": {"owner_email": "unknown@example.com", "plan_code": "pro"},
+                "status": "new_future_status",
+            }
+        },
+    }
+
+    await process_event(finmind_session, event)
+
+    sub = await finmind_session.scalar(
+        select(Subscription).where(Subscription.external_sub_id == "sub_unknown_status")
+    )
+    assert sub.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_invoice_paid_activates_pending_subscription(finmind_session):
+    create_evt = {
+        "id": "evt_paid_create",
+        "type": "customer.subscription.created",
+        "data": {
+            "object": {
+                "id": "sub_paid",
+                "metadata": {"owner_email": "paid@example.com", "plan_code": "pro"},
+                "status": "incomplete",
+            }
+        },
+    }
+    paid_evt = {
+        "id": "evt_paid",
+        "type": "invoice.paid",
+        "data": {"object": {"subscription": "sub_paid"}},
+    }
+
+    await process_event(finmind_session, create_evt)
+    await process_event(finmind_session, paid_evt)
+
+    sub = await finmind_session.scalar(
+        select(Subscription).where(Subscription.external_sub_id == "sub_paid")
+    )
+    assert sub.status == "active"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stripe_status", "terminal_status"),
+    [("canceled", "canceled"), ("incomplete_expired", "expired"), ("paused", "paused")],
+)
+async def test_invoice_paid_does_not_revive_terminal_subscription(
+    finmind_session,
+    stripe_status,
+    terminal_status,
+):
+    await process_event(
+        finmind_session,
+        {
+            "id": f"evt_terminal_create_{terminal_status}",
+            "created": 100,
+            "type": "customer.subscription.created",
+            "data": {
+                "object": {
+                    "id": f"sub_terminal_{terminal_status}",
+                    "metadata": {"owner_email": "terminal@example.com", "plan_code": "pro"},
+                    "status": stripe_status,
+                }
+            },
+        },
+    )
+    outcome = await process_event(
+        finmind_session,
+        {
+            "id": f"evt_terminal_paid_{terminal_status}",
+            "created": 200,
+            "type": "invoice.paid",
+            "data": {"object": {"subscription": {"id": f"sub_terminal_{terminal_status}"}}},
+        },
+    )
+
+    sub = await finmind_session.scalar(
+        select(Subscription).where(
+            Subscription.external_sub_id == f"sub_terminal_{terminal_status}"
+        )
+    )
+    assert outcome.note == f"ignored invoice.paid for {terminal_status} subscription"
+    assert sub.status == terminal_status
+
+
+@pytest.mark.asyncio
+async def test_first_payment_failure_keeps_incomplete_subscription_pending(finmind_session):
+    await process_event(
+        finmind_session,
+        {
+            "id": "evt_first_failure_create",
+            "created": 100,
+            "type": "customer.subscription.created",
+            "data": {
+                "object": {
+                    "id": "sub_first_failure",
+                    "metadata": {"owner_email": "first@example.com", "plan_code": "pro"},
+                    "status": "incomplete",
+                }
+            },
+        },
+    )
+    outcome = await process_event(
+        finmind_session,
+        {
+            "id": "evt_first_failure",
+            "created": 200,
+            "type": "invoice.payment_failed",
+            "data": {"object": {"subscription": {"id": "sub_first_failure"}}},
+        },
+    )
+
+    sub = await finmind_session.scalar(
+        select(Subscription).where(Subscription.external_sub_id == "sub_first_failure")
+    )
+    assert outcome.note == "initial payment failure remains pending"
+    assert sub.status == "pending"
+    assert sub.last_external_event_created_at == 200
+
+
+@pytest.mark.asyncio
 async def test_subscription_updated_changes_plan_and_status(finmind_session):
     """Created followed by updated → row reflects the new state."""
     create_evt = {
         "id": "evt_upd_create",
         "type": "customer.subscription.created",
-        "data": {"object": {
-            "id": "sub_upd",
-            "metadata": {"owner_email": "u@x.com", "plan_code": "starter"},
-            "start_date": int(time.time()),
-            "current_period_end": int(time.time()) + 86400,
-        }},
+        "data": {
+            "object": {
+                "id": "sub_upd",
+                "metadata": {"owner_email": "u@x.com", "plan_code": "starter"},
+                "start_date": int(time.time()),
+                "current_period_end": int(time.time()) + 86400,
+            }
+        },
     }
     update_evt = {
         "id": "evt_upd_update",
         "type": "customer.subscription.updated",
-        "data": {"object": {
-            "id": "sub_upd",
-            "metadata": {"plan_code": "pro"},
-            "status": "past_due",
-        }},
+        "data": {
+            "object": {
+                "id": "sub_upd",
+                "metadata": {"plan_code": "pro"},
+                "status": "past_due",
+            }
+        },
     }
     await process_event(finmind_session, create_evt)
     await process_event(finmind_session, update_evt)
@@ -284,11 +603,13 @@ async def test_subscription_deleted_cancels(finmind_session):
     create_evt = {
         "id": "evt_del_create",
         "type": "customer.subscription.created",
-        "data": {"object": {
-            "id": "sub_del",
-            "metadata": {"owner_email": "u@x.com", "plan_code": "pro"},
-            "start_date": int(time.time()),
-        }},
+        "data": {
+            "object": {
+                "id": "sub_del",
+                "metadata": {"owner_email": "u@x.com", "plan_code": "pro"},
+                "start_date": int(time.time()),
+            }
+        },
     }
     delete_evt = {
         "id": "evt_del",
@@ -312,11 +633,14 @@ async def test_invoice_payment_failed_marks_past_due(finmind_session):
     create_evt = {
         "id": "evt_pf_create",
         "type": "customer.subscription.created",
-        "data": {"object": {
-            "id": "sub_pf",
-            "metadata": {"owner_email": "u@x.com", "plan_code": "pro"},
-            "start_date": int(time.time()),
-        }},
+        "data": {
+            "object": {
+                "id": "sub_pf",
+                "metadata": {"owner_email": "u@x.com", "plan_code": "pro"},
+                "status": "active",
+                "start_date": int(time.time()),
+            }
+        },
     }
     fail_evt = {
         "id": "evt_pf",
@@ -344,12 +668,14 @@ async def test_subscription_updated_without_prior_created_falls_back(
     update_evt = {
         "id": "evt_oo",
         "type": "customer.subscription.updated",
-        "data": {"object": {
-            "id": "sub_oo",
-            "metadata": {"owner_email": "u@x.com", "plan_code": "pro"},
-            "start_date": int(time.time()),
-            "current_period_end": int(time.time()) + 86400,
-        }},
+        "data": {
+            "object": {
+                "id": "sub_oo",
+                "metadata": {"owner_email": "u@x.com", "plan_code": "pro"},
+                "start_date": int(time.time()),
+                "current_period_end": int(time.time()) + 86400,
+            }
+        },
     }
     outcome = await process_event(finmind_session, update_evt)
     assert outcome.status == "processed"
@@ -421,22 +747,29 @@ async def test_endpoint_400_on_missing_signature(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_endpoint_200_on_valid_sig_persists_event(
-    client, finmind_session, monkeypatch,
+    client,
+    finmind_session,
+    monkeypatch,
 ):
     """End-to-end happy path — sign payload, POST, expect 200, assert
     payment_events row + subscription state change."""
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", _TEST_SECRET)
 
-    body = json.dumps({
-        "id": "evt_e2e",
-        "type": "customer.subscription.created",
-        "data": {"object": {
-            "id": "sub_e2e",
-            "metadata": {"owner_email": "e2e@x.com", "plan_code": "pro"},
-            "start_date": int(time.time()),
-            "current_period_end": int(time.time()) + 86400,
-        }},
-    }).encode()
+    body = json.dumps(
+        {
+            "id": "evt_e2e",
+            "type": "customer.subscription.created",
+            "data": {
+                "object": {
+                    "id": "sub_e2e",
+                    "metadata": {"owner_email": "e2e@x.com", "plan_code": "pro"},
+                    "status": "active",
+                    "start_date": int(time.time()),
+                    "current_period_end": int(time.time()) + 86400,
+                }
+            },
+        }
+    ).encode()
 
     resp = await client.post(
         "/api/finmind/webhooks/stripe",

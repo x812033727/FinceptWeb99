@@ -19,17 +19,19 @@ Operational shape:
   → process_event(): switch on event.type, mutate subscriptions
 
 Event types handled in this module:
-  - customer.subscription.created  → INSERT into subscriptions
-                                     (status='active', plan from
-                                     metadata.plan_code)
+  - customer.subscription.created  → INSERT into subscriptions with
+                                     Stripe's actual status (an initial
+                                     subscription can be incomplete)
   - customer.subscription.updated  → UPDATE plan / status / expires_at
   - customer.subscription.deleted  → status='canceled', expires_at=NOW()
+  - invoice.paid                   → status='active'
   - invoice.payment_failed         → status='past_due'
 
 Anything else is recorded in payment_events but not acted on — the
 inbox is the source of truth, the dispatcher just translates known
 event types into subscription state.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -37,7 +39,7 @@ import hmac
 import logging
 import time
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import select, update
@@ -74,7 +76,7 @@ class SignatureError(Exception):
 class WebhookOutcome:
     event_id: str
     event_type: str
-    status: str           # 'processed' | 'duplicate' | 'unhandled'
+    status: str  # 'processed' | 'duplicate' | 'unhandled'
     note: str | None = None
 
 
@@ -107,8 +109,11 @@ def _parse_signature_header(header: str) -> tuple[int, list[str]]:
 
 
 def verify_signature(
-    payload: bytes, signature_header: str, secret: str,
-    *, now: int | None = None,
+    payload: bytes,
+    signature_header: str,
+    secret: str,
+    *,
+    now: int | None = None,
 ) -> None:
     """Raise SignatureError on mismatch / stale / malformed.
 
@@ -131,9 +136,7 @@ def verify_signature(
         )
 
     signed_payload = f"{ts}.".encode() + payload
-    expected = hmac.new(
-        secret.encode("utf-8"), signed_payload, hashlib.sha256
-    ).hexdigest()
+    expected = hmac.new(secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
 
     for sig in signatures:
         if hmac.compare_digest(expected, sig):
@@ -159,7 +162,7 @@ def _to_date(epoch: int | None) -> date | None:
     if epoch is None:
         return None
     try:
-        return datetime.fromtimestamp(int(epoch), tz=timezone.utc).date()
+        return datetime.fromtimestamp(int(epoch), tz=UTC).date()
     except (ValueError, TypeError, OSError):
         return None
 
@@ -174,10 +177,7 @@ def _customer_email(sub_obj: dict[str, Any]) -> str | None:
         or sub_obj.get("customer_email")
         or (sub_obj.get("customer") or {}).get("email")
         if isinstance(sub_obj.get("customer"), dict)
-        else (
-            md.get("owner_email")
-            or sub_obj.get("customer_email")
-        )
+        else (md.get("owner_email") or sub_obj.get("customer_email"))
     )
 
 
@@ -195,17 +195,71 @@ def _plan_code(sub_obj: dict[str, Any]) -> str | None:
     return None
 
 
-async def _record_event(
-    session: AsyncSession, event: dict[str, Any]
+def _subscription_status(stripe_status: Any) -> str:
+    """Map Stripe's lifecycle to the local access-control states.
+
+    Only ``active`` and ``trial`` grant quota access. New or unknown Stripe
+    states therefore map to ``pending`` instead of optimistically enabling a
+    subscription. In particular, Stripe documents that a newly-created
+    subscription can be ``incomplete`` while its first payment still needs
+    customer action.
+    """
+    return {
+        "trialing": "trial",
+        "active": "active",
+        "past_due": "past_due",
+        "unpaid": "past_due",
+        "canceled": "canceled",
+        "incomplete": "pending",
+        "incomplete_expired": "expired",
+        "paused": "paused",
+    }.get(str(stripe_status or "").lower(), "pending")
+
+
+def _event_created(event: dict[str, Any]) -> int | None:
+    try:
+        created = int(event.get("created"))
+    except (TypeError, ValueError):
+        return None
+    return created if created >= 0 else None
+
+
+def _event_is_stale(subscription: Subscription, event_created: int | None) -> bool:
+    previous = subscription.last_external_event_created_at
+    return event_created is not None and previous is not None and event_created < previous
+
+
+def _event_would_relax_same_second(
+    subscription: Subscription,
+    event_created: int | None,
+    incoming_status: str,
 ) -> bool:
+    """Prefer access-restricting state when Stripe timestamps tie."""
+    previous = subscription.last_external_event_created_at
+    granting = {"trial", "active"}
+    return (
+        event_created is not None
+        and previous == event_created
+        and subscription.status not in granting
+        and incoming_status in granting
+    )
+
+
+def _stamp_event(subscription: Subscription, event_created: int | None) -> None:
+    if event_created is not None:
+        subscription.last_external_event_created_at = event_created
+
+
+async def _record_event(session: AsyncSession, event: dict[str, Any]) -> str:
     """INSERT into payment_events with ON CONFLICT DO NOTHING for
-    dedup. Returns True if this is a new event, False if Stripe
-    re-delivered something we already saw."""
+    dedup. Returns ``new``, ``duplicate``, or ``retry``. A prior handler
+    failure remains retryable because Stripe redelivery is how out-of-order
+    subscription events recover."""
     event_id = _event_id(event)
     if not event_id:
         # Bare malformed payload — log and move on. Caller still
         # returns 200 to stop Stripe retrying a bad event forever.
-        return False
+        return "duplicate"
 
     payload = {
         "provider": "stripe",
@@ -216,18 +270,26 @@ async def _record_event(
     dialect = session.bind.dialect.name
     insert_fn = pg_insert if dialect == "postgresql" else sqlite_insert
     stmt = insert_fn(PaymentEvent).values(**payload)
-    stmt = stmt.on_conflict_do_nothing(
-        index_elements=["provider", "event_id"]
-    )
+    stmt = stmt.on_conflict_do_nothing(index_elements=["provider", "event_id"])
     result = await session.execute(stmt)
     await session.commit()
-    # rowcount > 0 = inserted; 0 = duplicate (skipped by ON CONFLICT).
-    return (result.rowcount or 0) > 0
+    if (result.rowcount or 0) > 0:
+        return "new"
+
+    recorded = await session.scalar(
+        select(PaymentEvent).where(
+            PaymentEvent.provider == "stripe",
+            PaymentEvent.event_id == event_id,
+        )
+    )
+    if recorded is not None and recorded.processed_at is not None:
+        return "duplicate"
+    if recorded is not None and recorded.error is not None:
+        return "retry"
+    return "processing"
 
 
-async def _mark_processed(
-    session: AsyncSession, event_id: str, error: str | None = None
-) -> None:
+async def _mark_processed(session: AsyncSession, event_id: str, error: str | None = None) -> None:
     await session.execute(
         update(PaymentEvent)
         .where(
@@ -235,7 +297,7 @@ async def _mark_processed(
             PaymentEvent.event_id == event_id,
         )
         .values(
-            processed_at=datetime.now(tz=timezone.utc),
+            processed_at=None if error is not None else datetime.now(tz=UTC),
             error=error,
         )
     )
@@ -243,7 +305,9 @@ async def _mark_processed(
 
 
 async def _handle_subscription_created(
-    session: AsyncSession, sub_obj: dict[str, Any]
+    session: AsyncSession,
+    sub_obj: dict[str, Any],
+    event_created: int | None,
 ) -> str:
     email = _customer_email(sub_obj)
     plan_code = _plan_code(sub_obj)
@@ -252,8 +316,9 @@ async def _handle_subscription_created(
         return f"missing email / plan_code / id (have {bool(email)} / {bool(plan_code)} / {bool(sub_id)})"
 
     started_epoch = sub_obj.get("start_date") or sub_obj.get("current_period_start")
-    started_at = _to_date(started_epoch) or datetime.now(tz=timezone.utc).date()
+    started_at = _to_date(started_epoch) or datetime.now(tz=UTC).date()
     expires_at = _to_date(sub_obj.get("current_period_end"))
+    status = _subscription_status(sub_obj.get("status"))
 
     # Idempotency: same external_sub_id = same row. If Stripe re-sends
     # `created` after a subscription already exists locally (e.g. operator
@@ -267,29 +332,39 @@ async def _handle_subscription_created(
         )
     ).scalar_one_or_none()
     if existing is not None:
+        if _event_is_stale(existing, event_created):
+            return "ignored stale subscription.created"
+        if _event_would_relax_same_second(existing, event_created, status):
+            return "ignored same-second access relaxation"
         existing.plan_code = plan_code
-        existing.status = "active"
+        existing.status = status
         existing.started_at = started_at
         existing.expires_at = expires_at
+        _stamp_event(existing, event_created)
         await session.commit()
         return "updated existing subscription"
 
-    session.add(Subscription(
-        owner_email=email,
-        plan_code=plan_code,
-        status="active",
-        started_at=started_at,
-        expires_at=expires_at,
-        external_provider="stripe",
-        external_sub_id=sub_id,
-        auto_renew=True,
-    ))
+    session.add(
+        Subscription(
+            owner_email=email,
+            plan_code=plan_code,
+            status=status,
+            started_at=started_at,
+            expires_at=expires_at,
+            external_provider="stripe",
+            external_sub_id=sub_id,
+            last_external_event_created_at=event_created,
+            auto_renew=True,
+        )
+    )
     await session.commit()
     return "subscription created"
 
 
 async def _handle_subscription_updated(
-    session: AsyncSession, sub_obj: dict[str, Any]
+    session: AsyncSession,
+    sub_obj: dict[str, Any],
+    event_created: int | None,
 ) -> str:
     sub_id = sub_obj.get("id")
     if not sub_id:
@@ -306,101 +381,144 @@ async def _handle_subscription_updated(
     if existing is None:
         # Stripe sometimes sends `updated` before we've processed
         # `created` (out-of-order delivery). Fall back to insert.
-        return await _handle_subscription_created(session, sub_obj)
+        return await _handle_subscription_created(session, sub_obj, event_created)
+
+    if _event_is_stale(existing, event_created):
+        return "ignored stale subscription.updated"
 
     plan_code = _plan_code(sub_obj)
     if plan_code:
         existing.plan_code = plan_code
-    # Stripe.status: 'active' | 'past_due' | 'canceled' | 'unpaid' |
-    # 'incomplete' | 'trialing' — map to our subset.
-    stripe_status = sub_obj.get("status") or "active"
-    existing.status = {
-        "trialing": "trial",
-        "active": "active",
-        "past_due": "past_due",
-        "unpaid": "past_due",
-        "canceled": "canceled",
-        "incomplete": "past_due",
-        "incomplete_expired": "expired",
-    }.get(stripe_status, stripe_status)
+    status = _subscription_status(sub_obj.get("status"))
+    if _event_would_relax_same_second(existing, event_created, status):
+        return "ignored same-second access relaxation"
+    existing.status = status
     new_expires = _to_date(sub_obj.get("current_period_end"))
     if new_expires is not None:
         existing.expires_at = new_expires
+    _stamp_event(existing, event_created)
     await session.commit()
     return "subscription updated"
 
 
 async def _handle_subscription_deleted(
-    session: AsyncSession, sub_obj: dict[str, Any]
+    session: AsyncSession,
+    sub_obj: dict[str, Any],
+    event_created: int | None,
 ) -> str:
     sub_id = sub_obj.get("id")
     if not sub_id:
         return "missing id"
-    await session.execute(
-        update(Subscription)
-        .where(
+    existing = await session.scalar(
+        select(Subscription).where(
             Subscription.external_provider == "stripe",
             Subscription.external_sub_id == sub_id,
         )
-        .values(
-            status="canceled",
-            expires_at=datetime.now(tz=timezone.utc).date(),
-        )
     )
+    if existing is None:
+        return "subscription not yet recorded"
+    if _event_is_stale(existing, event_created):
+        return "ignored stale subscription.deleted"
+    existing.status = "canceled"
+    existing.expires_at = datetime.now(tz=UTC).date()
+    _stamp_event(existing, event_created)
     await session.commit()
     return "subscription canceled"
 
 
 async def _handle_invoice_payment_failed(
-    session: AsyncSession, invoice: dict[str, Any]
+    session: AsyncSession,
+    invoice: dict[str, Any],
+    event_created: int | None,
 ) -> str:
-    sub_id = invoice.get("subscription")
+    sub_ref = invoice.get("subscription")
+    sub_id = sub_ref.get("id") if isinstance(sub_ref, dict) else sub_ref
     if not sub_id:
         return "invoice not tied to a subscription"
-    await session.execute(
-        update(Subscription)
-        .where(
+    existing = await session.scalar(
+        select(Subscription).where(
             Subscription.external_provider == "stripe",
             Subscription.external_sub_id == sub_id,
         )
-        .values(status="past_due")
     )
+    if existing is None:
+        raise RuntimeError(f"subscription {sub_id} not yet recorded")
+    if _event_is_stale(existing, event_created):
+        return "ignored stale invoice.payment_failed"
+    if existing.status == "pending":
+        _stamp_event(existing, event_created)
+        await session.commit()
+        return "initial payment failure remains pending"
+    existing.status = "past_due"
+    _stamp_event(existing, event_created)
     await session.commit()
     return "marked past_due"
 
 
+async def _handle_invoice_paid(
+    session: AsyncSession,
+    invoice: dict[str, Any],
+    event_created: int | None,
+) -> str:
+    sub_ref = invoice.get("subscription")
+    sub_id = sub_ref.get("id") if isinstance(sub_ref, dict) else sub_ref
+    if not sub_id:
+        return "invoice not tied to a subscription"
+    existing = await session.scalar(
+        select(Subscription).where(
+            Subscription.external_provider == "stripe",
+            Subscription.external_sub_id == sub_id,
+        )
+    )
+    if existing is None:
+        raise RuntimeError(f"subscription {sub_id} not yet recorded")
+    if _event_is_stale(existing, event_created):
+        return "ignored stale invoice.paid"
+    if existing.status in {"canceled", "expired", "paused"}:
+        return f"ignored invoice.paid for {existing.status} subscription"
+    if _event_would_relax_same_second(existing, event_created, "active"):
+        return "ignored same-second access relaxation"
+    existing.status = "active"
+    _stamp_event(existing, event_created)
+    await session.commit()
+    return "marked active"
+
+
 # Switch table — keeps the dispatch readable and easy to extend.
 _HANDLERS = {
-    "customer.subscription.created":  _handle_subscription_created,
-    "customer.subscription.updated":  _handle_subscription_updated,
-    "customer.subscription.deleted":  _handle_subscription_deleted,
-    "invoice.payment_failed":         _handle_invoice_payment_failed,
+    "customer.subscription.created": _handle_subscription_created,
+    "customer.subscription.updated": _handle_subscription_updated,
+    "customer.subscription.deleted": _handle_subscription_deleted,
+    "invoice.paid": _handle_invoice_paid,
+    "invoice.payment_failed": _handle_invoice_payment_failed,
 }
 
 
-async def process_event(
-    session: AsyncSession, event: dict[str, Any]
-) -> WebhookOutcome:
+async def process_event(session: AsyncSession, event: dict[str, Any]) -> WebhookOutcome:
     """Record + dispatch one Stripe event. Caller must verify the
     signature before invoking this — `process_event` trusts its input."""
     event_id = _event_id(event) or "<no-id>"
     event_type = _event_type(event)
 
-    inserted = await _record_event(session, event)
-    if not inserted:
+    record_status = await _record_event(session, event)
+    if record_status == "duplicate":
         return WebhookOutcome(event_id, event_type, "duplicate")
+    if record_status == "processing":
+        raise RuntimeError(f"event {event_id} is already being processed")
 
     handler = _HANDLERS.get(event_type)
     if handler is None:
         await _mark_processed(session, event_id, error=None)
         return WebhookOutcome(
-            event_id, event_type, "unhandled",
+            event_id,
+            event_type,
+            "unhandled",
             note="event recorded; no handler registered for this type",
         )
 
     obj = (event.get("data") or {}).get("object") or {}
     try:
-        note = await handler(session, obj)
+        note = await handler(session, obj, _event_created(event))
     except Exception as exc:
         # Surface enough context for ops to manually audit the
         # affected customer when the automated path crashes —
@@ -412,7 +530,10 @@ async def process_event(
         log.exception(
             "stripe webhook handler crashed: type=%s event_id=%s "
             "stripe_object_id=%s customer_email=%s",
-            event_type, event_id, sub_id, customer_email,
+            event_type,
+            event_id,
+            sub_id,
+            customer_email,
         )
         await _mark_processed(session, event_id, error=repr(exc))
         # Re-raise so the caller can return 500 → Stripe retries.

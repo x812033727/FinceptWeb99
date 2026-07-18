@@ -21,6 +21,7 @@ receiver, key issuance, usage roll-up cron) are explicit Phase 4
 follow-ups; ORM here is enough for the auth dep upgrade in
 `api.auth` to query `api_keys` instead of an env-var allowlist.
 """
+
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -81,7 +82,8 @@ class Subscription(Base):
     )
     owner_email: Mapped[str] = mapped_column(String(255), nullable=False)
     plan_code: Mapped[str] = mapped_column(String(32), nullable=False)
-    # 'trial' | 'active' | 'past_due' | 'canceled' | 'expired'
+    # 'pending' | 'trial' | 'active' | 'past_due' | 'paused' |
+    # 'canceled' | 'expired'. Only trial/active grant quota access.
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     started_at: Mapped[date] = mapped_column(Date, nullable=False)
     expires_at: Mapped[date | None] = mapped_column(Date, nullable=True)
@@ -89,6 +91,10 @@ class Subscription(Base):
     # de-duplicate webhook events.
     external_provider: Mapped[str | None] = mapped_column(String(16), nullable=True)
     external_sub_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Stripe explicitly does not guarantee webhook delivery order. Keep the
+    # Event.created clock so an older snapshot cannot overwrite a newer
+    # payment/subscription state.
+    last_external_event_created_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     auto_renew: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -104,7 +110,8 @@ class Subscription(Base):
         Index("ix_subscriptions_owner_email", "owner_email"),
         Index(
             "ix_subscriptions_external",
-            "external_provider", "external_sub_id",
+            "external_provider",
+            "external_sub_id",
         ),
     )
 
@@ -141,12 +148,8 @@ class ApiKey(Base):
     # Optional IP allowlist — empty = any IP.
     allowed_ips: Mapped[list[str] | None] = mapped_column(_JSON, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
-    expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    last_used_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -188,7 +191,8 @@ class ApiUsageEvent(Base):
     __table_args__ = (
         Index(
             "ix_api_usage_events_key_ts",
-            "api_key_id", "ts",
+            "api_key_id",
+            "ts",
         ),
         Index(
             "ix_api_usage_events_ts",
@@ -216,15 +220,14 @@ class PaymentEvent(Base):
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    processed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         Index(
             "ix_payment_events_provider_event_id",
-            "provider", "event_id",
+            "provider",
+            "event_id",
             unique=True,
         ),
     )

@@ -3,7 +3,7 @@
 One endpoint mounted under `/webhooks/stripe`. Verifies the
 `Stripe-Signature` header (HMAC-SHA256 ±5min tolerance), dedups via
 UNIQUE (provider, event_id), and dispatches subscription.{created,
-updated,deleted} + invoice.payment_failed via
+updated,deleted} + invoice.paid + invoice.payment_failed via
 `finmind.billing.stripe_webhook.process_event`.
 
 Body is read as raw bytes for signature verification, then parsed as

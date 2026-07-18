@@ -54,7 +54,9 @@ jobs:
           FINMIND_TOKEN: ""
         run: |
           pytest tests/ -v --tb=short --asyncio-mode=auto \
-            --cov=. --cov-report=term --cov-report=xml:coverage.xml \
+            --cov=. --cov-report=
+          pytest finmind/tests/ -v --tb=short --asyncio-mode=auto \
+            --cov=. --cov-append --cov-report=term --cov-report=xml:coverage.xml \
             --cov-fail-under=73.09
 
       - name: Enforce changed-line coverage

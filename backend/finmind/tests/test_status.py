@@ -13,9 +13,9 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 from sqlalchemy import select
 
+from finmind.dataset_catalog import all_entries
 from finmind.models.backfill_progress import BackfillProgress
 from finmind.models.dataset_source import DatasetSource
-from finmind.dataset_catalog import all_entries
 from finmind.scripts.init_db import seed_dataset_sources
 from finmind.scripts.status import (
     collect_status,
@@ -224,9 +224,17 @@ async def test_render_json_round_trips(finmind_session):
 
 
 @pytest.mark.asyncio
-async def test_status_quota_is_none_when_redis_unavailable(finmind_session):
-    """The test environment doesn't run Redis; `_collect_quota` should
-    swallow the connection error and return None rather than raising —
-    Redis is observability-nice-to-have, not load-bearing for status."""
+async def test_status_quota_is_none_when_redis_unavailable(
+    finmind_session,
+    monkeypatch,
+):
+    """Redis failures should be swallowed even when CI provides Redis."""
+    import redis.asyncio as aioredis
+
+    def _redis_unavailable(*args, **kwargs):
+        raise ConnectionError("Redis unavailable")
+
+    monkeypatch.setattr(aioredis, "from_url", _redis_unavailable)
+
     report = await collect_status(finmind_session)
     assert report.quota is None

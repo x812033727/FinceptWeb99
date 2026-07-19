@@ -172,9 +172,9 @@ services:
     volumes:
       # Bidirectional channel for the admin one-click redeploy button.
       # Backend touches /host-trigger/deploy-trigger to fire the host's
-      # finceptweb-deploy.path systemd unit; backend reads the status
+      # finceptweb99-deploy.path systemd unit; backend reads the status
       # JSON the deploy script writes alongside it. Mount path is
-      # /opt/finceptweb/var on the host (must exist with uid 1001).
+      # /opt/finceptweb99/var on the host (must exist with uid 1001).
       - ./var:/host-trigger
     depends_on:
       postgres:
@@ -183,6 +183,12 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).read()"]
+      interval: 15s
+      timeout: 8s
+      retries: 5
+      start_period: 30s
     restart: unless-stopped
 
   # Dedicated scheduler process (blueprint P2): hosts APScheduler +
@@ -208,27 +214,48 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     restart: unless-stopped
 
   # First verified backup runs at startup, then daily. Archives and their
   # SHA-256 manifests live in a dedicated volume with 35-day retention.
   db-backup:
     build: ./backend
-    command: sh -c "while true; do python -m scripts.database_backup --directory /backups; sleep 86400; done"
+    command: sh -ec "while true; do python -m scripts.database_backup --directory /backups; sleep 86400; done"
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fincept}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-finceptweb}
+      # database_backup imports the application settings module, whose
+      # production validation requires the same strong JWT secret as backend.
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-35}
     volumes:
       - database_backups:/backups
     depends_on:
       migrate:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "latest=$$(ls -1t /backups/fincept_*.dump 2>/dev/null | head -n1); test -n \"$$latest\" && test -s \"$$latest\" && test -s \"$${latest%.dump}.json\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     restart: unless-stopped
 
   frontend:
     build:
       context: ./frontend
       target: production
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     restart: unless-stopped
 
   nginx:
@@ -240,6 +267,12 @@ services:
     depends_on:
       - backend
       - frontend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/api/health"]
+      interval: 15s
+      timeout: 8s
+      retries: 5
+      start_period: 30s
     restart: unless-stopped
 
   prometheus:

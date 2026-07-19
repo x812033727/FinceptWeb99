@@ -291,10 +291,12 @@
       "phase": {
         "idle": "Idle",
         "starting": "Starting",
+        "backing_up": "Backing up database",
         "pulling": "Pulling code",
+        "building": "Building images",
         "pausing": "Pausing ingest",
         "reset_stale": "Resetting stale jobs",
-        "building": "Building images",
+        "migrating": "Applying migrations",
         "restarting": "Restarting services",
         "nginx": "Reloading nginx",
         "verifying": "Health check",

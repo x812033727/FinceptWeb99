@@ -6,10 +6,12 @@ import { useDeployStatus, useTriggerDeploy } from "@/hooks/useDeploy";
 import type { DeployPhase } from "@/types/system";
 
 const PHASE_ORDER: DeployPhase[] = [
+  "backing_up",
   "pulling",
+  "building",
   "pausing",
   "reset_stale",
-  "building",
+  "migrating",
   "restarting",
   "nginx",
   "verifying",

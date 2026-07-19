@@ -6,7 +6,7 @@ import { useCollapsible } from "@/hooks/useCollapsible";
 import { IngestHealthSparkline } from "./IngestHealthSparkline";
 import { DataTable, type DataTableColumn } from "../ui/table";
 
-interface IngestHealth {
+export interface IngestHealth {
   job_id: string;
   last_run_at: string | null;
   ok: boolean;
@@ -26,6 +26,9 @@ interface IngestHealth {
   // trusts it as-is; falls back to a client-side calendar-day check
   // for older deploys whose serializer didn't emit this field.
   data_stale?: boolean;
+  // Schedule freshness for host-managed jobs. A successful run can still be
+  // stale when a later required cron slot was missed.
+  run_stale?: boolean;
 }
 
 interface IngestRetryResult {
@@ -36,10 +39,12 @@ interface IngestRetryResult {
 /**
  * Decide the status badge for one ingest row.
  *
- * Six states (in priority order):
+ * Seven states (in priority order):
  *  - **pending**: never-run-yet (`last_run_at === null`). Newly-
  *    deployed cron before its first scheduled tick — neutral grey,
  *    not a failure.
+ *  - **stale**: last run succeeded, but a later required host-cron slot was
+ *    missed. Amber. Explicit failures still take priority over this signal.
  *  - **ok**: last run succeeded (`r.ok === true`). Green.
  *  - **queued**: error message starts with `queued:` — written by
  *    the admin "Retry now" endpoint while the background task is
@@ -66,6 +71,12 @@ export function deriveIngestBadge(r: IngestHealth): { text: string; cls: string 
     return {
       text: "pending",
       cls: "bg-muted/30 text-muted-foreground border border-border",
+    };
+  }
+  if (r.ok && r.run_stale) {
+    return {
+      text: "stale",
+      cls: "bg-warning/10 text-warning border border-warning/30",
     };
   }
   if (r.ok) {
@@ -151,6 +162,39 @@ const RETRYABLE_INGEST_JOBS = new Set([
   "score_news_sentiment",
 ]);
 
+const HOST_MANAGED_PLACEHOLDER_JOBS = new Set([
+  "finmind_tw_marketwide",
+]);
+
+const PLACEHOLDER_JOB_IDS = new Set([
+  ...RETRYABLE_INGEST_JOBS,
+  ...HOST_MANAGED_PLACEHOLDER_JOBS,
+]);
+
+export function isRetryableIngestJob(jobId: string): boolean {
+  return RETRYABLE_INGEST_JOBS.has(jobId);
+}
+
+export function withIngestHealthPlaceholders(
+  serverRows: IngestHealth[],
+): IngestHealth[] {
+  const seen = new Set(serverRows.map((row) => row.job_id));
+  const placeholders: IngestHealth[] = [];
+  for (const jobId of PLACEHOLDER_JOB_IDS) {
+    if (!seen.has(jobId)) {
+      placeholders.push({
+        job_id: jobId,
+        last_run_at: null,
+        ok: false,
+        row_count: 0,
+        error: null,
+        run_stale: false,
+      });
+    }
+  }
+  return [...serverRows, ...placeholders];
+}
+
 // Jobs that have a localized description + schedule label. The strings
 // themselves live in the i18n locale files under
 // `admin.ingestHealth.jobs.<slug>` (slug = job_id with ':' → '_'), so the
@@ -187,6 +231,7 @@ const JOB_META_IDS = new Set<string>([
   "ingest_buyback_tw",
   "ingest_govt_bank_flow_tw",
   "ingest_quotes_retention_tw",
+  "finmind_tw_marketwide",
   "score_news_sentiment",
   "auto_run_discussion",
   "verify_discussion_outcome",
@@ -286,27 +331,11 @@ export function IngestHealthCard() {
     queryFn: () => api.get("/admin/scheduler/health").then((r) => r.data),
     refetchInterval: 15_000,
   });
-  // Union with the whitelist so newly-deployed jobs that haven't
-  // hit their first cron tick yet still appear in the table — admin
-  // can fire the first run manually via "Retry now" instead of
-  // waiting for 09:30 UTC for the row to materialise. Placeholder
-  // rows have `last_run_at=null` which renders as "—" via timeAgo().
-  const rows: IngestHealth[] = (() => {
-    const seen = new Set(serverRows.map((r) => r.job_id));
-    const placeholders: IngestHealth[] = [];
-    for (const jobId of RETRYABLE_INGEST_JOBS) {
-      if (!seen.has(jobId)) {
-        placeholders.push({
-          job_id: jobId,
-          last_run_at: null,
-          ok: false,
-          row_count: 0,
-          error: null,
-        });
-      }
-    }
-    return [...serverRows, ...placeholders];
-  })();
+  // Union with known jobs so a newly-deployed job appears before its first
+  // tick. APScheduler jobs can be retried here; the host-managed Taiwan cron
+  // intentionally cannot, because its production command is guarded by flock.
+  // Placeholder rows use `last_run_at=null`, rendered as pending / "—".
+  const rows = withIngestHealthPlaceholders(serverRows);
   const retry = useMutation({
     mutationFn: (jobId: string) =>
       api.post<IngestRetryResult>(`/admin/ingest/${jobId}/retry`).then((r) => r.data),
@@ -402,7 +431,7 @@ export function IngestHealthCard() {
       align: "right",
       cellClassName: "align-top",
       render: (r) =>
-        RETRYABLE_INGEST_JOBS.has(r.job_id) ? (
+        isRetryableIngestJob(r.job_id) ? (
           <button
             type="button"
             disabled={retry.isPending}

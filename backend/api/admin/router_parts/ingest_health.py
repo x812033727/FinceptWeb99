@@ -1,9 +1,14 @@
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
 from auth.permissions import require_admin
 from services.ingest import repository as ingest_repo
+from services.ingest_schedules import (
+    FINMIND_TW_MARKETWIDE_JOB_ID,
+    is_finmind_tw_marketwide_run_stale,
+)
 
 from ..schemas import (
     IngestHealthHistoryDayOut,
@@ -27,6 +32,8 @@ async def ingest_health(_: AdminUser) -> list[IngestHealthOut]:
     """
     from services.freshness import is_data_stale
 
+    now = datetime.now(UTC)
+
     return [
         IngestHealthOut(
             job_id=h.job_id,
@@ -39,6 +46,13 @@ async def ingest_health(_: AdminUser) -> list[IngestHealthOut]:
             data_stale=is_data_stale(
                 last_run_at=h.last_run_at,
                 latest_data_ts=h.latest_data_ts,
+            ),
+            run_stale=(
+                h.job_id == FINMIND_TW_MARKETWIDE_JOB_ID
+                and is_finmind_tw_marketwide_run_stale(
+                    h.last_run_at,
+                    now=now,
+                )
             ),
         )
         for h in await ingest_repo.list_health()

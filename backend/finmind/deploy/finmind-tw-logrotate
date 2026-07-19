@@ -1,0 +1,9 @@
+/var/log/finmind99-tw.log {
+    daily
+    rotate 14
+    compress
+    maxsize 50M
+    copytruncate
+    missingok
+    notifempty
+}

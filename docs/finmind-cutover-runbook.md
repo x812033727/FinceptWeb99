@@ -122,6 +122,9 @@ Install the committed FinceptWeb99 `/etc/cron.d` configuration:
 ```bash
 install -m 0644 backend/finmind/deploy/finmind-cron \
   /etc/cron.d/finceptweb99-finmind-tw
+install -m 0644 backend/finmind/deploy/finmind-tw-logrotate \
+  /etc/logrotate.d/finceptweb99-finmind-tw
+logrotate --debug /etc/logrotate.d/finceptweb99-finmind-tw
 ```
 
 The production entries are fail-closed to `/opt/finceptweb99`, the
@@ -129,6 +132,10 @@ The production entries are fail-closed to `/opt/finceptweb99`, the
 `--tw-only --skip-per-symbol`, so only Taiwan market-wide datasets are
 eligible and per-symbol connectors are removed before ingest. `run_due`
 is idempotent and freshness-gated, so a missed slot self-heals next tick.
+It reports the fixed `finmind_tw_marketwide` job to Admin Ingest Health and
+returns 0 for a clean/nothing-due sweep, 1 for failed chunks, or 2 for a
+runner crash. The dedicated logrotate policy keeps 14 compressed daily logs,
+rotates early at 50 MiB, and uses `copytruncate` because cron appends directly.
 
 Do not add `--universe-from-tw-stock-info` to this cron until the
 `tw_stock_info` universe has been repaired and bounded: the current

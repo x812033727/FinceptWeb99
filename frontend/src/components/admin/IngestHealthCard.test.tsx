@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   deriveIngestBadge,
   deriveSchedulerBadge,
+  isRetryableIngestJob,
   isDataStale,
+  withIngestHealthPlaceholders,
 } from "./IngestHealthCard";
 
 const baseRow = {
@@ -24,6 +26,23 @@ describe("deriveIngestBadge", () => {
     const out = deriveIngestBadge(baseRow);
     expect(out.text).toBe("ok");
     expect(out.cls).toContain("text-success");
+  });
+
+  it("returns stale when a successful host cron missed a required slot", () => {
+    const out = deriveIngestBadge({ ...baseRow, run_stale: true });
+    expect(out.text).toBe("stale");
+    expect(out.cls).toContain("text-warning");
+  });
+
+  it("keeps an explicit failure red even when its run is also stale", () => {
+    const out = deriveIngestBadge({
+      ...baseRow,
+      ok: false,
+      error: "upstream failed",
+      run_stale: true,
+    });
+    expect(out.text).toBe("error");
+    expect(out.cls).toContain("text-danger");
   });
 
   it("returns skipped when error starts with 'skipped:' (FinMind paywall fail-soft case)", () => {
@@ -143,6 +162,35 @@ describe("deriveIngestBadge", () => {
       silent_deny: "Your level is register",
     });
     expect(out.text).toBe("silent deny");
+  });
+});
+
+
+describe("host-managed ingest placeholders", () => {
+  it("shows the Taiwan market-wide cron as pending before its first run", () => {
+    const rows = withIngestHealthPlaceholders([]);
+    const twCron = rows.find((row) => row.job_id === "finmind_tw_marketwide");
+
+    expect(twCron).toMatchObject({
+      last_run_at: null,
+      ok: false,
+      row_count: 0,
+      run_stale: false,
+    });
+    expect(deriveIngestBadge(twCron!).text).toBe("pending");
+  });
+
+  it("does not duplicate a server-provided Taiwan cron row", () => {
+    const rows = withIngestHealthPlaceholders([
+      { ...baseRow, job_id: "finmind_tw_marketwide" },
+    ]);
+    expect(
+      rows.filter((row) => row.job_id === "finmind_tw_marketwide"),
+    ).toHaveLength(1);
+  });
+
+  it("does not offer Admin retry for the flock-managed host cron", () => {
+    expect(isRetryableIngestJob("finmind_tw_marketwide")).toBe(false);
   });
 });
 

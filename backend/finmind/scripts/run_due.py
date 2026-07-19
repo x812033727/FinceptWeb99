@@ -25,7 +25,8 @@ upstream sources fail in that case and the chunk lands as 'failed'
 in `backfill_progress`. Use --skip-per-symbol to filter them out
 before any upstream request. Production Taiwan market-wide cron should
 also pass --tw-only so crypto and non-Taiwan macro datasets stay out of
-that sweep.
+that sweep. Exit status is 0 when no chunk fails (including nothing due),
+1 when one or more chunks fail, and 2 when the runner itself crashes.
 """
 from __future__ import annotations
 
@@ -34,7 +35,7 @@ import asyncio
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 _BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -46,12 +47,23 @@ from finmind.db.session import (  # noqa: E402
     FinmindAsyncSessionLocal,
     finmind_engine,
 )
+from finmind.redaction import redact_exception, redact_secret_text  # noqa: E402
 from finmind.scheduler.runner import (  # noqa: E402
     get_crypto_universe,
     get_universe_from_tw_stock_info,
     get_warrant_universe_from_tw_stock_info,
     run_due_now,
 )
+from services.ingest.repository import record_health  # noqa: E402
+from services.ingest_schedules import (  # noqa: E402
+    FINMIND_TW_MARKETWIDE_JOB_ID as TW_MARKETWIDE_JOB_ID,
+)
+
+EXIT_OK = 0
+EXIT_CHUNK_FAILURE = 1
+EXIT_RUNNER_CRASH = 2
+_MAX_FAILED_DATASET_CODES = 5
+_MAX_HEALTH_ERROR_LENGTH = 1000
 
 
 async def _load_symbols(args, session) -> list[str] | None:
@@ -109,6 +121,45 @@ async def _load_crypto_symbols(args, session) -> list[str] | None:
     if args.crypto_universe_from_db:
         return await get_crypto_universe(session)
     return None
+
+
+def _failed_health_summary(outcomes) -> str | None:
+    """Build a bounded, secret-safe summary for the Admin health row."""
+    failed = [o for o in outcomes if o.result.status == "failed"]
+    if not failed:
+        return None
+
+    dataset_codes = list(dict.fromkeys(o.chunk.dataset_code for o in failed))
+    visible_codes = dataset_codes[:_MAX_FAILED_DATASET_CODES]
+    hidden_count = len(dataset_codes) - len(visible_codes)
+    code_summary = ", ".join(visible_codes)
+    if hidden_count:
+        code_summary += f" (+{hidden_count} more)"
+
+    first_error = redact_secret_text(failed[0].result.error) or "unknown error"
+    summary = (
+        f"{len(failed)} failed chunk(s): {code_summary}; "
+        f"first error: {first_error}"
+    )
+    return summary[:_MAX_HEALTH_ERROR_LENGTH]
+
+
+async def _record_tw_marketwide_health(
+    *, ok: bool, row_count: int, error: str | None = None,
+) -> None:
+    """Best-effort bridge from the host cron into Admin Ingest Health."""
+    try:
+        await record_health(
+            TW_MARKETWIDE_JOB_ID,
+            ok=ok,
+            row_count=row_count,
+            error=error,
+        )
+    except Exception as exc:
+        logging.getLogger(__name__).error(
+            "run_due: could not record Taiwan market-wide health: %s",
+            redact_exception(exc),
+        )
 
 
 async def amain() -> int:
@@ -227,25 +278,50 @@ async def amain() -> int:
             "--tw-only and --crypto-universe-from-db are mutually exclusive"
         )
 
-    async with FinmindAsyncSessionLocal() as session:
-        symbols = await _load_symbols(args, session)
-        warrant_symbols = await _load_warrant_symbols(args, session)
-        crypto_symbols = await _load_crypto_symbols(args, session)
+    outcomes = None
+    runner_error: BaseException | None = None
+    try:
+        async with FinmindAsyncSessionLocal() as session:
+            symbols = await _load_symbols(args, session)
+            warrant_symbols = await _load_warrant_symbols(args, session)
+            crypto_symbols = await _load_crypto_symbols(args, session)
 
-        outcomes = await run_due_now(
-            session,
-            symbols=symbols,
-            warrant_symbols=warrant_symbols,
-            crypto_symbols=crypto_symbols,
-            categories=(
-                {"crypto"} if args.crypto_universe_from_db else None
-            ),
-            dataset_code_prefixes=(
-                _TAIWAN_DATASET_PREFIXES if args.tw_only else None
-            ),
-            skip_per_symbol=args.skip_per_symbol,
-            now=datetime.now(tz=timezone.utc),
-        )
+            outcomes = await run_due_now(
+                session,
+                symbols=symbols,
+                warrant_symbols=warrant_symbols,
+                crypto_symbols=crypto_symbols,
+                categories=(
+                    {"crypto"} if args.crypto_universe_from_db else None
+                ),
+                dataset_code_prefixes=(
+                    _TAIWAN_DATASET_PREFIXES if args.tw_only else None
+                ),
+                skip_per_symbol=args.skip_per_symbol,
+                now=datetime.now(tz=UTC),
+            )
+    except Exception as exc:
+        runner_error = exc
+    finally:
+        try:
+            await finmind_engine.dispose()
+        except Exception as exc:
+            if runner_error is None:
+                runner_error = exc
+
+    if runner_error is not None:
+        safe_error = redact_exception(runner_error)
+        error_summary = f"runner crash: {safe_error}"[:_MAX_HEALTH_ERROR_LENGTH]
+        if args.tw_only:
+            await _record_tw_marketwide_health(
+                ok=False,
+                row_count=0,
+                error=error_summary,
+            )
+        print(f"run_due: {error_summary}", file=sys.stderr)
+        return EXIT_RUNNER_CRASH
+
+    assert outcomes is not None
 
     if not outcomes:
         print("run_due: nothing due — all enabled datasets are fresh.")
@@ -266,11 +342,19 @@ async def amain() -> int:
                 f"({o.result.rows_written} rows)"
             )
             if o.result.error:
-                line += f" — {o.result.error}"
+                safe_error = redact_secret_text(o.result.error) or "unknown error"
+                line += f" — {safe_error}"
             print(line)
 
-    await finmind_engine.dispose()
-    return 0
+    rows = sum(o.result.rows_written for o in outcomes)
+    health_error = _failed_health_summary(outcomes)
+    if args.tw_only:
+        await _record_tw_marketwide_health(
+            ok=health_error is None,
+            row_count=rows,
+            error=health_error,
+        )
+    return EXIT_CHUNK_FAILURE if health_error is not None else EXIT_OK
 
 
 def main() -> None:

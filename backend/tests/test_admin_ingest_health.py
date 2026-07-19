@@ -5,13 +5,19 @@ auth / serialization layer without touching Redis. Round-trip tests for
 `record_health` / `get_health` themselves are deferred to Phase 4 once
 ingest health gets a frontend panel that exercises the full path.
 """
+from datetime import datetime
 from unittest.mock import AsyncMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.ingest.repository import IngestHealth
+from services.ingest_schedules import (
+    is_finmind_tw_marketwide_run_stale,
+    latest_required_finmind_tw_slot,
+)
 from tests.test_admin_api import _auth, _promote_to_admin, _register_login
 
 
@@ -58,6 +64,90 @@ async def test_ingest_health_returns_recorded_jobs(
     assert body[0]["ok"] is True
     assert body[0]["row_count"] == 42_000
     assert body[0]["error"] is None
+    assert body[0]["run_stale"] is False
+
+
+def _taipei(iso: str) -> datetime:
+    return datetime.fromisoformat(iso).replace(tzinfo=ZoneInfo("Asia/Taipei"))
+
+
+@pytest.mark.parametrize(
+    ("now", "expected"),
+    [
+        # Friday's 15:10 slot is not required until its 45-minute grace ends.
+        ("2026-07-17T15:54:59", "2026-07-16T22:00:00+08:00"),
+        ("2026-07-17T15:55:00", "2026-07-17T15:10:00+08:00"),
+        ("2026-07-17T18:14:59", "2026-07-17T15:10:00+08:00"),
+        ("2026-07-17T18:15:00", "2026-07-17T17:30:00+08:00"),
+        ("2026-07-17T22:45:00", "2026-07-17T22:00:00+08:00"),
+        # Weekend and Monday morning retain Friday's final slot.
+        ("2026-07-19T12:00:00", "2026-07-17T22:00:00+08:00"),
+        ("2026-07-20T10:00:00", "2026-07-17T22:00:00+08:00"),
+    ],
+)
+def test_latest_required_tw_slot_honors_grace_and_weekends(now, expected):
+    slot = latest_required_finmind_tw_slot(now=_taipei(now))
+    assert slot.isoformat() == expected
+
+
+def test_tw_run_stale_compares_last_run_with_latest_required_slot():
+    now = _taipei("2026-07-20T15:56:00")
+
+    assert is_finmind_tw_marketwide_run_stale(
+        "2026-07-17T14:00:00+00:00", now=now,
+    )
+    assert not is_finmind_tw_marketwide_run_stale(
+        "2026-07-20T07:11:00+00:00", now=now,
+    )
+    assert is_finmind_tw_marketwide_run_stale(None, now=now)
+    assert is_finmind_tw_marketwide_run_stale("not-a-timestamp", now=now)
+
+
+@pytest.mark.asyncio
+async def test_ingest_health_marks_only_tw_host_cron_run_stale(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    email = "ingest_admin_run_stale@test.com"
+    await _register_login(client, email)
+    token = await _promote_to_admin(db_session, email, client=client)
+    canned = [
+        IngestHealth(
+            job_id="finmind_tw_marketwide",
+            last_run_at="2026-07-17T14:00:00+00:00",
+            ok=True,
+            row_count=99,
+            error=None,
+        ),
+        IngestHealth(
+            job_id="ingest_ohlcv_tw",
+            last_run_at="2026-07-17T14:00:00+00:00",
+            ok=True,
+            row_count=99,
+            error=None,
+        ),
+    ]
+
+    with (
+        patch(
+            "services.ingest.repository.list_health",
+            AsyncMock(return_value=canned),
+        ),
+        patch(
+            "api.admin.router_parts.ingest_health."
+            "is_finmind_tw_marketwide_run_stale",
+            return_value=True,
+        ) as stale_check,
+    ):
+        response = await client.get(
+            "/api/admin/ingest/health",
+            headers=_auth(token),
+        )
+
+    assert response.status_code == 200
+    rows = {row["job_id"]: row for row in response.json()}
+    assert rows["finmind_tw_marketwide"]["run_stale"] is True
+    assert rows["ingest_ohlcv_tw"]["run_stale"] is False
+    stale_check.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -146,6 +236,7 @@ async def test_ingest_history_endpoint_returns_aggregated_payload(
     daily aggregate produced by `repository.get_health_history`,
     sorted oldest-first, with `days` echoing the requested window."""
     from datetime import UTC, datetime, timedelta
+
     from models.ingest_health_history import IngestHealthHistory
 
     email = "ingest_history_admin@test.com"

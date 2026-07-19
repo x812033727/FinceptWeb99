@@ -200,6 +200,10 @@
           "desc": "TW stock quote_snapshots 30-day retention (purge old data)",
           "sched": "Daily 11:00 (Taipei)"
         },
+        "finmind_tw_marketwide": {
+          "desc": "FinMind Taiwan market-wide due-dataset sweep (host cron, per-symbol fan-out disabled)",
+          "sched": "Weekdays 15:10 / 17:30 / 22:00 (Taipei)"
+        },
         "score_news_sentiment": {
           "desc": "News sentiment scoring (LLM rates each article bullish / bearish / neutral)",
           "sched": "Every 30 minutes"

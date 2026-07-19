@@ -200,6 +200,10 @@
           "desc": "台股 quote_snapshots 30 日保留（清舊資料）",
           "sched": "每天 11:00 (台北)"
         },
+        "finmind_tw_marketwide": {
+          "desc": "FinMind 台股全市場到期資料批次（主機 cron，停用逐檔 fan-out）",
+          "sched": "平日 15:10 / 17:30 / 22:00 (台北)"
+        },
         "score_news_sentiment": {
           "desc": "新聞情緒評分（LLM 評每篇利多 / 利空 / 中性）",
           "sched": "每 30 分鐘"

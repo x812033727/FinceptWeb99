@@ -1,6 +1,5 @@
 import uuid
 from datetime import datetime
-
 from typing import Any, Literal
 
 from pydantic import BaseModel, EmailStr, Field
@@ -271,6 +270,10 @@ class IngestHealthOut(BaseModel):
     # Monday after a quiet weekend. Always False when latest_data_ts
     # is null (non-time-series job).
     data_stale: bool = False
+    # Backend-computed schedule freshness. Currently used by the host-managed
+    # Taiwan market-wide cron; defaults False for backward compatibility and
+    # for jobs whose cadence is owned by APScheduler.
+    run_stale: bool = False
 
 
 class IngestRetryResult(BaseModel):

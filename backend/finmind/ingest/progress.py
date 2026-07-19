@@ -21,6 +21,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from finmind.models.backfill_progress import BackfillProgress
+from finmind.redaction import redact_secret_text
 
 
 async def claim_chunk(
@@ -104,13 +105,14 @@ async def _set_chunk_status(
     """
     from sqlalchemy import update
 
+    safe_error = redact_secret_text(error_message)
     await session.execute(
         update(BackfillProgress)
         .where(BackfillProgress.id == chunk_id)
         .values(
             status=status,
             rows_written=rows_written,
-            error_message=(error_message[:1000] if error_message else None),
+            error_message=(safe_error[:1000] if safe_error else None),
             finished_at=datetime.now(tz=timezone.utc),
         )
     )

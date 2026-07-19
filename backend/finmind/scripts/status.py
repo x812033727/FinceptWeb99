@@ -45,6 +45,7 @@ from finmind.db.session import (  # noqa: E402
 )
 from finmind.models.backfill_progress import BackfillProgress  # noqa: E402
 from finmind.models.dataset_source import DatasetSource  # noqa: E402
+from finmind.redaction import redact_secret_text  # noqa: E402
 
 
 # ── Stuck-running threshold ──────────────────────────────────────
@@ -76,9 +77,27 @@ class StatusReport:
 
 # ── Collectors ──────────────────────────────────────────────────
 
+def _expected_alembic_head() -> str:
+    """Resolve the migration head from the checked-in revision graph."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    config_path = _BACKEND_DIR / "finmind" / "db" / "alembic.ini"
+    config = Config(str(config_path))
+    config.set_main_option("path_separator", "os")
+    config.set_main_option(
+        "script_location", str(config_path.parent / "migrations")
+    )
+    heads = ScriptDirectory.from_config(config).get_heads()
+    # Multiple heads are reported as a stable comma-separated expectation;
+    # they cannot equal a single version-table row, so status remains safely
+    # not-at-head while still telling the operator what Alembic discovered.
+    return ",".join(sorted(heads))
+
+
 async def _collect_alembic(session: AsyncSession) -> dict[str, Any]:
-    """Read the version table directly. Avoids importing alembic at runtime
-    for fast-path queries; `init_db --check` does the full alembic walk."""
+    """Compare the version table with the checked-in migration head."""
+    expected = _expected_alembic_head()
     try:
         result = await session.execute(
             text("SELECT version_num FROM alembic_version_finmind LIMIT 1")
@@ -86,9 +105,8 @@ async def _collect_alembic(session: AsyncSession) -> dict[str, Any]:
         current = result.scalar_one_or_none()
     except Exception:
         # Table doesn't exist yet → init_db hasn't run.
-        return {"at_head": False, "current": None, "expected": "0002"}
+        return {"at_head": False, "current": None, "expected": expected}
 
-    expected = "0011"  # bump when adding migrations
     return {
         "at_head": current == expected,
         "current": current,
@@ -219,7 +237,7 @@ async def _collect_recent_errors(
             {
                 "source": "dataset_sources",
                 "dataset_code": code,
-                "error": err,
+                "error": redact_secret_text(err),
                 "ts": ts.isoformat() if ts else None,
             }
         )
@@ -248,7 +266,7 @@ async def _collect_recent_errors(
                 "source": "backfill_progress",
                 "dataset_code": code,
                 "symbol": sym,
-                "error": err,
+                "error": redact_secret_text(err),
                 "ts": ts.isoformat() if ts else None,
             }
         )

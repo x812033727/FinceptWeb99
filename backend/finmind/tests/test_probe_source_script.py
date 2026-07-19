@@ -121,6 +121,36 @@ async def test_probe_handler_raising_exits_one(monkeypatch, capsys):
 
 
 @pytest.mark.asyncio
+async def test_probe_redacts_secrets_from_handler_errors(monkeypatch, capsys):
+    secret = "test-probe-secret"
+
+    class BoomClient:
+        async def fetch(self, *_a, **_k):
+            raise RuntimeError(
+                "https://example.test/data?"
+                f"token={secret}&dataset=TaiwanStockPrice"
+            )
+
+    monkeypatch.setattr(
+        "finmind.ingest.selfcrawl.resolve_client", lambda _src: BoomClient(),
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "probe_source",
+        "--dataset", "TaiwanStockPrice", "--source", "twse",
+        "--symbol", "2330",
+        "--start", "2024-01-01", "--end", "2024-01-31",
+    ])
+    from finmind.scripts.probe_source import amain
+
+    rc = await amain()
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert secret not in err
+    assert "token=<redacted>" in err
+
+
+@pytest.mark.asyncio
 async def test_probe_dataset_with_no_fallback_requires_explicit_source(
     monkeypatch, capsys,
 ):

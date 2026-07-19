@@ -47,6 +47,7 @@ from finmind.ingest.progress import (
     skip_chunk,
 )
 from finmind.models.dataset_source import DatasetSource
+from finmind.redaction import redact_exception, redact_secret_text
 
 log = logging.getLogger("finmind.ingest")
 
@@ -212,13 +213,14 @@ async def _update_dataset_telemetry(
     expired-attribute lazy refresh on the failure path."""
     from sqlalchemy import update
 
+    safe_error = redact_secret_text(error)
     await session.execute(
         update(DatasetSource)
         .where(DatasetSource.dataset_code == dataset_code)
         .values(
             last_ingest_at=datetime.now(tz=timezone.utc),
             last_ingest_rows=rows_written,
-            last_error=(error[:1000] if error else None),
+            last_error=(safe_error[:1000] if safe_error else None),
         )
     )
     await session.commit()
@@ -258,6 +260,7 @@ async def ingest_chunk(
     try:
         mapping = find_mapping(dataset_code)
     except MappingNotFoundError as exc:
+        safe_error = redact_exception(exc)
         chunk = await claim_chunk(
             session,
             dataset_code=dataset_code,
@@ -266,9 +269,9 @@ async def ingest_chunk(
             range_start=range_start,
             range_end=range_end,
         )
-        await skip_chunk(session, chunk.id, str(exc))
-        await _update_dataset_telemetry(session, dataset_code, 0, str(exc))
-        return ChunkResult("skipped", 0, str(exc))
+        await skip_chunk(session, chunk.id, safe_error)
+        await _update_dataset_telemetry(session, dataset_code, 0, safe_error)
+        return ChunkResult("skipped", 0, safe_error)
 
     # 3. Claim chunk in 'running' state.
     chunk = await claim_chunk(
@@ -279,6 +282,10 @@ async def ingest_chunk(
         range_start=range_start,
         range_end=range_end,
     )
+    # Keep the scalar ID across a later rollback. SQLAlchemy expires ORM
+    # objects on rollback even with expire_on_commit=False; reading chunk.id
+    # afterward can otherwise trigger an async lazy-load outside greenlet.
+    chunk_id = chunk.id
 
     # 4. Fetch + transform + UPSERT.
     #
@@ -319,24 +326,34 @@ async def ingest_chunk(
             if all(r.get(pk) is not None for pk in mapping.pk_columns)
         ]
     except Exception as exc:
-        log.exception("ingest_chunk fetch/transform failed: %s %s",
-                      dataset_code, symbol)
-        await fail_chunk(session, chunk.id, repr(exc))
-        await _update_dataset_telemetry(session, dataset_code, 0, repr(exc))
-        return ChunkResult("failed", 0, repr(exc))
+        safe_error = redact_exception(exc)
+        log.error(
+            "ingest_chunk fetch/transform failed: %s %s: %s",
+            dataset_code,
+            symbol,
+            safe_error,
+        )
+        await fail_chunk(session, chunk_id, safe_error)
+        await _update_dataset_telemetry(session, dataset_code, 0, safe_error)
+        return ChunkResult("failed", 0, safe_error)
 
     try:
         rows_written = await _upsert_rows(session, mapping, transformed)
         await session.commit()
     except Exception as exc:
         await session.rollback()
-        log.exception("ingest_chunk upsert failed: %s %s",
-                      dataset_code, symbol)
-        await fail_chunk(session, chunk.id, repr(exc))
-        await _update_dataset_telemetry(session, dataset_code, 0, repr(exc))
-        return ChunkResult("failed", 0, repr(exc))
+        safe_error = redact_exception(exc)
+        log.error(
+            "ingest_chunk upsert failed: %s %s: %s",
+            dataset_code,
+            symbol,
+            safe_error,
+        )
+        await fail_chunk(session, chunk_id, safe_error)
+        await _update_dataset_telemetry(session, dataset_code, 0, safe_error)
+        return ChunkResult("failed", 0, safe_error)
 
-    await finish_chunk(session, chunk.id, rows_written)
+    await finish_chunk(session, chunk_id, rows_written)
     await _update_dataset_telemetry(session, dataset_code, rows_written, None)
     return ChunkResult("done", rows_written, None)
 

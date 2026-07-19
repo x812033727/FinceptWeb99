@@ -13,7 +13,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from finmind.redaction import redact_secret_text
 
 
 class DataResponseMetadata(BaseModel):
@@ -52,6 +54,12 @@ class DatasetSourceItem(BaseModel):
     last_ingest_at: datetime | None
     last_ingest_rows: int | None
     last_error: str | None
+
+    @field_validator("last_error", mode="before")
+    @classmethod
+    def redact_last_error(cls, value: Any | None) -> str | None:
+        """Prevent legacy telemetry rows from disclosing credentials."""
+        return redact_secret_text(value)
 
 
 class DatasetSourceUpdate(BaseModel):

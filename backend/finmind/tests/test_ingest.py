@@ -229,11 +229,18 @@ async def test_ingest_chunk_records_progress_done(finmind_session):
 
 @pytest.mark.asyncio
 async def test_ingest_chunk_records_failure_on_upstream_error(
-    finmind_session,
+    finmind_session, caplog,
 ):
     await seed_dataset_sources()
 
-    fake = FakeClient([], raise_on_call=RuntimeError("FinMind 503"))
+    secret = "test-upstream-secret"
+    fake = FakeClient(
+        [],
+        raise_on_call=RuntimeError(
+            "FinMind 503 for https://example.test/data?"
+            f"token={secret}&dataset=TaiwanStockPrice"
+        ),
+    )
 
     result = await ingest_chunk(
         finmind_session,
@@ -246,6 +253,8 @@ async def test_ingest_chunk_records_failure_on_upstream_error(
 
     assert result.status == "failed"
     assert "FinMind 503" in result.error
+    assert secret not in result.error
+    assert "token=<redacted>" in result.error
 
     chunk = (
         await finmind_session.execute(
@@ -256,11 +265,88 @@ async def test_ingest_chunk_records_failure_on_upstream_error(
     ).scalar_one()
     assert chunk.status == "failed"
     assert "FinMind 503" in chunk.error_message
+    assert secret not in chunk.error_message
 
     # dataset_sources telemetry mirrors the failure.
     ds = await finmind_session.get(DatasetSource, "TaiwanStockPrice")
     assert ds.last_error is not None
     assert "FinMind 503" in ds.last_error
+    assert secret not in ds.last_error
+    assert secret not in caplog.text
+    assert "token=<redacted>" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_ingest_chunk_redacts_upsert_failure(
+    finmind_session, monkeypatch, caplog,
+):
+    await seed_dataset_sources()
+    secret = "test-upsert-secret"
+
+    async def fail_upsert(*_args, **_kwargs):
+        raise RuntimeError(
+            "database rejected https://example.test/data?"
+            f"token={secret}&dataset=TaiwanStockPrice"
+        )
+
+    monkeypatch.setattr(
+        "finmind.ingest.runner._upsert_rows", fail_upsert
+    )
+
+    result = await ingest_chunk(
+        finmind_session,
+        dataset_code="TaiwanStockPrice",
+        symbol="2330",
+        range_start=date(2024, 1, 1),
+        range_end=date(2024, 1, 31),
+        client=FakeClient([]),
+    )
+
+    assert result.status == "failed"
+    assert result.error is not None
+    assert secret not in result.error
+    assert secret not in caplog.text
+    chunk = (
+        await finmind_session.execute(
+            select(BackfillProgress).where(
+                BackfillProgress.dataset_code == "TaiwanStockPrice"
+            )
+        )
+    ).scalar_one()
+    assert chunk.status == "failed"
+    assert secret not in (chunk.error_message or "")
+
+
+@pytest.mark.asyncio
+async def test_ingest_chunk_safely_skips_unknown_mapping(finmind_session):
+    finmind_session.add(
+        DatasetSource(
+            dataset_code="TestUnknownMapping",
+            category="technical",
+            description_zh="test",
+            local_table="test_table",
+            per_symbol=False,
+            primary_source="finmind",
+            fallback_source=None,
+            active_source="finmind",
+            enabled=True,
+            sponsor_tier=False,
+            ingest_freq="daily",
+        )
+    )
+    await finmind_session.commit()
+
+    result = await ingest_chunk(
+        finmind_session,
+        dataset_code="TestUnknownMapping",
+        symbol=None,
+        range_start=date(2024, 1, 1),
+        range_end=date(2024, 1, 31),
+        client=FakeClient([]),
+    )
+
+    assert result.status == "skipped"
+    assert "no ingest mapping" in (result.error or "").lower()
 
 
 @pytest.mark.asyncio

@@ -218,10 +218,48 @@ async def test_collect_diagnostic_secrets_never_in_serialized_output(
         "FINMIND_DATABASE_URL",
         "postgresql://u:dbpass-must-NOT-leak@h:5432/d",
     )
+    await seed_dataset_sources()
+    telemetry_secret = "telemetry-token-must-NOT-leak"
+    progress_secret = "progress-token-must-NOT-leak"
+    usage_secret = "usage-token-must-NOT-leak"
+    row = await finmind_session.get(DatasetSource, "TaiwanStockPrice")
+    row.last_error = (
+        "https://example.test/data?"
+        f"token={telemetry_secret}&dataset=TaiwanStockPrice"
+    )
+    finmind_session.add(
+        BackfillProgress(
+            dataset_code="TaiwanStockPrice",
+            symbol="2330",
+            source="finmind",
+            range_start=date(2026, 1, 1),
+            range_end=date(2026, 1, 2),
+            status="failed",
+            error_message=f"Authorization: Bearer {progress_secret}",
+            finished_at=datetime.now(tz=timezone.utc),
+        )
+    )
+    finmind_session.add(
+        ApiUsageEvent(
+            ts=datetime.now(tz=timezone.utc),
+            api_key_id=1,
+            dataset_code="TaiwanStockPrice",
+            endpoint="/data/TaiwanStockPrice",
+            row_count=0,
+            bytes_out=0,
+            latency_ms=1,
+            status_code=500,
+            error_message=f"api_key={usage_secret}",
+        )
+    )
+    await finmind_session.commit()
 
     diag = await collect_diagnostic()
     serialized = _json.dumps(diag, default=str)
     assert "hunter2-this-must-NOT-leak" not in serialized
     assert "dbpass-must-NOT-leak" not in serialized
+    assert telemetry_secret not in serialized
+    assert progress_secret not in serialized
+    assert usage_secret not in serialized
     # Sanity: the URL host *is* still in the output.
     assert "h:5432/d" in serialized

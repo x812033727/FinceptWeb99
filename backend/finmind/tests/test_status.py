@@ -18,10 +18,15 @@ from finmind.models.backfill_progress import BackfillProgress
 from finmind.models.dataset_source import DatasetSource
 from finmind.scripts.init_db import seed_dataset_sources
 from finmind.scripts.status import (
+    _expected_alembic_head,
     collect_status,
     render_human,
     render_json,
 )
+
+
+def test_expected_alembic_head_comes_from_revision_graph():
+    assert _expected_alembic_head() == "0023"
 
 
 @pytest.mark.asyncio
@@ -159,7 +164,11 @@ async def test_status_surfaces_recent_errors_from_both_sources(
 
     # Daily-cron failure
     ds = await finmind_session.get(DatasetSource, "TaiwanStockMonthRevenue")
-    ds.last_error = "FinMind 503 Service Unavailable"
+    ds_secret = "test-status-dataset-secret"
+    ds.last_error = (
+        "FinMind 503 for https://example.test/data?"
+        f"token={ds_secret}&dataset=Revenue"
+    )
     ds.last_ingest_at = datetime(2026, 5, 3, 9, 0, tzinfo=UTC)
     # Backfill chunk failure
     finmind_session.add(
@@ -170,7 +179,10 @@ async def test_status_surfaces_recent_errors_from_both_sources(
             range_start=date(2020, 1, 1),
             range_end=date(2020, 1, 31),
             status="failed",
-            error_message="connection reset by peer",
+            error_message=(
+                "connection reset by peer: Bearer "
+                "test-status-backfill-secret"
+            ),
             finished_at=datetime.now(tz=UTC) - timedelta(hours=2),
         )
     )
@@ -183,6 +195,10 @@ async def test_status_surfaces_recent_errors_from_both_sources(
 
     by_code = {e["dataset_code"]: e for e in report.recent_errors}
     assert "FinMind 503" in by_code["TaiwanStockMonthRevenue"]["error"]
+    assert ds_secret not in by_code["TaiwanStockMonthRevenue"]["error"]
+    assert "test-status-backfill-secret" not in by_code[
+        "TaiwanStockPrice"
+    ]["error"]
     assert (
         "connection reset" in by_code["TaiwanStockPrice"]["error"]
     )

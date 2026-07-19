@@ -240,6 +240,50 @@ async def test_run_due_now_skips_when_no_datasets_enabled(finmind_session):
 
 
 @pytest.mark.asyncio
+async def test_run_due_now_filters_enabled_datasets_by_category(
+    finmind_session,
+):
+    """The crypto cron must not run enabled Taiwan-market datasets."""
+    await seed_dataset_sources()
+
+    for code in ("TaiwanStockPrice", "CryptoPrice"):
+        row = await finmind_session.get(DatasetSource, code)
+        row.enabled = True
+    await finmind_session.commit()
+
+    fake = FakeClient(rows_per_call=[])
+    outcomes = await run_due_now(
+        finmind_session,
+        crypto_symbols=["BTCUSDT"],
+        categories={"crypto"},
+        client=fake,
+    )
+
+    assert outcomes
+    assert {outcome.chunk.dataset_code for outcome in outcomes} == {
+        "CryptoPrice"
+    }
+    assert {outcome.chunk.symbol for outcome in outcomes} == {"BTCUSDT"}
+    assert fake.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_run_due_now_empty_category_filter_is_a_noop(finmind_session):
+    await seed_dataset_sources()
+    row = await finmind_session.get(DatasetSource, "CryptoPrice")
+    row.enabled = True
+    await finmind_session.commit()
+
+    fake = FakeClient(rows_per_call=[])
+    outcomes = await run_due_now(
+        finmind_session, categories=set(), client=fake
+    )
+
+    assert outcomes == []
+    assert fake.call_count == 0
+
+
+@pytest.mark.asyncio
 async def test_run_due_now_fans_out_per_symbol_dataset(finmind_session):
     """Enable a per-symbol dataset + supply a universe → one ingest
     call per symbol."""
@@ -281,6 +325,35 @@ async def test_run_due_now_continues_after_chunk_failure(finmind_session):
     assert len(outcomes) == 2
     statuses = [o.result.status for o in outcomes]
     assert all(s == "failed" for s in statuses)
+
+
+@pytest.mark.asyncio
+async def test_run_due_now_redacts_unexpected_scheduler_errors(
+    finmind_session, monkeypatch, caplog,
+):
+    await seed_dataset_sources()
+    row = await finmind_session.get(DatasetSource, "TaiwanStockPrice")
+    row.enabled = True
+    await finmind_session.commit()
+    secret = "test-scheduler-secret"
+
+    async def crash_ingest(*_args, **_kwargs):
+        raise RuntimeError(
+            "scheduler failure https://example.test/data?"
+            f"token={secret}&dataset=TaiwanStockPrice"
+        )
+
+    monkeypatch.setattr(
+        "finmind.scheduler.runner.ingest_chunk", crash_ingest
+    )
+
+    outcomes = await run_due_now(finmind_session, client=FakeClient([]))
+
+    assert len(outcomes) == 1
+    assert outcomes[0].result.status == "failed"
+    assert outcomes[0].result.error is not None
+    assert secret not in outcomes[0].result.error
+    assert secret not in caplog.text
 
 
 @pytest.mark.asyncio

@@ -616,11 +616,17 @@ async def test_get_news_single_day_passthrough():
 
 
 @pytest.mark.asyncio
-async def test_get_news_per_day_failure_does_not_abort_loop():
+async def test_get_news_per_day_failure_does_not_abort_loop(caplog):
     """One bad day shouldn't poison the whole window — log and skip,
     keep going with the rest. Verifies partial results return
     successfully when at least one day worked."""
-    err = httpx.HTTPStatusError("HTTP 400", request=None, response=None)
+    secret = "test-news-log-secret"
+    err = httpx.HTTPStatusError(
+        "HTTP 400 for https://example.test/data?"
+        f"token={secret}&dataset=TaiwanStockNews",
+        request=None,
+        response=None,
+    )
 
     async def _flaky_query(dataset, data_id, start_date, end_date=None):
         if start_date == "2024-01-02":
@@ -637,6 +643,14 @@ async def test_get_news_per_day_failure_does_not_abort_loop():
 
     titles = [r["title"] for r in out]
     assert titles == ["news 2024-01-01", "news 2024-01-03"]
+    logged_errors = [
+        getattr(record, "error", None) for record in caplog.records
+    ]
+    assert secret not in repr(logged_errors)
+    assert "token=" in repr(logged_errors)
+    assert any(
+        marker in repr(logged_errors) for marker in ("<redacted>", "***")
+    )
 
 
 @pytest.mark.asyncio

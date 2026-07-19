@@ -42,6 +42,8 @@ _BACKEND_DIR = Path(__file__).resolve().parents[2]
 if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
+from finmind.redaction import redact_exception  # noqa: E402
+
 
 def _parse_date(s: str) -> date:
     return datetime.strptime(s, "%Y-%m-%d").date()
@@ -168,12 +170,10 @@ async def amain() -> int:
             args.dataset, args.symbol, start, end,
         )
     except NotImplementedError as exc:
-        print(f"probe: NotImplementedError — {exc}", file=sys.stderr)
+        print(f"probe: {redact_exception(exc)}", file=sys.stderr)
         return 1
     except Exception as exc:
-        print(
-            f"probe: {exc.__class__.__name__}: {exc}", file=sys.stderr
-        )
+        print(f"probe: {redact_exception(exc)}", file=sys.stderr)
         return 1
 
     if not rows:

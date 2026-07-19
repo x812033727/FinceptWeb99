@@ -40,7 +40,6 @@ import argparse
 import asyncio
 import json
 import os
-import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -55,6 +54,7 @@ from finmind.db.session import (  # noqa: E402
     FinmindAsyncSessionLocal,
     finmind_engine,
 )
+from finmind.redaction import redact_exception, redact_secret_text  # noqa: E402
 
 
 _SECRET_VARS = {
@@ -78,13 +78,7 @@ def _redact_url_password(url: str) -> str:
     Preserves scheme + host + db so the operator can still see
     where the connector is pointing without leaking the password
     through the support channel."""
-    if not url:
-        return ""
-    return re.sub(
-        r"(://[^:]+:)([^@]+)(@)",
-        r"\1<redacted>\3",
-        url,
-    )
+    return redact_secret_text(url) or ""
 
 
 def collect_environment() -> dict:
@@ -125,7 +119,7 @@ async def collect_diagnostic(skip_usage: bool = False) -> dict:
         out["status"] = asdict(report)
     except Exception as exc:
         out["status"] = {
-            "error": f"{exc.__class__.__name__}: {exc!s}",
+            "error": redact_exception(exc),
         }
 
     # ── Backfill recent ───────────────────────────────────
@@ -150,7 +144,9 @@ async def collect_diagnostic(skip_usage: bool = False) -> dict:
                 "status": r.status,
                 "rows_written": r.rows_written,
                 "error_message": (
-                    r.error_message[:300] if r.error_message else None
+                    safe[:300] if (
+                        safe := redact_secret_text(r.error_message)
+                    ) else None
                 ),
                 "started_at": (
                     r.started_at.isoformat() if r.started_at else None
@@ -163,7 +159,7 @@ async def collect_diagnostic(skip_usage: bool = False) -> dict:
         ]
     except Exception as exc:
         out["backfill_recent"] = {
-            "error": f"{exc.__class__.__name__}: {exc!s}",
+            "error": redact_exception(exc),
         }
 
     # ── Usage recent ──────────────────────────────────────
@@ -208,9 +204,9 @@ async def collect_diagnostic(skip_usage: bool = False) -> dict:
                         "status_code": r.status_code,
                         "latency_ms": r.latency_ms,
                         "error_message": (
-                            r.error_message[:200]
-                            if r.error_message
-                            else None
+                            safe[:200] if (
+                                safe := redact_secret_text(r.error_message)
+                            ) else None
                         ),
                     }
                     for r in rows
@@ -218,7 +214,7 @@ async def collect_diagnostic(skip_usage: bool = False) -> dict:
             }
         except Exception as exc:
             out["usage_recent"] = {
-                "error": f"{exc.__class__.__name__}: {exc!s}",
+                "error": redact_exception(exc),
             }
 
     # ── Dataset telemetry ─────────────────────────────────
@@ -246,14 +242,16 @@ async def collect_diagnostic(skip_usage: bool = False) -> dict:
                 ),
                 "last_ingest_rows": r.last_ingest_rows,
                 "last_error": (
-                    r.last_error[:300] if r.last_error else None
+                    safe[:300] if (
+                        safe := redact_secret_text(r.last_error)
+                    ) else None
                 ),
             }
             for r in rows
         ]
     except Exception as exc:
         out["dataset_telemetry"] = {
-            "error": f"{exc.__class__.__name__}: {exc!s}",
+            "error": redact_exception(exc),
         }
 
     return out

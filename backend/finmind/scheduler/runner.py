@@ -8,6 +8,7 @@ list so the CLI can print + the eventual /admin endpoint can render.
 from __future__ import annotations
 
 import logging
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -18,6 +19,7 @@ from finmind.ingest.runner import ChunkResult, ingest_chunk
 from finmind.models.crypto import CryptoUniverse
 from finmind.models.dataset_source import DatasetSource
 from finmind.models.master import TwStockInfo
+from finmind.redaction import redact_exception
 from finmind.scheduler.dispatcher import DueChunk, expand_due_datasets
 
 log = logging.getLogger("finmind.scheduler")
@@ -123,6 +125,7 @@ async def run_due_now(
     symbols: list[str] | None = None,
     warrant_symbols: list[str] | None = None,
     crypto_symbols: list[str] | None = None,
+    categories: Collection[str] | None = None,
     now: datetime | None = None,
     client=None,
 ) -> list[ChunkOutcome]:
@@ -133,7 +136,8 @@ async def run_due_now(
     listed in `dispatcher._WARRANT_UNIVERSE_DATASETS`. `crypto_symbols`
     is the Binance-pair universe used by binance/coingecko-sourced
     datasets (see `get_crypto_universe`). Market-wide datasets ignore
-    all three. `now` defaults to UTC wall clock. `client`
+    all three. When `categories` is provided, only enabled datasets in
+    those catalog categories are considered. `now` defaults to UTC wall clock. `client`
     overrides the ingest source (for tests) — production leaves it
     None and the runner picks per `dataset_sources.active_source`.
 
@@ -144,11 +148,12 @@ async def run_due_now(
     """
     now = now or datetime.now(tz=timezone.utc)
 
-    rows = (
-        await session.execute(
-            select(DatasetSource).where(DatasetSource.enabled.is_(True))
-        )
-    ).scalars().all()
+    stmt = select(DatasetSource).where(DatasetSource.enabled.is_(True))
+    if categories is not None:
+        if not categories:
+            return []
+        stmt = stmt.where(DatasetSource.category.in_(sorted(categories)))
+    rows = (await session.execute(stmt)).scalars().all()
 
     chunks = expand_due_datasets(
         list(rows), now,
@@ -177,12 +182,15 @@ async def run_due_now(
             # (DB connection lost, etc.). Surface as a failed-result
             # in the outcome list so the caller sees the whole sweep
             # outcome rather than crashing on the bad chunk.
-            log.exception(
-                "scheduler crashed on %s/%s",
-                chunk.dataset_code, chunk.symbol or "<market-wide>",
+            safe_error = redact_exception(exc)
+            log.error(
+                "scheduler crashed on %s/%s: %s",
+                chunk.dataset_code,
+                chunk.symbol or "<market-wide>",
+                safe_error,
             )
             result = ChunkResult(
-                status="failed", rows_written=0, error=repr(exc),
+                status="failed", rows_written=0, error=safe_error,
             )
         outcomes.append(ChunkOutcome(chunk=chunk, result=result))
 

@@ -23,8 +23,13 @@ from cache.redis_cache import (
     key_finmind_quota_exhausted_counter,
 )
 from config import settings
+from finmind.redaction import redact_secret_text
 
 log = logging.getLogger(__name__)
+# httpx's INFO request log includes the fully rendered query string. FinMind's
+# generic endpoint puts its token there, so CLI jobs that configure the root
+# logger at INFO must not inherit those request lines.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 _BASE = "https://api.finmindtrade.com/api/v4/data"
 
@@ -912,7 +917,7 @@ async def get_news(
                 extra={
                     "day": cur.isoformat(),
                     "symbol": symbol or "_market",
-                    "error": str(exc),
+                    "error": redact_secret_text(exc),
                 },
             )
         else:

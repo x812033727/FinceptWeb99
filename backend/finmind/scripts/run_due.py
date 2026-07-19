@@ -169,9 +169,10 @@ async def amain() -> int:
         action="store_true",
         help=(
             "Auto-discover the crypto universe from `crypto_universe` "
-            "(active + Binance-mapped rows). Required for the crypto "
-            "cron — per-symbol crypto datasets (CryptoPrice*) fan out "
-            "across it. Populate the table first with "
+            "(active + Binance-mapped rows) and scope this run to the "
+            "crypto category. Required for the crypto cron — per-symbol "
+            "crypto datasets (CryptoPrice*) fan out across it. Populate "
+            "the table first with "
             "`crypto_universe_refresh`."
         ),
     )
@@ -220,6 +221,9 @@ async def amain() -> int:
             symbols=symbols,
             warrant_symbols=warrant_symbols,
             crypto_symbols=crypto_symbols,
+            categories=(
+                {"crypto"} if args.crypto_universe_from_db else None
+            ),
             now=datetime.now(tz=timezone.utc),
         )
 

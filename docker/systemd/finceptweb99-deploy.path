@@ -1,0 +1,11 @@
+[Unit]
+Description=Watch the FinceptWeb99 admin deployment trigger
+After=docker.service
+Requires=docker.service
+
+[Path]
+PathChanged=/opt/finceptweb99/var/deploy-trigger
+Unit=finceptweb99-deploy.service
+
+[Install]
+WantedBy=multi-user.target

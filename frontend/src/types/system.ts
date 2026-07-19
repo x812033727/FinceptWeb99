@@ -16,10 +16,12 @@ export interface UpdateResult {
 export type DeployPhase =
   | "idle"
   | "starting"
+  | "backing_up"
   | "pulling"
+  | "building"
   | "pausing"
   | "reset_stale"
-  | "building"
+  | "migrating"
   | "restarting"
   | "nginx"
   | "verifying"

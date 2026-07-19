@@ -1,0 +1,22 @@
+[Unit]
+Description=FinceptWeb99 fail-closed deployment runner
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+ConditionPathIsDirectory=/opt/finceptweb99/.git
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/finceptweb99
+Environment=REPO=/opt/finceptweb99
+Environment=BRANCH=main
+Environment=COMPOSE_PROJECT_NAME=finceptweb99
+Environment=HEALTH_URL=http://127.0.0.1:8081/api/health
+Environment=INSTALL_PATH=/usr/local/bin/finceptweb99-deploy.sh
+Environment=EXPECTED_REMOTE=https://github.com/x812033727/FinceptWeb99.git
+ExecStart=/usr/local/bin/finceptweb99-deploy.sh
+TimeoutStartSec=1800
+UMask=0022
+StandardOutput=journal
+StandardError=journal

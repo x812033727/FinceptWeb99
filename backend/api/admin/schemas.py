@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -59,13 +59,31 @@ class DeployTriggerOut(BaseModel):
     message: str
 
 
+DeployPhase = Literal[
+    "idle",
+    "starting",
+    "backing_up",
+    "pulling",
+    "building",
+    "pausing",
+    "reset_stale",
+    "migrating",
+    "restarting",
+    "nginx",
+    "verifying",
+    "completed",
+    "failed",
+    "unknown",
+]
+
+
 class DeployStatusOut(BaseModel):
-    """Mirrors deploy-status.json written by /usr/local/bin/finceptweb-deploy.sh.
+    """Mirrors deploy-status.json written by the FinceptWeb99 deploy runner.
 
     All fields except `phase` are optional so we can return a minimal
     `{phase: "idle"}` document before the first deploy ever runs.
     """
-    phase: str           # idle | starting | pulling | pausing | reset_stale | building | restarting | nginx | verifying | completed | failed | unknown
+    phase: DeployPhase
     started_at: str | None = None
     finished_at: str | None = None
     before_sha: str | None = None

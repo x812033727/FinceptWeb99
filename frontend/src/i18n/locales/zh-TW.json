@@ -291,10 +291,12 @@
       "phase": {
         "idle": "閒置",
         "starting": "準備中",
+        "backing_up": "備份資料庫",
         "pulling": "拉取代碼",
+        "building": "建置映像",
         "pausing": "停下抓取",
         "reset_stale": "清理進行中任務",
-        "building": "建置映像",
+        "migrating": "套用資料庫遷移",
         "restarting": "重啟後端與前端",
         "nginx": "重啟 nginx",
         "verifying": "等待健康檢查",

@@ -2,10 +2,10 @@
 
 Backend can't run docker-compose directly — it lives inside a container
 with no docker socket and no docker CLI. Instead we touch a trigger file
-on a shared volume; the host's `finceptweb-deploy.path` systemd unit
-notices the mtime change and runs `/usr/local/bin/finceptweb-deploy.sh`
-as root, which performs the full pull → pause → reset_stale → build →
-up → verify SOP.
+on a shared volume; the host's `finceptweb99-deploy.path` systemd unit
+notices the mtime change and runs `/usr/local/bin/finceptweb99-deploy.sh`
+as root, which performs the full backup → fast-forward → build → migrate →
+restart → verify SOP.
 
 The deploy script writes phase progress to `deploy-status.json` in the
 same shared volume; we expose that JSON via GET /api/admin/deploy/status

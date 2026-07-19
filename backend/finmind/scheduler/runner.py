@@ -12,7 +12,7 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from finmind.ingest.runner import ChunkResult, ingest_chunk
@@ -126,6 +126,8 @@ async def run_due_now(
     warrant_symbols: list[str] | None = None,
     crypto_symbols: list[str] | None = None,
     categories: Collection[str] | None = None,
+    dataset_code_prefixes: Collection[str] | None = None,
+    skip_per_symbol: bool = False,
     now: datetime | None = None,
     client=None,
 ) -> list[ChunkOutcome]:
@@ -137,9 +139,13 @@ async def run_due_now(
     is the Binance-pair universe used by binance/coingecko-sourced
     datasets (see `get_crypto_universe`). Market-wide datasets ignore
     all three. When `categories` is provided, only enabled datasets in
-    those catalog categories are considered. `now` defaults to UTC wall clock. `client`
-    overrides the ingest source (for tests) — production leaves it
-    None and the runner picks per `dataset_sources.active_source`.
+    those catalog categories are considered. `dataset_code_prefixes`
+    further scopes the query to dataset codes beginning with one of the
+    supplied prefixes. `skip_per_symbol` excludes those rows in SQL,
+    before due-chunk expansion or any upstream request. `now` defaults
+    to UTC wall clock. `client` overrides the ingest source (for tests)
+    — production leaves it None and the runner picks per
+    `dataset_sources.active_source`.
 
     Failures don't short-circuit: one bad dataset still lets the rest
     run. The per-chunk telemetry already lands in `dataset_sources`
@@ -153,6 +159,16 @@ async def run_due_now(
         if not categories:
             return []
         stmt = stmt.where(DatasetSource.category.in_(sorted(categories)))
+    if dataset_code_prefixes is not None:
+        prefixes = sorted(set(dataset_code_prefixes))
+        if not prefixes:
+            return []
+        stmt = stmt.where(or_(*(
+            DatasetSource.dataset_code.startswith(prefix)
+            for prefix in prefixes
+        )))
+    if skip_per_symbol:
+        stmt = stmt.where(DatasetSource.per_symbol.is_(False))
     rows = (await session.execute(stmt)).scalars().all()
 
     chunks = expand_due_datasets(

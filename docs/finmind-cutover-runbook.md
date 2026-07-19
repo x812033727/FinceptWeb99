@@ -117,16 +117,24 @@ serialise against TWSE. Even so:
 
 ## Step 4 — daily cron
 
-Install the committed snippet (host crontab):
+Install the committed FinceptWeb99 `/etc/cron.d` configuration:
 
 ```bash
-crontab -l > /tmp/cur
-cat backend/finmind/deploy/finmind-cron >> /tmp/cur
-crontab /tmp/cur
+install -m 0644 backend/finmind/deploy/finmind-cron \
+  /etc/cron.d/finceptweb99-finmind-tw
 ```
 
-`run_due` is idempotent and freshness-gated, so a missed slot self-heals
-next tick. See `finmind-cron` for the schedule rationale.
+The production entries are fail-closed to `/opt/finceptweb99`, the
+`finceptweb99` Compose project, and a single-flight lock. They pass
+`--tw-only --skip-per-symbol`, so only Taiwan market-wide datasets are
+eligible and per-symbol connectors are removed before ingest. `run_due`
+is idempotent and freshness-gated, so a missed slot self-heals next tick.
+
+Do not add `--universe-from-tw-stock-info` to this cron until the
+`tw_stock_info` universe has been repaired and bounded: the current
+with-warrant feed can misclassify tens of thousands of six-character
+rows as non-warrants. Per-symbol ingestion remains a manual, controlled
+backfill meanwhile.
 
 ## Step 5 — verify
 

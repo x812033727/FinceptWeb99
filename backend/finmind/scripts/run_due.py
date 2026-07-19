@@ -23,7 +23,9 @@ Without --symbols / --symbols-file / --universe-from-tw-stock-info,
 per-symbol datasets are still attempted with symbol=None — most
 upstream sources fail in that case and the chunk lands as 'failed'
 in `backfill_progress`. Use --skip-per-symbol to filter them out
-cleanly.
+before any upstream request. Production Taiwan market-wide cron should
+also pass --tw-only so crypto and non-Taiwan macro datasets stay out of
+that sweep.
 """
 from __future__ import annotations
 
@@ -36,6 +38,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 _BACKEND_DIR = Path(__file__).resolve().parents[2]
+_TAIWAN_DATASET_PREFIXES = ("Taiwan", "taiwan_")
 if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
@@ -177,6 +180,15 @@ async def amain() -> int:
         ),
     )
     parser.add_argument(
+        "--tw-only",
+        action="store_true",
+        help=(
+            "Scope this run to Taiwan dataset codes (`Taiwan*` and "
+            "`taiwan_*`). Production market-wide cron combines this "
+            "with --skip-per-symbol."
+        ),
+    )
+    parser.add_argument(
         "--skip-per-symbol",
         action="store_true",
         help=(
@@ -210,6 +222,10 @@ async def amain() -> int:
             "specify at most one of --warrant-universe-from-tw-stock-info / "
             "--warrant-symbols-file"
         )
+    if args.tw_only and args.crypto_universe_from_db:
+        parser.error(
+            "--tw-only and --crypto-universe-from-db are mutually exclusive"
+        )
 
     async with FinmindAsyncSessionLocal() as session:
         symbols = await _load_symbols(args, session)
@@ -224,11 +240,12 @@ async def amain() -> int:
             categories=(
                 {"crypto"} if args.crypto_universe_from_db else None
             ),
+            dataset_code_prefixes=(
+                _TAIWAN_DATASET_PREFIXES if args.tw_only else None
+            ),
+            skip_per_symbol=args.skip_per_symbol,
             now=datetime.now(tz=timezone.utc),
         )
-
-    if args.skip_per_symbol:
-        outcomes = [o for o in outcomes if not o.chunk.per_symbol]
 
     if not outcomes:
         print("run_due: nothing due — all enabled datasets are fresh.")

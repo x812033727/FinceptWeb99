@@ -284,6 +284,76 @@ async def test_run_due_now_empty_category_filter_is_a_noop(finmind_session):
 
 
 @pytest.mark.asyncio
+async def test_run_due_now_filters_enabled_datasets_by_code_prefix(
+    finmind_session,
+):
+    """Taiwan cron must not run crypto or non-Taiwan macro datasets."""
+    await seed_dataset_sources()
+
+    for code in (
+        "TaiwanStockTradingDate",
+        "CryptoInfo",
+        "CnnFearGreedIndex",
+    ):
+        row = await finmind_session.get(DatasetSource, code)
+        row.enabled = True
+    await finmind_session.commit()
+
+    fake = FakeClient(rows_per_call=[])
+    outcomes = await run_due_now(
+        finmind_session,
+        dataset_code_prefixes=("Taiwan", "taiwan_"),
+        client=fake,
+    )
+
+    assert {outcome.chunk.dataset_code for outcome in outcomes} == {
+        "TaiwanStockTradingDate"
+    }
+    assert fake.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_run_due_now_skips_per_symbol_before_ingest(finmind_session):
+    """Market-wide cron must never call a per-symbol connector."""
+    await seed_dataset_sources()
+
+    for code in ("TaiwanStockTradingDate", "TaiwanStockPrice"):
+        row = await finmind_session.get(DatasetSource, code)
+        row.enabled = True
+    await finmind_session.commit()
+
+    fake = FakeClient(rows_per_call=[])
+    outcomes = await run_due_now(
+        finmind_session,
+        dataset_code_prefixes=("Taiwan", "taiwan_"),
+        skip_per_symbol=True,
+        client=fake,
+    )
+
+    assert {outcome.chunk.dataset_code for outcome in outcomes} == {
+        "TaiwanStockTradingDate"
+    }
+    assert all(not outcome.chunk.per_symbol for outcome in outcomes)
+    assert fake.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_run_due_now_empty_prefix_filter_is_a_noop(finmind_session):
+    await seed_dataset_sources()
+    row = await finmind_session.get(DatasetSource, "TaiwanStockTradingDate")
+    row.enabled = True
+    await finmind_session.commit()
+
+    fake = FakeClient(rows_per_call=[])
+    outcomes = await run_due_now(
+        finmind_session, dataset_code_prefixes=(), client=fake
+    )
+
+    assert outcomes == []
+    assert fake.call_count == 0
+
+
+@pytest.mark.asyncio
 async def test_run_due_now_fans_out_per_symbol_dataset(finmind_session):
     """Enable a per-symbol dataset + supply a universe → one ingest
     call per symbol."""

@@ -240,7 +240,11 @@ set_phase restarting
 "${COMPOSE[@]}" up -d --no-deps backend scheduler frontend db-backup 2>&1 | tee -a "$LOG"
 
 set_phase nginx
-"${COMPOSE[@]}" up -d --no-deps nginx 2>&1 | tee -a "$LOG"
+# nginx resolves the Compose backend hostname when the worker process starts.
+# Recreating backend can therefore leave a still-running nginx pinned to the
+# removed container IP even though its Compose configuration is unchanged.
+# Force a new nginx container so DNS is resolved again before verification.
+"${COMPOSE[@]}" up -d --no-deps --force-recreate nginx 2>&1 | tee -a "$LOG"
 
 set_phase verifying
 verify_deployment

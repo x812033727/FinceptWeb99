@@ -67,6 +67,10 @@ case " $* " in
   *" run "*" db-backup "*)
     [ "${FAKE_BACKUP_FAIL:-0}" != 1 ] || exit 43 ;;
 esac
+case " $* " in
+  *" up -d --no-deps --force-recreate nginx "*)
+    touch "$FAKE_STATE/nginx-recreated" ;;
+esac
 if [ "${3:-}" = "ps" ] && [ "${4:-}" = "-q" ]; then
   printf '%s-cid\\n' "$5"
 fi
@@ -88,7 +92,8 @@ esac
         fake_bin / "curl",
         """#!/bin/sh
 printf 'curl %s\\n' "$*" >> "$FAKE_CALLS"
-[ "${FAKE_HEALTH_FAIL:-0}" != 1 ]
+[ "${FAKE_HEALTH_FAIL:-0}" != 1 ] || exit 1
+[ "${FAKE_STALE_NGINX:-0}" != 1 ] || [ -f "$FAKE_STATE/nginx-recreated" ]
 """,
     )
     _executable(fake_bin / "sleep", "#!/bin/sh\nexit 0\n")
@@ -195,8 +200,29 @@ def test_backup_precedes_pull_and_migration_and_all_images_are_restarted(tmp_pat
     assert any("build backend frontend migrate scheduler db-backup" in line for line in lines)
     assert any("stop backend scheduler" in line for line in lines)
     assert any("up -d --no-deps backend scheduler frontend db-backup" in line for line in lines)
-    assert any("up -d --no-deps nginx" in line for line in lines)
+    assert any(
+        "up -d --no-deps --force-recreate nginx" in line
+        for line in lines
+    )
     assert Path(env["INSTALL_PATH"]).read_bytes() == SCRIPT.read_bytes()
+
+
+def test_force_recreating_nginx_recovers_stale_backend_dns(tmp_path: Path) -> None:
+    env, repo, calls = _sandbox(tmp_path)
+    env["FAKE_STALE_NGINX"] = "1"
+
+    result = _run(env)
+
+    assert result.returncode == 0, result.stderr
+    status = json.loads((repo / "var" / "deploy-status.json").read_text())
+    assert status["phase"] == "completed"
+    lines = calls.read_text().splitlines()
+    recreate_index = next(
+        i for i, line in enumerate(lines)
+        if "up -d --no-deps --force-recreate nginx" in line
+    )
+    health_index = next(i for i, line in enumerate(lines) if line.startswith("curl "))
+    assert recreate_index < health_index
 
 
 @pytest.mark.parametrize(

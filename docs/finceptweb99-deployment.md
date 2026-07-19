@@ -14,7 +14,9 @@ branch, and tracked or staged changes. Untracked operational files are kept.
 Every deploy creates and independently verifies a full PostgreSQL backup before
 fetching, then fast-forwards, builds all application images, explicitly runs
 both migration ledgers, and verifies health and container state. Backend and
-scheduler are stopped only after builds complete.
+scheduler are stopped only after builds complete. The runner force-recreates
+nginx after recreating the application containers so nginx cannot retain a
+removed backend container IP in its DNS cache.
 
 Install the reviewed runner and the dedicated units after merging:
 

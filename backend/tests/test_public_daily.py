@@ -341,3 +341,82 @@ async def test_public_daily_enriches_candidates_with_company_names(client, db_se
     pool_by_symbol = {p["symbol"]: p for p in run["candidate_pool"]}
     assert pool_by_symbol["2330"]["name"] == "台積電"
     assert "name" not in pool_by_symbol["9999"]
+
+
+@pytest.mark.asyncio
+async def test_public_daily_history_serves_symbols_on_the_page(client, db_session, monkeypatch):
+    owner = User(id=uuid.uuid4(), email="hist@example.com", hashed_password="x", role=UserRole.viewer, is_active=True)
+    db_session.add(owner)
+    await db_session.flush()
+    row = discussion(owner.id, created_at=datetime(2026, 7, 14, tzinfo=UTC), conclusion={
+        "recommended_symbols": ["2330"], "reasoning": "x", "risks": [],
+        "time_horizon": "short_term", "consensus_score": .8,
+    })
+    row.candidate_snapshot = {
+        "strategy": "general", "sequence": 1,
+        "candidates": [{"symbol": "2330", "strategy_score": 9.0}],
+        "pool": [{"symbol": "2317", "strategy_score": 5.0}],
+    }
+    db_session.add(row)
+    await db_session.commit()
+    monkeypatch.setattr(settings, "PUBLIC_DAILY_RESULTS_OWNER_EMAIL", "hist@example.com")
+
+    calls = []
+
+    async def fake_history(symbol, months=12):
+        calls.append((symbol, months))
+        return [
+            {"time": "2026-07-13", "open": 1000.0, "high": 1010.0, "low": 990.0,
+             "close": 1005.0, "volume": 12345, "data_source": "ohlcv_daily"},
+            {"time": "2026-07-14", "open": 1005.0, "high": 1020.0, "low": 1000.0,
+             "close": 1015.0, "volume": None, "data_source": "ohlcv_daily"},
+        ]
+
+    monkeypatch.setattr("services.tw_market_service.get_history", fake_history)
+
+    # Recommended symbol works…
+    response = await client.get("/api/public/daily/history/2330")
+    assert response.status_code == 200
+    assert response.headers["cache-control"].startswith("public, max-age=300")
+    assert response.headers["x-robots-tag"] == "noindex, nofollow"
+    bars = response.json()
+    assert [b["time"] for b in bars] == ["2026-07-13", "2026-07-14"]
+    assert bars[0]["close"] == 1005.0
+    # data_source is internal — the public projection must not leak it,
+    # and a NULL volume becomes 0 for the chart.
+    assert "data_source" not in bars[0]
+    assert bars[1]["volume"] == 0
+
+    # …and so does a pool-only symbol.
+    assert (await client.get("/api/public/daily/history/2317")).status_code == 200
+    assert calls == [("2330", 6), ("2317", 6)]
+
+
+@pytest.mark.asyncio
+async def test_public_daily_history_rejects_symbols_off_the_page(client, db_session, monkeypatch):
+    owner = User(id=uuid.uuid4(), email="hist2@example.com", hashed_password="x", role=UserRole.viewer, is_active=True)
+    db_session.add(owner)
+    await db_session.flush()
+    db_session.add(discussion(owner.id, created_at=datetime(2026, 7, 14, tzinfo=UTC), conclusion={
+        "recommended_symbols": ["2330"], "reasoning": "x", "risks": [],
+        "time_horizon": "short_term", "consensus_score": .8,
+    }))
+    await db_session.commit()
+    monkeypatch.setattr(settings, "PUBLIC_DAILY_RESULTS_OWNER_EMAIL", "hist2@example.com")
+
+    async def explode(symbol, months=12):  # pragma: no cover - guard must fire first
+        raise AssertionError("get_history must not be reached for off-page symbols")
+
+    monkeypatch.setattr("services.tw_market_service.get_history", explode)
+
+    assert (await client.get("/api/public/daily/history/9999")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_public_daily_history_404_when_disabled_or_empty(client, monkeypatch):
+    monkeypatch.setattr(settings, "PUBLIC_DAILY_RESULTS_OWNER_EMAIL", "")
+    assert (await client.get("/api/public/daily/history/2330")).status_code == 404
+
+    # Enabled but publisher has no rows → still 404, never a data probe.
+    monkeypatch.setattr(settings, "PUBLIC_DAILY_RESULTS_OWNER_EMAIL", "nobody@example.com")
+    assert (await client.get("/api/public/daily/history/2330")).status_code == 404

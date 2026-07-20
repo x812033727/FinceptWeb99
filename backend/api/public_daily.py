@@ -7,12 +7,13 @@ from datetime import timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
 
+import services.tw_market_service as tw_svc
 from ai.agents import list_agents
 from cache.redis_cache import cache_get_json, cache_set_json
 from config import settings
@@ -211,6 +212,10 @@ async def get_public_daily(
     response.headers["Cache-Control"] = "public, max-age=60, s-maxage=60, stale-while-revalidate=30"
     response.headers["X-Robots-Tag"] = "noindex, nofollow"
 
+    return await _get_or_build_payload(db)
+
+
+async def _get_or_build_payload(db: AsyncSession) -> PublicDailyResponse:
     email = settings.PUBLIC_DAILY_RESULTS_OWNER_EMAIL.strip().lower()
     if not email:
         return PublicDailyResponse(state="disabled")
@@ -222,6 +227,94 @@ async def get_public_daily(
     payload = await _build_response(db, email)
     await cache_set_json(_CACHE_KEY, payload.model_dump(mode="json"), _CACHE_TTL_SECONDS)
     return payload
+
+
+class PublicOHLCVBar(BaseModel):
+    time: str
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    close: float | None = None
+    volume: int = 0
+
+
+# One month beyond the chart's default MA windows; get_history() has its
+# own Redis cache so no extra cache layer is kept here.
+_HISTORY_MONTHS = 6
+
+
+def _allowed_symbols(payload: PublicDailyResponse) -> set[str]:
+    """Every symbol visible somewhere on the public page.
+
+    The history endpoint only serves these — it must not become an
+    anonymous full-market quote scraping surface.
+    """
+    symbols: set[str] = set()
+
+    def _collect(result: PublicDailyResult) -> None:
+        conclusion = result.conclusion or {}
+        recommended = conclusion.get("recommended_symbols")
+        if isinstance(recommended, list):
+            symbols.update(s for s in recommended if isinstance(s, str))
+        names = conclusion.get("symbol_names")
+        if isinstance(names, dict):
+            symbols.update(names.keys())
+        for item in [*result.candidates, *result.candidate_pool]:
+            sym = item.get("symbol") if isinstance(item, dict) else None
+            if isinstance(sym, str):
+                symbols.add(sym)
+        for prices in (
+            result.day1_open_prices,
+            result.day5_close_prices,
+            result.daily_close_prices,
+        ):
+            if isinstance(prices, dict):
+                symbols.update(prices.keys())
+
+    for runs in payload.strategies.values():
+        for result in runs:
+            _collect(result)
+    for day in payload.days:
+        for runs in day.strategies.values():
+            for result in runs:
+                _collect(result)
+    if payload.result is not None:
+        _collect(payload.result)
+    return symbols
+
+
+@router.get("/daily/history/{symbol}", response_model=list[PublicOHLCVBar])
+@limiter.limit("30/minute")
+async def get_public_daily_history(
+    request: Request,
+    response: Response,
+    symbol: str,
+    db: AsyncSession = Depends(get_db),
+) -> list[PublicOHLCVBar]:
+    """Anonymous daily OHLCV for a symbol shown on the public page."""
+    response.headers["Cache-Control"] = "public, max-age=300, s-maxage=300"
+    response.headers["X-Robots-Tag"] = "noindex, nofollow"
+
+    payload = await _get_or_build_payload(db)
+    symbol = symbol.strip()
+    if payload.state != "ready" or symbol not in _allowed_symbols(payload):
+        raise HTTPException(status_code=404, detail="symbol not on the public daily page")
+
+    try:
+        bars = await tw_svc.get_history(symbol, months=_HISTORY_MONTHS)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Data source error: {e}")
+    return [
+        PublicOHLCVBar(
+            time=str(bar.get("time")),
+            open=bar.get("open"),
+            high=bar.get("high"),
+            low=bar.get("low"),
+            close=bar.get("close"),
+            volume=int(bar.get("volume") or 0),
+        )
+        for bar in bars
+    ]
 
 
 async def _build_response(db: AsyncSession, email: str) -> PublicDailyResponse:

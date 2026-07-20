@@ -193,15 +193,28 @@ export default function DailyPage() {
 type SelectedSymbol = { symbol: string; name?: string } | null;
 
 function SymbolChartDialog({ selected, onClose }: { selected: SelectedSymbol; onClose: () => void }) {
+  return (
+    <Dialog open={!!selected} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="max-w-3xl border-slate-800 bg-slate-950 text-slate-100">
+        <DialogHeader>
+          <DialogTitle className="text-slate-100">
+            {selected ? `${selected.symbol}${selected.name ? ` ${selected.name}` : ""} 日 K 線（近六個月）` : ""}
+          </DialogTitle>
+        </DialogHeader>
+        {/* Keyed by symbol so switching stocks remounts with fresh state
+            instead of resetting it synchronously inside an effect. */}
+        {selected && <SymbolChartBody key={selected.symbol} symbol={selected.symbol} />}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SymbolChartBody({ symbol }: { symbol: string }) {
   const [bars, setBars] = useState<OHLCVBar[] | null>(null);
   const [failed, setFailed] = useState(false);
-  const symbol = selected?.symbol;
 
   useEffect(() => {
-    if (!symbol) return;
     let cancelled = false;
-    setBars(null);
-    setFailed(false);
     (async () => {
       try {
         const res = await fetch(`/api/public/daily/history/${symbol}`, { credentials: "omit", headers: { Accept: "application/json" } });
@@ -215,27 +228,16 @@ function SymbolChartDialog({ selected, onClose }: { selected: SelectedSymbol; on
     return () => { cancelled = true; };
   }, [symbol]);
 
+  if (failed) return <div className="py-16 text-center text-sm text-slate-400">目前無法取得 K 線資料，請稍後再試。</div>;
+  if (!bars) return <div className="py-16 text-center text-sm text-slate-500">正在載入 K 線…</div>;
+  if (!bars.length) return <div className="py-16 text-center text-sm text-slate-400">此標的暫無歷史價格資料。</div>;
   return (
-    <Dialog open={!!selected} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="max-w-3xl border-slate-800 bg-slate-950 text-slate-100">
-        <DialogHeader>
-          <DialogTitle className="text-slate-100">
-            {selected ? `${selected.symbol}${selected.name ? ` ${selected.name}` : ""} 日 K 線（近六個月）` : ""}
-          </DialogTitle>
-        </DialogHeader>
-        {failed && <div className="py-16 text-center text-sm text-slate-400">目前無法取得 K 線資料，請稍後再試。</div>}
-        {!failed && !bars && <div className="py-16 text-center text-sm text-slate-500">正在載入 K 線…</div>}
-        {!failed && bars?.length === 0 && <div className="py-16 text-center text-sm text-slate-400">此標的暫無歷史價格資料。</div>}
-        {!failed && !!bars?.length && (
-          <Suspense fallback={<div className="py-16 text-center text-sm text-slate-500">正在載入圖表…</div>}>
-            {/* Deliberately no market/symbol props: they switch on the
-                authed drawings/alerts wiring, which would 401 for the
-                anonymous visitors of this page. */}
-            <CandlestickChart bars={bars} height={420} />
-          </Suspense>
-        )}
-      </DialogContent>
-    </Dialog>
+    <Suspense fallback={<div className="py-16 text-center text-sm text-slate-500">正在載入圖表…</div>}>
+      {/* Deliberately no market/symbol props: they switch on the
+          authed drawings/alerts wiring, which would 401 for the
+          anonymous visitors of this page. */}
+      <CandlestickChart bars={bars} height={420} />
+    </Suspense>
   );
 }
 

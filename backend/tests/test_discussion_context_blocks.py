@@ -427,41 +427,49 @@ async def test_risk_fetch_risk_warnings_returns_three_subblocks(
 
 
 @pytest.mark.asyncio
-async def test_news_backfill_result_surfaces_into_ctx(
+async def test_news_backfill_never_runs_in_backtest_mode(
     db_session: AsyncSession,
 ):
-    """PR #216: when auto-backfill runs in backtest mode, its result
-    must land in `ctx['news_backfill']` so the user can diagnose why
-    news is empty (paywall? missing token? archive truly thin?)
-    without digging into ctx['errors']. Live mode (no `as_of_dt`)
-    leaves the field at its default None."""
+    """Backtest mode must NOT call `ensure_news_archive_covers`.
+
+    Anything it inserts is unscored (filtered by
+    `sentiment_score IS NOT NULL`) and anything it scores is stamped
+    `sentiment_scored_at = now()`, which a backtest reader rejects via
+    `sentiment_scored_at <= anchor`. The call cannot change this ctx,
+    so it is pure cost — ~35 min of ingest + LLM scoring per anchor
+    date on the replay that found this.
+    """
     from datetime import datetime, timezone
     ctx = _new_ctx()
     asof_dt = datetime(2025, 1, 15, 23, 59, tzinfo=timezone.utc)
 
-    fake_result = {"covered": False, "backfilled": 0}
+    backfill_mock = AsyncMock()
     with patch(
         "services.news_backfill_service.ensure_news_archive_covers",
-        new=AsyncMock(return_value=fake_result),
+        new=backfill_mock,
     ), patch(
         "services.news_sentiment_service.read_recent_market_sentiment",
         new=AsyncMock(return_value={"bullish": 0, "headlines": []}),
     ):
         await news.fetch_market_sentiment(
             ctx, db_session, market="TW", as_of_dt=asof_dt,
-            record_error=_record(ctx),
+            record_error=_record(ctx), focus_symbols=["2330"],
         )
 
-    assert ctx["news_backfill"] == fake_result
+    backfill_mock.assert_not_awaited()
+    assert ctx["news_backfill"] is None
+    # And the empty archive stays visible as a gap rather than being
+    # papered over: the block drops to None for `_record_data_gaps`.
+    assert ctx["news_sentiment"] is None
 
 
 @pytest.mark.asyncio
-async def test_news_backfill_skipped_in_live_mode(
+async def test_news_backfill_never_runs_in_live_mode(
     db_session: AsyncSession,
 ):
-    """Live mode (`as_of_dt=None`) must not invoke the auto-backfill
-    helper — it's specifically a backtest-mode crutch. The
-    `news_backfill` field stays at its default (None)."""
+    """Live mode never backfilled either — it relies on the hourly
+    ingest + scoring cron. Unchanged; asserted so a future edit can't
+    reintroduce the call on the hot path."""
     ctx = _new_ctx()
 
     backfill_mock = AsyncMock()
@@ -480,37 +488,13 @@ async def test_news_backfill_skipped_in_live_mode(
 
     backfill_mock.assert_not_awaited()
     assert ctx["news_backfill"] is None
+    # Live mode keeps the empty counts — operators read zero as
+    # "cron hasn't run yet", which is different from "no data exists".
+    assert ctx["news_sentiment"] == {
+        "bullish": 0, "bearish": 0, "neutral": 0, "headlines": [],
+    }
 
 
-@pytest.mark.asyncio
-async def test_news_backfill_exception_recorded_into_ctx(
-    db_session: AsyncSession,
-):
-    """If `ensure_news_archive_covers` raises (very rare — it normally
-    catches everything and returns a dict), the wrapper must still
-    populate `ctx['news_backfill']` with the error message so the
-    user has actionable diagnostic info."""
-    from datetime import datetime, timezone
-    ctx = _new_ctx()
-    asof_dt = datetime(2025, 1, 15, 23, 59, tzinfo=timezone.utc)
-
-    with patch(
-        "services.news_backfill_service.ensure_news_archive_covers",
-        new=AsyncMock(side_effect=RuntimeError("DB connection lost")),
-    ), patch(
-        "services.news_sentiment_service.read_recent_market_sentiment",
-        new=AsyncMock(return_value={"bullish": 0, "headlines": []}),
-    ):
-        await news.fetch_market_sentiment(
-            ctx, db_session, market="TW", as_of_dt=asof_dt,
-            record_error=_record(ctx),
-        )
-
-    assert ctx["news_backfill"]["covered"] is False
-    assert "DB connection lost" in ctx["news_backfill"]["error"]
-
-
-@pytest.mark.asyncio
 async def test_news_fetch_market_sentiment_drops_block_on_empty_backtest(
     db_session: AsyncSession,
 ):

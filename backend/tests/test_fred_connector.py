@@ -89,7 +89,9 @@ def test_series_map_exposes_core_macro_indicators():
     assert fred.SERIES["cpi"] == "CPIAUCSL"
     assert fred.SERIES["10y_yield"] == "DGS10"
     assert fred.SERIES["10y_minus_2y"] == "T10Y2Y"
-    assert fred.SERIES["twd_usd"] == "DEXTW"
+    # Was "DEXTW", which FRED rejects with 400 "The series does not
+    # exist". Re-pinned to the real daily series after probing the API.
+    assert fred.SERIES["twd_usd"] == "DEXTAUS"
 
 
 # ── get_series: API-key gate ──────────────────────────────────────
@@ -248,7 +250,7 @@ async def test_get_series_yfinance_fallback_swallows_errors():
 
     with with_no_api_key(), \
          patch.object(fred.yfinance, "get_history", new=_raise):
-        out = await fred.get_series("DEXTW")
+        out = await fred.get_series("DEXTAUS")
     assert out == []
 
 
@@ -261,9 +263,12 @@ async def _coro(value):
 
 @pytest.mark.asyncio
 async def test_get_series_parses_observations_to_typed_rows():
+    # FRED is now asked for `sort_order=desc` (newest first) so the
+    # 1000-row limit keeps recent data, and the connector flips the
+    # payload back to ascending. Callers still see oldest → newest.
     payload = {"observations": [
-        {"date": "2024-01-02", "value": "5.33"},
         {"date": "2024-02-01", "value": "5.31"},
+        {"date": "2024-01-02", "value": "5.33"},
     ]}
     patcher, _ = install_client(FakeResponse(payload))
     with patcher, with_api_key():
@@ -314,7 +319,10 @@ async def test_get_series_passes_required_params_to_fred():
     assert params["series_id"] == "FEDFUNDS"
     assert params["api_key"] == "my-secret-key"
     assert params["file_type"] == "json"
-    assert params["sort_order"] == "asc"
+    # `desc`, not `asc`: with `asc` the 1000-row limit returned the
+    # OLDEST 1000 observations, so DGS10 (daily since 1962) reported
+    # 1965-11-01 as its latest value in production.
+    assert params["sort_order"] == "desc"
     assert params["limit"] == 1000
 
 
@@ -374,10 +382,13 @@ async def test_get_latest_returns_most_recent_non_null_value():
     """get_latest walks the series in reverse and returns the first
     non-None value. The most recent observations may not be published
     yet (FRED lags behind real time for some series)."""
+    # Payload is in FRED's `desc` order (newest first); the connector
+    # reverses it, so `get_latest` still walks oldest → newest in
+    # reverse and lands on 2024-11.
     payload = {"observations": [
-        {"date": "2024-10-01", "value": "5.33"},
-        {"date": "2024-11-01", "value": "5.40"},
         {"date": "2024-12-01", "value": "."},  # latest entry, no data yet
+        {"date": "2024-11-01", "value": "5.40"},
+        {"date": "2024-10-01", "value": "5.33"},
     ]}
     patcher, _ = install_client(FakeResponse(payload))
     with patcher, with_api_key():

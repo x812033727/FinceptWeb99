@@ -35,7 +35,13 @@ SERIES = {
     "2y_yield": "DGS2",
     "10y_minus_2y": "T10Y2Y",
     "usd_index": "DTWEXBGS",
-    "twd_usd": "DEXTW",        # TWD/USD — used for portfolio FX
+    # `DEXTAUS` — "Taiwan Dollars to One U.S. Dollar", daily. The
+    # previous id `DEXTW` does not exist at FRED (400 "The series does
+    # not exist"), so every read of it fell through to the proxy or to
+    # portfolio_service's hard-coded rate. Nothing surfaced because
+    # there was no API key here until now: the keyless path never
+    # reached FRED to be told the id was wrong.
+    "twd_usd": "DEXTAUS",      # TWD per 1 USD — used for portfolio FX
 }
 
 # yfinance proxies for the tradable series. `scale` is applied to the
@@ -45,11 +51,15 @@ SERIES = {
 #   - Dollar index and FX cross are spot quotes, scale=1.
 # 13-week T-bill (^IRX) is used as a Fed-Funds proxy: it tracks the
 # short rate within a few basis points and works without an API key.
+# `USDTWD=X` quotes TWD per 1 USD (32.375), matching DEXTAUS (32.37).
+# The previous entry used `TWDUSD=X`, the inverse (0.0309) — so
+# whenever the proxy served this series, portfolio_service converted
+# with a rate ~1000x off. Direction, not just the id, has to match.
 _YF_FALLBACK: dict[str, tuple[str, float]] = {
     "DGS10":    ("^TNX",       1.0),
     "FEDFUNDS": ("^IRX",       1.0),
     "DTWEXBGS": ("DX-Y.NYB",   1.0),
-    "DEXTW":    ("TWDUSD=X",   1.0),
+    "DEXTAUS":  ("USDTWD=X",   1.0),
 }
 
 
@@ -168,11 +178,18 @@ async def get_series(series_id: str, start_date: str | None = None, end_date: st
     api_key = await resolve_key("fred")
     if not api_key:
         return await _yfinance_fallback(series_id, end_date=end_date)
+    # `desc` + limit takes the NEWEST 1000 observations, then we flip
+    # back to ascending for callers. With `asc` the limit took the
+    # OLDEST 1000, so a daily series starting in 1962 reported its
+    # "latest" value as 1965: observed live as
+    # `10y_yield.latest_date = 1965-11-01 (4.43)` and
+    # `usd_index.latest_date = 2009-10-30`. That only became reachable
+    # once a working key existed — the keyless proxy path had masked it.
     params: dict = {
         "series_id": series_id,
         "api_key": api_key,
         "file_type": "json",
-        "sort_order": "asc",
+        "sort_order": "desc",
         "limit": 1000,
     }
     if start_date:
@@ -191,9 +208,11 @@ async def get_series(series_id: str, start_date: str | None = None, end_date: st
         )
         return await _yfinance_fallback(series_id, end_date=end_date)
 
+    # Back to ascending — `get_latest` walks the list in reverse and
+    # `_macro_summary_from_series` reads `points[-1]` as the newest.
     return [
         {"date": obs["date"], "value": float(obs["value"]) if obs["value"] != "." else None}
-        for obs in r.json().get("observations", [])
+        for obs in reversed(r.json().get("observations", []))
     ]
 
 

@@ -54,7 +54,7 @@ TTL_SCREENER_CRYPTO = 60             # crypto universe is 20 symbols, cheaper
 TTL_NEWS = 5 * 60                    # 5 min — Google News RSS / connector cap
 TTL_OPTIONS = 5 * 60                 # 5 min — chain shifts only with quote
 
-# ── FX (TWD/USD via FRED DEXTW) ──────────────────────────────────
+# ── FX (TWD/USD via FRED DEXTAUS) ──────────────────────────────────
 TTL_FX = 4 * 3600
 TTL_FX_LAST_KNOWN = 30 * 86400       # 30 days — used as a fallback floor
 TTL_FX_HISTORICAL = 90 * 86400       # 90 days — historical rates are immutable;

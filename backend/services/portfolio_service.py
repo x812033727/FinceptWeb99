@@ -4,7 +4,7 @@ Portfolio service — CRUD, P&L calculation, multi-currency, optimisation.
 Multi-currency rule:
   avg_cost and price are stored in cost_currency (TWD for TW stocks, USD for US).
   P&L is computed in cost_currency, then converted to portfolio.currency
-  using the TWD/USD FX rate from FRED (series DEXTW).
+  using the TWD/USD FX rate from FRED (series DEXTAUS).
   FX rate is cached 4h in Redis.
 """
 import asyncio
@@ -78,7 +78,7 @@ def decode_transaction_cursor(cursor: str) -> TransactionCursor:
 
 async def _get_twd_usd_rate() -> float:
     """
-    TWD per 1 USD. Fresh cache 4h from FRED DEXTW; falls back to the
+    TWD per 1 USD. Fresh cache 4h from FRED DEXTAUS; falls back to the
     last-known-good rate (30d TTL) if FRED is down. Hard-coded 32.0 is
     only used if the long-term cache is also empty (first cold start).
     """
@@ -89,7 +89,7 @@ async def _get_twd_usd_rate() -> float:
     if cached:
         return float(cached)
 
-    rate = await get_latest("DEXTW")
+    rate = await get_latest("DEXTAUS")
     if rate:
         await cache_set(key, str(rate), TTL_FX)
         await cache_set(key_last, str(rate), TTL_FX_LAST_KNOWN)
@@ -98,12 +98,12 @@ async def _get_twd_usd_rate() -> float:
     last_known = await cache_get(key_last)
     if last_known:
         logger.warning(
-            "FRED DEXTW unavailable; using last-known TWD/USD rate %s", last_known,
+            "FRED DEXTAUS unavailable; using last-known TWD/USD rate %s", last_known,
         )
         return float(last_known)
 
     logger.error(
-        "FRED DEXTW unavailable and no cached rate; using hard fallback %.2f",
+        "FRED DEXTAUS unavailable and no cached rate; using hard fallback %.2f",
         _FX_HARD_FALLBACK,
     )
     return _FX_HARD_FALLBACK
@@ -111,7 +111,7 @@ async def _get_twd_usd_rate() -> float:
 
 async def _get_historical_twd_usd(d: date) -> float | None:
     """
-    TWD per 1 USD on the given date. Hits FRED DEXTW with a small window
+    TWD per 1 USD on the given date. Hits FRED DEXTAUS with a small window
     around the date and returns the last observation on or before `d`
     (markets closed weekends/holidays so we walk back). Cached forever
     keyed by date (the historical rate doesn't change once published).
@@ -132,7 +132,7 @@ async def _get_historical_twd_usd(d: date) -> float | None:
     end = d.isoformat()
     try:
         from data.us.fred_connector import get_series
-        obs = await get_series("DEXTW", start_date=start, end_date=end)
+        obs = await get_series("DEXTAUS", start_date=start, end_date=end)
     except Exception:
         obs = []
 
@@ -163,7 +163,7 @@ async def _to_portfolio_currency(amount: float, cost_currency: str, portfolio_cu
     """Convert amount from cost_currency to portfolio_currency.
 
     Stablecoins (USDT/USDC/DAI/BUSD/TUSD) are treated as USD. Supported
-    real conversions: TWD ↔ USD via FRED DEXTW. Unsupported pairs return
+    real conversions: TWD ↔ USD via FRED DEXTAUS. Unsupported pairs return
     the amount unchanged (logged at higher layers if needed).
     """
     cost = _normalize_currency(cost_currency)

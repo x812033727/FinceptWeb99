@@ -138,6 +138,18 @@ async def test_get_series_falls_back_to_yfinance_when_no_key_and_series_is_trada
 
 
 @pytest.mark.asyncio
+async def test_no_proxy_for_the_broad_dollar_index():
+    """`DTWEXBGS` is the Fed's broad dollar index (Jan 2006 = 100, ~120).
+    Yahoo's `DX-Y.NYB` is the ICE dollar index (~101) — a different
+    index, not a rescaling. It used to be wired up as the proxy, so the
+    block's level moved ~19% depending only on whether FRED answered.
+    Empty is the honest answer; `data_gaps` names the block."""
+    assert "DTWEXBGS" not in fred._YF_FALLBACK
+    with with_no_api_key():
+        assert await fred.get_series("DTWEXBGS") == []
+
+
+@pytest.mark.asyncio
 async def test_get_series_no_fallback_for_economic_releases():
     """CPI, Unemployment, GDP, T10Y2Y, DGS2 have no Yahoo equivalent
     so they correctly return [] when FRED is missing."""
@@ -155,7 +167,7 @@ async def test_get_series_yfinance_fallback_skips_rows_with_null_close():
     ]
     with with_no_api_key(), \
          patch.object(fred.yfinance, "get_history", new=lambda *a, **k: _coro(fake_bars)):
-        out = await fred.get_series("DTWEXBGS")
+        out = await fred.get_series("DGS10")
 
     assert len(out) == 1
     assert out[0]["value"] == 101.0
@@ -437,5 +449,5 @@ async def test_get_latest_uses_yfinance_fallback_when_api_key_missing():
     ]
     with with_no_api_key(), \
          patch.object(fred.yfinance, "get_history", new=lambda *a, **k: _coro(fake_bars)):
-        latest = await fred.get_latest("DTWEXBGS")
+        latest = await fred.get_latest("DGS10")
     assert latest == 102.0

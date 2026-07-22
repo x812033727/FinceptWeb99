@@ -58,7 +58,14 @@ SERIES = {
 _YF_FALLBACK: dict[str, tuple[str, float]] = {
     "DGS10":    ("^TNX",       1.0),
     "FEDFUNDS": ("^IRX",       1.0),
-    "DTWEXBGS": ("DX-Y.NYB",   1.0),
+    # No entry for DTWEXBGS. Yahoo's `DX-Y.NYB` is the ICE dollar index
+    # (~101); DTWEXBGS is the Fed's broad index (~120). Serving one
+    # under the other's key meant the block's level jumped ~19% purely
+    # on whether FRED happened to answer — same failure mode as the
+    # inverted TWD proxy, and harder to spot because both numbers look
+    # plausible. Better to leave the block empty and let `data_gaps`
+    # name it than to serve a different index silently.
+
     "DEXTAUS":  ("USDTWD=X",   1.0),
 }
 

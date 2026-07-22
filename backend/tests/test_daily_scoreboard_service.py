@@ -98,3 +98,81 @@ async def test_scoreboard_empty_and_partial_prices(db_session):
     assert entries[0]["win_rate"] == 1.0
     assert entries[0]["avg_return_pct"] is None
     assert entries[0]["avg_alpha_pct"] is None
+
+
+@pytest.mark.asyncio
+async def test_abstain_and_pending_stay_out_of_the_win_rate(db_session):
+    """The three non-decided outcomes are reported separately.
+
+    Collapsing them is exactly how a single decided round rendered as a
+    "100% win rate" on the public page: an abstention is a deliberate
+    pass, a pending row hasn't been graded yet, and neither is a win.
+    """
+    owner = await _owner(db_session)
+    db_session.add_all([
+        _verified(owner.id, strategy="chip_quality", verdict="win",
+                  day1={"2330": 100.0}, day5={"2330": 106.0}),
+        _verified(owner.id, strategy="chip_quality", verdict="abstain"),
+        _verified(owner.id, strategy="chip_quality", verdict="abstain"),
+        _verified(owner.id, strategy="chip_quality", verdict=None),
+    ])
+    await db_session.commit()
+
+    entry = (await build_scoreboard(db_session, owner.id))[0]
+    assert entry["samples"] == 4
+    assert entry["abstains"] == 2
+    assert entry["pending"] == 1
+    assert entry["decided"] == 1
+    # 1 win / 1 decided — a real 100%, but the caller can now see it
+    # rests on a single round.
+    assert entry["win_rate"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_excess_vs_taiex_uses_the_same_window(db_session):
+    """Market-relative column: +6% while the index did +2% is +4% excess."""
+    from datetime import date
+
+    from models.ohlcv_daily import OhlcvDaily
+
+    owner = await _owner(db_session)
+    # The helper anchors discussions at 2026-07-10 (Taipei date).
+    # Seed five index sessions from that date: open 100 → D5 close 102.
+    for offset, close in enumerate([100.5, 101.0, 101.5, 101.8, 102.0]):
+        db_session.add(OhlcvDaily(
+            market="TW", symbol="_TAIEX_TR",
+            ts=date(2026, 7, 10 + offset),
+            open=100.0 if offset == 0 else close,
+            high=close, low=close, close=close, volume=0, source="test",
+        ))
+    db_session.add(_verified(owner.id, strategy="general", verdict="win",
+                             day1={"2330": 100.0}, day5={"2330": 106.0}))
+    await db_session.commit()
+
+    entry = (await build_scoreboard(db_session, owner.id))[0]
+    assert entry["benchmark_samples"] == 1
+    assert entry["avg_excess_vs_taiex_pct"] == pytest.approx(4.0, abs=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_excess_omitted_while_index_window_incomplete(db_session):
+    """Fewer than 5 index sessions → no excess, rather than a number
+    computed over a truncated benchmark."""
+    from datetime import date
+
+    from models.ohlcv_daily import OhlcvDaily
+
+    owner = await _owner(db_session)
+    for offset, close in enumerate([100.5, 101.0]):
+        db_session.add(OhlcvDaily(
+            market="TW", symbol="_TAIEX_TR",
+            ts=date(2026, 7, 10 + offset),
+            open=100.0, high=close, low=close, close=close, volume=0, source="test",
+        ))
+    db_session.add(_verified(owner.id, strategy="general", verdict="win",
+                             day1={"2330": 100.0}, day5={"2330": 106.0}))
+    await db_session.commit()
+
+    entry = (await build_scoreboard(db_session, owner.id))[0]
+    assert entry["benchmark_samples"] == 0
+    assert entry["avg_excess_vs_taiex_pct"] is None

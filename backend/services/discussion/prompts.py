@@ -352,12 +352,19 @@ _SYNTHESIZER_USER_TEMPLATE = (
     '  "reasoning": "結論摘要，≤200字，繁體中文，引用至少2位專家",\n'
     '  "risks": ["風險1", "風險2"],\n'
     '  "time_horizon": "short_term",\n'
-    '  "consensus_score": 0.7\n'
+    '  "consensus_score": 0.7,\n'
+    '  "abstained": false,\n'
+    '  "abstain_reason": ""\n'
     "}}\n\n"
     "欄位規則：\n"
+    "- abstained：本場是否棄權（不推薦任何標的）。候選股全都不符合進場條件時，"
+    "請誠實填 true、recommendations 留空陣列，並在 abstain_reason 說明棄權原因。"
+    "**棄權是合法且被鼓勵的結論** —— 空頭或訊號不明時硬湊推薦，比棄權更糟。"
+    "只要 recommendations 非空，abstained 就必須是 false。\n"
     "- recommendations：最多 5 檔，要有市場共識且風險可控。每檔包含：\n"
     "  - symbol：股票代號（字串）\n"
-    "  - confidence：0.0-1.0，你對這檔在「未來 5 個交易日內收盤至少出現一次顯著正向報酬」的把握程度。"
+    "  - confidence：0.0-1.0，你對這檔在「第 5 個交易日收盤相對進場日開盤有顯著正向報酬」的把握程度"
+    "（以第 5 日收盤結算，期間曾經漲過又跌回來不算）。"
     "請保守估計：有重大不確定性給 0.5 以下；極度有把握再給 0.8 以上；"
     "全 conclusion 不應全部 ≥ 0.8（這代表沒有風險意識）。\n"
     "- time_horizon：只能是 short_term / medium_term / long_term 三選一\n"

@@ -491,20 +491,35 @@ _W_DAYS = [
 _BANDS = {"big_win_day5_pct": 20.0, "win_pct": 5.0, "big_loss_pct": -5.0}
 
 
-def test_evaluate_outcome_marks_win_when_any_symbol_peak_reaches_threshold():
-    """One symbol clears 5% peak → status=win; the other's loss
-    doesn't downgrade the verdict (any-symbol semantic)."""
+def test_evaluate_outcome_marks_win_when_any_symbol_holds_the_threshold():
+    """One symbol is still ≥ 5% at its latest resolved close →
+    status=win; the other's loss doesn't downgrade the verdict
+    (any-symbol semantic)."""
     rec = [
-        _perf("2330", [(_W_DAYS[0], 1.0), (_W_DAYS[1], 6.0), (_W_DAYS[2], 2.0)]),
+        _perf("2330", [(_W_DAYS[0], 1.0), (_W_DAYS[1], 6.0), (_W_DAYS[2], 6.5)]),
         _perf("2454", [(_W_DAYS[0], 0.5), (_W_DAYS[1], -2.0)]),
     ]
     v = svc.evaluate_recommendation_outcome(
         rec, window_days=5, trading_days=_W_DAYS, **_BANDS,
     )
     assert v.status == "win"
-    assert v.best_pct == 6.0
+    assert v.best_pct == 6.5
     assert {w.symbol for w in v.winners} == {"2330"}
-    assert v.winners[0].peak_day == _W_DAYS[1]
+
+
+def test_evaluate_outcome_spike_that_faded_is_not_a_win():
+    """Peaked +6% mid-window but gave it back → loss.
+
+    Mirrors the scoreboard: the post-mortem must coach on the outcome
+    a reader could realize, not on the best tick of the week.
+    """
+    rec = [
+        _perf("2330", [(_W_DAYS[0], 1.0), (_W_DAYS[1], 6.0), (_W_DAYS[2], 2.0)]),
+    ]
+    v = svc.evaluate_recommendation_outcome(
+        rec, window_days=5, trading_days=_W_DAYS, **_BANDS,
+    )
+    assert v.status == "loss"
 
 
 def test_evaluate_outcome_marks_loss_when_all_peaks_below_win_threshold():
@@ -646,9 +661,9 @@ async def test_build_post_mortem_message_returns_win_prompt(
         _bar("2330", base, 100.0),
         _bar("2330", days[0], 102.0),
         _bar("2330", days[1], 108.0),    # +8 % vs entry → clear win
-        _bar("2330", days[2], 105.0),
-        _bar("2330", days[3], 103.0),
-        _bar("2330", days[4], 99.0),
+        _bar("2330", days[2], 107.0),
+        _bar("2330", days[3], 106.0),
+        _bar("2330", days[4], 107.0),    # still +7 % at D5 → holds
     ])
     await db_session.commit()
 
@@ -791,8 +806,8 @@ def test_evaluate_outcome_big_loss_overrides_big_win():
 
 
 def test_evaluate_outcome_big_win_requires_d5_close():
-    """big_win is gated on the LAST day's close, not the peak — a
-    spike that fades by D5 stays as win, not big_win."""
+    """big_win is gated on the LAST day's close, not the peak — and a
+    spike that fades all the way back is a loss, not a win."""
     rec = [
         _perf("2330", [
             (_W_DAYS[0], 25.0),    # peak +25% on D1
@@ -805,7 +820,7 @@ def test_evaluate_outcome_big_win_requires_d5_close():
     v = svc.evaluate_recommendation_outcome(
         rec, window_days=5, trading_days=_W_DAYS, **_BANDS,
     )
-    assert v.status == "win"   # peak ≥ 5% but D5 < 20%
+    assert v.status == "loss"   # peak +25% but D5 only +3%
     assert v.best_pct == 25.0
 
 
@@ -978,9 +993,9 @@ async def test_build_post_mortem_message_win_branch_now_includes_leaderboard(
         _bar("2330", base, 100.0),
         _bar("2330", days[0], 102.0),
         _bar("2330", days[1], 107.0),
-        _bar("2330", days[2], 105.0),
-        _bar("2330", days[3], 104.0),
-        _bar("2330", days[4], 103.0),
+        _bar("2330", days[2], 106.5),
+        _bar("2330", days[3], 106.0),
+        _bar("2330", days[4], 107.0),    # holds +7 % at D5 → win band
         _bar("2454", base, 200.0),
         _bar("2454", days[0], 230.0),    # +15% single-day
         _bar("2454", days[1], 240.0),

@@ -459,6 +459,11 @@ def evaluate_recommendation_outcome(
             big_win_day5_pct=big_win_day5_pct,
             win_pct=win_pct,
             big_loss_pct=big_loss_pct,
+            # The post-mortem coaches the panel while the 5-day window
+            # is still open, so it grades on the latest resolved close
+            # rather than waiting for D5 (which would make it silent
+            # exactly when it is useful). Still a close, never a peak.
+            require_d5=False,
         )
         if result is None:
             continue

@@ -9,17 +9,20 @@ the 4-band outcome via `services.outcome_classifier.classify_discussion`:
 
   big_loss  — any symbol's any-day close ≤ big_loss_pct (default -5%)
   big_win   — else any symbol's D5 close ≥ big_win_day5_pct (default 20%)
-  win       — else any symbol's peak close ≥ win_pct (default 5%)
+  win       — else any symbol's D5 close ≥ win_pct (default 5%)
   loss      — otherwise
   unverifiable — synthesizer returned no symbols, OR the stale-grace
                  cap was hit before any bar resolved
 
 All comparisons are on CLOSE prices (matches the post-mortem and
-Brier sides). The legacy `intra-day high` rule from earlier in the
-project was over-permissive — it counted single-bar spikes that
-round-tripped the same session as "wins". The new rule grades only
-realized closes, which is the actual outcome the recommendation
-would have produced.
+Brier sides), and specifically on the D5 close. Two permissive rules
+were retired in turn: first `intra-day high`, which counted single-bar
+spikes that round-tripped the same session; then `peak close`, which
+still counted a position that rose 6% on D2 and gave it all back by
+D5. `peak_pct` / `trough_pct` survive as UI annotations only.
+`big_loss` deliberately keeps its any-day-close test — it is a
+risk band, not a return band, and a -5% touch is a real drawdown the
+holder lived through.
 
 Defer (verdict stays NULL, retry tomorrow) when none of the symbols
 have 5 bars yet — that's a holiday-in-window or a delisting issue;

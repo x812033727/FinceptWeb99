@@ -46,6 +46,22 @@ _BLOCK_ANNOTATIONS: dict[str, str] = {
         "個別行的 `as_of_session` 若與 `captured_session.session_date` 不一致時，"
         "以該行自己的 `as_of_session` 為準。"
     ),
+    "data_gaps": (
+        "- data_gaps：**本次完全取不到資料的區塊名單**（上游斷線、端點改版、"
+        "或該資料當日未發布）。名單上的區塊不會出現在 ## 市場現況 裡，"
+        "**嚴禁**為它們寫出任何具體數值——沒有資料就直說沒有資料，"
+        "並改用其他仍有資料的訊號替代推論。空陣列代表所有追蹤區塊都有資料。"
+    ),
+    "data_stale": (
+        # Braces are doubled: this string is inlined into
+        # `_TURN_PROMPT_TEMPLATE` / `_SYNTHESIZER_USER_TEMPLATE`, both
+        # of which go through `str.format`.
+        "- data_stale：**有資料但落後本場基準日的區塊**，格式為 "
+        "`{{區塊: {{as_of, days_behind}}}}`。這些數字是 `as_of` 那天的事實，"
+        "不是今天的。引用時必須連日期一起講（「分點資料 07/07（落後 14 天）"
+        "顯示…」），並在推論時折價看待；落後越多、參考價值越低。"
+        "**不得**把它當成當日最新狀態陳述。"
+    ),
     "top_gainers": (
         "- top_gainers / top_losers：**`as_of_session` 標示之交易日**的漲跌幅前 10"
         "（動能 + 籌碼面）。注意：TWSE `STOCK_DAY_ALL` 端點要等 14:30 後才會更新"
@@ -306,7 +322,13 @@ _TURN_PROMPT_TEMPLATE = (
     "中該區塊的描述若觸及主題提到的個股 / 產業 / 時間視窗，即屬相關。\n"
     "  3. **訊號之間互相印證或衝突要明寫**。例：「news_sentiment 偏多但"
     "taifex_positioning trend=bearish — 兩者相左，優先信任後者，因外資期貨"
-    "部位通常領先大盤 1-2 日」。單一訊號可被忽略，多訊號互證或互斥不可。\n\n"
+    "部位通常領先大盤 1-2 日」。單一訊號可被忽略，多訊號互證或互斥不可。\n"
+    "  4. **只能引用 ## 市場現況 裡真的存在的數字**。上面沒有給你的資料，"
+    "一律不得寫出具體數值——包含你從訓練資料記得的、或前幾輪別人講過但 ctx "
+    "查不到的。`data_gaps` 列出的區塊本次完全沒有資料，正確的寫法是"
+    "「本場無 VIX 讀數，改以 taifex_positioning 判斷風險」，"
+    "**不是**憑印象補一個數字上去。第 1 條要求引用具體數值，指的是引用"
+    "**ctx 內**的具體數值；資料缺漏時，誠實說缺比湊一個數字有價值得多。\n\n"
     "## 先前發言\n{history}\n\n"
     "## 你現在的任務\n"
     "依照你扮演的角色立場，閱讀上述資料與先前發言後，"

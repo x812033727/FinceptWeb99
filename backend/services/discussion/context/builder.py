@@ -475,7 +475,124 @@ async def build_market_context(
 
     await _progress("ctx_ready")
     _apply_block_byte_caps(ctx)
+    _record_data_gaps(ctx)
     return ctx
+
+
+# ── Declared data gaps ─────────────────────────────────────────────
+#
+# Blocks whose upstream produced nothing are already dropped from the
+# prompt: `_minify_for_prompt` strips `None` values and
+# `_persona_schema_annotation` only describes blocks that survived. So
+# a persona is never *shown* an empty block — it is shown nothing at
+# all, which is exactly the problem. Silence is indistinguishable from
+# "not relevant this session", and a panel under a rule that says
+# 必須引用至少一個具體數據 fills the hole from memory.
+#
+# Measured on the live deployment over the six sessions to 2026-07-22:
+# `tw_vix_daily` was empty (the TAIFEX download endpoint had 302'd to
+# a 404 page for weeks) and `taiwan_vix` was cited with a fabricated
+# number 30 times across 9 of 9 discussions — e.g. "VIX+12.33% 至
+# 18.77" for an index we had no value for. `broker_concentration`
+# added 23 more.
+#
+# Naming the gap converts an invisible absence into a stated fact the
+# model can reason about ("no volatility reading this session") and
+# quote instead of inventing one.
+_GAP_TRACKED_BLOCKS: tuple[str, ...] = (
+    "taiwan_vix",
+    "broker_concentration",
+    "taifex_positioning",
+    "top_foreign_buyers",
+    "market_institutional_5d",
+    "margin_balance_trend",
+    "single_stock_futures_oi",
+    "upcoming_events_calendar",
+    "news_sentiment",
+    "overseas_indicators",
+    "govt_bank_flow_5d",
+    "top_revenue_growers",
+)
+
+
+def _block_is_empty(value: Any) -> bool:
+    """Empty for gap purposes. `False` / `0` are real readings and are
+    NOT gaps — same distinction `_minify_for_prompt` draws."""
+    if value is None:
+        return True
+    if isinstance(value, (list, dict, str)):
+        return len(value) == 0
+    return False
+
+
+def _record_data_gaps(ctx: dict[str, Any]) -> None:
+    """List the tracked blocks that carry no data, in place."""
+    gaps = [
+        block for block in _GAP_TRACKED_BLOCKS
+        if _block_is_empty(ctx.get(block))
+    ]
+    # `overseas_indicators` is a `{as_of, indices}` envelope that stays
+    # non-empty when the connector fails — check the payload, mirroring
+    # `signal_audit_service._detect_present_signals`.
+    overseas = ctx.get("overseas_indicators")
+    if isinstance(overseas, dict) and not overseas.get("indices"):
+        if "overseas_indicators" not in gaps:
+            gaps.append("overseas_indicators")
+    ctx["data_gaps"] = sorted(gaps)
+    _record_stale_blocks(ctx, skip=set(gaps))
+
+
+def _parse_iso_date(value: Any) -> date | None:
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value[:10])
+        except ValueError:
+            return None
+    return None
+
+
+def _record_stale_blocks(ctx: dict[str, Any], *, skip: set[str]) -> None:
+    """Report how far behind the session each present-but-old block is.
+
+    A block that IS there but is weeks old is the other half of the
+    fabrication problem, and it is worse than an empty one: the panel
+    reads it as current. `broker_concentration` is the live example —
+    FinMind's 分點 dataset itself stopped publishing after 2026-07-07,
+    so a discussion on 07-21 was handed two-week-old broker flows with
+    nothing marking them as such. (One conclusion did spot it and wrote
+    "分點分點資料已過期(07/06)僅供參考"; the other four did not.)
+
+    Deliberately no per-dataset publication schedule here — encoding
+    "revenue is monthly, shareholding is weekly" invites exactly the
+    wrong-by-a-holiday judgements that make an alert worth ignoring.
+    The lag is stated as a plain fact ("this block is 10 calendar days
+    behind the session everything else is anchored to") and the panel
+    decides what that means for a weekly dataset.
+    """
+    session = _parse_iso_date(
+        (ctx.get("captured_session") or {}).get("session_date")
+        if isinstance(ctx.get("captured_session"), dict) else None
+    )
+    if session is None:
+        return
+    stale: dict[str, dict[str, Any]] = {}
+    for block in _GAP_TRACKED_BLOCKS:
+        if block in skip:
+            continue
+        value = ctx.get(block)
+        if not isinstance(value, dict):
+            continue
+        as_of = _parse_iso_date(value.get("as_of"))
+        if as_of is None or as_of >= session:
+            continue
+        stale[block] = {
+            "as_of": as_of.isoformat(),
+            "days_behind": (session - as_of).days,
+        }
+    if stale:
+        ctx["data_stale"] = stale
 
 
 # ── G7-2a: per-block byte cap ──────────────────────────────────────

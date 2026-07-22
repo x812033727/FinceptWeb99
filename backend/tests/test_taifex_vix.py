@@ -1,9 +1,8 @@
 """Tests for the TAIWAN VIX pipeline (PR #283).
 
 Three layers:
-  1. CSV parser — `taifex_connector._parse_csv_body` happy path +
-     tolerance for column-order, missing fields, mojibake'd
-     headers
+  1. Day-file parser — `taifex_connector._parse_vix_day_body`, over
+     the per-session minute file TAIFEX moved to in 2026-07
   2. Read tier — `read_tw_vix_snapshot` returns latest + 5-day
      change %; None when archive empty
   3. Upsert — bulk + ON CONFLICT idempotency
@@ -15,7 +14,7 @@ from datetime import date
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from data.tw.taifex_connector import _parse_csv_body
+from data.tw.taifex_connector import _parse_vix_day_body
 from models.tw_vix_daily import TwVixDaily
 from services.ingest.repository import (
     VixDailyRow,
@@ -24,78 +23,49 @@ from services.ingest.repository import (
 )
 
 
-# ── _parse_csv_body ──────────────────────────────────────────────
+# ── _parse_vix_day_body ──────────────────────────────────────────
 
 
-def test_parse_csv_happy_path():
+_DAY_FILE = (
+    "交易日期\t時間(時/分/秒/毫秒)\t臺指選擇權波動率指數\n"
+    "--------\t-------------------\t--------------------\n"
+    "20260721\t9000000\t\t\t38.13\n"
+    "20260721\t9010000\t\t\t37.90\n"
+    "20260721\tLast 1 min AVG\t\t\t36.55\n"
+)
+
+
+def test_parse_day_file_prefers_the_last_minute_average():
+    """TAIFEX's own closing convention for this file is the trailing
+    `Last 1 min AVG` row, not the final timestamped tick."""
+    assert _parse_vix_day_body(_DAY_FILE, date(2026, 7, 21)) == pytest.approx(36.55)
+
+
+def test_parse_day_file_falls_back_to_last_numeric_row():
     body = (
-        "日期,收盤指數\n"
-        "2026/04/15,18.32\n"
-        "2026/04/16,17.51\n"
-        "2026/04/17,16.95\n"
+        "交易日期\t時間\t指數\n"
+        "20260721\t9000000\t\t\t38.13\n"
+        "20260721\t9010000\t\t\t37.90\n"
     )
-    out = _parse_csv_body(body)
-    assert len(out) == 3
-    assert out[0]["date"] == "2026-04-15"
-    assert out[0]["value"] == pytest.approx(18.32)
-    assert out[2]["value"] == pytest.approx(16.95)
+    assert _parse_vix_day_body(body, date(2026, 7, 21)) == pytest.approx(37.90)
 
 
-def test_parse_csv_tolerates_extra_columns():
-    """TAIFEX sometimes includes 開盤/最高/最低 alongside the close.
-    Parser keys off the headers — extra columns must not shift
-    the date/value lookup or break the row."""
-    body = (
-        "日期,開盤,最高,最低,收盤指數\n"
-        "2026/04/15,18.0,18.5,17.9,18.32\n"
-        "2026/04/16,18.3,18.4,17.5,17.51\n"
-    )
-    out = _parse_csv_body(body)
-    assert len(out) == 2
-    assert out[0]["value"] == pytest.approx(18.32)
+def test_parse_day_file_rejects_the_404_html_body():
+    """Sessions outside TAIFEX's ~7-day publication window answer with
+    an HTML 404 page. Parsing that as data would write garbage; parsing
+    it as "no data today" would hide that we asked for something the
+    endpoint no longer serves."""
+    html = '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN">\n<html><body><h1>404</h1></body></html>'
+    assert _parse_vix_day_body(html, date(2026, 6, 1)) is None
 
 
-def test_parse_csv_accepts_alternate_value_header():
-    """A future TAIFEX header rotation (`收盤` instead of `收盤指數`)
-    shouldn't blank the parser — we list both forms."""
-    body = (
-        "日期,收盤\n"
-        "2026/04/15,18.32\n"
-    )
-    out = _parse_csv_body(body)
-    assert len(out) == 1
-    assert out[0]["value"] == pytest.approx(18.32)
+def test_parse_day_file_ignores_rows_for_another_session():
+    body = _DAY_FILE + "20260720\tLast 1 min AVG\t\t\t99.99\n"
+    assert _parse_vix_day_body(body, date(2026, 7, 21)) == pytest.approx(36.55)
 
 
-def test_parse_csv_skips_unparseable_rows():
-    """Bad date strings + non-numeric values are skipped silently
-    rather than crashing the whole batch."""
-    body = (
-        "日期,收盤指數\n"
-        "2026/04/15,18.32\n"
-        "BAD-DATE,17.51\n"
-        "2026/04/17,not-a-number\n"
-        "2026/04/18,16.95\n"
-    )
-    out = _parse_csv_body(body)
-    assert [r["date"] for r in out] == ["2026-04-15", "2026-04-18"]
-
-
-def test_parse_csv_empty_body_returns_empty():
-    assert _parse_csv_body("") == []
-    assert _parse_csv_body("\n\n") == []
-
-
-def test_parse_csv_missing_headers_returns_empty_with_warn(caplog):
-    """If the headers don't match anything we recognise (e.g. TAIFEX
-    rotated to a Big5-decoded gibberish or English variant), return
-    [] so the cron records a clean failure rather than crashing."""
-    body = (
-        "Date,Close\n"   # English headers — not in our known set
-        "2026/04/15,18.32\n"
-    )
-    out = _parse_csv_body(body)
-    assert out == []
+def test_parse_day_file_empty_input():
+    assert _parse_vix_day_body("", date(2026, 7, 21)) is None
 
 
 # ── read_tw_vix_snapshot ─────────────────────────────────────────

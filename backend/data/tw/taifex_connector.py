@@ -21,7 +21,8 @@ from __future__ import annotations
 import csv
 import io
 import logging
-from datetime import date, datetime
+import math
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -32,7 +33,19 @@ log = logging.getLogger(__name__)
 # Documented at https://www.taifex.com.tw/cht/3/vixQuote (the page
 # behind the "歷史資料下載" button POSTs to this URL with the date
 # range as form data).
-_VIX_DOWNLOAD_URL = "https://www.taifex.com.tw/cht/3/vixDownload"
+# TAIFEX retired `/cht/3/vixDownload` (and the whole `/cht/3/vixQuote`
+# page) — both 302 to `/file/taifex/404.htm`, the same way the TWSE
+# OpenAPI T86 endpoint went. The replacement is a per-session file
+# under `/cht/7/`, linked from the 臺指選擇權波動率指數下載 page:
+#
+#     GET /cht/7/getVixData?filesname=YYYYMMDD
+#
+# It answers with the intraday minute series for that one session, so
+# a range now means one request per trading day. Only the most recent
+# ~7 sessions are published; older dates fall back to an HTML 404 body
+# (hence the content sniffing in `_parse_vix_day_body`).
+_VIX_DAY_URL = "https://www.taifex.com.tw/cht/7/getVixData"
+_VIX_REFERER = "https://www.taifex.com.tw/cht/7/vixMinNew"
 
 # TAIFEX serves Big5-encoded CSV. Pin so a future server-side
 # locale flip doesn't silently mojibake the date column.
@@ -58,68 +71,6 @@ def _format_taifex_date(d: date) -> str:
     """TAIFEX expects YYYY/MM/DD in form params — explicit zero-padding
     so a 1-digit month/day (April 5th) doesn't trigger a 400."""
     return d.strftime("%Y/%m/%d")
-
-
-def _parse_csv_body(body: str) -> list[dict[str, Any]]:
-    """Parse the TAIFEX VIX CSV into ``[{date, value}, ...]``.
-
-    The CSV layout (snapshot 2026-05):
-        日期,收盤指數
-        2026/04/15,18.32
-        2026/04/16,17.51
-        ...
-
-    Tolerant of column-order changes + extra columns (some TAIFEX
-    pages include 開盤/最高/最低 alongside 收盤). We only look at
-    the date + close columns by header name; everything else is
-    ignored.
-
-    Skips any row whose date doesn't parse OR whose value isn't a
-    finite float. Empty header / mojibake'd input → returns [].
-    """
-    if not body or not body.strip():
-        return []
-    reader = csv.reader(io.StringIO(body))
-    rows = list(reader)
-    if len(rows) < 2:
-        return []
-
-    header = [h.strip() for h in rows[0]]
-    date_idx = next(
-        (i for i, h in enumerate(header) if h in _VIX_DATE_HEADERS),
-        None,
-    )
-    value_idx = next(
-        (i for i, h in enumerate(header) if h in _VIX_VALUE_HEADERS),
-        None,
-    )
-    if date_idx is None or value_idx is None:
-        log.warning(
-            "taifex.vix.unrecognized_csv_header",
-            extra={"header": header},
-        )
-        return []
-
-    out: list[dict[str, Any]] = []
-    for line in rows[1:]:
-        if len(line) <= max(date_idx, value_idx):
-            continue
-        raw_date = (line[date_idx] or "").strip()
-        raw_value = (line[value_idx] or "").strip().replace(",", "")
-        if not raw_date or not raw_value:
-            continue
-        # TAIFEX writes ROC-year and Gregorian dates depending on
-        # the page; this endpoint uses Gregorian YYYY/MM/DD.
-        try:
-            ts = datetime.strptime(raw_date, "%Y/%m/%d").date()
-        except ValueError:
-            continue
-        try:
-            value = float(raw_value)
-        except ValueError:
-            continue
-        out.append({"date": ts.isoformat(), "value": value})
-    return out
 
 
 # ── Daily futures / options market reports ───────────────────────
@@ -371,39 +322,93 @@ def _parse_taifex_day(raw: str) -> str | None:
         return None
 
 
+def _parse_vix_day_body(body: str, day: date) -> float | None:
+    """Pull one session's closing VIX out of the per-day minute file.
+
+    Layout (snapshot 2026-07, tab-separated, Big5):
+
+        交易日期	時間(時/分/秒/毫秒)	臺指選擇權波動率指數
+        --------	-------------------	--------------------
+        20260721	9000000			38.13
+        ...
+        20260721	Last 1 min AVG			36.55
+
+    TAIFEX's own closing convention for this file is the trailing
+    ``Last 1 min AVG`` row, so that is preferred; a missing trailer
+    falls back to the final numeric row. Returns None for anything
+    that isn't this file — notably the HTML 404 body served for
+    sessions older than the published window, which must not be
+    mistaken for "no data today".
+    """
+    if not body or "<html" in body[:400].lower():
+        return None
+    last_numeric: float | None = None
+    stamp = day.strftime("%Y%m%d")
+    for line in body.splitlines():
+        parts = [p.strip() for p in line.split("\t") if p.strip()]
+        if len(parts) < 3 or parts[0] != stamp:
+            continue
+        try:
+            value = float(parts[-1])
+        except ValueError:
+            continue
+        if not math.isfinite(value):
+            continue
+        last_numeric = value
+        if "Last 1 min AVG" in parts[1]:
+            return value
+    return last_numeric
+
+
 async def get_vix_history(
     start: date, end: date,
 ) -> list[dict[str, Any]]:
-    """Fetch the TAIWAN VIX (台指選擇權波動率指數) closes between
-    ``start`` and ``end`` (inclusive). Empty list on connector
-    failure or empty body — caller decides how to surface it
-    (cron records ``ok=False`` with a diagnostic message; ctx
-    block leaves the value as None).
+    """Fetch the TAIWAN VIX (臺指選擇權波動率指數) closes between
+    ``start`` and ``end`` (inclusive), one request per weekday.
+
+    Returns ``[{"date": "YYYY-MM-DD", "value": float}, ...]`` — the
+    same shape the previous range-download endpoint produced, so
+    callers are unaffected by the upstream move.
+
+    Days with no published file (weekends, holidays, and anything
+    outside TAIFEX's ~7-session publication window) are skipped
+    rather than raising: a single missing day is normal, and a caller
+    asking for a 30-day window would otherwise never get the days
+    that do exist. Transport errors on ALL days still surface, since
+    the caller sees an empty list and records it.
     """
     if start > end:
         return []
-    params = {
-        "queryStartDate": _format_taifex_date(start),
-        "queryEndDate":   _format_taifex_date(end),
-    }
-    headers = {
-        "User-Agent": _USER_AGENT,
-        "Referer":    "https://www.taifex.com.tw/cht/3/vixQuote",
-    }
+    headers = {"User-Agent": _USER_AGENT, "Referer": _VIX_REFERER}
+    out: list[dict[str, Any]] = []
     async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
-        try:
-            r = await client.post(
-                _VIX_DOWNLOAD_URL, data=params, headers=headers,
-            )
-            r.raise_for_status()
-        except httpx.HTTPError as exc:
-            log.warning(
-                "taifex.vix.fetch_failed",
-                extra={"error": str(exc), "start": str(start), "end": str(end)},
-            )
-            raise
-    body = r.content.decode(_TAIFEX_CSV_ENCODING, errors="replace")
-    return _parse_csv_body(body)
+        day = start
+        while day <= end:
+            if day.weekday() >= 5:
+                day += timedelta(days=1)
+                continue
+            try:
+                r = await client.get(
+                    _VIX_DAY_URL,
+                    params={"filesname": day.strftime("%Y%m%d")},
+                    headers=headers,
+                )
+                r.raise_for_status()
+                body = r.content.decode(
+                    _TAIFEX_CSV_ENCODING, errors="replace",
+                )
+            except httpx.HTTPError as exc:
+                log.warning(
+                    "taifex.vix.day_fetch_failed",
+                    extra={"error": str(exc), "day": str(day)},
+                )
+                day += timedelta(days=1)
+                continue
+            value = _parse_vix_day_body(body, day)
+            if value is not None:
+                out.append({"date": day.isoformat(), "value": value})
+            day += timedelta(days=1)
+    return out
 
 
 __all__ = [

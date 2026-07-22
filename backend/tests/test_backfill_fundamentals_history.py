@@ -195,3 +195,74 @@ async def test_one_failing_session_does_not_abort_the_window():
 
     assert stats["failed"] == 1
     assert stats["written_sessions"] == 1
+
+
+# ── CLI ───────────────────────────────────────────────────────────
+
+
+def test_args_require_a_window():
+    with pytest.raises(SystemExit):
+        bf._parse_args([])
+
+
+def test_days_resolves_to_a_window_ending_today():
+    args = bf._parse_args(["--days", "90"])
+    assert args.days == 90 and args.start is None
+
+
+def test_explicit_window_is_parsed_as_dates():
+    args = bf._parse_args(["--start", "2026-04-20", "--end", "2026-07-11"])
+    assert args.start == date(2026, 4, 20)
+    assert args.end == date(2026, 7, 11)
+
+
+@pytest.mark.asyncio
+async def test_main_rejects_an_inverted_window():
+    rc = await bf._main(["--start", "2026-07-11", "--end", "2026-04-20"])
+    assert rc == 2
+
+
+@pytest.mark.asyncio
+async def test_main_reports_success_for_a_normal_run():
+    with patch.object(
+        bf.twse, "get_all_valuation_ratios",
+        AsyncMock(side_effect=lambda d: _ratios(30.0)),
+    ), patch.object(bf, "_load_statement_payloads", AsyncMock(return_value={})):
+        rc = await bf._main(["--start", "2026-05-11", "--end", "2026-05-12"])
+    assert rc == 0
+
+
+@pytest.mark.asyncio
+async def test_main_exits_nonzero_when_every_session_failed():
+    """A total upstream outage must be distinguishable from a quiet
+    window by the exit code, not just by reading the log."""
+    with patch.object(
+        bf.twse, "get_all_valuation_ratios",
+        AsyncMock(side_effect=RuntimeError("twse down")),
+    ), patch.object(bf, "_load_statement_payloads", AsyncMock(return_value={})):
+        rc = await bf._main(["--start", "2026-05-11", "--end", "2026-05-12"])
+    assert rc == 1
+
+
+@pytest.mark.asyncio
+async def test_statement_failure_does_not_lose_the_valuation_ratios(
+    db_session: AsyncSession,
+):
+    """Statements are a bonus; PE/PB/yield must still land when FinMind
+    is down or out of quota — the same contract the daily job keeps."""
+    with patch.object(
+        bf.twse, "get_all_valuation_ratios",
+        AsyncMock(side_effect=lambda d: _ratios(30.0)),
+    ), patch.object(
+        bf, "_load_statement_payloads",
+        AsyncMock(side_effect=RuntimeError("finmind quota")),
+    ):
+        stats = await bf.backfill(
+            date(2026, 5, 11), date(2026, 5, 11), dry_run=False, force=False,
+        )
+
+    assert stats["written_sessions"] == 1
+    rows = (await db_session.scalars(select(FundamentalsSnapshot))).all()
+    assert len(rows) == 2
+    assert all(r.payload is None for r in rows)
+    assert rows[0].pe_ratio is not None

@@ -171,6 +171,7 @@ async def _do_run() -> tuple[int, list[str]]:
 async def _run_for_user(
     db: AsyncSession,
     cfg: DiscussionAutoRunConfig,
+    as_of: date | None = None,
 ) -> bool:
     """Run one auto-run discussion for a single enabled user.
 
@@ -185,8 +186,8 @@ async def _run_for_user(
         getattr(cfg, "strategy_run_counts", None),
         legacy_enabled=True,
     )
-    run_date = datetime.now(ZoneInfo("Asia/Taipei")).date()
-    candidate_rows = await load_candidate_rows(db)
+    run_date = as_of or datetime.now(ZoneInfo("Asia/Taipei")).date()
+    candidate_rows = await load_candidate_rows(db, as_of=as_of)
     ran_strategies: dict[str, int] = {}
     for strategy, count in counts.items():
         if count <= 0:
@@ -214,9 +215,13 @@ async def _run_for_user(
             await _run_strategy_slot(
                 db, cfg, strategy, sequence, run_date, batch,
                 pool=pool if sequence == 1 else None,
+                as_of=as_of,
             )
             ran_strategies[strategy] = ran_strategies.get(strategy, 0) + 1
-    if ran_strategies:
+    # Replays are an operator batch job, not something the user asked
+    # for this morning — pushing "今日 AI 選股完成" sixty times would be
+    # noise at best and misleading at worst.
+    if ran_strategies and as_of is None:
         await _notify_daily_ready(str(user_id), run_date, ran_strategies)
     return bool(ran_strategies)
 
@@ -386,7 +391,8 @@ async def load_candidate_rows(
 
 
 async def _run_strategy_slot(
-    db, cfg, strategy, sequence, run_date, batch, pool: list | None = None
+    db, cfg, strategy, sequence, run_date, batch, pool: list | None = None,
+    as_of: date | None = None,
 ) -> None:
     user_id = cfg.user_id
 
@@ -400,6 +406,11 @@ async def _run_strategy_slot(
     # self-heal (mirrors the screener fast-path) — so personas read the
     # prior session's settled close without the pre-market TWSE feed's
     # publication-lag staleness, and without pretending to be a backtest.
+    #
+    # Replay mode (`as_of` set) is the exception: the row IS a backtest
+    # and must carry the anchor, so the context builder clamps every
+    # block to `prev_trading_day(as_of)` and the verifier grades forward
+    # from `as_of` off the archive instead of a live quote.
     topic = cfg.topic if not batch else build_topic(strategy, batch, cfg.topic)
     discussion = await discussion_service.create_discussion(
         db,
@@ -408,6 +419,7 @@ async def _run_strategy_slot(
         rules=cfg.rules,
         persona_ids=list(cfg.persona_ids or []),
         market=cfg.market,
+        as_of_date=as_of,
     )
     # Flag this row as scheduler-produced so the verifier task picks
     # it up and the manual UI can render it differently if we ever

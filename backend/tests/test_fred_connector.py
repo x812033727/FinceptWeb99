@@ -209,6 +209,37 @@ async def test_get_series_forwards_end_date_into_the_yfinance_fallback():
 
 
 @pytest.mark.asyncio
+async def test_get_series_falls_back_when_a_configured_key_is_rejected():
+    """A bad key (FRED answers 400) must degrade to the Yahoo proxy,
+    not raise. Raising took the whole macro block down site-wide when a
+    placeholder key was saved from the admin page. The clamp still
+    applies on the fallback path."""
+    fake_bars = [
+        {"time": 1_704_067_200_000, "close": 4.25},   # 2024-01-01
+        {"time": 1_709_251_200_000, "close": 4.40},   # 2024-03-01
+    ]
+
+    class _Boom:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_a):
+            return False
+
+        async def get(self, *_a, **_kw):
+            raise httpx.HTTPStatusError(
+                "400", request=None, response=None,  # type: ignore[arg-type]
+            )
+
+    with with_api_key(), \
+         patch.object(fred.httpx, "AsyncClient", new=lambda *a, **k: _Boom()), \
+         patch.object(fred.yfinance, "get_history", new=lambda *a, **k: _coro(fake_bars)):
+        out = await fred.get_series("DGS10", end_date="2024-01-31")
+
+    assert [o["date"] for o in out] == ["2024-01-01"]
+
+
+@pytest.mark.asyncio
 async def test_get_series_yfinance_fallback_swallows_errors():
     """Yahoo blocked / DNS failure during fallback ⇒ [] (no exception
     bubbles to the request handler)."""
@@ -310,10 +341,30 @@ async def test_get_series_omits_date_params_when_not_provided():
 
 
 @pytest.mark.asyncio
-async def test_get_series_propagates_http_errors():
+async def test_get_series_degrades_to_the_proxy_on_http_errors():
+    """Was `test_get_series_propagates_http_errors`. Rewritten to the
+    new contract: an HTTP error from FRED (429 here, 400 for a bad key)
+    now falls through to the Yahoo proxy instead of bubbling out.
+    Propagating meant one rate-limited call blanked the macro block for
+    every reader; FEDFUNDS has a proxy (^IRX), so serving it is
+    strictly better."""
     patcher, _ = install_client(FakeResponse({}, status_code=429))
-    with patcher, with_api_key(), pytest.raises(httpx.HTTPStatusError):
-        await fred.get_series("FEDFUNDS")
+    fake_bars = [{"time": 1_704_067_200_000, "close": 5.3}]
+    with patcher, with_api_key(), \
+         patch.object(fred.yfinance, "get_history", new=lambda *a, **k: _coro(fake_bars)):
+        out = await fred.get_series("FEDFUNDS")
+
+    assert out == [{"date": "2024-01-01", "value": 5.3}]
+
+
+@pytest.mark.asyncio
+async def test_get_series_returns_empty_on_http_error_when_no_proxy_exists():
+    """Series with no Yahoo equivalent (CPI is an economic release) get
+    `[]` rather than an exception — the same "skip this series" signal
+    the empty-response path already produced."""
+    patcher, _ = install_client(FakeResponse({}, status_code=429))
+    with patcher, with_api_key():
+        assert await fred.get_series("CPIAUCSL") == []
 
 
 # ── get_latest ───────────────────────────────────────────────────

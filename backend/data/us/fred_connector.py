@@ -154,6 +154,16 @@ async def get_series_csv(
 
 
 async def get_series(series_id: str, start_date: str | None = None, end_date: str | None = None) -> list[dict[str, Any]]:
+    """One FRED series as ``[{date, value}]``.
+
+    Falls back to the yfinance proxy when no key is configured **and**
+    when a configured key is rejected. The second case is not
+    hypothetical: a placeholder key saved from the admin page made FRED
+    answer `400` on every call, and because this function raised, the
+    whole macro block went empty site-wide — a worse outcome than the
+    approximate-but-present Yahoo proxy. The failure stays visible in
+    the logs (and in `market_provider_keys.last_validation_ok`) rather
+    than being swallowed."""
     from services.market_key_service import resolve_key
     api_key = await resolve_key("fred")
     if not api_key:
@@ -170,9 +180,16 @@ async def get_series(series_id: str, start_date: str | None = None, end_date: st
     if end_date:
         params["observation_end"] = end_date
 
-    async with httpx.AsyncClient(timeout=10.0) as c:
-        r = await c.get(f"{_BASE}/series/observations", params=params)
-        r.raise_for_status()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.get(f"{_BASE}/series/observations", params=params)
+            r.raise_for_status()
+    except Exception as exc:
+        log.warning(
+            "fred.api_failed_using_yfinance_fallback",
+            extra={"series": series_id, "error": str(exc)},
+        )
+        return await _yfinance_fallback(series_id, end_date=end_date)
 
     return [
         {"date": obs["date"], "value": float(obs["value"]) if obs["value"] != "." else None}

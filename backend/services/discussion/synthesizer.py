@@ -289,6 +289,13 @@ async def _compute_quality_signals(
         a post-parse signal.
       - ``consensus_contradiction``: bool, dissent > agree AND
         recommendations non-empty.
+      - ``observed_consensus`` / ``consensus_gap``: agreement measured
+        from the transcript (all rounds, later rounds weighted higher)
+        and how far the synthesizer's self-reported
+        ``consensus_score`` sits above it. See
+        ``services/discussion/consensus.py`` — nothing previously
+        checked the self-reported number against what was said, and in
+        production the two are decoupled.
       - ``hallucination_warnings``: from
         ``signal_audit_service.audit_discussion_for_synthesis`` —
         triples of (round, persona_id, signal) where a persona
@@ -356,6 +363,16 @@ async def _compute_quality_signals(
         and bool(conclusion.get("recommendations"))
     )
 
+    # Measured agreement across ALL rounds, vs the number the
+    # synthesizer wrote about itself. `stance_distribution` above only
+    # covers the final round, which is the right input for the
+    # contradiction flag but too narrow to compare against a
+    # whole-discussion score.
+    from services.discussion.consensus import consensus_gap, observed_consensus
+
+    observed = observed_consensus(persona_turns)
+    gap = consensus_gap(conclusion.get("consensus_score"), observed)
+
     warnings: list[dict[str, Any]] = []
     try:
         from services.signal_audit_service import (
@@ -375,6 +392,8 @@ async def _compute_quality_signals(
         "stance_distribution": stance_dist,
         "confidence_stats": confidence_stats,
         "consensus_contradiction": consensus_contradiction,
+        "observed_consensus": observed,
+        "consensus_gap": gap,
         "hallucination_warnings": warnings,
     }
 

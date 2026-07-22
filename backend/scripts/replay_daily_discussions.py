@@ -99,14 +99,29 @@ async def _spent_usd() -> float:
         ) or 0.0)
 
 
-async def _replayed_sessions(owner_id, days: list[date]) -> set[date]:
+async def _covered_sessions(owner_id, days: list[date]) -> set[date]:
+    """Sessions that already have an auto-run row, live or replayed.
+
+    Keyed on `auto_run_date`, because that is the column
+    `_run_for_user` dedupes against — the unique slot is
+    `(owner, auto_run_date, strategy, sequence)`. Keying this on
+    `as_of_date` instead (which is NULL on live rows) made the script
+    ask for sessions the pipeline would then silently skip, and report
+    them as replayed: three sessions "replayed", nine discussions
+    promised, nothing created, US$0.00 spent.
+
+    A session with a live run does not want a replay anyway. The live
+    row is the better datum — it is what the panel actually produced
+    that morning — and a second row for the same session would double-
+    count it in every rate the scoreboard computes.
+    """
     if not days:
         return set()
     async with AsyncSessionLocal() as db:
         rows = await db.scalars(
-            select(Discussion.as_of_date).where(
+            select(Discussion.auto_run_date).where(
                 Discussion.owner_id == owner_id,
-                Discussion.as_of_date.in_(days),
+                Discussion.auto_run_date.in_(days),
                 Discussion.auto_run.is_(True),
             ).distinct()
         )
@@ -204,7 +219,7 @@ async def _main(argv: list[str]) -> int:
         print(f"look-ahead violations: {violations}")
         return 1 if violations else 0
 
-    done = await _replayed_sessions(cfg.user_id, days)
+    done = await _covered_sessions(cfg.user_id, days)
     todo = [d for d in days if d not in done]
     strategies = sum(
         1 for count in discussion_auto_run_config_service
@@ -214,13 +229,18 @@ async def _main(argv: list[str]) -> int:
     )
     estimate = len(todo) * strategies * _USD_PER_DISCUSSION
     print(f"sessions {days[0]} .. {days[-1]}  "
-          f"({len(days)} total, {len(done)} already replayed, {len(todo)} to run)")
+          f"({len(days)} total, {len(done)} already covered, {len(todo)} to run)")
+    if not todo:
+        print("nothing to replay — every session in the window already has "
+              "an auto-run row")
+        return 0
     print(f"~{len(todo) * strategies} discussions, ~US${estimate:.0f}")
     if args.dry_run:
         return 0
 
     baseline = await _spent_usd()
     ran = 0
+    empty = 0
     for day in todo:
         if args.budget_usd is not None:
             spent = await _spent_usd() - baseline
@@ -230,13 +250,26 @@ async def _main(argv: list[str]) -> int:
                 break
         async with AsyncSessionLocal() as db:
             fresh = (await discussion_auto_run_config_service.list_enabled(db))[0]
-            await _run_for_user(db, fresh, as_of=day)
-        ran += 1
-        print(f"{day}  replayed ({ran}/{len(todo)})")
+            # `_run_for_user` returns False when it created nothing —
+            # every slot taken, or every strategy's screener came back
+            # empty for that session. Report that instead of counting it
+            # as a replay; a run that produces no rows while printing
+            # progress is the exact failure this script just had.
+            created = await _run_for_user(db, fresh, as_of=day)
+        if created:
+            ran += 1
+            print(f"{day}  replayed ({ran}/{len(todo)})")
+        else:
+            empty += 1
+            print(f"{day}  produced nothing (no candidates, or slots taken)")
 
     spent = await _spent_usd() - baseline
-    print(f"replayed {ran} sessions, spent US${spent:.2f}")
-    return 0
+    print(f"replayed {ran} sessions ({empty} produced nothing), "
+          f"spent US${spent:.2f}")
+    # Asking for work and getting none back is a failure, not a quiet
+    # success — the caller is about to spend hundreds of dollars on the
+    # strength of a smoke test.
+    return 1 if ran == 0 else 0
 
 
 if __name__ == "__main__":

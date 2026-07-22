@@ -251,9 +251,11 @@ async def test_budget_ceiling_stops_before_overspending(
 
     # Spend accrues as sessions run, the way the real ledger does.
     ledger = {"usd": 0.0}
-    run = AsyncMock(side_effect=lambda *a, **k: ledger.__setitem__(
-        "usd", ledger["usd"] + 4.74,
-    ))
+    def _charge(*_a, **_k):
+        ledger["usd"] += 4.74
+        return True
+
+    run = AsyncMock(side_effect=_charge)
 
     async def _spent():
         return ledger["usd"]
@@ -298,3 +300,120 @@ async def test_verify_only_reports_violations_and_exits_nonzero(
 
     assert rc == 1
     assert "look-ahead violations: 2" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_sessions_with_a_live_run_are_not_replayed(
+    db_session: AsyncSession, capsys,
+):
+    """A session that already produced a real auto-run must be left
+    alone.
+
+    The slot is unique on `(owner, auto_run_date, strategy, sequence)`,
+    so a replay of such a session creates nothing — and the first
+    version of this script keyed its own bookkeeping on `as_of_date`
+    (NULL on live rows), asked for those sessions anyway, and printed
+    "replayed (3/3)" over nine discussions that were never created.
+    A replay would also double-count the session in every rate the
+    scoreboard computes.
+    """
+    from models.discussion import Discussion
+    from models.user import User, UserRole
+
+    owner = User(id=uuid.uuid4(), email=f"rp-{uuid.uuid4().hex[:6]}@example.com",
+                 hashed_password="x", role=UserRole.viewer, is_active=True)
+    db_session.add(owner)
+    for day in (date(2026, 7, 1), date(2026, 7, 3)):
+        db_session.add(OhlcvDaily(
+            market="TW", symbol="_TAIEX_TR", ts=day,
+            open=100.0, high=101.0, low=99.0, close=100.0,
+            volume=0, source="test",
+        ))
+    # A live auto-run on 07-03: no `as_of_date`, but the slot is taken.
+    db_session.add(Discussion(
+        id=uuid.uuid4(), owner_id=owner.id, topic="t", rules="r",
+        persona_ids=["x"], market="TW", status="done", current_round=5,
+        auto_run=True, auto_run_date=date(2026, 7, 3),
+        auto_run_strategy="general", auto_run_sequence=1,
+    ))
+    await db_session.commit()
+
+    cfg = _cfg()
+    cfg.user_id = owner.id
+    run = AsyncMock(return_value=True)
+    with patch.object(rp, "AsyncSessionLocal", return_value=_SessionCM(db_session)), \
+         patch.object(
+             rp.discussion_auto_run_config_service, "list_enabled",
+             AsyncMock(return_value=[cfg]),
+         ), \
+         patch.object(rp, "_run_for_user", run):
+        rc = await rp._main(["--sessions", "5", "--end", "2026-07-06"])
+
+    assert rc == 0
+    assert run.await_count == 1
+    assert run.await_args.kwargs["as_of"] == date(2026, 7, 1)
+    assert "1 already covered" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_creates_nothing_exits_nonzero(
+    db_session: AsyncSession, capsys,
+):
+    """Silence is not success. The caller is about to spend hundreds of
+    dollars on the strength of this smoke test."""
+    db_session.add(OhlcvDaily(
+        market="TW", symbol="_TAIEX_TR", ts=date(2026, 7, 1),
+        open=100.0, high=101.0, low=99.0, close=100.0,
+        volume=0, source="test",
+    ))
+    await db_session.commit()
+
+    with patch.object(rp, "AsyncSessionLocal", return_value=_SessionCM(db_session)), \
+         patch.object(
+             rp.discussion_auto_run_config_service, "list_enabled",
+             AsyncMock(return_value=[_cfg()]),
+         ), \
+         patch.object(rp, "_run_for_user", AsyncMock(return_value=False)):
+        rc = await rp._main(["--sessions", "5", "--end", "2026-07-06"])
+
+    assert rc == 1
+    assert "produced nothing" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_fully_covered_window_is_a_clean_no_op(
+    db_session: AsyncSession, capsys,
+):
+    from models.discussion import Discussion
+    from models.user import User, UserRole
+
+    owner = User(id=uuid.uuid4(), email=f"rp-{uuid.uuid4().hex[:6]}@example.com",
+                 hashed_password="x", role=UserRole.viewer, is_active=True)
+    db_session.add(owner)
+    db_session.add(OhlcvDaily(
+        market="TW", symbol="_TAIEX_TR", ts=date(2026, 7, 1),
+        open=100.0, high=101.0, low=99.0, close=100.0,
+        volume=0, source="test",
+    ))
+    db_session.add(Discussion(
+        id=uuid.uuid4(), owner_id=owner.id, topic="t", rules="r",
+        persona_ids=["x"], market="TW", status="done", current_round=5,
+        auto_run=True, auto_run_date=date(2026, 7, 1),
+        auto_run_strategy="general", auto_run_sequence=1,
+    ))
+    await db_session.commit()
+
+    cfg = _cfg()
+    cfg.user_id = owner.id
+    run = AsyncMock(return_value=True)
+    with patch.object(rp, "AsyncSessionLocal", return_value=_SessionCM(db_session)), \
+         patch.object(
+             rp.discussion_auto_run_config_service, "list_enabled",
+             AsyncMock(return_value=[cfg]),
+         ), \
+         patch.object(rp, "_run_for_user", run):
+        rc = await rp._main(["--sessions", "5", "--end", "2026-07-06"])
+
+    assert rc == 0
+    run.assert_not_awaited()
+    assert "nothing to replay" in capsys.readouterr().out

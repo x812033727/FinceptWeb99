@@ -229,18 +229,51 @@ async def _verify_one(
     SQLAlchemy's "Instance not persistent" error on PostgreSQL when
     `synchronize_session='auto'` expunges the entity after an ORM
     UPDATE."""
-    raw_symbols = (d.conclusion or {}).get("recommended_symbols") or []
+    conclusion = d.conclusion or {}
+    raw_symbols = conclusion.get("recommended_symbols") or []
     symbols = [str(s).strip() for s in raw_symbols if _TW_SYMBOL_RE.fullmatch(str(s).strip())]
 
-    # Edge: no symbols recommended → unverifiable. Set immediately so
-    # the cron doesn't keep re-fetching this row forever.
+    # Edge: no symbols recommended. Two very different outcomes share
+    # this shape and must not share a verdict:
+    #
+    #   `abstain`      the panel deliberately declined ("no candidate
+    #                  meets the entry conditions"). A real, gradeable
+    #                  decision — sitting out a −7% tape is a good call,
+    #                  and the scoreboard says so by keeping abstains
+    #                  out of the win-rate denominator.
+    #   `unverifiable` the synthesizer produced nothing usable (parse
+    #                  error, empty output). A pipeline failure.
+    #
+    # The distinction comes from the structured `abstained` flag the
+    # synthesizer emits (see `conclusion_parsing._safe_conclusion`),
+    # never from `reasoning` prose.
     if not symbols:
+        abstained = bool(conclusion.get("abstained"))
+        # An abstention still has a counterfactual worth recording:
+        # what the deterministic screener pool did that week. Without
+        # it we can't tell a wise pass from a missed rally.
+        pool_perf: dict[str, Any] | None = None
+        if abstained:
+            anchor = d.as_of_date or to_tw_date(d.created_at)
+            try:
+                pool_perf = await _compute_pool_performance(d, anchor)
+            except Exception:
+                log.exception(
+                    "verify_discussion_outcome.pool_performance_failed",
+                    extra={"id": str(d.id)},
+                )
         await _set_verdict(
             db,
             d,
-            verdict="unverifiable",
-            reason="synthesizer returned no symbols",
+            verdict="abstain" if abstained else "unverifiable",
+            reason=(
+                (str(conclusion.get("abstain_reason") or "").strip()
+                 or "panel abstained — no candidate met the entry conditions")
+                if abstained
+                else "synthesizer returned no symbols"
+            ),
             day1_opens={},
+            pool_performance=pool_perf,
         )
         return True
 
@@ -584,8 +617,11 @@ def _format_verdict_reason(
             f"{winner_symbol} D5 close {sym_cls.day5_pct:+.2f}% " f"(≥ {big_win_pct:g}% threshold)"
         )
     if band == "win":
-        return f"{winner_symbol} peak close {sym_cls.peak_pct:+.2f}% " f"(≥ {win_pct:g}% threshold)"
+        return (
+            f"{winner_symbol} D5 close {sym_cls.day5_pct:+.2f}% "
+            f"(≥ {win_pct:g}% threshold; 期間最高 {sym_cls.peak_pct:+.2f}%)"
+        )
     return (
-        f"{winner_symbol} peak {sym_cls.peak_pct:+.2f}% / trough "
-        f"{sym_cls.trough_pct:+.2f}% — no band crossed"
+        f"{winner_symbol} D5 close {sym_cls.day5_pct:+.2f}% — no band crossed "
+        f"(期間最高 {sym_cls.peak_pct:+.2f}% / 最低 {sym_cls.trough_pct:+.2f}%)"
     )

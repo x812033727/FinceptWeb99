@@ -218,6 +218,7 @@ export type Verdict =
   | "win"
   | "big_loss"
   | "loss"
+  | "abstain"
   | "unverifiable";
 
 export type DiscussionMarket = "TW" | "US" | "GLOBAL";

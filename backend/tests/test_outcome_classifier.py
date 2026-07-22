@@ -39,14 +39,20 @@ def test_big_loss_overrides_big_win_priority():
     assert result.day5_pct == pytest.approx(22.0)
 
 
-def test_big_win_requires_d5_at_or_above_threshold():
-    """Peak +25% but D5 only +3% → not big_win, falls to win."""
+def test_spike_that_fades_by_d5_is_a_loss():
+    """Peak +25% but D5 only +3% → loss.
+
+    This is the case the pre-2026-07 peak-touch rule scored as a win:
+    a position that spiked and gave it back. Nobody holding to the
+    stated 5-day horizon realized +25%, so the band follows D5.
+    """
     d1 = 100.0
     closes = _closes_from_pct(d1, [+25, +25, +25, +25, +3])
     result = classify_outcome(d1_buy=d1, closes=closes)
     assert result is not None
-    assert result.band == "win"
+    assert result.band == "loss"
     assert result.day5_pct == pytest.approx(3.0)
+    # The peak is still reported — it just no longer decides the band.
     assert result.peak_pct == pytest.approx(25.0)
 
 
@@ -69,22 +75,34 @@ def test_big_loss_at_exact_threshold_inclusive():
 
 
 def test_win_at_exact_threshold_inclusive():
-    """Peak at exactly +5% → win."""
+    """D5 at exactly +5% → win (≥ is inclusive)."""
     d1 = 100.0
-    closes = _closes_from_pct(d1, [+1, +2, +5, +3, +1])
+    closes = _closes_from_pct(d1, [+1, +2, +3, +4, +5])
     result = classify_outcome(d1_buy=d1, closes=closes)
     assert result is not None
     assert result.band == "win"
+    assert result.day5_pct == pytest.approx(5.0)
 
 
-def test_win_any_day_picks_peak():
-    """Single +6% day among low days → win."""
+def test_single_good_day_mid_window_does_not_make_a_win():
+    """Single +6% day at D2 that fades to +1% by D5 → loss."""
     d1 = 100.0
     closes = _closes_from_pct(d1, [+1, +6, +2, +1, +1])
     result = classify_outcome(d1_buy=d1, closes=closes)
     assert result is not None
-    assert result.band == "win"
+    assert result.band == "loss"
     assert result.peak_pct == pytest.approx(6.0)
+    assert result.day5_pct == pytest.approx(1.0)
+
+
+def test_win_needs_the_gain_to_hold_to_d5():
+    """Same +6% peak, but it holds → win."""
+    d1 = 100.0
+    closes = _closes_from_pct(d1, [+1, +6, +5, +6, +6])
+    result = classify_outcome(d1_buy=d1, closes=closes)
+    assert result is not None
+    assert result.band == "win"
+    assert result.day5_pct == pytest.approx(6.0)
 
 
 def test_loss_default_no_threshold_crossed():
@@ -101,26 +119,23 @@ def test_loss_default_no_threshold_crossed():
 # ── classify_outcome — partial windows ─────────────────────────────
 
 
-def test_partial_window_win_path_works():
-    """Peak hit at D2, D3-D5 missing → still classifies as win."""
+def test_partial_window_is_undecidable_not_a_loss():
+    """D2 hit +6% but D3-D5 are missing → no classification.
+
+    Win/loss both hinge on the D5 close, so an open window has no
+    honest answer. Returning `loss` would bias every partial window
+    downward; callers all treat None as "skip this symbol".
+    """
     d1 = 100.0
     closes = _closes_from_pct(d1, [+2, +6, None, None, None])
-    result = classify_outcome(d1_buy=d1, closes=closes)
-    assert result is not None
-    assert result.band == "win"
-    assert result.day5_pct is None  # D5 unresolved
-    assert result.peak_pct == pytest.approx(6.0)
+    assert classify_outcome(d1_buy=d1, closes=closes) is None
 
 
 def test_partial_window_big_win_blocked_when_d5_missing():
-    """Even with D2 == +25%, big_win needs D5 specifically. With D5
-    None, falls through to win."""
+    """Even with D2 == +25%, every positive band needs the D5 close."""
     d1 = 100.0
     closes = _closes_from_pct(d1, [+5, +25, None, None, None])
-    result = classify_outcome(d1_buy=d1, closes=closes)
-    assert result is not None
-    assert result.band == "win"
-    assert result.day5_pct is None
+    assert classify_outcome(d1_buy=d1, closes=closes) is None
 
 
 def test_partial_window_big_loss_still_detected():
@@ -192,9 +207,9 @@ def test_discussion_big_win_when_no_big_loss():
     assert result.winner_symbol == "B"
 
 
-def test_discussion_win_picks_highest_peak():
-    a_closes = _closes_from_pct(100.0, [+1, +6, +2, +1, +1])
-    b_closes = _closes_from_pct(100.0, [+1, +8, +2, +1, +1])
+def test_discussion_win_picks_highest_d5():
+    a_closes = _closes_from_pct(100.0, [+1, +6, +2, +6, +6])
+    b_closes = _closes_from_pct(100.0, [+1, +8, +2, +7, +8])
     result = classify_discussion(per_symbol={
         "A": (100.0, a_closes),
         "B": (100.0, b_closes),

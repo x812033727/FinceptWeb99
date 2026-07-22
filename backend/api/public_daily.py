@@ -140,15 +140,20 @@ def _public_conclusion(value: dict[str, Any], market: str) -> dict[str, Any]:
 class ScoreboardEntry(BaseModel):
     strategy: str
     samples: int
+    decided: int = 0
+    pending: int = 0
     wins: int
     losses: int
     big_wins: int
     big_losses: int
+    abstains: int = 0
     unverifiable: int
     win_rate: float | None = None
     avg_return_pct: float | None = None
     pool_samples: int = 0
     avg_alpha_pct: float | None = None
+    benchmark_samples: int = 0
+    avg_excess_vs_taiex_pct: float | None = None
 
 
 class PublicScoreboardResponse(BaseModel):

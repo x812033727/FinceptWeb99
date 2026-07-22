@@ -38,7 +38,7 @@ type Result = {
   sequence?: number;
   candidates?: Array<{ symbol?: string; name?: string; strategy_score?: number; signal_type?: string }>;
   candidate_pool?: Array<{ symbol?: string; name?: string; strategy_score?: number; signal_type?: string }>;
-  verdict?: "big_win" | "win" | "big_loss" | "loss" | "unverifiable" | null;
+  verdict?: "big_win" | "win" | "big_loss" | "loss" | "abstain" | "unverifiable" | null;
   verdict_reason?: string | null;
   verified_at?: string | null;
   verify_after_date?: string | null;
@@ -51,6 +51,11 @@ type Payload = { state: "disabled" | "empty" | "ready"; result: Result | null; s
 type ScoreboardEntry = {
   strategy: string;
   samples: number;
+  decided?: number;
+  pending?: number;
+  abstains?: number;
+  benchmark_samples?: number;
+  avg_excess_vs_taiex_pct?: number | null;
   wins: number;
   losses: number;
   big_wins: number;
@@ -263,35 +268,55 @@ function Scoreboard({ entries }: { entries: ScoreboardEntry[] }) {
             <th className="py-1.5 pr-4 font-medium">平均五日報酬</th>
             <th className="py-1.5 pr-4 font-medium">大勝／大敗</th>
             <th className="py-1.5 pr-4 font-medium">樣本</th>
-            <th className="py-1.5 font-medium">AI−池 α</th>
+            <th className="py-1.5 pr-4 font-medium">AI−池 α</th>
+            <th className="py-1.5 font-medium">AI−大盤</th>
           </tr>
         </thead>
         <tbody>
           {entries.map((entry) => {
-            const decided = entry.wins + entry.losses;
+            const decided = entry.decided ?? entry.wins + entry.losses;
+            // A win rate over a handful of decided rounds is noise, and
+            // showing a bare "100%" next to it is how the page ended up
+            // overstating the panel. Under 10 decided rounds the number
+            // is explicitly marked as not yet meaningful.
+            const thin = decided < 10;
             return <tr key={entry.strategy} className="border-t border-slate-800/60 text-slate-200">
               <td className="py-2 pr-4 font-semibold">
                 {strategyNames[entry.strategy] ?? legacyStrategyNames[entry.strategy] ?? entry.strategy}
-                {entry.samples < 5 && <span className="ml-2 rounded-full border border-slate-700 px-1.5 py-0.5 text-micro text-slate-500">樣本累積中</span>}
+                {thin && <span className="ml-2 rounded-full border border-slate-700 px-1.5 py-0.5 text-micro text-slate-500">樣本不足</span>}
               </td>
               <td className="py-2 pr-4">
-                {typeof entry.win_rate === "number" ? `${Math.round(entry.win_rate * 100)}%` : "—"}
-                {decided > 0 && <span className="ml-1 text-xs text-slate-500">({entry.wins}勝{entry.losses}敗)</span>}
+                <span className={thin ? "text-slate-400" : undefined}>
+                  {typeof entry.win_rate === "number" ? `${Math.round(entry.win_rate * 100)}%` : "—"}
+                </span>
+                {decided > 0 && <span className="ml-1 text-xs text-slate-500">({entry.wins}勝{entry.losses}敗／決勝 {decided} 場)</span>}
               </td>
               <td className={`py-2 pr-4 ${typeof entry.avg_return_pct === "number" ? (entry.avg_return_pct >= 0 ? "text-up" : "text-down") : ""}`}>
                 {pct(entry.avg_return_pct, true)}
               </td>
               <td className="py-2 pr-4 text-xs">{entry.big_wins}／{entry.big_losses}</td>
-              <td className="py-2 pr-4">{entry.samples}{entry.unverifiable > 0 && <span className="ml-1 text-xs text-slate-500">(無法驗證 {entry.unverifiable})</span>}</td>
-              <td className={`py-2 ${typeof entry.avg_alpha_pct === "number" ? (entry.avg_alpha_pct >= 0 ? "text-up" : "text-down") : "text-slate-500"}`}>
+              <td className="py-2 pr-4">
+                {entry.samples}
+                <span className="ml-1 text-xs text-slate-500">
+                  ({[
+                    (entry.pending ?? 0) > 0 ? `待判 ${entry.pending}` : null,
+                    (entry.abstains ?? 0) > 0 ? `棄權 ${entry.abstains}` : null,
+                    entry.unverifiable > 0 ? `無法驗證 ${entry.unverifiable}` : null,
+                  ].filter(Boolean).join("／") || `決勝 ${decided}`})
+                </span>
+              </td>
+              <td className={`py-2 pr-4 ${typeof entry.avg_alpha_pct === "number" ? (entry.avg_alpha_pct >= 0 ? "text-up" : "text-down") : "text-slate-500"}`}>
                 {entry.pool_samples > 0 ? pct(entry.avg_alpha_pct, true) : "累積中"}
+              </td>
+              <td className={`py-2 ${typeof entry.avg_excess_vs_taiex_pct === "number" ? (entry.avg_excess_vs_taiex_pct >= 0 ? "text-up" : "text-down") : "text-slate-500"}`}>
+                {(entry.benchmark_samples ?? 0) > 0 ? pct(entry.avg_excess_vs_taiex_pct, true) : "累積中"}
               </td>
             </tr>;
           })}
         </tbody>
       </table>
     </div>
-    <p className="mt-3 text-xs leading-5 text-slate-500">勝率＝已分出勝負場次中的獲勝比例（不含無法驗證）；AI−池 α＝AI 精選的五日報酬減去該場完整候選池的平均報酬，僅統計已留存候選池表現的場次。歷史統計僅供參考，不構成投資建議。</p>
+    <p className="mt-3 text-xs leading-5 text-slate-500">勝率＝已分出勝負的場次中，第 5 個交易日收盤仍達門檻的比例（期間漲過又跌回來不算勝）；棄權（候選股皆不符合進場條件）與待判、無法驗證都不列入勝率分母。AI−池 α＝AI 精選的五日報酬減去該場完整候選池的平均報酬；AI−大盤＝減去同期間加權報酬指數。決勝場次少於 10 場時數字僅供參考，不具統計意義。歷史統計不構成投資建議。</p>
   </details>;
 }
 
@@ -328,7 +353,7 @@ function StrategyRun({ run, onSelect }: { run: Result; onSelect: (symbol: string
   </article>;
 }
 
-const verdictLabel: Record<string, string> = { big_win: "大勝", win: "勝", big_loss: "大敗", loss: "敗", unverifiable: "無法驗證" };
+const verdictLabel: Record<string, string> = { big_win: "大勝", win: "勝", big_loss: "大敗", loss: "敗", abstain: "棄權", unverifiable: "無法驗證" };
 
 function OutcomeSummary({ run, onSelect }: { run: Result; onSelect: (symbol: string, name?: string) => void }) {
   const symbols = run.conclusion.recommended_symbols ?? [];

@@ -4678,3 +4678,52 @@ async def test_interject_followup_rejects_non_concluded(
         await discussion_service.interject_followup(
             db_session, row, question="q",
         )
+
+
+def test_safe_conclusion_carries_the_structured_abstain_flag():
+    """`abstained` comes from the synthesizer's JSON, never from prose.
+
+    The verifier grades a deliberate pass (`abstain`) differently from a
+    synthesizer that produced nothing usable (`unverifiable`), and only
+    this flag can tell them apart.
+    """
+    raw = json.dumps({
+        "recommendations": [],
+        "reasoning": "五檔候選皆未過量能門檻",
+        "abstained": True,
+        "abstain_reason": "候選股皆不符合進場條件",
+    })
+    out = discussion_service._safe_conclusion(raw)
+    assert out["recommended_symbols"] == []
+    assert out["abstained"] is True
+    assert out["abstain_reason"] == "候選股皆不符合進場條件"
+
+
+def test_safe_conclusion_abstain_flag_loses_to_actual_recommendations():
+    """A conclusion that recommends symbols is not an abstention, even
+    when the model also sets the flag — the picks are what gets graded."""
+    raw = json.dumps({
+        "recommendations": [{"symbol": "2330", "confidence": 0.6}],
+        "reasoning": "原本想棄權，但 2330 量價轉強",
+        "abstained": True,
+    })
+    out = discussion_service._safe_conclusion(raw)
+    assert out["recommended_symbols"] == ["2330"]
+    assert out["abstained"] is False
+
+
+def test_safe_conclusion_prose_alone_is_not_an_abstention():
+    """Talking about abstaining without the flag stays non-abstained —
+    string matching on `reasoning` is what this deliberately avoids."""
+    raw = json.dumps({
+        "recommendations": [],
+        "reasoning": "多位專家主張本場應該棄權，不推薦任何標的",
+    })
+    out = discussion_service._safe_conclusion(raw)
+    assert out["abstained"] is False
+
+
+def test_safe_conclusion_parse_error_is_not_an_abstention():
+    out = discussion_service._safe_conclusion("not json at all")
+    assert out["_parse_error"] is True
+    assert out["abstained"] is False

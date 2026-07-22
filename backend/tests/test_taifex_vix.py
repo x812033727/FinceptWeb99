@@ -10,10 +10,13 @@ Three layers:
 from __future__ import annotations
 
 from datetime import date
+from unittest.mock import patch
 
+import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import data.tw.taifex_connector as taifex
 from data.tw.taifex_connector import _parse_vix_day_body
 from models.tw_vix_daily import TwVixDaily
 from services.ingest.repository import (
@@ -180,3 +183,101 @@ async def test_upsert_overwrites_on_re_ingest(
     )).all()
     assert len(rows) == 1
     assert float(rows[0].vix_value) == pytest.approx(22.5)
+
+
+# ── get_vix_history: per-session walk ────────────────────────────
+
+
+def _day_file(stamp: str, value: str) -> bytes:
+    return (
+        "交易日期\t時間(時/分/秒/毫秒)\t臺指選擇權波動率指數\n"
+        f"{stamp}\t9000000\t\t\t40.00\n"
+        f"{stamp}\tLast 1 min AVG\t\t\t{value}\n"
+    ).encode("big5")
+
+
+class _FakeResponse:
+    def __init__(self, content: bytes, status: int = 200):
+        self.content = content
+        self._status = status
+
+    def raise_for_status(self):
+        if self._status >= 400:
+            raise httpx.HTTPStatusError(
+                "boom", request=None, response=None,  # type: ignore[arg-type]
+            )
+
+
+class _FakeClient:
+    """Stands in for httpx.AsyncClient; answers per `filesname`."""
+
+    def __init__(self, answers):
+        self.answers = answers
+        self.asked: list[str] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def get(self, url, params=None, headers=None):
+        stamp = (params or {})["filesname"]
+        self.asked.append(stamp)
+        answer = self.answers.get(stamp)
+        if isinstance(answer, Exception):
+            raise answer
+        if answer is None:
+            return _FakeResponse(b"<html><body>404</body></html>")
+        return _FakeResponse(answer)
+
+
+@pytest.mark.asyncio
+async def test_get_vix_history_walks_weekdays_only():
+    """One request per weekday: TAIFEX now publishes a file per session
+    rather than a date-range download."""
+    client = _FakeClient({
+        "20260717": _day_file("20260717", "38.81"),
+        "20260720": _day_file("20260720", "39.49"),
+    })
+    with patch.object(taifex.httpx, "AsyncClient", lambda **_: client):
+        # 07-18 Sat, 07-19 Sun
+        out = await taifex.get_vix_history(date(2026, 7, 17), date(2026, 7, 20))
+
+    assert client.asked == ["20260717", "20260720"]
+    assert out == [
+        {"date": "2026-07-17", "value": pytest.approx(38.81)},
+        {"date": "2026-07-20", "value": pytest.approx(39.49)},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_vix_history_skips_unpublished_sessions():
+    """Dates outside the ~7-session window answer with an HTML 404 page;
+    they are skipped, not parsed and not fatal."""
+    client = _FakeClient({
+        "20260720": None,                             # HTML 404 body
+        "20260721": _day_file("20260721", "36.55"),
+    })
+    with patch.object(taifex.httpx, "AsyncClient", lambda **_: client):
+        out = await taifex.get_vix_history(date(2026, 7, 20), date(2026, 7, 21))
+
+    assert out == [{"date": "2026-07-21", "value": pytest.approx(36.55)}]
+
+
+@pytest.mark.asyncio
+async def test_get_vix_history_one_transport_error_does_not_lose_the_rest():
+    client = _FakeClient({
+        "20260720": httpx.ConnectTimeout("down"),
+        "20260721": _day_file("20260721", "36.55"),
+    })
+    with patch.object(taifex.httpx, "AsyncClient", lambda **_: client):
+        out = await taifex.get_vix_history(date(2026, 7, 20), date(2026, 7, 21))
+
+    assert out == [{"date": "2026-07-21", "value": pytest.approx(36.55)}]
+
+
+@pytest.mark.asyncio
+async def test_get_vix_history_inverted_range_is_empty():
+    out = await taifex.get_vix_history(date(2026, 7, 21), date(2026, 7, 20))
+    assert out == []

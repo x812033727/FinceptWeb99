@@ -1000,3 +1000,51 @@ def test_record_data_gaps_does_not_double_report_empty_blocks():
     _record_data_gaps(ctx)
     assert "broker_concentration" in ctx["data_gaps"]
     assert "broker_concentration" not in ctx.get("data_stale", {})
+
+
+def test_record_data_gaps_treats_non_container_values_as_present():
+    """`0` and `False` are real readings, not gaps — the same call the
+    prompt minifier makes."""
+    from services.discussion.context.builder import _block_is_empty
+
+    assert _block_is_empty(None) is True
+    assert _block_is_empty([]) is True
+    assert _block_is_empty("") is True
+    assert _block_is_empty(0) is False
+    assert _block_is_empty(False) is False
+
+
+def test_record_stale_blocks_needs_a_session_anchor():
+    """Without `captured_session.session_date` there is nothing to
+    measure lag against, so no staleness is claimed rather than one
+    being guessed."""
+    from services.discussion.context.builder import _record_data_gaps
+
+    ctx = {"broker_concentration": {"as_of": "2026-07-07", "x": 1}}
+    _record_data_gaps(ctx)
+    assert "data_stale" not in ctx
+
+
+def test_record_stale_blocks_ignores_unparseable_as_of():
+    from services.discussion.context.builder import _record_data_gaps
+
+    ctx = {
+        "captured_session": {"session_date": "2026-07-21"},
+        "broker_concentration": {"as_of": "not-a-date", "x": 1},
+        "taifex_positioning": {"as_of": None, "x": 1},
+    }
+    _record_data_gaps(ctx)
+    assert "data_stale" not in ctx
+
+
+def test_record_stale_blocks_accepts_date_objects():
+    from datetime import date as _date
+
+    from services.discussion.context.builder import _record_data_gaps
+
+    ctx = {
+        "captured_session": {"session_date": _date(2026, 7, 21)},
+        "broker_concentration": {"as_of": _date(2026, 7, 14), "x": 1},
+    }
+    _record_data_gaps(ctx)
+    assert ctx["data_stale"]["broker_concentration"]["days_behind"] == 7

@@ -418,3 +418,27 @@ async def test_margin_empty_result_records_ok_zero(patch_margin_session):
     kwargs = health.await_args.kwargs
     assert kwargs["ok"] is True
     assert kwargs["row_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_institutional_fully_archived_window_asks_nothing(
+    patch_institutional_session,
+):
+    """Nothing pending → no upstream requests at all. The steady state
+    of a healed table is a single request for today, and zero once that
+    lands."""
+    from tasks import ingest_institutional_tw
+
+    fetch = AsyncMock(return_value=[])
+    with patch.object(
+        ingest_institutional_tw, "_archived_days",
+        AsyncMock(return_value={
+            date.today() - timedelta(days=n) for n in range(0, 40)
+        }),
+    ), patch(
+        "tasks.ingest_institutional_tw.twse.get_institutional", fetch,
+    ):
+        written = await ingest_institutional_tw._do_run()
+
+    assert written == 0
+    fetch.assert_not_awaited()

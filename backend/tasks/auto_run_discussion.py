@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, update
@@ -247,8 +247,23 @@ async def _notify_daily_ready(
         )
 
 
-async def load_candidate_rows(db: AsyncSession) -> list[dict]:
-    """Build one settled-data snapshot from the local TW archives."""
+async def load_candidate_rows(
+    db: AsyncSession, as_of: date | None = None,
+) -> list[dict]:
+    """Build one settled-data snapshot from the local TW archives.
+
+    `as_of` reconstructs the snapshot as it would have looked on that
+    session — every source table is clamped to `ts <= as_of` — so a
+    historical discussion screens on what was actually knowable then.
+    `None` is live mode: latest of everything.
+
+    The clamp has to be in SQL, before the per-symbol trims below keep
+    only the newest 40 bars and newest 5 chip rows. Filtering after the
+    trim would hand a 2026-05 anchor forty bars from July and then drop
+    all of them, leaving every symbol short of the 21-bar minimum and
+    every strategy with an empty pool — a silent, plausible-looking
+    zero.
+    """
     from collections import defaultdict
 
     from models.fundamentals_snapshot import FundamentalsSnapshot
@@ -256,10 +271,15 @@ async def load_candidate_rows(db: AsyncSession) -> list[dict]:
     from models.tw_chip_metrics import TwInstitutionalDaily
     from models.tw_revenue_monthly import TwRevenueMonthly
 
+    def _clamp(stmt, column):
+        return stmt if as_of is None else stmt.where(column <= as_of)
+
     bars = (
         await db.scalars(
-            select(OhlcvDaily)
-            .where(OhlcvDaily.market == "TW")
+            _clamp(
+                select(OhlcvDaily).where(OhlcvDaily.market == "TW"),
+                OhlcvDaily.ts,
+            )
             .order_by(OhlcvDaily.symbol, OhlcvDaily.ts.desc())
         )
     ).all()
@@ -278,8 +298,11 @@ async def load_candidate_rows(db: AsyncSession) -> list[dict]:
     fundamentals = latest_by_symbol(
         (
             await db.scalars(
-                select(FundamentalsSnapshot)
-                .where(FundamentalsSnapshot.market == "TW")
+                _clamp(
+                    select(FundamentalsSnapshot)
+                    .where(FundamentalsSnapshot.market == "TW"),
+                    FundamentalsSnapshot.as_of,
+                )
                 .order_by(FundamentalsSnapshot.as_of.desc())
             )
         ).all()
@@ -287,16 +310,22 @@ async def load_candidate_rows(db: AsyncSession) -> list[dict]:
     revenues = latest_by_symbol(
         (
             await db.scalars(
-                select(TwRevenueMonthly)
-                .where(TwRevenueMonthly.market == "TW")
+                _clamp(
+                    select(TwRevenueMonthly)
+                    .where(TwRevenueMonthly.market == "TW"),
+                    TwRevenueMonthly.ts,
+                )
                 .order_by(TwRevenueMonthly.ts.desc())
             )
         ).all()
     )
     chip_rows = (
         await db.scalars(
-            select(TwInstitutionalDaily)
-            .where(TwInstitutionalDaily.market == "TW")
+            _clamp(
+                select(TwInstitutionalDaily)
+                .where(TwInstitutionalDaily.market == "TW"),
+                TwInstitutionalDaily.ts,
+            )
             .order_by(TwInstitutionalDaily.symbol, TwInstitutionalDaily.ts.desc())
         )
     ).all()

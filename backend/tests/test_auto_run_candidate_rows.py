@@ -82,3 +82,55 @@ async def test_dense_series_is_unaffected(db_session: AsyncSession):
     assert len(rows) == 1
     assert rows[0]["symbol"] == "2330"
     assert rows[0]["history_days"] == 30
+
+
+# ── as_of clamp (historical replay) ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_as_of_excludes_every_later_bar(db_session: AsyncSession):
+    """No datum after the anchor may reach the snapshot.
+
+    This is the whole guarantee a historical replay rests on: if a
+    2026-07-01 pool can see 2026-07-15 prices, every backfilled sample
+    is optimistically biased and the review built on it is worthless.
+    """
+    await _add_bars(db_session, "2330", 40)
+    anchor = date(2026, 7, 1)
+
+    rows = await load_candidate_rows(db_session, as_of=anchor)
+
+    assert len(rows) == 1
+    row = rows[0]
+    # Bars run 2026-07-15 backwards; the newest at/​before the anchor is
+    # 2026-07-01, which is offset 14 → close 100 + 14.
+    assert row["close"] == 114.0
+    # 40 bars end 2026-07-15, so 26 of them are on/before 2026-07-01.
+    assert row["history_days"] == 26
+
+
+@pytest.mark.asyncio
+async def test_as_of_clamp_runs_before_the_forty_bar_trim(db_session: AsyncSession):
+    """The clamp must be in SQL, not applied after the per-symbol trim.
+
+    `load_candidate_rows` keeps only the newest 40 bars per symbol. Trim
+    first and a distant anchor gets 40 bars that are all *after* it,
+    every one of which then filters out — leaving the symbol under the
+    21-bar minimum and the pool silently empty rather than wrong-looking.
+    """
+    await _add_bars(db_session, "2330", 120)
+    anchor = date(2026, 7, 15) - timedelta(days=80)
+
+    rows = await load_candidate_rows(db_session, as_of=anchor)
+
+    assert [r["symbol"] for r in rows] == ["2330"]
+    assert rows[0]["history_days"] == 40   # the trim still applies, after the clamp
+
+
+@pytest.mark.asyncio
+async def test_live_mode_is_unchanged_by_the_new_parameter(db_session: AsyncSession):
+    await _add_bars(db_session, "2330", 30)
+
+    assert await load_candidate_rows(db_session) == await load_candidate_rows(
+        db_session, as_of=None,
+    )

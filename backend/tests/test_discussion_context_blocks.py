@@ -597,6 +597,7 @@ async def test_build_market_context_initialises_default_shape(
         "captured_session",          # PR for expert-quote freshness
         "backtest", "as_of",
         "info_cutoff",               # backtest look-ahead guard (prev trading day)
+        "data_gaps",                 # blocks with no data this session
         "top_gainers", "top_losers", "index",
         "news_sentiment", "news_backfill", "per_symbol_news_sentiment",
         "short_term_signals",
@@ -635,6 +636,10 @@ async def test_build_market_context_initialises_default_shape(
     assert set(ctx.keys()) == expected_keys
     assert ctx["market"] == "TW"
     assert ctx["backtest"] is False
+    # Every tracked block is empty in this stubbed build, so the gap
+    # list must name them rather than leaving the personas to guess
+    # why the blocks aren't there (which is when they invent numbers).
+    assert "taiwan_vix" in ctx["data_gaps"]
     # `captured_session` must be a fully-populated dict in live mode —
     # downstream blocks (focus_briefs.quote, screener rows) read its
     # `session_date` to stamp per-row `as_of_session` consistently.
@@ -920,3 +925,126 @@ async def test_build_market_context_skips_chip_blocks_for_non_tw(
     assert ctx["active_buybacks"] == []
     assert ctx["govt_bank_flow_5d"] == []
     assert ctx["market_institutional_5d"] == []
+
+
+# ── data_gaps ────────────────────────────────────────────────────
+
+
+def test_record_data_gaps_names_only_the_empty_blocks():
+    """A block with a real reading is not a gap; `False` / `0` are real
+    readings, matching what `_minify_for_prompt` keeps."""
+    from services.discussion.context.builder import _record_data_gaps
+
+    ctx = {
+        "taiwan_vix": None,
+        "broker_concentration": {},
+        "top_foreign_buyers": [{"symbol": "2330"}],
+        "market_institutional_5d": {"trend": "bearish", "net": 0},
+        "overseas_indicators": {"as_of": "2026-07-21", "indices": [
+            {"symbol": "^SOX"},
+        ]},
+    }
+    _record_data_gaps(ctx)
+    assert "taiwan_vix" in ctx["data_gaps"]
+    assert "broker_concentration" in ctx["data_gaps"]
+    assert "top_foreign_buyers" not in ctx["data_gaps"]
+    assert "market_institutional_5d" not in ctx["data_gaps"]
+    assert "overseas_indicators" not in ctx["data_gaps"]
+
+
+def test_record_data_gaps_flags_overseas_envelope_with_no_indices():
+    """`overseas_indicators` stays a non-empty `{as_of, indices}` dict
+    when the connector fails — the payload is what decides."""
+    from services.discussion.context.builder import _record_data_gaps
+
+    ctx = {"overseas_indicators": {"as_of": "2026-07-21", "indices": []}}
+    _record_data_gaps(ctx)
+    assert "overseas_indicators" in ctx["data_gaps"]
+
+
+def test_record_data_gaps_reports_present_but_stale_blocks():
+    """A block that is there but weeks old is worse than an absent one:
+    the panel reads it as current unless told otherwise."""
+    from services.discussion.context.builder import _record_data_gaps
+
+    ctx = {
+        "captured_session": {"session_date": "2026-07-21"},
+        "broker_concentration": {"as_of": "2026-07-07", "symbols": ["2330"]},
+        "taifex_positioning": {"as_of": "2026-07-21", "trend": "bearish"},
+    }
+    _record_data_gaps(ctx)
+    assert ctx["data_stale"]["broker_concentration"]["days_behind"] == 14
+    assert "taifex_positioning" not in ctx["data_stale"]
+
+
+def test_record_data_gaps_omits_stale_map_when_everything_is_current():
+    from services.discussion.context.builder import _record_data_gaps
+
+    ctx = {
+        "captured_session": {"session_date": "2026-07-21"},
+        "taifex_positioning": {"as_of": "2026-07-21", "trend": "bearish"},
+    }
+    _record_data_gaps(ctx)
+    assert "data_stale" not in ctx
+
+
+def test_record_data_gaps_does_not_double_report_empty_blocks():
+    """An empty block is a gap, not a staleness — it must not appear in
+    both lists."""
+    from services.discussion.context.builder import _record_data_gaps
+
+    ctx = {
+        "captured_session": {"session_date": "2026-07-21"},
+        "broker_concentration": {},
+    }
+    _record_data_gaps(ctx)
+    assert "broker_concentration" in ctx["data_gaps"]
+    assert "broker_concentration" not in ctx.get("data_stale", {})
+
+
+def test_record_data_gaps_treats_non_container_values_as_present():
+    """`0` and `False` are real readings, not gaps — the same call the
+    prompt minifier makes."""
+    from services.discussion.context.builder import _block_is_empty
+
+    assert _block_is_empty(None) is True
+    assert _block_is_empty([]) is True
+    assert _block_is_empty("") is True
+    assert _block_is_empty(0) is False
+    assert _block_is_empty(False) is False
+
+
+def test_record_stale_blocks_needs_a_session_anchor():
+    """Without `captured_session.session_date` there is nothing to
+    measure lag against, so no staleness is claimed rather than one
+    being guessed."""
+    from services.discussion.context.builder import _record_data_gaps
+
+    ctx = {"broker_concentration": {"as_of": "2026-07-07", "x": 1}}
+    _record_data_gaps(ctx)
+    assert "data_stale" not in ctx
+
+
+def test_record_stale_blocks_ignores_unparseable_as_of():
+    from services.discussion.context.builder import _record_data_gaps
+
+    ctx = {
+        "captured_session": {"session_date": "2026-07-21"},
+        "broker_concentration": {"as_of": "not-a-date", "x": 1},
+        "taifex_positioning": {"as_of": None, "x": 1},
+    }
+    _record_data_gaps(ctx)
+    assert "data_stale" not in ctx
+
+
+def test_record_stale_blocks_accepts_date_objects():
+    from datetime import date as _date
+
+    from services.discussion.context.builder import _record_data_gaps
+
+    ctx = {
+        "captured_session": {"session_date": _date(2026, 7, 21)},
+        "broker_concentration": {"as_of": _date(2026, 7, 14), "x": 1},
+    }
+    _record_data_gaps(ctx)
+    assert ctx["data_stale"]["broker_concentration"]["days_behind"] == 7

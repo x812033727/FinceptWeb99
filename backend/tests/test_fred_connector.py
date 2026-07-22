@@ -159,6 +159,55 @@ async def test_get_series_yfinance_fallback_skips_rows_with_null_close():
     assert out[0]["value"] == 101.0
 
 
+# ── yfinance fallback honours end_date (backtest look-ahead) ──────
+#
+# Regression for a real leak: with no FRED key configured (the default
+# deployment) `get_series` takes the yfinance branch, which used to
+# drop `end_date` entirely. A replay anchored at 2026-04-24 persisted
+# `macro.fed_funds_rate.summary.latest_date == "2026-07-01"` — personas
+# deliberating in April were quoting July rates.
+
+@pytest.mark.asyncio
+async def test_yfinance_fallback_drops_observations_after_end_date():
+    fake_bars = [
+        {"time": 1_704_067_200_000, "close": 4.25},   # 2024-01-01
+        {"time": 1_706_745_600_000, "close": 4.32},   # 2024-02-01
+        {"time": 1_709_251_200_000, "close": 4.40},   # 2024-03-01
+    ]
+    with patch.object(fred.yfinance, "get_history", new=lambda *a, **k: _coro(fake_bars)):
+        out = await fred._yfinance_fallback("DGS10", end_date="2024-02-15")
+
+    assert [o["date"] for o in out] == ["2024-01-01", "2024-02-01"]
+
+
+@pytest.mark.asyncio
+async def test_yfinance_fallback_without_end_date_keeps_everything():
+    """Live mode must be unchanged — no clamp when `end_date` is None."""
+    fake_bars = [
+        {"time": 1_704_067_200_000, "close": 4.25},
+        {"time": 1_709_251_200_000, "close": 4.40},
+    ]
+    with patch.object(fred.yfinance, "get_history", new=lambda *a, **k: _coro(fake_bars)):
+        out = await fred._yfinance_fallback("DGS10")
+
+    assert len(out) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_series_forwards_end_date_into_the_yfinance_fallback():
+    """The leak was at the call site, not in the helper: `get_series`
+    dropped `end_date` on the keyless branch. Assert it reaches through."""
+    fake_bars = [
+        {"time": 1_704_067_200_000, "close": 4.25},   # 2024-01-01
+        {"time": 1_709_251_200_000, "close": 4.40},   # 2024-03-01
+    ]
+    with with_no_api_key(), \
+         patch.object(fred.yfinance, "get_history", new=lambda *a, **k: _coro(fake_bars)):
+        out = await fred.get_series("DGS10", end_date="2024-01-31")
+
+    assert [o["date"] for o in out] == ["2024-01-01"]
+
+
 @pytest.mark.asyncio
 async def test_get_series_yfinance_fallback_swallows_errors():
     """Yahoo blocked / DNS failure during fallback ⇒ [] (no exception

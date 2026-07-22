@@ -65,7 +65,20 @@ def _bars_to_observations(bars: list[dict], scale: float) -> list[dict[str, Any]
     return out
 
 
-async def _yfinance_fallback(series_id: str) -> list[dict[str, Any]]:
+async def _yfinance_fallback(
+    series_id: str, *, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """yfinance proxy for a FRED series, clamped at `end_date`.
+
+    `end_date` matters for backtests. Yahoo has no observation-window
+    parameter that matches FRED's `observation_end`, so the clamp is
+    applied here after the fetch. Without it this function silently
+    returned today's quote for a historical anchor: `get_series`
+    takes this branch whenever no FRED key is configured, and that is
+    the default deployment. A backtest anchored at 2026-04-24 was
+    reading July macro — a real look-ahead leak, observed in a replay
+    context whose `macro.*.latest_date` read `2026-07-01`.
+    """
     mapping = _YF_FALLBACK.get(series_id)
     if mapping is None:
         return []
@@ -76,7 +89,12 @@ async def _yfinance_fallback(series_id: str) -> list[dict[str, Any]]:
         log.warning("fred.yfinance_fallback_failed",
                     extra={"series": series_id, "ticker": ticker, "error": str(exc)})
         return []
-    return _bars_to_observations(bars, scale)
+    obs = _bars_to_observations(bars, scale)
+    if end_date:
+        # ISO dates compare correctly as strings; both sides are
+        # YYYY-MM-DD (`_bars_to_observations` formats them that way).
+        obs = [o for o in obs if o["date"] <= end_date]
+    return obs
 
 
 # Keyless public CSV endpoint — no API key, no rate-limit sign-up.
@@ -139,7 +157,7 @@ async def get_series(series_id: str, start_date: str | None = None, end_date: st
     from services.market_key_service import resolve_key
     api_key = await resolve_key("fred")
     if not api_key:
-        return await _yfinance_fallback(series_id)
+        return await _yfinance_fallback(series_id, end_date=end_date)
     params: dict = {
         "series_id": series_id,
         "api_key": api_key,

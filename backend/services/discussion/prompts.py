@@ -334,10 +334,21 @@ _TURN_PROMPT_TEMPLATE = (
     "依照你扮演的角色立場，閱讀上述資料與先前發言後，"
     "**直接輸出合法 JSON**（不要包 markdown code fence、不要在 JSON 之前或之後加任何解釋文字）：\n"
     '{{"stance": "agree|dissent|supplement", "content": "你的發言"}}\n\n'
-    "stance 規則：\n"
-    "  - agree：完全同意先前共識，無新內容可補充。content 可留空或一句話致意。\n"
-    "  - dissent：對某位專家的觀點有具體反對，必須點名是反對誰、為什麼。\n"
-    "  - supplement：補充新資訊、新角度、新數據。\n\n"
+    # The three definitions have to cost about the same to satisfy.
+    # The previous wording made `agree` the most demanding option
+    # ("完全同意…無新內容可補充" — and then asked for empty content,
+    # which reads as contributing nothing) while `dissent` accepted any
+    # specific disagreement at all. Measured over one week of auto-runs
+    # that produced dissent 392 / supplement 70 / agree 58, i.e. 75%
+    # dissent — a near-degenerate signal that carried no information.
+    # Now `agree` accepts partial endorsement with reasons, and
+    # `dissent` is reserved for an actually opposed conclusion.
+    "stance 規則（三者請依實際立場選擇，不要預設選 dissent）：\n"
+    "  - agree：同意先前的主要結論。**可以同時補充理由或佐證數據**，"
+    "只要你的結論方向與先前一致就選這個。\n"
+    "  - dissent：你的**結論**與某位專家相反（他說買、你說不該買），"
+    "必須點名是反對誰、為什麼。細節或幅度不同不算 dissent。\n"
+    "  - supplement：提出新資訊、新角度、新數據，但**不表態**支持或反對。\n\n"
     "## 排版規範\n"
     "為了讓使用者快速抓重點，content 內請用 markdown 強調語法：\n"
     "  - 關鍵結論、重要數字、目標價、停損點、股票代號 → 用 **粗體**\n"

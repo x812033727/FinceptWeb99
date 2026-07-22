@@ -110,6 +110,72 @@ async def test_stance_distribution_counts_latest_round_only(
     }
 
 
+# ── observed consensus vs the self-reported score ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_observed_consensus_spans_every_round_and_exposes_the_gap(
+    db_session: AsyncSession, owner: User,
+):
+    """`stance_distribution` is deliberately last-round-only, so it
+    can't be compared against a whole-discussion `consensus_score`.
+    `observed_consensus` covers all rounds, and `consensus_gap` makes
+    the model's overclaim a queryable number rather than something you
+    have to notice by eye.
+
+    Also pins that user-injected directives are excluded from the
+    measurement, same as the distribution.
+    """
+    disc = _make_discussion(owner.id)
+    turns = [
+        _turn(1, "a", "agree"),
+        _turn(1, "b", "dissent"),
+        _turn(2, "a", "dissent"),
+        _turn(2, "b", "dissent"),
+        _turn(2, discussion_service.USER_PERSONA_ID, "agree", "【事後檢討..."),
+    ]
+    conclusion: dict[str, Any] = {
+        "recommendations": [],
+        "consensus_score": 0.9,   # the model's own claim
+    }
+    with patch(
+        "services.signal_audit_service.audit_discussion_for_synthesis",
+        AsyncMock(return_value=[]),
+    ):
+        await discussion_service._compute_quality_signals(
+            db_session, disc, conclusion, turns=turns,
+        )
+    qs = conclusion["quality_signals"]
+    # round 1: agree(1.0) + dissent(0.0) at weight 1 -> 1.0
+    # round 2: dissent + dissent at weight 2         -> 0.0
+    # (1*1.0 + 1*0.0 + 2*0.0 + 2*0.0) / (1+1+2+2) = 1/6
+    assert qs["observed_consensus"] == round(1 / 6, 4)
+    assert qs["consensus_gap"] == round(0.9 - round(1 / 6, 4), 4)
+    # The self-reported value is preserved, not overwritten — the
+    # disagreement between the two IS the finding.
+    assert conclusion["consensus_score"] == 0.9
+
+
+@pytest.mark.asyncio
+async def test_consensus_gap_is_none_when_the_model_reported_nothing(
+    db_session: AsyncSession, owner: User,
+):
+    """Older rows and parse fallbacks carry no `consensus_score`.
+    Observed still gets measured; the gap is absent rather than 0."""
+    disc = _make_discussion(owner.id)
+    conclusion: dict[str, Any] = {"recommendations": []}
+    with patch(
+        "services.signal_audit_service.audit_discussion_for_synthesis",
+        AsyncMock(return_value=[]),
+    ):
+        await discussion_service._compute_quality_signals(
+            db_session, disc, conclusion, turns=[_turn(1, "a", "agree")],
+        )
+    qs = conclusion["quality_signals"]
+    assert qs["observed_consensus"] == 1.0
+    assert qs["consensus_gap"] is None
+
+
 # ── confidence stats ──────────────────────────────────────────────
 
 

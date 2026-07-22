@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, update
@@ -171,6 +171,7 @@ async def _do_run() -> tuple[int, list[str]]:
 async def _run_for_user(
     db: AsyncSession,
     cfg: DiscussionAutoRunConfig,
+    as_of: date | None = None,
 ) -> bool:
     """Run one auto-run discussion for a single enabled user.
 
@@ -185,8 +186,8 @@ async def _run_for_user(
         getattr(cfg, "strategy_run_counts", None),
         legacy_enabled=True,
     )
-    run_date = datetime.now(ZoneInfo("Asia/Taipei")).date()
-    candidate_rows = await load_candidate_rows(db)
+    run_date = as_of or datetime.now(ZoneInfo("Asia/Taipei")).date()
+    candidate_rows = await load_candidate_rows(db, as_of=as_of)
     ran_strategies: dict[str, int] = {}
     for strategy, count in counts.items():
         if count <= 0:
@@ -214,9 +215,13 @@ async def _run_for_user(
             await _run_strategy_slot(
                 db, cfg, strategy, sequence, run_date, batch,
                 pool=pool if sequence == 1 else None,
+                as_of=as_of,
             )
             ran_strategies[strategy] = ran_strategies.get(strategy, 0) + 1
-    if ran_strategies:
+    # Replays are an operator batch job, not something the user asked
+    # for this morning — pushing "今日 AI 選股完成" sixty times would be
+    # noise at best and misleading at worst.
+    if ran_strategies and as_of is None:
         await _notify_daily_ready(str(user_id), run_date, ran_strategies)
     return bool(ran_strategies)
 
@@ -247,8 +252,23 @@ async def _notify_daily_ready(
         )
 
 
-async def load_candidate_rows(db: AsyncSession) -> list[dict]:
-    """Build one settled-data snapshot from the local TW archives."""
+async def load_candidate_rows(
+    db: AsyncSession, as_of: date | None = None,
+) -> list[dict]:
+    """Build one settled-data snapshot from the local TW archives.
+
+    `as_of` reconstructs the snapshot as it would have looked on that
+    session — every source table is clamped to `ts <= as_of` — so a
+    historical discussion screens on what was actually knowable then.
+    `None` is live mode: latest of everything.
+
+    The clamp has to be in SQL, before the per-symbol trims below keep
+    only the newest 40 bars and newest 5 chip rows. Filtering after the
+    trim would hand a 2026-05 anchor forty bars from July and then drop
+    all of them, leaving every symbol short of the 21-bar minimum and
+    every strategy with an empty pool — a silent, plausible-looking
+    zero.
+    """
     from collections import defaultdict
 
     from models.fundamentals_snapshot import FundamentalsSnapshot
@@ -256,10 +276,15 @@ async def load_candidate_rows(db: AsyncSession) -> list[dict]:
     from models.tw_chip_metrics import TwInstitutionalDaily
     from models.tw_revenue_monthly import TwRevenueMonthly
 
+    def _clamp(stmt, column):
+        return stmt if as_of is None else stmt.where(column <= as_of)
+
     bars = (
         await db.scalars(
-            select(OhlcvDaily)
-            .where(OhlcvDaily.market == "TW")
+            _clamp(
+                select(OhlcvDaily).where(OhlcvDaily.market == "TW"),
+                OhlcvDaily.ts,
+            )
             .order_by(OhlcvDaily.symbol, OhlcvDaily.ts.desc())
         )
     ).all()
@@ -278,8 +303,11 @@ async def load_candidate_rows(db: AsyncSession) -> list[dict]:
     fundamentals = latest_by_symbol(
         (
             await db.scalars(
-                select(FundamentalsSnapshot)
-                .where(FundamentalsSnapshot.market == "TW")
+                _clamp(
+                    select(FundamentalsSnapshot)
+                    .where(FundamentalsSnapshot.market == "TW"),
+                    FundamentalsSnapshot.as_of,
+                )
                 .order_by(FundamentalsSnapshot.as_of.desc())
             )
         ).all()
@@ -287,16 +315,22 @@ async def load_candidate_rows(db: AsyncSession) -> list[dict]:
     revenues = latest_by_symbol(
         (
             await db.scalars(
-                select(TwRevenueMonthly)
-                .where(TwRevenueMonthly.market == "TW")
+                _clamp(
+                    select(TwRevenueMonthly)
+                    .where(TwRevenueMonthly.market == "TW"),
+                    TwRevenueMonthly.ts,
+                )
                 .order_by(TwRevenueMonthly.ts.desc())
             )
         ).all()
     )
     chip_rows = (
         await db.scalars(
-            select(TwInstitutionalDaily)
-            .where(TwInstitutionalDaily.market == "TW")
+            _clamp(
+                select(TwInstitutionalDaily)
+                .where(TwInstitutionalDaily.market == "TW"),
+                TwInstitutionalDaily.ts,
+            )
             .order_by(TwInstitutionalDaily.symbol, TwInstitutionalDaily.ts.desc())
         )
     ).all()
@@ -357,7 +391,8 @@ async def load_candidate_rows(db: AsyncSession) -> list[dict]:
 
 
 async def _run_strategy_slot(
-    db, cfg, strategy, sequence, run_date, batch, pool: list | None = None
+    db, cfg, strategy, sequence, run_date, batch, pool: list | None = None,
+    as_of: date | None = None,
 ) -> None:
     user_id = cfg.user_id
 
@@ -371,6 +406,11 @@ async def _run_strategy_slot(
     # self-heal (mirrors the screener fast-path) — so personas read the
     # prior session's settled close without the pre-market TWSE feed's
     # publication-lag staleness, and without pretending to be a backtest.
+    #
+    # Replay mode (`as_of` set) is the exception: the row IS a backtest
+    # and must carry the anchor, so the context builder clamps every
+    # block to `prev_trading_day(as_of)` and the verifier grades forward
+    # from `as_of` off the archive instead of a live quote.
     topic = cfg.topic if not batch else build_topic(strategy, batch, cfg.topic)
     discussion = await discussion_service.create_discussion(
         db,
@@ -379,6 +419,7 @@ async def _run_strategy_slot(
         rules=cfg.rules,
         persona_ids=list(cfg.persona_ids or []),
         market=cfg.market,
+        as_of_date=as_of,
     )
     # Flag this row as scheduler-produced so the verifier task picks
     # it up and the manual UI can render it differently if we ever

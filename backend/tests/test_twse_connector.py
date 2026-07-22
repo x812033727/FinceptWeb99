@@ -724,3 +724,61 @@ async def test_get_taiex_history_still_parses_legacy_chinese_keys():
     assert len(rows) == 1
     assert rows[0]["time"] == "2026-07-01"
     assert rows[0]["close"] == 47018.99
+
+
+# ── get_all_valuation_ratios: today vs a past session ─────────────
+
+@pytest.mark.asyncio
+async def test_valuation_ratios_without_date_uses_the_openapi_cross_section():
+    patcher, mock = install_get([
+        {"Code": "2330", "PEratio": "32.40", "PBratio": "10.61",
+         "DividendYield": "0.91"},
+    ])
+    with patcher:
+        out = await twse.get_all_valuation_ratios()
+    assert out["2330"]["pe_ratio"] == pytest.approx(32.40)
+    url = mock.await_args.args[0]
+    assert url.endswith("/exchangeReport/BWIBBU_ALL")
+    # today-only endpoint: no date is sent
+    assert "date" not in (mock.await_args.kwargs.get("params") or {})
+
+
+@pytest.mark.asyncio
+async def test_valuation_ratios_with_date_uses_the_dated_legacy_report():
+    """`BWIBBU_ALL` has no date parameter at all, which is why
+    `fundamentals_snapshots` had no history. The dated report is a
+    different URL with the `{stat, fields, data}` envelope."""
+    patcher, mock = install_get({
+        "stat": "OK",
+        "date": "20260515",
+        "fields": ["證券代號", "證券名稱", "收盤價", "殖利率(%)",
+                   "股利年度", "本益比", "股價淨值比", "財報年/季"],
+        "data": [
+            ["1101", "台泥", "24.10", "3.32", 114, "-", "0.77", "115/1"],
+            ["2330", "台積電", "1080.00", "0.97", 114, "30.45", "9.97", "115/1"],
+        ],
+    })
+    with patcher:
+        out = await twse.get_all_valuation_ratios(date(2026, 5, 15))
+
+    url = mock.await_args.args[0]
+    assert url.endswith("/exchangeReport/BWIBBU_d")
+    params = mock.await_args.kwargs["params"]
+    assert params["date"] == "20260515"
+    assert params["selectType"] == "ALL"
+
+    assert out["2330"]["pe_ratio"] == pytest.approx(30.45)
+    assert out["2330"]["pb_ratio"] == pytest.approx(9.97)
+    # "-" is TWSE's no-value marker, not a number.
+    assert out["1101"]["pe_ratio"] is None
+    assert out["1101"]["pb_ratio"] == pytest.approx(0.77)
+
+
+@pytest.mark.asyncio
+async def test_valuation_ratios_on_a_non_trading_day_is_empty():
+    patcher, _ = install_get({
+        "stat": "很抱歉，沒有符合條件的資料!", "data": [],
+    })
+    with patcher:
+        out = await twse.get_all_valuation_ratios(date(2026, 5, 17))
+    assert out == {}

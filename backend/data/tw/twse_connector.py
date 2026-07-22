@@ -476,17 +476,41 @@ async def get_valuation_ratios(symbol: str) -> dict[str, Any]:
         return {}
 
 
-async def get_all_valuation_ratios() -> dict[str, dict[str, float | None]]:
+async def get_all_valuation_ratios(
+    query_date: date | None = None,
+) -> dict[str, dict[str, float | None]]:
     """
-    Bulk fetch latest 本益比/股價淨值比/殖利率 for every TWSE stock in one call.
+    Bulk fetch 本益比/股價淨值比/殖利率 for every TWSE stock in one call.
     Returns {symbol: {"pe_ratio", "pb_ratio", "dividend_yield"}}.
 
     Used by the screener to avoid N+1 lookups; one TWSE token covers the
-    whole exchange. The endpoint without `stockNo` returns the day's full
-    cross-section.
+    whole exchange.
+
+    `query_date=None` reads the OpenAPI `BWIBBU_ALL` cross-section,
+    which is today-only — it carries no date parameter at all, which is
+    why `fundamentals_snapshots` had no history before the day the job
+    was first switched on and why any historical candidate-pool
+    reconstruction came up with no PE and therefore no chip_quality
+    candidates.
+
+    Passing a date reads the legacy dated report instead. Same three
+    ratios, one row per listed stock, available for arbitrary past
+    sessions. Non-trading days answer `stat=很抱歉…` with no rows,
+    which unwraps to an empty dict.
     """
-    data = await _get(f"{_BASE}/exchangeReport/BWIBBU_ALL")
-    rows = data if isinstance(data, list) else []
+    if query_date is None:
+        data = await _get(f"{_BASE}/exchangeReport/BWIBBU_ALL")
+        rows = data if isinstance(data, list) else []
+    else:
+        raw = await _get(
+            f"{_LEGACY_BASE}/exchangeReport/BWIBBU_d",
+            params={
+                "response": "json",
+                "date": _twse_date(query_date),
+                "selectType": "ALL",
+            },
+        )
+        rows = _unwrap_legacy_table(raw)
     out: dict[str, dict[str, float | None]] = {}
     for r in rows:
         code = (r.get("Code") or r.get("證券代號") or "").strip()

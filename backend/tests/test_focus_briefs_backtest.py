@@ -240,3 +240,50 @@ async def test_a_failing_margin_read_degrades_too():
 
     assert brief["margin_latest"] is None    # degraded, not fatal
     assert brief["chip_5d"] is not None
+
+
+# ── naming the gaps ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_unavailable_blocks_are_named_with_reasons():
+    """An empty block reads as "bad", not "unknown". A 06-05 replay
+    concluded 「技術、期貨籌碼、基本面（revenue_trend全空）三源同向不利」
+    — counting a deliberately-empty block as a third strike. The gap
+    has to be stated for silence to be distinguishable from a negative
+    reading."""
+    with (p0 := _patches(fundamentals={"pe_ratio": 11.0, "as_of": "2026-06-03"}))[0], \
+         p0[1], p0[2], p0[3]:
+        brief = await fb._build_tw_focus_brief_backtest("2330", as_of=_AS_OF)
+
+    gaps = brief["_unavailable"]
+    assert "revenue_trend" in gaps
+    assert "peers" in gaps
+    # Populated blocks must NOT be listed as gaps.
+    assert "fundamentals" not in gaps
+    assert "chip_5d" not in gaps
+    # Each entry carries a reason, not just a flag.
+    assert all(isinstance(v, str) and v for v in gaps.values())
+    # The block's own shape is unchanged — the explanation rides alongside.
+    assert brief["revenue_trend"] == []
+
+
+@pytest.mark.asyncio
+async def test_missing_archive_rows_are_named_too():
+    """Distinct from the deliberate omissions: margin has no rows for
+    sessions before the ingest job started, and fundamentals can miss
+    a day. Both must be named rather than read as weakness."""
+    with patch("services.ingest.repository.read_ohlcv_range_autosession",
+               AsyncMock(return_value=_bars())), \
+         patch("services.ingest.repository.read_fundamentals_as_of_autosession",
+               AsyncMock(return_value=None)), \
+         patch("services.ingest.repository.read_institutional_range_autosession",
+               AsyncMock(return_value=_inst_rows())), \
+         patch("services.ingest.repository.read_margin_range_autosession",
+               AsyncMock(return_value=[])):
+        brief = await fb._build_tw_focus_brief_backtest("2330", as_of=_AS_OF)
+
+    gaps = brief["_unavailable"]
+    assert "margin_latest" in gaps
+    assert "fundamentals" in gaps
+    assert "chip_5d" not in gaps      # this one resolved

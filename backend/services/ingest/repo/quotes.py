@@ -362,6 +362,95 @@ async def upsert_tw_vix_daily(
     )
 
 
+_VIX_REGIME_WINDOW_DAYS = 365
+# Below this many sessions a percentile is noise dressed up as a
+# statistic — 20 trading days is one month. The snapshot still
+# reports `sample_days` so the prompt can say "history too short"
+# instead of silently omitting the field (an omitted block reads to
+# the model as "not relevant", not as "unknown").
+_VIX_REGIME_MIN_SAMPLES = 20
+
+
+def _percentile_rank(values: list[float], current: float) -> float:
+    """Share of `values` at or below `current`, as 0-100."""
+    at_or_below = sum(1 for v in values if v <= current)
+    return round(at_or_below / len(values) * 100, 1)
+
+
+def _quantile(sorted_values: list[float], q: float) -> float:
+    """Nearest-rank quantile — matches the ad-hoc awk check used when
+    this regression was diagnosed, so DB and hand-audit agree."""
+    idx = min(len(sorted_values) - 1, int(len(sorted_values) * q))
+    return round(sorted_values[idx], 4)
+
+
+async def _read_vix_regime(
+    db: AsyncSession, *,
+    market: str,
+    end: date,
+    current: float,
+    window_days: int = _VIX_REGIME_WINDOW_DAYS,
+) -> dict[str, Any]:
+    """Where `current` sits in the trailing `window_days` of closes.
+
+    Personas used to judge the TAIWAN VIX against a hardcoded
+    "median ≈ 16-18" written into the prompt. That baseline predates
+    the current volatility regime: over 2026-04..07 the median close
+    was 36.57 and the *minimum* was 27.32, so a 36.14 print — the 39th
+    percentile, i.e. calmer than usual — was being read as extreme
+    panic and suppressing every recommendation. The regime block
+    replaces that constant with the distribution actually observed.
+
+    Backtest semantics: clamped to `<= end`, same as the caller, so a
+    replay can't rank today's value against volatility it hadn't seen.
+    """
+    from models.tw_vix_daily import TwVixDaily
+
+    stmt = (
+        select(TwVixDaily.vix_value)
+        .where(
+            TwVixDaily.market == market,
+            TwVixDaily.ts >= end - timedelta(days=window_days),
+            TwVixDaily.ts <= end,
+        )
+    )
+    values = sorted(
+        float(v) for (v,) in (await db.execute(stmt)).all()
+    )
+    sample_days = len(values)
+    sufficient = sample_days >= _VIX_REGIME_MIN_SAMPLES
+    regime: dict[str, Any] = {
+        "sample_days": sample_days,
+        "window_days": window_days,
+        "sufficient": sufficient,
+    }
+    if sufficient:
+        regime |= {
+            "percentile": _percentile_rank(values, current),
+            "median":     _quantile(values, 0.50),
+            "p25":        _quantile(values, 0.25),
+            "p75":        _quantile(values, 0.75),
+        }
+    else:
+        # `_minify_for_prompt` strips None values, so the nulls below
+        # never reach the model — `sufficient` + `sample_days` + this
+        # note are what it actually sees. Say the gap out loud: an
+        # absent statistic reads as "not relevant", and the personas
+        # fill that silence with a remembered number, which is the
+        # exact failure this block exists to end.
+        regime |= {
+            "percentile": None, "median": None,
+            "p25": None, "p75": None,
+            "note": (
+                f"VIX 歷史僅 {sample_days} 個交易日"
+                f"（需 {_VIX_REGIME_MIN_SAMPLES} 日）"
+                "，尚不足以判斷目前水位的相對高低；"
+                "請勿引用任何歷史中位數或恐慌門檻。"
+            ),
+        }
+    return regime
+
+
 async def read_tw_vix_snapshot(
     db: AsyncSession, *,
     market: str = "TW",
@@ -369,13 +458,14 @@ async def read_tw_vix_snapshot(
     as_of: date | None = None,
 ) -> dict[str, Any] | None:
     """Latest VIX value + value `days` trading-days ago (best-effort
-    via calendar-day lookback) + change %.
+    via calendar-day lookback) + change % + where that value sits in
+    the trailing year's distribution (`regime`).
 
     Returns None when the archive has no rows in the window — caller
     (ctx block) drops the field entirely so personas don't reference
     a phantom value.
 
-    Backtest semantics: when `as_of` is set, both endpoints are
+    Backtest semantics: when `as_of` is set, all lookups are
     clamped to `<= as_of`. The TAIFEX archive is insert-only (VIX
     closes don't get retroactively corrected the way some FinMind
     datasets do), so no extra masking needed.
@@ -423,4 +513,7 @@ async def read_tw_vix_snapshot(
         "from_ts":    prev_pair[0].isoformat() if prev_pair else None,
         "from_value": round(prev_pair[1], 4) if prev_pair else None,
         "change_pct": change_pct,
+        "regime":     await _read_vix_regime(
+            db, market=market, end=end, current=last_value,
+        ),
     }

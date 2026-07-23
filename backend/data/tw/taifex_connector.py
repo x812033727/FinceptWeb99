@@ -411,7 +411,126 @@ async def get_vix_history(
     return out
 
 
+# ── Monthly VIX archive ──────────────────────────────────────────
+#
+# `get_vix_history` above can only reach ~7 published sessions, which
+# is enough to quote today's level but not to say whether that level
+# is high or low. TAIFEX separately publishes one file per month,
+# linked from `/cht/7/vixDaily3MNew`:
+#
+#     GET /file/taifex/Dailydownload/vix/log2data/YYYYMMnew.txt
+#
+# Roughly four months are retained (older months 302 to the same
+# HTML 404 body as an out-of-window session). That is the only free
+# source of TAIWAN VIX history — TAIFEX's Data Shop sells the 2007+
+# series — so the archive grows one month at a time from here.
+#
+# Layout (snapshot 2026-07, tab-separated, Big5) carries the daily
+# close AND the closing-minute average:
+#
+#     交易日期	時間	臺指選擇權波動率指數	收盤前1分鐘平均指數
+#     20260701	13450000		38.12		38.14
+#
+# The trailing column is the same convention `_parse_vix_day_body`
+# returns for `Last 1 min AVG`, so both sources agree and a day
+# ingested by either path upserts to the same value.
+_VIX_MONTH_URL = (
+    "https://www.taifex.com.tw/file/taifex/Dailydownload/vix/"
+    "log2data/{month}new.txt"
+)
+
+
+def _parse_vix_month_body(body: str) -> list[dict[str, Any]]:
+    """Pull every session's closing VIX out of one month file.
+
+    Returns ``[{"date": "YYYY-MM-DD", "value": float}, ...]`` — the
+    same shape as `get_vix_history`. Non-data input (the HTML 404
+    body for a month past retention, header rows, malformed lines)
+    yields an empty list rather than raising: the caller distinguishes
+    "this month aged out" from "every month failed".
+    """
+    if not body or "<html" in body[:400].lower():
+        return []
+    out: list[dict[str, Any]] = []
+    for line in body.splitlines():
+        parts = [p.strip() for p in line.split("\t") if p.strip()]
+        if len(parts) < 3:
+            continue
+        try:
+            day = datetime.strptime(parts[0], "%Y%m%d").date()
+        except ValueError:
+            continue
+        try:
+            value = float(parts[-1])
+        except ValueError:
+            continue
+        if not math.isfinite(value):
+            continue
+        out.append({"date": day.isoformat(), "value": value})
+    return out
+
+
+def _month_stamps(end: date, months: int) -> list[str]:
+    """`months` YYYYMM stamps ending at `end`'s month, newest first."""
+    stamps: list[str] = []
+    year, month = end.year, end.month
+    for _ in range(max(0, months)):
+        stamps.append(f"{year:04d}{month:02d}")
+        month -= 1
+        if month == 0:
+            year, month = year - 1, 12
+    return stamps
+
+
+async def get_vix_monthly_history(
+    months: int = 4, *, end: date | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch the TAIWAN VIX closes for the last `months` month files.
+
+    Returns rows sorted oldest → newest, deduplicated by date (a day
+    can appear in only one month file, but the sort keeps the caller's
+    upsert order stable).
+
+    A month that aged out of retention, or whose fetch fails, is
+    skipped — that is the steady state once the archive is older than
+    TAIFEX's window. Callers must treat a *fully* empty result as a
+    failure, since every month failing is not normal.
+    """
+    headers = {"User-Agent": _USER_AGENT, "Referer": _VIX_REFERER}
+    by_date: dict[str, float] = {}
+    async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
+        for stamp in _month_stamps(end or date.today(), months):
+            try:
+                r = await client.get(
+                    _VIX_MONTH_URL.format(month=stamp),
+                    headers=headers,
+                )
+                r.raise_for_status()
+                body = r.content.decode(
+                    _TAIFEX_CSV_ENCODING, errors="replace",
+                )
+            except httpx.HTTPError as exc:
+                log.warning(
+                    "taifex.vix.month_fetch_failed",
+                    extra={"error": str(exc), "month": stamp},
+                )
+                continue
+            rows = _parse_vix_month_body(body)
+            if not rows:
+                log.info(
+                    "taifex.vix.month_empty",
+                    extra={"month": stamp},
+                )
+                continue
+            for row in rows:
+                by_date[row["date"]] = row["value"]
+    return [
+        {"date": d, "value": by_date[d]} for d in sorted(by_date)
+    ]
+
+
 __all__ = [
-    "get_vix_history", "get_futures_daily", "get_option_daily",
+    "get_vix_history", "get_vix_monthly_history",
+    "get_futures_daily", "get_option_daily",
     "get_futures_institutional",
 ]

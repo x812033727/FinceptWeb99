@@ -285,15 +285,22 @@ async def _build_tw_focus_brief_backtest(
     the five — the emptiness was the reader, not the market. Replays
     were therefore biased toward abstention.
 
-    Still skipped: revenue trend, chip metrics, peers. Revenue is
-    deliberate rather than pending — a later backfill can restate
+    Chip metrics are included for the same reason: the institutional
+    and margin ledgers are published daily by TWSE and never restated,
+    so `ts <= as_of` is point-in-time by construction. `chip_5d` is
+    load-bearing rather than decorative — it is the core dimension of
+    the chip_quality strategy, so replaying that strategy without it
+    was grading a panel that could not see its own thesis.
+
+    Still skipped: revenue trend and peers. Revenue is deliberate
+    rather than pending — a later backfill can restate
     `tw_revenue_monthly.revenue_yoy` against revised baselines, which
     is why `read_top_revenue_growers` masks it in backtest mode too;
     reading it per-symbol here would reintroduce exactly that leak.
-    Chip and peers need live screener state that can't be
-    reconstructed. Those show as null, and the personas read them as
-    "not available in backtest mode" — better than fabricating values
-    that never existed on `as_of`.
+    Peers need live screener state that can't be reconstructed. Those
+    show as null, and the personas read them as "not available in
+    backtest mode" — better than fabricating values that never
+    existed on `as_of`.
     """
     from services import tw_market_service
     from services.ingest.repository import read_ohlcv_range_autosession
@@ -368,6 +375,52 @@ async def _build_tw_focus_brief_backtest(
             }
     except Exception as exc:
         log.warning("focus_brief.backtest.fundamentals.failed",
+                    extra={"symbol": symbol, "as_of": as_of.isoformat(),
+                           "error": str(exc)})
+
+    # Chip metrics as of that session. Institutional and margin ledgers
+    # are published daily by TWSE and never restated, so reading them
+    # at `ts <= as_of` is point-in-time by construction — the property
+    # that rules out `revenue_yoy`, which a later backfill recomputes.
+    #
+    # Note on the parameter: callers pass `info_cutoff` here, i.e.
+    # `prev_trading_day(discussion.as_of_date)`, not the session being
+    # predicted (see `context.builder`). So `end=as_of` already stops a
+    # day short of the graded session — the ledger for the session
+    # itself is never in range.
+    #
+    # `chip_5d` is not a nice-to-have here: it is the core dimension of
+    # the chip_quality strategy, so replaying that strategy without it
+    # was grading a panel that couldn't see its own thesis.
+    chip_start = as_of - timedelta(days=_FOCUS_BRIEF_CHIP_DAYS * 3)
+    try:
+        from services.ingest.repository import (
+            read_institutional_range_autosession,
+        )
+        inst = await read_institutional_range_autosession(
+            "TW", symbol, chip_start, as_of,
+        )
+        # Same tail-window the live path takes, applied after the
+        # as_of clamp so the calendar-day padding above can't leak.
+        brief["chip_5d"] = _summarize_institutional(
+            (inst or [])[-_FOCUS_BRIEF_CHIP_DAYS:],
+        )
+    except Exception as exc:
+        log.warning("focus_brief.backtest.institutional.failed",
+                    extra={"symbol": symbol, "as_of": as_of.isoformat(),
+                           "error": str(exc)})
+
+    try:
+        from services.ingest.repository import read_margin_range_autosession
+
+        margin = await read_margin_range_autosession(
+            "TW", symbol, chip_start, as_of,
+        )
+        brief["margin_latest"] = _summarize_margin(
+            (margin or [])[-_FOCUS_BRIEF_CHIP_DAYS:],
+        )
+    except Exception as exc:
+        log.warning("focus_brief.backtest.margin.failed",
                     extra={"symbol": symbol, "as_of": as_of.isoformat(),
                            "error": str(exc)})
     return brief

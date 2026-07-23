@@ -143,3 +143,100 @@ async def test_a_failing_chip_read_degrades_instead_of_failing_the_replay():
     assert brief["chip_5d"] is None          # degraded, not fatal
     assert brief["margin_latest"] is not None
     assert brief["quote"] is not None
+
+
+# ── the session-owning wrappers themselves ───────────────────────
+#
+# The tests above patch these at the import site, so the wrapper
+# bodies never execute. Exercise them directly: the point of the
+# wrapper is that a DB failure yields an empty list instead of
+# propagating into the replay.
+
+
+def _session_factory(db):
+    """Stand-in for AsyncSessionLocal returning `db` from the context."""
+    class _CM:
+        async def __aenter__(self):
+            return db
+
+        async def __aexit__(self, *exc):
+            return False
+
+    return lambda: _CM()
+
+
+@pytest.mark.asyncio
+async def test_institutional_autosession_returns_rows():
+    import db.session as dbsession
+    import services.ingest.repo.tw_chip as chip
+
+    sentinel = [{"date": "2026-06-03", "symbol": "2330"}]
+    with patch.object(dbsession, "AsyncSessionLocal", _session_factory(object())), \
+         patch.object(chip, "read_institutional_range",
+                      AsyncMock(return_value=sentinel)):
+        out = await chip.read_institutional_range_autosession(
+            "TW", "2330", date(2026, 5, 20), _AS_OF,
+        )
+    assert out == sentinel
+
+
+@pytest.mark.asyncio
+async def test_institutional_autosession_swallows_db_errors():
+    import db.session as dbsession
+    import services.ingest.repo.tw_chip as chip
+
+    def _boom():
+        raise RuntimeError("db down")
+
+    with patch.object(dbsession, "AsyncSessionLocal", _boom):
+        out = await chip.read_institutional_range_autosession(
+            "TW", "2330", date(2026, 5, 20), _AS_OF,
+        )
+    assert out == []
+
+
+@pytest.mark.asyncio
+async def test_margin_autosession_returns_rows():
+    import db.session as dbsession
+    import services.ingest.repo.tw_chip as chip
+
+    sentinel = [{"date": "2026-06-03", "symbol": "2330"}]
+    with patch.object(dbsession, "AsyncSessionLocal", _session_factory(object())), \
+         patch.object(chip, "read_margin_range", AsyncMock(return_value=sentinel)):
+        out = await chip.read_margin_range_autosession(
+            "TW", "2330", date(2026, 5, 20), _AS_OF,
+        )
+    assert out == sentinel
+
+
+@pytest.mark.asyncio
+async def test_margin_autosession_swallows_db_errors():
+    import db.session as dbsession
+    import services.ingest.repo.tw_chip as chip
+
+    def _boom():
+        raise RuntimeError("db down")
+
+    with patch.object(dbsession, "AsyncSessionLocal", _boom):
+        out = await chip.read_margin_range_autosession(
+            "TW", "2330", date(2026, 5, 20), _AS_OF,
+        )
+    assert out == []
+
+
+@pytest.mark.asyncio
+async def test_a_failing_margin_read_degrades_too():
+    """Mirror of the chip degradation case — the margin branch has its
+    own try/except and must not fail the replay either."""
+    with patch("services.ingest.repository.read_ohlcv_range_autosession",
+               AsyncMock(return_value=_bars())), \
+         patch("services.ingest.repository.read_fundamentals_as_of_autosession",
+               AsyncMock(return_value=None)), \
+         patch("services.ingest.repository.read_institutional_range_autosession",
+               AsyncMock(return_value=_inst_rows())), \
+         patch("services.ingest.repository.read_margin_range_autosession",
+               AsyncMock(side_effect=RuntimeError("db down"))):
+        brief = await fb._build_tw_focus_brief_backtest("2330", as_of=_AS_OF)
+
+    assert brief["margin_latest"] is None    # degraded, not fatal
+    assert brief["chip_5d"] is not None

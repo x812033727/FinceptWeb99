@@ -96,6 +96,55 @@ async def test_trading_sessions_reads_real_sessions_not_a_calendar(
     assert out == [date(2026, 7, 3), date(2026, 7, 6)]
 
 
+# ── _archived_sessions_among / --dates ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_named_sessions_keep_only_archived_trading_days(
+    db_session: AsyncSession,
+):
+    """A contiguous window answers only for whichever volatility band it
+    happens to sit in, so stratified sampling needs explicit dates. Same
+    source of truth as the window path: a named holiday is dropped by
+    observation, not replayed against no bars."""
+    class _CM:
+        async def __aenter__(self):
+            return db_session
+
+        async def __aexit__(self, *exc):
+            return False
+
+    for day in (date(2026, 4, 29), date(2026, 5, 22), date(2026, 6, 16)):
+        db_session.add(OhlcvDaily(
+            market="TW", symbol="_TAIEX_TR", ts=day,
+            open=100.0, high=101.0, low=99.0, close=100.0,
+            volume=0, source="test",
+        ))
+    await db_session.commit()
+
+    with patch.object(rp, "AsyncSessionLocal", return_value=_CM()):
+        out = await rp._archived_sessions_among([
+            date(2026, 6, 16), date(2026, 4, 29),
+            date(2026, 5, 22), date(2026, 7, 4),   # not archived
+        ])
+
+    # Oldest first, unarchived day dropped.
+    assert out == [date(2026, 4, 29), date(2026, 5, 22), date(2026, 6, 16)]
+
+
+@pytest.mark.asyncio
+async def test_named_sessions_empty_input():
+    assert await rp._archived_sessions_among([]) == []
+
+
+@pytest.mark.asyncio
+async def test_dates_flag_rejects_an_unparseable_stamp(db_session: AsyncSession):
+    """Exit 2 rather than silently sampling a smaller set — a stratified
+    draw that quietly loses a band is worse than one that fails loudly."""
+    code = await rp._main(["--dates", "2026-04-29,not-a-date"])
+    assert code == 2
+
+
 # ── as_of threading ──────────────────────────────────────────────
 
 
@@ -417,3 +466,40 @@ async def test_fully_covered_window_is_a_clean_no_op(
     assert rc == 0
     run.assert_not_awaited()
     assert "nothing to replay" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_dates_flag_drives_the_run_and_reports_unarchived_days(
+    db_session: AsyncSession, capsys,
+):
+    """The stratified-sampling path end to end: only the named archived
+    sessions run, and a named day that isn't a trading session is
+    reported rather than silently dropped."""
+    for day in (date(2026, 4, 29), date(2026, 6, 16)):
+        db_session.add(OhlcvDaily(
+            market="TW", symbol="_TAIEX_TR", ts=day,
+            open=100.0, high=101.0, low=99.0, close=100.0,
+            volume=0, source="test",
+        ))
+    await db_session.commit()
+
+    cfg = type("Cfg", (), {})()
+    cfg.user_id = uuid.uuid4()
+
+    with patch.object(rp, "AsyncSessionLocal", return_value=_SessionCM(db_session)), \
+         patch.object(
+             rp.discussion_auto_run_config_service, "list_enabled",
+             AsyncMock(return_value=[cfg]),
+         ):
+        rc = await rp._main([
+            "--dates", "2026-06-16,2026-04-29,2026-07-04",
+            "--dry-run",
+        ])
+
+    assert rc == 0
+    out = capsys.readouterr()
+    combined = out.out + out.err
+    # The window bounds come from the named set, not from --sessions.
+    assert "2026-04-29" in combined and "2026-06-16" in combined
+    # The non-trading day is named, not swallowed.
+    assert "2026-07-04" in combined

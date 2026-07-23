@@ -39,6 +39,18 @@ Usage::
     # Full run under a spend ceiling
     python -m scripts.replay_daily_discussions --sessions 60 --budget-usd 300
 
+    # Named sessions instead of a window — for stratified sampling
+    python -m scripts.replay_daily_discussions \
+        --dates 2026-04-29,2026-05-22,2026-06-16 --budget-usd 40
+
+A contiguous window is a convenience, not a sampling method. Whether
+the panel finds a trade depends heavily on the regime — measured over
+the first replays, a session at VIX 33.9 produced picks from two of
+three strategies while sessions at 35.2-42.3 produced none — so a
+window that happens to sit inside one volatility band answers only
+for that band. When the goal is measuring accuracy rather than
+covering recent history, draw `--dates` evenly across bands.
+
 Run it from the host, not from inside the backend container: a deploy
 recreates the container and would take a long-running replay with it.
 Already-replayed slots are skipped (the auto-run unique constraint
@@ -66,6 +78,30 @@ log = logging.getLogger(__name__)
 # Measured over the six live sessions to 2026-07-22.
 _USD_PER_DISCUSSION = 1.58
 _BENCHMARK_SYMBOL = "_TAIEX_TR"
+
+
+async def _archived_sessions_among(wanted: list[date]) -> list[date]:
+    """Those of `wanted` that are archived trading sessions, oldest first.
+
+    Same source of truth as `_trading_sessions` — the index series
+    rather than a calendar — so a public holiday named on the command
+    line is dropped by observation rather than silently replayed
+    against no bars.
+    """
+    if not wanted:
+        return []
+    async with AsyncSessionLocal() as db:
+        rows = await db.scalars(
+            select(OhlcvDaily.ts)
+            .where(
+                OhlcvDaily.market == "TW",
+                OhlcvDaily.symbol == _BENCHMARK_SYMBOL,
+                OhlcvDaily.ts.in_(wanted),
+            )
+            .distinct()
+            .order_by(OhlcvDaily.ts)
+        )
+        return [r if isinstance(r, date) else r.date() for r in rows.all()]
 
 
 async def _trading_sessions(count: int, end: date) -> list[date]:
@@ -192,6 +228,10 @@ async def _main(argv: list[str]) -> int:
     ap.add_argument("--sessions", type=int, default=60)
     ap.add_argument("--end", type=date.fromisoformat, default=None,
                     help="latest session to replay (default: yesterday)")
+    ap.add_argument("--dates", default=None,
+                    help="comma-separated sessions to replay instead of a "
+                         "contiguous window — for stratified sampling "
+                         "(e.g. equal counts across volatility bands)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--verify-only", action="store_true",
                     help="check replayed contexts for look-ahead, run nothing")
@@ -202,7 +242,29 @@ async def _main(argv: list[str]) -> int:
     # Never replay a session whose own 5-day window is still open enough
     # to be ungradeable, and never replay today (its close isn't in yet).
     end = args.end or (date.today() - timedelta(days=1))
-    days = await _trading_sessions(args.sessions, end)
+    if args.dates:
+        try:
+            wanted = sorted({
+                date.fromisoformat(token.strip())
+                for token in args.dates.split(",")
+                if token.strip()
+            })
+        except ValueError as exc:
+            print(f"--dates: {exc}", file=sys.stderr)
+            return 2
+        days = await _archived_sessions_among(wanted)
+        missing = sorted(set(wanted) - set(days))
+        if missing:
+            # Named but unarchived days are reported, never silently
+            # dropped: a stratified sample that quietly loses a band
+            # is worse than one that fails loudly.
+            print(
+                "not archived trading sessions, skipping: "
+                + ", ".join(d.isoformat() for d in missing),
+                file=sys.stderr,
+            )
+    else:
+        days = await _trading_sessions(args.sessions, end)
     if not days:
         print("no archived trading sessions found", file=sys.stderr)
         return 1

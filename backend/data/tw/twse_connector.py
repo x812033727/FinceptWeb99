@@ -355,24 +355,97 @@ async def get_institutional(query_date: date | None = None) -> list[dict[str, An
 
 # ── Margin balance (融資融券) ─────────────────────────────────────
 
-async def get_margin(query_date: date | None = None) -> list[dict[str, Any]]:
-    """Endpoint: /fund/MI_MARGN"""
-    data = await _get(
-        f"{_BASE}/fund/MI_MARGN",
-        params={"response": "json", "date": _twse_date(query_date), "selectType": "MS"},
-    )
-    rows = data if isinstance(data, list) else []
-    result = []
-    for r in rows:
-        result.append({
-            "symbol":          r.get("股票代號", "").strip(),
-            "name_zh":         r.get("名稱", "").strip(),
-            "margin_purchase": _tw_int(r.get("融資買進")),
-            "margin_balance":  _tw_int(r.get("融資餘額")),
-            "short_sale":      _tw_int(r.get("融券賣出")),
-            "short_balance":   _tw_int(r.get("融券餘額")),
+# Legacy MI_MARGN positional layout for the per-symbol table.
+#
+# Parsed by INDEX, not by field name, because the header repeats
+# itself: 買進 / 賣出 / 前日餘額 / 今日餘額 / 次一營業日限額 each
+# appear twice — once for margin (融資) and once for short (融券).
+# Zipping fields to values would silently let the short columns
+# overwrite the margin ones, so `_unwrap_legacy_table` is unusable
+# here. Verified against 2330 on 2026-06-04: margin balance 28,388,
+# short balance 86.
+_MARGIN_COL_SYMBOL = 0
+_MARGIN_COL_PURCHASE = 2      # 融資買進
+_MARGIN_COL_BALANCE = 6       # 融資今日餘額
+_MARGIN_COL_SHORT_SALE = 9    # 融券賣出
+_MARGIN_COL_SHORT_BALANCE = 12  # 融券今日餘額
+_MARGIN_MIN_COLS = 13
+# The envelope nests one table per section; [0] is the market-wide
+# summary, [1] the per-symbol breakdown we want.
+_MARGIN_SYMBOL_TABLE = 1
+
+
+def _parse_legacy_margin(payload: Any) -> list[dict[str, Any]]:
+    """Per-symbol rows out of the legacy MI_MARGN envelope.
+
+    Returns `[]` for weekends, holidays and failed queries (`stat`
+    other than OK, or the per-symbol table absent), matching
+    `_unwrap_legacy_table`'s contract so callers treat "no session"
+    and "no data" the same way.
+    """
+    if not isinstance(payload, dict) or payload.get("stat") != "OK":
+        return []
+    tables = payload.get("tables")
+    if not isinstance(tables, list) or len(tables) <= _MARGIN_SYMBOL_TABLE:
+        return []
+    data = tables[_MARGIN_SYMBOL_TABLE].get("data") or []
+    out: list[dict[str, Any]] = []
+    for row in data:
+        if not isinstance(row, list) or len(row) < _MARGIN_MIN_COLS:
+            continue
+        symbol = str(row[_MARGIN_COL_SYMBOL] or "").strip()
+        if not symbol:
+            continue
+        out.append({
+            "symbol":          symbol,
+            "name_zh":         str(row[1] or "").strip(),
+            "margin_purchase": _tw_int(row[_MARGIN_COL_PURCHASE]),
+            "margin_balance":  _tw_int(row[_MARGIN_COL_BALANCE]),
+            "short_sale":      _tw_int(row[_MARGIN_COL_SHORT_SALE]),
+            "short_balance":   _tw_int(row[_MARGIN_COL_SHORT_BALANCE]),
         })
-    return result
+    return out
+
+
+async def get_margin(query_date: date | None = None) -> list[dict[str, Any]]:
+    """All stocks' margin / short balances for one session.
+
+    Two surfaces, same shape out — mirroring `get_valuations`:
+
+    - **no date** → OpenAPI `/fund/MI_MARGN`, a today-only snapshot.
+      This is what the daily cron uses and its behaviour is unchanged.
+    - **dated** → the legacy site, which serves arbitrary past
+      sessions. The OpenAPI variant takes no date at all: passing one
+      is silently ignored and yields today's numbers, so backfilling
+      through it would stamp today's balances onto historical rows.
+    """
+    if query_date is None:
+        data = await _get(
+            f"{_BASE}/fund/MI_MARGN",
+            params={"response": "json", "selectType": "MS"},
+        )
+        rows = data if isinstance(data, list) else []
+        return [
+            {
+                "symbol":          (r.get("股票代號") or "").strip(),
+                "name_zh":         (r.get("名稱") or "").strip(),
+                "margin_purchase": _tw_int(r.get("融資買進")),
+                "margin_balance":  _tw_int(r.get("融資餘額")),
+                "short_sale":      _tw_int(r.get("融券賣出")),
+                "short_balance":   _tw_int(r.get("融券餘額")),
+            }
+            for r in rows
+        ]
+
+    raw = await _get(
+        f"{_LEGACY_BASE}/rwd/zh/marginTrading/MI_MARGN",
+        params={
+            "response": "json",
+            "date": _twse_date(query_date),
+            "selectType": "ALL",
+        },
+    )
+    return _parse_legacy_margin(raw)
 
 
 # ── TAIEX index ───────────────────────────────────────────────────

@@ -271,11 +271,28 @@ async def _build_tw_focus_brief_backtest(
     1-day change vs the prior bar. Technicals (MA / 52w / RSI / perf
     %) are computed from the as_of-truncated history.
 
-    Skipped in v1: fundamentals, revenue trend, chip metrics, peers.
-    Those readers either don't have an `as_of`-aware path yet or
-    require live screener data that can't be reconstructed from the
-    DB. They show as null in the brief; personas read them as "data
-    not available in backtest mode" — better than fabricating values
+    Fundamentals ARE included: `fundamentals_snapshots` is keyed on
+    `as_of` and `backfill_fundamentals_history` populates past
+    sessions point-in-time (valuations from TWSE's dated `BWIBBU_d`,
+    statement fields from the quarters closed on/before each day), so
+    the historical rows are what was public then. The v1 note that
+    "readers don't have an as_of-aware path yet" no longer holds.
+
+    This matters more than it looks: with the block missing, every
+    replayed session lost a whole dimension of the panel's reasoning.
+    A 2026-05-26 replay abstained citing "fundamentals 與 revenue_trend
+    五檔候選股全數空值" while the archive held snapshots for four of
+    the five — the emptiness was the reader, not the market. Replays
+    were therefore biased toward abstention.
+
+    Still skipped: revenue trend, chip metrics, peers. Revenue is
+    deliberate rather than pending — a later backfill can restate
+    `tw_revenue_monthly.revenue_yoy` against revised baselines, which
+    is why `read_top_revenue_growers` masks it in backtest mode too;
+    reading it per-symbol here would reintroduce exactly that leak.
+    Chip and peers need live screener state that can't be
+    reconstructed. Those show as null, and the personas read them as
+    "not available in backtest mode" — better than fabricating values
     that never existed on `as_of`.
     """
     from services import tw_market_service
@@ -331,6 +348,28 @@ async def _build_tw_focus_brief_backtest(
             "as_of_session": str(last.get("time") or "")[:10],
             "is_intraday": False,
         }
+
+    # Fundamentals as they stood on `as_of`. `snap_as_of` is carried
+    # through so a persona can see how stale the snapshot is — on a
+    # session the ingest job never covered, the nearest earlier row is
+    # returned rather than nothing.
+    try:
+        from services.ingest.repository import read_fundamentals_as_of_autosession
+
+        f = await read_fundamentals_as_of_autosession("TW", symbol, as_of=as_of)
+        if isinstance(f, dict):
+            brief["fundamentals"] = {
+                "pe":             f.get("pe_ratio"),
+                "pb":             f.get("pb_ratio"),
+                "dividend_yield": f.get("dividend_yield"),
+                "eps":            f.get("eps"),
+                "data_source":    f.get("data_source", "unavailable"),
+                "as_of":          f.get("as_of"),
+            }
+    except Exception as exc:
+        log.warning("focus_brief.backtest.fundamentals.failed",
+                    extra={"symbol": symbol, "as_of": as_of.isoformat(),
+                           "error": str(exc)})
     return brief
 
 

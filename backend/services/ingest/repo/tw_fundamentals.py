@@ -854,6 +854,63 @@ async def read_latest_fundamentals(
     }
 
 
+async def read_fundamentals_as_of(
+    db: AsyncSession, market: str, symbol: str, *, as_of: date,
+) -> dict[str, Any] | None:
+    """Most recent snapshot at or before `as_of` — the backtest twin of
+    `read_latest_fundamentals`, which anchors its staleness window on
+    `date.today()` and so can only answer "now".
+
+    Safe to read historically because the rows are point-in-time by
+    construction: `backfill_fundamentals_history` sources valuations
+    from TWSE's dated `BWIBBU_d` report and statement fields from the
+    quarters that had closed on/before each target day. Nothing
+    recomputes a past row against later data — unlike
+    `tw_revenue_monthly.revenue_yoy`, which a later backfill can
+    restate and which `read_top_revenue_growers` therefore masks in
+    backtest mode.
+
+    No staleness cap: a replay anchored on a day the ingest job hadn't
+    yet covered should fall back to the closest earlier snapshot rather
+    than show nothing, and `as_of` on the returned dict makes the age
+    visible to the caller.
+    """
+    stmt = (
+        select(FundamentalsSnapshot)
+        .where(
+            FundamentalsSnapshot.market == market,
+            FundamentalsSnapshot.symbol == symbol,
+            FundamentalsSnapshot.as_of <= as_of,
+        )
+        .order_by(FundamentalsSnapshot.as_of.desc())
+        .limit(1)
+    )
+    row = await db.scalar(stmt)
+    if row is None:
+        return None
+    return {
+        "symbol":         row.symbol,
+        "market":         row.market,
+        "pe_ratio":       float(row.pe_ratio) if row.pe_ratio is not None else None,
+        "pb_ratio":       float(row.pb_ratio) if row.pb_ratio is not None else None,
+        "dividend_yield": float(row.dividend_yield) if row.dividend_yield is not None else None,
+        "eps":            float(row.eps) if row.eps is not None else None,
+        "revenue":        float(row.revenue) if row.revenue is not None else None,
+        "as_of":          row.as_of.isoformat(),
+        "data_source":    row.source,
+    }
+
+
+async def read_fundamentals_as_of_autosession(
+    market: str, symbol: str, *, as_of: date,
+) -> dict[str, Any] | None:
+    """Session-owning wrapper — focus briefs are fanned out alongside
+    tasks that share the caller's session, so they open their own."""
+    from db.session import AsyncSessionLocal
+    async with AsyncSessionLocal() as db:
+        return await read_fundamentals_as_of(db, market, symbol, as_of=as_of)
+
+
 async def upsert_fundamentals_snapshots_autosession(
     rows: Iterable[FundamentalsSnapshotRow],
 ) -> int:

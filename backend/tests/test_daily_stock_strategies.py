@@ -64,13 +64,92 @@ def test_chip_quality_requires_both_gates():
     assert rank_candidates("chip_quality", [quality_only]) == []
 
 
-def test_chip_quality_intersection_scores_50_50_blend():
+def test_chip_quality_ranks_stronger_on_both_halves_first():
+    """Scores are mean percentile ranks across the pool, so the row that
+    is better on more factors sorts first. The old absolute blend is
+    gone: summing raw chip (~223,000, dominated by a share count) and
+    quality (~70) never expressed the intended 50/50."""
+    strong = _safe_row(
+        symbol="2330",
+        **{**_chip_fields(), "foreign_net_buy_5d": 9000, "return_5d": 0.09},
+        **{**_quality_fields(), "roe": 30.0, "revenue_yoy": 25.0},
+    )
+    weak = _safe_row(
+        symbol="1101",
+        **{**_chip_fields(), "foreign_net_buy_5d": 1000, "return_5d": 0.01},
+        **{**_quality_fields(), "roe": 10.0, "revenue_yoy": 5.0},
+    )
+    ranked = rank_candidates("chip_quality", [weak, strong])
+    assert [r["symbol"] for r in ranked] == ["2330", "1101"]
+    # Percentile means are bounded — no more five-figure scores.
+    assert all(0.0 <= r["strategy_score"] <= 1.0 for r in ranked)
+
+
+def test_single_candidate_scores_neutral():
+    """One row has nothing to be ranked against, so every factor sits at
+    the midpoint rather than inventing a spread."""
     row = _safe_row(**_chip_fields(), **_quality_fields())
     ranked = rank_candidates("chip_quality", [row])
     assert len(ranked) == 1
-    # chip: 4*10 + 2000/1000 + 1.0*4 + 0.03*100 = 49
-    # quality: 15 + 20 + 4*3 - 40/5 + (30-18) = 51
-    assert ranked[0]["strategy_score"] == pytest.approx(0.5 * 49 + 0.5 * 51)
+    assert ranked[0]["strategy_score"] == pytest.approx(0.5)
+
+
+def test_an_extreme_factor_cannot_dominate_the_ranking():
+    """The defect this replaces. 1808 carried revenue_yoy = +162,537%
+    (a low-base artefact the earnings analyst rejected in session after
+    session) and the raw sum ranked it first almost daily, because that
+    one number was ~98% of its total score.
+
+    Under percentile ranks the outlier tops exactly one of four factors
+    and loses the other three, so it must not come first."""
+    outlier = _safe_row(
+        symbol="1808", revenue_yoy=162_537.0,
+        return_5d=0.001, foreign_net_buy_5d=10, pe=29.0,
+    )
+    allrounder = _safe_row(
+        symbol="2330", revenue_yoy=20.0,
+        return_5d=0.08, foreign_net_buy_5d=900_000, pe=12.0,
+    )
+    middling = _safe_row(
+        symbol="1101", revenue_yoy=15.0,
+        return_5d=0.04, foreign_net_buy_5d=500_000, pe=18.0,
+    )
+    ranked = rank_candidates("general", [outlier, allrounder, middling])
+    assert [r["symbol"] for r in ranked] == ["2330", "1101", "1808"]
+
+
+def test_no_single_factor_exceeds_half_of_the_score():
+    """Equal weighting over four factors caps any one factor's share at
+    25% — the property whose absence let a share count contribute
+    99.97% of a total."""
+    rows = [
+        _safe_row(symbol="2330", revenue_yoy=99_999.0, return_5d=0.01,
+                  foreign_net_buy_5d=1, pe=25.0),
+        _safe_row(symbol="1101", revenue_yoy=10.0, return_5d=0.05,
+                  foreign_net_buy_5d=800_000, pe=15.0),
+    ]
+    ranked = rank_candidates("general", rows)
+    # Four equally-weighted factors, each bounded on 0-1: the most any
+    # one can contribute to the mean is 1/4.
+    for row in ranked:
+        assert row["strategy_score"] <= 1.0
+        assert row["strategy_score"] >= 0.0
+
+
+def test_tied_factor_values_share_a_rank():
+    """Rows identical on a factor must not be ordered by it — otherwise
+    a field that is missing pool-wide (and defaults everywhere) would
+    silently drive the ranking."""
+    rows = [
+        _safe_row(symbol="2330", revenue_yoy=10.0, return_5d=0.05,
+                  foreign_net_buy_5d=1000, pe=20.0),
+        _safe_row(symbol="1101", revenue_yoy=10.0, return_5d=0.05,
+                  foreign_net_buy_5d=1000, pe=20.0),
+    ]
+    ranked = rank_candidates("general", rows)
+    assert ranked[0]["strategy_score"] == pytest.approx(ranked[1]["strategy_score"])
+    # Stable tie-break by symbol, as before.
+    assert [r["symbol"] for r in ranked] == ["1101", "2330"]
 
 
 def test_chip_quality_empty_intersection_yields_no_batches():
@@ -86,8 +165,7 @@ def test_price_signal_breakout_track():
     ranked = rank_candidates("price_signal", [row])
     assert len(ranked) == 1
     assert ranked[0]["signal_type"] == "breakout"
-    # (105/100-1)*100 + 2*5 + 0.04*50 + 2000/2000 = 5 + 10 + 2 + 1 = 18
-    assert ranked[0]["strategy_score"] == pytest.approx(18.0)
+    assert ranked[0]["strategy_score"] == pytest.approx(0.5)  # sole row → neutral
 
 
 def test_price_signal_oversold_track():
@@ -96,8 +174,7 @@ def test_price_signal_oversold_track():
     ranked = rank_candidates("price_signal", [row])
     assert len(ranked) == 1
     assert ranked[0]["signal_type"] == "oversold"
-    # (40-30) + 0.01*100 + 1.2*3 + 500/1000 = 10 + 1 + 3.6 + 0.5 = 15.1
-    assert ranked[0]["strategy_score"] == pytest.approx(15.1)
+    assert ranked[0]["strategy_score"] == pytest.approx(0.5)  # sole row → neutral
 
 
 def test_price_signal_breakout_wins_when_both_tracks_match():

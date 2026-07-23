@@ -63,6 +63,11 @@ type ScoreboardEntry = {
   unverifiable: number;
   win_rate?: number | null;
   avg_return_pct?: number | null;
+  d5_decided?: number;
+  d5_wins?: number;
+  d5_losses?: number;
+  d5_win_rate?: number | null;
+  d5_unsettled?: number;
   pool_samples: number;
   avg_alpha_pct?: number | null;
 };
@@ -264,7 +269,14 @@ function Scoreboard({ entries }: { entries: ScoreboardEntry[] }) {
         <thead>
           <tr className="text-left text-xs text-slate-500">
             <th className="py-1.5 pr-4 font-medium">策略</th>
-            <th className="py-1.5 pr-4 font-medium">勝率</th>
+            <th className="py-1.5 pr-4 font-medium">
+              勝率
+              <span className="ml-1 font-normal text-slate-600">（含中途風控）</span>
+            </th>
+            <th className="py-1.5 pr-4 font-medium">
+              勝率
+              <span className="ml-1 font-normal text-slate-600">（只看五日收盤）</span>
+            </th>
             <th className="py-1.5 pr-4 font-medium">平均五日報酬</th>
             <th className="py-1.5 pr-4 font-medium">大勝／大敗</th>
             <th className="py-1.5 pr-4 font-medium">樣本</th>
@@ -290,6 +302,25 @@ function Scoreboard({ entries }: { entries: ScoreboardEntry[] }) {
                   {typeof entry.win_rate === "number" ? `${Math.round(entry.win_rate * 100)}%` : "—"}
                 </span>
                 {decided > 0 && <span className="ml-1 text-xs text-slate-500">({entry.wins}勝{entry.losses}敗／決勝 {decided} 場)</span>}
+              </td>
+              {/* Second lens: the verdict bands are asymmetric on purpose
+                  (a mid-window drop of 5% books a loss even if the pick
+                  closes higher), so the D5-only view sits beside it
+                  rather than replacing it. */}
+              <td className="py-2 pr-4">
+                <span className={thin ? "text-slate-400" : undefined}>
+                  {typeof entry.d5_win_rate === "number" ? `${Math.round(entry.d5_win_rate * 100)}%` : "—"}
+                </span>
+                {(entry.d5_decided ?? 0) > 0 && (
+                  <span className="ml-1 text-xs text-slate-500">
+                    ({entry.d5_wins}勝{entry.d5_losses}敗／已收盤 {entry.d5_decided} 場)
+                  </span>
+                )}
+                {(entry.d5_unsettled ?? 0) > 0 && (
+                  <span className="ml-1 text-xs text-slate-500" title="已依中途風控判定，但五日收盤尚未產生">
+                    ／{entry.d5_unsettled} 場尚未收盤
+                  </span>
+                )}
               </td>
               <td className={`py-2 pr-4 ${typeof entry.avg_return_pct === "number" ? (entry.avg_return_pct >= 0 ? "text-up" : "text-down") : ""}`}>
                 {pct(entry.avg_return_pct, true)}

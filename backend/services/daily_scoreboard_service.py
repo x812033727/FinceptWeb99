@@ -22,6 +22,18 @@ rate ends up on a public page:
   - `decided`  = wins + losses; the win-rate denominator
   - `abstains` = the panel deliberately passed (a decision, not a gap)
   - `pending`  = window still open, not yet graded
+
+Two *lenses* are reported for the same picks, because the verdict
+bands are deliberately asymmetric: `win` grades on the D5 close while
+`big_loss` fires on any close ≤ −5% (a risk band, not a return
+measurement — see `outcome_classifier`). In a high-volatility regime
+that asymmetry moves the headline win rate on its own: a pick can be
+booked as a loss before its D5 close even exists, which is what
+happened to a 2026-07 pick whose trough hit −7.1% with `day5_close`
+still unset. So alongside the verdict lens we report a pure D5 lens —
+same picks, graded only on where they closed — and let the reader see
+both. Neither replaces the other: the verdict lens answers "did this
+hurt", the D5 lens answers "where did it end up".
 """
 
 from __future__ import annotations
@@ -34,10 +46,14 @@ from sqlalchemy.orm import load_only
 
 from models.discussion import Discussion
 from models.ohlcv_daily import OhlcvDaily
+from services.outcome_classifier import DEFAULT_WIN_PCT
 from services.tw_trading_calendar import to_tw_date
 
 WINNING_VERDICTS = ("win", "big_win")
 LOSING_VERDICTS = ("loss", "big_loss")
+# Graded verdicts whose D5 lens can be missing: the verdict landed on
+# the any-close risk band before the window finished.
+_GRADED_VERDICTS = WINNING_VERDICTS + LOSING_VERDICTS
 
 # The 5-trading-day grading window, mirroring
 # `tasks.verify_discussion_outcome._WINDOW_TRADING_DAYS`.
@@ -169,6 +185,19 @@ async def build_scoreboard(
             r for r in (_picked_return_pct(d) for d in group) if r is not None
         ]
 
+        # D5 lens: same picks, graded purely on where they closed.
+        # `win` uses the same +5% bar as the verdict band so the two
+        # lenses differ only in the asymmetry, not in the threshold.
+        d5_wins = sum(1 for r in pick_returns if r >= DEFAULT_WIN_PCT)
+        d5_decided = len(pick_returns)
+        # Booked as a win or loss while its D5 close is still missing —
+        # the any-close band fired early. Counting these as 0% return
+        # would understate the lens; they are surfaced instead.
+        d5_unsettled = sum(
+            1 for d in group
+            if d.verdict in _GRADED_VERDICTS and _picked_return_pct(d) is None
+        )
+
         # AI-vs-pool alpha: only rows where BOTH sides resolved.
         alphas: list[float] = []
         pool_samples = 0
@@ -201,6 +230,13 @@ async def build_scoreboard(
             "unverifiable": sum(1 for d in group if d.verdict == "unverifiable"),
             "win_rate": round(wins / decided, 4) if decided else None,
             "avg_return_pct": _mean(pick_returns),
+            "d5_decided": d5_decided,
+            "d5_wins": d5_wins,
+            "d5_losses": d5_decided - d5_wins,
+            "d5_win_rate": (
+                round(d5_wins / d5_decided, 4) if d5_decided else None
+            ),
+            "d5_unsettled": d5_unsettled,
             "pool_samples": pool_samples,
             "avg_alpha_pct": _mean(alphas),
             "benchmark_samples": benchmark_samples,

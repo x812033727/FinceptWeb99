@@ -176,3 +176,72 @@ async def test_excess_omitted_while_index_window_incomplete(db_session):
     entry = (await build_scoreboard(db_session, owner.id))[0]
     assert entry["benchmark_samples"] == 0
     assert entry["avg_excess_vs_taiex_pct"] is None
+
+
+# ── D5 lens alongside the verdict lens ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_d5_lens_reported_alongside_the_verdict_lens(db_session):
+    """The verdict bands are asymmetric on purpose: `win` grades on the
+    D5 close, `big_loss` fires on ANY close ≤ −5%. A pick that dipped
+    below the risk band mid-window but closed up is a `big_loss` by
+    verdict and a win by D5 — both are true, and the scoreboard now
+    says so instead of showing only the harsher one."""
+    owner = await _owner(db_session)
+    db_session.add_all([
+        # Dipped through the risk band, closed +8% → big_loss verdict,
+        # win under the D5 lens.
+        _verified(owner.id, strategy="general", verdict="big_loss",
+                  day1={"2330": 100.0}, day5={"2330": 108.0}),
+        # Closed down: a loss under both lenses.
+        _verified(owner.id, strategy="general", verdict="loss",
+                  day1={"2330": 100.0}, day5={"2330": 97.0}),
+    ])
+    await db_session.commit()
+
+    entry = (await build_scoreboard(db_session, owner.id))[0]
+    # Verdict lens unchanged — this must stay the risk-aware view.
+    assert entry["win_rate"] == pytest.approx(0.0)
+    assert entry["big_losses"] == 1
+    # D5 lens: one of the two closed above +5%.
+    assert entry["d5_decided"] == 2
+    assert entry["d5_wins"] == 1
+    assert entry["d5_losses"] == 1
+    assert entry["d5_win_rate"] == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_d5_lens_flags_picks_booked_before_their_window_closed(db_session):
+    """The 2026-07 case that motivated this: a pick whose trough hit
+    −7.1% was booked `big_loss` while `day5_close_prices` was still
+    unset. It has no D5 lens at all — counting it as a 0% return would
+    invent a number, so it is surfaced as unsettled instead."""
+    owner = await _owner(db_session)
+    db_session.add(_verified(owner.id, strategy="price_signal",
+                             verdict="big_loss",
+                             day1={"6243": 50.0}, day5=None))
+    await db_session.commit()
+
+    entry = (await build_scoreboard(db_session, owner.id))[0]
+    assert entry["decided"] == 1          # counted by the verdict lens
+    assert entry["d5_decided"] == 0       # but not yet by the D5 lens
+    assert entry["d5_win_rate"] is None
+    assert entry["d5_unsettled"] == 1
+
+
+@pytest.mark.asyncio
+async def test_d5_unsettled_ignores_ungraded_rows(db_session):
+    """Pending and abstained rows have no D5 lens either, but they are
+    not *unsettled verdicts* — only a row already booked win/loss
+    without a close counts."""
+    owner = await _owner(db_session)
+    db_session.add_all([
+        _verified(owner.id, strategy="general", verdict=None),
+        _verified(owner.id, strategy="general", verdict="abstain"),
+        _verified(owner.id, strategy="general", verdict="unverifiable"),
+    ])
+    await db_session.commit()
+
+    entry = (await build_scoreboard(db_session, owner.id))[0]
+    assert entry["d5_unsettled"] == 0

@@ -150,6 +150,16 @@ class ScoreboardEntry(BaseModel):
     unverifiable: int
     win_rate: float | None = None
     avg_return_pct: float | None = None
+    # Second lens on the same picks, graded purely on the D5 close.
+    # The verdict bands are asymmetric by design (`big_loss` fires on
+    # any close ≤ −5%), so in a volatile regime the two disagree — and
+    # a reader deserves both rather than only the harsher one.
+    d5_decided: int = 0
+    d5_wins: int = 0
+    d5_losses: int = 0
+    d5_win_rate: float | None = None
+    # Booked win/loss while the D5 close is still missing.
+    d5_unsettled: int = 0
     pool_samples: int = 0
     avg_alpha_pct: float | None = None
     benchmark_samples: int = 0

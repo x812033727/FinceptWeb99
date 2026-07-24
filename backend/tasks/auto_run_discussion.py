@@ -168,10 +168,34 @@ async def _do_run() -> tuple[int, list[str]]:
         return successes, errors
 
 
+def _select_strategy_counts(
+    counts: dict[str, int], only_strategy: str | None,
+) -> dict[str, int]:
+    """Narrow a strategy→count map to one strategy for an experiment run.
+
+    An unknown key selects nothing: a typo must produce an empty run rather
+    than silently falling back to every strategy and spending real budget on
+    the wrong thing."""
+    if only_strategy is None:
+        return counts
+    return {k: v for k, v in counts.items() if k == only_strategy}
+
+
+def _effective_rules(cfg: DiscussionAutoRunConfig, rules_override: str | None) -> str:
+    """Rules text for this run. An override is applied in memory only — the
+    saved config the daily cron reads must not change because an experiment
+    ran."""
+    return rules_override if rules_override else cfg.rules
+
+
 async def _run_for_user(
     db: AsyncSession,
     cfg: DiscussionAutoRunConfig,
     as_of: date | None = None,
+    *,
+    only_strategy: str | None = None,
+    rules_override: str | None = None,
+    allow_duplicate: bool = False,
 ) -> bool:
     """Run one auto-run discussion for a single enabled user.
 
@@ -186,6 +210,8 @@ async def _run_for_user(
         getattr(cfg, "strategy_run_counts", None),
         legacy_enabled=True,
     )
+    counts = _select_strategy_counts(counts, only_strategy)
+    rules = _effective_rules(cfg, rules_override)
     run_date = as_of or datetime.now(ZoneInfo("Asia/Taipei")).date()
     candidate_rows = await load_candidate_rows(db, as_of=as_of)
     ran_strategies: dict[str, int] = {}
@@ -202,7 +228,7 @@ async def _run_for_user(
         if strategy == "general" and not batches:
             batches = [[]]
         for sequence, batch in enumerate(batches, 1):
-            exists = await db.scalar(
+            exists = None if allow_duplicate else await db.scalar(
                 select(Discussion.id).where(
                     Discussion.owner_id == user_id,
                     Discussion.auto_run_date == run_date,
@@ -215,7 +241,7 @@ async def _run_for_user(
             await _run_strategy_slot(
                 db, cfg, strategy, sequence, run_date, batch,
                 pool=pool if sequence == 1 else None,
-                as_of=as_of,
+                as_of=as_of, rules=rules,
             )
             ran_strategies[strategy] = ran_strategies.get(strategy, 0) + 1
     # Replays are an operator batch job, not something the user asked
@@ -392,7 +418,7 @@ async def load_candidate_rows(
 
 async def _run_strategy_slot(
     db, cfg, strategy, sequence, run_date, batch, pool: list | None = None,
-    as_of: date | None = None,
+    as_of: date | None = None, rules: str | None = None,
 ) -> None:
     user_id = cfg.user_id
 
@@ -416,7 +442,7 @@ async def _run_strategy_slot(
         db,
         owner_id=user_id,
         topic=topic,
-        rules=cfg.rules,
+        rules=rules if rules is not None else cfg.rules,
         persona_ids=list(cfg.persona_ids or []),
         market=cfg.market,
         as_of_date=as_of,

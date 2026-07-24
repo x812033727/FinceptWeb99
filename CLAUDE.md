@@ -1304,3 +1304,13 @@ helm install fincept ./helm/fincept-web \
   wrap with `Boolean(condition)` or use a ternary.
 - Optional chaining: `h.current_price?.toFixed(2)` on `number | null | undefined` —
   guard with `(h.current_price ?? 0).toFixed(2)`.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs live as GitHub issues in `x812033727/FinceptWeb99`, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context — `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.

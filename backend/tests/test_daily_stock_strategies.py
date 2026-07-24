@@ -13,6 +13,7 @@ from services.daily_stock_strategies import (
     LABELS,
     POOL_LIMIT,
     STRATEGIES,
+    _score_pool,
     build_topic,
     candidate_batches,
     candidate_pool,
@@ -193,6 +194,36 @@ def test_price_signal_mixed_tracks_sorted_by_score():
     assert [r["signal_type"] for r in ranked] == ["breakout", "oversold"]
     scores = [r["strategy_score"] for r in ranked]
     assert scores == sorted(scores, reverse=True)
+
+
+def test_price_signal_ranks_each_factor_within_its_users():
+    """A track-exclusive factor is ranked only among the rows that use it.
+
+    `rsi` scores only the oversold track. A breakout row carries an rsi
+    value (it is eligible with rsi <= 80) but never scores on it, so it
+    must not sit in the pool that ranks rsi — otherwise the oversold rows'
+    rsi percentile is diluted by rows that ignore the factor. Shared
+    factors (`volume_ratio`, used by both tracks) still rank over the
+    whole pool.
+
+    Two oversold rows (rsi 10 / 20) and one breakout row (rsi 70), every
+    other factor held equal so only rsi separates the oversold pair:
+      - rsi ranked among the oversold pair only → O1=1.0, O2=0.0
+      - volume_ratio equal across all three → 0.5 each
+      - the remaining per-track factors are equal (or single-user) → 0.5
+    So O1=(1.0+0.5+0.5+0.5)/4=0.625, O2=(0.0+…)/4=0.375, B1=0.5.
+    Ranking rsi across all three would instead give O2=0.5 (rsi 20 is the
+    pool median), so this pins the within-users semantics.
+    """
+    o1 = {"symbol": "1001", "signal_type": "oversold", "rsi": 10.0,
+          "return_1d": 0.02, "volume_ratio": 1.0, "foreign_net_buy_1d": 100}
+    o2 = {"symbol": "1002", "signal_type": "oversold", "rsi": 20.0,
+          "return_1d": 0.02, "volume_ratio": 1.0, "foreign_net_buy_1d": 100}
+    b1 = {"symbol": "1003", "signal_type": "breakout", "rsi": 70.0,
+          "breakout_pct": 0.05, "return_20d": 0.10, "volume_ratio": 1.0,
+          "foreign_net_buy_5d": 500}
+    scores = _score_pool("price_signal", [o1, o2, b1])
+    assert scores == [0.625, 0.375, 0.5]
 
 
 def test_build_topic_price_signal_tags_signals():

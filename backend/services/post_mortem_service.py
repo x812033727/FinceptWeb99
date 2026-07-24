@@ -1208,3 +1208,47 @@ def verdict_to_dict(v: OutcomeVerdict) -> dict[str, Any]:
         "best_pct":       v.best_pct,
         "reason":         v.reason,
     }
+
+
+# ── Post-mortem self-critique pass ──────────────────────────────
+
+
+async def run_post_mortem_pass(db: AsyncSession, discussion: Any, owner_id) -> None:
+    """Inject the post-mortem critique prompt, run one reflection round,
+    and re-synthesize. Shared by the backtest sweep and the live verify
+    path so both self-critique through one implementation."""
+    from services import discussion_service
+
+    await db.refresh(discussion)
+    if not discussion.conclusion:
+        return
+    payload = await build_post_mortem_message(db, discussion)
+    if not payload.trading_days:
+        return
+    if payload.verdict is not None and payload.verdict.status in ("win", "big_win"):
+        try:
+            from middleware.metrics import POST_MORTEM_SKIPPED_TOTAL
+            POST_MORTEM_SKIPPED_TOTAL.labels(market=discussion.market).inc()
+        except Exception:
+            pass
+        if payload.prompt_text:
+            try:
+                await discussion_service.extract_winning_thesis_lessons(
+                    db, discussion, win_prompt_text=payload.prompt_text,
+                    user_id=str(owner_id),
+                )
+            except Exception as exc:
+                log.warning("post_mortem.win_lesson_extraction_failed",
+                            extra={"discussion_id": str(discussion.id), "error": str(exc)})
+        return
+    if not payload.prompt_text:
+        return
+    await discussion_service.inject_user_message(db, discussion, content=payload.prompt_text)
+    try:
+        from middleware.metrics import POST_MORTEM_RAN_TOTAL
+        POST_MORTEM_RAN_TOTAL.labels(market=discussion.market).inc()
+    except Exception:
+        pass
+    async for _ev in discussion_service.run_round(db, discussion, user_id=str(owner_id), user_role="analyst"):
+        pass
+    await discussion_service.synthesize_conclusion(db, discussion, user_id=str(owner_id))

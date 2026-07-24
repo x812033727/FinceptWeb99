@@ -234,20 +234,33 @@ def _factors_for(strategy: str, row: dict[str, Any]) -> tuple[str, ...]:
 def _score_pool(strategy: str, rows: list[dict[str, Any]]) -> list[float]:
     """Mean percentile rank per row, over that row's factor set.
 
-    Percentiles are computed across the whole eligible pool (not per
-    track), so a factor means the same thing to every row that uses it.
+    Each factor is ranked only among the rows that actually score on it,
+    so a factor means the same thing to every row that uses it. For
+    fixed-factor strategies (general, chip_quality) every row uses every
+    factor, so this is the whole pool. For price_signal the two tracks
+    score on different factors: a track-exclusive factor (rsi for
+    oversold, breakout_pct for breakout) is ranked within its own track,
+    while a shared factor (volume_ratio) still ranks across both. Pooling
+    an exclusive factor over the whole pool would rank it against rows
+    that carry the value but never use it — e.g. a breakout row's rsi,
+    eligible up to 80 — diluting the users' percentiles.
     """
     if strategy not in _STRATEGY_FACTORS and strategy != "price_signal":
         raise ValueError(f"unknown strategy: {strategy}")
     if not rows:
         return []
-    needed = {f for row in rows for f in _factors_for(strategy, row)}
-    pct: dict[str, list[float]] = {}
-    for name in needed:
+    users: dict[str, list[int]] = {}
+    for idx, row in enumerate(rows):
+        for name in _factors_for(strategy, row):
+            users.setdefault(name, []).append(idx)
+    pct: dict[str, dict[int, float]] = {}
+    for name, idxs in users.items():
         extract, higher_is_better = _FACTORS[name]
-        raw = [extract(r) for r in rows]
+        raw = [extract(rows[i]) for i in idxs]
         ranks = _percentile_ranks(raw)
-        pct[name] = ranks if higher_is_better else [1.0 - x for x in ranks]
+        if not higher_is_better:
+            ranks = [1.0 - x for x in ranks]
+        pct[name] = dict(zip(idxs, ranks, strict=True))
     out = []
     for idx, row in enumerate(rows):
         names = _factors_for(strategy, row)

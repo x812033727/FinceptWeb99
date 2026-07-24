@@ -43,5 +43,8 @@ Thumbs.db
 postgres_data/
 redis_data/
 
+# Runtime deploy state (logs, locks, status written by the deploy runner)
+var/
+
 # Alembic
 backend/db/migrations/versions/*.pyc

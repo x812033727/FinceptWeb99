@@ -156,6 +156,11 @@ async def build_scoreboard(
                 Discussion.owner_id == owner_id,
                 Discussion.auto_run.is_(True),
                 Discussion.status == "done",
+                # LIVE track record only. Backtest replay rows carry an
+                # `as_of_date` and run under the same owner as live picks,
+                # so without this they blend hindsight-informed replays
+                # (and every fuel sweep) into the published win rate.
+                Discussion.as_of_date.is_(None),
             )
         )
     ).all()

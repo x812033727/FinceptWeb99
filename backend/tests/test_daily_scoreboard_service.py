@@ -29,6 +29,7 @@ def _verified(
     pool_performance: dict | None = None,
     auto_run: bool = True,
     status: str = "done",
+    as_of_date=None,
 ):
     now = datetime(2026, 7, 10, tzinfo=UTC)
     return Discussion(
@@ -37,7 +38,7 @@ def _verified(
         current_round=5, conclusion={"reasoning": "x"},
         auto_run=auto_run, auto_run_strategy=strategy,
         verdict=verdict, day1_open_prices=day1, day5_close_prices=day5,
-        pool_performance=pool_performance,
+        pool_performance=pool_performance, as_of_date=as_of_date,
         created_at=now, updated_at=now,
     )
 
@@ -245,3 +246,32 @@ async def test_d5_unsettled_ignores_ungraded_rows(db_session):
 
     entry = (await build_scoreboard(db_session, owner.id))[0]
     assert entry["d5_unsettled"] == 0
+
+
+@pytest.mark.asyncio
+async def test_scoreboard_excludes_backtest_replay_rows(db_session):
+    """The public scoreboard is the LIVE track record. Backtest replay rows
+    (`as_of_date` set) run under the same owner as live picks, so without an
+    explicit filter they blend hindsight-informed replays into the published
+    win rate. Only `as_of_date IS NULL` rows may count."""
+    from datetime import date
+    owner = await _owner(db_session)
+    db_session.add_all([
+        # one LIVE win
+        _verified(owner.id, strategy="general", verdict="win",
+                  day1={"2330": 100.0}, day5={"2330": 105.0}),
+        # three BACKTEST rows (2 win, 1 loss) that must NOT count
+        _verified(owner.id, strategy="general", verdict="big_win",
+                  day1={"2330": 100.0}, day5={"2330": 130.0}, as_of_date=date(2026, 5, 1)),
+        _verified(owner.id, strategy="general", verdict="win",
+                  day1={"2330": 100.0}, day5={"2330": 106.0}, as_of_date=date(2026, 5, 2)),
+        _verified(owner.id, strategy="general", verdict="loss",
+                  day1={"2330": 100.0}, day5={"2330": 90.0}, as_of_date=date(2026, 5, 3)),
+    ])
+    await db_session.flush()
+    entries = await build_scoreboard(db_session, owner.id)
+    general = next(e for e in entries if e["strategy"] == "general")
+    # Only the single live win — not 3 wins / 1 loss blended in.
+    assert general["wins"] == 1
+    assert general["losses"] == 0
+    assert general["decided"] == 1

@@ -63,6 +63,7 @@ from services.outcome_classifier import (
     classify_discussion,
     is_winning_verdict,
 )
+from services.post_mortem_service import run_post_mortem_pass
 from services.tw_trading_calendar import to_tw_date
 
 log = logging.getLogger(__name__)
@@ -81,6 +82,22 @@ _WINDOW_TRADING_DAYS = 5
 # data hasn't surfaced by then, it's not coming.
 _STALE_GRACE_DAYS = 30
 _TW_SYMBOL_RE = re.compile(r"^\d{4,6}$")
+
+DECIDED_VERDICTS = ("win", "big_win", "loss", "big_loss")
+
+
+async def maybe_run_live_post_mortem(db, d) -> None:
+    """Self-critique a graded live discussion. Only decided outcomes carry
+    a real pick worth critiquing; abstain/unverifiable have nothing to
+    reflect on. Fail-closed: a post-mortem error must never disturb the
+    verdict already committed above."""
+    if d.verdict not in DECIDED_VERDICTS:
+        return
+    try:
+        await run_post_mortem_pass(db, d, d.owner_id)
+    except Exception as exc:
+        log.warning("verify_discussion_outcome.live_post_mortem_failed",
+                    extra={"id": str(d.id), "error": str(exc)})
 
 
 async def run() -> None:
@@ -568,6 +585,7 @@ async def _set_verdict(
                 "verify_discussion_outcome.record_lesson_outcome_failed",
                 extra={"id": str(d.id), "error": str(exc)},
             )
+    await maybe_run_live_post_mortem(db, d)
     log.info(
         "verify_discussion_outcome.verdict",
         extra={

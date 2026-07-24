@@ -766,6 +766,51 @@ async def test_build_post_mortem_message_returns_big_loss_when_any_day_crashes(
     assert "風險控管" in payload.prompt_text
 
 
+@pytest.mark.asyncio
+async def test_build_post_mortem_message_live_discussion_anchors_on_created_at(
+    db_session: AsyncSession,
+):
+    """C1 regression: live/auto-run discussions always have
+    `as_of_date is None` (that anchor is only ever set by backtest
+    replay). `build_post_mortem_message` must not raise for these —
+    it should fall back to `created_at`'s Taipei trading date as the
+    *forward* anchor, mirroring the convention
+    `verify_discussion_outcome.py` already uses for its own anchor
+    resolution (`d.as_of_date or to_tw_date(d.created_at)`)."""
+    from datetime import UTC, datetime as _dt
+    from uuid import uuid4
+
+    base = date(2026, 3, 23)
+    days = [date(2026, 3, 24), date(2026, 3, 25), date(2026, 3, 26),
+            date(2026, 3, 27), date(2026, 3, 30)]
+    db_session.add_all([
+        _bar("2330", base, 100.0),
+        _bar("2330", days[0], 102.0),
+        _bar("2330", days[1], 108.0),    # +8 % vs entry → clear win
+        _bar("2330", days[2], 107.0),
+        _bar("2330", days[3], 106.0),
+        _bar("2330", days[4], 107.0),
+    ])
+    await db_session.commit()
+
+    fake_disc = type("Disc", (), {})()
+    fake_disc.id = uuid4()
+    fake_disc.owner_id = uuid4()
+    fake_disc.market = "TW"
+    fake_disc.as_of_date = None   # live discussion — no backtest anchor
+    fake_disc.conclusion = {"recommended_symbols": ["2330"]}
+    # 06:00 UTC == 14:00 Taipei, same calendar date as `base`.
+    fake_disc.created_at = _dt(2026, 3, 23, 6, 0, tzinfo=UTC)
+
+    payload = await svc.build_post_mortem_message(db_session, fake_disc)
+
+    assert payload.verdict is not None
+    assert payload.verdict.status == "win"
+    assert payload.trading_days   # anchored correctly off created_at
+    assert payload.prompt_text
+    assert base.isoformat() in payload.prompt_text
+
+
 # ── verdict serialiser ───────────────────────────────────────────
 
 

@@ -258,7 +258,7 @@ function Info({ label, value }: { label: string; value: string }) {
   return <div className="rounded-xl bg-slate-950/50 p-4"><div className="text-xs text-slate-500">{label}</div><div className="mt-1 font-semibold">{value}</div></div>;
 }
 
-function Scoreboard({ entries }: { entries: ScoreboardEntry[] }) {
+export function Scoreboard({ entries }: { entries: ScoreboardEntry[] }) {
   if (!entries.length) return null;
   const pct = (value?: number | null, signed = false) =>
     typeof value === "number" ? `${signed && value >= 0 ? "+" : ""}${value.toFixed(1)}%` : "—";
@@ -292,6 +292,12 @@ function Scoreboard({ entries }: { entries: ScoreboardEntry[] }) {
             // overstating the panel. Under 10 decided rounds the number
             // is explicitly marked as not yet meaningful.
             const thin = decided < 10;
+            // The D5 lens settles on its own clock — a round can be
+            // verdict-decided (mid-window risk band touched) while its D5
+            // close is still missing. Grade its sufficiency off its own
+            // settled count so the verdict lens's sample size can't mark a
+            // thin D5 rate as solid, or a solid one as thin.
+            const d5Thin = (entry.d5_decided ?? 0) < 10;
             return <tr key={entry.strategy} className="border-t border-slate-800/60 text-slate-200">
               <td className="py-2 pr-4 font-semibold">
                 {strategyNames[entry.strategy] ?? legacyStrategyNames[entry.strategy] ?? entry.strategy}
@@ -308,9 +314,10 @@ function Scoreboard({ entries }: { entries: ScoreboardEntry[] }) {
                   closes higher), so the D5-only view sits beside it
                   rather than replacing it. */}
               <td className="py-2 pr-4">
-                <span className={thin ? "text-slate-400" : undefined}>
+                <span className={d5Thin ? "text-slate-400" : undefined}>
                   {typeof entry.d5_win_rate === "number" ? `${Math.round(entry.d5_win_rate * 100)}%` : "—"}
                 </span>
+                {d5Thin && (entry.d5_decided ?? 0) > 0 && <span className="ml-1 rounded-full border border-slate-700 px-1.5 py-0.5 text-micro text-slate-500">樣本不足</span>}
                 {(entry.d5_decided ?? 0) > 0 && (
                   <span className="ml-1 text-xs text-slate-500">
                     ({entry.d5_wins}勝{entry.d5_losses}敗／已收盤 {entry.d5_decided} 場)

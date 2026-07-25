@@ -5,22 +5,42 @@ episodic lessons WOULD cross the promotion floor once correct
 abstentions count? A zero here means the semantics change alone is
 insufficient and the threshold discussion starts now, not in two weeks.
 
-From-scratch recount (idempotent), dry-run by default; --apply
-overwrites hit_count. Never promotes — the Sunday job owns that.
+From-scratch recount (idempotent), dry-run by default; --apply writes
+hit_count (raising only, by default — see below).
 
---apply can LOWER hit_count, not just raise it: rows inflated by
-historical double-bump bugs recount downward once this script's
-from-scratch aggregation replaces whatever incremental count is
-currently stored. DEMOTE_HIT_RATE_THRESHOLD (lesson_tier_service.py)
-reads hit_count too, so a lowered count can push a lesson toward
-demotion on its next cron pass — read the dry-run's raised/lowered
-split below before passing --apply.
+ERA MISMATCH, not a double-bump bug: the numerator this script rebuilds
+comes from RETAINED discussions only (prod has retained discussion rows
+since 2026-07-12), while the denominator, each lesson's `usage_count`,
+is a LIFETIME counter that has been accumulating since the lesson
+system shipped (2026-05-09). A lesson used steadily since May whose
+citing discussions from before mid-July were pruned recounts to a much
+lower hit_count than its true lifetime hit rate — not because it
+stopped working, but because the evidence for its early hits no longer
+exists to recount. Expect this to zero ~296 lessons and lower ~313
+more; a WOULD-PROMOTE=0 headline from this alone is a retention-window
+artifact, not evidence the semantics fix failed.
+
+Two downstream consumers read hit_count and would treat a lowered
+number as real signal rather than a retention-window casualty:
+  - `DEMOTE_HIT_RATE_THRESHOLD` (services/lesson_tier_service.py)
+    demotes a semantic lesson back to episodic when its rolling
+    hit-rate falls below it.
+  - `archive_stale_lessons`'s zero-hit branch
+    (services/lesson_tier_service.py, run by
+    services/backtest_sweep_service.py after EVERY sweep) soft-archives
+    any lesson with `usage_count > 0 AND hit_count == 0`.
+`--apply` therefore REFUSES to lower any hit_count by default — pass
+`--allow-lower` to override, once the era mismatch above is something
+an operator has actually accounted for.
+
+Never promotes — the Sunday job owns that.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
 from collections import Counter
+from datetime import date, datetime
 
 from sqlalchemy import select, update
 
@@ -64,6 +84,72 @@ def would_promote(*, usage: int, hits: int) -> bool:
     )
 
 
+def partition_changes(
+    current: dict[int, int], recomputed: dict[int, int],
+) -> tuple[int, int, int]:
+    """Compare a lesson's stored `hit_count` against the from-scratch
+    recount, per lesson id. `current` must cover every lesson (not just
+    ones with a nonzero count) — lessons absent from `recomputed` are
+    treated as recounting to 0, same convention as `aggregate_hits`'s
+    output.
+
+    Returns `(raised, lowered, zeroed)`: counts of lessons whose
+    recomputed count is higher, lower, and (a subset of `lowered`)
+    exactly zero. `zeroed` is what feeds the archive-eligibility delta
+    — `archive_stale_lessons` soft-archives any `usage_count > 0 AND
+    hit_count == 0` row.
+    """
+    raised = lowered = zeroed = 0
+    for lesson_id, old in current.items():
+        new = recomputed.get(lesson_id, 0)
+        if new > old:
+            raised += 1
+        elif new < old:
+            lowered += 1
+            if new == 0:
+                zeroed += 1
+    return raised, lowered, zeroed
+
+
+def describe_range(values: list) -> tuple | None:
+    """(min, max) over the non-None values, or None if there are none."""
+    values = [v for v in values if v is not None]
+    if not values:
+        return None
+    return (min(values), max(values))
+
+
+def overlap_warning(
+    *,
+    evidence_range: tuple[datetime, datetime] | None,
+    lesson_age_range: tuple[date, date] | None,
+) -> str | None:
+    """Warn when the evidence window (retained discussions) doesn't
+    fully cover the lesson-age range (as_of_date span). If lessons are
+    older than the earliest retained discussion, part of their lifetime
+    usage_count denominator has NO retained numerator evidence at all —
+    the recount for those lessons is undercounted by retention, not by
+    merit, and the zero/lowered counts above should be read with that
+    in mind."""
+    if evidence_range is None or lesson_age_range is None:
+        return None
+    evidence_start, _evidence_end = evidence_range
+    lesson_min, _lesson_max = lesson_age_range
+    evidence_start_date = (
+        evidence_start.date() if hasattr(evidence_start, "date")
+        else evidence_start
+    )
+    if lesson_min < evidence_start_date:
+        return (
+            f"WARNING: evidence window starts {evidence_start_date} but "
+            f"lessons go back to {lesson_min} — hit_count evidence is "
+            f"retention-limited while usage_count is lifetime; recomputed "
+            f"hits for lessons older than the evidence window are "
+            f"undercounted, not zero by merit."
+        )
+    return None
+
+
 def _lesson_ids_from_snapshots(snapshots) -> set[int]:
     ids: set[int] = set()
     for snap in snapshots:
@@ -86,11 +172,17 @@ def _lesson_ids_from_snapshots(snapshots) -> set[int]:
     return ids
 
 
-async def _collect(db) -> list[tuple[bool, set[int]]]:
+async def _collect(
+    db,
+) -> list[tuple[bool, set[int], datetime]]:
+    """Returns `(qualifies, cited_lesson_ids, discussion_created_at)`
+    per retained, non-experiment, verified discussion. The timestamp
+    rides along so `main()` can report the evidence window without a
+    second, harder-to-keep-in-sync query."""
     discussions = (await db.scalars(
         select(Discussion).where(Discussion.verdict.is_not(None))
     )).all()
-    rows: list[tuple[bool, set[int]]] = []
+    rows: list[tuple[bool, set[int], datetime]] = []
     for d in discussions:
         if _is_experiment(d):
             continue
@@ -102,36 +194,40 @@ async def _collect(db) -> list[tuple[bool, set[int]]]:
                 DiscussionRoundContext.discussion_id == d.id
             )
         )).all()
-        rows.append((qualifies, _lesson_ids_from_snapshots(snaps)))
+        rows.append((qualifies, _lesson_ids_from_snapshots(snaps), d.created_at))
     return rows
 
 
-async def main(apply: bool) -> None:
+async def main(apply: bool, allow_lower: bool) -> None:
     from db.session import AsyncSessionLocal
     from tasks.promote_lessons import LESSON_MARKETS
 
     async with AsyncSessionLocal() as db:
         rows = await _collect(db)
-        hits = aggregate_hits(rows)
+        hits = aggregate_hits([(q, lids) for q, lids, _ts in rows])
         lessons = (await db.scalars(select(DiscussionLesson))).all()
-        raised = 0
-        lowered = 0
+
+        current_hits = {lesson.id: (lesson.hit_count or 0) for lesson in lessons}
+        raised, lowered, zeroed = partition_changes(current_hits, hits)
+
         tier_counts: Counter[str] = Counter()
         market_promotable: Counter[str] = Counter()
+        current_zero_hit = 0
+        recomputed_zero_hit = 0
         for lesson in lessons:
             tier_counts[lesson.tier] += 1
+            usage = lesson.usage_count or 0
             new_hits = hits.get(lesson.id, 0)
-            old_hits = lesson.hit_count or 0
-            if new_hits > old_hits:
-                raised += 1
-            elif new_hits < old_hits:
-                lowered += 1
+            if usage > 0 and (lesson.hit_count or 0) == 0:
+                current_zero_hit += 1
+            if usage > 0 and new_hits == 0:
+                recomputed_zero_hit += 1
             # Mirror promote_eligible_lessons' own filter (lesson_tier_
             # service.py): only "episodic" lessons are promotion
             # candidates — semantic/structural rows are already past
             # that gate and never re-enter it.
             if lesson.tier == "episodic" and would_promote(
-                usage=lesson.usage_count or 0, hits=new_hits,
+                usage=usage, hits=new_hits,
             ):
                 market_promotable[lesson.market] += 1
 
@@ -144,10 +240,27 @@ async def main(apply: bool) -> None:
         cron_promotable = sum(market_promotable[m] for m in LESSON_MARKETS)
         all_promotable = sum(market_promotable.values())
 
+        evidence_range = describe_range([ts for _q, _l, ts in rows])
+        lesson_age_range = describe_range([lesson.as_of_date for lesson in lessons])
+
         print(f"discussions considered: {len(rows)} "
-              f"(qualifying: {sum(1 for q, _ in rows if q)})")
+              f"(qualifying: {sum(1 for q, _l, _t in rows if q)})")
+        print(f"evidence window (retained discussions seen): {evidence_range}")
+        print(f"lesson age range (as_of_date): {lesson_age_range}")
+        warning = overlap_warning(
+            evidence_range=evidence_range, lesson_age_range=lesson_age_range,
+        )
+        if warning:
+            print(warning)
         print(f"lessons: {len(lessons)}, "
-              f"hit_count raised: {raised}, lowered: {lowered}")
+              f"hit_count raised: {raised}, lowered: {lowered} (of which "
+              f"zeroed: {zeroed})")
+        archive_delta = recomputed_zero_hit - current_zero_hit
+        print(f"archive-eligible (usage>0 & hit_count==0): "
+              f"current={current_zero_hit}, "
+              f"after recompute={recomputed_zero_hit} ({archive_delta:+d}) "
+              f"— archive_stale_lessons picks these up on the next "
+              f"backtest sweep")
         print("by tier: " + ", ".join(
             f"{tier}={count}" for tier, count in sorted(tier_counts.items())
         ))
@@ -161,11 +274,21 @@ async def main(apply: bool) -> None:
         if not apply:
             print("dry-run — pass --apply to write")
             return
+        if lowered and not allow_lower:
+            print(f"refusing to lower {lowered} lesson(s)' hit_count "
+                  f"(pass --allow-lower to override) — writing {raised} "
+                  f"raise(s) only")
         for lesson in lessons:
+            new_hits = hits.get(lesson.id, 0)
+            old_hits = lesson.hit_count or 0
+            if new_hits == old_hits:
+                continue
+            if new_hits < old_hits and not allow_lower:
+                continue
             await db.execute(
                 update(DiscussionLesson)
                 .where(DiscussionLesson.id == lesson.id)
-                .values(hit_count=hits.get(lesson.id, 0))
+                .values(hit_count=new_hits)
                 .execution_options(synchronize_session=False)
             )
         await db.commit()
@@ -175,5 +298,10 @@ async def main(apply: bool) -> None:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true")
+    ap.add_argument(
+        "--allow-lower", action="store_true",
+        help="also write lowered hit_count values (refused by default; "
+             "see module docstring on the retention-window era mismatch)",
+    )
     args = ap.parse_args()
-    asyncio.run(main(args.apply))
+    asyncio.run(main(args.apply, args.allow_lower))

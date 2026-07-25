@@ -3,11 +3,18 @@ idempotent by construction, so running it twice cannot double-count."""
 import os
 import subprocess
 import sys
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
 
-from scripts.recount_lesson_hits import aggregate_hits, would_promote
+from scripts.recount_lesson_hits import (
+    aggregate_hits,
+    describe_range,
+    overlap_warning,
+    partition_changes,
+    would_promote,
+)
 
 
 def test_aggregate_counts_once_per_qualifying_discussion():
@@ -26,6 +33,65 @@ def test_would_promote_applies_both_floors():
     assert would_promote(usage=10, hits=5) is False    # ratio floor
     assert would_promote(usage=4, hits=4) is False     # usage floor
     assert would_promote(usage=0, hits=0) is False
+
+
+def test_partition_changes_splits_raised_lowered_zeroed():
+    # lesson id -> hit_count: 1 raised, 2 lowered-to-nonzero, 3 zeroed,
+    # 4 unchanged, 5 absent from the recount entirely (implicit zero).
+    current = {1: 2, 2: 5, 3: 3, 4: 4, 5: 2}
+    recomputed = {1: 4, 2: 2, 3: 0, 4: 4}
+    raised, lowered, zeroed = partition_changes(current, recomputed)
+    assert raised == 1        # lesson 1: 2 -> 4
+    assert lowered == 3       # lessons 2, 3, 5
+    assert zeroed == 2        # lessons 3 and 5 recount to exactly 0
+
+
+def test_partition_changes_empty_is_all_zero():
+    assert partition_changes({}, {}) == (0, 0, 0)
+
+
+def test_describe_range_returns_min_max_ignoring_none():
+    assert describe_range([date(2026, 5, 9), None, date(2026, 7, 12)]) == (
+        date(2026, 5, 9), date(2026, 7, 12),
+    )
+
+
+def test_describe_range_empty_or_all_none_is_none():
+    assert describe_range([]) is None
+    assert describe_range([None, None]) is None
+
+
+def test_overlap_warning_fires_when_lessons_predate_evidence_window():
+    evidence_range = (
+        datetime(2026, 7, 12, tzinfo=UTC),
+        datetime(2026, 7, 25, tzinfo=UTC),
+    )
+    lesson_age_range = (date(2026, 5, 9), date(2026, 7, 20))
+    warning = overlap_warning(
+        evidence_range=evidence_range, lesson_age_range=lesson_age_range,
+    )
+    assert warning is not None
+    assert "2026-07-12" in warning
+    assert "2026-05-09" in warning
+
+
+def test_overlap_warning_silent_when_windows_fully_overlap():
+    evidence_range = (
+        datetime(2026, 5, 1, tzinfo=UTC),
+        datetime(2026, 7, 25, tzinfo=UTC),
+    )
+    lesson_age_range = (date(2026, 5, 9), date(2026, 7, 20))
+    assert overlap_warning(
+        evidence_range=evidence_range, lesson_age_range=lesson_age_range,
+    ) is None
+
+
+def test_overlap_warning_none_when_either_range_missing():
+    assert overlap_warning(evidence_range=None, lesson_age_range=None) is None
+    assert overlap_warning(
+        evidence_range=(datetime(2026, 1, 1, tzinfo=UTC),) * 2,
+        lesson_age_range=None,
+    ) is None
 
 
 def test_import_does_not_pull_in_engine_building_task_module():

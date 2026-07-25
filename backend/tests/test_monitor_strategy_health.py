@@ -343,6 +343,53 @@ async def test_veto_guard_revert_trigger_forces_not_ok(
 
 
 @pytest.mark.asyncio
+async def test_veto_guard_decided_window_survives_interleaved_abstains(
+    db_session: AsyncSession, owner: User,
+):
+    """FIX 5: the rolling-10-decided window must be 10+ DECIDED
+    verdicts, not the newest N verdicts of any kind. Before this fix,
+    the decided filter happened in Python after an unfiltered
+    `LIMIT 15` fetch — on an abstain-heavy tape, abstains crowd the
+    fetch window and shrink the decided slice `revert_trigger` actually
+    sees, silently missing a real revert condition. Here 12 of the
+    newest 15 live price_signal discussions are abstain; the 2
+    big_losses that should trip "2 big_losses within the last 10
+    decided" sit just outside the OLD unfiltered 15-row window (they'd
+    only be the 3rd/5th entries of an 8-long decided-only fetch)."""
+    await _seed_veto_clause_config(db_session, owner.id)
+    now = datetime.now(UTC)
+
+    # Newest 12 (offsets 1..12 minutes ago): abstain. These would fill
+    # 12 of the old code's unfiltered LIMIT-15 slots.
+    for i in range(1, 13):
+        await _live_discussion(
+            db_session, owner, strategy="price_signal",
+            verdict="abstain", created_at=now - timedelta(minutes=i),
+        )
+    # Older 8 (offsets 13..20): the actual decided tape, newest-first.
+    # No 3 consecutive losses (decided[0] is "win", so the leading-
+    # streak check never engages) — only the 2-big-losses-in-10 branch
+    # should fire, and only if the window actually contains 8 decided
+    # verdicts rather than the 3 that fit in an unfiltered top-15.
+    decided_newest_first = [
+        "win", "win", "big_loss", "win", "big_loss", "win", "win", "win",
+    ]
+    for offset, verdict in zip(range(13, 21), decided_newest_first, strict=True):
+        await _live_discussion(
+            db_session, owner, strategy="price_signal",
+            verdict=verdict, created_at=now - timedelta(minutes=offset),
+        )
+    await db_session.commit()
+
+    with patch.object(cron, "acquire_lock", AsyncMock(return_value=True)), \
+         patch.object(cron, "release_lock", AsyncMock()):
+        out = await cron.run_health_monitor()
+
+    assert out["guard_findings"]
+    assert any("2 big_losses" in f for f in out["guard_findings"])
+
+
+@pytest.mark.asyncio
 async def test_veto_guard_quiet_by_default(
     db_session: AsyncSession, owner: User,
 ):

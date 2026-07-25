@@ -39,7 +39,7 @@ from services import strategy_maturity_service as msvc
 from services.ingest.repository import record_health
 from services.notification_service import notify_user
 from services.veto_clause import VETO_DOWNGRADE_CLAUSE
-from services.veto_guard import abstention_leakage, revert_trigger
+from services.veto_guard import _DECIDED, abstention_leakage, revert_trigger
 
 log = logging.getLogger(__name__)
 
@@ -191,12 +191,20 @@ async def _veto_guard_findings(db: AsyncSession) -> list[str]:
     function only gathers the data and formats findings."""
     findings: list[str] = []
 
+    # Filter to decided verdicts IN SQL, not in revert_trigger (which
+    # already re-filters, harmlessly, once its input is already
+    # decided-only). Filtering in Python after a plain `verdict IS NOT
+    # NULL` + LIMIT 15 fetch let abstains/unverifiable rows crowd the
+    # 15-row window on an abstain-heavy tape, leaving revert_trigger's
+    # rolling-10 slice with fewer than 10 actual decided verdicts to
+    # look at. Filtering decided-only in SQL first means the LIMIT 15
+    # is 15 decided verdicts, always enough for the rolling-10 check.
     verdicts = list((await db.scalars(
         select(Discussion.verdict).where(
             Discussion.auto_run_strategy == "price_signal",
             Discussion.as_of_date.is_(None),
             Discussion.auto_run.is_(True),
-            Discussion.verdict.is_not(None),
+            Discussion.verdict.in_(_DECIDED),
         )
         .order_by(Discussion.created_at.desc())
         .limit(_LIVE_PRICE_SIGNAL_LIMIT)

@@ -25,8 +25,9 @@ upstream sources fail in that case and the chunk lands as 'failed'
 in `backfill_progress`. Use --skip-per-symbol to filter them out
 before any upstream request. Production Taiwan market-wide cron should
 also pass --tw-only so crypto and non-Taiwan macro datasets stay out of
-that sweep. Exit status is 0 when no chunk fails (including nothing due),
-1 when one or more chunks fail, and 2 when the runner itself crashes.
+that sweep. Exit status is 0 for a clean, idle, or partial run (any rows
+written), 1 only when all due work failed with zero rows written, and 2
+when the runner itself crashes.
 """
 from __future__ import annotations
 

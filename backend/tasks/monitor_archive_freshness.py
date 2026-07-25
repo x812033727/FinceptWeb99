@@ -17,6 +17,7 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.session import AsyncSessionLocal
 from models.ohlcv_daily import OhlcvDaily
@@ -43,31 +44,50 @@ def stale_datasets(
     return findings
 
 
-async def _collect_latest() -> dict[str, date | None]:
-    async with AsyncSessionLocal() as db:
-        def _as_date(v):
-            return v.date() if hasattr(v, "date") else v
+async def _collect_latest(db: AsyncSession | None = None) -> dict[str, date | None]:
+    """`db` is an optional seam for tests: pass a session to skip
+    `AsyncSessionLocal` entirely instead of relying on it being
+    monkeypatched. Production callers always omit it."""
+    if db is not None:
+        return await _collect_latest_with(db)
+    async with AsyncSessionLocal() as session:
+        return await _collect_latest_with(session)
 
-        ohlcv = await db.scalar(
-            select(func.max(OhlcvDaily.ts)).where(
-                OhlcvDaily.market == "TW",
-                ~OhlcvDaily.symbol.startswith("_"),
-            )
+
+async def _collect_latest_with(db: AsyncSession) -> dict[str, date | None]:
+    def _as_date(v):
+        return v.date() if hasattr(v, "date") else v
+
+    ohlcv = await db.scalar(
+        select(func.max(OhlcvDaily.ts)).where(
+            OhlcvDaily.market == "TW",
+            # `escape="\\"` is load-bearing, not decorative: `_` is
+            # the LIKE single-char wildcard. The former
+            # `~symbol.startswith("_")` compiled to
+            # `NOT LIKE '_' || '%'` with no ESCAPE clause, which
+            # matches every non-empty symbol (so NOT LIKE excluded
+            # everything, and `ohlcv_tw` was always None). Without an
+            # explicit ESCAPE clause `\_%` still doesn't filter on
+            # SQLite (verified: backslash is a literal there, not an
+            # escape char by default) — the clause must stay explicit
+            # for both backends.
+            OhlcvDaily.symbol.not_like(r"\_%", escape="\\"),
         )
-        taiex = await db.scalar(
-            select(func.max(OhlcvDaily.ts)).where(
-                OhlcvDaily.market == "TW",
-                OhlcvDaily.symbol == "_TAIEX",
-            )
+    )
+    taiex = await db.scalar(
+        select(func.max(OhlcvDaily.ts)).where(
+            OhlcvDaily.market == "TW",
+            OhlcvDaily.symbol == "_TAIEX",
         )
-        inst = await db.scalar(select(func.max(TwInstitutionalDaily.ts)))
-        margin = await db.scalar(select(func.max(TwMarginDaily.ts)))
-        return {
-            "ohlcv_tw": _as_date(ohlcv) if ohlcv else None,
-            "taiex": _as_date(taiex) if taiex else None,
-            "institutional_tw": _as_date(inst) if inst else None,
-            "margin_tw": _as_date(margin) if margin else None,
-        }
+    )
+    inst = await db.scalar(select(func.max(TwInstitutionalDaily.ts)))
+    margin = await db.scalar(select(func.max(TwMarginDaily.ts)))
+    return {
+        "ohlcv_tw": _as_date(ohlcv) if ohlcv else None,
+        "taiex": _as_date(taiex) if taiex else None,
+        "institutional_tw": _as_date(inst) if inst else None,
+        "margin_tw": _as_date(margin) if margin else None,
+    }
 
 
 async def run() -> None:

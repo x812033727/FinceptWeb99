@@ -1183,3 +1183,84 @@ async def test_index_stale_archive_falls_back_to_live():
 
     assert ctx["data_sources"]["index"] == "live_fallback"
     assert ctx["index"]["price"] == 23000.0
+
+
+# ── http.fetch_focus_briefs (archive-first) ─────────────────────────
+
+def _fake_brief(sym: str, session: str) -> dict:
+    return {
+        "symbol": sym,
+        "quote": {"price": 100.0, "change_pct": 0.5,
+                  "as_of_session": session, "is_intraday": False},
+        "technicals": {"rsi14": 55.0, "as_of_session": session},
+    }
+
+
+@pytest.mark.asyncio
+async def test_focus_briefs_live_mode_prefers_the_archive():
+    ctx = _new_ctx()
+    session = date(2026, 7, 23)
+
+    async def fake_assemble(**kwargs):
+        assert kwargs.get("as_of") == session, "live path reached"
+        return [_fake_brief("2330", "2026-07-23"),
+                _fake_brief("2454", "2026-07-23")]
+
+    with patch(
+        "services.discussion_service._assemble_focus_briefs",
+        new=AsyncMock(side_effect=fake_assemble),
+    ):
+        await http.fetch_focus_briefs(
+            ctx, market="TW", focus_symbols=["2330", "2454"], as_of=None,
+            read_session=session, record_error=_record(ctx),
+        )
+
+    assert ctx["data_sources"]["focus_briefs"] == "archive"
+    assert len(ctx["focus_briefs"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_focus_briefs_one_stale_symbol_within_lag_still_archive():
+    """A single symbol answering 2 days back (suspension) is within
+    max_lag_days=3 — not a batch miss."""
+    ctx = _new_ctx()
+    session = date(2026, 7, 23)
+
+    async def fake_assemble(**kwargs):
+        assert kwargs.get("as_of") == session, "live path reached"
+        return [_fake_brief("2330", "2026-07-23"),
+                _fake_brief("9999", "2026-07-21")]
+
+    with patch(
+        "services.discussion_service._assemble_focus_briefs",
+        new=AsyncMock(side_effect=fake_assemble),
+    ):
+        await http.fetch_focus_briefs(
+            ctx, market="TW", focus_symbols=["2330", "9999"], as_of=None,
+            read_session=session, record_error=_record(ctx),
+        )
+
+    assert ctx["data_sources"]["focus_briefs"] == "archive"
+
+
+@pytest.mark.asyncio
+async def test_focus_briefs_stale_batch_falls_back_to_live():
+    ctx = _new_ctx()
+    session = date(2026, 7, 23)
+
+    async def fake_assemble(**kwargs):
+        if kwargs.get("as_of") is not None:
+            return [_fake_brief("2330", "2026-07-10")]   # 13 days stale
+        return [_fake_brief("2330", "2026-07-23")]
+
+    with patch(
+        "services.discussion_service._assemble_focus_briefs",
+        new=AsyncMock(side_effect=fake_assemble),
+    ):
+        await http.fetch_focus_briefs(
+            ctx, market="TW", focus_symbols=["2330"], as_of=None,
+            read_session=session, record_error=_record(ctx),
+        )
+
+    assert ctx["data_sources"]["focus_briefs"] == "live_fallback"
+    assert ctx["focus_briefs"][0]["quote"]["as_of_session"] == "2026-07-23"

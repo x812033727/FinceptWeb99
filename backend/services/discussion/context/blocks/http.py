@@ -352,6 +352,7 @@ async def fetch_focus_briefs(
     focus_symbols: list[str] | None,
     as_of: date | None,
     record_error: ErrorRecorder,
+    read_session: date | None = None,
 ) -> None:
     """Per-focus-symbol mini analyst report. Skipped when no focus
     symbols. Each brief includes quote / 52w bands / RSI / moving
@@ -361,10 +362,42 @@ async def fetch_focus_briefs(
         return
     try:
         from services.discussion_service import _assemble_focus_briefs
-        ctx["focus_briefs"] = await _assemble_focus_briefs(
-            market=market,
-            symbols=list(focus_symbols),
-            as_of=as_of,
-        )
+
+        if as_of is None and read_session is not None and market == "TW":
+            from services.discussion.context.read_session import (
+                archive_first,
+            )
+
+            def _batch_session(briefs: list[dict[str, Any]]) -> date | None:
+                """Weakest answer governs — one unanswered symbol means
+                the batch did not fully answer for the session."""
+                stamps: list[date] = []
+                for b in briefs:
+                    raw = (b.get("quote") or {}).get("as_of_session")
+                    if not isinstance(raw, str):
+                        return None
+                    try:
+                        stamps.append(date.fromisoformat(raw[:10]))
+                    except ValueError:
+                        return None
+                return min(stamps) if stamps else None
+
+            async def _call(a: date | None) -> list[dict[str, Any]]:
+                return await _assemble_focus_briefs(
+                    market=market, symbols=list(focus_symbols), as_of=a,
+                )
+
+            briefs, source = await archive_first(
+                _call, session=read_session,
+                answered_session=_batch_session, max_lag_days=3,
+            )
+            ctx.setdefault("data_sources", {})["focus_briefs"] = source
+            ctx["focus_briefs"] = briefs
+        else:
+            ctx["focus_briefs"] = await _assemble_focus_briefs(
+                market=market,
+                symbols=list(focus_symbols),
+                as_of=as_of,
+            )
     except Exception as exc:
         record_error("focus_briefs", exc)

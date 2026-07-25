@@ -22,12 +22,15 @@ import tasks.ingest_margin_tw as margin_task
 import tasks.ingest_ohlcv_tw as ohlcv_task
 
 # (module, job_id, _do_run success return). Shapes differ today:
-# ohlcv returns (rows, latest_bar_ts); institutional/margin return a
-# bare row count — the R3 shared runner must preserve both.
+# ohlcv returns (rows, latest_bar_ts); institutional/margin return
+# (rows, ok, status) since the chip outcome taxonomy (spec Track 1) —
+# the R3 shared runner must preserve all of them.
 TASKS = [
     pytest.param(ohlcv_task, "ingest_ohlcv_tw", (42, date(2026, 7, 11)), id="ohlcv"),
-    pytest.param(inst_task, "ingest_institutional_tw", 42, id="institutional"),
-    pytest.param(margin_task, "ingest_margin_tw", 42, id="margin"),
+    pytest.param(
+        inst_task, "ingest_institutional_tw", (42, True, None), id="institutional",
+    ),
+    pytest.param(margin_task, "ingest_margin_tw", (42, True, None), id="margin"),
 ]
 
 

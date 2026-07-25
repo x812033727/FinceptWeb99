@@ -226,6 +226,75 @@ async def _update_dataset_telemetry(
     await session.commit()
 
 
+def _is_permanent_client_error(exc: BaseException) -> bool:
+    """4xx other than 429: the request shape is rejected — retrying the
+    same source is pointless, but a different source may serve it."""
+    import httpx
+
+    return (
+        isinstance(exc, httpx.HTTPStatusError)
+        and 400 <= exc.response.status_code < 500
+        and exc.response.status_code != 429
+    )
+
+
+def _resolve_fallback_client(dataset_code: str, source: str):
+    """The SourceClient for this dataset's catalog fallback, or None.
+
+    Only meaningful when the PRIMARY source raised: a dataset already
+    running on its fallback (active_source != 'finmind') has nowhere
+    further to go.
+    """
+    if source != "finmind":
+        return None
+    from finmind.dataset_catalog import fallback_source_for
+    from finmind.ingest.selfcrawl import resolve_client
+
+    fb = fallback_source_for(dataset_code)
+    if fb is None or fb == source:
+        return None
+    try:
+        return resolve_client(fb)
+    except KeyError:
+        return None
+
+
+async def _fetch_with_fallback(
+    upstream,
+    *,
+    dataset_code: str,
+    symbol: str | None,
+    range_start: date,
+    range_end: date,
+    source: str,
+) -> list[dict[str, Any]]:
+    """Primary fetch, with catalog-fallback routing on permanent 4xx.
+
+    A fallback that itself raises (including NotImplementedError from a
+    dataset the fallback client has no handler for) re-raises the
+    ORIGINAL primary error — the operator should see the 422 that
+    started it, not the fallback's stack.
+    """
+    try:
+        return await upstream.fetch(dataset_code, symbol, range_start, range_end)
+    except Exception as primary_exc:
+        if not _is_permanent_client_error(primary_exc):
+            raise
+        fallback = _resolve_fallback_client(dataset_code, source)
+        if fallback is None:
+            raise
+        log.warning(
+            "ingest_chunk: %s 4xx on %s — routing to catalog fallback",
+            dataset_code, source,
+        )
+        try:
+            return await fallback.fetch(
+                dataset_code, symbol, range_start, range_end
+            )
+        except Exception:
+            raise primary_exc
+
+
 async def ingest_chunk(
     session: AsyncSession,
     *,
@@ -306,8 +375,9 @@ async def ingest_chunk(
     else:
         upstream = client
     try:
-        raw_rows = await upstream.fetch(
-            dataset_code, symbol, range_start, range_end
+        raw_rows = await _fetch_with_fallback(
+            upstream, dataset_code=dataset_code, symbol=symbol,
+            range_start=range_start, range_end=range_end, source=source,
         )
         # Wide-format datasets (quarterly statements, market-wide
         # institutional totals) need to pivot N FinMind rows → 1

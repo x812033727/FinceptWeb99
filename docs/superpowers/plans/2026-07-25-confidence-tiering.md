@@ -268,6 +268,39 @@ NOTE: adapt the assertion to the payload's real shape after reading the serializ
 
 ---
 
+### Task 5b: D10 reference lens (user-approved 2026-07-25 grill round 2)
+
+**Files:**
+- Create: `backend/tasks/extend_daily_closes.py` (+ scheduler registration, Cron 12:10 UTC daily — after TW ingest, before nothing critical)
+- Modify: `backend/services/daily_scoreboard_service.py`
+- Test: `backend/tests/test_extend_daily_closes.py`, scoreboard tests (append)
+
+**Why:** the D1-D10 excess curve over 16 graded sessions rises monotonically
+(+3.53pp at D1 → +10.28 at D5 → +12.55 at D10) — no peak-and-fade at D5, so
+the user pre-committed to a PARALLEL D10 observation lens (not a window
+change; D5 stays the primary verdict window; cross-regime samples decide any
+future switch).
+
+**Interfaces:**
+- Produces: `extend_daily_closes.run()` — for decided discussions of the last
+  60 days whose `daily_close_prices` arrays have < 10 entries and whose
+  anchor+10 sessions exist in `ohlcv_daily`, extend each symbol's array from
+  the archive (append-only, never rewrites existing entries; same
+  close-vs-day1-open convention the verifier uses). TaskOutcome per the
+  Track-1 conventions (`idle` when nothing needed).
+- Scoreboard entries gain `d10_decided`, `d10_wins`, `d10_win_rate`,
+  `avg_d10_excess_vs_taiex_pct` — computed only from rows whose arrays reach
+  10 entries (no archive fan-out at build time), same +5% win bar as the D5
+  lens, benchmark window = 10 sessions of `_TAIEX_TR`. Frontend Task 6 shows
+  the column with the same small-n dimming, labeled 「D10 參考」.
+
+Steps follow the standard TDD shape: failing tests for (a) the extender's
+pure selection/append logic against fixture arrays + archive rows (fixed
+dates), (b) idempotency (second run appends nothing), (c) scoreboard d10
+columns with a seeded 10-entry row vs a 5-entry row (excluded), then
+implement, suites green, ruff, commit
+("feat(metrics): D10 reference lens — extend stored closes + scoreboard columns").
+
 ### Task 6: Frontend grouping
 
 **Files:**

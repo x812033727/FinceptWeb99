@@ -1076,6 +1076,35 @@ async def test_screener_live_mode_prefers_the_archive():
 
 
 @pytest.mark.asyncio
+async def test_screener_archive_served_feeds_the_phase_downgrade_net():
+    """Archive rows never carry `actual_session` (that's a live-
+    recovery-only field), so without a fallback populate,
+    `screener_actual_session` / `screener_data_source` stay unset for
+    every archive-served run and `_maybe_downgrade_captured_session`
+    (builder.py) can never fire for it — a regression vs. the live
+    path. The safety net must fill both from the rows' own session."""
+    ctx = _new_ctx()
+    session = date(2026, 7, 23)
+
+    async def fake_screener(**kwargs):
+        return [_screener_row("2330", "2026-07-23"),
+                _screener_row("2454", "2026-07-23")]
+
+    with patch(
+        "services.tw_market_service.get_screener",
+        new=AsyncMock(side_effect=fake_screener),
+    ):
+        await http.fetch_screener(
+            ctx, market="TW", top_n=5, as_of=None,
+            read_session=session, record_error=_record(ctx),
+        )
+
+    assert ctx["data_sources"]["screener"] == "archive"
+    assert ctx["screener_actual_session"] == "2026-07-23"
+    assert ctx["screener_data_source"] == "ohlcv_daily"
+
+
+@pytest.mark.asyncio
 async def test_screener_stale_archive_falls_back_to_live():
     """Archive clamps `<= session` and answers with an older day →
     treated as a miss; the live path serves and is tagged."""

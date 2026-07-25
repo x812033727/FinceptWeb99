@@ -155,6 +155,26 @@ async def fetch_screener(
                     (rows[0].get("data_source") if rows else None)
                     or "twse"
                 )
+            elif as_of is None and read_session is not None and rows:
+                # Archive-served rows (any of the three `archive_first`
+                # sources — "archive", "archive_stale", or a
+                # "live_fallback" that also didn't detect a lag) never
+                # carry `actual_session`; only the batch-level `as_of`
+                # stamp used above to decide "did the archive answer".
+                # Without this, `screener_actual_session` stays unset
+                # for the archive path and `_maybe_downgrade_captured_
+                # session` (builder.py) can never fire for it — a
+                # regression vs. the live-recovery path, which does
+                # populate it via `row_sessions` above.
+                stamps = [
+                    r.get("as_of")[:10] for r in rows
+                    if isinstance(r.get("as_of"), str)
+                ]
+                if stamps:
+                    ctx["screener_actual_session"] = min(stamps)
+                    ctx["screener_data_source"] = (
+                        rows[0].get("data_source") or "ohlcv_daily"
+                    )
             # Surface the full recovery-tier trace so a future audit
             # can tell at a glance which tier produced the rendered
             # rows (and which earlier tiers bailed + why).

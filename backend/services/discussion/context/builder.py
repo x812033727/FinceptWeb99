@@ -193,6 +193,15 @@ def _initial_ctx(
         # personas need it for self-consistency. Shape:
         # `{as_of, indices: [{symbol, name, close, prev_close, change_pct}, ...]}`.
         "overseas_indicators": None,
+        # Per-block provenance tagging (Task 5): which blocks read the
+        # settled archive vs. fell back to live vs. went straight live
+        # (macro). Always present — even backtest / non-TW builds get
+        # the empty dict — so downstream readers can `ctx["data_sources"]`
+        # unconditionally instead of `.get(...)`. Populated by the
+        # `http.fetch_*` blocks' own `setdefault` calls plus the
+        # macro live-tag below; stays `{}` whenever the live-TW
+        # archive-first gate doesn't fire.
+        "data_sources": {},
         "errors": [],
     }
 

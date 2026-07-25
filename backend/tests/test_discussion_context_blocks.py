@@ -1288,16 +1288,26 @@ async def test_builder_live_tw_passes_read_session_to_blocks(db_session):
     async def spy_briefs(ctx, **kwargs):
         seen["focus_briefs"] = kwargs.get("read_session")
 
+    expected = date(2026, 7, 23)
+
     with patch.object(http, "fetch_screener", new=spy_screener), \
          patch.object(http, "fetch_index", new=spy_index), \
          patch.object(http, "fetch_macro", new=spy_macro), \
-         patch.object(http, "fetch_focus_briefs", new=spy_briefs):
+         patch.object(http, "fetch_focus_briefs", new=spy_briefs), \
+         patch(
+             "services.discussion.context.read_session.resolve_read_session",
+             new=lambda *a, **kw: expected,
+         ):
         ctx = await build_market_context(
             db_session, market="TW", focus_symbols=["2330"], as_of=None,
         )
 
-    from services.discussion.context.read_session import resolve_read_session
-    expected = resolve_read_session()
+    # `builder.py` imports `resolve_read_session` from
+    # `services.discussion.context.read_session` inside the function
+    # body, so patching that source module's attribute (not a copy
+    # imported at builder-module load time) is what actually takes
+    # effect here — deterministic, no wall-clock/timezone-boundary
+    # flakiness across 15:00 Taipei or midnight rollovers.
     assert seen["screener"] == expected
     assert seen["index"] == expected
     assert seen["focus_briefs"] == expected
@@ -1325,13 +1335,17 @@ async def test_builder_backtest_never_passes_read_session(db_session):
          patch.object(http, "fetch_index", new=spy_noop), \
          patch.object(http, "fetch_macro", new=spy_noop), \
          patch.object(http, "fetch_focus_briefs", new=spy_noop):
-        await build_market_context(
+        ctx = await build_market_context(
             db_session, market="TW", focus_symbols=[],
             as_of=date(2026, 6, 12),
         )
 
     assert seen["read_session"] is None
     assert seen["as_of"] is not None
+    # `data_sources` is always present per `_initial_ctx`'s contract,
+    # but stays empty — the live-TW archive-first gate never fired,
+    # so nothing wrote a provenance tag into it.
+    assert ctx["data_sources"] == {}
 
 
 @pytest.mark.asyncio

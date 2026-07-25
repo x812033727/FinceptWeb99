@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from unittest.mock import AsyncMock, patch
 
 from services.discussion.context import build_market_context
+from services.discussion.context import builder
 from services.discussion.context.blocks import chip, http, news, owner, risk, technical
 
 
@@ -600,6 +601,7 @@ async def test_build_market_context_initialises_default_shape(
         # (G7-1) corporate_announcements removed — dead weight, no
         # persona profile ever consumed it.
         "errors",
+        "data_sources",              # live TW: archive-first tagging (Task 5)
     }
 
     with patch(
@@ -1032,3 +1034,454 @@ def test_record_stale_blocks_accepts_date_objects():
     }
     _record_data_gaps(ctx)
     assert ctx["data_stale"]["broker_concentration"]["days_behind"] == 7
+
+
+# ── archive-first live reads (data-fetch stabilization) ────────────
+
+
+def _screener_row(sym: str, session: str) -> dict:
+    return {
+        "symbol": sym, "change_pct": 1.0, "price": 100.0,
+        "volume": 2_000_000, "as_of": session,
+        "data_source": "ohlcv_daily",
+    }
+
+
+@pytest.mark.asyncio
+async def test_screener_live_mode_prefers_the_archive():
+    """With `read_session` set and the archive answering for that
+    session, the live TWSE path must never be called and the source
+    tag must say so."""
+    ctx = _new_ctx()
+    session = date(2026, 7, 23)
+
+    async def fake_screener(**kwargs):
+        # Wrapper's archive attempt: as_of == session.
+        assert kwargs.get("as_of") == session, (
+            "live path reached — archive-first broken"
+        )
+        return [_screener_row("2330", "2026-07-23"),
+                _screener_row("2454", "2026-07-23")]
+
+    with patch(
+        "services.tw_market_service.get_screener",
+        new=AsyncMock(side_effect=fake_screener),
+    ):
+        await http.fetch_screener(
+            ctx, market="TW", top_n=5, as_of=None,
+            read_session=session, record_error=_record(ctx),
+        )
+
+    assert ctx["data_sources"]["screener"] == "archive"
+    assert ctx["top_gainers"][0]["symbol"] == "2330"
+
+
+@pytest.mark.asyncio
+async def test_screener_archive_served_feeds_the_phase_downgrade_net():
+    """Archive rows never carry `actual_session` (that's a live-
+    recovery-only field), so without a fallback populate,
+    `screener_actual_session` / `screener_data_source` stay unset for
+    every archive-served run and `_maybe_downgrade_captured_session`
+    (builder.py) can never fire for it — a regression vs. the live
+    path. The safety net must fill both from the rows' own session."""
+    ctx = _new_ctx()
+    session = date(2026, 7, 23)
+
+    async def fake_screener(**kwargs):
+        return [_screener_row("2330", "2026-07-23"),
+                _screener_row("2454", "2026-07-23")]
+
+    with patch(
+        "services.tw_market_service.get_screener",
+        new=AsyncMock(side_effect=fake_screener),
+    ):
+        await http.fetch_screener(
+            ctx, market="TW", top_n=5, as_of=None,
+            read_session=session, record_error=_record(ctx),
+        )
+
+    assert ctx["data_sources"]["screener"] == "archive"
+    assert ctx["screener_actual_session"] == "2026-07-23"
+    assert ctx["screener_data_source"] == "ohlcv_daily"
+
+
+@pytest.mark.asyncio
+async def test_screener_archive_served_at_0400_does_not_spuriously_downgrade():
+    """The 04:00 Taipei daily-discussion run (this fix's primary path) must
+    NOT trip the phase downgrade just because FIX 3 now populates
+    `screener_actual_session` for the archive path.
+
+    At 04:00, `resolve_read_session()` and `resolve_captured_session()`'s
+    `session_date` agree (both resolve to the same prior trading day via
+    `prev_trading_day_estimate`) — verified directly:
+    `_tw_latest_complete_session(04:00) == resolve_read_session(04:00)`.
+    So when the archive answers exactly for the requested session (the
+    ordinary case), `screener_actual_session == captured_session.session_date`,
+    which fails `_maybe_downgrade_captured_session`'s `actual < expected`
+    check and is a no-op — proving FIX 3 doesn't turn on spurious downgrades
+    for the branch's main production path."""
+    ctx = _new_ctx()
+    session = date(2026, 7, 23)   # what read_session resolves to at 04:00
+    ctx["captured_session"] = {
+        "session_date": "2026-07-23",   # what captured_session agrees to at 04:00
+        "phase": "pre_open_today",
+        "is_intraday": False,
+        "hint_zh": "placeholder",
+    }
+
+    async def fake_screener(**kwargs):
+        return [_screener_row("2330", "2026-07-23"),
+                _screener_row("2454", "2026-07-23")]
+
+    with patch(
+        "services.tw_market_service.get_screener",
+        new=AsyncMock(side_effect=fake_screener),
+    ):
+        await http.fetch_screener(
+            ctx, market="TW", top_n=5, as_of=None,
+            read_session=session, record_error=_record(ctx),
+        )
+
+    assert ctx["screener_actual_session"] == "2026-07-23"
+    builder._maybe_downgrade_captured_session(ctx)
+    assert ctx["captured_session"]["session_date"] == "2026-07-23"
+    assert ctx["captured_session"]["phase"] == "pre_open_today"
+    assert "phase_downgrade_reason" not in ctx["captured_session"]
+
+
+@pytest.mark.asyncio
+async def test_screener_archive_served_at_1445_correctly_downgrades():
+    """Between 14:30-15:00 Taipei, `captured_session.session_date` has
+    already rolled to "today" (STOCK_DAY_ALL's nominal publish time) but
+    `read_session` (15:00 threshold) hasn't yet — so the archive still
+    correctly serves the PRIOR session. This is exactly the scenario FIX 3
+    exists for: before the fix, `screener_actual_session` stayed unset for
+    archive-served rows and this real lag was never caught. After the fix,
+    it must be caught."""
+    ctx = _new_ctx()
+    session = date(2026, 7, 23)   # what read_session resolves to at 14:45
+    ctx["captured_session"] = {
+        "session_date": "2026-07-24",   # captured_session already rolled
+        "phase": "today_close_published",
+        "is_intraday": False,
+        "hint_zh": "placeholder",
+    }
+
+    async def fake_screener(**kwargs):
+        return [_screener_row("2330", "2026-07-23"),
+                _screener_row("2454", "2026-07-23")]
+
+    with patch(
+        "services.tw_market_service.get_screener",
+        new=AsyncMock(side_effect=fake_screener),
+    ):
+        await http.fetch_screener(
+            ctx, market="TW", top_n=5, as_of=None,
+            read_session=session, record_error=_record(ctx),
+        )
+
+    assert ctx["screener_actual_session"] == "2026-07-23"
+    builder._maybe_downgrade_captured_session(ctx)
+    assert ctx["captured_session"]["session_date"] == "2026-07-23"
+    assert ctx["captured_session"]["phase_downgrade_reason"] == (
+        "stock_day_all_lag_detected"
+    )
+
+
+@pytest.mark.asyncio
+async def test_screener_stale_archive_falls_back_to_live():
+    """Archive clamps `<= session` and answers with an older day →
+    treated as a miss; the live path serves and is tagged."""
+    ctx = _new_ctx()
+    session = date(2026, 7, 23)
+
+    async def fake_screener(**kwargs):
+        if kwargs.get("as_of") is not None:
+            return [_screener_row("2330", "2026-07-18")]   # stale
+        return [_screener_row("2330", "2026-07-23")]        # live
+
+    with patch(
+        "services.tw_market_service.get_screener",
+        new=AsyncMock(side_effect=fake_screener),
+    ):
+        await http.fetch_screener(
+            ctx, market="TW", top_n=5, as_of=None,
+            read_session=session, record_error=_record(ctx),
+        )
+
+    assert ctx["data_sources"]["screener"] == "live_fallback"
+
+
+@pytest.mark.asyncio
+async def test_screener_without_read_session_behaves_as_before():
+    """Default param → exactly today's live behaviour, no tag."""
+    ctx = _new_ctx()
+    with patch(
+        "services.tw_market_service.get_screener",
+        new=AsyncMock(return_value=[_screener_row("2330", "2026-07-23")]),
+    ) as mock:
+        await http.fetch_screener(
+            ctx, market="TW", top_n=5, as_of=None,
+            record_error=_record(ctx),
+        )
+    assert mock.call_args.kwargs.get("as_of") is None
+    assert "screener" not in ctx.get("data_sources", {})
+
+
+@pytest.mark.asyncio
+async def test_screener_backtest_row_stamp_unchanged():
+    """Backtest path: per-row `as_of` must NOT override the requested
+    session stamp (byte-identical to pre-archive-first behaviour)."""
+    ctx = _new_ctx()
+    asof = date(2026, 7, 23)
+    with patch(
+        "services.tw_market_service.get_screener",
+        new=AsyncMock(return_value=[_screener_row("2330", "2026-07-18")]),
+    ):
+        await http.fetch_screener(
+            ctx, market="TW", top_n=5, as_of=asof,
+            record_error=_record(ctx),
+        )
+    assert ctx["top_gainers"][0]["as_of_session"] == "2026-07-23"
+
+
+@pytest.mark.asyncio
+async def test_index_live_mode_prefers_the_archive():
+    ctx = _new_ctx()
+    session = date(2026, 7, 23)
+
+    async def fake_index(**kwargs):
+        assert kwargs.get("as_of") == session, "live path reached"
+        return {
+            "symbol": "TAIEX", "price": 23000.0, "change_pct": -1.2,
+            "data_source": "ohlcv_daily", "as_of": "2026-07-23",
+            "history": [{"time": "2026-07-23", "close": 23000.0}],
+        }
+
+    with patch(
+        "services.tw_market_service.get_index",
+        new=AsyncMock(side_effect=fake_index),
+    ):
+        await http.fetch_index(
+            ctx, market="TW", as_of=None,
+            read_session=session, record_error=_record(ctx),
+        )
+
+    assert ctx["data_sources"]["index"] == "archive"
+    assert ctx["index"]["price"] == 23000.0
+    # Archive answer is a settled close, never intraday.
+    assert ctx["index"]["is_intraday"] is False
+    assert ctx["index"]["as_of_session"] == "2026-07-23"
+
+
+@pytest.mark.asyncio
+async def test_index_stale_archive_falls_back_to_live():
+    ctx = _new_ctx()
+    session = date(2026, 7, 23)
+
+    async def fake_index(**kwargs):
+        if kwargs.get("as_of") is not None:
+            return {"symbol": "TAIEX", "price": 22000.0,
+                    "data_source": "ohlcv_daily", "as_of": "2026-07-18"}
+        return {"symbol": "TAIEX", "price": 23000.0,
+                "data_source": "twse", "as_of": "2026-07-23"}
+
+    with patch(
+        "services.tw_market_service.get_index",
+        new=AsyncMock(side_effect=fake_index),
+    ):
+        await http.fetch_index(
+            ctx, market="TW", as_of=None,
+            read_session=session, record_error=_record(ctx),
+        )
+
+    assert ctx["data_sources"]["index"] == "live_fallback"
+    assert ctx["index"]["price"] == 23000.0
+
+
+# ── http.fetch_focus_briefs (archive-first) ─────────────────────────
+
+def _fake_brief(sym: str, session: str) -> dict:
+    return {
+        "symbol": sym,
+        "quote": {"price": 100.0, "change_pct": 0.5,
+                  "as_of_session": session, "is_intraday": False},
+        "technicals": {"rsi14": 55.0, "as_of_session": session},
+    }
+
+
+@pytest.mark.asyncio
+async def test_focus_briefs_live_mode_prefers_the_archive():
+    ctx = _new_ctx()
+    session = date(2026, 7, 23)
+
+    async def fake_assemble(**kwargs):
+        assert kwargs.get("as_of") == session, "live path reached"
+        return [_fake_brief("2330", "2026-07-23"),
+                _fake_brief("2454", "2026-07-23")]
+
+    with patch(
+        "services.discussion_service._assemble_focus_briefs",
+        new=AsyncMock(side_effect=fake_assemble),
+    ):
+        await http.fetch_focus_briefs(
+            ctx, market="TW", focus_symbols=["2330", "2454"], as_of=None,
+            read_session=session, record_error=_record(ctx),
+        )
+
+    assert ctx["data_sources"]["focus_briefs"] == "archive"
+    assert len(ctx["focus_briefs"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_focus_briefs_one_stale_symbol_within_lag_still_archive():
+    """A single symbol answering 2 days back (suspension) is within
+    max_lag_days=3 — not a batch miss."""
+    ctx = _new_ctx()
+    session = date(2026, 7, 23)
+
+    async def fake_assemble(**kwargs):
+        assert kwargs.get("as_of") == session, "live path reached"
+        return [_fake_brief("2330", "2026-07-23"),
+                _fake_brief("9999", "2026-07-21")]
+
+    with patch(
+        "services.discussion_service._assemble_focus_briefs",
+        new=AsyncMock(side_effect=fake_assemble),
+    ):
+        await http.fetch_focus_briefs(
+            ctx, market="TW", focus_symbols=["2330", "9999"], as_of=None,
+            read_session=session, record_error=_record(ctx),
+        )
+
+    assert ctx["data_sources"]["focus_briefs"] == "archive"
+
+
+@pytest.mark.asyncio
+async def test_focus_briefs_stale_batch_falls_back_to_live():
+    ctx = _new_ctx()
+    session = date(2026, 7, 23)
+
+    async def fake_assemble(**kwargs):
+        if kwargs.get("as_of") is not None:
+            return [_fake_brief("2330", "2026-07-10")]   # 13 days stale
+        return [_fake_brief("2330", "2026-07-23")]
+
+    with patch(
+        "services.discussion_service._assemble_focus_briefs",
+        new=AsyncMock(side_effect=fake_assemble),
+    ):
+        await http.fetch_focus_briefs(
+            ctx, market="TW", focus_symbols=["2330"], as_of=None,
+            read_session=session, record_error=_record(ctx),
+        )
+
+    assert ctx["data_sources"]["focus_briefs"] == "live_fallback"
+    assert ctx["focus_briefs"][0]["quote"]["as_of_session"] == "2026-07-23"
+
+
+# ── builder wiring: live TW passes read_session; backtest never does ──
+
+
+@pytest.mark.asyncio
+async def test_builder_live_tw_passes_read_session_to_blocks(db_session):
+    """Live TW build: the three DB-archived blocks receive the resolved
+    settled session; macro is tagged live (FRED has no local archive)."""
+    seen: dict[str, object] = {}
+
+    async def spy_screener(ctx, **kwargs):
+        seen["screener"] = kwargs.get("read_session")
+
+    async def spy_index(ctx, **kwargs):
+        seen["index"] = kwargs.get("read_session")
+
+    async def spy_macro(ctx, **kwargs):
+        seen["macro_read_session"] = kwargs.get("read_session", "absent")
+
+    async def spy_briefs(ctx, **kwargs):
+        seen["focus_briefs"] = kwargs.get("read_session")
+
+    expected = date(2026, 7, 23)
+
+    with patch.object(http, "fetch_screener", new=spy_screener), \
+         patch.object(http, "fetch_index", new=spy_index), \
+         patch.object(http, "fetch_macro", new=spy_macro), \
+         patch.object(http, "fetch_focus_briefs", new=spy_briefs), \
+         patch(
+             "services.discussion.context.read_session.resolve_read_session",
+             new=lambda *a, **kw: expected,
+         ):
+        ctx = await build_market_context(
+            db_session, market="TW", focus_symbols=["2330"], as_of=None,
+        )
+
+    # `builder.py` imports `resolve_read_session` from
+    # `services.discussion.context.read_session` inside the function
+    # body, so patching that source module's attribute (not a copy
+    # imported at builder-module load time) is what actually takes
+    # effect here — deterministic, no wall-clock/timezone-boundary
+    # flakiness across 15:00 Taipei or midnight rollovers.
+    assert seen["screener"] == expected
+    assert seen["index"] == expected
+    assert seen["focus_briefs"] == expected
+    # Macro never gets a read_session — no local archive exists.
+    assert seen["macro_read_session"] == "absent"
+    assert ctx["data_sources"]["macro"] == "live"
+
+
+@pytest.mark.asyncio
+async def test_builder_backtest_never_passes_read_session(db_session):
+    """THE invariant: backtest mode gets no archive-first machinery —
+    its strict `as_of` path must stay byte-identical, because a live
+    fallback here would let replays see the future and invalidate
+    every backtest-derived conclusion."""
+    seen: dict[str, object] = {}
+
+    async def spy_screener(ctx, **kwargs):
+        seen["read_session"] = kwargs.get("read_session")
+        seen["as_of"] = kwargs.get("as_of")
+
+    async def spy_noop(ctx, **kwargs):
+        pass
+
+    with patch.object(http, "fetch_screener", new=spy_screener), \
+         patch.object(http, "fetch_index", new=spy_noop), \
+         patch.object(http, "fetch_macro", new=spy_noop), \
+         patch.object(http, "fetch_focus_briefs", new=spy_noop):
+        ctx = await build_market_context(
+            db_session, market="TW", focus_symbols=[],
+            as_of=date(2026, 6, 12),
+        )
+
+    assert seen["read_session"] is None
+    assert seen["as_of"] is not None
+    # `data_sources` is always present per `_initial_ctx`'s contract,
+    # but stays empty — the live-TW archive-first gate never fired,
+    # so nothing wrote a provenance tag into it.
+    assert ctx["data_sources"] == {}
+
+
+@pytest.mark.asyncio
+async def test_backtest_block_call_never_reaches_live_path():
+    """Belt to the builder test's braces, at block level: with `as_of`
+    set, `fetch_screener` must never call the service with
+    `as_of=None` even when the archive returns nothing — an exploding
+    double, not a call-count assertion."""
+    ctx = _new_ctx()
+
+    async def exploding_when_live(**kwargs):
+        if kwargs.get("as_of") is None:
+            raise AssertionError("backtest reached the live path")
+        return []
+
+    with patch(
+        "services.tw_market_service.get_screener",
+        new=AsyncMock(side_effect=exploding_when_live),
+    ):
+        await http.fetch_screener(
+            ctx, market="TW", top_n=5, as_of=date(2026, 6, 12),
+            record_error=_record(ctx),
+        )
+
+    assert ctx["errors"] == []          # the double did not fire
+    assert ctx["top_gainers"] == []

@@ -1,0 +1,12 @@
+# GHSA-qwww-vcr4-c8h2 — react-router RSC-mode CSRF bypass.
+#
+# Same advisory, same rationale as the npm-audit allowlist in
+# .github/workflows/security.yml (PR #259): the vulnerable code path is
+# React Server Components mode only. This app is a plain <BrowserRouter>
+# SPA with no @react-router/* framework packages, so the vulnerable
+# surface is never mounted. Trivy's DB started flagging it on 2026-07-25
+# once upstream published a fix (8.3.0) — a major-version jump tracked
+# as its own upgrade, not smuggled into an unrelated branch.
+#
+# Remove this entry when react-router-dom is upgraded to >= 8.3.0.
+GHSA-qwww-vcr4-c8h2

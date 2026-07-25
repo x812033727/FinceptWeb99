@@ -2,14 +2,25 @@
 
 Adoption is GATED on the spec's pre-registered criteria — running
 --apply is the human act of adoption, after the experiment grades land
-in the criteria table. The original text is printed AND written to
-docs/rules-archive/ before any change, so revert is always possible
-even without this script.
+in the criteria table. The original text is printed AND written to an
+archive directory before any change, so revert is always possible even
+without this script.
+
+The archive directory is NOT always `docs/rules-archive` under the
+container's own tree: WORKDIR /app there is not writable by `appuser`,
+so a bare `docs/rules-archive` fails a PermissionError exactly when
+--revert needs it most. `resolve_archive_dir` below picks, in order: an
+explicit `VETO_ARCHIVE_DIR` override, the `/host-trigger` bind mount
+(container case — mounted from /opt/finceptweb99/var, writable), then
+`docs/rules-archive` (host-run case, e.g. run directly on the host
+rather than in the container).
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
+import os
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -46,9 +57,40 @@ def archive_stamp(now: datetime) -> str:
     return now.strftime("%Y%m%dT%H%M%SZ")
 
 
+def _default_probe(path: Path) -> bool:
+    """Real writability check: the directory must exist and accept
+    writes from this process (os.access, not just an existence check —
+    the container mounts plenty of paths read-only)."""
+    return path.exists() and os.access(path, os.W_OK)
+
+
+def resolve_archive_dir(
+    env: Mapping[str, str], probe: Callable[[Path], bool],
+) -> Path:
+    """Pick the archive directory: an explicit override first, then the
+    container's writable bind mount, then the host-run fallback.
+
+    `probe` is injected so tests can fake writability without touching
+    the real filesystem — the real check (`_default_probe`) hits
+    `Path.exists` + `os.access`, neither of which is something a unit
+    test should depend on the sandbox actually having set up.
+    """
+    override = env.get("VETO_ARCHIVE_DIR")
+    if override:
+        return Path(override)
+    host_trigger = Path("/host-trigger")
+    if probe(host_trigger):
+        return host_trigger / "rules-archive"
+    return Path("docs/rules-archive")
+
+
 async def main(mode: str, force_without_archive: bool) -> None:
     from db.session import AsyncSessionLocal
     from models.discussion_auto_run_config import DiscussionAutoRunConfig
+
+    archive = resolve_archive_dir(os.environ, _default_probe)
+    if mode != "show":
+        print(f"archive dir resolved to: {archive}")
 
     async with AsyncSessionLocal() as db:
         cfgs = (await db.scalars(select(DiscussionAutoRunConfig))).all()
@@ -69,7 +111,6 @@ async def main(mode: str, force_without_archive: bool) -> None:
 
             # Attempt archive before any DB change (only for real mutations)
             stamp = archive_stamp(datetime.now(UTC))
-            archive = Path("docs/rules-archive")
             try:
                 archive.mkdir(parents=True, exist_ok=True)
                 archive_file = archive / f"rules-{cfg.user_id}-{stamp}.txt"

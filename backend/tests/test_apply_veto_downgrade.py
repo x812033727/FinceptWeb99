@@ -11,6 +11,7 @@ from scripts.apply_veto_downgrade import (
     VETO_DOWNGRADE_CLAUSE,
     apply_clause,
     archive_stamp,
+    resolve_archive_dir,
     revert_clause,
 )
 
@@ -43,6 +44,27 @@ def test_archive_stamp_formats_utc_datetime():
     """
     fixed_time = datetime(2026, 7, 25, 12, 0, 0, tzinfo=UTC)
     assert archive_stamp(fixed_time) == "20260725T120000Z"
+
+
+def test_resolve_archive_dir_prefers_env_override():
+    # Even a probe that would say "yes, /host-trigger is writable" must
+    # lose to an explicit operator override.
+    resolved = resolve_archive_dir(
+        {"VETO_ARCHIVE_DIR": "/custom/archive"}, probe=lambda p: True,
+    )
+    assert resolved == Path("/custom/archive")
+
+
+def test_resolve_archive_dir_falls_back_to_host_trigger_when_writable():
+    resolved = resolve_archive_dir(
+        {}, probe=lambda p: str(p) == "/host-trigger",
+    )
+    assert resolved == Path("/host-trigger/rules-archive")
+
+
+def test_resolve_archive_dir_falls_back_to_docs_when_nothing_else_available():
+    resolved = resolve_archive_dir({}, probe=lambda p: False)
+    assert resolved == Path("docs/rules-archive")
 
 
 def test_import_does_not_pull_in_engine_building_models():

@@ -207,6 +207,7 @@ async def fetch_index(
     market: str,
     as_of: date | None,
     record_error: ErrorRecorder,
+    read_session: date | None = None,
 ) -> None:
     """Index-level snapshot. TW: TAIEX quote + 30-day history. US:
     SPY/QQQ/DIA quotes (ETF tickers, not `^GSPC` — Polygon free tier
@@ -228,9 +229,36 @@ async def fetch_index(
         )
         if market == "TW":
             from services import tw_market_service
-            index = await tw_market_service.get_index(
-                history_days=30, as_of=as_of,
-            )
+
+            source: str | None = None
+            if as_of is None and read_session is not None:
+                from services.discussion.context.read_session import (
+                    archive_first,
+                )
+
+                def _index_session(result: dict[str, Any]) -> date | None:
+                    stamp = result.get("as_of") if isinstance(result, dict) else None
+                    if not isinstance(stamp, str):
+                        return None
+                    try:
+                        return date.fromisoformat(stamp[:10])
+                    except ValueError:
+                        return None
+
+                async def _call(a: date | None) -> dict[str, Any]:
+                    return await tw_market_service.get_index(
+                        history_days=30, as_of=a,
+                    )
+
+                index, source = await archive_first(
+                    _call, session=read_session,
+                    answered_session=_index_session,
+                )
+                ctx.setdefault("data_sources", {})["index"] = source
+            else:
+                index = await tw_market_service.get_index(
+                    history_days=30, as_of=as_of,
+                )
             if index:
                 history = index.get("history") or []
                 history_last = (
@@ -238,6 +266,11 @@ async def fetch_index(
                 )
                 if as_of is not None:
                     index["as_of_session"] = as_of.isoformat()
+                    index["is_intraday"] = False
+                elif source in ("archive", "archive_stale"):
+                    # Archive answer: a settled close from ohlcv_daily,
+                    # stamped with the bar's own session.
+                    index["as_of_session"] = str(index.get("as_of") or "")[:10]
                     index["is_intraday"] = False
                 else:
                     index["is_intraday"] = tw_index_is_intraday()

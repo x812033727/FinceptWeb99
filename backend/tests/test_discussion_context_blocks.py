@@ -1129,3 +1129,57 @@ async def test_screener_backtest_row_stamp_unchanged():
             record_error=_record(ctx),
         )
     assert ctx["top_gainers"][0]["as_of_session"] == "2026-07-23"
+
+
+@pytest.mark.asyncio
+async def test_index_live_mode_prefers_the_archive():
+    ctx = _new_ctx()
+    session = date(2026, 7, 23)
+
+    async def fake_index(**kwargs):
+        assert kwargs.get("as_of") == session, "live path reached"
+        return {
+            "symbol": "TAIEX", "price": 23000.0, "change_pct": -1.2,
+            "data_source": "ohlcv_daily", "as_of": "2026-07-23",
+            "history": [{"time": "2026-07-23", "close": 23000.0}],
+        }
+
+    with patch(
+        "services.tw_market_service.get_index",
+        new=AsyncMock(side_effect=fake_index),
+    ):
+        await http.fetch_index(
+            ctx, market="TW", as_of=None,
+            read_session=session, record_error=_record(ctx),
+        )
+
+    assert ctx["data_sources"]["index"] == "archive"
+    assert ctx["index"]["price"] == 23000.0
+    # Archive answer is a settled close, never intraday.
+    assert ctx["index"]["is_intraday"] is False
+    assert ctx["index"]["as_of_session"] == "2026-07-23"
+
+
+@pytest.mark.asyncio
+async def test_index_stale_archive_falls_back_to_live():
+    ctx = _new_ctx()
+    session = date(2026, 7, 23)
+
+    async def fake_index(**kwargs):
+        if kwargs.get("as_of") is not None:
+            return {"symbol": "TAIEX", "price": 22000.0,
+                    "data_source": "ohlcv_daily", "as_of": "2026-07-18"}
+        return {"symbol": "TAIEX", "price": 23000.0,
+                "data_source": "twse", "as_of": "2026-07-23"}
+
+    with patch(
+        "services.tw_market_service.get_index",
+        new=AsyncMock(side_effect=fake_index),
+    ):
+        await http.fetch_index(
+            ctx, market="TW", as_of=None,
+            read_session=session, record_error=_record(ctx),
+        )
+
+    assert ctx["data_sources"]["index"] == "live_fallback"
+    assert ctx["index"]["price"] == 23000.0

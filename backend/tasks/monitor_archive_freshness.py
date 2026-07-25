@@ -9,6 +9,14 @@ Scheduled 19:00 UTC = 03:00 Taipei — after the evening ingest window
 (all TW ingest lands by 19:30 Taipei) and one hour before the 04:00
 daily discussion, so a gap is recorded before the discussion would hit
 its archive-first live fallback.
+
+`record_health`'s `latest_data_ts` is stamped with the OLDEST date
+actually observed across the four datasets (`min` of what `_collect_
+latest` found), not the expected/desired session. Stamping the
+desired session would show a fresh-looking timestamp on the admin
+dashboard right beside `ok=False` — the honest "data is at least this
+fresh" bound is the weakest dataset actually on hand, not the date we
+wished for.
 """
 from __future__ import annotations
 
@@ -55,8 +63,11 @@ async def _collect_latest(db: AsyncSession | None = None) -> dict[str, date | No
 
 
 async def _collect_latest_with(db: AsyncSession) -> dict[str, date | None]:
+    # All three ts columns are `Date`, never `DateTime`, so `func.max`
+    # always returns a plain `date` — no `datetime`-with-`.date()` case
+    # to unwrap.
     def _as_date(v):
-        return v.date() if hasattr(v, "date") else v
+        return v
 
     ohlcv = await db.scalar(
         select(func.max(OhlcvDaily.ts)).where(
@@ -97,16 +108,22 @@ async def run() -> None:
     expected = prev_trading_day_estimate(now_tw.date())
     latest = await _collect_latest()
     findings = stale_datasets(latest, expected)
+    # Number of datasets found fresh, not a row count in the usual
+    # ingest-task sense — this job never writes rows, it only reads.
     fresh = len(latest) - len(findings)
     if findings:
         log.warning(
             "monitor_archive_freshness.stale",
             extra={"expected": expected.isoformat(), "findings": findings},
         )
+    # Stamp what we actually found (oldest observed dataset date), not
+    # `expected` — `expected` is the session we wanted, and stamping
+    # it would show a fresh-looking latest_data_ts beside ok=False.
+    observed = [d for d in latest.values() if d is not None]
     await record_health(
         JOB_ID,
         ok=not findings,
         row_count=fresh,
         error="; ".join(findings) if findings else None,
-        latest_data_ts=expected,
+        latest_data_ts=min(observed) if observed else None,
     )

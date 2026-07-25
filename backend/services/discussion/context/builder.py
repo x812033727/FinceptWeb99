@@ -145,6 +145,15 @@ def _initial_ctx(
         # `{contract, as_of, session_count, fini, sitc, dealer, trend}`
         # — fini / sitc / dealer carry `{net_oi, change_5d}`.
         "taifex_positioning": None,
+        # TX large-trader OI concentration + dealer-volume breadth
+        # (Task 3 of the large-trader feed plan). Archive-only,
+        # gated to `strategy == "price_signal"` in
+        # `build_market_context` below — every other strategy (and
+        # the strategy-less default) leaves this at `None`, same as
+        # any other block that never ran. Always present here so the
+        # ctx shape stays stable regardless of which strategy built
+        # it.
+        "large_trader_positioning": None,
         # Per-stock futures (個股期貨) institutional net-OI shifts
         # (PR #282). List of `{symbol, contract_id, fini_net_oi,
         # fini_change, fini_long_oi, fini_short_oi, as_of, from_ts,
@@ -248,6 +257,7 @@ async def build_market_context(
     max_focus_symbols: int = 5,
     progress_cb: ProgressCb | None = None,
     topic: str | None = None,
+    strategy: str | None = None,
 ) -> dict[str, Any]:
     # Backtest look-ahead guard: personas may only see data through the
     # trading day *before* `as_of`. `as_of` is the decision / entry /
@@ -366,6 +376,18 @@ async def build_market_context(
         await derivatives.fetch_taifex_positioning(
             ctx, as_of=info_cutoff, record_error=record_error,
         )
+        # Task 3 (large-trader feed plan): only the `price_signal`
+        # strategy's persona profile reads `large_trader_positioning`
+        # — every other strategy (and the strategy-less default)
+        # skips the archive scan entirely rather than paying for a
+        # block nobody looks at. `as_of=info_cutoff` applies in both
+        # live (`None`) and backtest (prev-trading-day cutoff) modes,
+        # same look-ahead guard as every other TW block here —
+        # replay parity, not a live-only shortcut.
+        if strategy == "price_signal":
+            await derivatives.fetch_large_trader_positioning(
+                ctx, as_of=info_cutoff, record_error=record_error,
+            )
         await chip.fetch_top_foreign_buyers(
             ctx, db, as_of=info_cutoff, record_error=record_error,
         )
@@ -503,7 +525,7 @@ async def build_market_context(
 
     await _progress("ctx_ready")
     _apply_block_byte_caps(ctx)
-    _record_data_gaps(ctx)
+    _record_data_gaps(ctx, strategy=strategy)
     return ctx
 
 
@@ -553,7 +575,7 @@ def _block_is_empty(value: Any) -> bool:
     return False
 
 
-def _record_data_gaps(ctx: dict[str, Any]) -> None:
+def _record_data_gaps(ctx: dict[str, Any], *, strategy: str | None = None) -> None:
     """List the tracked blocks that carry no data, in place."""
     gaps = [
         block for block in _GAP_TRACKED_BLOCKS
@@ -566,8 +588,24 @@ def _record_data_gaps(ctx: dict[str, Any]) -> None:
     if isinstance(overseas, dict) and not overseas.get("indices"):
         if "overseas_indicators" not in gaps:
             gaps.append("overseas_indicators")
+    # `large_trader_positioning` (Task 3, large-trader feed plan) is
+    # deliberately NOT in `_GAP_TRACKED_BLOCKS` — that tuple is
+    # unconditional, and this block only ever runs for the
+    # `price_signal` strategy. Tracking it unconditionally would flag
+    # every `chip_quality` / general / strategy-less discussion as
+    # having a "gap" for a block it never attempted, which is the
+    # false-positive `_GAP_TRACKED_BLOCKS` itself exists to avoid.
+    # Only when the gate actually fired (`strategy == "price_signal"`)
+    # is a `None` here the real "attempted but the archive had
+    # nothing" case the gap list exists to surface.
+    if (
+        strategy == "price_signal"
+        and _block_is_empty(ctx.get("large_trader_positioning"))
+        and "large_trader_positioning" not in gaps
+    ):
+        gaps.append("large_trader_positioning")
     ctx["data_gaps"] = sorted(gaps)
-    _record_stale_blocks(ctx, skip=set(gaps))
+    _record_stale_blocks(ctx, skip=set(gaps), strategy=strategy)
 
 
 def _parse_iso_date(value: Any) -> date | None:
@@ -581,7 +619,9 @@ def _parse_iso_date(value: Any) -> date | None:
     return None
 
 
-def _record_stale_blocks(ctx: dict[str, Any], *, skip: set[str]) -> None:
+def _record_stale_blocks(
+    ctx: dict[str, Any], *, skip: set[str], strategy: str | None = None,
+) -> None:
     """Report how far behind the session each present-but-old block is.
 
     A block that IS there but is weeks old is the other half of the
@@ -590,7 +630,11 @@ def _record_stale_blocks(ctx: dict[str, Any], *, skip: set[str]) -> None:
     FinMind's 分點 dataset itself stopped publishing after 2026-07-07,
     so a discussion on 07-21 was handed two-week-old broker flows with
     nothing marking them as such. (One conclusion did spot it and wrote
-    "分點分點資料已過期(07/06)僅供參考"; the other four did not.)
+    "分點分點資料已過期(07/06)僅供參考"; the other four did not.) An
+    annotation nobody consistently reads is not a substitute for a
+    machine-checkable field the synthesizer's unfiltered ctx actually
+    carries — 4 of 5 conclusions missed the plain-text warning that
+    incident produced.
 
     Deliberately no per-dataset publication schedule here — encoding
     "revenue is monthly, shareholding is weekly" invites exactly the
@@ -598,6 +642,19 @@ def _record_stale_blocks(ctx: dict[str, Any], *, skip: set[str]) -> None:
     The lag is stated as a plain fact ("this block is 10 calendar days
     behind the session everything else is anchored to") and the panel
     decides what that means for a weekly dataset.
+
+    `large_trader_positioning` (Task 3, large-trader feed plan) is
+    scanned alongside `_GAP_TRACKED_BLOCKS` ONLY when
+    `strategy == "price_signal"` — the one strategy that actually
+    attempts the block — same strategy-conditional the gap list above
+    applies. `_GAP_TRACKED_BLOCKS` itself stays untouched (it's
+    unconditional) so this list is built locally instead of mutating
+    the shared tuple. The archive-only reader has no live fallback and
+    is measured stale in prod today, so this is not a hypothetical:
+    without it a price_signal discussion would cite a multi-week-old
+    large-trader snapshot as current, the exact failure the
+    `broker_concentration` incident above already proved an
+    annotation-only warning does not reliably prevent.
     """
     session = _parse_iso_date(
         (ctx.get("captured_session") or {}).get("session_date")
@@ -605,8 +662,11 @@ def _record_stale_blocks(ctx: dict[str, Any], *, skip: set[str]) -> None:
     )
     if session is None:
         return
+    tracked = _GAP_TRACKED_BLOCKS
+    if strategy == "price_signal":
+        tracked = (*tracked, "large_trader_positioning")
     stale: dict[str, dict[str, Any]] = {}
-    for block in _GAP_TRACKED_BLOCKS:
+    for block in tracked:
         if block in skip:
             continue
         value = ctx.get(block)

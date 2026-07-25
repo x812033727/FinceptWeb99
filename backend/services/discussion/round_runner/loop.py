@@ -165,6 +165,7 @@ async def run_round(
                     as_of=discussion.as_of_date,
                     progress_cb=_emit_progress,
                     topic=discussion.topic,
+                    strategy=discussion.auto_run_strategy,
                 )
             finally:
                 # Sentinel — signals to the drainer that no more

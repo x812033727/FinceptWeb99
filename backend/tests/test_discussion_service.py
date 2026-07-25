@@ -834,6 +834,7 @@ def _full_ctx_for_filter():
         "govt_bank_flow_5d":         [],
         "risk_warnings":             {},
         "market_institutional_5d":   [],
+        "large_trader_positioning":  {"top5": {"net": 1}},
         "focus_briefs":              [],
         "macro":                     {},
         "user_context":              None,
@@ -928,6 +929,70 @@ def test_filter_context_always_includes_metadata_keys():
         assert "market" in out
         assert "captured_at" in out
         assert "errors" in out
+
+
+def test_large_trader_positioning_rides_wherever_taifex_positioning_does():
+    """Large-trader feed plan Task 4: `large_trader_positioning` is the
+    TX large-trader-concentration sibling of `taifex_positioning` —
+    every persona archetype that already reads the futures-OI
+    directional signal should also see the concentration breakdown.
+    Loop over every compiled profile rather than hand-picking personas
+    so a future archetype can't silently regress this."""
+    from services.discussion import persona_config as pc
+
+    for name, profile in vars(pc).items():
+        if not isinstance(profile, frozenset):
+            continue
+        if "taifex_positioning" in profile:
+            assert "large_trader_positioning" in profile, (
+                f"{name} carries taifex_positioning but not "
+                "large_trader_positioning"
+            )
+
+    for persona_id, profile in pc._PERSONA_CONTEXT_PROFILES.items():
+        if "taifex_positioning" in profile:
+            assert "large_trader_positioning" in profile, persona_id
+
+
+def test_filter_context_macro_analyst_sees_large_trader_positioning():
+    """macro_analyst's profile carries taifex_positioning, so it must
+    also carry the new large_trader_positioning block."""
+    ctx = _full_ctx_for_filter()
+    out = discussion_service._filter_context_for_persona(ctx, "macro_analyst")
+    assert "large_trader_positioning" in out
+
+
+def test_filter_context_buffett_drops_large_trader_positioning():
+    """buffett's (_VALUE_PROFILE) view never carried taifex_positioning
+    and must not gain large_trader_positioning either — value investors
+    don't reason about futures-market concentration."""
+    ctx = _full_ctx_for_filter()
+    out = discussion_service._filter_context_for_persona(ctx, "buffett")
+    assert "large_trader_positioning" not in out
+
+
+def test_block_annotations_documents_large_trader_positioning():
+    """The prompt-schema annotation must describe the new block's
+    shape so a weak model doesn't ignore it: top5/top10 net OI + the
+    `*_special` (特定法人) columns, `net_change_5s` (5-session net
+    change), `dealer_volume` (自營商總量 vs 20-session mean), and —
+    critically — `as_of_session` so personas know the data can lag
+    and must cite its own date rather than "today"."""
+    from services.discussion.prompts import _BLOCK_ANNOTATIONS
+
+    assert "large_trader_positioning" in _BLOCK_ANNOTATIONS
+    text = _BLOCK_ANNOTATIONS["large_trader_positioning"]
+    assert "as_of_session" in text
+    assert "top5" in text or "top10" in text
+    assert "special" in text
+    assert "net_change_5s" in text
+    assert "dealer_volume" in text
+    # Every annotation is inlined into `_TURN_PROMPT_TEMPLATE` /
+    # `_SYNTHESIZER_USER_TEMPLATE` via `str.format` — a stray single
+    # brace here would raise at format time in a real round (see the
+    # `data_stale` entry's doubled `{{`/`}}` for the pattern to follow
+    # if this ever needs literal braces).
+    assert "{" not in text and "}" not in text
 
 
 # ── _assemble_prior_discussions ───────────────────────────────────

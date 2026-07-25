@@ -476,6 +476,7 @@ async def synthesize_conclusion(
             exclude_discussion_id=discussion.id,
             as_of=discussion.as_of_date,
             topic=discussion.topic,
+            strategy=discussion.auto_run_strategy,
         )
 
     # PR #267: detect a post-mortem self-critique cycle in the

@@ -24,7 +24,9 @@ from unittest.mock import AsyncMock, patch
 
 from services.discussion.context import build_market_context
 from services.discussion.context import builder
-from services.discussion.context.blocks import chip, http, news, owner, risk, technical
+from services.discussion.context.blocks import (
+    chip, derivatives, http, news, owner, risk, technical,
+)
 
 
 def _new_ctx() -> dict:
@@ -565,6 +567,70 @@ async def test_owner_fetch_user_context_records_error_on_failure(
     assert ctx["errors"][0]["source"] == "user_context"
 
 
+# ── derivatives.fetch_large_trader_positioning ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_derivatives_fetch_large_trader_positioning_happy_path():
+    """Happy path: reader result lands on the ctx key, `as_of` is
+    threaded through, and the block opens its own session (not
+    `None`) to pass to the reader."""
+    ctx = _new_ctx()
+    asof = date(2026, 7, 20)
+    shape = {
+        "as_of_session": "2026-07-18",
+        "top5": {"long_oi": 100, "short_oi": 80, "net": 20},
+        "top10": {"long_oi": 150, "short_oi": 130, "net": 20},
+        "net_change_5s": {"top5": 5, "top10": 5},
+        "dealer_volume": {"as_of_session": "2026-07-18", "total": 1000, "vs_20s_mean_pct": 1.5},
+    }
+    mock = AsyncMock(return_value=shape)
+
+    with patch("services.tw_derivatives_archive.large_trader_positioning", new=mock):
+        await derivatives.fetch_large_trader_positioning(
+            ctx, as_of=asof, record_error=_record(ctx),
+        )
+
+    assert ctx["large_trader_positioning"] == shape
+    assert ctx["errors"] == []
+    assert mock.call_args.args[0] is not None
+    assert mock.call_args.kwargs["as_of"] == asof
+
+
+@pytest.mark.asyncio
+async def test_derivatives_fetch_large_trader_positioning_records_error_on_failure():
+    """Reader failure must record to `ctx['errors']` and leave the
+    key absent-safe, without disturbing sibling ctx keys."""
+    ctx = _new_ctx()
+    ctx["taifex_positioning"] = {"trend": "bearish"}
+    mock = AsyncMock(side_effect=RuntimeError("archive query failed"))
+
+    with patch("services.tw_derivatives_archive.large_trader_positioning", new=mock):
+        await derivatives.fetch_large_trader_positioning(
+            ctx, as_of=None, record_error=_record(ctx),
+        )
+
+    assert ctx.get("large_trader_positioning") is None
+    assert ctx["errors"][0]["source"] == "large_trader_positioning"
+    assert ctx["taifex_positioning"] == {"trend": "bearish"}
+
+
+@pytest.mark.asyncio
+async def test_derivatives_fetch_large_trader_positioning_none_is_not_an_error():
+    """Reader returning `None` (archive empty for the cut) is a valid
+    no-signal state — key set to `None`, no error recorded."""
+    ctx = _new_ctx()
+    mock = AsyncMock(return_value=None)
+
+    with patch("services.tw_derivatives_archive.large_trader_positioning", new=mock):
+        await derivatives.fetch_large_trader_positioning(
+            ctx, as_of=None, record_error=_record(ctx),
+        )
+
+    assert ctx["large_trader_positioning"] is None
+    assert ctx["errors"] == []
+
+
 # ── builder.build_market_context (end-to-end) ─────────────────────
 
 
@@ -576,7 +642,9 @@ async def test_build_market_context_initialises_default_shape(
     returns nothing — the prompt template assumes a stable shape.
     Updated through PRs #269 (overseas_indicators), #282
     (single_stock_futures_oi), #283 (taiwan_vix), #284
-    (upcoming_events_calendar), #285 (broker_concentration)."""
+    (upcoming_events_calendar), #285 (broker_concentration), and the
+    large-trader feed plan's Task 3 (large_trader_positioning —
+    present but None here since `strategy` defaults to None)."""
     expected_keys = {
         "market", "captured_at",
         "captured_session",          # PR for expert-quote freshness
@@ -592,6 +660,7 @@ async def test_build_market_context_initialises_default_shape(
         "top_revenue_growers", "active_buybacks",
         "govt_bank_flow_5d", "risk_warnings",
         "market_institutional_5d", "taifex_positioning",
+        "large_trader_positioning",  # Task 3, large-trader feed plan
         "single_stock_futures_oi",   # PR #282
         "taiwan_vix",                # PR #283
         "upcoming_events_calendar",  # PR #284
@@ -938,6 +1007,31 @@ def test_record_data_gaps_names_only_the_empty_blocks():
     assert "overseas_indicators" not in ctx["data_gaps"]
 
 
+def test_record_data_gaps_flags_large_trader_positioning_only_for_price_signal():
+    """`large_trader_positioning` is strategy-gated (Task 3): the block
+    is only ever attempted for `price_signal`, so a `None` there is a
+    real "attempted but the archive had nothing" gap ONLY when that
+    strategy built the ctx. Every other strategy (and the
+    strategy-less default) never ran the block, so the same `None`
+    must not be reported as a gap — it isn't in `_GAP_TRACKED_BLOCKS`
+    at all, this behaviour is strategy-conditional on top of that."""
+    from services.discussion.context.builder import _record_data_gaps
+
+    ctx_price_signal = {"large_trader_positioning": None}
+    _record_data_gaps(ctx_price_signal, strategy="price_signal")
+    assert "large_trader_positioning" in ctx_price_signal["data_gaps"]
+
+    for strategy in (None, "chip_quality", "general"):
+        ctx = {"large_trader_positioning": None}
+        _record_data_gaps(ctx, strategy=strategy)
+        assert "large_trader_positioning" not in ctx["data_gaps"], strategy
+
+    # A real reading under price_signal is not a gap.
+    ctx_present = {"large_trader_positioning": {"top5": {"net": 20}}}
+    _record_data_gaps(ctx_present, strategy="price_signal")
+    assert "large_trader_positioning" not in ctx_present["data_gaps"]
+
+
 def test_record_data_gaps_flags_overseas_envelope_with_no_indices():
     """`overseas_indicators` stays a non-empty `{as_of, indices}` dict
     when the connector fails — the payload is what decides."""
@@ -1034,6 +1128,49 @@ def test_record_stale_blocks_accepts_date_objects():
     }
     _record_data_gaps(ctx)
     assert ctx["data_stale"]["broker_concentration"]["days_behind"] == 7
+
+
+def test_record_data_gaps_flags_stale_large_trader_positioning_for_price_signal():
+    """Follow-up to the strategy-gated gap test above: `as_of` staleness
+    detection (not just the "empty" gap case) must also be
+    strategy-conditional on `large_trader_positioning`. The archive
+    reader (`tw_derivatives_archive.large_trader_positioning`) has no
+    live fallback and is measured 17 days stale in prod today — an
+    annotation nobody reliably reads is not enough (the
+    `broker_concentration` incident this same mechanism was built for
+    had 4 of 5 conclusions miss a plain-text staleness note), so a
+    stale reading must land in `ctx["data_stale"]`, machine-checkable,
+    for the one strategy that actually consumes this block."""
+    from services.discussion.context.builder import _record_data_gaps
+
+    stale_block = {"as_of": "2026-07-04", "top5": {"net": 20}}
+    fresh_block = {"as_of": "2026-07-21", "top5": {"net": 20}}
+
+    # Stale + price_signal → flagged, with the right day count.
+    ctx = {
+        "captured_session": {"session_date": "2026-07-21"},
+        "large_trader_positioning": stale_block,
+    }
+    _record_data_gaps(ctx, strategy="price_signal")
+    assert ctx["data_stale"]["large_trader_positioning"]["days_behind"] == 17
+
+    # Fresh + price_signal → not flagged.
+    ctx_fresh = {
+        "captured_session": {"session_date": "2026-07-21"},
+        "large_trader_positioning": fresh_block,
+    }
+    _record_data_gaps(ctx_fresh, strategy="price_signal")
+    assert "large_trader_positioning" not in ctx_fresh.get("data_stale", {})
+
+    # Same stale reading, but NOT price_signal → never scanned at all,
+    # even though the block happens to carry a (leftover / stale) value.
+    for strategy in (None, "chip_quality", "general"):
+        ctx_other = {
+            "captured_session": {"session_date": "2026-07-21"},
+            "large_trader_positioning": stale_block,
+        }
+        _record_data_gaps(ctx_other, strategy=strategy)
+        assert "large_trader_positioning" not in ctx_other.get("data_stale", {}), strategy
 
 
 # ── archive-first live reads (data-fetch stabilization) ────────────
@@ -1530,3 +1667,98 @@ async def test_backtest_block_call_never_reaches_live_path():
 
     assert ctx["errors"] == []          # the double did not fire
     assert ctx["top_gainers"] == []
+
+
+# ── build_market_context: strategy-gated large_trader_positioning ──
+#
+# Task 3 of the large-trader feed plan: the block built in Task 2
+# (`derivatives.fetch_large_trader_positioning`) is expensive enough
+# (its own `AsyncSessionLocal` + archive scan) that it only makes
+# sense for the strategy that actually reads it — `price_signal`.
+# Every other strategy (and the strategy-less default) leaves the
+# key at its `_initial_ctx` default of `None`, same as an empty
+# reading, so the prompt template doesn't need to special-case it.
+
+
+@pytest.mark.asyncio
+async def test_build_market_context_invokes_large_trader_block_for_price_signal(
+    db_session: AsyncSession,
+):
+    """`strategy="price_signal"` must fire the block with
+    `as_of=info_cutoff` — `None` in live mode, matching every other
+    TW-only block's live behaviour. The block returning nothing (the
+    spy never sets the ctx key, so it stays at its `_initial_ctx`
+    default of `None`) must also surface as a `data_gaps` entry —
+    price_signal is the one strategy that actually attempted this
+    block, so a missing reading here is the real "attempted but
+    empty" case the gap list exists to name."""
+    spy = AsyncMock()
+
+    with patch.object(http, "fetch_screener", new=AsyncMock()), \
+         patch.object(http, "fetch_index", new=AsyncMock()), \
+         patch.object(http, "fetch_macro", new=AsyncMock()), \
+         patch.object(http, "fetch_focus_briefs", new=AsyncMock()), \
+         patch.object(derivatives, "fetch_large_trader_positioning", new=spy):
+        ctx = await build_market_context(
+            db_session, market="TW", strategy="price_signal",
+        )
+
+    spy.assert_awaited_once()
+    assert spy.call_args.kwargs["as_of"] is None
+    assert "large_trader_positioning" in ctx
+    assert "large_trader_positioning" in ctx["data_gaps"]
+
+
+@pytest.mark.parametrize("strategy", [None, "chip_quality"])
+@pytest.mark.asyncio
+async def test_build_market_context_skips_large_trader_block_for_other_strategies(
+    db_session: AsyncSession, strategy: str | None,
+):
+    """Any strategy other than `price_signal` — including the
+    strategy-less default (`None`) — must not invoke the block at
+    all. The ctx key stays present (via `_initial_ctx`) but `None`,
+    same as any other block that never ran this session — and,
+    because the block was never attempted, `data_gaps` must NOT name
+    it (that would falsely imply a real attempt came back empty)."""
+    spy = AsyncMock()
+
+    with patch.object(http, "fetch_screener", new=AsyncMock()), \
+         patch.object(http, "fetch_index", new=AsyncMock()), \
+         patch.object(http, "fetch_macro", new=AsyncMock()), \
+         patch.object(http, "fetch_focus_briefs", new=AsyncMock()), \
+         patch.object(derivatives, "fetch_large_trader_positioning", new=spy):
+        ctx = await build_market_context(
+            db_session, market="TW", strategy=strategy,
+        )
+
+    spy.assert_not_awaited()
+    assert ctx["large_trader_positioning"] is None
+    assert "large_trader_positioning" not in ctx["data_gaps"]
+
+
+@pytest.mark.asyncio
+async def test_build_market_context_backtest_price_signal_uses_info_cutoff(
+    db_session: AsyncSession,
+):
+    """Replay parity: a backtest discussion (`as_of` set) running the
+    `price_signal` strategy must still fire the block, threaded with
+    the *previous-trading-day* cutoff — never `as_of` itself and
+    never `None` (which would silently fall back to "live"). Pins
+    the same look-ahead guard every other TW block gets."""
+    spy = AsyncMock()
+    as_of = date(2026, 6, 12)
+
+    with patch.object(http, "fetch_screener", new=AsyncMock()), \
+         patch.object(http, "fetch_index", new=AsyncMock()), \
+         patch.object(http, "fetch_macro", new=AsyncMock()), \
+         patch.object(http, "fetch_focus_briefs", new=AsyncMock()), \
+         patch.object(derivatives, "fetch_large_trader_positioning", new=spy):
+        ctx = await build_market_context(
+            db_session, market="TW", as_of=as_of, strategy="price_signal",
+        )
+
+    spy.assert_awaited_once()
+    cutoff = spy.call_args.kwargs["as_of"]
+    assert cutoff is not None
+    assert cutoff < as_of
+    assert ctx["info_cutoff"] == cutoff.isoformat()

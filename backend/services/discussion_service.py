@@ -656,6 +656,7 @@ async def gather_market_context(
     as_of: date | None = None,
     progress_cb: Any = None,
     topic: str | None = None,
+    strategy: str | None = None,
 ) -> dict[str, Any]:
     """Build a structured snapshot of the market state for the personas.
 
@@ -678,6 +679,12 @@ async def gather_market_context(
     `user_context` block carrying the owner's portfolio + watchlist
     summary plus overlap with `focus_symbols`. Personas that don't
     care about portfolio fit can ignore it.
+
+    `strategy` (the discussion's `auto_run_strategy`, when auto-run)
+    gates strategy-specific blocks — currently only
+    `large_trader_positioning`, fetched when `strategy ==
+    "price_signal"`. `None` (the default, matching every caller that
+    predates this param) skips it, same as any other strategy.
     """
     from services.discussion.context import build_market_context
     return await build_market_context(
@@ -691,6 +698,7 @@ async def gather_market_context(
         max_focus_symbols=_MAX_FOCUS_SYMBOLS,
         progress_cb=progress_cb,
         topic=topic,
+        strategy=strategy,
     )
 
 

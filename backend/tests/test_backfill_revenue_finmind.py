@@ -32,12 +32,22 @@ from services.ingest.repository import (
 
 
 @pytest.mark.asyncio
-async def test_backfill_walks_oldest_to_newest_in_30_day_chunks():
-    """The chunk order matters: walking newest→oldest would prevent
-    YoY computation because the prev-year row wouldn't yet be in DB
-    when we process the current row. Verify the FinMind calls fire
-    in ascending order."""
-    calls: list[tuple[str, str]] = []
+async def test_backfill_asks_only_for_month_firsts_oldest_to_newest():
+    """Two contracts in one, both load-bearing.
+
+    Order: walking newest→oldest would prevent YoY computation, because
+    the prev-year row wouldn't yet be in DB when the current row is
+    processed.
+
+    Dates: every request must be a first-of-month. This dataset's
+    market-wide mode answers for `start_date` alone and ignores
+    `end_date`, and revenue rows only land on a month-first, so a
+    mid-month start fetches nothing. The previous 30-day-chunk walk
+    asked for e.g. `2024-01-31` and got zero rows back while still
+    reporting success -- and the test that replaced this one asserted
+    that exact mid-month call, pinning the bug in place.
+    """
+    calls: list[tuple[str, str | None]] = []
 
     async def _fake(start, end_date=None):
         calls.append((start, end_date))
@@ -49,18 +59,36 @@ async def test_backfill_walks_oldest_to_newest_in_30_day_chunks():
     ):
         await backfill.backfill(date(2024, 1, 1), date(2024, 3, 31))
 
-    # 30-day chunks: Jan 1-30, Jan 31-Feb 29, Mar 1-30, Mar 31-31
-    assert len(calls) == 4
-    # Oldest first
-    assert calls[0] == ("2024-01-01", "2024-01-30")
-    assert calls[1] == ("2024-01-31", "2024-02-29")
-    assert calls[-1] == ("2024-03-31", "2024-03-31")
+    assert [c[0] for c in calls] == ["2024-01-01", "2024-02-01", "2024-03-01"]
+    # end_date is never sent -- the API ignores it, and passing one
+    # invites the reader to believe a range was fetched.
+    assert all(c[1] is None for c in calls)
 
 
 @pytest.mark.asyncio
-async def test_backfill_continues_past_chunk_failures():
-    """A FinMind 5xx on chunk 2 of 4 must not abort the overall run.
-    Total upserted reflects only the chunks that succeeded."""
+async def test_backfill_skips_a_partial_leading_month():
+    """A start mid-month has no fetchable data for that month, so the
+    walk begins at the NEXT month-first rather than asking for a date
+    that returns nothing."""
+    calls: list[str] = []
+
+    async def _fake(start, end_date=None):
+        calls.append(start)
+        return []
+
+    with patch.object(
+        backfill.finmind, "get_monthly_revenue_market_wide",
+        new=AsyncMock(side_effect=_fake),
+    ):
+        await backfill.backfill(date(2024, 1, 15), date(2024, 3, 31))
+
+    assert calls == ["2024-02-01", "2024-03-01"]
+
+
+@pytest.mark.asyncio
+async def test_backfill_continues_past_month_failures():
+    """A FinMind 5xx on month 2 of 3 must not abort the overall run.
+    Total upserted reflects only the months that succeeded."""
     call_count = 0
 
     async def _flaky(start, end_date=None):
@@ -87,9 +115,9 @@ async def test_backfill_continues_past_chunk_failures():
             date(2024, 1, 1), date(2024, 3, 31),
         )
 
-    assert call_count == 4
-    assert fetched == 3
-    assert upserted == 3
+    assert call_count == 3
+    assert fetched == 2
+    assert upserted == 2
 
 
 # ── End-to-end against the test DB ────────────────────────────────
@@ -119,13 +147,13 @@ class _NoopCM:
 
 
 @pytest.mark.asyncio
-async def test_backfill_computes_yoy_from_previously_backfilled_chunk(
+async def test_backfill_computes_yoy_from_previously_backfilled_month(
     db_session: AsyncSession,
 ):
     """End-to-end value test: the backfill walks Apr 2025 → Apr 2026
-    sequentially. By the time the chunk containing Apr 2026 processes,
-    the Apr 2025 row is already in DB → YoY computes correctly. Without
-    the oldest-first ordering this would yield NULL.
+    one month at a time. By the time Apr 2026 is processed, the Apr
+    2025 row is already in DB → YoY computes correctly. Without the
+    oldest-first ordering this would yield NULL.
 
     NB: FinMind's `date` field for TaiwanStockMonthRevenue is the
     publish-month-first (YYYY-MM-01), not the publish day. Mocks use
@@ -135,20 +163,18 @@ async def test_backfill_computes_yoy_from_previously_backfilled_chunk(
     target_apr_2026 = date(2026, 4, 1)
 
     async def _fake(start, end_date=None):
-        chunk_start = date.fromisoformat(start)
-        chunk_end = date.fromisoformat(end_date)
-        out = []
-        if chunk_start <= target_apr_2025 <= chunk_end:
-            out.append({
+        month = date.fromisoformat(start)
+        if month == target_apr_2025:
+            return [{
                 "symbol": "2330", "date": "2025-04-01",
                 "revenue": 100_000_000,
-            })
-        if chunk_start <= target_apr_2026 <= chunk_end:
-            out.append({
+            }]
+        if month == target_apr_2026:
+            return [{
                 "symbol": "2330", "date": "2026-04-01",
                 "revenue": 130_000_000,  # +30% YoY vs 2025-04
-            })
-        return out
+            }]
+        return []
 
     with patch.object(
         backfill.finmind, "get_monthly_revenue_market_wide",
@@ -194,9 +220,7 @@ async def test_backfill_overwrites_bogus_yoy_year_value(
     target = date(2026, 2, 1)
 
     async def _fake(start, end_date=None):
-        chunk_start = date.fromisoformat(start)
-        chunk_end = date.fromisoformat(end_date)
-        if chunk_start <= target <= chunk_end:
+        if date.fromisoformat(start) == target:
             return [{
                 "symbol": "1101", "date": "2026-02-01",
                 "revenue": 12_252_892_000,

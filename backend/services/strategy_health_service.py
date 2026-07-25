@@ -23,6 +23,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
+import sqlalchemy as sa
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,6 +49,46 @@ LOW_SAMPLE_THRESHOLD = 5
 LESSON_HIT_COLLAPSE_THRESHOLD = 0.30
 
 
+async def _discussion_scope(db: AsyncSession, strategy_id: UUID):
+    """The WHERE clause selecting this strategy's discussions, or None
+    when the strategy has produced none.
+
+    Two disjoint sources, because the deployment runs two kinds of
+    strategy:
+
+      - **Sweep templates** reach their discussions through
+        `BacktestSweep.strategy_id` -> `Discussion.sweep_id`.
+      - **Daily roundtable strategies** (template rows carrying
+        `auto_run_strategy`) reach them through
+        `Discussion.auto_run_strategy`; those rows have `sweep_id`
+        NULL and never appear in any sweep.
+
+    Only the first path existed, so every metric for the daily
+    strategies resolved to "no samples" -- which is why
+    `strategy_health_metrics` sat at 0 rows while the job reported
+    healthy every morning.
+    """
+    tmpl_key = await db.scalar(
+        select(DiscussionStrategyTemplate.auto_run_strategy).where(
+            DiscussionStrategyTemplate.id == strategy_id,
+        )
+    )
+    if tmpl_key:
+        return sa.and_(
+            Discussion.auto_run.is_(True),
+            Discussion.auto_run_strategy == tmpl_key,
+        )
+
+    sweep_ids = list((await db.scalars(
+        select(BacktestSweep.id).where(
+            BacktestSweep.strategy_id == strategy_id,
+        )
+    )).all())
+    if not sweep_ids:
+        return None
+    return Discussion.sweep_id.in_(sweep_ids)
+
+
 async def _gather_recent_briers(
     db: AsyncSession, strategy_id: UUID, *, snapshot: date,
 ) -> tuple[list[float], list[float | None]]:
@@ -57,12 +98,8 @@ async def _gather_recent_briers(
     `calibrated_briers` may have None entries for discussions
     pre-PR-C2 (no calibrated_confidence set); the caller filters.
     """
-    sweep_ids = list((await db.scalars(
-        select(BacktestSweep.id).where(
-            BacktestSweep.strategy_id == strategy_id,
-        )
-    )).all())
-    if not sweep_ids:
+    scope = await _discussion_scope(db, strategy_id)
+    if scope is None:
         return ([], [])
     window_start = datetime.combine(
         snapshot - timedelta(days=WINDOW_DAYS), datetime.min.time(), UTC,
@@ -74,7 +111,7 @@ async def _gather_recent_briers(
         select(
             Discussion,
         ).where(
-            Discussion.sweep_id.in_(sweep_ids),
+            scope,
             Discussion.brier_score.is_not(None),
             Discussion.created_at >= window_start,
             Discussion.created_at < window_end,
@@ -95,12 +132,8 @@ async def _gather_window_hit_rate(
 ) -> tuple[float | None, int]:
     """win_count / total_count over the rolling window. Returns
     `(rate, sample_count)`; rate is None when nothing graded."""
-    sweep_ids = list((await db.scalars(
-        select(BacktestSweep.id).where(
-            BacktestSweep.strategy_id == strategy_id,
-        )
-    )).all())
-    if not sweep_ids:
+    scope = await _discussion_scope(db, strategy_id)
+    if scope is None:
         return (None, 0)
     window_start = datetime.combine(
         snapshot - timedelta(days=WINDOW_DAYS), datetime.min.time(), UTC,
@@ -110,7 +143,7 @@ async def _gather_window_hit_rate(
     )
     verdicts = list((await db.scalars(
         select(Discussion.verdict).where(
-            Discussion.sweep_id.in_(sweep_ids),
+            scope,
             Discussion.verdict.is_not(None),
             Discussion.created_at >= window_start,
             Discussion.created_at < window_end,

@@ -14,13 +14,22 @@ This module replaces all three with one pure function over
   band            condition (precedence top-down — 大敗優先)
   ─────────────── ───────────────────────────────────────────
   big_loss        any close vs d1_buy ≤ big_loss_pct  (default -5%)
-  big_win         D5 close vs d1_buy   ≥ big_win_day5_pct (default 20%)
-  win             any close vs d1_buy  ≥ win_pct      (default 5%)
+  big_win         D5 close vs d1_buy  ≥ big_win_day5_pct (default 20%)
+  win             D5 close vs d1_buy  ≥ win_pct       (default 5%)
   loss            otherwise
 
 All comparisons use CLOSE prices (matches the post-mortem and Brier
 side; replaces the verifier's intraday-high bar which over-counted
 "wins" that round-tripped the same session).
+
+`win` was itself a peak-touch rule until the 2026-07 review: "any
+close in the window ≥ +5%" scored a spike-and-fade as a win, which is
+why the public scoreboard could show a 100% win rate over picks a
+reader following them would have lost money on. It now grades on the
+D5 close — the realized outcome of the 5-day horizon the topic
+promises, and the same basis the scoreboard's `avg_return_pct` uses.
+`big_loss` intentionally still fires on any close: it is a
+risk-management band, not a return measurement.
 
 Precedence rationale: 大敗 dominates 大勝 because the new rule is
 risk-management oriented — a recommendation that drops ≥5% intraday
@@ -54,6 +63,7 @@ def classify_outcome(
     big_win_day5_pct: float = DEFAULT_BIG_WIN_DAY5_PCT,
     win_pct: float = DEFAULT_WIN_PCT,
     big_loss_pct: float = DEFAULT_BIG_LOSS_PCT,
+    require_d5: bool = True,
 ) -> OutcomeClassification | None:
     """Classify one symbol's D1-Dn outcome into a band.
 
@@ -90,13 +100,49 @@ def classify_outcome(
         if isinstance(last, (int, float)):
             day5_pct = (float(last) - d1_buy) / d1_buy * 100.0
 
-    # Precedence: 大敗 first, then 大勝 (requires D5), then 勝, else 敗.
+    # `require_d5=False` grades an open window on its most recent
+    # resolved close instead of refusing to grade. The post-mortem
+    # needs this: it coaches the panel mid-week, when D5 hasn't
+    # happened yet, and "no verdict" would leave it with nothing to
+    # say. The basis stays a realized close — never the window peak —
+    # so the coaching signal and the scoreboard can't disagree about
+    # what counts as a win.
+    settled_pct = day5_pct
+    if settled_pct is None and not require_d5:
+        settled_pct = numeric_pcts[-1]
+
+    # Precedence: 大敗 first, then 大勝, then 勝, else 敗.
+    #
+    # `win` is graded on the D5 CLOSE, not on the window peak. The old
+    # peak-touch rule ("any close in D1..D5 ≥ +5%") counted a position
+    # that spiked and gave it all back as a win — a number nobody could
+    # have realized without a same-week exit the recommendation never
+    # specified. D5 close is what a reader following the pick actually
+    # gets, and it is the same basis as `avg_return_pct` on the
+    # scoreboard, so the two columns can no longer disagree.
+    #
+    # `big_loss` deliberately keeps the any-close trigger: it is a
+    # risk-management band, and a −5% drawdown mid-window is a real
+    # loss event even if the price recovers by D5.
+    #
+    # `peak_pct` / `trough_pct` stay on the result as UI annotations
+    # ("期間最高 +8.2% / 最低 −3.1%") — informative, not deciding.
     band: OutcomeBand
     if trough_pct <= big_loss_pct:
         band = "big_loss"
+    elif settled_pct is None:
+        # Window still open and the caller demands a settled D5.
+        # big_loss above can still fire early — a −5% drawdown is
+        # already a fact — but win / loss are undecidable, and
+        # defaulting them to `loss` would quietly bias every partial
+        # window downward. Callers all treat None as "skip this
+        # symbol".
+        return None
     elif day5_pct is not None and day5_pct >= big_win_day5_pct:
+        # 大勝 stays gated on the real D5 close: it is a claim about
+        # how the week ended, not about how it was going.
         band = "big_win"
-    elif peak_pct >= win_pct:
+    elif settled_pct >= win_pct:
         band = "win"
     else:
         band = "loss"
@@ -132,8 +178,8 @@ def classify_discussion(
     `winner_symbol` is the symbol that drove the chosen band:
       - for big_loss: the symbol with the worst (lowest) trough
       - for big_win: the symbol with the highest D5
-      - for win: the symbol with the highest peak
-      - for loss: the symbol with the highest peak (the best of a bad lot)
+      - for win: the symbol with the highest D5
+      - for loss: the symbol with the highest D5 (the best of a bad lot)
 
     Returns None when no symbol has a resolvable classification (every
     d1_buy invalid OR every closes empty).
@@ -179,18 +225,18 @@ def classify_discussion(
         (sym, c) for sym, c in classifications.items() if c.band == "win"
     ]
     if wins:
-        winner = max(wins, key=lambda p: (p[1].peak_pct or 0.0))
+        winner = max(wins, key=lambda p: (p[1].day5_pct or 0.0))
         return DiscussionClassification(
             band="win",
             winner_symbol=winner[0],
             classifications=classifications,
         )
 
-    # All loss. Pick the highest peak as the "best of a bad lot" so
-    # the verdict_reason can quote a representative number.
+    # All loss. Pick the best D5 as the "best of a bad lot" so the
+    # verdict_reason quotes the same basis the band was decided on.
     winner = max(
         classifications.items(),
-        key=lambda p: (p[1].peak_pct or 0.0),
+        key=lambda p: (p[1].day5_pct or 0.0),
     )
     return DiscussionClassification(
         band="loss",

@@ -39,6 +39,30 @@ class DiscussionStrategyTemplate(Base):
         nullable=False,
     )
 
+    # Links this template to a DAILY ROUNDTABLE strategy instead of to
+    # backtest sweeps. NULL for ordinary sweep templates.
+    #
+    # The health / calibration / maturity stack was built around
+    # `template -> BacktestSweep -> Discussion.sweep_id`. The daily
+    # auto-run never touches any of those: it keys off the three
+    # hard-coded strings in
+    # `discussion_auto_run_configs.strategy_run_counts` and leaves
+    # `sweep_id` NULL. The two halves were never connected, so
+    # `monitor_strategy_health` walked an empty template table every
+    # day at 02:00 UTC and wrote zero rows while reporting healthy --
+    # `strategy_health_metrics` had 0 rows for the life of the
+    # deployment.
+    #
+    # Setting this to "general" / "chip_quality" / "price_signal"
+    # makes `_gather_recent_briers` sample the auto-run discussions
+    # for that strategy directly. Everything downstream
+    # (record_snapshot, maturity tier, alerts, timeline, comparison,
+    # the strategies API) already keys on `strategy_id` and needs no
+    # change.
+    auto_run_strategy: Mapped[str | None] = mapped_column(
+        String(32), nullable=True,
+    )
+
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     topic: Mapped[str] = mapped_column(Text, nullable=False)

@@ -1,21 +1,23 @@
 """Tests for the TAIWAN VIX pipeline (PR #283).
 
 Three layers:
-  1. CSV parser — `taifex_connector._parse_csv_body` happy path +
-     tolerance for column-order, missing fields, mojibake'd
-     headers
+  1. Day-file parser — `taifex_connector._parse_vix_day_body`, over
+     the per-session minute file TAIFEX moved to in 2026-07
   2. Read tier — `read_tw_vix_snapshot` returns latest + 5-day
      change %; None when archive empty
   3. Upsert — bulk + ON CONFLICT idempotency
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
+from unittest.mock import patch
 
+import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from data.tw.taifex_connector import _parse_csv_body
+import data.tw.taifex_connector as taifex
+from data.tw.taifex_connector import _parse_vix_day_body
 from models.tw_vix_daily import TwVixDaily
 from services.ingest.repository import (
     VixDailyRow,
@@ -24,78 +26,49 @@ from services.ingest.repository import (
 )
 
 
-# ── _parse_csv_body ──────────────────────────────────────────────
+# ── _parse_vix_day_body ──────────────────────────────────────────
 
 
-def test_parse_csv_happy_path():
+_DAY_FILE = (
+    "交易日期\t時間(時/分/秒/毫秒)\t臺指選擇權波動率指數\n"
+    "--------\t-------------------\t--------------------\n"
+    "20260721\t9000000\t\t\t38.13\n"
+    "20260721\t9010000\t\t\t37.90\n"
+    "20260721\tLast 1 min AVG\t\t\t36.55\n"
+)
+
+
+def test_parse_day_file_prefers_the_last_minute_average():
+    """TAIFEX's own closing convention for this file is the trailing
+    `Last 1 min AVG` row, not the final timestamped tick."""
+    assert _parse_vix_day_body(_DAY_FILE, date(2026, 7, 21)) == pytest.approx(36.55)
+
+
+def test_parse_day_file_falls_back_to_last_numeric_row():
     body = (
-        "日期,收盤指數\n"
-        "2026/04/15,18.32\n"
-        "2026/04/16,17.51\n"
-        "2026/04/17,16.95\n"
+        "交易日期\t時間\t指數\n"
+        "20260721\t9000000\t\t\t38.13\n"
+        "20260721\t9010000\t\t\t37.90\n"
     )
-    out = _parse_csv_body(body)
-    assert len(out) == 3
-    assert out[0]["date"] == "2026-04-15"
-    assert out[0]["value"] == pytest.approx(18.32)
-    assert out[2]["value"] == pytest.approx(16.95)
+    assert _parse_vix_day_body(body, date(2026, 7, 21)) == pytest.approx(37.90)
 
 
-def test_parse_csv_tolerates_extra_columns():
-    """TAIFEX sometimes includes 開盤/最高/最低 alongside the close.
-    Parser keys off the headers — extra columns must not shift
-    the date/value lookup or break the row."""
-    body = (
-        "日期,開盤,最高,最低,收盤指數\n"
-        "2026/04/15,18.0,18.5,17.9,18.32\n"
-        "2026/04/16,18.3,18.4,17.5,17.51\n"
-    )
-    out = _parse_csv_body(body)
-    assert len(out) == 2
-    assert out[0]["value"] == pytest.approx(18.32)
+def test_parse_day_file_rejects_the_404_html_body():
+    """Sessions outside TAIFEX's ~7-day publication window answer with
+    an HTML 404 page. Parsing that as data would write garbage; parsing
+    it as "no data today" would hide that we asked for something the
+    endpoint no longer serves."""
+    html = '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN">\n<html><body><h1>404</h1></body></html>'
+    assert _parse_vix_day_body(html, date(2026, 6, 1)) is None
 
 
-def test_parse_csv_accepts_alternate_value_header():
-    """A future TAIFEX header rotation (`收盤` instead of `收盤指數`)
-    shouldn't blank the parser — we list both forms."""
-    body = (
-        "日期,收盤\n"
-        "2026/04/15,18.32\n"
-    )
-    out = _parse_csv_body(body)
-    assert len(out) == 1
-    assert out[0]["value"] == pytest.approx(18.32)
+def test_parse_day_file_ignores_rows_for_another_session():
+    body = _DAY_FILE + "20260720\tLast 1 min AVG\t\t\t99.99\n"
+    assert _parse_vix_day_body(body, date(2026, 7, 21)) == pytest.approx(36.55)
 
 
-def test_parse_csv_skips_unparseable_rows():
-    """Bad date strings + non-numeric values are skipped silently
-    rather than crashing the whole batch."""
-    body = (
-        "日期,收盤指數\n"
-        "2026/04/15,18.32\n"
-        "BAD-DATE,17.51\n"
-        "2026/04/17,not-a-number\n"
-        "2026/04/18,16.95\n"
-    )
-    out = _parse_csv_body(body)
-    assert [r["date"] for r in out] == ["2026-04-15", "2026-04-18"]
-
-
-def test_parse_csv_empty_body_returns_empty():
-    assert _parse_csv_body("") == []
-    assert _parse_csv_body("\n\n") == []
-
-
-def test_parse_csv_missing_headers_returns_empty_with_warn(caplog):
-    """If the headers don't match anything we recognise (e.g. TAIFEX
-    rotated to a Big5-decoded gibberish or English variant), return
-    [] so the cron records a clean failure rather than crashing."""
-    body = (
-        "Date,Close\n"   # English headers — not in our known set
-        "2026/04/15,18.32\n"
-    )
-    out = _parse_csv_body(body)
-    assert out == []
+def test_parse_day_file_empty_input():
+    assert _parse_vix_day_body("", date(2026, 7, 21)) is None
 
 
 # ── read_tw_vix_snapshot ─────────────────────────────────────────
@@ -186,6 +159,100 @@ async def test_read_snapshot_clamps_to_as_of_for_backtest(
     assert out["as_of"] == "2026-04-15"
 
 
+# ── regime: where today's value sits in the distribution ─────────
+
+
+def _seed_regime(db_session: AsyncSession, values: list[float], *, start: date):
+    """One row per calendar day from `start`, in order."""
+    for i, val in enumerate(values):
+        db_session.add(TwVixDaily(
+            market="TW", ts=start + timedelta(days=i),
+            vix_value=val, source="taifex",
+        ))
+
+
+@pytest.mark.asyncio
+async def test_regime_ranks_the_current_value_against_history(
+    db_session: AsyncSession,
+):
+    """The bug this replaces: a hardcoded "median 16-18" made a 36.14
+    print look like extreme panic when it was actually below the
+    prevailing median. With 40 sessions spanning 30..40, a 36 close
+    must rank mid-pack, not at the top."""
+    _seed_regime(
+        db_session,
+        [30.0 + i * 0.25 for i in range(40)],  # 30.00 .. 39.75
+        start=date(2026, 5, 1),
+    )
+    db_session.add(TwVixDaily(
+        market="TW", ts=date(2026, 6, 20), vix_value=36.0, source="taifex",
+    ))
+    await db_session.commit()
+
+    out = await read_tw_vix_snapshot(
+        db_session, market="TW", days=5, as_of=date(2026, 6, 20),
+    )
+    assert out is not None
+    regime = out["regime"]
+    assert regime["sufficient"] is True
+    assert regime["sample_days"] == 41
+    # 36.0 sits inside the 30.00..39.75 ramp — mid-pack, not extreme.
+    assert 50 <= regime["percentile"] <= 70
+    assert regime["p25"] < regime["median"] < regime["p75"]
+
+
+@pytest.mark.asyncio
+async def test_regime_reports_insufficient_history_explicitly(
+    db_session: AsyncSession,
+):
+    """Below the sample floor the stats are nulled but the block still
+    exists — an omitted block reads to the model as "not relevant",
+    which is exactly how the earlier data holes produced invented
+    numbers."""
+    _seed_regime(db_session, [35.0, 36.0, 37.0], start=date(2026, 6, 1))
+    await db_session.commit()
+
+    out = await read_tw_vix_snapshot(
+        db_session, market="TW", days=5, as_of=date(2026, 6, 3),
+    )
+    assert out is not None
+    regime = out["regime"]
+    assert regime["sufficient"] is False
+    assert regime["sample_days"] == 3
+    assert regime["percentile"] is None
+    assert regime["median"] is None
+    assert "percentile" in regime  # present-but-null, not dropped
+
+
+@pytest.mark.asyncio
+async def test_regime_clamps_to_as_of_for_backtest(
+    db_session: AsyncSession,
+):
+    """A replay must not rank its value against volatility that had not
+    happened yet — the same look-ahead class as the macro block leak."""
+    _seed_regime(
+        db_session,
+        [30.0] * 25,                       # calm pre-anchor regime
+        start=date(2026, 5, 1),
+    )
+    _seed_regime(
+        db_session,
+        [90.0] * 25,                       # post-anchor panic
+        start=date(2026, 7, 1),
+    )
+    await db_session.commit()
+
+    out = await read_tw_vix_snapshot(
+        db_session, market="TW", days=5, as_of=date(2026, 5, 25),
+    )
+    assert out is not None
+    regime = out["regime"]
+    assert regime["sample_days"] == 25          # post-anchor rows excluded
+    # Ranked only against the calm regime: 30.0 is the whole sample.
+    assert regime["median"] == pytest.approx(30.0)
+    assert regime["p75"] == pytest.approx(30.0)
+
+
 # ── upsert idempotency ───────────────────────────────────────────
 
 
@@ -210,3 +277,233 @@ async def test_upsert_overwrites_on_re_ingest(
     )).all()
     assert len(rows) == 1
     assert float(rows[0].vix_value) == pytest.approx(22.5)
+
+
+# ── get_vix_history: per-session walk ────────────────────────────
+
+
+def _day_file(stamp: str, value: str) -> bytes:
+    return (
+        "交易日期\t時間(時/分/秒/毫秒)\t臺指選擇權波動率指數\n"
+        f"{stamp}\t9000000\t\t\t40.00\n"
+        f"{stamp}\tLast 1 min AVG\t\t\t{value}\n"
+    ).encode("big5")
+
+
+class _FakeResponse:
+    def __init__(self, content: bytes, status: int = 200):
+        self.content = content
+        self._status = status
+
+    def raise_for_status(self):
+        if self._status >= 400:
+            raise httpx.HTTPStatusError(
+                "boom", request=None, response=None,  # type: ignore[arg-type]
+            )
+
+
+class _FakeClient:
+    """Stands in for httpx.AsyncClient; answers per `filesname`."""
+
+    def __init__(self, answers):
+        self.answers = answers
+        self.asked: list[str] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def get(self, url, params=None, headers=None):
+        stamp = (params or {})["filesname"]
+        self.asked.append(stamp)
+        answer = self.answers.get(stamp)
+        if isinstance(answer, Exception):
+            raise answer
+        if answer is None:
+            return _FakeResponse(b"<html><body>404</body></html>")
+        return _FakeResponse(answer)
+
+
+@pytest.mark.asyncio
+async def test_get_vix_history_walks_weekdays_only():
+    """One request per weekday: TAIFEX now publishes a file per session
+    rather than a date-range download."""
+    client = _FakeClient({
+        "20260717": _day_file("20260717", "38.81"),
+        "20260720": _day_file("20260720", "39.49"),
+    })
+    with patch.object(taifex.httpx, "AsyncClient", lambda **_: client):
+        # 07-18 Sat, 07-19 Sun
+        out = await taifex.get_vix_history(date(2026, 7, 17), date(2026, 7, 20))
+
+    assert client.asked == ["20260717", "20260720"]
+    assert out == [
+        {"date": "2026-07-17", "value": pytest.approx(38.81)},
+        {"date": "2026-07-20", "value": pytest.approx(39.49)},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_vix_history_skips_unpublished_sessions():
+    """Dates outside the ~7-session window answer with an HTML 404 page;
+    they are skipped, not parsed and not fatal."""
+    client = _FakeClient({
+        "20260720": None,                             # HTML 404 body
+        "20260721": _day_file("20260721", "36.55"),
+    })
+    with patch.object(taifex.httpx, "AsyncClient", lambda **_: client):
+        out = await taifex.get_vix_history(date(2026, 7, 20), date(2026, 7, 21))
+
+    assert out == [{"date": "2026-07-21", "value": pytest.approx(36.55)}]
+
+
+@pytest.mark.asyncio
+async def test_get_vix_history_one_transport_error_does_not_lose_the_rest():
+    client = _FakeClient({
+        "20260720": httpx.ConnectTimeout("down"),
+        "20260721": _day_file("20260721", "36.55"),
+    })
+    with patch.object(taifex.httpx, "AsyncClient", lambda **_: client):
+        out = await taifex.get_vix_history(date(2026, 7, 20), date(2026, 7, 21))
+
+    assert out == [{"date": "2026-07-21", "value": pytest.approx(36.55)}]
+
+
+@pytest.mark.asyncio
+async def test_get_vix_history_inverted_range_is_empty():
+    out = await taifex.get_vix_history(date(2026, 7, 21), date(2026, 7, 20))
+    assert out == []
+
+
+# ── monthly archive: the only free source of VIX history ─────────
+#
+# The per-session endpoint above only publishes ~7 sessions, which
+# left `tw_vix_daily` with 15 rows — too few to say whether a given
+# VIX level is high or low for the current regime. TAIFEX also
+# publishes one file per month (4 months retained), which is where
+# the distribution comes from.
+
+
+_MONTH_FILE = (
+    "交易日期\t時間(時/分/秒/毫秒)\t臺指選擇權波動率指數\t收盤前1分鐘平均指數\n"
+    "--------\t-------------------\t--------------------\t-------------------\n"
+    "20260701\t13450000\t\t\t38.12\t\t38.14\n"
+    "20260702\t13450000\t\t\t37.82\t\t37.76\n"
+    "20260703\t13450000\t\t\t36.61\t\t36.58\n"
+)
+
+
+def test_parse_month_file_takes_the_closing_minute_average():
+    """The month file carries BOTH the raw close (col 3) and the
+    closing-minute average (col 4). The per-session file's
+    `Last 1 min AVG` — what `tw_vix_daily` already stores — is the
+    latter, so the two sources must agree on column 4 or the archive
+    would mix two different conventions."""
+    out = taifex._parse_vix_month_body(_MONTH_FILE)
+    assert out == [
+        {"date": "2026-07-01", "value": pytest.approx(38.14)},
+        {"date": "2026-07-02", "value": pytest.approx(37.76)},
+        {"date": "2026-07-03", "value": pytest.approx(36.58)},
+    ]
+
+
+def test_parse_month_file_rejects_the_404_html_body():
+    """Months outside the 4-month retention window 302 to an HTML
+    404 page — must not be parsed as data."""
+    html = '<!DOCTYPE HTML><html><body><h1>404</h1></body></html>'
+    assert taifex._parse_vix_month_body(html) == []
+
+
+def test_parse_month_file_skips_malformed_rows():
+    body = _MONTH_FILE + "notadate\t13450000\t\t\t1.0\t\t2.0\nblah\n"
+    out = taifex._parse_vix_month_body(body)
+    assert len(out) == 3
+
+
+class _FakeMonthClient:
+    """Answers per month-file URL rather than per `filesname` param."""
+
+    def __init__(self, answers: dict[str, bytes | None | Exception]):
+        self.answers = answers
+        self.asked: list[str] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def get(self, url, params=None, headers=None):
+        stamp = url.rsplit("/", 1)[-1].replace("new.txt", "")
+        self.asked.append(stamp)
+        answer = self.answers.get(stamp)
+        if isinstance(answer, Exception):
+            raise answer
+        if answer is None:
+            return _FakeResponse(b"<html><body>404</body></html>")
+        return _FakeResponse(answer)
+
+
+def _month_file(rows: list[tuple[str, str]]) -> bytes:
+    head = (
+        "交易日期\t時間(時/分/秒/毫秒)\t臺指選擇權波動率指數\t收盤前1分鐘平均指數\n"
+        "--------\t-------------------\t--------------------\t-------------------\n"
+    )
+    body = "".join(
+        f"{stamp}\t13450000\t\t\t99.99\t\t{value}\n" for stamp, value in rows
+    )
+    return (head + body).encode("big5")
+
+
+@pytest.mark.asyncio
+async def test_get_vix_monthly_history_walks_back_n_months():
+    client = _FakeMonthClient({
+        "202607": _month_file([("20260701", "38.14")]),
+        "202606": _month_file([("20260601", "35.10")]),
+    })
+    with patch.object(taifex.httpx, "AsyncClient", lambda **_: client):
+        out = await taifex.get_vix_monthly_history(
+            months=2, end=date(2026, 7, 23),
+        )
+
+    # Newest month requested first, output sorted oldest → newest.
+    assert client.asked == ["202607", "202606"]
+    assert out == [
+        {"date": "2026-06-01", "value": pytest.approx(35.10)},
+        {"date": "2026-07-01", "value": pytest.approx(38.14)},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_vix_monthly_history_crosses_the_year_boundary():
+    client = _FakeMonthClient({
+        "202601": _month_file([("20260105", "30.00")]),
+        "202512": _month_file([("20251203", "28.00")]),
+    })
+    with patch.object(taifex.httpx, "AsyncClient", lambda **_: client):
+        out = await taifex.get_vix_monthly_history(
+            months=2, end=date(2026, 1, 20),
+        )
+
+    assert client.asked == ["202601", "202512"]
+    assert [r["date"] for r in out] == ["2025-12-03", "2026-01-05"]
+
+
+@pytest.mark.asyncio
+async def test_get_vix_monthly_history_one_missing_month_keeps_the_rest():
+    """Older months fall out of TAIFEX's retention window. That is the
+    normal steady state, not a failure — but a month that answers with
+    nothing must not silently look like a month with no trading days."""
+    client = _FakeMonthClient({
+        "202607": _month_file([("20260701", "38.14")]),
+        "202606": None,                                   # aged out
+        "202605": httpx.ConnectTimeout("down"),           # transport
+    })
+    with patch.object(taifex.httpx, "AsyncClient", lambda **_: client):
+        out = await taifex.get_vix_monthly_history(
+            months=3, end=date(2026, 7, 23),
+        )
+
+    assert out == [{"date": "2026-07-01", "value": pytest.approx(38.14)}]

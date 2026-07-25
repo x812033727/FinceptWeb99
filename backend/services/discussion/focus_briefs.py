@@ -271,12 +271,36 @@ async def _build_tw_focus_brief_backtest(
     1-day change vs the prior bar. Technicals (MA / 52w / RSI / perf
     %) are computed from the as_of-truncated history.
 
-    Skipped in v1: fundamentals, revenue trend, chip metrics, peers.
-    Those readers either don't have an `as_of`-aware path yet or
-    require live screener data that can't be reconstructed from the
-    DB. They show as null in the brief; personas read them as "data
-    not available in backtest mode" — better than fabricating values
-    that never existed on `as_of`.
+    Fundamentals ARE included: `fundamentals_snapshots` is keyed on
+    `as_of` and `backfill_fundamentals_history` populates past
+    sessions point-in-time (valuations from TWSE's dated `BWIBBU_d`,
+    statement fields from the quarters closed on/before each day), so
+    the historical rows are what was public then. The v1 note that
+    "readers don't have an as_of-aware path yet" no longer holds.
+
+    This matters more than it looks: with the block missing, every
+    replayed session lost a whole dimension of the panel's reasoning.
+    A 2026-05-26 replay abstained citing "fundamentals 與 revenue_trend
+    五檔候選股全數空值" while the archive held snapshots for four of
+    the five — the emptiness was the reader, not the market. Replays
+    were therefore biased toward abstention.
+
+    Chip metrics are included for the same reason: the institutional
+    and margin ledgers are published daily by TWSE and never restated,
+    so `ts <= as_of` is point-in-time by construction. `chip_5d` is
+    load-bearing rather than decorative — it is the core dimension of
+    the chip_quality strategy, so replaying that strategy without it
+    was grading a panel that could not see its own thesis.
+
+    Still skipped: revenue trend and peers. Revenue is deliberate
+    rather than pending — a later backfill can restate
+    `tw_revenue_monthly.revenue_yoy` against revised baselines, which
+    is why `read_top_revenue_growers` masks it in backtest mode too;
+    reading it per-symbol here would reintroduce exactly that leak.
+    Peers need live screener state that can't be reconstructed. Those
+    show as null, and the personas read them as "not available in
+    backtest mode" — better than fabricating values that never
+    existed on `as_of`.
     """
     from services import tw_market_service
     from services.ingest.repository import read_ohlcv_range_autosession
@@ -331,6 +355,99 @@ async def _build_tw_focus_brief_backtest(
             "as_of_session": str(last.get("time") or "")[:10],
             "is_intraday": False,
         }
+
+    # Fundamentals as they stood on `as_of`. `snap_as_of` is carried
+    # through so a persona can see how stale the snapshot is — on a
+    # session the ingest job never covered, the nearest earlier row is
+    # returned rather than nothing.
+    try:
+        from services.ingest.repository import read_fundamentals_as_of_autosession
+
+        f = await read_fundamentals_as_of_autosession("TW", symbol, as_of=as_of)
+        if isinstance(f, dict):
+            brief["fundamentals"] = {
+                "pe":             f.get("pe_ratio"),
+                "pb":             f.get("pb_ratio"),
+                "dividend_yield": f.get("dividend_yield"),
+                "eps":            f.get("eps"),
+                "data_source":    f.get("data_source", "unavailable"),
+                "as_of":          f.get("as_of"),
+            }
+    except Exception as exc:
+        log.warning("focus_brief.backtest.fundamentals.failed",
+                    extra={"symbol": symbol, "as_of": as_of.isoformat(),
+                           "error": str(exc)})
+
+    # Chip metrics as of that session. Institutional and margin ledgers
+    # are published daily by TWSE and never restated, so reading them
+    # at `ts <= as_of` is point-in-time by construction — the property
+    # that rules out `revenue_yoy`, which a later backfill recomputes.
+    #
+    # Note on the parameter: callers pass `info_cutoff` here, i.e.
+    # `prev_trading_day(discussion.as_of_date)`, not the session being
+    # predicted (see `context.builder`). So `end=as_of` already stops a
+    # day short of the graded session — the ledger for the session
+    # itself is never in range.
+    #
+    # `chip_5d` is not a nice-to-have here: it is the core dimension of
+    # the chip_quality strategy, so replaying that strategy without it
+    # was grading a panel that couldn't see its own thesis.
+    chip_start = as_of - timedelta(days=_FOCUS_BRIEF_CHIP_DAYS * 3)
+    try:
+        from services.ingest.repository import (
+            read_institutional_range_autosession,
+        )
+        inst = await read_institutional_range_autosession(
+            "TW", symbol, chip_start, as_of,
+        )
+        # Same tail-window the live path takes, applied after the
+        # as_of clamp so the calendar-day padding above can't leak.
+        brief["chip_5d"] = _summarize_institutional(
+            (inst or [])[-_FOCUS_BRIEF_CHIP_DAYS:],
+        )
+    except Exception as exc:
+        log.warning("focus_brief.backtest.institutional.failed",
+                    extra={"symbol": symbol, "as_of": as_of.isoformat(),
+                           "error": str(exc)})
+
+    try:
+        from services.ingest.repository import read_margin_range_autosession
+
+        margin = await read_margin_range_autosession(
+            "TW", symbol, chip_start, as_of,
+        )
+        brief["margin_latest"] = _summarize_margin(
+            (margin or [])[-_FOCUS_BRIEF_CHIP_DAYS:],
+        )
+    except Exception as exc:
+        log.warning("focus_brief.backtest.margin.failed",
+                    extra={"symbol": symbol, "as_of": as_of.isoformat(),
+                           "error": str(exc)})
+
+    # Name what is missing, and why.
+    #
+    # An empty block does not read as "unknown" — it reads as "bad".
+    # Observed on a 06-05 replay, where the panel concluded
+    # 「技術、期貨籌碼、基本面（revenue_trend全空）三源同向不利」:
+    # a block deliberately left empty was counted as a third strike
+    # against the candidate. Silence is indistinguishable from a
+    # negative reading unless the gap is stated, so state it.
+    #
+    # `revenue_trend` stays `[]` rather than becoming a dict — the
+    # shape is part of the block's contract — and the explanation
+    # rides alongside.
+    unavailable = {
+        "revenue_trend": (
+            "回測模式不提供：營收年增率會被日後回補重算，"
+            "提供將洩漏 as_of 當時尚不存在的修訂值"
+        ),
+        "peers": "回測模式不提供：同業比較需要即時選股器狀態，無法重建",
+    }
+    if brief["margin_latest"] is None:
+        unavailable["margin_latest"] = "此交易日的融資融券資料尚未收錄於封存"
+    if brief["fundamentals"] is None:
+        unavailable["fundamentals"] = "此交易日無估值快照"
+    brief["_unavailable"] = unavailable
     return brief
 
 

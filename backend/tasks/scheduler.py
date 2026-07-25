@@ -770,3 +770,21 @@ def setup_jobs() -> None:
         max_instances=1,
         coalesce=True,
     )
+
+    # ── R2: content-level archive freshness monitor ──────────────
+    # 19:00 UTC = 03:00 Taipei — after the evening TW ingest window
+    # (all TW ingest lands by 19:30 Taipei) and one hour before the
+    # 04:00 daily discussion. Job-level ingest health has lied in both
+    # directions (`failed` on a 15k-row run, `ok` on zero-row runs), so
+    # this reads `max(ts)` per archive table directly and compares it
+    # against the expected settled session, recording a gap before the
+    # discussion would hit its archive-first live fallback.
+    from tasks.monitor_archive_freshness import run as run_monitor_archive_freshness
+    scheduler.add_job(
+        run_monitor_archive_freshness,
+        trigger=CronTrigger(hour=19, minute=0, timezone="UTC"),
+        id="monitor_archive_freshness",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )

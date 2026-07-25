@@ -283,13 +283,31 @@ async def build_market_context(
     # cold-cache would burn 5-7s before the first persona could
     # speak; parallel fall to ~max(any one).
     await _progress("fetching_market_data")
+
+    # Live TW runs read the archive first: every ingest job finished
+    # hours before the 04:00 discussion, so the settled session is
+    # already in the DB. `info_cutoff` stays None — the row must remain
+    # live-classified; only the blocks' read target changes.
+    read_session = None
+    if info_cutoff is None and market == "TW":
+        from services.discussion.context.read_session import (
+            resolve_read_session,
+        )
+        read_session = resolve_read_session()
+        # FRED macro has no local archive — its as_of path is still
+        # outbound HTTP — so it is honestly tagged live rather than
+        # wrapped.
+        ctx.setdefault("data_sources", {})["macro"] = "live"
+
     await asyncio.gather(
         http.fetch_screener(
             ctx, market=market, top_n=top_n,
             as_of=info_cutoff, record_error=record_error,
+            read_session=read_session,
         ),
         http.fetch_index(
             ctx, market=market, as_of=info_cutoff, record_error=record_error,
+            read_session=read_session,
         ),
         http.fetch_macro(
             ctx, as_of=info_cutoff, record_error=record_error,
@@ -297,6 +315,7 @@ async def build_market_context(
         http.fetch_focus_briefs(
             ctx, market=market, focus_symbols=focus_symbols,
             as_of=info_cutoff, record_error=record_error,
+            read_session=read_session,
         ),
     )
 

@@ -600,6 +600,7 @@ async def test_build_market_context_initialises_default_shape(
         # (G7-1) corporate_announcements removed — dead weight, no
         # persona profile ever consumed it.
         "errors",
+        "data_sources",              # live TW: archive-first tagging (Task 5)
     }
 
     with patch(
@@ -1264,3 +1265,96 @@ async def test_focus_briefs_stale_batch_falls_back_to_live():
 
     assert ctx["data_sources"]["focus_briefs"] == "live_fallback"
     assert ctx["focus_briefs"][0]["quote"]["as_of_session"] == "2026-07-23"
+
+
+# ── builder wiring: live TW passes read_session; backtest never does ──
+
+
+@pytest.mark.asyncio
+async def test_builder_live_tw_passes_read_session_to_blocks(db_session):
+    """Live TW build: the three DB-archived blocks receive the resolved
+    settled session; macro is tagged live (FRED has no local archive)."""
+    seen: dict[str, object] = {}
+
+    async def spy_screener(ctx, **kwargs):
+        seen["screener"] = kwargs.get("read_session")
+
+    async def spy_index(ctx, **kwargs):
+        seen["index"] = kwargs.get("read_session")
+
+    async def spy_macro(ctx, **kwargs):
+        seen["macro_read_session"] = kwargs.get("read_session", "absent")
+
+    async def spy_briefs(ctx, **kwargs):
+        seen["focus_briefs"] = kwargs.get("read_session")
+
+    with patch.object(http, "fetch_screener", new=spy_screener), \
+         patch.object(http, "fetch_index", new=spy_index), \
+         patch.object(http, "fetch_macro", new=spy_macro), \
+         patch.object(http, "fetch_focus_briefs", new=spy_briefs):
+        ctx = await build_market_context(
+            db_session, market="TW", focus_symbols=["2330"], as_of=None,
+        )
+
+    from services.discussion.context.read_session import resolve_read_session
+    expected = resolve_read_session()
+    assert seen["screener"] == expected
+    assert seen["index"] == expected
+    assert seen["focus_briefs"] == expected
+    # Macro never gets a read_session — no local archive exists.
+    assert seen["macro_read_session"] == "absent"
+    assert ctx["data_sources"]["macro"] == "live"
+
+
+@pytest.mark.asyncio
+async def test_builder_backtest_never_passes_read_session(db_session):
+    """THE invariant: backtest mode gets no archive-first machinery —
+    its strict `as_of` path must stay byte-identical, because a live
+    fallback here would let replays see the future and invalidate
+    every backtest-derived conclusion."""
+    seen: dict[str, object] = {}
+
+    async def spy_screener(ctx, **kwargs):
+        seen["read_session"] = kwargs.get("read_session")
+        seen["as_of"] = kwargs.get("as_of")
+
+    async def spy_noop(ctx, **kwargs):
+        pass
+
+    with patch.object(http, "fetch_screener", new=spy_screener), \
+         patch.object(http, "fetch_index", new=spy_noop), \
+         patch.object(http, "fetch_macro", new=spy_noop), \
+         patch.object(http, "fetch_focus_briefs", new=spy_noop):
+        await build_market_context(
+            db_session, market="TW", focus_symbols=[],
+            as_of=date(2026, 6, 12),
+        )
+
+    assert seen["read_session"] is None
+    assert seen["as_of"] is not None
+
+
+@pytest.mark.asyncio
+async def test_backtest_block_call_never_reaches_live_path():
+    """Belt to the builder test's braces, at block level: with `as_of`
+    set, `fetch_screener` must never call the service with
+    `as_of=None` even when the archive returns nothing — an exploding
+    double, not a call-count assertion."""
+    ctx = _new_ctx()
+
+    async def exploding_when_live(**kwargs):
+        if kwargs.get("as_of") is None:
+            raise AssertionError("backtest reached the live path")
+        return []
+
+    with patch(
+        "services.tw_market_service.get_screener",
+        new=AsyncMock(side_effect=exploding_when_live),
+    ):
+        await http.fetch_screener(
+            ctx, market="TW", top_n=5, as_of=date(2026, 6, 12),
+            record_error=_record(ctx),
+        )
+
+    assert ctx["errors"] == []          # the double did not fire
+    assert ctx["top_gainers"] == []

@@ -116,6 +116,22 @@ _BLOCK_ANNOTATIONS: dict[str, str] = {
         "`trend` 已自動分類 bullish/bearish/neutral。**外資台指期方向往往領先大盤 1-2 日**，"
         "若與 news_sentiment 同向則短線方向確立度高；逆向則優先信任此訊號。"
     ),
+    "large_trader_positioning": (
+        "- large_trader_positioning：**TX 大額交易人未平倉部位**"
+        "（large-trader feed plan Task 3/4，taifex_positioning 的集中度版本）。"
+        "`top5` / `top10` 各含 `long_oi` / `short_oi` / `net`（多單 - 空單，正值 = 淨多）/ "
+        "`special_long` / `special_short`（特定法人 *_special 多空未平倉，通常代表主力法人"
+        "而非全體大額交易人）。`net_change_5s` 為 top5/top10 淨部位的 5 個交易日淨變化"
+        "（正值 = 近 5 日轉多、負值 = 近 5 日轉空）。`dealer_volume` 為自營商總量快照："
+        "`total` 當期總量、`vs_20s_mean_pct` 相對近 20 個交易日均量的差 %"
+        "（正值 = 量能放大，可能是變盤前兆）。**`as_of_session`（頂層 + `dealer_volume` 各自"
+        "獨立一份）是這份快照真正對應的交易日，兩者可能不同步**"
+        "（OI 集中度與自營商量能來自不同排程的獨立回補，落後幅度可能不一致）——"
+        "引用時必須連 `as_of_session` 一起講（例：「大額交易人 top5 淨空單 07/07"
+        "（as_of_session 07/07）擴大，自營商量能 07/08 較 20 日均量 +18%」），"
+        "不得當成今日最新狀態陳述。與 taifex_positioning 同向 = 外資與大額交易人"
+        "方向一致、確立度更高；逆向則優先信任集中度更高的一方。"
+    ),
     "single_stock_futures_oi": (
         "- single_stock_futures_oi：**個股期貨外資未平倉變化前 N 名** "
         "(per-stock smart-money 方向訊號，PR #282)。每筆含 `symbol` / "

@@ -233,6 +233,7 @@ _ALL_PERSONA_BLOCKS: frozenset[str] = frozenset({
     "top_foreign_buyers", "margin_balance_trend", "top_revenue_growers",
     "active_buybacks", "govt_bank_flow_5d", "risk_warnings",
     "market_institutional_5d", "taifex_positioning",
+    "large_trader_positioning",  # large-trader feed plan Task 4: TX top5/top10 concentration
     "single_stock_futures_oi",   # PR #282: per-stock 外資 期貨 net OI shift
     "taiwan_vix",                # PR #283: 台指選擇權波動率指數
     "upcoming_events_calendar",  # PR #284: market-wide 法說 / 除息 calendar
@@ -250,6 +251,7 @@ _MACRO_PROFILE = frozenset({
     "taiwan_vix",            # PR #283: TW implied-vol regime
     "top_foreign_buyers", "govt_bank_flow_5d", "market_institutional_5d",
     "taifex_positioning",   # smart-money directional signal — central to macro view
+    "large_trader_positioning",  # TX top5/top10 concentration — companion to taifex_positioning
     "news_sentiment", "per_symbol_news_sentiment",
     # PR #219: macro personas need focus_briefs when the topic
     # names specific stocks. "Fed cuts → 2330 受惠" requires seeing
@@ -272,6 +274,7 @@ _CONTRARIAN_PROFILE = frozenset({
     "focus_briefs", "news_sentiment", "per_symbol_news_sentiment",
     "short_term_signals",   # RSI extremes + volume spikes flag reversals
     "taifex_positioning",   # extreme net OI = contrarian setup
+    "large_trader_positioning",  # extreme top5/top10 concentration = contrarian setup
     "single_stock_futures_oi",  # PR #282: extreme per-stock futures OI also a contrarian setup
     "taiwan_vix",               # PR #283: 台 VIX > 25 = panic = contrarian setup
     "upcoming_events_calendar", # PR #284: events create dislocation opportunities
@@ -286,6 +289,7 @@ _QUANT_PROFILE = frozenset({
     "risk_warnings", "news_sentiment", "macro",
     "short_term_signals",   # core Tier-1 quant signals per focus symbol
     "taifex_positioning",   # market-wide directional bias
+    "large_trader_positioning",  # TX top5/top10 concentration — smart-money crowding signal
     "single_stock_futures_oi",  # PR #282: per-stock futures smart-money lead
     "taiwan_vix",               # PR #283: TW VIX as a vol-regime filter
     "upcoming_events_calendar", # PR #284: event-risk gating on entries

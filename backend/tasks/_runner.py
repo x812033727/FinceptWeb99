@@ -42,7 +42,8 @@ The runner reproduces the canonical flow EXACTLY:
                               row preserving the last real error, return
   * body raises            -> ``record_failure`` + record an unhealthy
                               ``auto-backoff armed`` health row, swallow
-  * body succeeds          -> ``clear_failures`` + record ``ok=True``
+  * body succeeds          -> ``clear_failures`` + record ``ok=outcome.ok``
+                              (``True`` unless the body flags a data gap)
   * finally                -> release the lock
 
 Tasks with bespoke pre-exception branches (FinMind paywall / silent-
@@ -79,6 +80,14 @@ class TaskOutcome:
         between "upstream gave us nothing" and "there was nothing to
         ask for" (a holiday, a window already archived), so the runner
         can't infer it. Defaults to today's behaviour: 0 rows is ok.
+      * ``ok`` — set to ``False`` when the body itself detected a data
+        gap (e.g. a past session that should have data but doesn't).
+        The runner still records ``record_health(ok=False, error=status,
+        ...)`` so it surfaces on the dashboard, but does NOT call
+        ``record_failure`` — the upstream answered fine, so arming the
+        transport backoff would only delay tomorrow's run, which is the
+        opposite of what heals a gap. Defaults to ``True`` (unchanged
+        behaviour for every existing task).
     """
 
     row_count: int
@@ -86,6 +95,7 @@ class TaskOutcome:
     status: str | None = None
     done_extra: dict | None = None
     empty_is_stale: bool = False
+    ok: bool = True
 
     def log_extra(self) -> dict:
         if self.done_extra is not None:
@@ -180,7 +190,7 @@ async def run_ingest_task(
             )
             return
         await record_health(
-            job_id, ok=True, row_count=outcome.row_count,
+            job_id, ok=outcome.ok, row_count=outcome.row_count,
             latest_data_ts=outcome.latest_data_ts, error=outcome.status,
         )
     finally:

@@ -6,7 +6,7 @@ common patterns (lock skip, success path, idempotent re-run, backoff
 preservation) for both jobs without duplicating fixtures.
 """
 from datetime import date, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
@@ -445,6 +445,31 @@ async def test_margin_empty_result_records_ok_zero(patch_margin_session):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("day,expected_status", [
+    (date(2026, 7, 24), "not_yet_published: 2026-07-24"),  # Friday
+    (date(2026, 7, 25), "idle: nothing due"),               # Saturday
+])
+async def test_margin_empty_day_status_depends_on_weekday(
+    patch_margin_session, day, expected_status,
+):
+    """`_do_run` only ever asks for `today`, so a weekday's empty answer
+    means "not published yet" while a weekend's empty answer means
+    "nothing was ever due" — pinning the guard added on top of the
+    brief's snippet so it can't silently regress."""
+    from tasks import ingest_margin_tw
+
+    with patch.object(
+        ingest_margin_tw, "date", Mock(today=Mock(return_value=day)),
+    ), patch(
+        "tasks.ingest_margin_tw.twse.get_margin", AsyncMock(return_value=[]),
+    ):
+        written, ok, status = await ingest_margin_tw._do_run()
+
+    assert (written, ok) == (0, True)
+    assert status == expected_status
+
+
+@pytest.mark.asyncio
 async def test_institutional_fully_archived_window_asks_nothing(
     patch_institutional_session,
 ):
@@ -462,7 +487,11 @@ async def test_institutional_fully_archived_window_asks_nothing(
     ), patch(
         "tasks.ingest_institutional_tw.twse.get_institutional", fetch,
     ):
-        written = await ingest_institutional_tw._do_run()
+        written, ok, status = await ingest_institutional_tw._do_run()
 
     assert written == 0
+    # Nothing pending at all is the `idle` case in the outcome taxonomy —
+    # distinct from `not_yet_published`, which needs today to be pending.
+    assert ok is True
+    assert status == "idle: nothing due"
     fetch.assert_not_awaited()

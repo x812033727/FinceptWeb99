@@ -324,6 +324,30 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # Evening re-probe: picks up ledgers the 17:10 run classified
+    # not_yet_published; idempotent via pending_market_days; per-job
+    # lock prevents overlap.
+    scheduler.add_job(
+        run_ingest_institutional_tw,
+        trigger=CronTrigger(hour=13, minute=40, timezone="UTC"),
+        id="ingest_institutional_tw_evening",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Evening re-probe: picks up ledgers the 17:10 run classified
+    # not_yet_published; idempotent via pending_market_days; per-job
+    # lock prevents overlap.
+    scheduler.add_job(
+        run_ingest_margin_tw,
+        trigger=CronTrigger(hour=13, minute=40, timezone="UTC"),
+        id="ingest_margin_tw_evening",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # 外資連 N 日買超 alerts (PR-D1). Daily rule — evaluated once
     # per day against tw_institutional_daily, 30 min after the
     # institutional ingest above has landed the day's rows.
@@ -432,23 +456,10 @@ def setup_jobs() -> None:
     #                     replace_existing=True, max_instances=1,
     #                     coalesce=True)
 
-    # 庫藏股 (TW listed-company buyback announcements). The cron is
-    # intentionally NOT scheduled — FinMind v4 doesn't expose a
-    # `TaiwanStockBuyBack` dataset (verified via direct curl + the
-    # tutor docs), every call returns HTTP 422 and arms backoff. The
-    # task file + connector method are kept so the cron can be revived
-    # by hand if FinMind ever adds the dataset. Re-add this block to
-    # put it back on a schedule:
-    #
-    #   from tasks.ingest_buyback_tw import run as run_ingest_buyback_tw
-    #   scheduler.add_job(run_ingest_buyback_tw,
-    #                     trigger=CronTrigger(hour=10, minute=0, timezone="UTC"),
-    #                     id="ingest_buyback_tw",
-    #                     replace_existing=True, max_instances=1, coalesce=True)
-
     # 八大行庫 daily flow. Sponsor-tier FinMind dataset; one
-    # market-wide call/day. 18:30 Taipei (10:30 UTC), 30 min after
-    # buyback so the sponsor-tier cluster spreads predictably.
+    # market-wide call/day. 18:30 Taipei (10:30 UTC) — offset from the
+    # other post-close TW crons so the sponsor-tier cluster spreads
+    # predictably.
     from tasks.ingest_govt_bank_flow_tw import (
         run as run_ingest_govt_bank_flow_tw,
     )

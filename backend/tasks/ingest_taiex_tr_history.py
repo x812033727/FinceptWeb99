@@ -26,6 +26,7 @@ import logging
 from datetime import date, datetime, timedelta
 
 import httpx
+from sqlalchemy import func, select
 
 import data.tw.finmind_connector as finmind
 from cache.redis_cache import acquire_lock, release_lock
@@ -40,6 +41,7 @@ from data.tw.finmind_paywall import (
     raise_if_silent_denied,
 )
 from db.session import AsyncSessionLocal
+from models.ohlcv_daily import OhlcvDaily
 from services.ingest.repository import (
     OhlcvBar,
     backoff_remaining_seconds,
@@ -59,10 +61,28 @@ TAIEX_TR_SYMBOL = "_TAIEX_TR"
 
 _LOCK_KEY = "lock:ingest_taiex_tr_history"
 _LOCK_TTL = 3 * 60
-# Keep enough history for the factor-validation API's five-year maximum,
-# plus forward-execution headroom. This index is only one row per session,
-# and idempotent upserts make the wider daily refresh inexpensive.
+# Only the empty-archive bound: the first run ever (or a wiped archive)
+# backfills from `date.today() - _LOOKBACK_DAYS`, deep enough for the
+# factor-validation API's five-year maximum plus forward-execution
+# headroom. Every subsequent run is clamped by `clamp_fetch_start` to a
+# few days before the newest archived bar — see its docstring — so this
+# constant is never reached again once the archive is populated.
 _LOOKBACK_DAYS = 5 * 366 + 120
+# Healing overlap for `clamp_fetch_start`: a handful of idempotent
+# re-upserts near the seam, in case upstream revises a recent bar.
+_HEAL_OVERLAP_DAYS = 5
+
+
+def clamp_fetch_start(*, newest_archived: date | None, epoch: date) -> date:
+    """Append-only window: start just before the newest archived bar.
+
+    The 5-day overlap re-upserts a handful of rows (idempotent) so a
+    late upstream revision still heals, while the full-history rewrite
+    — which would churn compressed chunks daily once 0099 lands — is
+    gone."""
+    if newest_archived is None:
+        return epoch
+    return newest_archived - timedelta(days=_HEAL_OVERLAP_DAYS)
 
 
 def _format_error(exc: BaseException) -> str:
@@ -164,7 +184,17 @@ async def run() -> None:
 
 
 async def _do_run() -> int:
-    start = (date.today() - timedelta(days=_LOOKBACK_DAYS)).isoformat()
+    epoch = date.today() - timedelta(days=_LOOKBACK_DAYS)
+    async with AsyncSessionLocal() as db:
+        newest_archived = await db.scalar(
+            select(func.max(OhlcvDaily.ts)).where(
+                OhlcvDaily.market == MARKET,
+                OhlcvDaily.symbol == TAIEX_TR_SYMBOL,
+            )
+        )
+    start = clamp_fetch_start(
+        newest_archived=newest_archived, epoch=epoch,
+    ).isoformat()
     items = raise_if_silent_denied(
         await finmind.get_taiex_total_return_index(start),
     )

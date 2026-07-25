@@ -43,6 +43,7 @@ from sqlalchemy import select
 import data.tw.twse_connector as twse
 from cache.redis_cache import acquire_lock, release_lock
 from db.session import AsyncSessionLocal
+from models.ohlcv_daily import OhlcvDaily
 from models.tw_chip_metrics import TwInstitutionalDaily
 from services.ingest.repository import (
     InstitutionalDailyRow,
@@ -56,6 +57,7 @@ from services.ingest.repository import (
 )
 from tasks._market_wide import pending_market_days
 from tasks._runner import TaskOutcome, run_ingest_task
+from tasks.chip_outcome import classify_chip_outcome
 
 log = logging.getLogger(__name__)
 
@@ -105,7 +107,8 @@ def _format_error(exc: BaseException) -> str:
 
 
 async def _body() -> TaskOutcome:
-    return TaskOutcome(row_count=await _do_run())
+    total, ok, status = await _do_run()
+    return TaskOutcome(row_count=total, ok=ok, status=status)
 
 
 async def run() -> None:
@@ -162,21 +165,29 @@ async def _ingest_day(day: date) -> int:
         return await upsert_institutional_daily(db, payload)
 
 
-async def _do_run() -> int:
+async def _do_run() -> tuple[int, bool, str | None]:
     """Walk every pending weekday in the window, writing each as it
-    lands. Returns total rows written.
+    lands. Returns (total rows written, ok, status).
 
     Weekends and holidays come back empty and are simply skipped —
     they are never archived, so they stay in `pending_market_days`
     forever, which is the price of not maintaining a holiday calendar
-    here. The cost is a handful of empty requests per run.
+    here. The cost is a handful of empty requests per run. A day that
+    comes back empty but has TW price bars in `ohlcv_daily` (our own
+    archive proves the market traded) is a real gap, not a holiday —
+    see `tasks.chip_outcome`.
     """
+    # Single snapshot, not a fresh `date.today()` per use: the walk below
+    # sleeps `_PACING_SECONDS` between days, so a run straddling midnight
+    # could otherwise see "today" advance between the walk and the
+    # classify_chip_outcome() call below it — reclassifying today's own
+    # in-progress day as a past day with zero rows, i.e. a spurious gap
+    # alarm instead of "today hasn't published yet".
+    today = date.today()
     days = pending_market_days(
-        date.today(), _LOOKBACK_DAYS, await _archived_days(),
+        today, _LOOKBACK_DAYS, await _archived_days(),
     )
-    if not days:
-        return 0
-
+    day_rows: dict[date, int] = {}
     total = 0
     succeeded = 0
     failures: list[tuple[date, BaseException]] = []
@@ -194,6 +205,7 @@ async def _do_run() -> int:
             continue
         succeeded += 1
         total += written
+        day_rows[day] = written
 
     if failures and succeeded == 0:
         # Every day failed — this is an outage, not a quiet holiday.
@@ -209,4 +221,21 @@ async def _do_run() -> int:
                 "rows": total,
             },
         )
-    return total
+
+    past_empty = [d for d, r in day_rows.items() if r == 0]
+    traded: set[date] = set()
+    if past_empty:
+        async with AsyncSessionLocal() as db:
+            hits = (await db.scalars(
+                select(OhlcvDaily.ts).where(
+                    OhlcvDaily.market == "TW",
+                    OhlcvDaily.ts.in_(past_empty),
+                    OhlcvDaily.symbol == "2330",   # one liquid witness row is enough
+                )
+            )).all()
+        traded = {t.date() if hasattr(t, "date") else t for t in hits}
+
+    ok, status = classify_chip_outcome(
+        day_rows=day_rows, today=today, traded=traded,
+    )
+    return total, ok, status

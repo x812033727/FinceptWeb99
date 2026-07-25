@@ -226,6 +226,92 @@ async def _update_dataset_telemetry(
     await session.commit()
 
 
+def _is_permanent_client_error(exc: BaseException) -> bool:
+    """4xx other than 429: the request shape is rejected — retrying the
+    same source is pointless, but a different source may serve it."""
+    import httpx
+
+    return (
+        isinstance(exc, httpx.HTTPStatusError)
+        and 400 <= exc.response.status_code < 500
+        and exc.response.status_code != 429
+    )
+
+
+def _resolve_fallback_client(dataset_code: str, source: str):
+    """The SourceClient for this dataset's catalog fallback, or None.
+
+    Only meaningful when the PRIMARY source raised: a dataset already
+    running on its fallback (active_source != 'finmind') has nowhere
+    further to go.
+    """
+    if source != "finmind":
+        return None
+    from finmind.dataset_catalog import fallback_source_for
+    from finmind.ingest.selfcrawl import resolve_client
+
+    fb = fallback_source_for(dataset_code)
+    if fb is None or fb == source:
+        return None
+    try:
+        return resolve_client(fb)
+    except KeyError:
+        return None
+
+
+async def _fetch_with_fallback(
+    upstream,
+    *,
+    dataset_code: str,
+    symbol: str | None,
+    range_start: date,
+    range_end: date,
+    source: str,
+) -> tuple[list[dict[str, Any]], str]:
+    """Primary fetch, with catalog-fallback routing on permanent 4xx.
+
+    Returns `(rows, served_source)`: `served_source` is `source` when the
+    primary answered, or the catalog's registered fallback source name
+    when a fallback served the request instead. Callers need this to fix
+    row provenance — `mapping.extra` (e.g. `{"source": "finmind"}`)
+    stamps the PRIMARY source unconditionally, so `ingest_chunk` must
+    overwrite the transformed rows' "source" field when a fallback
+    actually served them.
+
+    A fallback that itself raises (including NotImplementedError from a
+    dataset the fallback client has no handler for) re-raises the
+    ORIGINAL primary error — the operator should see the 422 that
+    started it, not the fallback's stack.
+    """
+    try:
+        rows = await upstream.fetch(dataset_code, symbol, range_start, range_end)
+        return rows, source
+    except Exception as primary_exc:
+        if not _is_permanent_client_error(primary_exc):
+            raise
+        fallback = _resolve_fallback_client(dataset_code, source)
+        if fallback is None:
+            raise
+        from finmind.dataset_catalog import fallback_source_for
+
+        served_source = fallback_source_for(dataset_code) or source
+        log.warning(
+            "ingest_chunk: %s 4xx on %s — routing to catalog fallback %s",
+            dataset_code, source, served_source,
+        )
+        try:
+            rows = await fallback.fetch(
+                dataset_code, symbol, range_start, range_end
+            )
+        except Exception as fallback_exc:
+            log.warning(
+                "ingest_chunk: %s fallback %s also failed: %s",
+                dataset_code, served_source, redact_exception(fallback_exc),
+            )
+            raise primary_exc
+        return rows, served_source
+
+
 async def ingest_chunk(
     session: AsyncSession,
     *,
@@ -306,8 +392,9 @@ async def ingest_chunk(
     else:
         upstream = client
     try:
-        raw_rows = await upstream.fetch(
-            dataset_code, symbol, range_start, range_end
+        raw_rows, served_source = await _fetch_with_fallback(
+            upstream, dataset_code=dataset_code, symbol=symbol,
+            range_start=range_start, range_end=range_end, source=source,
         )
         # Wide-format datasets (quarterly statements, market-wide
         # institutional totals) need to pivot N FinMind rows → 1
@@ -325,6 +412,15 @@ async def ingest_chunk(
             r for r in transformed
             if all(r.get(pk) is not None for pk in mapping.pk_columns)
         ]
+        if served_source != source:
+            # `mapping.extra` (e.g. {"source": "finmind"}) stamps the
+            # PRIMARY source unconditionally, before we know whether a
+            # fallback ended up serving the chunk — correct the
+            # provenance here so fallback-served rows don't claim
+            # FinMind lineage they don't have.
+            for r in transformed:
+                if "source" in r:
+                    r["source"] = served_source
     except Exception as exc:
         safe_error = redact_exception(exc)
         log.error(

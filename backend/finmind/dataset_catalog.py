@@ -259,4 +259,25 @@ def lookup_finmind_spec(dataset_code: str):
     return find_dataset(dataset_code)
 
 
+_FALLBACK_BY_CODE: dict[str, str | None] | None = None
+
+
+def fallback_source_for(dataset_code: str) -> str | None:
+    """The catalog's registered fallback source for a dataset, or None.
+
+    Used by the ingest runner's 4xx routing: a permanent client error
+    from the primary source retries against this source in the same
+    chunk instead of failing the dataset forever (TaiwanStockBuyBack
+    spent months at zero rows with a working TWSE fetcher registered
+    right here).
+    """
+    global _FALLBACK_BY_CODE
+    if _FALLBACK_BY_CODE is None:
+        _FALLBACK_BY_CODE = {
+            entry.dataset_code: entry.fallback_source
+            for _, entry in all_entries()
+        }
+    return _FALLBACK_BY_CODE.get(dataset_code)
+
+
 _validate_against_finmind_registry()

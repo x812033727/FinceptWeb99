@@ -30,6 +30,7 @@ from services.ingest.repository import (
     upsert_margin_daily,
 )
 from tasks._runner import TaskOutcome, run_ingest_task
+from tasks.chip_outcome import classify_chip_outcome
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +69,8 @@ def _format_error(exc: BaseException) -> str:
 
 
 async def _body() -> TaskOutcome:
-    return TaskOutcome(row_count=await _do_run())
+    total, ok, status = await _do_run()
+    return TaskOutcome(row_count=total, ok=ok, status=status)
 
 
 async def run() -> None:
@@ -83,28 +85,43 @@ async def run() -> None:
     )
 
 
-async def _do_run() -> int:
+async def _do_run() -> tuple[int, bool, str | None]:
     today = date.today()
     rows = await twse.get_margin(today)
-    if not rows:
-        return 0
 
-    payload = [
-        MarginDailyRow(
-            market=MARKET,
-            symbol=r["symbol"],
-            ts=today,
-            margin_purchase=r.get("margin_purchase"),
-            margin_balance=r.get("margin_balance"),
-            short_sale=r.get("short_sale"),
-            short_balance=r.get("short_balance"),
-            source="twse",
-        )
-        for r in rows
-        if r.get("symbol")
-    ]
-    if not payload:
-        return 0
+    written = 0
+    if rows:
+        payload = [
+            MarginDailyRow(
+                market=MARKET,
+                symbol=r["symbol"],
+                ts=today,
+                margin_purchase=r.get("margin_purchase"),
+                margin_balance=r.get("margin_balance"),
+                short_sale=r.get("short_sale"),
+                short_balance=r.get("short_balance"),
+                source="twse",
+            )
+            for r in rows
+            if r.get("symbol")
+        ]
+        if payload:
+            async with AsyncSessionLocal() as db:
+                written = await upsert_margin_daily(db, payload)
 
-    async with AsyncSessionLocal() as db:
-        return await upsert_margin_daily(db, payload)
+    # Unlike the institutional walk, this job only ever asks for `today` —
+    # there is no past day in play, so there is no gap to witness against
+    # ohlcv_daily (that check only ever fires for `d < today`). Weekends
+    # and holidays answer empty exactly like a weekday before the evening
+    # publication; omit them from day_rows so they land in `idle` rather
+    # than misreporting `not_yet_published`, mirroring how the
+    # institutional walk's `pending_market_days` filters weekends out
+    # before they ever reach the classifier.
+    day_rows: dict[date, int] = {}
+    if today.weekday() < 5 or written:
+        day_rows[today] = written
+
+    ok, status = classify_chip_outcome(
+        day_rows=day_rows, today=today, traded=set(),
+    )
+    return written, ok, status

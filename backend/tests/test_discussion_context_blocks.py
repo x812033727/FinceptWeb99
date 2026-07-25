@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from unittest.mock import AsyncMock, patch
 
 from services.discussion.context import build_market_context
+from services.discussion.context import builder
 from services.discussion.context.blocks import chip, http, news, owner, risk, technical
 
 
@@ -1102,6 +1103,89 @@ async def test_screener_archive_served_feeds_the_phase_downgrade_net():
     assert ctx["data_sources"]["screener"] == "archive"
     assert ctx["screener_actual_session"] == "2026-07-23"
     assert ctx["screener_data_source"] == "ohlcv_daily"
+
+
+@pytest.mark.asyncio
+async def test_screener_archive_served_at_0400_does_not_spuriously_downgrade():
+    """The 04:00 Taipei daily-discussion run (this fix's primary path) must
+    NOT trip the phase downgrade just because FIX 3 now populates
+    `screener_actual_session` for the archive path.
+
+    At 04:00, `resolve_read_session()` and `resolve_captured_session()`'s
+    `session_date` agree (both resolve to the same prior trading day via
+    `prev_trading_day_estimate`) — verified directly:
+    `_tw_latest_complete_session(04:00) == resolve_read_session(04:00)`.
+    So when the archive answers exactly for the requested session (the
+    ordinary case), `screener_actual_session == captured_session.session_date`,
+    which fails `_maybe_downgrade_captured_session`'s `actual < expected`
+    check and is a no-op — proving FIX 3 doesn't turn on spurious downgrades
+    for the branch's main production path."""
+    ctx = _new_ctx()
+    session = date(2026, 7, 23)   # what read_session resolves to at 04:00
+    ctx["captured_session"] = {
+        "session_date": "2026-07-23",   # what captured_session agrees to at 04:00
+        "phase": "pre_open_today",
+        "is_intraday": False,
+        "hint_zh": "placeholder",
+    }
+
+    async def fake_screener(**kwargs):
+        return [_screener_row("2330", "2026-07-23"),
+                _screener_row("2454", "2026-07-23")]
+
+    with patch(
+        "services.tw_market_service.get_screener",
+        new=AsyncMock(side_effect=fake_screener),
+    ):
+        await http.fetch_screener(
+            ctx, market="TW", top_n=5, as_of=None,
+            read_session=session, record_error=_record(ctx),
+        )
+
+    assert ctx["screener_actual_session"] == "2026-07-23"
+    builder._maybe_downgrade_captured_session(ctx)
+    assert ctx["captured_session"]["session_date"] == "2026-07-23"
+    assert ctx["captured_session"]["phase"] == "pre_open_today"
+    assert "phase_downgrade_reason" not in ctx["captured_session"]
+
+
+@pytest.mark.asyncio
+async def test_screener_archive_served_at_1445_correctly_downgrades():
+    """Between 14:30-15:00 Taipei, `captured_session.session_date` has
+    already rolled to "today" (STOCK_DAY_ALL's nominal publish time) but
+    `read_session` (15:00 threshold) hasn't yet — so the archive still
+    correctly serves the PRIOR session. This is exactly the scenario FIX 3
+    exists for: before the fix, `screener_actual_session` stayed unset for
+    archive-served rows and this real lag was never caught. After the fix,
+    it must be caught."""
+    ctx = _new_ctx()
+    session = date(2026, 7, 23)   # what read_session resolves to at 14:45
+    ctx["captured_session"] = {
+        "session_date": "2026-07-24",   # captured_session already rolled
+        "phase": "today_close_published",
+        "is_intraday": False,
+        "hint_zh": "placeholder",
+    }
+
+    async def fake_screener(**kwargs):
+        return [_screener_row("2330", "2026-07-23"),
+                _screener_row("2454", "2026-07-23")]
+
+    with patch(
+        "services.tw_market_service.get_screener",
+        new=AsyncMock(side_effect=fake_screener),
+    ):
+        await http.fetch_screener(
+            ctx, market="TW", top_n=5, as_of=None,
+            read_session=session, record_error=_record(ctx),
+        )
+
+    assert ctx["screener_actual_session"] == "2026-07-23"
+    builder._maybe_downgrade_captured_session(ctx)
+    assert ctx["captured_session"]["session_date"] == "2026-07-23"
+    assert ctx["captured_session"]["phase_downgrade_reason"] == (
+        "stock_day_all_lag_detected"
+    )
 
 
 @pytest.mark.asyncio

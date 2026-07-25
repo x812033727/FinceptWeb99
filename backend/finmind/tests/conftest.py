@@ -93,13 +93,28 @@ def _override_finmind_session_factory(finmind_engine, monkeypatch):
     # Each script imports `FinmindAsyncSessionLocal` at module load, so
     # changing it on `finmind.db.session` doesn't propagate to those
     # scripts — patch each one explicitly.
+    #
+    # `run_due` matters beyond this file: `backend/tests/test_run_due_
+    # outcome.py` also imports `finmind.scripts.run_due` (for the pure
+    # `classify_run_outcome` helper). If that import happens FIRST in
+    # the process — e.g. `pytest tests/ finmind/tests/` in one
+    # invocation — `finmind.db.session` gets built there, before this
+    # fixture ever runs, and `run_due`'s own `FinmindAsyncSessionLocal`
+    # name binds to that real-Postgres-backed factory permanently
+    # (module-level "from X import Y" isn't re-read on later patches to
+    # X). Without patching `run_due` here too, any finmind test that
+    # actually calls into `run_due.amain()`'s DB path fails with a real
+    # connection/auth error instead of hitting the in-memory SQLite
+    # engine — CI never saw it because the two suites run as separate
+    # pytest invocations there.
     import finmind.scripts.check as _check
     import finmind.scripts.cutover as _cutover
     import finmind.scripts.diagnostic as _diagnostic
     import finmind.scripts.init_db as _init_db
+    import finmind.scripts.run_due as _run_due
     import finmind.scripts.status as _status
 
-    for mod in (_init_db, _status, _check, _diagnostic, _cutover):
+    for mod in (_init_db, _status, _check, _diagnostic, _cutover, _run_due):
         monkeypatch.setattr(mod, "FinmindAsyncSessionLocal", SessionLocal)
         monkeypatch.setattr(mod, "finmind_engine", finmind_engine)
     yield

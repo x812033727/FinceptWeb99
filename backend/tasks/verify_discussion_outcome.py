@@ -59,10 +59,7 @@ from services.ingest.repository import (
     record_failure,
     record_health,
 )
-from services.outcome_classifier import (
-    classify_discussion,
-    is_winning_verdict,
-)
+from services.outcome_classifier import classify_discussion
 from services.post_mortem_service import run_post_mortem_pass
 from services.tw_trading_calendar import to_tw_date
 
@@ -96,6 +93,17 @@ def is_experiment(d) -> bool:
     promote it into the semantic lessons that steer the live panel.
     """
     return bool((getattr(d, "candidate_snapshot", None) or {}).get("experiment"))
+
+
+def should_record_lesson_outcome(verdict: str | None, d) -> bool:
+    """Call-site gate for the lesson hit bump: winning bands and
+    abstentions reach the service (which applies the precise
+    falling-pool test); experiment rows never do (#264)."""
+    from services.outcome_classifier import is_winning_verdict
+
+    if is_experiment(d):
+        return False
+    return is_winning_verdict(verdict) or verdict == "abstain"
 
 
 async def maybe_run_live_post_mortem(db, d) -> None:
@@ -582,14 +590,14 @@ async def _set_verdict(
         d.pool_performance = pool_performance
 
     # PR-B2: bump hit_count on every lesson cited by this discussion's
-    # round contexts when the verdict is a winning band (legacy "win"
-    # or new "big_win"). record_lesson_outcome is gated internally so
-    # calling unconditionally is safe; failure only logs.
-    # `is_experiment` rows are excluded for the same reason as the
-    # post-mortem below: hit_count is the promotion eligibility signal, so a
-    # win earned under non-production rules would push a lesson toward the
-    # semantic tier that steers the live panel.
-    if is_winning_verdict(verdict) and not is_experiment(d):
+    # round contexts when the verdict is a winning band (legacy "win" or
+    # new "big_win") OR an abstain. record_lesson_outcome is gated internally
+    # so calling unconditionally is safe; failure only logs. `is_experiment`
+    # rows are excluded for the same reason as the post-mortem below: hit_count
+    # is the promotion eligibility signal, so a win earned under non-production
+    # rules would push a lesson toward the semantic tier that steers the live
+    # panel.
+    if should_record_lesson_outcome(verdict, d):
         try:
             from services.lesson_tier_service import (
                 record_lesson_outcome,

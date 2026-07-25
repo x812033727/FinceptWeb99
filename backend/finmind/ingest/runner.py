@@ -450,7 +450,13 @@ async def ingest_chunk(
         return ChunkResult("failed", 0, safe_error)
 
     await finish_chunk(session, chunk_id, rows_written)
-    await _update_dataset_telemetry(session, dataset_code, rows_written, None)
+    telemetry_error = (
+        f"served_by_fallback:{served_source} (primary {source} failing)"
+        if served_source != source else None
+    )
+    await _update_dataset_telemetry(
+        session, dataset_code, rows_written, telemetry_error
+    )
     return ChunkResult("done", rows_written, None)
 
 

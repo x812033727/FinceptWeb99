@@ -383,6 +383,14 @@ async def test_margin_success_writes_rows(
 
     rows = [_margin_row("2330"), _margin_row("2454")]
 
+    # The job walks a window of unarchived weekdays, so answer only for the
+    # most recent weekday and give every other date an empty table — the
+    # shape TWSE returns for a non-trading day.
+    market_day = _recent_weekdays(1)[0]
+
+    async def _only_today(query_date=None, **_):
+        return rows if query_date == market_day else []
+
     with patch(
         "tasks.ingest_margin_tw.acquire_lock",
         AsyncMock(return_value=True),
@@ -394,8 +402,10 @@ async def test_margin_success_writes_rows(
     ), patch(
         "tasks.ingest_margin_tw.clear_failures", AsyncMock(),
     ), patch(
+        "tasks.ingest_margin_tw.asyncio.sleep", AsyncMock(),
+    ), patch(
         "tasks.ingest_margin_tw.twse.get_margin",
-        AsyncMock(return_value=rows),
+        AsyncMock(side_effect=_only_today),
     ), patch(
         "tasks.ingest_margin_tw.record_health", AsyncMock(),
     ) as health:
@@ -410,6 +420,7 @@ async def test_margin_success_writes_rows(
     by_sym = {r.symbol: r for r in db_rows}
     assert by_sym["2330"].margin_balance == 20_000
     assert by_sym["2330"].source == "twse"
+    assert by_sym["2330"].ts == market_day
 
     kwargs = health.await_args.kwargs
     assert kwargs["ok"] is True
@@ -432,6 +443,8 @@ async def test_margin_empty_result_records_ok_zero(patch_margin_session):
     ), patch(
         "tasks.ingest_margin_tw.clear_failures", AsyncMock(),
     ), patch(
+        "tasks.ingest_margin_tw.asyncio.sleep", AsyncMock(),
+    ), patch(
         "tasks.ingest_margin_tw.twse.get_margin",
         AsyncMock(return_value=[]),
     ), patch(
@@ -445,28 +458,64 @@ async def test_margin_empty_result_records_ok_zero(patch_margin_session):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("day,expected_status", [
-    (date(2026, 7, 24), "not_yet_published: 2026-07-24"),  # Friday
-    (date(2026, 7, 25), "idle: nothing due"),               # Saturday
-])
-async def test_margin_empty_day_status_depends_on_weekday(
-    patch_margin_session, day, expected_status,
+async def test_margin_not_yet_published_for_todays_pending_weekday(
+    patch_margin_session,
 ):
-    """`_do_run` only ever asks for `today`, so a weekday's empty answer
-    means "not published yet" while a weekend's empty answer means
-    "nothing was ever due" — pinning the guard added on top of the
-    brief's snippet so it can't silently regress."""
+    """A pending weekday with no rows yet (today, before the evening
+    publication) reports `not_yet_published`, not a gap — mirroring
+    institutional's classifier contract now that margin shares the
+    walk. `today` is pinned to a weekday (`classify_chip_outcome` only
+    emits `not_yet_published` when `today` itself is the pending day),
+    and every other day in the window is already archived so it's the
+    only day asked about."""
     from tasks import ingest_margin_tw
 
+    market_day = _recent_weekdays(1)[0]
+
     with patch.object(
-        ingest_margin_tw, "date", Mock(today=Mock(return_value=day)),
+        ingest_margin_tw, "date", Mock(today=Mock(return_value=market_day)),
+    ), patch.object(
+        ingest_margin_tw, "_archived_days",
+        AsyncMock(return_value={
+            market_day - timedelta(days=n)
+            for n in range(1, ingest_margin_tw._LOOKBACK_DAYS + 1)
+        }),
+    ), patch(
+        "tasks.ingest_margin_tw.asyncio.sleep", AsyncMock(),
     ), patch(
         "tasks.ingest_margin_tw.twse.get_margin", AsyncMock(return_value=[]),
     ):
         written, ok, status = await ingest_margin_tw._do_run()
 
     assert (written, ok) == (0, True)
-    assert status == expected_status
+    assert status == f"not_yet_published: {market_day.isoformat()}"
+
+
+@pytest.mark.asyncio
+async def test_margin_fully_archived_window_is_idle(patch_margin_session):
+    """Nothing pending at all (a Saturday run, or a window that's fully
+    healed) is the `idle` case — distinct from `not_yet_published`,
+    which needs a pending day in the window."""
+    from tasks import ingest_margin_tw
+
+    fetch = AsyncMock(return_value=[])
+    with patch.object(
+        ingest_margin_tw, "_archived_days",
+        AsyncMock(return_value={
+            date.today() - timedelta(days=n)
+            for n in range(0, ingest_margin_tw._LOOKBACK_DAYS + 1)
+        }),
+    ), patch(
+        "tasks.ingest_margin_tw.asyncio.sleep", AsyncMock(),
+    ), patch(
+        "tasks.ingest_margin_tw.twse.get_margin", fetch,
+    ):
+        written, ok, status = await ingest_margin_tw._do_run()
+
+    assert written == 0
+    assert ok is True
+    assert status == "idle: nothing due"
+    fetch.assert_not_awaited()
 
 
 @pytest.mark.asyncio

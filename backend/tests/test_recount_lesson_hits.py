@@ -5,6 +5,7 @@ import subprocess
 import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -92,6 +93,53 @@ def test_overlap_warning_none_when_either_range_missing():
         evidence_range=(datetime(2026, 1, 1, tzinfo=UTC),) * 2,
         lesson_age_range=None,
     ) is None
+
+
+def test_inlined_is_experiment_matches_the_real_implementation():
+    """`scripts.recount_lesson_hits._is_experiment` is a hand-inlined
+    copy of `tasks.verify_discussion_outcome.is_experiment` (see that
+    function's own docstring for why it isn't imported directly — doing
+    so would reopen the engine-building import this file's own
+    `test_import_does_not_pull_in_engine_building_task_module` guards
+    against). A hand-copy can silently drift from the original as
+    either evolves; pin both sides against the same edge shapes so a
+    future change to either one that breaks parity fails loudly here
+    instead of showing up as a quiet miscount.
+
+    Imports the real module inside the test body, not at module scope
+    -- this test file's import-purity test already proves the SCRIPT
+    itself is safe to import; this test is just checking behavioral
+    parity in-process, same as any other test in this suite, and is
+    allowed to pull in whatever it needs to do that.
+    """
+    from scripts.recount_lesson_hits import _is_experiment
+    from tasks.verify_discussion_outcome import is_experiment as real_is_experiment
+
+    class _NoAttrAtAll:
+        """A discussion-shaped object with no candidate_snapshot at
+        all -- distinct from one that has it set to None."""
+
+    shapes = [
+        SimpleNamespace(candidate_snapshot=None),
+        SimpleNamespace(candidate_snapshot={}),
+        SimpleNamespace(candidate_snapshot=""),
+        SimpleNamespace(candidate_snapshot=False),
+        SimpleNamespace(candidate_snapshot=0),
+        _NoAttrAtAll(),
+        SimpleNamespace(candidate_snapshot={"experiment": True}),
+        # Not one of the 7 named edge shapes, but load-bearing: every
+        # shape above is falsy except the last, and a non-empty dict is
+        # ALSO truthy regardless of its keys — so a mutated inline copy
+        # that checked `bool(candidate_snapshot)` instead of
+        # `.get("experiment")` would pass all 7 named shapes above
+        # (verified empirically) while silently misclassifying every
+        # non-experiment discussion that happens to carry a non-empty
+        # candidate_snapshot dict as an experiment. This shape is the
+        # one that actually discriminates that mutation.
+        SimpleNamespace(candidate_snapshot={"pool_size": 12}),
+    ]
+    for shape in shapes:
+        assert _is_experiment(shape) == real_is_experiment(shape), shape
 
 
 def test_import_does_not_pull_in_engine_building_task_module():

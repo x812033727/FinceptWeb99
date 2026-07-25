@@ -642,7 +642,9 @@ async def test_build_market_context_initialises_default_shape(
     returns nothing — the prompt template assumes a stable shape.
     Updated through PRs #269 (overseas_indicators), #282
     (single_stock_futures_oi), #283 (taiwan_vix), #284
-    (upcoming_events_calendar), #285 (broker_concentration)."""
+    (upcoming_events_calendar), #285 (broker_concentration), and the
+    large-trader feed plan's Task 3 (large_trader_positioning —
+    present but None here since `strategy` defaults to None)."""
     expected_keys = {
         "market", "captured_at",
         "captured_session",          # PR for expert-quote freshness
@@ -658,6 +660,7 @@ async def test_build_market_context_initialises_default_shape(
         "top_revenue_growers", "active_buybacks",
         "govt_bank_flow_5d", "risk_warnings",
         "market_institutional_5d", "taifex_positioning",
+        "large_trader_positioning",  # Task 3, large-trader feed plan
         "single_stock_futures_oi",   # PR #282
         "taiwan_vix",                # PR #283
         "upcoming_events_calendar",  # PR #284
@@ -1551,3 +1554,105 @@ async def test_backtest_block_call_never_reaches_live_path():
 
     assert ctx["errors"] == []          # the double did not fire
     assert ctx["top_gainers"] == []
+
+
+# ── build_market_context: strategy-gated large_trader_positioning ──
+#
+# Task 3 of the large-trader feed plan: the block built in Task 2
+# (`derivatives.fetch_large_trader_positioning`) is expensive enough
+# (its own `AsyncSessionLocal` + archive scan) that it only makes
+# sense for the strategy that actually reads it — `price_signal`.
+# Every other strategy (and the strategy-less default) leaves the
+# key at its `_initial_ctx` default of `None`, same as an empty
+# reading, so the prompt template doesn't need to special-case it.
+
+
+@pytest.mark.asyncio
+async def test_build_market_context_invokes_large_trader_block_for_price_signal(
+    db_session: AsyncSession,
+):
+    """`strategy="price_signal"` must fire the block with
+    `as_of=info_cutoff` — `None` in live mode, matching every other
+    TW-only block's live behaviour."""
+    spy = AsyncMock()
+
+    with patch(
+        "services.tw_market_service.get_screener",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "services.tw_market_service.get_index",
+        new=AsyncMock(return_value={}),
+    ), patch(
+        "services.discussion_service._assemble_macro_block",
+        new=AsyncMock(return_value={}),
+    ), patch(
+        "services.discussion_service._assemble_focus_briefs",
+        new=AsyncMock(return_value=[]),
+    ), patch.object(derivatives, "fetch_large_trader_positioning", new=spy):
+        ctx = await build_market_context(
+            db_session, market="TW", strategy="price_signal",
+        )
+
+    spy.assert_awaited_once()
+    assert spy.call_args.kwargs["as_of"] is None
+    assert "large_trader_positioning" in ctx
+
+
+@pytest.mark.parametrize("strategy", [None, "chip_quality"])
+@pytest.mark.asyncio
+async def test_build_market_context_skips_large_trader_block_for_other_strategies(
+    db_session: AsyncSession, strategy: str | None,
+):
+    """Any strategy other than `price_signal` — including the
+    strategy-less default (`None`) — must not invoke the block at
+    all. The ctx key stays present (via `_initial_ctx`) but `None`,
+    same as any other block that never ran this session."""
+    spy = AsyncMock()
+
+    with patch(
+        "services.tw_market_service.get_screener",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "services.tw_market_service.get_index",
+        new=AsyncMock(return_value={}),
+    ), patch(
+        "services.discussion_service._assemble_macro_block",
+        new=AsyncMock(return_value={}),
+    ), patch(
+        "services.discussion_service._assemble_focus_briefs",
+        new=AsyncMock(return_value=[]),
+    ), patch.object(derivatives, "fetch_large_trader_positioning", new=spy):
+        ctx = await build_market_context(
+            db_session, market="TW", strategy=strategy,
+        )
+
+    spy.assert_not_awaited()
+    assert ctx["large_trader_positioning"] is None
+
+
+@pytest.mark.asyncio
+async def test_build_market_context_backtest_price_signal_uses_info_cutoff(
+    db_session: AsyncSession,
+):
+    """Replay parity: a backtest discussion (`as_of` set) running the
+    `price_signal` strategy must still fire the block, threaded with
+    the *previous-trading-day* cutoff — never `as_of` itself and
+    never `None` (which would silently fall back to "live"). Pins
+    the same look-ahead guard every other TW block gets."""
+    spy = AsyncMock()
+    as_of = date(2026, 6, 12)
+
+    with patch.object(http, "fetch_screener", new=AsyncMock()), \
+         patch.object(http, "fetch_index", new=AsyncMock()), \
+         patch.object(http, "fetch_macro", new=AsyncMock()), \
+         patch.object(http, "fetch_focus_briefs", new=AsyncMock()), \
+         patch.object(derivatives, "fetch_large_trader_positioning", new=spy):
+        ctx = await build_market_context(
+            db_session, market="TW", as_of=as_of, strategy="price_signal",
+        )
+
+    spy.assert_awaited_once()
+    cutoff = spy.call_args.kwargs["as_of"]
+    assert cutoff is not None
+    assert cutoff < as_of
+    assert ctx["info_cutoff"] == cutoff.isoformat()

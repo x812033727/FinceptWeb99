@@ -145,6 +145,15 @@ def _initial_ctx(
         # `{contract, as_of, session_count, fini, sitc, dealer, trend}`
         # — fini / sitc / dealer carry `{net_oi, change_5d}`.
         "taifex_positioning": None,
+        # TX large-trader OI concentration + dealer-volume breadth
+        # (Task 3 of the large-trader feed plan). Archive-only,
+        # gated to `strategy == "price_signal"` in
+        # `build_market_context` below — every other strategy (and
+        # the strategy-less default) leaves this at `None`, same as
+        # any other block that never ran. Always present here so the
+        # ctx shape stays stable regardless of which strategy built
+        # it.
+        "large_trader_positioning": None,
         # Per-stock futures (個股期貨) institutional net-OI shifts
         # (PR #282). List of `{symbol, contract_id, fini_net_oi,
         # fini_change, fini_long_oi, fini_short_oi, as_of, from_ts,
@@ -248,6 +257,7 @@ async def build_market_context(
     max_focus_symbols: int = 5,
     progress_cb: ProgressCb | None = None,
     topic: str | None = None,
+    strategy: str | None = None,
 ) -> dict[str, Any]:
     # Backtest look-ahead guard: personas may only see data through the
     # trading day *before* `as_of`. `as_of` is the decision / entry /
@@ -366,6 +376,18 @@ async def build_market_context(
         await derivatives.fetch_taifex_positioning(
             ctx, as_of=info_cutoff, record_error=record_error,
         )
+        # Task 3 (large-trader feed plan): only the `price_signal`
+        # strategy's persona profile reads `large_trader_positioning`
+        # — every other strategy (and the strategy-less default)
+        # skips the archive scan entirely rather than paying for a
+        # block nobody looks at. `as_of=info_cutoff` applies in both
+        # live (`None`) and backtest (prev-trading-day cutoff) modes,
+        # same look-ahead guard as every other TW block here —
+        # replay parity, not a live-only shortcut.
+        if strategy == "price_signal":
+            await derivatives.fetch_large_trader_positioning(
+                ctx, as_of=info_cutoff, record_error=record_error,
+            )
         await chip.fetch_top_foreign_buyers(
             ctx, db, as_of=info_cutoff, record_error=record_error,
         )

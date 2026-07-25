@@ -46,3 +46,13 @@ loop's real bottleneck is abstention — part data-driven (missing/stale signals
 "沒估算到"), part regime-driven (correct conservatism). Reducing unwarranted
 abstention is the highest-leverage next lever for both accuracy and fuel; it was
 scoped out of this project and should be its own effort.
+
+### What came next (added on merge)
+
+That effort ran as the strengthening workstream — see
+`2026-07-25-strengthening-findings.md`. It confirmed this conclusion on a much
+larger sample: over n=168 archived abstentions, the top-3 candidates
+`price_signal` declined beat TAIEX by **+9.20pp** (64% beat the index), while
+`chip_quality`'s caution was vindicated (+0.47pp, no missed alpha). So
+"over-abstention" is real but **concentrated in one strategy**, not global —
+a sharper target than this document could name at n=3 sessions.

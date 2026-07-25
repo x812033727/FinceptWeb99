@@ -134,16 +134,24 @@ async def _record_alert_event(
 async def _abstain_rate(
     db: AsyncSession, *, strategy: str, window_start: datetime, window_end: datetime,
 ) -> tuple[float | None, int]:
-    """abstain-count / all-verdict-count for one auto_run_strategy over
-    a `[window_start, window_end)` slice of live (as_of_date IS NULL)
-    discussions. Returns `(rate, sample_count)`; rate is None when the
-    window has no verdicts at all."""
+    """abstain-count / decision-verdict-count for one auto_run_strategy
+    over a `[window_start, window_end)` slice of live (as_of_date IS
+    NULL) discussions. Returns `(rate, sample_count)`; rate is None
+    when the window has no decision verdicts at all.
+
+    `unverifiable` is a data-availability bucket, not a decision — same
+    convention as `daily_scoreboard_service`'s win-rate denominator
+    (WINNING_VERDICTS/LOSING_VERDICTS exclude it too). Left in the
+    denominator here, a spike in unverifiable rows (e.g. a data-source
+    outage) would dilute the abstain-rate and could trip a false
+    leakage finding unrelated to any veto-clause bleed."""
     verdicts = list((await db.scalars(
         select(Discussion.verdict).where(
             Discussion.auto_run_strategy == strategy,
             Discussion.as_of_date.is_(None),
             Discussion.auto_run.is_(True),
             Discussion.verdict.is_not(None),
+            Discussion.verdict != "unverifiable",
             Discussion.created_at >= window_start,
             Discussion.created_at < window_end,
         )

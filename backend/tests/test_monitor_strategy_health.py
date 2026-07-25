@@ -265,6 +265,34 @@ async def _live_price_signal_discussion(
     return d
 
 
+async def _live_discussion(
+    db: AsyncSession, owner: User, *,
+    strategy: str, verdict: str, created_at: datetime,
+) -> Discussion:
+    """A live (as_of_date NULL) auto-run discussion for an arbitrary
+    strategy/verdict/timestamp — used to populate the leakage watch's
+    current (last 14d) vs. baseline (prior 30d) windows."""
+    d = Discussion(
+        id=uuid4(),
+        owner_id=owner.id,
+        topic="t",
+        rules="r",
+        market="TW",
+        status="done",
+        persona_ids=[],
+        auto_run=True,
+        auto_run_strategy=strategy,
+        auto_run_date=created_at.date(),
+        auto_run_sequence=1,
+        verdict=verdict,
+    )
+    db.add(d)
+    await db.flush()
+    d.created_at = created_at
+    await db.flush()
+    return d
+
+
 @pytest.mark.asyncio
 async def test_veto_guard_revert_trigger_forces_not_ok(
     db_session: AsyncSession, owner: User,
@@ -310,3 +338,117 @@ async def test_veto_guard_quiet_by_default(
 
     assert out["guard_findings"] == []
     assert out["errors"] == 0
+
+
+@pytest.mark.asyncio
+async def test_veto_guard_leakage_fires_and_ignores_unverifiable(
+    db_session: AsyncSession, owner: User,
+):
+    """chip_quality's abstain rate collapsing >20pp from baseline to
+    current trips the leakage watch. `unverifiable` rows salted into
+    the baseline window must NOT dilute the rate (Finding 1's fix:
+    `unverifiable` is a data-availability bucket excluded from the
+    denominator, same convention as `daily_scoreboard_service`'s
+    win-rate calc) — if they did, the baseline rate would read 62.5%
+    instead of 100% and this assertion on the exact percentage would
+    catch it."""
+    now = datetime.now(UTC)
+    current_ts = now - timedelta(days=1)
+    baseline_ts = now - timedelta(days=20)
+
+    for _ in range(5):
+        await _live_discussion(
+            db_session, owner, strategy="chip_quality",
+            verdict="abstain", created_at=baseline_ts,
+        )
+    for _ in range(3):
+        await _live_discussion(
+            db_session, owner, strategy="chip_quality",
+            verdict="unverifiable", created_at=baseline_ts,
+        )
+    for _ in range(5):
+        await _live_discussion(
+            db_session, owner, strategy="chip_quality",
+            verdict="win", created_at=current_ts,
+        )
+    await db_session.commit()
+
+    with patch.object(cron, "acquire_lock", AsyncMock(return_value=True)), \
+         patch.object(cron, "release_lock", AsyncMock()):
+        out = await cron.run_health_monitor()
+
+    findings = out["guard_findings"]
+    assert findings
+    finding = next(f for f in findings if "chip_quality" in f)
+    assert "100%" in finding   # baseline rate unchanged by the 3 unverifiable rows
+    assert "0%" in finding
+
+    record_health = AsyncMock()
+    with patch.object(cron, "run_health_monitor", AsyncMock(return_value=out)), \
+         patch.object(cron, "record_health", record_health):
+        await cron.health_monitor_job()
+
+    assert record_health.await_args.kwargs["ok"] is False
+    assert "chip_quality" in record_health.await_args.kwargs["error"]
+
+
+@pytest.mark.asyncio
+async def test_veto_guard_leakage_skips_thin_window(
+    db_session: AsyncSession, owner: User,
+):
+    """Noise floor: a window with fewer than 5 verdicts is skipped
+    entirely, even though the raw rates would otherwise read as a
+    dramatic (and spurious) drop."""
+    now = datetime.now(UTC)
+    current_ts = now - timedelta(days=1)
+    baseline_ts = now - timedelta(days=20)
+
+    for _ in range(5):
+        await _live_discussion(
+            db_session, owner, strategy="chip_quality",
+            verdict="abstain", created_at=baseline_ts,
+        )
+    for _ in range(3):   # below the 5-sample noise floor
+        await _live_discussion(
+            db_session, owner, strategy="chip_quality",
+            verdict="win", created_at=current_ts,
+        )
+    await db_session.commit()
+
+    with patch.object(cron, "acquire_lock", AsyncMock(return_value=True)), \
+         patch.object(cron, "release_lock", AsyncMock()):
+        out = await cron.run_health_monitor()
+
+    assert out["guard_findings"] == []
+
+
+@pytest.mark.asyncio
+async def test_veto_guard_leakage_quiet_when_rate_rises(
+    db_session: AsyncSession, owner: User,
+):
+    """A rise in abstain rate (current high, baseline low) must NOT
+    fire — it's the opposite of leakage. This also catches a
+    current/baseline window-swap bug: if the current-window query were
+    accidentally given the baseline date range (or vice versa), this
+    exact data would flip into a spurious 100pp "drop" and fire."""
+    now = datetime.now(UTC)
+    current_ts = now - timedelta(days=1)
+    baseline_ts = now - timedelta(days=20)
+
+    for _ in range(5):
+        await _live_discussion(
+            db_session, owner, strategy="chip_quality",
+            verdict="win", created_at=baseline_ts,   # baseline: 0% abstain
+        )
+    for _ in range(5):
+        await _live_discussion(
+            db_session, owner, strategy="chip_quality",
+            verdict="abstain", created_at=current_ts,   # current: 100% abstain
+        )
+    await db_session.commit()
+
+    with patch.object(cron, "acquire_lock", AsyncMock(return_value=True)), \
+         patch.object(cron, "release_lock", AsyncMock()):
+        out = await cron.run_health_monitor()
+
+    assert out["guard_findings"] == []

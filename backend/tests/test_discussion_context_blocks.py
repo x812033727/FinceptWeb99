@@ -1130,6 +1130,49 @@ def test_record_stale_blocks_accepts_date_objects():
     assert ctx["data_stale"]["broker_concentration"]["days_behind"] == 7
 
 
+def test_record_data_gaps_flags_stale_large_trader_positioning_for_price_signal():
+    """Follow-up to the strategy-gated gap test above: `as_of` staleness
+    detection (not just the "empty" gap case) must also be
+    strategy-conditional on `large_trader_positioning`. The archive
+    reader (`tw_derivatives_archive.large_trader_positioning`) has no
+    live fallback and is measured 17 days stale in prod today — an
+    annotation nobody reliably reads is not enough (the
+    `broker_concentration` incident this same mechanism was built for
+    had 4 of 5 conclusions miss a plain-text staleness note), so a
+    stale reading must land in `ctx["data_stale"]`, machine-checkable,
+    for the one strategy that actually consumes this block."""
+    from services.discussion.context.builder import _record_data_gaps
+
+    stale_block = {"as_of": "2026-07-04", "top5": {"net": 20}}
+    fresh_block = {"as_of": "2026-07-21", "top5": {"net": 20}}
+
+    # Stale + price_signal → flagged, with the right day count.
+    ctx = {
+        "captured_session": {"session_date": "2026-07-21"},
+        "large_trader_positioning": stale_block,
+    }
+    _record_data_gaps(ctx, strategy="price_signal")
+    assert ctx["data_stale"]["large_trader_positioning"]["days_behind"] == 17
+
+    # Fresh + price_signal → not flagged.
+    ctx_fresh = {
+        "captured_session": {"session_date": "2026-07-21"},
+        "large_trader_positioning": fresh_block,
+    }
+    _record_data_gaps(ctx_fresh, strategy="price_signal")
+    assert "large_trader_positioning" not in ctx_fresh.get("data_stale", {})
+
+    # Same stale reading, but NOT price_signal → never scanned at all,
+    # even though the block happens to carry a (leftover / stale) value.
+    for strategy in (None, "chip_quality", "general"):
+        ctx_other = {
+            "captured_session": {"session_date": "2026-07-21"},
+            "large_trader_positioning": stale_block,
+        }
+        _record_data_gaps(ctx_other, strategy=strategy)
+        assert "large_trader_positioning" not in ctx_other.get("data_stale", {}), strategy
+
+
 # ── archive-first live reads (data-fetch stabilization) ────────────
 
 

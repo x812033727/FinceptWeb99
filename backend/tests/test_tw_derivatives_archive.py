@@ -43,6 +43,13 @@ async def test_builds_shape_from_latest_session():
     dealer = [(date(2026, 7, 17), 45231.0, 40250.0)]   # ts, total, mean20
     out = await large_trader_positioning(_DB([latest, prior, dealer]), as_of=None)
     assert out["as_of_session"] == "2026-07-09"
+    # `as_of` (same value as `as_of_session`) is what builder.py's
+    # `_record_stale_blocks` reads via `value.get("as_of")` to compute
+    # `days_behind` against the session anchor — every other TW
+    # block's dict carries this same top-level key, and this reader
+    # is archive-only (no live fallback) so a stale read needs to be
+    # machine-detectable, not just carried on a differently-named key.
+    assert out["as_of"] == out["as_of_session"]
     assert out["top5"]["net"] == 69609 - 59449
     assert out["net_change_5s"]["top5"] == (69609 - 59449) - (60000 - 59000)
     assert out["dealer_volume"]["vs_20s_mean_pct"] == pytest.approx(12.38, abs=0.1)

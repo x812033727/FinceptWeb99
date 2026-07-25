@@ -175,7 +175,22 @@ async def large_trader_positioning(db: Any, *, as_of: date | None) -> dict[str, 
     dealer_params: dict[str, Any] = {"cutoff": as_of} if has_cutoff else {}
     dealer_rows = (await db.execute(_dealer_sql(has_cutoff), dealer_params)).all()
 
-    result: dict[str, Any] = {"as_of_session": latest_ts.isoformat()}
+    # `as_of` (alongside the existing `as_of_session`) is what
+    # `builder.py`'s `_record_stale_blocks` reads via
+    # `value.get("as_of")` to compute `days_behind` against the
+    # session anchor — every other TW block's dict carries this same
+    # top-level key. Without it, a stale archive read (this reader has
+    # no live fallback — it's archive-only) would keep serving a
+    # weeks-old snapshot with nothing in `ctx["data_stale"]` to flag
+    # it, same failure mode the `broker_concentration` incident
+    # documented in `_record_stale_blocks`'s own docstring: an
+    # annotation nobody reads is not a substitute for a machine-
+    # checkable field the synthesizer's unfiltered ctx actually
+    # carries.
+    result: dict[str, Any] = {
+        "as_of_session": latest_ts.isoformat(),
+        "as_of": latest_ts.isoformat(),
+    }
 
     net_change_5s: dict[str, int | None] = {}
     for rank in _RANKS:

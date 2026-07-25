@@ -7,6 +7,14 @@ insufficient and the threshold discussion starts now, not in two weeks.
 
 From-scratch recount (idempotent), dry-run by default; --apply
 overwrites hit_count. Never promotes — the Sunday job owns that.
+
+--apply can LOWER hit_count, not just raise it: rows inflated by
+historical double-bump bugs recount downward once this script's
+from-scratch aggregation replaces whatever incremental count is
+currently stored. DEMOTE_HIT_RATE_THRESHOLD (lesson_tier_service.py)
+reads hit_count too, so a lowered count can push a lesson toward
+demotion on its next cron pass — read the dry-run's raised/lowered
+split below before passing --apply.
 """
 from __future__ import annotations
 
@@ -25,7 +33,16 @@ from services.lesson_tier_service import (
     _extract_lesson_id,
     qualifies_for_hit,
 )
-from tasks.verify_discussion_outcome import is_experiment
+
+
+def _is_experiment(d) -> bool:
+    """Mirror of tasks.verify_discussion_outcome.is_experiment — inlined
+    so importing this script never pulls in that module's own
+    module-scope `from db.session import AsyncSessionLocal` (which
+    builds the engine at import time). Importing the real function here
+    would defeat the whole point of deferring our own db.session import
+    into main() below."""
+    return bool((getattr(d, "candidate_snapshot", None) or {}).get("experiment"))
 
 
 def aggregate_hits(rows: list[tuple[bool, set[int]]]) -> dict[int, int]:
@@ -75,7 +92,7 @@ async def _collect(db) -> list[tuple[bool, set[int]]]:
     )).all()
     rows: list[tuple[bool, set[int]]] = []
     for d in discussions:
-        if is_experiment(d):
+        if _is_experiment(d):
             continue
         pool = d.pool_performance or {}
         pool_avg = pool.get("avg_return_pct") if isinstance(pool, dict) else None
@@ -91,19 +108,24 @@ async def _collect(db) -> list[tuple[bool, set[int]]]:
 
 async def main(apply: bool) -> None:
     from db.session import AsyncSessionLocal
+    from tasks.promote_lessons import LESSON_MARKETS
 
     async with AsyncSessionLocal() as db:
         rows = await _collect(db)
         hits = aggregate_hits(rows)
         lessons = (await db.scalars(select(DiscussionLesson))).all()
-        promotable = 0
-        changed = 0
+        raised = 0
+        lowered = 0
         tier_counts: Counter[str] = Counter()
+        market_promotable: Counter[str] = Counter()
         for lesson in lessons:
             tier_counts[lesson.tier] += 1
             new_hits = hits.get(lesson.id, 0)
-            if new_hits != (lesson.hit_count or 0):
-                changed += 1
+            old_hits = lesson.hit_count or 0
+            if new_hits > old_hits:
+                raised += 1
+            elif new_hits < old_hits:
+                lowered += 1
             # Mirror promote_eligible_lessons' own filter (lesson_tier_
             # service.py): only "episodic" lessons are promotion
             # candidates — semantic/structural rows are already past
@@ -111,14 +133,31 @@ async def main(apply: bool) -> None:
             if lesson.tier == "episodic" and would_promote(
                 usage=lesson.usage_count or 0, hits=new_hits,
             ):
-                promotable += 1
+                market_promotable[lesson.market] += 1
+
+        # The Sunday cron (tasks/promote_lessons.py) only ever promotes
+        # markets in LESSON_MARKETS (today just "TW") — a lesson in any
+        # other market clearing the floor is not something that job will
+        # act on. Report both so a non-TW lesson crossing the floor is
+        # visible but doesn't inflate the number that answers "would the
+        # cron actually promote something".
+        cron_promotable = sum(market_promotable[m] for m in LESSON_MARKETS)
+        all_promotable = sum(market_promotable.values())
+
         print(f"discussions considered: {len(rows)} "
               f"(qualifying: {sum(1 for q, _ in rows if q)})")
-        print(f"lessons: {len(lessons)}, hit_count changes: {changed}")
+        print(f"lessons: {len(lessons)}, "
+              f"hit_count raised: {raised}, lowered: {lowered}")
         print("by tier: " + ", ".join(
             f"{tier}={count}" for tier, count in sorted(tier_counts.items())
         ))
-        print(f"WOULD-PROMOTE under new semantics: {promotable}")
+        print("WOULD-PROMOTE by market: " + (", ".join(
+            f"{market}={count}"
+            for market, count in sorted(market_promotable.items())
+        ) or "(none)"))
+        print(f"WOULD-PROMOTE ({', '.join(LESSON_MARKETS)}, "
+              f"= Sunday cron): {cron_promotable}")
+        print(f"WOULD-PROMOTE (all markets, secondary): {all_promotable}")
         if not apply:
             print("dry-run — pass --apply to write")
             return

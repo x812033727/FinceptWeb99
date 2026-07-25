@@ -166,14 +166,26 @@ async def fetch_screener(
                 # session` (builder.py) can never fire for it — a
                 # regression vs. the live-recovery path, which does
                 # populate it via `row_sessions` above.
+                #
+                # Stamp only over the RENDERED rows (the same
+                # `top_n` head/tail slices used for top_gainers/
+                # top_losers above), not the full raw batch (up to
+                # 200 symbols). Archive rows carry heterogeneous
+                # per-symbol `as_of` dates — a single halted/thinly-
+                # traded straggler that cleared the volume filter on
+                # an old day but landed in the unrendered middle
+                # would otherwise drag `min()` below the batch's real
+                # session and spuriously trip the phase downgrade for
+                # rows nobody sees.
+                rendered = scored[:top_n] + scored[-top_n:]
                 stamps = [
-                    r.get("as_of")[:10] for r in rows
+                    r.get("as_of")[:10] for r in rendered
                     if isinstance(r.get("as_of"), str)
                 ]
                 if stamps:
                     ctx["screener_actual_session"] = min(stamps)
                     ctx["screener_data_source"] = (
-                        rows[0].get("data_source") or "ohlcv_daily"
+                        rendered[0].get("data_source") or "ohlcv_daily"
                     )
             # Surface the full recovery-tier trace so a future audit
             # can tell at a glance which tier produced the rendered

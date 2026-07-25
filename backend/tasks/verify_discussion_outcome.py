@@ -86,12 +86,24 @@ _TW_SYMBOL_RE = re.compile(r"^\d{4,6}$")
 DECIDED_VERDICTS = ("win", "big_win", "loss", "big_loss")
 
 
+def is_experiment(d) -> bool:
+    """True for a row produced under a rules text that is not the saved
+    production config (`--rules-override` on the replay path).
+
+    Backtest replays SHOULD feed the learning loop — that is what the fuel
+    sweeps are for. An experiment row is the one exception: its lesson would
+    be "under rules we do not run, this worked", and `promote_lessons` would
+    promote it into the semantic lessons that steer the live panel.
+    """
+    return bool((getattr(d, "candidate_snapshot", None) or {}).get("experiment"))
+
+
 async def maybe_run_live_post_mortem(db, d) -> None:
-    """Self-critique a graded live discussion. Only decided outcomes carry
+    """Self-critique a graded discussion. Only decided outcomes carry
     a real pick worth critiquing; abstain/unverifiable have nothing to
     reflect on. Fail-closed: a post-mortem error must never disturb the
     verdict already committed above."""
-    if d.verdict not in DECIDED_VERDICTS:
+    if d.verdict not in DECIDED_VERDICTS or is_experiment(d):
         return
     try:
         await run_post_mortem_pass(db, d, d.owner_id)
@@ -573,7 +585,11 @@ async def _set_verdict(
     # round contexts when the verdict is a winning band (legacy "win"
     # or new "big_win"). record_lesson_outcome is gated internally so
     # calling unconditionally is safe; failure only logs.
-    if is_winning_verdict(verdict):
+    # `is_experiment` rows are excluded for the same reason as the
+    # post-mortem below: hit_count is the promotion eligibility signal, so a
+    # win earned under non-production rules would push a lesson toward the
+    # semantic tier that steers the live panel.
+    if is_winning_verdict(verdict) and not is_experiment(d):
         try:
             from services.lesson_tier_service import (
                 record_lesson_outcome,

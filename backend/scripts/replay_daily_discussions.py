@@ -235,6 +235,18 @@ async def _main(argv: list[str]) -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--verify-only", action="store_true",
                     help="check replayed contexts for look-ahead, run nothing")
+    ap.add_argument("--rerun-covered", action="store_true",
+                    help="replay sessions that already have an auto-run row. "
+                         "Needed for A/B experiments (e.g. re-running an "
+                         "abstained session under different rules); off by "
+                         "default so ordinary fuel runs stay idempotent")
+    ap.add_argument("--only-strategy", default=None,
+                    help="run just this strategy key (e.g. price_signal) "
+                         "instead of every enabled one")
+    ap.add_argument("--rules-override", default=None,
+                    help="replace the saved auto-run rules text for THIS run "
+                         "only; the stored config the daily cron reads is "
+                         "left untouched")
     ap.add_argument("--budget-usd", type=float, default=None,
                     help="stop before exceeding this much additional spend")
     args = ap.parse_args(argv)
@@ -281,12 +293,15 @@ async def _main(argv: list[str]) -> int:
         print(f"look-ahead violations: {violations}")
         return 1 if violations else 0
 
-    done = await _covered_sessions(cfg.user_id, days)
+    done = set() if args.rerun_covered else await _covered_sessions(cfg.user_id, days)
     todo = [d for d in days if d not in done]
+    from tasks.auto_run_discussion import _select_strategy_counts
     strategies = sum(
-        1 for count in discussion_auto_run_config_service
-        .normalize_strategy_run_counts(
-            getattr(cfg, "strategy_run_counts", None), legacy_enabled=True,
+        1 for count in _select_strategy_counts(
+            discussion_auto_run_config_service.normalize_strategy_run_counts(
+                getattr(cfg, "strategy_run_counts", None), legacy_enabled=True,
+            ),
+            args.only_strategy,
         ).values() if count > 0
     )
     estimate = len(todo) * strategies * _USD_PER_DISCUSSION
@@ -317,7 +332,12 @@ async def _main(argv: list[str]) -> int:
             # empty for that session. Report that instead of counting it
             # as a replay; a run that produces no rows while printing
             # progress is the exact failure this script just had.
-            created = await _run_for_user(db, fresh, as_of=day)
+            created = await _run_for_user(
+                db, fresh, as_of=day,
+                only_strategy=args.only_strategy,
+                rules_override=args.rules_override,
+                allow_duplicate=args.rerun_covered,
+            )
         if created:
             ran += 1
             print(f"{day}  replayed ({ran}/{len(todo)})")

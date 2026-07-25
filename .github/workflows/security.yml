@@ -33,7 +33,31 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Audit frontend dependencies
         working-directory: frontend
-        run: npm audit --audit-level=high
+        # Allowlist GHSA-qwww-vcr4-c8h2 (react-router "RSC Mode CSRF Bypass").
+        # This app is a client-side Vite SPA using <BrowserRouter> — it does
+        # not use React Router's RSC / framework mode, so the advisory's
+        # attack surface does not exist here. No forward-patched
+        # react-router-dom has shipped yet (7.18.1 is latest); npm's only
+        # suggested fix is a breaking downgrade to 7.11.0. Drop this
+        # allowlist once a patched >=7.18.x / 8.x is available. Any other
+        # high/critical advisory still fails the job.
+        run: |
+          set -euo pipefail
+          ALLOW="GHSA-qwww-vcr4-c8h2"
+          audit=$(npm audit --audit-level=high --json || true)
+          offenders=$(echo "$audit" | jq -r --arg allow "$ALLOW" '
+            [ .vulnerabilities[]?
+              | select(.severity=="high" or .severity=="critical")
+              | .via[]? | objects
+              | select(((.url // "") | contains($allow)) or ((.source|tostring) == $allow) | not)
+              | "\(.name // "?"): \(.title // .url // "?")"
+            ] | unique | .[]' )
+          if [ -n "$offenders" ]; then
+            echo "Un-allowlisted high/critical advisories found:"
+            echo "$offenders"
+            exit 1
+          fi
+          echo "Only the allowlisted advisory ($ALLOW) is present — OK."
 
   repository-scan:
     name: Trivy repository scan

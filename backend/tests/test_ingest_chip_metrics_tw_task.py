@@ -16,6 +16,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models.tw_chip_metrics import TwInstitutionalDaily, TwMarginDaily
 
 
+def _recent_weekdays(count: int) -> list[date]:
+    """The `count` most recent weekdays, newest first.
+
+    Both jobs walk `pending_market_days`, which keeps only `weekday() < 5`.
+    A test that stubs the connector to answer for `date.today()` therefore
+    answers for a day the job never asks about whenever the suite runs on a
+    Saturday or Sunday — the run legitimately processes nothing and the
+    assertion reads as a zero-row failure. Anchoring on the most recent
+    weekday makes these tests independent of the day CI happens to run.
+    """
+    days: list[date] = []
+    day = date.today()
+    while len(days) < count:
+        if day.weekday() < 5:
+            days.append(day)
+        day -= timedelta(days=1)
+    return days
+
+
 # ── shared fixtures ────────────────────────────────────────────────
 
 
@@ -103,11 +122,13 @@ async def test_institutional_success_writes_rows(
 
     rows = [_institutional_row("2330"), _institutional_row("2454")]
 
-    # The job walks a window of unarchived weekdays, so answer only for
-    # today and give every other date an empty table — the shape TWSE
-    # returns for a non-trading day.
+    # The job walks a window of unarchived weekdays, so answer only for the
+    # most recent weekday and give every other date an empty table — the
+    # shape TWSE returns for a non-trading day.
+    market_day = _recent_weekdays(1)[0]
+
     async def _only_today(query_date=None, **_):
-        return rows if query_date == date.today() else []
+        return rows if query_date == market_day else []
 
     with patch(
         "tasks.ingest_institutional_tw.acquire_lock",
@@ -138,7 +159,7 @@ async def test_institutional_success_writes_rows(
     by_sym = {r.symbol: r for r in db_rows}
     assert by_sym["2330"].fini_buy == 10_000
     assert by_sym["2330"].source == "twse"
-    assert by_sym["2330"].ts == date.today()
+    assert by_sym["2330"].ts == market_day
 
     kwargs = health.await_args.kwargs
     assert kwargs["ok"] is True
@@ -159,8 +180,10 @@ async def test_institutional_rerun_skips_already_archived_days(
 
     rows = [_institutional_row("2330")]
 
+    market_day = _recent_weekdays(1)[0]
+
     async def _today_only(query_date=None, **_):
-        return rows if query_date == date.today() else []
+        return rows if query_date == market_day else []
 
     common = (
         patch(
@@ -195,7 +218,7 @@ async def test_institutional_rerun_skips_already_archived_days(
 
     asked = {c.args[0] if c.args else c.kwargs.get("query_date")
              for c in second.await_args_list}
-    assert date.today() not in asked
+    assert market_day not in asked
 
     db_rows = (await db_session.scalars(
         select(TwInstitutionalDaily).where(
@@ -241,13 +264,14 @@ async def test_institutional_partial_window_keeps_what_landed(
     run still reports healthy — the gap is retried on the next tick."""
     from tasks import ingest_institutional_tw
 
-    today = date.today()
-    failing_day = today - timedelta(days=1)
+    # Two consecutive weekdays, so the "one day fails" case survives a
+    # weekend run (Monday's predecessor in the walk is the prior Friday).
+    market_day, failing_day = _recent_weekdays(2)
 
     async def _one_bad_day(query_date=None, **_):
         if query_date == failing_day:
             raise httpx.ConnectTimeout("boom")
-        return [_institutional_row("2330")] if query_date == today else []
+        return [_institutional_row("2330")] if query_date == market_day else []
 
     with patch(
         "tasks.ingest_institutional_tw.acquire_lock",

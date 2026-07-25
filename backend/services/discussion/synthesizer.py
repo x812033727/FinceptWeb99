@@ -33,7 +33,7 @@ import asyncio
 import json
 import logging
 import math
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -56,6 +56,19 @@ from services.discussion.symbols import extract_focus_symbols
 from services.discussion.transcript_format import _format_transcript
 
 log = logging.getLogger(__name__)
+
+
+def _verify_after_date(conclusion: dict[str, Any], anchor: date) -> date:
+    """When the conclusion recommends no symbol — a deliberate abstain or
+    an unusable parse — there is no pick and no D5 window to wait for, so
+    it is due immediately; the verifier labels it abstain/unverifiable on
+    its next run instead of leaving the row invisible on the scoreboard
+    for 5 trading days. A real recommendation waits for its bars."""
+    from services.tw_trading_calendar import add_trading_days_estimate
+
+    if conclusion.get("recommended_symbols"):
+        return add_trading_days_estimate(anchor, 5)
+    return anchor
 
 
 async def _apply_calibration_to_conclusion(
@@ -738,18 +751,17 @@ async def synthesize_conclusion(
     # update score_discussion_outcomes to prefer the latter when
     # populated; that's intentionally NOT in this PR.
     if discussion.verify_after_date is None:
-        from services.tw_trading_calendar import (
-            add_trading_days_estimate,
-            utcnow_tw_date,
-        )
+        from services.tw_trading_calendar import utcnow_tw_date
+
         # 5 trading days matches the verifier's `_WINDOW_TRADING_DAYS`
         # — anything sooner and the bars haven't all resolved yet.
         # In backtest mode (PR #224), anchor on `as_of_date` instead
         # of today so the post-window is the historical 5 trading
         # days after the backtest anchor — verifier picks the row
         # up immediately if as_of + 5d is already in the past.
+        # An abstention has no window (see `_verify_after_date`).
         anchor = discussion.as_of_date or utcnow_tw_date()
-        discussion.verify_after_date = add_trading_days_estimate(anchor, 5)
+        discussion.verify_after_date = _verify_after_date(conclusion, anchor)
     await db.commit()
     await db.refresh(discussion)
 

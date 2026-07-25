@@ -380,8 +380,8 @@ async def test_veto_guard_leakage_fires_and_ignores_unverifiable(
     findings = out["guard_findings"]
     assert findings
     finding = next(f for f in findings if "chip_quality" in f)
-    assert "100%" in finding   # baseline rate unchanged by the 3 unverifiable rows
-    assert "0%" in finding
+    assert "from 100%" in finding   # baseline rate unchanged by the 3 unverifiable rows
+    assert "to 0% (last 14d)" in finding   # current rate — not just a substring of "100%"
 
     record_health = AsyncMock()
     with patch.object(cron, "run_health_monitor", AsyncMock(return_value=out)), \

@@ -28,6 +28,19 @@ Defer (verdict stays NULL, retry tomorrow) when none of the symbols
 have 5 bars yet — that's a holiday-in-window or a delisting issue;
 the cron's daily cadence + idempotency make a re-attempt safe.
 
+Market-aware verification (WS1 finding A):
+  Symbol filtering and price fetch both branch on `d.market`. TW rows
+  keep the legacy numeric-code regex and `tw_market_service.get_history`
+  unchanged. US/GLOBAL rows use an uppercase-ticker regex and route
+  through `us_market_service.get_history` instead — previously every
+  US/GLOBAL discussion had its symbols filtered to `[]` by the
+  TW-only regex and landed `unverifiable` forever, regardless of how
+  the pick actually performed. `pool_performance` (the abstain-path
+  counterfactual) stays TW-only since the underlying candidate pool
+  and benchmark archive are TW screener artifacts; US/GLOBAL rows
+  simply carry `pool_performance: None` rather than a fabricated
+  TW-shaped stat.
+
 Notes on day-1 open snapshot:
   We don't capture day1_open at auto-run time (20:00 UTC = 04:00
   Taipei, market still hours from opening). The verifier captures it
@@ -79,8 +92,45 @@ _WINDOW_TRADING_DAYS = 5
 # data hasn't surfaced by then, it's not coming.
 _STALE_GRACE_DAYS = 30
 _TW_SYMBOL_RE = re.compile(r"^\d{4,6}$")
+# US / GLOBAL: uppercase tickers (AAPL, BRK.B, BF-B). Deliberately
+# conservative — no lowercase, no spaces, no leading digit — so junk
+# like "drop table" or a stray sentence fragment from a synthesizer
+# parse hiccup can't slip through and get treated as a symbol.
+_US_SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 
 DECIDED_VERDICTS = ("win", "big_win", "loss", "big_loss")
+
+
+def _symbol_pattern(market: str) -> re.Pattern[str]:
+    """TW keeps the legacy 4-6 digit numeric shape; US and GLOBAL
+    (WS1 finding A) accept uppercase tickers instead — GLOBAL topics
+    recommend US-listed names (crypto ADRs, cross-listed tickers)
+    far more often than raw TW codes, so it shares the US shape
+    rather than getting its own regex."""
+    return _TW_SYMBOL_RE if market == "TW" else _US_SYMBOL_RE
+
+
+def _filter_recommended_symbols(raw_symbols: list, market: str) -> list[str]:
+    pattern = _symbol_pattern(market)
+    return [str(s).strip() for s in raw_symbols if pattern.fullmatch(str(s).strip())]
+
+
+async def _fetch_history(sym: str, market: str) -> list[dict[str, Any]]:
+    """Route the live (non-backtest) price fetch to the right market
+    service. TW unchanged; US/GLOBAL go through `us_market_service`,
+    whose `get_history` takes a `period` string (e.g. "1mo") rather
+    than TW's `months` int — same bar shape (time/open/high/low/close),
+    just a different kwarg idiom (see `focus_briefs._build_us_focus_brief`
+    for the same call pattern). Lazy import matches this module's
+    existing pattern for other heavier service imports
+    (`read_ohlcv_range_autosession`, `lesson_tier_service`, ...) and
+    keeps `us_market_service`'s yfinance/polygon connector graph out
+    of the TW-only hot path."""
+    if market == "TW":
+        return await tw_market_service.get_history(sym, months=1)
+    from services import us_market_service
+
+    return await us_market_service.get_history(sym, period="1mo")
 
 
 def is_experiment(d) -> bool:
@@ -271,7 +321,12 @@ async def _verify_one(
     UPDATE."""
     conclusion = d.conclusion or {}
     raw_symbols = conclusion.get("recommended_symbols") or []
-    symbols = [str(s).strip() for s in raw_symbols if _TW_SYMBOL_RE.fullmatch(str(s).strip())]
+    # WS1 finding A: this used to be `_TW_SYMBOL_RE` unconditionally,
+    # which stripped every US ticker ("AAPL" -> no match on `^\d{4,6}$`)
+    # to an empty list — a US/GLOBAL discussion landed `unverifiable`
+    # forever, never actually graded. Market-aware filtering fixes it;
+    # TW behavior (numeric-only) is unchanged.
+    symbols = _filter_recommended_symbols(raw_symbols, d.market)
 
     # Edge: no symbols recommended. Two very different outcomes share
     # this shape and must not share a verdict:
@@ -293,7 +348,13 @@ async def _verify_one(
         # what the deterministic screener pool did that week. Without
         # it we can't tell a wise pass from a missed rally.
         pool_perf: dict[str, Any] | None = None
-        if abstained:
+        # Pool performance is TW-only: the stored `candidate_snapshot.pool`
+        # comes from the TW screener strategy slots (chip_quality /
+        # price_signal), and the benchmark read below hits TW-only
+        # archive tables. A US/GLOBAL row has no such pool to compare
+        # against — leave `pool_perf` None rather than run a TW-shaped
+        # computation over data that was never TW-sourced.
+        if abstained and d.market == "TW":
             anchor = d.as_of_date or to_tw_date(d.created_at)
             try:
                 pool_perf = await _compute_pool_performance(d, anchor)
@@ -339,16 +400,24 @@ async def _verify_one(
             # 5-trading-day window plus weekends / holidays. Read
             # the archive directly so we don't pull a live snapshot
             # that would miss historical dates.
+            # NOTE: only the TW archive is actually populated by an
+            # ingest cron today (see `focus_briefs._assemble_focus_briefs`
+            # for the same "no US backtest variant in v1" precedent) —
+            # passing `d.market` rather than a hardcoded "TW" is still
+            # correct here: for a TW row it's identical, and for a
+            # US/GLOBAL row it degrades honestly to an empty archive
+            # read (-> defers / stale-grace) instead of silently
+            # querying the wrong market's table.
             from services.ingest.repository import read_ohlcv_range_autosession
 
             bars = await read_ohlcv_range_autosession(
-                "TW",
+                d.market,
                 sym,
                 d.as_of_date,
                 d.as_of_date + timedelta(days=14),
             )
         else:
-            bars = await tw_market_service.get_history(sym, months=1)
+            bars = await _fetch_history(sym, d.market)
         # Bars are returned with `time` either as ISO date ("YYYY-MM-DD")
         # or full ISO timestamp. Truncate to date for comparison.
         # `>= anchor_tw` covers backtest (anchor=as_of_date) and
@@ -407,14 +476,16 @@ async def _verify_one(
                 big_loss_pct=big_loss_pct,
             )
             pool_perf: dict[str, Any] | None = None
-            try:
-                pool_perf = await _compute_pool_performance(d, anchor_tw)
-            except Exception:
-                # Pool stats are a bonus metric — never block the verdict.
-                log.exception(
-                    "verify_discussion_outcome.pool_performance_failed",
-                    extra={"id": str(d.id)},
-                )
+            # TW-only — see the abstain-path comment above for why.
+            if d.market == "TW":
+                try:
+                    pool_perf = await _compute_pool_performance(d, anchor_tw)
+                except Exception:
+                    # Pool stats are a bonus metric — never block the verdict.
+                    log.exception(
+                        "verify_discussion_outcome.pool_performance_failed",
+                        extra={"id": str(d.id)},
+                    )
             await _set_verdict(
                 db,
                 d,

@@ -83,6 +83,7 @@ async def _make_pending(
     day1_open_prices: dict[str, float] | None = None,
     abstained: bool = False,
     abstain_reason: str = "",
+    market: str = "TW",
 ) -> Discussion:
     """Build an auto-run discussion ready for the verifier.
 
@@ -111,6 +112,7 @@ async def _make_pending(
         persona_ids=["buffett", "lynch"],
         status="done",
         current_round=5,
+        market=market,
         conclusion={
             "recommended_symbols": symbols,
             "reasoning": "z",
@@ -818,3 +820,126 @@ async def test_pool_performance_absent_without_pool(
     await db_session.refresh(refreshed)
     assert refreshed.verdict == "win"
     assert refreshed.pool_performance is None
+
+
+# ── WS1 finding A: US / GLOBAL discussions were permanently mislabeled
+# `unverifiable` because the verifier filtered every recommended symbol
+# through a TW-only `^\d{4,6}$` regex. "AAPL" never matched, so
+# `symbols` came out empty and the row was graded as if the panel had
+# produced nothing usable. The tests below pin the market-aware fix:
+# US symbols survive the filter, route through `us_market_service`
+# (not `tw_market_service`), and grade normally; junk still gets
+# rejected; TW rows (every test above, run with `market` defaulting to
+# "TW") are untouched.
+
+
+@pytest.mark.asyncio
+async def test_us_discussion_symbols_not_stripped(
+    patch_session,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """A US discussion recommending ["AAPL"] must reach the history
+    fetch with "AAPL" intact — the old TW-only regex stripped it to
+    `[]` before any fetch was attempted, so the row above would have
+    been misclassified as if the synthesizer had produced nothing.
+    No bars yet (empty history) => verdict stays NULL (deferred), NOT
+    'unverifiable' — proof the row was scheduled for grading rather
+    than short-circuited by the no-symbols path."""
+    d = await _make_pending(db_session, owner.id, symbols=["AAPL"], market="US")
+    history_calls: list[str] = []
+
+    async def _fake_history(symbol, **_):
+        history_calls.append(symbol)
+        return []
+
+    patches = _stub_lock_helpers() + [
+        patch("services.us_market_service.get_history", AsyncMock(side_effect=_fake_history)),
+        patch("services.tw_market_service.get_history", AsyncMock()),
+    ]
+    _enter_all(patches)
+    try:
+        from tasks import verify_discussion_outcome
+
+        await verify_discussion_outcome.run()
+    finally:
+        _exit_all(patches)
+
+    assert history_calls == ["AAPL"]
+    refreshed = await db_session.get(Discussion, d.id)
+    await db_session.refresh(refreshed)
+    assert refreshed.verdict is None
+
+
+@pytest.mark.asyncio
+async def test_us_discussion_grades_win_via_us_market_service(
+    patch_session,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Grading a US discussion with mocked `us_market_service` history
+    (+6% D5 close, same shape as `test_win_when_peak_close_above_5pct`)
+    yields a decided 'win' verdict — not 'unverifiable'. TW's
+    `tw_market_service.get_history` must never be called for a US row.
+    `pool_performance` stays None: the candidate pool / benchmark
+    tables are TW-only screener artifacts, so a US row can't fabricate
+    a comparison against them."""
+    d = await _make_pending(db_session, owner.id, symbols=["AAPL"], market="US")
+    created_date = d.created_at.date()
+    bars = _bars(created_date, 5, open_=100.0, closes=[100.5, 101.0, 106.0, 105.0, 106.0])
+
+    tw_history = AsyncMock()
+    patches = _stub_lock_helpers() + [
+        patch("services.us_market_service.get_history", AsyncMock(return_value=bars)),
+        patch("services.tw_market_service.get_history", tw_history),
+    ]
+    _enter_all(patches)
+    try:
+        from tasks import verify_discussion_outcome
+
+        await verify_discussion_outcome.run()
+    finally:
+        _exit_all(patches)
+
+    refreshed = await db_session.get(Discussion, d.id)
+    await db_session.refresh(refreshed)
+    assert refreshed.verdict == "win"
+    assert "AAPL" in (refreshed.verdict_reason or "")
+    assert refreshed.day1_open_prices == {"AAPL": 100.0}
+    assert refreshed.day5_close_prices == {"AAPL": 106.0}
+    assert refreshed.pool_performance is None
+    tw_history.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_us_junk_symbols_still_filtered(
+    patch_session,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """The US ticker shape is deliberately conservative: a SQL-injection-
+    shaped string and lowercase noise must still be filtered out, same
+    as `test_filters_non_numeric_symbols` does for TW junk. No valid
+    symbols survive => 'unverifiable', no history fetch attempted."""
+    d = await _make_pending(
+        db_session, owner.id, symbols=["DROP TABLE", "aapl"], market="US",
+    )
+    history = AsyncMock()
+
+    patches = _stub_lock_helpers() + [
+        patch("services.us_market_service.get_history", history),
+        patch("services.tw_market_service.get_history", AsyncMock()),
+    ]
+    _enter_all(patches)
+    try:
+        from tasks import verify_discussion_outcome
+
+        await verify_discussion_outcome.run()
+    finally:
+        _exit_all(patches)
+
+    refreshed = await db_session.get(Discussion, d.id)
+    await db_session.refresh(refreshed)
+    assert refreshed.verdict == "unverifiable"
+    assert refreshed.verdict_reason == "synthesizer returned no symbols"
+    history.assert_not_called()

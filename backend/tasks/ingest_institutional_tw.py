@@ -177,8 +177,15 @@ async def _do_run() -> tuple[int, bool, str | None]:
     archive proves the market traded) is a real gap, not a holiday —
     see `tasks.chip_outcome`.
     """
+    # Single snapshot, not a fresh `date.today()` per use: the walk below
+    # sleeps `_PACING_SECONDS` between days, so a run straddling midnight
+    # could otherwise see "today" advance between the walk and the
+    # classify_chip_outcome() call below it — reclassifying today's own
+    # in-progress day as a past day with zero rows, i.e. a spurious gap
+    # alarm instead of "today hasn't published yet".
+    today = date.today()
     days = pending_market_days(
-        date.today(), _LOOKBACK_DAYS, await _archived_days(),
+        today, _LOOKBACK_DAYS, await _archived_days(),
     )
     day_rows: dict[date, int] = {}
     total = 0
@@ -229,6 +236,6 @@ async def _do_run() -> tuple[int, bool, str | None]:
         traded = {t.date() if hasattr(t, "date") else t for t in hits}
 
     ok, status = classify_chip_outcome(
-        day_rows=day_rows, today=date.today(), traded=traded,
+        day_rows=day_rows, today=today, traded=traded,
     )
     return total, ok, status

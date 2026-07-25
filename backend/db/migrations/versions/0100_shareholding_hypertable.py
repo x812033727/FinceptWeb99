@@ -27,6 +27,15 @@ storage parameter, nor `add_compression_policy` /
 `remove_compression_policy` / `decompress_chunk`, so without the guard
 both directions hard-fail the whole migration chain there.
 
+Schema-qualified as `public.tw_stock_shareholding` throughout (including
+inside `create_hypertable` / `add_compression_policy` / `show_chunks`
+string arguments) rather than bare, same reasoning as migration 0099:
+prod has a same-named table in the `finmind` schema (already compressed
+independently); `search_path` resolves the bare name correctly today,
+but qualifying it removes that dependency rather than leaving a
+regression the rehearsal DB (no `finmind` schema there) could never
+catch.
+
 Known writer against this table: `upsert_shareholdings`
 (`services/ingest/repo/tw_chip.py`), via `_chunked_upsert`
 (`services/ingest/repo/_common.py`), issues
@@ -49,7 +58,7 @@ down_revision: str | None = "0099"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-_TABLE = "tw_stock_shareholding"
+_TABLE = "public.tw_stock_shareholding"
 
 
 def _is_postgres() -> bool:

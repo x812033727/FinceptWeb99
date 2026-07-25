@@ -30,6 +30,14 @@ has neither the `timescaledb.compress` storage parameter nor
 so without the guard both directions hard-fail there. Unit-test SQLite
 never runs Alembic at all.
 
+Table names are schema-qualified (`public.ohlcv_daily`, etc., including
+inside `create_hypertable` / `add_compression_policy` / `show_chunks`
+string arguments) rather than bare: prod has same-named tables in the
+`finmind` schema (already compressed independently). `search_path`
+resolves the bare names to the right table today, but qualifying them
+removes that dependency entirely rather than leaving a regression the
+rehearsal DB (which has no `finmind` schema) could never catch.
+
 Known write against compressed chunks: `tw_market_service.get_history()`
 can, on a user-triggered `/api/tw-market/history` request with `months`
 up to 60, upsert bars older than the 90-day compression threshold via
@@ -51,7 +59,9 @@ down_revision: str | None = "0098"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-_TABLES = ("ohlcv_daily", "tw_institutional_daily", "tw_margin_daily")
+_TABLES = (
+    "public.ohlcv_daily", "public.tw_institutional_daily", "public.tw_margin_daily",
+)
 
 
 def _is_postgres() -> bool:

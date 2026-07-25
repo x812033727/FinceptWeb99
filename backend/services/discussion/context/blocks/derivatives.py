@@ -39,3 +39,41 @@ async def fetch_taifex_positioning(
         ctx["taifex_positioning"] = result
     except Exception as exc:
         record_error("taifex_positioning", exc)
+
+
+async def fetch_large_trader_positioning(
+    ctx: dict[str, Any],
+    *,
+    as_of: date | None,
+    record_error: ErrorRecorder,
+) -> None:
+    """Populate `ctx['large_trader_positioning']` with the TX
+    large-trader OI concentration + dealer-volume breadth snapshot
+    read from the `finmind.*` archive (`tw_derivatives_archive.
+    large_trader_positioning`).
+
+    Unlike `fetch_taifex_positioning` above (a live FinMind call with
+    its own cache, needing no DB), this reader is archive-only and
+    takes a `db` session. The builder's shared `db` is threaded
+    sequentially through the chip/risk blocks around this one in
+    `builder.py`, and SQLAlchemy `AsyncSession` is not safe to use
+    for two overlapping awaits — so rather than depend on exactly
+    where in that sequence this call lands (today or after a future
+    reshuffle), this block opens its own short-lived
+    `AsyncSessionLocal`, the same idiom `news.py`'s
+    `fetch_per_symbol_sentiment` uses for its per-symbol fan-out.
+
+    The reader returning `None` (archive has nothing for this cut)
+    is a valid no-signal state, not a failure: the key is set to
+    `None` and no error is recorded, matching
+    `fetch_taifex_positioning`'s empty-state handling above.
+    """
+    try:
+        from db.session import AsyncSessionLocal
+        from services.tw_derivatives_archive import large_trader_positioning
+        async with AsyncSessionLocal() as db:
+            ctx["large_trader_positioning"] = await large_trader_positioning(
+                db, as_of=as_of,
+            )
+    except Exception as exc:
+        record_error("large_trader_positioning", exc)

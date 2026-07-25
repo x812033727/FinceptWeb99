@@ -24,7 +24,9 @@ from unittest.mock import AsyncMock, patch
 
 from services.discussion.context import build_market_context
 from services.discussion.context import builder
-from services.discussion.context.blocks import chip, http, news, owner, risk, technical
+from services.discussion.context.blocks import (
+    chip, derivatives, http, news, owner, risk, technical,
+)
 
 
 def _new_ctx() -> dict:
@@ -563,6 +565,70 @@ async def test_owner_fetch_user_context_records_error_on_failure(
 
     assert ctx["user_context"] is None
     assert ctx["errors"][0]["source"] == "user_context"
+
+
+# ── derivatives.fetch_large_trader_positioning ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_derivatives_fetch_large_trader_positioning_happy_path():
+    """Happy path: reader result lands on the ctx key, `as_of` is
+    threaded through, and the block opens its own session (not
+    `None`) to pass to the reader."""
+    ctx = _new_ctx()
+    asof = date(2026, 7, 20)
+    shape = {
+        "as_of_session": "2026-07-18",
+        "top5": {"long_oi": 100, "short_oi": 80, "net": 20},
+        "top10": {"long_oi": 150, "short_oi": 130, "net": 20},
+        "net_change_5s": {"top5": 5, "top10": 5},
+        "dealer_volume": {"as_of_session": "2026-07-18", "total": 1000, "vs_20s_mean_pct": 1.5},
+    }
+    mock = AsyncMock(return_value=shape)
+
+    with patch("services.tw_derivatives_archive.large_trader_positioning", new=mock):
+        await derivatives.fetch_large_trader_positioning(
+            ctx, as_of=asof, record_error=_record(ctx),
+        )
+
+    assert ctx["large_trader_positioning"] == shape
+    assert ctx["errors"] == []
+    assert mock.call_args.args[0] is not None
+    assert mock.call_args.kwargs["as_of"] == asof
+
+
+@pytest.mark.asyncio
+async def test_derivatives_fetch_large_trader_positioning_records_error_on_failure():
+    """Reader failure must record to `ctx['errors']` and leave the
+    key absent-safe, without disturbing sibling ctx keys."""
+    ctx = _new_ctx()
+    ctx["taifex_positioning"] = {"trend": "bearish"}
+    mock = AsyncMock(side_effect=RuntimeError("archive query failed"))
+
+    with patch("services.tw_derivatives_archive.large_trader_positioning", new=mock):
+        await derivatives.fetch_large_trader_positioning(
+            ctx, as_of=None, record_error=_record(ctx),
+        )
+
+    assert ctx.get("large_trader_positioning") is None
+    assert ctx["errors"][0]["source"] == "large_trader_positioning"
+    assert ctx["taifex_positioning"] == {"trend": "bearish"}
+
+
+@pytest.mark.asyncio
+async def test_derivatives_fetch_large_trader_positioning_none_is_not_an_error():
+    """Reader returning `None` (archive empty for the cut) is a valid
+    no-signal state — key set to `None`, no error recorded."""
+    ctx = _new_ctx()
+    mock = AsyncMock(return_value=None)
+
+    with patch("services.tw_derivatives_archive.large_trader_positioning", new=mock):
+        await derivatives.fetch_large_trader_positioning(
+            ctx, as_of=None, record_error=_record(ctx),
+        )
+
+    assert ctx["large_trader_positioning"] is None
+    assert ctx["errors"] == []
 
 
 # ── builder.build_market_context (end-to-end) ─────────────────────

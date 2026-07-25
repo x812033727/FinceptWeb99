@@ -7,6 +7,16 @@ Rows are NEVER deleted — compression only. 90-day threshold keeps every
 chunk the daily ingest walks (10-day lookback) and the discussion reads
 (30-day history windows) uncompressed; only cold history compresses.
 
+Deploy-critical: `ohlcv_daily`, `tw_institutional_daily`, and
+`tw_margin_daily` are all pre-populated (real history, not empty
+tables), so most of each already sits past the 90-day threshold at the
+moment this migration runs. `add_compression_policy` schedules a
+background job per table that starts working through that backlog
+almost immediately after commit — a real, sustained compression I/O
+burst against all three tables for some time post-deploy, not just a
+future-dated policy sitting idle. Same caveat applies to migration
+0100's `tw_stock_shareholding` conversion (see its docstring).
+
 Requires TimescaleDB community license (prod: `timescale/timescaledb:
 latest-pg15` per `docker-compose.yml`; rehearsed here against
 `2.26.3-pg16` — same TimescaleDB feature set, one PG major version

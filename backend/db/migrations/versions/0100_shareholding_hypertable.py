@@ -6,6 +6,16 @@ contains `ts`, so `create_hypertable` with `migrate_data => true` is
 clean -- no PK surgery needed. Runs minutes of exclusive lock --
 acceptable in the deploy window; only batch ingest touches this table.
 
+Deploy-critical: because virtually the entire ~2.64M-row table is
+already older than the 90-day compression threshold, `add_compression_
+policy` doesn't just register a future policy -- it schedules a
+background job that starts working through that whole backlog almost
+immediately once this migration commits. That job runs *after* the
+exclusive-lock window above ends (the table is usable again), but it
+is a real, sustained compression I/O burst against this table for some
+time afterward -- expect it, don't mistake it for something wrong with
+the deploy.
+
 Requires TimescaleDB (prod: `timescale/timescaledb:latest-pg15` per
 `docker-compose.yml`; rehearsed here against `2.26.3-pg16` -- see
 migration 0099's docstring for the version-gap note, which applies

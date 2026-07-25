@@ -6,18 +6,21 @@
 #   2. the one known writer that can touch a compressed chunk
 #      (tw_market_service.get_history's history-backfill upsert) still
 #      succeeds against one (UPSERT-INTO-COMPRESSED-OK)
-#   3. a downgrade -1 / upgrade head cycle preserves that exact state
-#      (POST-CYCLE-READ-OK) — decompression survival is proven by a
-#      real diff, not inferred from "the commands didn't error".
+#   3. a downgrade -2 / upgrade head cycle (0100 -> 0099 -> 0098, then
+#      back up) preserves that exact state for BOTH migrations
+#      (POST-CYCLE-READ-OK for 0099's ohlcv_daily,
+#      SHAREHOLDING-CYCLE-READ-OK for 0100's tw_stock_shareholding) —
+#      decompression survival is proven by a real diff, not inferred
+#      from "the commands didn't error". -2, not -1: with 0100 at head,
+#      a -1 cycle would only ever revert 0100, leaving 0099's
+#      reversibility untested and its marker vacuously green forever.
 #   4. migration 0100's `create_hypertable(..., migrate_data => true)`
 #      conversion of tw_stock_shareholding — seeded *before* 0100 runs,
 #      so this is a genuine non-empty-table conversion, not an empty
 #      hypertable being compressed after the fact — preserves every row
-#      (SHAREHOLDING-READ-OK), the shareholding writer
+#      (SHAREHOLDING-READ-OK), and the shareholding writer
 #      (`upsert_shareholdings`) still succeeds against a compressed-era
-#      row (SHAREHOLDING-UPSERT-OK), and a downgrade -1 / upgrade head
-#      cycle (which now exercises 0100, since it's head) preserves that
-#      state too (SHAREHOLDING-CYCLE-READ-OK).
+#      row (SHAREHOLDING-UPSERT-OK).
 #
 # Prod runs `timescale/timescaledb:latest-pg15` (docker-compose.yml).
 # This rehearsal pins `2.26.3-pg16` — same TimescaleDB version family,
@@ -86,29 +89,22 @@ export DATABASE_URL="postgresql+asyncpg://postgres:x@127.0.0.1:${PORT}/rehearse"
 # either is fine), since the SHAREHOLDING-READ-OK row-content diff alone
 # can't tell compressed rows from uncompressed ones.
 #
-# `alembic_upgrade_retry` below is unrelated to the above race (which is
-# not inside alembic at all) — it's cheap, generic defense-in-depth
-# against any other transient DB hiccup wrapping every `alembic upgrade`
-# call in this script; it was never observed to trigger across ~10
-# reproductions of the migration itself.
-alembic_upgrade_retry() {
-  local target="$1" attempt
-  for attempt in 1 2 3; do
-    if alembic upgrade "$target"; then
-      return 0
-    fi
-    echo "alembic upgrade $target failed (attempt $attempt/3); retrying" >&2
-    sleep 2
-  done
-  return 1
-}
-
+# Deliberately no retry wrapper around any `alembic upgrade` /
+# `alembic downgrade` call below: prod's real deploy doesn't retry
+# alembic, so a retry here would risk masking a genuine migration
+# failure behind "it worked on attempt 2" — every failure above was
+# confirmed (via `bash -x`) to already be past alembic returning exit 0,
+# so alembic itself never needed retrying. The one place a transient
+# race is expected — container startup — already has its own dedicated
+# poll loop above (waiting for "ready to accept connections" x2 +
+# `pg_isready`), which is the correct place for that kind of retry.
+#
 # Stop one short of head so tw_stock_shareholding can be seeded as a
 # genuine plain table *before* 0100 converts it — otherwise the
 # migrate_data => true conversion (the riskiest part of 0100: it runs
 # under exclusive lock over ~2.64M rows in prod) would only ever be
 # exercised against an empty table.
-alembic_upgrade_retry 0099
+alembic upgrade 0099
 
 STEP0=$(docker exec -i "$NAME" psql -v ON_ERROR_STOP=1 -U postgres -d rehearse <<'SQL'
 -- 2 symbols x ~29 weekly rows spanning 200 days x 3 distinct bucket_ids
@@ -136,7 +132,7 @@ echo "$STEP0"
 
 # Now run 0100: converts the just-seeded, non-empty tw_stock_shareholding
 # into a compressed hypertable via migrate_data => true.
-alembic_upgrade_retry head
+alembic upgrade head
 
 # Compressed-read equivalence: seed 200 days of bars, force-compress,
 # diff a range read against the pre-compression answer, then simulate
@@ -253,16 +249,16 @@ WHERE hypertable_name = 'tw_stock_shareholding';
 SELECT CASE WHEN count(*) = 0 THEN 'SHAREHOLDING-READ-OK'
        ELSE 'SHAREHOLDING-READ-MISMATCH' END
 FROM (
-  (SELECT market,symbol,ts,bucket_id,bucket_label,holders_count,shares_count,shares_percent
+  (SELECT market,symbol,ts,bucket_id,bucket_label,holders_count,shares_count,shares_percent,source
    FROM tw_stock_shareholding WHERE symbol IN ('2330', '2317')
    EXCEPT
-   SELECT market,symbol,ts,bucket_id,bucket_label,holders_count,shares_count,shares_percent
+   SELECT market,symbol,ts,bucket_id,bucket_label,holders_count,shares_count,shares_percent,source
    FROM pre_migrate_snapshot_shareholding)
   UNION ALL
-  (SELECT market,symbol,ts,bucket_id,bucket_label,holders_count,shares_count,shares_percent
+  (SELECT market,symbol,ts,bucket_id,bucket_label,holders_count,shares_count,shares_percent,source
    FROM pre_migrate_snapshot_shareholding
    EXCEPT
-   SELECT market,symbol,ts,bucket_id,bucket_label,holders_count,shares_count,shares_percent
+   SELECT market,symbol,ts,bucket_id,bucket_label,holders_count,shares_count,shares_percent,source
    FROM tw_stock_shareholding WHERE symbol IN ('2330', '2317'))
 ) diff;
 
@@ -305,14 +301,24 @@ echo "$STEP1" | grep -q "SHAREHOLDING-CHUNKS-COMPRESSED-OK" || { echo "FAILED: s
 echo "$STEP1" | grep -q "SHAREHOLDING-READ-OK" || { echo "FAILED: shareholding migrate_data+compression equivalence check did not pass" >&2; exit 1; }
 echo "$STEP1" | grep -q "SHAREHOLDING-UPSERT-OK" || { echo "FAILED: shareholding upsert-into-compressed-chunk check did not pass" >&2; exit 1; }
 
-alembic downgrade -1 && alembic_upgrade_retry head
+# -2, not -1: with 0100 at head, a plain `downgrade -1` only reverts
+# 0100 — 0099's ohlcv/chip decompression-survival would then never be
+# exercised again and POST-CYCLE-READ-OK would print green forever
+# without actually testing anything (0099's tables wouldn't be touched
+# by the cycle at all). `downgrade -2` walks 0100 -> 0099 -> 0098, then
+# `upgrade head` walks back 0098 -> 0099 -> 0100, so both migrations'
+# reversibility is proven on every rehearsal run. `if_not_exists => true`
+# on 0100's `create_hypertable` call (see the migration's own comment)
+# is what makes re-hypertabling tw_stock_shareholding on the way back up
+# safe rather than a hard "already a hypertable" error.
+alembic downgrade -2 && alembic upgrade head
 
 # Decompression-survival proof: diff the post-cycle table against the
 # snapshot taken right before the cycle (which already includes the
-# backfill-simulated row) — this must come back empty. With 0100 at
-# head, this downgrade -1 / upgrade head cycle exercises 0100 (the
-# shareholding conversion), so the shareholding diff is the one that
-# actually proves something about *this* migration's reversibility.
+# backfill-simulated row) — this must come back empty. The deeper -2
+# cycle above means both diffs below are genuine: POST-CYCLE-READ-OK
+# for ohlcv_daily (0099's reversibility) and SHAREHOLDING-CYCLE-READ-OK
+# for tw_stock_shareholding (0100's reversibility).
 STEP2=$(docker exec -i "$NAME" psql -v ON_ERROR_STOP=1 -U postgres -d rehearse <<'SQL'
 SELECT CASE WHEN count(*) = 0 THEN 'POST-CYCLE-READ-OK'
        ELSE 'POST-CYCLE-READ-MISMATCH' END
@@ -329,16 +335,16 @@ FROM (
 SELECT CASE WHEN count(*) = 0 THEN 'SHAREHOLDING-CYCLE-READ-OK'
        ELSE 'SHAREHOLDING-CYCLE-READ-MISMATCH' END
 FROM (
-  (SELECT market,symbol,ts,bucket_id,bucket_label,holders_count,shares_count,shares_percent
+  (SELECT market,symbol,ts,bucket_id,bucket_label,holders_count,shares_count,shares_percent,source
    FROM tw_stock_shareholding WHERE symbol IN ('2330', '2317')
    EXCEPT
-   SELECT market,symbol,ts,bucket_id,bucket_label,holders_count,shares_count,shares_percent
+   SELECT market,symbol,ts,bucket_id,bucket_label,holders_count,shares_count,shares_percent,source
    FROM pre_cycle_snapshot_shareholding)
   UNION ALL
-  (SELECT market,symbol,ts,bucket_id,bucket_label,holders_count,shares_count,shares_percent
+  (SELECT market,symbol,ts,bucket_id,bucket_label,holders_count,shares_count,shares_percent,source
    FROM pre_cycle_snapshot_shareholding
    EXCEPT
-   SELECT market,symbol,ts,bucket_id,bucket_label,holders_count,shares_count,shares_percent
+   SELECT market,symbol,ts,bucket_id,bucket_label,holders_count,shares_count,shares_percent,source
    FROM tw_stock_shareholding WHERE symbol IN ('2330', '2317'))
 ) diff;
 

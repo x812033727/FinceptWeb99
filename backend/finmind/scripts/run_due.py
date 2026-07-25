@@ -144,6 +144,28 @@ def _failed_health_summary(outcomes) -> str | None:
     return summary[:_MAX_HEALTH_ERROR_LENGTH]
 
 
+def classify_run_outcome(outcomes) -> tuple[bool, str | None]:
+    """(ok, error_summary) for the market-wide health record.
+
+    The naive rule `ok = no failed chunks` inverts the signal at both
+    ends: a run writing 15k rows with one timed-out chunk of ~30 read
+    as `failed`, while an idle run (nothing due) read as a clean `ok`
+    indistinguishable from real work. Partial success is success —
+    with the failure summary carried in `error` so the dashboard still
+    shows what went wrong — and idleness is labeled so a
+    zero-row `ok` can never masquerade as a productive run.
+    """
+    if not outcomes:
+        return True, "idle: nothing due"
+    summary = _failed_health_summary(outcomes)
+    if summary is None:
+        return True, None
+    rows = sum(o.result.rows_written for o in outcomes)
+    if rows > 0:
+        return True, f"partial: {summary}"
+    return False, summary
+
+
 async def _record_tw_marketwide_health(
     *, ok: bool, row_count: int, error: str | None = None,
 ) -> None:
@@ -347,14 +369,14 @@ async def amain() -> int:
             print(line)
 
     rows = sum(o.result.rows_written for o in outcomes)
-    health_error = _failed_health_summary(outcomes)
+    ok, health_error = classify_run_outcome(outcomes)
     if args.tw_only:
         await _record_tw_marketwide_health(
-            ok=health_error is None,
+            ok=ok,
             row_count=rows,
             error=health_error,
         )
-    return EXIT_CHUNK_FAILURE if health_error is not None else EXIT_OK
+    return EXIT_OK if ok else EXIT_CHUNK_FAILURE
 
 
 def main() -> None:

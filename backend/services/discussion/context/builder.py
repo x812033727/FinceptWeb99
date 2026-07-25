@@ -525,7 +525,7 @@ async def build_market_context(
 
     await _progress("ctx_ready")
     _apply_block_byte_caps(ctx)
-    _record_data_gaps(ctx)
+    _record_data_gaps(ctx, strategy=strategy)
     return ctx
 
 
@@ -575,7 +575,7 @@ def _block_is_empty(value: Any) -> bool:
     return False
 
 
-def _record_data_gaps(ctx: dict[str, Any]) -> None:
+def _record_data_gaps(ctx: dict[str, Any], *, strategy: str | None = None) -> None:
     """List the tracked blocks that carry no data, in place."""
     gaps = [
         block for block in _GAP_TRACKED_BLOCKS
@@ -588,6 +588,22 @@ def _record_data_gaps(ctx: dict[str, Any]) -> None:
     if isinstance(overseas, dict) and not overseas.get("indices"):
         if "overseas_indicators" not in gaps:
             gaps.append("overseas_indicators")
+    # `large_trader_positioning` (Task 3, large-trader feed plan) is
+    # deliberately NOT in `_GAP_TRACKED_BLOCKS` — that tuple is
+    # unconditional, and this block only ever runs for the
+    # `price_signal` strategy. Tracking it unconditionally would flag
+    # every `chip_quality` / general / strategy-less discussion as
+    # having a "gap" for a block it never attempted, which is the
+    # false-positive `_GAP_TRACKED_BLOCKS` itself exists to avoid.
+    # Only when the gate actually fired (`strategy == "price_signal"`)
+    # is a `None` here the real "attempted but the archive had
+    # nothing" case the gap list exists to surface.
+    if (
+        strategy == "price_signal"
+        and _block_is_empty(ctx.get("large_trader_positioning"))
+        and "large_trader_positioning" not in gaps
+    ):
+        gaps.append("large_trader_positioning")
     ctx["data_gaps"] = sorted(gaps)
     _record_stale_blocks(ctx, skip=set(gaps))
 

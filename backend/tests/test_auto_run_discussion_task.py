@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
+from datetime import date
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -919,6 +920,73 @@ async def test_notify_failure_does_not_fail_the_run(
 
     rows = (await db_session.scalars(select(Discussion))).all()
     assert len([r for r in rows if r.auto_run]) == 1  # run still succeeded
+
+
+@pytest.mark.asyncio
+async def test_run_round_sees_auto_run_strategy_on_the_live_object(
+    patch_session, db_session: AsyncSession,
+):
+    """Regression for the large-trader feed plan's Task 3 gate: the
+    `auto_run_strategy` column is stamped via a raw `UPDATE` with
+    `synchronize_session=False` (a bulk update, not an ORM attribute
+    set), and `AsyncSessionLocal` runs with `expire_on_commit=False`
+    (db/session.py) — so without an explicit in-memory mirror
+    alongside `discussion.auto_run = True`, every `run_round` call in
+    the `_AUTO_ROUNDS` loop would see `discussion.auto_run_strategy
+    is None` regardless of what was actually persisted. That's the
+    exact object `round_runner/loop.py` reads
+    `strategy=discussion.auto_run_strategy` off of to gate the
+    `large_trader_positioning` block — a missing mirror here silently
+    defeats the price_signal gate for every real auto-run / replay
+    discussion, even though the DB column is correct.
+
+    Calls `_run_strategy_slot` directly (rather than the full `run()`
+    entry point) — going through `run()` requires a populated
+    candidate-rows universe for `price_signal` to produce a non-empty
+    batch (there's no market data in the test DB), which is
+    orthogonal to what this regression is pinning."""
+    from tasks import auto_run_discussion
+
+    user = await _make_user(db_session)
+    cfg = await _enable_for(db_session, user)
+
+    seen_strategies: list[str | None] = []
+    seen_sequences: list[int | None] = []
+
+    async def _fake_run_round(_db, discussion, *_a, **_kw):
+        seen_strategies.append(discussion.auto_run_strategy)
+        seen_sequences.append(discussion.auto_run_sequence)
+        return
+        yield  # pragma: no cover
+
+    synth = AsyncMock(return_value={
+        "recommended_symbols": ["2330"], "reasoning": "x", "risks": [],
+        "time_horizon": "short_term", "consensus_score": 0.7,
+    })
+
+    with patch.object(discussion_service, "run_round", _fake_run_round), \
+         patch.object(discussion_service, "synthesize_conclusion", synth):
+        await auto_run_discussion._run_strategy_slot(
+            db_session, cfg, "price_signal", 1,
+            date(2026, 7, 24), [{"symbol": "2330"}],
+        )
+
+    # `_AUTO_ROUNDS` calls happened; every single one must have seen
+    # the real strategy (and sequence) on the live object, not the
+    # pre-UPDATE `None`.
+    assert seen_strategies, "run_round was never called"
+    assert all(s == "price_signal" for s in seen_strategies), seen_strategies
+    assert all(s == 1 for s in seen_sequences), seen_sequences
+
+    # Belt-and-braces: the persisted row must agree with what
+    # run_round saw — this regression is about the *mirror*, not the
+    # UPDATE itself, so both must be "price_signal".
+    row = (
+        await db_session.scalars(
+            select(Discussion).where(Discussion.owner_id == user.id)
+        )
+    ).one()
+    assert row.auto_run_strategy == "price_signal"
 
 
 @pytest.mark.asyncio

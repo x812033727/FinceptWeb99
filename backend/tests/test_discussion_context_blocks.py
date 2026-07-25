@@ -1007,6 +1007,31 @@ def test_record_data_gaps_names_only_the_empty_blocks():
     assert "overseas_indicators" not in ctx["data_gaps"]
 
 
+def test_record_data_gaps_flags_large_trader_positioning_only_for_price_signal():
+    """`large_trader_positioning` is strategy-gated (Task 3): the block
+    is only ever attempted for `price_signal`, so a `None` there is a
+    real "attempted but the archive had nothing" gap ONLY when that
+    strategy built the ctx. Every other strategy (and the
+    strategy-less default) never ran the block, so the same `None`
+    must not be reported as a gap — it isn't in `_GAP_TRACKED_BLOCKS`
+    at all, this behaviour is strategy-conditional on top of that."""
+    from services.discussion.context.builder import _record_data_gaps
+
+    ctx_price_signal = {"large_trader_positioning": None}
+    _record_data_gaps(ctx_price_signal, strategy="price_signal")
+    assert "large_trader_positioning" in ctx_price_signal["data_gaps"]
+
+    for strategy in (None, "chip_quality", "general"):
+        ctx = {"large_trader_positioning": None}
+        _record_data_gaps(ctx, strategy=strategy)
+        assert "large_trader_positioning" not in ctx["data_gaps"], strategy
+
+    # A real reading under price_signal is not a gap.
+    ctx_present = {"large_trader_positioning": {"top5": {"net": 20}}}
+    _record_data_gaps(ctx_present, strategy="price_signal")
+    assert "large_trader_positioning" not in ctx_present["data_gaps"]
+
+
 def test_record_data_gaps_flags_overseas_envelope_with_no_indices():
     """`overseas_indicators` stays a non-empty `{as_of, indices}` dict
     when the connector fails — the payload is what decides."""
@@ -1573,22 +1598,19 @@ async def test_build_market_context_invokes_large_trader_block_for_price_signal(
 ):
     """`strategy="price_signal"` must fire the block with
     `as_of=info_cutoff` — `None` in live mode, matching every other
-    TW-only block's live behaviour."""
+    TW-only block's live behaviour. The block returning nothing (the
+    spy never sets the ctx key, so it stays at its `_initial_ctx`
+    default of `None`) must also surface as a `data_gaps` entry —
+    price_signal is the one strategy that actually attempted this
+    block, so a missing reading here is the real "attempted but
+    empty" case the gap list exists to name."""
     spy = AsyncMock()
 
-    with patch(
-        "services.tw_market_service.get_screener",
-        new=AsyncMock(return_value=[]),
-    ), patch(
-        "services.tw_market_service.get_index",
-        new=AsyncMock(return_value={}),
-    ), patch(
-        "services.discussion_service._assemble_macro_block",
-        new=AsyncMock(return_value={}),
-    ), patch(
-        "services.discussion_service._assemble_focus_briefs",
-        new=AsyncMock(return_value=[]),
-    ), patch.object(derivatives, "fetch_large_trader_positioning", new=spy):
+    with patch.object(http, "fetch_screener", new=AsyncMock()), \
+         patch.object(http, "fetch_index", new=AsyncMock()), \
+         patch.object(http, "fetch_macro", new=AsyncMock()), \
+         patch.object(http, "fetch_focus_briefs", new=AsyncMock()), \
+         patch.object(derivatives, "fetch_large_trader_positioning", new=spy):
         ctx = await build_market_context(
             db_session, market="TW", strategy="price_signal",
         )
@@ -1596,6 +1618,7 @@ async def test_build_market_context_invokes_large_trader_block_for_price_signal(
     spy.assert_awaited_once()
     assert spy.call_args.kwargs["as_of"] is None
     assert "large_trader_positioning" in ctx
+    assert "large_trader_positioning" in ctx["data_gaps"]
 
 
 @pytest.mark.parametrize("strategy", [None, "chip_quality"])
@@ -1606,28 +1629,23 @@ async def test_build_market_context_skips_large_trader_block_for_other_strategie
     """Any strategy other than `price_signal` — including the
     strategy-less default (`None`) — must not invoke the block at
     all. The ctx key stays present (via `_initial_ctx`) but `None`,
-    same as any other block that never ran this session."""
+    same as any other block that never ran this session — and,
+    because the block was never attempted, `data_gaps` must NOT name
+    it (that would falsely imply a real attempt came back empty)."""
     spy = AsyncMock()
 
-    with patch(
-        "services.tw_market_service.get_screener",
-        new=AsyncMock(return_value=[]),
-    ), patch(
-        "services.tw_market_service.get_index",
-        new=AsyncMock(return_value={}),
-    ), patch(
-        "services.discussion_service._assemble_macro_block",
-        new=AsyncMock(return_value={}),
-    ), patch(
-        "services.discussion_service._assemble_focus_briefs",
-        new=AsyncMock(return_value=[]),
-    ), patch.object(derivatives, "fetch_large_trader_positioning", new=spy):
+    with patch.object(http, "fetch_screener", new=AsyncMock()), \
+         patch.object(http, "fetch_index", new=AsyncMock()), \
+         patch.object(http, "fetch_macro", new=AsyncMock()), \
+         patch.object(http, "fetch_focus_briefs", new=AsyncMock()), \
+         patch.object(derivatives, "fetch_large_trader_positioning", new=spy):
         ctx = await build_market_context(
             db_session, market="TW", strategy=strategy,
         )
 
     spy.assert_not_awaited()
     assert ctx["large_trader_positioning"] is None
+    assert "large_trader_positioning" not in ctx["data_gaps"]
 
 
 @pytest.mark.asyncio

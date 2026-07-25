@@ -517,7 +517,30 @@ async def _run_strategy_slot(
         .execution_options(synchronize_session=False)
     )
     await db.commit()
+    # Mirror the raw UPDATE onto the in-memory object. The UPDATE above
+    # runs with `synchronize_session=False` (a `WHERE id == ...` bulk
+    # update, not an ORM-tracked attribute set) and `AsyncSessionLocal`
+    # is configured with `expire_on_commit=False` (db/session.py), so
+    # without this mirror `discussion` would keep serving its
+    # pre-UPDATE attribute values — `None` for every column just
+    # written — through the rest of this function, including the
+    # `_AUTO_ROUNDS` `run_round` calls below. `run_round` is exactly
+    # what threads `discussion.auto_run_strategy` into
+    # `gather_market_context` (round_runner/loop.py), so a missing
+    # mirror here silently defeats the price_signal strategy gate for
+    # every real auto-run / replay discussion — the gate only ever
+    # fired in tests that construct `discussion` directly.
     discussion.auto_run = True
+    discussion.auto_run_strategy = strategy
+    discussion.auto_run_sequence = sequence
+    discussion.auto_run_date = run_date
+    discussion.candidate_snapshot = {
+        "strategy": strategy,
+        "sequence": sequence,
+        "candidates": batch,
+        **({"experiment": experiment} if experiment else {}),
+        **({"pool": pool} if pool is not None else {}),
+    }
 
     # Resolve the system-task LLM that all personas will use for this
     # auto-run. Admins set this in AdminPage → SystemTasksCard →

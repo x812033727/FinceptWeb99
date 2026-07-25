@@ -14,6 +14,7 @@ from sqlalchemy import text
 import finmind.dataset_catalog as catalog_mod
 import finmind.ingest.selfcrawl as selfcrawl_mod
 from finmind.ingest import runner as R
+from finmind.models.dataset_source import DatasetSource
 from finmind.scripts.init_db import seed_dataset_sources
 
 
@@ -195,3 +196,77 @@ async def test_ingest_chunk_persists_fallback_rows_with_true_provenance(
     ).all()
     assert len(rows) == 1
     assert rows[0][1] == "twse"
+
+
+@pytest.mark.asyncio
+async def test_fallback_served_chunk_keeps_primary_broken_signal(
+    finmind_session, monkeypatch,
+):
+    """I2 (final review): a chunk served by the catalog fallback still
+    completes 'done' with rows, but must NOT clear
+    dataset_sources.last_error to None — that would erase the signal
+    that the PRIMARY source (FinMind) is still broken. A subsequent
+    chunk that the primary itself serves should still clear it, so the
+    signal doesn't get stuck once FinMind recovers."""
+    await seed_dataset_sources()
+
+    class _FallbackBuyBack:
+        async def fetch(self, dataset_code, symbol, start, end):
+            return [{
+                "date": "2026-07-20",
+                "stock_id": "2330",
+                "BuyBackStartDate": "2026-07-21",
+                "BuyBackEndDate": "2026-08-20",
+                "BuyBackPlanQuantity": "1000000",
+                "BuyBackActualQuantity": "500000",
+                "BuyBackAveragePrice": "600.5",
+            }]
+
+    monkeypatch.setattr(
+        R, "_resolve_fallback_client",
+        lambda code, source: _FallbackBuyBack(),
+    )
+
+    result = await R.ingest_chunk(
+        finmind_session,
+        dataset_code="TaiwanStockBuyBack",
+        symbol="2330",
+        range_start=date(2026, 7, 17),
+        range_end=date(2026, 7, 24),
+        client=_Primary(),
+    )
+    assert result.status == "done"
+    assert result.rows_written == 1
+
+    ds = await finmind_session.get(DatasetSource, "TaiwanStockBuyBack")
+    assert ds.last_error is not None
+    assert "served_by_fallback:twse" in ds.last_error
+    assert "finmind" in ds.last_error
+
+    # Primary recovers: the next chunk the primary itself serves must
+    # clear the signal back to None rather than leaving it stuck.
+    class _PrimaryOK:
+        async def fetch(self, dataset_code, symbol, start, end):
+            return [{
+                "date": "2026-07-21",
+                "stock_id": "2330",
+                "BuyBackStartDate": "2026-07-22",
+                "BuyBackEndDate": "2026-08-21",
+                "BuyBackPlanQuantity": "1000000",
+                "BuyBackActualQuantity": "500000",
+                "BuyBackAveragePrice": "601.0",
+            }]
+
+    result2 = await R.ingest_chunk(
+        finmind_session,
+        dataset_code="TaiwanStockBuyBack",
+        symbol="2330",
+        range_start=date(2026, 7, 21),
+        range_end=date(2026, 7, 21),
+        client=_PrimaryOK(),
+    )
+    assert result2.status == "done"
+    assert result2.rows_written == 1
+
+    await finmind_session.refresh(ds)
+    assert ds.last_error is None

@@ -43,6 +43,17 @@ filterwarnings = [
     # Read-only bind mounts used by local verification cannot persist pytest's
     # cache. CI checkouts are writable, so this is environment-only noise.
     "ignore:cache could not write path.*:_pytest.warning_types.PytestCacheWarning",
+    # Python 3.12 deprecated sqlite3's default date/datetime adapter, but only
+    # WARNS the first time a process binds one — CPython's warnings registry
+    # dedups every subsequent occurrence. Run the whole finmind/tests/ suite
+    # and some earlier test eats the one warning, so this never surfaces; run
+    # any single file whose first DB write binds a `date` (e.g.
+    # test_ingest.py, test_runner_fallback.py) in isolation and THAT file's
+    # first date-binding test explodes on it instead — order-dependent
+    # flakiness, not a real regression to chase per-file. finmind's own
+    # in-memory-SQLite test suite is the only place this can fire (Postgres
+    # in prod doesn't have this adapter), so ignoring it here is safe.
+    "ignore:The default date adapter is deprecated.*:DeprecationWarning",
 ]
 
 [tool.coverage.run]

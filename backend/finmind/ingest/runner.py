@@ -267,8 +267,16 @@ async def _fetch_with_fallback(
     range_start: date,
     range_end: date,
     source: str,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], str]:
     """Primary fetch, with catalog-fallback routing on permanent 4xx.
+
+    Returns `(rows, served_source)`: `served_source` is `source` when the
+    primary answered, or the catalog's registered fallback source name
+    when a fallback served the request instead. Callers need this to fix
+    row provenance — `mapping.extra` (e.g. `{"source": "finmind"}`)
+    stamps the PRIMARY source unconditionally, so `ingest_chunk` must
+    overwrite the transformed rows' "source" field when a fallback
+    actually served them.
 
     A fallback that itself raises (including NotImplementedError from a
     dataset the fallback client has no handler for) re-raises the
@@ -276,23 +284,32 @@ async def _fetch_with_fallback(
     started it, not the fallback's stack.
     """
     try:
-        return await upstream.fetch(dataset_code, symbol, range_start, range_end)
+        rows = await upstream.fetch(dataset_code, symbol, range_start, range_end)
+        return rows, source
     except Exception as primary_exc:
         if not _is_permanent_client_error(primary_exc):
             raise
         fallback = _resolve_fallback_client(dataset_code, source)
         if fallback is None:
             raise
+        from finmind.dataset_catalog import fallback_source_for
+
+        served_source = fallback_source_for(dataset_code) or source
         log.warning(
-            "ingest_chunk: %s 4xx on %s — routing to catalog fallback",
-            dataset_code, source,
+            "ingest_chunk: %s 4xx on %s — routing to catalog fallback %s",
+            dataset_code, source, served_source,
         )
         try:
-            return await fallback.fetch(
+            rows = await fallback.fetch(
                 dataset_code, symbol, range_start, range_end
             )
-        except Exception:
+        except Exception as fallback_exc:
+            log.warning(
+                "ingest_chunk: %s fallback %s also failed: %s",
+                dataset_code, served_source, redact_exception(fallback_exc),
+            )
             raise primary_exc
+        return rows, served_source
 
 
 async def ingest_chunk(
@@ -375,7 +392,7 @@ async def ingest_chunk(
     else:
         upstream = client
     try:
-        raw_rows = await _fetch_with_fallback(
+        raw_rows, served_source = await _fetch_with_fallback(
             upstream, dataset_code=dataset_code, symbol=symbol,
             range_start=range_start, range_end=range_end, source=source,
         )
@@ -395,6 +412,15 @@ async def ingest_chunk(
             r for r in transformed
             if all(r.get(pk) is not None for pk in mapping.pk_columns)
         ]
+        if served_source != source:
+            # `mapping.extra` (e.g. {"source": "finmind"}) stamps the
+            # PRIMARY source unconditionally, before we know whether a
+            # fallback ended up serving the chunk — correct the
+            # provenance here so fallback-served rows don't claim
+            # FinMind lineage they don't have.
+            for r in transformed:
+                if "source" in r:
+                    r["source"] = served_source
     except Exception as exc:
         safe_error = redact_exception(exc)
         log.error(

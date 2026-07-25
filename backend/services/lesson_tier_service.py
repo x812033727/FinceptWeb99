@@ -57,6 +57,30 @@ PROMOTE_MIN_HIT_RATE = 0.6
 VALID_TIERS = ("episodic", "semantic", "structural")
 
 
+def qualifies_for_hit(
+    verdict: str | None, pool_avg_return_pct: float | None,
+) -> bool:
+    """Does this outcome vindicate the lessons the discussion cited?
+
+    Wins obviously. An abstention whose candidate pool then FELL also
+    does — the lessons that argued for caution were right, and scoring
+    correct refusals as failure is why the promotion pipeline has never
+    fired (max hit ratio 0.259 vs the 0.6 floor, across two stacks).
+    An abstention over a rising or unmeasured pool earns nothing:
+    usage still counts, so a lesson that talks the panel out of gains
+    keeps sinking.
+    """
+    from services.outcome_classifier import is_winning_verdict
+
+    if is_winning_verdict(verdict):
+        return True
+    return (
+        verdict == "abstain"
+        and pool_avg_return_pct is not None
+        and pool_avg_return_pct < 0
+    )
+
+
 async def record_lesson_usage(
     db: AsyncSession,
     *,
@@ -122,8 +146,9 @@ async def record_lesson_outcome(
     if discussion is None:
         return status_payload
     status_payload["verdict"] = discussion.verdict
-    from services.outcome_classifier import is_winning_verdict
-    if not is_winning_verdict(discussion.verdict):
+    pool = discussion.pool_performance or {}
+    pool_avg = pool.get("avg_return_pct") if isinstance(pool, dict) else None
+    if not qualifies_for_hit(discussion.verdict, pool_avg):
         return status_payload
 
     snapshots_q = select(DiscussionRoundContext.context).where(
@@ -458,6 +483,7 @@ __all__ = [
     "ARCHIVE_UNUSED_DAYS",
     "ARCHIVE_HIT_RATE_THRESHOLD",
     "RECENT_HIT_WINDOW",
+    "qualifies_for_hit",
     "record_lesson_usage",
     "record_lesson_outcome",
     "promote_eligible_lessons",

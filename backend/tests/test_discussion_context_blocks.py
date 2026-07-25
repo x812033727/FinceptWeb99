@@ -1039,9 +1039,9 @@ def test_record_stale_blocks_accepts_date_objects():
 # ── archive-first live reads (data-fetch stabilization) ────────────
 
 
-def _screener_row(sym: str, session: str) -> dict:
+def _screener_row(sym: str, session: str, change_pct: float = 1.0) -> dict:
     return {
-        "symbol": sym, "change_pct": 1.0, "price": 100.0,
+        "symbol": sym, "change_pct": change_pct, "price": 100.0,
         "volume": 2_000_000, "as_of": session,
         "data_source": "ohlcv_daily",
     }
@@ -1103,6 +1103,51 @@ async def test_screener_archive_served_feeds_the_phase_downgrade_net():
     assert ctx["data_sources"]["screener"] == "archive"
     assert ctx["screener_actual_session"] == "2026-07-23"
     assert ctx["screener_data_source"] == "ohlcv_daily"
+
+
+@pytest.mark.asyncio
+async def test_screener_archive_stamp_ignores_unrendered_straggler():
+    """A single stale row buried in the unrendered middle of the raw
+    200-row batch must not drag `screener_actual_session` backwards.
+
+    Archive rows carry heterogeneous per-symbol `as_of` dates. Before
+    this fix, the stamp was `min()` over the FULL raw batch, so one
+    halted/thinly-traded straggler that cleared the volume filter on
+    an old day (but landed in the unrendered middle — not a top/bottom
+    `top_n` mover) would spuriously trip `_maybe_downgrade_captured_
+    session` on an otherwise perfectly fresh run. The stamp must only
+    look at the rendered rows (`scored[:top_n] + scored[-top_n:]`) —
+    the ones personas actually see."""
+    ctx = _new_ctx()
+    session = date(2026, 7, 23)
+    top_n = 2
+
+    async def fake_screener(**kwargs):
+        return [
+            _screener_row("AAA", "2026-07-23", change_pct=5.0),
+            _screener_row("BBB", "2026-07-23", change_pct=3.0),
+            # Straggler: middle of the sort, excluded by top_n=2 on
+            # both ends, stamped 10 days stale.
+            _screener_row("CCC", "2026-07-13", change_pct=0.01),
+            _screener_row("DDD", "2026-07-23", change_pct=-3.0),
+            _screener_row("EEE", "2026-07-23", change_pct=-5.0),
+        ]
+
+    with patch(
+        "services.tw_market_service.get_screener",
+        new=AsyncMock(side_effect=fake_screener),
+    ):
+        await http.fetch_screener(
+            ctx, market="TW", top_n=top_n, as_of=None,
+            read_session=session, record_error=_record(ctx),
+        )
+
+    rendered_symbols = (
+        [r["symbol"] for r in ctx["top_gainers"]]
+        + [r["symbol"] for r in ctx["top_losers"]]
+    )
+    assert "CCC" not in rendered_symbols
+    assert ctx["screener_actual_session"] == "2026-07-23"
 
 
 @pytest.mark.asyncio

@@ -1,19 +1,30 @@
-"""Pure-function tests for veto-downgrade clause apply/revert."""
+"""Pure-function tests for veto-downgrade clause apply/revert, plus
+main()-path coverage using a fully fake DB session (never a real one —
+see module docstring for _CM/_FakeSession, mirroring the precedent
+fixture in test_ingest_chip_metrics_tw_task.py's patch_institutional_
+session, adapted to a fake session instead of the real in-memory-
+sqlite db_session fixture since main() only needs canned rows and a
+commit spy, not real ORM persistence).
+"""
 import os
 import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from scripts.apply_veto_downgrade import (
     VETO_DOWNGRADE_CLAUSE,
+    _default_probe,
     apply_clause,
     archive_stamp,
     resolve_archive_dir,
     revert_clause,
 )
+from scripts.apply_veto_downgrade import main as veto_main
 
 
 def test_apply_appends_once():
@@ -65,6 +76,138 @@ def test_resolve_archive_dir_falls_back_to_host_trigger_when_writable():
 def test_resolve_archive_dir_falls_back_to_docs_when_nothing_else_available():
     resolved = resolve_archive_dir({}, probe=lambda p: False)
     assert resolved == Path("docs/rules-archive")
+
+
+def test_default_probe_checks_existence_and_writability(tmp_path):
+    assert _default_probe(tmp_path) is True
+    assert _default_probe(tmp_path / "does-not-exist") is False
+
+
+# ── main() coverage with a fully fake DB session ──────────────────
+#
+# main() does `from db.session import AsyncSessionLocal` INSIDE its
+# own body (deferred, for import-purity — see the regression test
+# below), so the name to patch is `db.session.AsyncSessionLocal`
+# itself, not an attribute of scripts.apply_veto_downgrade (no such
+# module-level binding exists to patch). Never a real DB: `_FakeSession`
+# is a bare stand-in with a scalars() that returns canned SimpleNamespace
+# rows and an AsyncMock commit() spy, not the real in-memory-sqlite
+# db_session fixture other tests in this suite use.
+
+
+class _FakeResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def all(self):
+        return self._rows
+
+
+class _FakeSession:
+    def __init__(self, cfgs):
+        self._cfgs = cfgs
+        self.commit = AsyncMock()
+
+    async def scalars(self, stmt):
+        return _FakeResult(self._cfgs)
+
+
+class _CM:
+    def __init__(self, session):
+        self._session = session
+
+    async def __aenter__(self):
+        return self._session
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_main_show_mode_prints_and_mutates_nothing():
+    cfg = SimpleNamespace(user_id="u1", rules="原有規則。")
+    session = _FakeSession([cfg])
+    with patch("db.session.AsyncSessionLocal", return_value=_CM(session)):
+        await veto_main("show", force_without_archive=False)
+
+    assert cfg.rules == "原有規則。"
+    session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_main_apply_happy_path_archives_and_commits(tmp_path, monkeypatch):
+    monkeypatch.setenv("VETO_ARCHIVE_DIR", str(tmp_path))
+    cfg = SimpleNamespace(user_id="u1", rules="原有規則。")
+    session = _FakeSession([cfg])
+    with patch("db.session.AsyncSessionLocal", return_value=_CM(session)):
+        await veto_main("apply", force_without_archive=False)
+
+    assert VETO_DOWNGRADE_CLAUSE in cfg.rules
+    session.commit.assert_awaited_once()
+
+    archived = list(tmp_path.glob("rules-u1-*.txt"))
+    assert len(archived) == 1
+    assert archived[0].read_text(encoding="utf-8") == "原有規則。"
+
+
+@pytest.mark.asyncio
+async def test_main_apply_archive_failure_without_force_skips_mutation(
+    tmp_path, monkeypatch,
+):
+    # A FILE (not a directory) sits where the archive dir would need to
+    # be created -- mkdir(parents=True) under it raises NotADirectoryError,
+    # a realistic stand-in for the container's PermissionError without
+    # needing root-only chmod tricks.
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    monkeypatch.setenv("VETO_ARCHIVE_DIR", str(blocker / "rules-archive"))
+
+    cfg = SimpleNamespace(user_id="u1", rules="原有規則。")
+    session = _FakeSession([cfg])
+    with patch("db.session.AsyncSessionLocal", return_value=_CM(session)):
+        await veto_main("apply", force_without_archive=False)
+
+    assert cfg.rules == "原有規則。"          # unchanged
+    session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_main_apply_archive_failure_with_force_proceeds_anyway(
+    tmp_path, monkeypatch,
+):
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    monkeypatch.setenv("VETO_ARCHIVE_DIR", str(blocker / "rules-archive"))
+
+    cfg = SimpleNamespace(user_id="u1", rules="原有規則。")
+    session = _FakeSession([cfg])
+    with patch("db.session.AsyncSessionLocal", return_value=_CM(session)):
+        await veto_main("apply", force_without_archive=True)
+
+    assert VETO_DOWNGRADE_CLAUSE in cfg.rules
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_main_revert_restores_archived_text_and_is_a_noop_when_absent(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setenv("VETO_ARCHIVE_DIR", str(tmp_path))
+    base = "原有規則。"
+    with_clause = SimpleNamespace(user_id="u1", rules=base + VETO_DOWNGRADE_CLAUSE)
+    without_clause = SimpleNamespace(user_id="u2", rules=base)
+    session = _FakeSession([with_clause, without_clause])
+    with patch("db.session.AsyncSessionLocal", return_value=_CM(session)):
+        await veto_main("revert", force_without_archive=False)
+
+    assert with_clause.rules == base
+    assert without_clause.rules == base   # already absent -> no-op, untouched
+    session.commit.assert_awaited_once()  # only u1 was a real mutation
+
+    archived = list(tmp_path.glob("rules-u1-*.txt"))
+    assert len(archived) == 1
+    assert archived[0].read_text(encoding="utf-8") == base + VETO_DOWNGRADE_CLAUSE
+    assert not list(tmp_path.glob("rules-u2-*.txt"))   # no-op archives nothing
 
 
 def test_import_does_not_pull_in_engine_building_models():

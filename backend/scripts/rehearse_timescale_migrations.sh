@@ -80,12 +80,17 @@ export DATABASE_URL="postgresql+asyncpg://postgres:x@127.0.0.1:${PORT}/rehearse"
 # well after, does old data exist for it, by which point its policy's
 # first sweep has long since found nothing to do. The per-chunk
 # EXCEPTION handler at the shareholding compress step (below) tolerates
-# losing that race — SHAREHOLDING-READ-OK's diff is what actually
-# proves every row survived, regardless of whether this call or the
-# policy's job did the compressing. `alembic_upgrade_retry` (kept as
-# cheap defense-in-depth for any other transient DB hiccup, though it
-# was never observed to trigger in ~10 reproductions of the migration
-# alone) wraps every `alembic upgrade` call in this script.
+# only that specific error and re-raises anything else — plus a
+# SHAREHOLDING-CHUNKS-COMPRESSED-OK assertion right after confirms
+# compression actually happened (by that call or the policy's job,
+# either is fine), since the SHAREHOLDING-READ-OK row-content diff alone
+# can't tell compressed rows from uncompressed ones.
+#
+# `alembic_upgrade_retry` below is unrelated to the above race (which is
+# not inside alembic at all) — it's cheap, generic defense-in-depth
+# against any other transient DB hiccup wrapping every `alembic upgrade`
+# call in this script; it was never observed to trigger across ~10
+# reproductions of the migration itself.
 alembic_upgrade_retry() {
   local target="$1" attempt
   for attempt in 1 2 3; do
@@ -218,10 +223,32 @@ BEGIN
     BEGIN
       PERFORM compress_chunk(c, true);
     EXCEPTION WHEN OTHERS THEN
-      RAISE NOTICE 'compress_chunk(%) skipped: % (likely raced add_compression_policy''s own job)', c, SQLERRM;
+      -- Only swallow the specific race with add_compression_policy's own
+      -- background job; anything else (a genuine compression failure)
+      -- must still fail loudly, not silently leave chunks uncompressed
+      -- while SHAREHOLDING-READ-OK's row-content diff prints green anyway.
+      IF SQLERRM NOT LIKE '%already compressed%' THEN
+        RAISE;
+      END IF;
+      RAISE NOTICE 'compress_chunk(%) skipped: % (raced add_compression_policy''s own job)', c, SQLERRM;
     END;
   END LOOP;
 END $$;
+
+-- Positive assertion that compression actually happened (by this loop or
+-- the policy's own job racing it) — the row-content diff below would
+-- print SHAREHOLDING-READ-OK even if zero chunks got compressed, since
+-- diffing content doesn't observe storage format. This is what actually
+-- proves the compression half of "migrate_data => true conversion AND
+-- compression preserved every row", not just the migrate_data half.
+SELECT CASE WHEN count(*) FILTER (WHERE is_compressed) >= 1
+             AND count(*) FILTER (
+               WHERE NOT is_compressed AND range_end < now() - interval '90 days'
+             ) = 0
+       THEN 'SHAREHOLDING-CHUNKS-COMPRESSED-OK'
+       ELSE 'SHAREHOLDING-CHUNKS-COMPRESSED-MISMATCH' END
+FROM timescaledb_information.chunks
+WHERE hypertable_name = 'tw_stock_shareholding';
 
 SELECT CASE WHEN count(*) = 0 THEN 'SHAREHOLDING-READ-OK'
        ELSE 'SHAREHOLDING-READ-MISMATCH' END
@@ -274,6 +301,7 @@ SQL
 echo "$STEP1"
 echo "$STEP1" | grep -q "COMPRESSED-READ-OK" || { echo "FAILED: compressed-read equivalence check did not pass" >&2; exit 1; }
 echo "$STEP1" | grep -q "UPSERT-INTO-COMPRESSED-OK" || { echo "FAILED: upsert-into-compressed-chunk check did not pass" >&2; exit 1; }
+echo "$STEP1" | grep -q "SHAREHOLDING-CHUNKS-COMPRESSED-OK" || { echo "FAILED: shareholding chunk-compression assertion did not pass" >&2; exit 1; }
 echo "$STEP1" | grep -q "SHAREHOLDING-READ-OK" || { echo "FAILED: shareholding migrate_data+compression equivalence check did not pass" >&2; exit 1; }
 echo "$STEP1" | grep -q "SHAREHOLDING-UPSERT-OK" || { echo "FAILED: shareholding upsert-into-compressed-chunk check did not pass" >&2; exit 1; }
 

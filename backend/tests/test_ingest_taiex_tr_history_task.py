@@ -179,6 +179,55 @@ async def test_get_history_short_circuits_for_synthetic_symbols(
     finmind_mock.assert_not_called()
 
 
+def test_clamp_starts_just_before_newest_archived():
+    """Append-only clamp: the TR ingest must not rewrite the full
+    series daily — compressed chunks (0099) would churn on every run."""
+    from tasks.ingest_taiex_tr_history import clamp_fetch_start
+
+    assert clamp_fetch_start(
+        newest_archived=date(2026, 7, 24), epoch=date(2021, 1, 1),
+    ) == date(2026, 7, 19)     # newest - 5 days of healing overlap
+
+
+def test_empty_archive_fetches_from_epoch():
+    from tasks.ingest_taiex_tr_history import clamp_fetch_start
+
+    assert clamp_fetch_start(
+        newest_archived=None, epoch=date(2021, 1, 1),
+    ) == date(2021, 1, 1)
+
+
+@pytest.mark.asyncio
+async def test_populated_archive_fetches_only_recent_window(
+    patch_session, db_session: AsyncSession,
+):
+    """Wiring: with a populated archive the daily run must clamp its
+    fetch start to `newest - 5 days`, not rewrite the full history —
+    the exact contract `clamp_fetch_start` pins above."""
+    from services.ingest.repository import OhlcvBar, upsert_ohlcv_bars
+    from tasks import ingest_taiex_tr_history
+
+    await upsert_ohlcv_bars(db_session, [
+        OhlcvBar(market="TW", symbol="_TAIEX_TR", ts=date(2026, 4, 30),
+                  open=35_080.20, high=35_080.20, low=35_080.20,
+                  close=35_080.20, volume=0, source="finmind"),
+    ])
+
+    fetch_mock = AsyncMock(return_value=[])
+    with patch("tasks.ingest_taiex_tr_history.acquire_lock",
+               AsyncMock(return_value=True)), \
+         patch("tasks.ingest_taiex_tr_history.release_lock", AsyncMock()), \
+         patch("tasks.ingest_taiex_tr_history.backoff_remaining_seconds",
+               AsyncMock(return_value=0)), \
+         patch("tasks.ingest_taiex_tr_history.clear_failures", AsyncMock()), \
+         patch("tasks.ingest_taiex_tr_history.record_health", AsyncMock()), \
+         patch("tasks.ingest_taiex_tr_history.finmind.get_taiex_total_return_index",
+               fetch_mock):
+        await ingest_taiex_tr_history.run()
+
+    assert fetch_mock.await_args.args[0] == "2026-04-25"
+
+
 @pytest.mark.asyncio
 async def test_tr_connector_queries_taiex_data_id():
     """Regression: data_id must be "TAIEX" — "IR0001" returns

@@ -32,7 +32,7 @@ import re
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cache.redis_cache import acquire_lock, release_lock
@@ -188,6 +188,40 @@ def _effective_rules(cfg: DiscussionAutoRunConfig, rules_override: str | None) -
     return rules_override if rules_override else cfg.rules
 
 
+# Re-running a session that already has rows collides with the partial unique
+# index `uq_discussions_auto_run_slot` on
+# (owner_id, auto_run_date, auto_run_strategy, auto_run_sequence). Experiment
+# rows therefore get their own high sequence band: it clears the collision AND
+# self-labels the rows, so an analysis query is `auto_run_sequence >= 900`
+# rather than "the ones I happen to remember running". Slot 2 would have been
+# indistinguishable from a legitimate second daily slot.
+EXPERIMENT_SEQUENCE_BASE = 900
+
+# Marker stored on `candidate_snapshot` for a run whose rules text is not the
+# saved production config. See `_run_strategy_slot`.
+EXPERIMENT_RULES_OVERRIDE = "rules_override"
+
+
+async def _experiment_sequence_offset(
+    db: AsyncSession, user_id, run_date, strategy: str,
+) -> int:
+    """Offset added to the logical sequence so experiment rows land in the
+    reserved band without colliding with each other on repeat runs.
+
+    The logical sequence stays 1-based for the caller (it decides which slot
+    carries the pool snapshot); only the stored value moves.
+    """
+    top = await db.scalar(
+        select(func.max(Discussion.auto_run_sequence)).where(
+            Discussion.owner_id == user_id,
+            Discussion.auto_run_date == run_date,
+            Discussion.auto_run_strategy == strategy,
+            Discussion.auto_run_sequence >= EXPERIMENT_SEQUENCE_BASE,
+        )
+    )
+    return (top if top is not None else EXPERIMENT_SEQUENCE_BASE - 1)
+
+
 async def _run_for_user(
     db: AsyncSession,
     cfg: DiscussionAutoRunConfig,
@@ -214,10 +248,17 @@ async def _run_for_user(
     rules = _effective_rules(cfg, rules_override)
     run_date = as_of or datetime.now(ZoneInfo("Asia/Taipei")).date()
     candidate_rows = await load_candidate_rows(db, as_of=as_of)
+    # A run whose rules text is not the saved config is an experiment: its
+    # rows must never feed the learning loop (see `_run_strategy_slot`).
+    experiment = EXPERIMENT_RULES_OVERRIDE if rules_override else None
     ran_strategies: dict[str, int] = {}
     for strategy, count in counts.items():
         if count <= 0:
             continue
+        seq_offset = (
+            await _experiment_sequence_offset(db, user_id, run_date, strategy)
+            if allow_duplicate else 0
+        )
         ranked = rank_candidates(strategy, candidate_rows)
         batches = candidate_batches(ranked, count)
         # The full (capped, slim) pool is a per-day per-strategy fact, so
@@ -239,9 +280,9 @@ async def _run_for_user(
             if exists:
                 continue
             await _run_strategy_slot(
-                db, cfg, strategy, sequence, run_date, batch,
+                db, cfg, strategy, sequence + seq_offset, run_date, batch,
                 pool=pool if sequence == 1 else None,
-                as_of=as_of, rules=rules,
+                as_of=as_of, rules=rules, experiment=experiment,
             )
             ran_strategies[strategy] = ran_strategies.get(strategy, 0) + 1
     # Replays are an operator batch job, not something the user asked
@@ -419,6 +460,7 @@ async def load_candidate_rows(
 async def _run_strategy_slot(
     db, cfg, strategy, sequence, run_date, batch, pool: list | None = None,
     as_of: date | None = None, rules: str | None = None,
+    experiment: str | None = None,
 ) -> None:
     user_id = cfg.user_id
 
@@ -462,6 +504,13 @@ async def _run_strategy_slot(
                 "strategy": strategy,
                 "sequence": sequence,
                 "candidates": batch,
+                # Durable marker that this row was produced under a rules text
+                # that is not production behaviour. The verifier reads it to
+                # keep the row out of the post-mortem → lesson → promotion
+                # chain: a lesson learned from rules we do not actually run
+                # would be promoted into live synthesis and quietly steer the
+                # real panel.
+                **({"experiment": experiment} if experiment else {}),
                 **({"pool": pool} if pool is not None else {}),
             },
         )

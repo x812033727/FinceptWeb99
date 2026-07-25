@@ -345,6 +345,11 @@ async def _build_response(db: AsyncSession, email: str) -> PublicDailyResponse:
             Discussion.auto_run.is_(True),
             Discussion.status == "done",
             Discussion.conclusion.is_not(None),
+            # LIVE rows only. Backtest replays run under the same owner and
+            # are stamped with today's `created_at`, so without this the
+            # anchor jumps to whenever a fuel sweep last ran and the public
+            # page serves a replayed June session as today's picks.
+            Discussion.as_of_date.is_(None),
         )
     )
     if latest_created is None:
@@ -378,6 +383,10 @@ async def _build_response(db: AsyncSession, email: str) -> PublicDailyResponse:
                 Discussion.status == "done",
                 Discussion.conclusion.is_not(None),
                 Discussion.created_at >= cutoff,
+                # Same reason as the anchor query above: a replay row would
+                # otherwise sort to the top of `created_at desc` and be
+                # rendered as the current day's recommendations.
+                Discussion.as_of_date.is_(None),
             )
             .order_by(Discussion.created_at.desc())
         )

@@ -120,8 +120,12 @@ def _recent_quarter_ends(today: date, count: int) -> list[date]:
     return sorted(ends)
 
 
-async def _load_statement_payloads() -> dict[str, dict]:
+async def _load_statement_payloads(as_of: date | None = None) -> dict[str, dict]:
     """Statement-derived fundamentals for every listed company.
+
+    `as_of` selects the quarters that were filed on or before that
+    session, so a historical backfill sees the statements a reader
+    would have had then rather than today's. `None` means today.
 
     TWSE's BWIBBU_ALL carries only PE / PB / yield — it has no ROE and no
     cash flow, which is why `payload` was hard-coded to None and why the
@@ -133,7 +137,7 @@ async def _load_statement_payloads() -> dict[str, dict]:
     statement math is shared with the per-symbol health endpoint via
     `compute_health` so the two can't drift.
     """
-    quarters = _recent_quarter_ends(date.today(), _STATEMENT_QUARTERS)
+    quarters = _recent_quarter_ends(as_of or date.today(), _STATEMENT_QUARTERS)
     income: dict[str, list[dict]] = defaultdict(list)
     balance: dict[str, list[dict]] = defaultdict(list)
     cash: dict[str, list[dict]] = defaultdict(list)

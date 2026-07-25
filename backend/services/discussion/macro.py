@@ -38,7 +38,12 @@ _MACRO_SERIES = (
     ("fed_funds_rate", "Fed Funds Rate (%)"),
     ("10y_yield",      "US 10Y Treasury (%)"),
     ("10y_minus_2y",   "10Y-2Y Spread (%)"),
-    ("usd_index",      "USD Index (DXY)"),
+    # NOT the DXY. The series behind this key is FRED `DTWEXBGS`,
+    # "Nominal Broad U.S. Dollar Index" (Jan 2006 = 100), which trades
+    # around 120 while the ICE dollar index trades around 101. Labelling
+    # it "DXY" handed personas a number ~19% off the index they were
+    # being told to reason about.
+    ("usd_index",      "USD Broad Index (Fed, Jan-2006=100)"),
     ("twd_usd",        "TWD/USD"),
 )
 

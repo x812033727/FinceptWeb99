@@ -427,41 +427,49 @@ async def test_risk_fetch_risk_warnings_returns_three_subblocks(
 
 
 @pytest.mark.asyncio
-async def test_news_backfill_result_surfaces_into_ctx(
+async def test_news_backfill_never_runs_in_backtest_mode(
     db_session: AsyncSession,
 ):
-    """PR #216: when auto-backfill runs in backtest mode, its result
-    must land in `ctx['news_backfill']` so the user can diagnose why
-    news is empty (paywall? missing token? archive truly thin?)
-    without digging into ctx['errors']. Live mode (no `as_of_dt`)
-    leaves the field at its default None."""
+    """Backtest mode must NOT call `ensure_news_archive_covers`.
+
+    Anything it inserts is unscored (filtered by
+    `sentiment_score IS NOT NULL`) and anything it scores is stamped
+    `sentiment_scored_at = now()`, which a backtest reader rejects via
+    `sentiment_scored_at <= anchor`. The call cannot change this ctx,
+    so it is pure cost — ~35 min of ingest + LLM scoring per anchor
+    date on the replay that found this.
+    """
     from datetime import datetime, timezone
     ctx = _new_ctx()
     asof_dt = datetime(2025, 1, 15, 23, 59, tzinfo=timezone.utc)
 
-    fake_result = {"covered": False, "backfilled": 0}
+    backfill_mock = AsyncMock()
     with patch(
         "services.news_backfill_service.ensure_news_archive_covers",
-        new=AsyncMock(return_value=fake_result),
+        new=backfill_mock,
     ), patch(
         "services.news_sentiment_service.read_recent_market_sentiment",
         new=AsyncMock(return_value={"bullish": 0, "headlines": []}),
     ):
         await news.fetch_market_sentiment(
             ctx, db_session, market="TW", as_of_dt=asof_dt,
-            record_error=_record(ctx),
+            record_error=_record(ctx), focus_symbols=["2330"],
         )
 
-    assert ctx["news_backfill"] == fake_result
+    backfill_mock.assert_not_awaited()
+    assert ctx["news_backfill"] is None
+    # And the empty archive stays visible as a gap rather than being
+    # papered over: the block drops to None for `_record_data_gaps`.
+    assert ctx["news_sentiment"] is None
 
 
 @pytest.mark.asyncio
-async def test_news_backfill_skipped_in_live_mode(
+async def test_news_backfill_never_runs_in_live_mode(
     db_session: AsyncSession,
 ):
-    """Live mode (`as_of_dt=None`) must not invoke the auto-backfill
-    helper — it's specifically a backtest-mode crutch. The
-    `news_backfill` field stays at its default (None)."""
+    """Live mode never backfilled either — it relies on the hourly
+    ingest + scoring cron. Unchanged; asserted so a future edit can't
+    reintroduce the call on the hot path."""
     ctx = _new_ctx()
 
     backfill_mock = AsyncMock()
@@ -480,37 +488,13 @@ async def test_news_backfill_skipped_in_live_mode(
 
     backfill_mock.assert_not_awaited()
     assert ctx["news_backfill"] is None
+    # Live mode keeps the empty counts — operators read zero as
+    # "cron hasn't run yet", which is different from "no data exists".
+    assert ctx["news_sentiment"] == {
+        "bullish": 0, "bearish": 0, "neutral": 0, "headlines": [],
+    }
 
 
-@pytest.mark.asyncio
-async def test_news_backfill_exception_recorded_into_ctx(
-    db_session: AsyncSession,
-):
-    """If `ensure_news_archive_covers` raises (very rare — it normally
-    catches everything and returns a dict), the wrapper must still
-    populate `ctx['news_backfill']` with the error message so the
-    user has actionable diagnostic info."""
-    from datetime import datetime, timezone
-    ctx = _new_ctx()
-    asof_dt = datetime(2025, 1, 15, 23, 59, tzinfo=timezone.utc)
-
-    with patch(
-        "services.news_backfill_service.ensure_news_archive_covers",
-        new=AsyncMock(side_effect=RuntimeError("DB connection lost")),
-    ), patch(
-        "services.news_sentiment_service.read_recent_market_sentiment",
-        new=AsyncMock(return_value={"bullish": 0, "headlines": []}),
-    ):
-        await news.fetch_market_sentiment(
-            ctx, db_session, market="TW", as_of_dt=asof_dt,
-            record_error=_record(ctx),
-        )
-
-    assert ctx["news_backfill"]["covered"] is False
-    assert "DB connection lost" in ctx["news_backfill"]["error"]
-
-
-@pytest.mark.asyncio
 async def test_news_fetch_market_sentiment_drops_block_on_empty_backtest(
     db_session: AsyncSession,
 ):
@@ -597,6 +581,7 @@ async def test_build_market_context_initialises_default_shape(
         "captured_session",          # PR for expert-quote freshness
         "backtest", "as_of",
         "info_cutoff",               # backtest look-ahead guard (prev trading day)
+        "data_gaps",                 # blocks with no data this session
         "top_gainers", "top_losers", "index",
         "news_sentiment", "news_backfill", "per_symbol_news_sentiment",
         "short_term_signals",
@@ -635,6 +620,10 @@ async def test_build_market_context_initialises_default_shape(
     assert set(ctx.keys()) == expected_keys
     assert ctx["market"] == "TW"
     assert ctx["backtest"] is False
+    # Every tracked block is empty in this stubbed build, so the gap
+    # list must name them rather than leaving the personas to guess
+    # why the blocks aren't there (which is when they invent numbers).
+    assert "taiwan_vix" in ctx["data_gaps"]
     # `captured_session` must be a fully-populated dict in live mode —
     # downstream blocks (focus_briefs.quote, screener rows) read its
     # `session_date` to stamp per-row `as_of_session` consistently.
@@ -920,3 +909,126 @@ async def test_build_market_context_skips_chip_blocks_for_non_tw(
     assert ctx["active_buybacks"] == []
     assert ctx["govt_bank_flow_5d"] == []
     assert ctx["market_institutional_5d"] == []
+
+
+# ── data_gaps ────────────────────────────────────────────────────
+
+
+def test_record_data_gaps_names_only_the_empty_blocks():
+    """A block with a real reading is not a gap; `False` / `0` are real
+    readings, matching what `_minify_for_prompt` keeps."""
+    from services.discussion.context.builder import _record_data_gaps
+
+    ctx = {
+        "taiwan_vix": None,
+        "broker_concentration": {},
+        "top_foreign_buyers": [{"symbol": "2330"}],
+        "market_institutional_5d": {"trend": "bearish", "net": 0},
+        "overseas_indicators": {"as_of": "2026-07-21", "indices": [
+            {"symbol": "^SOX"},
+        ]},
+    }
+    _record_data_gaps(ctx)
+    assert "taiwan_vix" in ctx["data_gaps"]
+    assert "broker_concentration" in ctx["data_gaps"]
+    assert "top_foreign_buyers" not in ctx["data_gaps"]
+    assert "market_institutional_5d" not in ctx["data_gaps"]
+    assert "overseas_indicators" not in ctx["data_gaps"]
+
+
+def test_record_data_gaps_flags_overseas_envelope_with_no_indices():
+    """`overseas_indicators` stays a non-empty `{as_of, indices}` dict
+    when the connector fails — the payload is what decides."""
+    from services.discussion.context.builder import _record_data_gaps
+
+    ctx = {"overseas_indicators": {"as_of": "2026-07-21", "indices": []}}
+    _record_data_gaps(ctx)
+    assert "overseas_indicators" in ctx["data_gaps"]
+
+
+def test_record_data_gaps_reports_present_but_stale_blocks():
+    """A block that is there but weeks old is worse than an absent one:
+    the panel reads it as current unless told otherwise."""
+    from services.discussion.context.builder import _record_data_gaps
+
+    ctx = {
+        "captured_session": {"session_date": "2026-07-21"},
+        "broker_concentration": {"as_of": "2026-07-07", "symbols": ["2330"]},
+        "taifex_positioning": {"as_of": "2026-07-21", "trend": "bearish"},
+    }
+    _record_data_gaps(ctx)
+    assert ctx["data_stale"]["broker_concentration"]["days_behind"] == 14
+    assert "taifex_positioning" not in ctx["data_stale"]
+
+
+def test_record_data_gaps_omits_stale_map_when_everything_is_current():
+    from services.discussion.context.builder import _record_data_gaps
+
+    ctx = {
+        "captured_session": {"session_date": "2026-07-21"},
+        "taifex_positioning": {"as_of": "2026-07-21", "trend": "bearish"},
+    }
+    _record_data_gaps(ctx)
+    assert "data_stale" not in ctx
+
+
+def test_record_data_gaps_does_not_double_report_empty_blocks():
+    """An empty block is a gap, not a staleness — it must not appear in
+    both lists."""
+    from services.discussion.context.builder import _record_data_gaps
+
+    ctx = {
+        "captured_session": {"session_date": "2026-07-21"},
+        "broker_concentration": {},
+    }
+    _record_data_gaps(ctx)
+    assert "broker_concentration" in ctx["data_gaps"]
+    assert "broker_concentration" not in ctx.get("data_stale", {})
+
+
+def test_record_data_gaps_treats_non_container_values_as_present():
+    """`0` and `False` are real readings, not gaps — the same call the
+    prompt minifier makes."""
+    from services.discussion.context.builder import _block_is_empty
+
+    assert _block_is_empty(None) is True
+    assert _block_is_empty([]) is True
+    assert _block_is_empty("") is True
+    assert _block_is_empty(0) is False
+    assert _block_is_empty(False) is False
+
+
+def test_record_stale_blocks_needs_a_session_anchor():
+    """Without `captured_session.session_date` there is nothing to
+    measure lag against, so no staleness is claimed rather than one
+    being guessed."""
+    from services.discussion.context.builder import _record_data_gaps
+
+    ctx = {"broker_concentration": {"as_of": "2026-07-07", "x": 1}}
+    _record_data_gaps(ctx)
+    assert "data_stale" not in ctx
+
+
+def test_record_stale_blocks_ignores_unparseable_as_of():
+    from services.discussion.context.builder import _record_data_gaps
+
+    ctx = {
+        "captured_session": {"session_date": "2026-07-21"},
+        "broker_concentration": {"as_of": "not-a-date", "x": 1},
+        "taifex_positioning": {"as_of": None, "x": 1},
+    }
+    _record_data_gaps(ctx)
+    assert "data_stale" not in ctx
+
+
+def test_record_stale_blocks_accepts_date_objects():
+    from datetime import date as _date
+
+    from services.discussion.context.builder import _record_data_gaps
+
+    ctx = {
+        "captured_session": {"session_date": _date(2026, 7, 21)},
+        "broker_concentration": {"as_of": _date(2026, 7, 14), "x": 1},
+    }
+    _record_data_gaps(ctx)
+    assert ctx["data_stale"]["broker_concentration"]["days_behind"] == 7

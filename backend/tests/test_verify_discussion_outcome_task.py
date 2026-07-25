@@ -81,6 +81,8 @@ async def _make_pending(
     created_offset_days: int = -8,
     verify_after_offset: int = -1,
     day1_open_prices: dict[str, float] | None = None,
+    abstained: bool = False,
+    abstain_reason: str = "",
 ) -> Discussion:
     """Build an auto-run discussion ready for the verifier.
 
@@ -115,6 +117,8 @@ async def _make_pending(
             "risks": [],
             "time_horizon": "short_term",
             "consensus_score": 0.8,
+            "abstained": abstained,
+            "abstain_reason": abstain_reason,
         },
         auto_run=True,
         verify_after_date=today + timedelta(days=verify_after_offset),
@@ -156,13 +160,13 @@ async def test_win_when_peak_close_above_5pct(
     db_session: AsyncSession,
     owner: User,
 ):
-    """Any close ≥ +5% (and no day ≤ -5%) → win band."""
+    """D5 close ≥ +5% (and no day ≤ -5%) → win band."""
     d = await _make_pending(db_session, owner.id, symbols=["2330"])
     created_date = d.created_at.date()
 
-    # open=100; D3 close=106 (+6%) — clears the 5% bar but D5 only +2%
-    # so it's win, not big_win.
-    bars = _bars(created_date, 5, open_=100.0, closes=[100.5, 101.0, 106.0, 103.0, 102.0])
+    # open=100; the gain holds to D5 (+6%) — that is what a reader
+    # following the 5-day call actually realizes.
+    bars = _bars(created_date, 5, open_=100.0, closes=[100.5, 101.0, 106.0, 105.0, 106.0])
     patches = _stub_lock_helpers() + [
         patch("services.tw_market_service.get_history", AsyncMock(return_value=bars)),
     ]
@@ -178,11 +182,44 @@ async def test_win_when_peak_close_above_5pct(
     await db_session.refresh(refreshed)
     assert refreshed.verdict == "win"
     assert "2330" in (refreshed.verdict_reason or "")
-    assert "peak close" in (refreshed.verdict_reason or "")
+    assert "D5 close" in (refreshed.verdict_reason or "")
     assert refreshed.day1_open_prices == {"2330": 100.0}
     # day-5 close is the LAST bar's close — used by the frontend to
-    # render `2330:100/102 (+2.0%)` in the sidebar.
-    assert refreshed.day5_close_prices == {"2330": 102.0}
+    # render `2330:100/106 (+6.0%)` in the sidebar.
+    assert refreshed.day5_close_prices == {"2330": 106.0}
+
+
+@pytest.mark.asyncio
+async def test_spike_that_fades_by_d5_is_a_loss(
+    patch_session,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Peak +6% at D3 but D5 only +2% → loss, not win.
+
+    The old peak-touch rule scored this as a win; it is the single
+    biggest reason the public scoreboard read more optimistic than the
+    picks it was summarizing.
+    """
+    d = await _make_pending(db_session, owner.id, symbols=["2330"])
+    created_date = d.created_at.date()
+    bars = _bars(created_date, 5, open_=100.0, closes=[100.5, 101.0, 106.0, 103.0, 102.0])
+    patches = _stub_lock_helpers() + [
+        patch("services.tw_market_service.get_history", AsyncMock(return_value=bars)),
+    ]
+    _enter_all(patches)
+    try:
+        from tasks import verify_discussion_outcome
+
+        await verify_discussion_outcome.run()
+    finally:
+        _exit_all(patches)
+
+    refreshed = await db_session.get(Discussion, d.id)
+    await db_session.refresh(refreshed)
+    assert refreshed.verdict == "loss"
+    # The peak is still reported for context, it just doesn't decide.
+    assert "期間最高" in (refreshed.verdict_reason or "")
 
 
 @pytest.mark.asyncio
@@ -277,7 +314,7 @@ async def test_any_symbol_can_trigger_win(
     db_session: AsyncSession,
     owner: User,
 ):
-    """Three symbols, only the second crosses +5% peak close. Verdict='win',
+    """Three symbols, only the second holds ≥ +5% at D5. Verdict='win',
     reason names the winning symbol."""
     d = await _make_pending(db_session, owner.id, symbols=["1101", "2330", "2454"])
     created_date = d.created_at.date()
@@ -285,8 +322,8 @@ async def test_any_symbol_can_trigger_win(
     by_sym = {
         "1101": _bars(created_date, 5, open_=50.0, closes=[50.2, 50.5, 50.3, 50.1, 50.0]),
         "2330": _bars(
-            created_date, 5, open_=600.0, closes=[610, 620, 635, 625, 620]
-        ),  # peak +5.83%
+            created_date, 5, open_=600.0, closes=[610, 620, 635, 632, 636]
+        ),  # D5 +6.0%
         "2454": _bars(created_date, 5, open_=900.0, closes=[902, 903, 901, 900, 899]),
     }
 
@@ -336,6 +373,68 @@ async def test_unverifiable_when_no_symbols(
     await db_session.refresh(refreshed)
     assert refreshed.verdict == "unverifiable"
     history.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_abstain_when_panel_declined(
+    patch_session,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Empty symbols WITH the structured `abstained` flag is a decision,
+    not a failure — verdict='abstain' so the scoreboard can keep it out
+    of the win-rate denominator instead of burying it in unverifiable."""
+    d = await _make_pending(
+        db_session, owner.id, symbols=[],
+        abstained=True, abstain_reason="候選股皆未過量能確認門檻",
+    )
+    history = AsyncMock()
+
+    patches = _stub_lock_helpers() + [
+        patch("services.tw_market_service.get_history", history),
+    ]
+    _enter_all(patches)
+    try:
+        from tasks import verify_discussion_outcome
+
+        await verify_discussion_outcome.run()
+    finally:
+        _exit_all(patches)
+
+    refreshed = await db_session.get(Discussion, d.id)
+    await db_session.refresh(refreshed)
+    assert refreshed.verdict == "abstain"
+    assert "候選股皆未過量能確認門檻" in (refreshed.verdict_reason or "")
+    history.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_abstain_flag_ignored_when_symbols_present(
+    patch_session,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """A row that recommends symbols is never an abstention, whatever
+    the flag says — the picks are what gets graded."""
+    d = await _make_pending(
+        db_session, owner.id, symbols=["2330"], abstained=True,
+    )
+    created_date = d.created_at.date()
+    bars = _bars(created_date, 5, open_=100.0, closes=[101, 102, 106, 105, 106])
+    patches = _stub_lock_helpers() + [
+        patch("services.tw_market_service.get_history", AsyncMock(return_value=bars)),
+    ]
+    _enter_all(patches)
+    try:
+        from tasks import verify_discussion_outcome
+
+        await verify_discussion_outcome.run()
+    finally:
+        _exit_all(patches)
+
+    refreshed = await db_session.get(Discussion, d.id)
+    await db_session.refresh(refreshed)
+    assert refreshed.verdict == "win"
 
 
 @pytest.mark.asyncio
@@ -510,7 +609,7 @@ async def test_only_processes_pending_rows(
     await db_session.commit()
 
     bars = _bars(
-        eligible_auto.created_at.date(), 5, open_=100.0, closes=[101, 102, 106, 103, 102]
+        eligible_auto.created_at.date(), 5, open_=100.0, closes=[101, 102, 106, 105, 106]
     )  # peak close +6%
     patches = _stub_lock_helpers() + [
         patch("services.tw_market_service.get_history", AsyncMock(return_value=bars)),
@@ -555,7 +654,7 @@ async def test_lazy_day1_open_snapshot(
         day1_open_prices=None,
     )
     bars = _bars(
-        d.created_at.date(), 5, open_=120.0, closes=[121, 122, 127, 124, 124]
+        d.created_at.date(), 5, open_=120.0, closes=[121, 122, 127, 126, 127]
     )  # peak close +5.8%
     patches = _stub_lock_helpers() + [
         patch("services.tw_market_service.get_history", AsyncMock(return_value=bars)),
@@ -592,7 +691,7 @@ async def test_filters_non_numeric_symbols(
     async def _fake_history(symbol, **_):
         history_calls.append(symbol)
         return _bars(
-            d.created_at.date(), 5, open_=100.0, closes=[101, 102, 106, 103, 102]
+            d.created_at.date(), 5, open_=100.0, closes=[101, 102, 106, 105, 106]
         )  # peak close +6%
 
     patches = _stub_lock_helpers() + [
@@ -634,7 +733,7 @@ async def test_pool_performance_computed_on_verdict(
     await db_session.commit()
     created_date = d.created_at.date()
 
-    pick_bars = _bars(created_date, 5, open_=100.0, closes=[106.0, 106.0, 106.0, 103.0, 102.0])
+    pick_bars = _bars(created_date, 5, open_=100.0, closes=[106.0, 106.0, 106.0, 105.0, 106.0])
     pool_bars = {
         "1101": _bars(created_date, 5, open_=100.0, closes=[101, 102, 104, 108, 110.0]),
         "1102": _bars(created_date, 5, open_=100.0, closes=[99, 97, 95, 92, 90.0]),
@@ -703,7 +802,7 @@ async def test_pool_performance_absent_without_pool(
     """No stored pool → pool_performance stays NULL (legacy rows)."""
     d = await _make_pending(db_session, owner.id, symbols=["2330"])
     created_date = d.created_at.date()
-    bars = _bars(created_date, 5, open_=100.0, closes=[106.0, 106.0, 106.0, 103.0, 102.0])
+    bars = _bars(created_date, 5, open_=100.0, closes=[106.0, 106.0, 106.0, 105.0, 106.0])
     patches = _stub_lock_helpers() + [
         patch("services.tw_market_service.get_history", AsyncMock(return_value=bars)),
     ]

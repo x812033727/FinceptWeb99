@@ -140,15 +140,30 @@ def _public_conclusion(value: dict[str, Any], market: str) -> dict[str, Any]:
 class ScoreboardEntry(BaseModel):
     strategy: str
     samples: int
+    decided: int = 0
+    pending: int = 0
     wins: int
     losses: int
     big_wins: int
     big_losses: int
+    abstains: int = 0
     unverifiable: int
     win_rate: float | None = None
     avg_return_pct: float | None = None
+    # Second lens on the same picks, graded purely on the D5 close.
+    # The verdict bands are asymmetric by design (`big_loss` fires on
+    # any close ≤ −5%), so in a volatile regime the two disagree — and
+    # a reader deserves both rather than only the harsher one.
+    d5_decided: int = 0
+    d5_wins: int = 0
+    d5_losses: int = 0
+    d5_win_rate: float | None = None
+    # Booked win/loss while the D5 close is still missing.
+    d5_unsettled: int = 0
     pool_samples: int = 0
     avg_alpha_pct: float | None = None
+    benchmark_samples: int = 0
+    avg_excess_vs_taiex_pct: float | None = None
 
 
 class PublicScoreboardResponse(BaseModel):
@@ -330,6 +345,11 @@ async def _build_response(db: AsyncSession, email: str) -> PublicDailyResponse:
             Discussion.auto_run.is_(True),
             Discussion.status == "done",
             Discussion.conclusion.is_not(None),
+            # LIVE rows only. Backtest replays run under the same owner and
+            # are stamped with today's `created_at`, so without this the
+            # anchor jumps to whenever a fuel sweep last ran and the public
+            # page serves a replayed June session as today's picks.
+            Discussion.as_of_date.is_(None),
         )
     )
     if latest_created is None:
@@ -363,6 +383,10 @@ async def _build_response(db: AsyncSession, email: str) -> PublicDailyResponse:
                 Discussion.status == "done",
                 Discussion.conclusion.is_not(None),
                 Discussion.created_at >= cutoff,
+                # Same reason as the anchor query above: a replay row would
+                # otherwise sort to the top of `created_at desc` and be
+                # rendered as the current day's recommendations.
+                Discussion.as_of_date.is_(None),
             )
             .order_by(Discussion.created_at.desc())
         )

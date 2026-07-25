@@ -14,7 +14,9 @@ may not reach back to the anchor date — the deploy-day ingest
 window is finite. When `as_of` is set AND `headlines` is empty, the
 block is dropped to `None` so the LLM reads "we have no data here"
 instead of "market has no sentiment". Live mode preserves the empty
-counts (operators read zero as "cron hasn't run yet").
+counts (operators read zero as "cron hasn't run yet"). Backtests do
+not try to backfill their way out of that gap — see
+`fetch_market_sentiment` for why backfilling cannot help.
 """
 from __future__ import annotations
 
@@ -44,46 +46,36 @@ async def fetch_market_sentiment(
 ) -> None:
     """Discussion's primary-market sentiment aggregate (last 48h).
 
-    Backtest auto-backfill (PR #214): when `as_of_dt` is set and the
-    archive is sparse for the relevant window, kick off a narrow
-    FinMind backfill so personas don't surface the empty-archive
-    warning. Best-effort — silent fail when FINMIND_TOKEN is missing
-    or paywalled. Hot path (archive already populated) is one COUNT
-    query in milliseconds, so no latency cost when not needed.
+    No auto-backfill in backtest mode. PRs #214-#227 called
+    `ensure_news_archive_covers` here whenever `as_of_dt` was set, to
+    insert the anchor's 14-day news window and inline-score it. That
+    work cannot affect what this function returns:
 
-    Surfaces the backfill diagnostic (PR #216) into
-    `ctx["news_backfill"]` so users can see why news is empty when
-    auto-backfill returned nothing — distinguishes "archive truly
-    doesn't reach this date" from "FINMIND_TOKEN is free-tier" or
-    "FinMind upstream error". Without this users couldn't tell the
-    difference and would re-run backtests hoping the warning would
-    disappear.
+      - inserted rows land with `sentiment_score = NULL`, and the
+        reader filters `sentiment_score IS NOT NULL`;
+      - `score_specific_articles` stamps `sentiment_scored_at = now()`,
+        and in backtest mode the reader filters
+        `sentiment_scored_at <= anchor` (the correct look-ahead guard —
+        a persona at `as_of` could not have seen a score written
+        today). `now()` is always > a past anchor, so a row scored
+        during a backtest is invisible to that backtest, forever.
 
-    `focus_symbols` (PR #218) plumbs the discussion's mentioned
-    tickers down to `ensure_news_archive_covers` so that when
-    market-wide FinMind is paywalled (Sponsor tier), the helper can
-    fall back to per-symbol fan-out for those specific tickers.
-    Without focus_symbols there's no good default universe to
-    fan out across, so the fallback is skipped and the error
-    surfaces as paywall."""
-    if as_of_dt is not None:
-        try:
-            from services.news_backfill_service import (
-                ensure_news_archive_covers,
-            )
-            backfill_result = await ensure_news_archive_covers(
-                db, market=market, as_of=as_of_dt.date(),
-                focus_symbols=focus_symbols,
-            )
-            ctx["news_backfill"] = backfill_result
-        except Exception as exc:
-            record_error("news_backfill", exc)
-            ctx["news_backfill"] = {
-                "covered": False,
-                "backfilled": 0,
-                "error": str(exc),
-            }
+    So the ctx this builds is byte-identical with or without the call:
+    either `None`, or the pre-existing rows the hourly cron scored
+    before the anchor. What the call did cost was real — measured on a
+    60-session replay, ~35 min and ~90K unscored rows per anchor date
+    before the first persona spoke, plus the LLM spend on scores no
+    backtest can read.
 
+    `news_sentiment` therefore stays honestly empty in backtest mode
+    and `_record_data_gaps` names it as a gap, which is the truthful
+    answer: the archive was not scored at that point in time.
+
+    If the scorer is ever changed to backdate `sentiment_scored_at`
+    (e.g. to `published_at`), revisit this — backfilling would then
+    genuinely change what a backtest reads.
+    """
+    _ = focus_symbols  # kept for signature compat with the builder
     try:
         from services.news_sentiment_service import read_recent_market_sentiment
         ns = await read_recent_market_sentiment(

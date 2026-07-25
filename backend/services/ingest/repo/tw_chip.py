@@ -169,6 +169,42 @@ async def read_margin_range(
     return [_margin_row_out(r) for r in rows]
 
 
+async def read_institutional_range_autosession(
+    market: str, symbol: str, start: date, end: date,
+) -> list[dict[str, Any]]:
+    """Same as `read_institutional_range` but opens its own session.
+
+    For the backtest focus brief, which is fanned out alongside tasks
+    that share the caller's session. Errors are logged and answered
+    with an empty list — a missing chip block degrades the brief, it
+    must not fail the replay.
+    """
+    from db.session import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as db:
+            return await read_institutional_range(db, market, symbol, start, end)
+    except Exception as exc:
+        log.warning("ingest.read.db_error",
+                    extra={"market": market, "symbol": symbol,
+                           "block": "institutional", "error": str(exc)})
+        return []
+
+
+async def read_margin_range_autosession(
+    market: str, symbol: str, start: date, end: date,
+) -> list[dict[str, Any]]:
+    """Session-owning twin of `read_margin_range`. See above."""
+    from db.session import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as db:
+            return await read_margin_range(db, market, symbol, start, end)
+    except Exception as exc:
+        log.warning("ingest.read.db_error",
+                    extra={"market": market, "symbol": symbol,
+                           "block": "margin", "error": str(exc)})
+        return []
+
+
 async def read_top_foreign_buyers(
     db: AsyncSession,
     market: str = "TW",

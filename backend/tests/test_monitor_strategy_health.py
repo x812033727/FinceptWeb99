@@ -384,6 +384,37 @@ async def test_veto_guard_skipped_when_clause_never_adopted(
 
 
 @pytest.mark.asyncio
+async def test_veto_guard_exception_forces_not_ok_not_a_silent_pass(
+    db_session: AsyncSession, owner: User,
+):
+    """FIX 4: before this fix, an exception in the guard section was
+    only logged — `counters["guard_findings"]` stayed `[]`, so
+    `health_monitor_job`'s `ok = errors == 0 and not guard_findings`
+    read ok=True even though the guard never actually ran. A broken
+    guard query must record not-ok, same as any other real finding."""
+    await _seed_veto_clause_config(db_session, owner.id)
+
+    with patch.object(cron, "acquire_lock", AsyncMock(return_value=True)), \
+         patch.object(cron, "release_lock", AsyncMock()), \
+         patch.object(
+             cron, "_veto_guard_findings",
+             AsyncMock(side_effect=RuntimeError("boom")),
+         ):
+        out = await cron.run_health_monitor()
+
+    assert out["errors"] == 0   # per-strategy sweep untouched
+    assert any("veto_guard check failed" in f for f in out["guard_findings"])
+    assert any("boom" in f for f in out["guard_findings"])
+
+    record_health = AsyncMock()
+    with patch.object(cron, "run_health_monitor", AsyncMock(return_value=out)), \
+         patch.object(cron, "record_health", record_health):
+        await cron.health_monitor_job()
+
+    assert record_health.await_args.kwargs["ok"] is False
+
+
+@pytest.mark.asyncio
 async def test_veto_guard_leakage_fires_and_ignores_unverifiable(
     db_session: AsyncSession, owner: User,
 ):

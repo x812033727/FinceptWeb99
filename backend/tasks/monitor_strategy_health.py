@@ -319,6 +319,16 @@ async def run_health_monitor() -> dict:
                 if await _veto_clause_armed(db):
                     counters["guard_findings"] = await _veto_guard_findings(db)
         except Exception as exc:
+            # A guard-side failure must not read as a silent green: it's
+            # exactly the kind of dead tripwire that hides a real revert
+            # condition behind a query bug. Fold it into guard_findings
+            # (health_monitor_job's `ok` already keys off `not
+            # guard_findings`) instead of only logging a warning nobody
+            # is watching.
+            counters["guard_findings"] = [
+                *counters["guard_findings"],
+                f"veto_guard check failed: {exc}",
+            ]
             log.warning(
                 "monitor_strategy_health.veto_guard_failed",
                 extra={"error": str(exc)},

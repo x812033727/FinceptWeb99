@@ -118,6 +118,10 @@ services:
       ADMIN_EMAIL:       ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD:    ${ADMIN_PASSWORD:-}
       PUBLIC_DAILY_RESULTS_OWNER_EMAIL: ${PUBLIC_DAILY_RESULTS_OWNER_EMAIL:-}
+      # SEC EDGAR requires a real contact email in the User-Agent; without
+      # it every ingest_announcements_us run 403s (observed 90/90 failures).
+      # Same enumerated-keys passthrough rule as the vars above.
+      SEC_EDGAR_USER_AGENT_EMAIL: ${SEC_EDGAR_USER_AGENT_EMAIL:-}
       # /metrics gate — without this passthrough the in-compose
       # Prometheus scrapes from the docker bridge and gets 403 against
       # the default 127.0.0.1-only allowlist. Same enumerated-keys

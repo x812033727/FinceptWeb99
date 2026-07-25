@@ -33,6 +33,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Literal
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,6 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from models.discussion import Discussion
 from models.ohlcv_daily import OhlcvDaily
+from services.tw_trading_calendar import to_tw_date
 
 log = logging.getLogger(__name__)
 
@@ -459,6 +461,11 @@ def evaluate_recommendation_outcome(
             big_win_day5_pct=big_win_day5_pct,
             win_pct=win_pct,
             big_loss_pct=big_loss_pct,
+            # The post-mortem coaches the panel while the 5-day window
+            # is still open, so it grades on the latest resolved close
+            # rather than waiting for D5 (which would make it silent
+            # exactly when it is useful). Still a close, never a peak.
+            require_d5=False,
         )
         if result is None:
             continue
@@ -1034,10 +1041,16 @@ async def build_post_mortem_message(
       - `verdict.status == "insufficient_data"` (rare) →
         `prompt_text == ""`.
     """
-    if discussion.as_of_date is None:
-        raise ValueError(
-            "post_mortem requires a backtest discussion (as_of_date is null)"
-        )
+    # Backtest discussions always carry a non-null `as_of_date` (set by
+    # replay); live/auto-run discussions never do — that anchor is a
+    # backtest-only concept. Fall back to the created-at Taipei trading
+    # date as the *forward* grading anchor so live discussions still get
+    # graded, mirroring the convention `verify_discussion_outcome.py`
+    # already uses (`d.as_of_date or to_tw_date(d.created_at)`). This is
+    # purely a forward anchor (days AFTER the recommendation, to grade
+    # it) — it must not be confused with any backward as_of context
+    # clamp used during `auto_run_discussion` / replay.
+    as_of = discussion.as_of_date or to_tw_date(discussion.created_at)
 
     big_win_pct, win_pct, big_loss_pct, window_days = (
         await _resolve_thresholds(db)
@@ -1049,7 +1062,7 @@ async def build_post_mortem_message(
 
     trading_days = await _resolve_trading_days_after(
         db, market=discussion.market,
-        as_of=discussion.as_of_date, days=fetch_days,
+        as_of=as_of, days=fetch_days,
     )
     if not trading_days:
         return PostMortemPayload(
@@ -1069,7 +1082,7 @@ async def build_post_mortem_message(
         recommended = [str(s) for s in raw if s]
 
     rec_perf = await compute_recommended_performance(
-        db, as_of=discussion.as_of_date, market=discussion.market,
+        db, as_of=as_of, market=discussion.market,
         recommended_symbols=recommended, trading_days=trading_days,
     )
     daily = await compute_daily_top_gainers(
@@ -1107,7 +1120,7 @@ async def build_post_mortem_message(
 
     if verdict.status == "big_win":
         text = format_post_mortem_big_win_prompt(
-            as_of=discussion.as_of_date,
+            as_of=as_of,
             trading_days=window_days_truncated,
             recommended_performance=rec_perf,
             daily_top_gainers=daily_truncated,
@@ -1117,7 +1130,7 @@ async def build_post_mortem_message(
         )
     elif verdict.status == "win":
         text = format_post_mortem_win_prompt(
-            as_of=discussion.as_of_date,
+            as_of=as_of,
             trading_days=window_days_truncated,
             recommended_performance=rec_perf,
             daily_top_gainers=daily_truncated,
@@ -1129,7 +1142,7 @@ async def build_post_mortem_message(
         # big_loss adds a risk-management header but reuses the
         # loss prompt body (mining for missed winners).
         text = format_post_mortem_loss_prompt(
-            as_of=discussion.as_of_date,
+            as_of=as_of,
             trading_days=window_days_truncated,
             daily_top_gainers=daily_truncated,
             recommended_symbols=recommended,
@@ -1203,3 +1216,55 @@ def verdict_to_dict(v: OutcomeVerdict) -> dict[str, Any]:
         "best_pct":       v.best_pct,
         "reason":         v.reason,
     }
+
+
+# ── Post-mortem self-critique pass ──────────────────────────────
+
+
+async def run_post_mortem_pass(
+    db: AsyncSession, discussion: Any, owner_id: UUID,
+) -> None:
+    """Inject the post-mortem critique prompt, run one reflection round,
+    and re-synthesize. Shared by the backtest sweep and the live verify
+    path so both self-critique through one implementation."""
+    from services import discussion_service
+
+    await db.refresh(discussion)
+    if not discussion.conclusion:
+        return
+    payload = await build_post_mortem_message(db, discussion)
+    if not payload.trading_days:
+        return
+    if payload.verdict is not None and payload.verdict.status in ("win", "big_win"):
+        # Wins already cleared the bar — running the full N-persona
+        # critique round here would just spend an LLM call per persona
+        # asking them to defend a recommendation that already worked.
+        # Instead we skip straight to a single-LLM-call winning-thesis
+        # lesson extraction so the learning loop still captures *why*
+        # it worked, without paying for the full critique round.
+        try:
+            from middleware.metrics import POST_MORTEM_SKIPPED_TOTAL
+            POST_MORTEM_SKIPPED_TOTAL.labels(market=discussion.market).inc()
+        except Exception:
+            pass
+        if payload.prompt_text:
+            try:
+                await discussion_service.extract_winning_thesis_lessons(
+                    db, discussion, win_prompt_text=payload.prompt_text,
+                    user_id=str(owner_id),
+                )
+            except Exception as exc:
+                log.warning("post_mortem.win_lesson_extraction_failed",
+                            extra={"discussion_id": str(discussion.id), "error": str(exc)})
+        return
+    if not payload.prompt_text:
+        return
+    await discussion_service.inject_user_message(db, discussion, content=payload.prompt_text)
+    try:
+        from middleware.metrics import POST_MORTEM_RAN_TOTAL
+        POST_MORTEM_RAN_TOTAL.labels(market=discussion.market).inc()
+    except Exception:
+        pass
+    async for _ev in discussion_service.run_round(db, discussion, user_id=str(owner_id), user_role="analyst"):
+        pass
+    await discussion_service.synthesize_conclusion(db, discussion, user_id=str(owner_id))

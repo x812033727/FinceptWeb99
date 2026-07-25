@@ -9,17 +9,20 @@ the 4-band outcome via `services.outcome_classifier.classify_discussion`:
 
   big_loss  — any symbol's any-day close ≤ big_loss_pct (default -5%)
   big_win   — else any symbol's D5 close ≥ big_win_day5_pct (default 20%)
-  win       — else any symbol's peak close ≥ win_pct (default 5%)
+  win       — else any symbol's D5 close ≥ win_pct (default 5%)
   loss      — otherwise
   unverifiable — synthesizer returned no symbols, OR the stale-grace
                  cap was hit before any bar resolved
 
 All comparisons are on CLOSE prices (matches the post-mortem and
-Brier sides). The legacy `intra-day high` rule from earlier in the
-project was over-permissive — it counted single-bar spikes that
-round-tripped the same session as "wins". The new rule grades only
-realized closes, which is the actual outcome the recommendation
-would have produced.
+Brier sides), and specifically on the D5 close. Two permissive rules
+were retired in turn: first `intra-day high`, which counted single-bar
+spikes that round-tripped the same session; then `peak close`, which
+still counted a position that rose 6% on D2 and gave it all back by
+D5. `peak_pct` / `trough_pct` survive as UI annotations only.
+`big_loss` deliberately keeps its any-day-close test — it is a
+risk band, not a return band, and a -5% touch is a real drawdown the
+holder lived through.
 
 Defer (verdict stays NULL, retry tomorrow) when none of the symbols
 have 5 bars yet — that's a holiday-in-window or a delisting issue;
@@ -60,6 +63,7 @@ from services.outcome_classifier import (
     classify_discussion,
     is_winning_verdict,
 )
+from services.post_mortem_service import run_post_mortem_pass
 from services.tw_trading_calendar import to_tw_date
 
 log = logging.getLogger(__name__)
@@ -78,6 +82,34 @@ _WINDOW_TRADING_DAYS = 5
 # data hasn't surfaced by then, it's not coming.
 _STALE_GRACE_DAYS = 30
 _TW_SYMBOL_RE = re.compile(r"^\d{4,6}$")
+
+DECIDED_VERDICTS = ("win", "big_win", "loss", "big_loss")
+
+
+def is_experiment(d) -> bool:
+    """True for a row produced under a rules text that is not the saved
+    production config (`--rules-override` on the replay path).
+
+    Backtest replays SHOULD feed the learning loop — that is what the fuel
+    sweeps are for. An experiment row is the one exception: its lesson would
+    be "under rules we do not run, this worked", and `promote_lessons` would
+    promote it into the semantic lessons that steer the live panel.
+    """
+    return bool((getattr(d, "candidate_snapshot", None) or {}).get("experiment"))
+
+
+async def maybe_run_live_post_mortem(db, d) -> None:
+    """Self-critique a graded discussion. Only decided outcomes carry
+    a real pick worth critiquing; abstain/unverifiable have nothing to
+    reflect on. Fail-closed: a post-mortem error must never disturb the
+    verdict already committed above."""
+    if d.verdict not in DECIDED_VERDICTS or is_experiment(d):
+        return
+    try:
+        await run_post_mortem_pass(db, d, d.owner_id)
+    except Exception as exc:
+        log.warning("verify_discussion_outcome.live_post_mortem_failed",
+                    extra={"id": str(d.id), "error": str(exc)})
 
 
 async def run() -> None:
@@ -229,18 +261,51 @@ async def _verify_one(
     SQLAlchemy's "Instance not persistent" error on PostgreSQL when
     `synchronize_session='auto'` expunges the entity after an ORM
     UPDATE."""
-    raw_symbols = (d.conclusion or {}).get("recommended_symbols") or []
+    conclusion = d.conclusion or {}
+    raw_symbols = conclusion.get("recommended_symbols") or []
     symbols = [str(s).strip() for s in raw_symbols if _TW_SYMBOL_RE.fullmatch(str(s).strip())]
 
-    # Edge: no symbols recommended → unverifiable. Set immediately so
-    # the cron doesn't keep re-fetching this row forever.
+    # Edge: no symbols recommended. Two very different outcomes share
+    # this shape and must not share a verdict:
+    #
+    #   `abstain`      the panel deliberately declined ("no candidate
+    #                  meets the entry conditions"). A real, gradeable
+    #                  decision — sitting out a −7% tape is a good call,
+    #                  and the scoreboard says so by keeping abstains
+    #                  out of the win-rate denominator.
+    #   `unverifiable` the synthesizer produced nothing usable (parse
+    #                  error, empty output). A pipeline failure.
+    #
+    # The distinction comes from the structured `abstained` flag the
+    # synthesizer emits (see `conclusion_parsing._safe_conclusion`),
+    # never from `reasoning` prose.
     if not symbols:
+        abstained = bool(conclusion.get("abstained"))
+        # An abstention still has a counterfactual worth recording:
+        # what the deterministic screener pool did that week. Without
+        # it we can't tell a wise pass from a missed rally.
+        pool_perf: dict[str, Any] | None = None
+        if abstained:
+            anchor = d.as_of_date or to_tw_date(d.created_at)
+            try:
+                pool_perf = await _compute_pool_performance(d, anchor)
+            except Exception:
+                log.exception(
+                    "verify_discussion_outcome.pool_performance_failed",
+                    extra={"id": str(d.id)},
+                )
         await _set_verdict(
             db,
             d,
-            verdict="unverifiable",
-            reason="synthesizer returned no symbols",
+            verdict="abstain" if abstained else "unverifiable",
+            reason=(
+                (str(conclusion.get("abstain_reason") or "").strip()
+                 or "panel abstained — no candidate met the entry conditions")
+                if abstained
+                else "synthesizer returned no symbols"
+            ),
             day1_opens={},
+            pool_performance=pool_perf,
         )
         return True
 
@@ -520,7 +585,11 @@ async def _set_verdict(
     # round contexts when the verdict is a winning band (legacy "win"
     # or new "big_win"). record_lesson_outcome is gated internally so
     # calling unconditionally is safe; failure only logs.
-    if is_winning_verdict(verdict):
+    # `is_experiment` rows are excluded for the same reason as the
+    # post-mortem below: hit_count is the promotion eligibility signal, so a
+    # win earned under non-production rules would push a lesson toward the
+    # semantic tier that steers the live panel.
+    if is_winning_verdict(verdict) and not is_experiment(d):
         try:
             from services.lesson_tier_service import (
                 record_lesson_outcome,
@@ -532,6 +601,7 @@ async def _set_verdict(
                 "verify_discussion_outcome.record_lesson_outcome_failed",
                 extra={"id": str(d.id), "error": str(exc)},
             )
+    await maybe_run_live_post_mortem(db, d)
     log.info(
         "verify_discussion_outcome.verdict",
         extra={
@@ -584,8 +654,11 @@ def _format_verdict_reason(
             f"{winner_symbol} D5 close {sym_cls.day5_pct:+.2f}% " f"(≥ {big_win_pct:g}% threshold)"
         )
     if band == "win":
-        return f"{winner_symbol} peak close {sym_cls.peak_pct:+.2f}% " f"(≥ {win_pct:g}% threshold)"
+        return (
+            f"{winner_symbol} D5 close {sym_cls.day5_pct:+.2f}% "
+            f"(≥ {win_pct:g}% threshold; 期間最高 {sym_cls.peak_pct:+.2f}%)"
+        )
     return (
-        f"{winner_symbol} peak {sym_cls.peak_pct:+.2f}% / trough "
-        f"{sym_cls.trough_pct:+.2f}% — no band crossed"
+        f"{winner_symbol} D5 close {sym_cls.day5_pct:+.2f}% — no band crossed "
+        f"(期間最高 {sym_cls.peak_pct:+.2f}% / 最低 {sym_cls.trough_pct:+.2f}%)"
     )

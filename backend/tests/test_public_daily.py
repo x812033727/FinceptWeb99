@@ -246,6 +246,42 @@ async def test_public_daily_window_anchored_on_newest_row(client, db_session, mo
     assert dates == ["2026-07-14"]
 
 
+@pytest.mark.asyncio
+async def test_public_daily_ignores_backtest_replays(client, db_session, monkeypatch):
+    """A replay row is stamped with today's `created_at` but recommends for a
+    past session. It sorts to the top of `created_at desc` and would be served
+    as the current day's picks — which is what a fuel sweep did in production.
+    The anchor must come from the live row even when a replay is newer.
+    """
+    owner = User(id=uuid.uuid4(), email="bt-pub@example.com", hashed_password="x", role=UserRole.viewer, is_active=True)
+    db_session.add(owner)
+    await db_session.flush()
+
+    def _conclusion(sym):
+        return {
+            "recommended_symbols": [sym], "reasoning": "理由", "risks": [],
+            "time_horizon": "short_term", "consensus_score": .8,
+        }
+
+    live = discussion(owner.id, created_at=datetime(2026, 7, 14, tzinfo=UTC),
+                      conclusion=_conclusion("2330"))
+    live.auto_run_strategy = "general"
+    live.auto_run_date = datetime(2026, 7, 14, tzinfo=UTC).date()
+    # Replayed later (newer created_at) but anchored on a June session.
+    replay = discussion(owner.id, created_at=datetime(2026, 7, 20, tzinfo=UTC),
+                        conclusion=_conclusion("1101"))
+    replay.auto_run_strategy = "general"
+    replay.auto_run_date = datetime(2026, 6, 12, tzinfo=UTC).date()
+    replay.as_of_date = datetime(2026, 6, 12, tzinfo=UTC).date()
+    db_session.add_all([live, replay])
+    await db_session.commit()
+    monkeypatch.setattr(settings, "PUBLIC_DAILY_RESULTS_OWNER_EMAIL", "bt-pub@example.com")
+
+    body = (await client.get("/api/public/daily")).json()
+    assert body["state"] == "ready"
+    assert body["result"]["conclusion"]["recommended_symbols"] == ["2330"]
+    assert [d["date"] for d in body["days"]] == ["2026-07-14"]
+
 
 @pytest.mark.asyncio
 async def test_public_scoreboard_endpoint(client, db_session, monkeypatch):

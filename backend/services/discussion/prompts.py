@@ -46,6 +46,22 @@ _BLOCK_ANNOTATIONS: dict[str, str] = {
         "個別行的 `as_of_session` 若與 `captured_session.session_date` 不一致時，"
         "以該行自己的 `as_of_session` 為準。"
     ),
+    "data_gaps": (
+        "- data_gaps：**本次完全取不到資料的區塊名單**（上游斷線、端點改版、"
+        "或該資料當日未發布）。名單上的區塊不會出現在 ## 市場現況 裡，"
+        "**嚴禁**為它們寫出任何具體數值——沒有資料就直說沒有資料，"
+        "並改用其他仍有資料的訊號替代推論。空陣列代表所有追蹤區塊都有資料。"
+    ),
+    "data_stale": (
+        # Braces are doubled: this string is inlined into
+        # `_TURN_PROMPT_TEMPLATE` / `_SYNTHESIZER_USER_TEMPLATE`, both
+        # of which go through `str.format`.
+        "- data_stale：**有資料但落後本場基準日的區塊**，格式為 "
+        "`{{區塊: {{as_of, days_behind}}}}`。這些數字是 `as_of` 那天的事實，"
+        "不是今天的。引用時必須連日期一起講（「分點資料 07/07（落後 14 天）"
+        "顯示…」），並在推論時折價看待；落後越多、參考價值越低。"
+        "**不得**把它當成當日最新狀態陳述。"
+    ),
     "top_gainers": (
         "- top_gainers / top_losers：**`as_of_session` 標示之交易日**的漲跌幅前 10"
         "（動能 + 籌碼面）。注意：TWSE `STOCK_DAY_ALL` 端點要等 14:30 後才會更新"
@@ -115,8 +131,17 @@ _BLOCK_ANNOTATIONS: dict[str, str] = {
         "與 overseas_indicators 的 `^VIX`（美 VIX）並列：兩者方向 / 強度差距"
         "反映台美避險溢價 spread，VIX_TW 跳升而 ^VIX 平靜 = 台股 idiosyncratic "
         "風險偏高（地緣 / 央行 / 個股突發）；同步跳升 = 全球 risk-off。"
-        "**> 25 視為高度恐慌**（歷史中位數約 16-18），結論時應提及避險建議。"
-        "引用時請帶具體值（例：「台 VIX 22.3 + 5d +18%，避險溢價擴大」）。"
+        "`regime` = 此數值在近一年實際分布中的位置："
+        "`percentile`（0-100）/ `median` / `p25` / `p75` / `sample_days`。"
+        "**判斷高低一律以 `regime` 為準，不得使用記憶中的歷史區間或固定恐慌門檻** — "
+        "波動水位的常態會隨市場結構整體位移，昨日的「極端」可能是今日的中位。"
+        "percentile > 75 = 相對此 regime 偏恐慌，應提避險；"
+        "25-75 = 此 regime 的常態波動，不構成單獨的看空理由；"
+        "< 25 = 相對平靜。"
+        "若 `sufficient` 為 false，代表歷史樣本不足，"
+        "**只能引用當前絕對值與 change_pct，不得聲稱它相對偏高或偏低**。"
+        "引用時請帶具體值與分位（例：「台 VIX 36.1，近一年第 39 百分位、"
+        "低於中位 36.6，屬此 regime 常態」）。"
     ),
     "upcoming_events_calendar": (
         "- upcoming_events_calendar：**未來 30 日法說會 / 除權息行事曆**"
@@ -156,6 +181,10 @@ _BLOCK_ANNOTATIONS: dict[str, str] = {
         "`peers`（同產業 3 檔可比標的）。**有此區塊就要引用具體數據**，"
         "不要只憑 headlines 推論。**引用報價時要連帶說明 `as_of_session`** "
         "（例：「2330 以 5/27 收盤 1,100 元為基準」），不要只說「目前股價」。"
+        "⚠️ `_unavailable` 列出的欄位代表**該資料在本場無法取得**（回測模式限制或"
+        "封存缺漏），並附有原因。**這是「未知」不是「不利」** — "
+        "不得把它當作負面訊號、不得計入不利條件的數量，"
+        "也不得替它編造數值；需要時請直接說明該維度本場無法評估。"
     ),
     "macro": (
         "- macro：宏觀利率與匯率快照（Fed Funds / US 10Y / 10Y-2Y 殖利率價差 / "
@@ -306,16 +335,33 @@ _TURN_PROMPT_TEMPLATE = (
     "中該區塊的描述若觸及主題提到的個股 / 產業 / 時間視窗，即屬相關。\n"
     "  3. **訊號之間互相印證或衝突要明寫**。例：「news_sentiment 偏多但"
     "taifex_positioning trend=bearish — 兩者相左，優先信任後者，因外資期貨"
-    "部位通常領先大盤 1-2 日」。單一訊號可被忽略，多訊號互證或互斥不可。\n\n"
+    "部位通常領先大盤 1-2 日」。單一訊號可被忽略，多訊號互證或互斥不可。\n"
+    "  4. **只能引用 ## 市場現況 裡真的存在的數字**。上面沒有給你的資料，"
+    "一律不得寫出具體數值——包含你從訓練資料記得的、或前幾輪別人講過但 ctx "
+    "查不到的。`data_gaps` 列出的區塊本次完全沒有資料，正確的寫法是"
+    "「本場無 VIX 讀數，改以 taifex_positioning 判斷風險」，"
+    "**不是**憑印象補一個數字上去。第 1 條要求引用具體數值，指的是引用"
+    "**ctx 內**的具體數值；資料缺漏時，誠實說缺比湊一個數字有價值得多。\n\n"
     "## 先前發言\n{history}\n\n"
     "## 你現在的任務\n"
     "依照你扮演的角色立場，閱讀上述資料與先前發言後，"
     "**直接輸出合法 JSON**（不要包 markdown code fence、不要在 JSON 之前或之後加任何解釋文字）：\n"
     '{{"stance": "agree|dissent|supplement", "content": "你的發言"}}\n\n'
-    "stance 規則：\n"
-    "  - agree：完全同意先前共識，無新內容可補充。content 可留空或一句話致意。\n"
-    "  - dissent：對某位專家的觀點有具體反對，必須點名是反對誰、為什麼。\n"
-    "  - supplement：補充新資訊、新角度、新數據。\n\n"
+    # The three definitions have to cost about the same to satisfy.
+    # The previous wording made `agree` the most demanding option
+    # ("完全同意…無新內容可補充" — and then asked for empty content,
+    # which reads as contributing nothing) while `dissent` accepted any
+    # specific disagreement at all. Measured over one week of auto-runs
+    # that produced dissent 392 / supplement 70 / agree 58, i.e. 75%
+    # dissent — a near-degenerate signal that carried no information.
+    # Now `agree` accepts partial endorsement with reasons, and
+    # `dissent` is reserved for an actually opposed conclusion.
+    "stance 規則（三者請依實際立場選擇，不要預設選 dissent）：\n"
+    "  - agree：同意先前的主要結論。**可以同時補充理由或佐證數據**，"
+    "只要你的結論方向與先前一致就選這個。\n"
+    "  - dissent：你的**結論**與某位專家相反（他說買、你說不該買），"
+    "必須點名是反對誰、為什麼。細節或幅度不同不算 dissent。\n"
+    "  - supplement：提出新資訊、新角度、新數據，但**不表態**支持或反對。\n\n"
     "## 排版規範\n"
     "為了讓使用者快速抓重點，content 內請用 markdown 強調語法：\n"
     "  - 關鍵結論、重要數字、目標價、停損點、股票代號 → 用 **粗體**\n"
@@ -352,12 +398,19 @@ _SYNTHESIZER_USER_TEMPLATE = (
     '  "reasoning": "結論摘要，≤200字，繁體中文，引用至少2位專家",\n'
     '  "risks": ["風險1", "風險2"],\n'
     '  "time_horizon": "short_term",\n'
-    '  "consensus_score": 0.7\n'
+    '  "consensus_score": 0.7,\n'
+    '  "abstained": false,\n'
+    '  "abstain_reason": ""\n'
     "}}\n\n"
     "欄位規則：\n"
+    "- abstained：本場是否棄權（不推薦任何標的）。候選股全都不符合進場條件時，"
+    "請誠實填 true、recommendations 留空陣列，並在 abstain_reason 說明棄權原因。"
+    "**棄權是合法且被鼓勵的結論** —— 空頭或訊號不明時硬湊推薦，比棄權更糟。"
+    "只要 recommendations 非空，abstained 就必須是 false。\n"
     "- recommendations：最多 5 檔，要有市場共識且風險可控。每檔包含：\n"
     "  - symbol：股票代號（字串）\n"
-    "  - confidence：0.0-1.0，你對這檔在「未來 5 個交易日內收盤至少出現一次顯著正向報酬」的把握程度。"
+    "  - confidence：0.0-1.0，你對這檔在「第 5 個交易日收盤相對進場日開盤有顯著正向報酬」的把握程度"
+    "（以第 5 日收盤結算，期間曾經漲過又跌回來不算）。"
     "請保守估計：有重大不確定性給 0.5 以下；極度有把握再給 0.8 以上；"
     "全 conclusion 不應全部 ≥ 0.8（這代表沒有風險意識）。\n"
     "- time_horizon：只能是 short_term / medium_term / long_term 三選一\n"

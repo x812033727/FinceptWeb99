@@ -157,6 +157,10 @@ def _safe_conclusion(raw: str) -> dict[str, Any]:
             "risks": [],
             "time_horizon": "short_term",
             "consensus_score": 0.0,
+            # A parse failure is never a deliberate abstention — the
+            # verifier must keep grading these as `unverifiable`.
+            "abstained": False,
+            "abstain_reason": "",
             "_parse_error": True,
         }
 
@@ -192,6 +196,18 @@ def _safe_conclusion(raw: str) -> dict[str, Any]:
     except (TypeError, ValueError):
         consensus = 0.0
     consensus = max(0.0, min(1.0, consensus))
+    # An empty recommendation list has two very different meanings and
+    # the verifier grades them differently: a deliberate "no setup
+    # today" (`abstain`) is a legitimate outcome, while a synthesizer
+    # that simply failed to emit symbols is `unverifiable`. Only the
+    # LLM's explicit structured flag distinguishes them — never infer
+    # it from `reasoning` prose, which misfires both ways (a
+    # discussion can discuss abstaining and still recommend).
+    #
+    # Recommendations win the tie: a row with picks is not an
+    # abstention no matter what the flag says.
+    abstained = bool(data.get("abstained")) and not recommendations
+    abstain_reason = str(data.get("abstain_reason", ""))[:500] if abstained else ""
     return {
         "recommended_symbols": recommended_symbols,
         "recommendations": recommendations,
@@ -199,6 +215,8 @@ def _safe_conclusion(raw: str) -> dict[str, Any]:
         "risks": [str(r).strip() for r in risks if str(r).strip()][:10],
         "time_horizon": horizon,
         "consensus_score": round(consensus, 3),
+        "abstained": abstained,
+        "abstain_reason": abstain_reason,
     }
 
 

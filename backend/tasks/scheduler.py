@@ -755,3 +755,18 @@ def setup_jobs() -> None:
         max_instances=1,
         coalesce=True,
     )
+
+    # ── Learning loop: episodic→semantic promotion ───────────────
+    # Weekly on Sunday at 17:00 UTC. Promotes lessons that have proven
+    # their hit rate past the threshold to the semantic tier so they
+    # join the permanent knowledge base. Only runs when fuel (forecast
+    # accuracy) has lifted episodic predictions high enough to trust.
+    from tasks.promote_lessons import run as run_promote_lessons
+    scheduler.add_job(
+        run_promote_lessons,
+        trigger=CronTrigger(day_of_week="sun", hour=17, minute=0, timezone="UTC"),
+        id="promote_lessons",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )

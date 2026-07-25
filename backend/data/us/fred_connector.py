@@ -35,7 +35,13 @@ SERIES = {
     "2y_yield": "DGS2",
     "10y_minus_2y": "T10Y2Y",
     "usd_index": "DTWEXBGS",
-    "twd_usd": "DEXTW",        # TWD/USD — used for portfolio FX
+    # `DEXTAUS` — "Taiwan Dollars to One U.S. Dollar", daily. The
+    # previous id `DEXTW` does not exist at FRED (400 "The series does
+    # not exist"), so every read of it fell through to the proxy or to
+    # portfolio_service's hard-coded rate. Nothing surfaced because
+    # there was no API key here until now: the keyless path never
+    # reached FRED to be told the id was wrong.
+    "twd_usd": "DEXTAUS",      # TWD per 1 USD — used for portfolio FX
 }
 
 # yfinance proxies for the tradable series. `scale` is applied to the
@@ -45,11 +51,22 @@ SERIES = {
 #   - Dollar index and FX cross are spot quotes, scale=1.
 # 13-week T-bill (^IRX) is used as a Fed-Funds proxy: it tracks the
 # short rate within a few basis points and works without an API key.
+# `USDTWD=X` quotes TWD per 1 USD (32.375), matching DEXTAUS (32.37).
+# The previous entry used `TWDUSD=X`, the inverse (0.0309) — so
+# whenever the proxy served this series, portfolio_service converted
+# with a rate ~1000x off. Direction, not just the id, has to match.
 _YF_FALLBACK: dict[str, tuple[str, float]] = {
     "DGS10":    ("^TNX",       1.0),
     "FEDFUNDS": ("^IRX",       1.0),
-    "DTWEXBGS": ("DX-Y.NYB",   1.0),
-    "DEXTW":    ("TWDUSD=X",   1.0),
+    # No entry for DTWEXBGS. Yahoo's `DX-Y.NYB` is the ICE dollar index
+    # (~101); DTWEXBGS is the Fed's broad index (~120). Serving one
+    # under the other's key meant the block's level jumped ~19% purely
+    # on whether FRED happened to answer — same failure mode as the
+    # inverted TWD proxy, and harder to spot because both numbers look
+    # plausible. Better to leave the block empty and let `data_gaps`
+    # name it than to serve a different index silently.
+
+    "DEXTAUS":  ("USDTWD=X",   1.0),
 }
 
 
@@ -65,7 +82,20 @@ def _bars_to_observations(bars: list[dict], scale: float) -> list[dict[str, Any]
     return out
 
 
-async def _yfinance_fallback(series_id: str) -> list[dict[str, Any]]:
+async def _yfinance_fallback(
+    series_id: str, *, end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """yfinance proxy for a FRED series, clamped at `end_date`.
+
+    `end_date` matters for backtests. Yahoo has no observation-window
+    parameter that matches FRED's `observation_end`, so the clamp is
+    applied here after the fetch. Without it this function silently
+    returned today's quote for a historical anchor: `get_series`
+    takes this branch whenever no FRED key is configured, and that is
+    the default deployment. A backtest anchored at 2026-04-24 was
+    reading July macro — a real look-ahead leak, observed in a replay
+    context whose `macro.*.latest_date` read `2026-07-01`.
+    """
     mapping = _YF_FALLBACK.get(series_id)
     if mapping is None:
         return []
@@ -76,7 +106,12 @@ async def _yfinance_fallback(series_id: str) -> list[dict[str, Any]]:
         log.warning("fred.yfinance_fallback_failed",
                     extra={"series": series_id, "ticker": ticker, "error": str(exc)})
         return []
-    return _bars_to_observations(bars, scale)
+    obs = _bars_to_observations(bars, scale)
+    if end_date:
+        # ISO dates compare correctly as strings; both sides are
+        # YYYY-MM-DD (`_bars_to_observations` formats them that way).
+        obs = [o for o in obs if o["date"] <= end_date]
+    return obs
 
 
 # Keyless public CSV endpoint — no API key, no rate-limit sign-up.
@@ -136,15 +171,32 @@ async def get_series_csv(
 
 
 async def get_series(series_id: str, start_date: str | None = None, end_date: str | None = None) -> list[dict[str, Any]]:
+    """One FRED series as ``[{date, value}]``.
+
+    Falls back to the yfinance proxy when no key is configured **and**
+    when a configured key is rejected. The second case is not
+    hypothetical: a placeholder key saved from the admin page made FRED
+    answer `400` on every call, and because this function raised, the
+    whole macro block went empty site-wide — a worse outcome than the
+    approximate-but-present Yahoo proxy. The failure stays visible in
+    the logs (and in `market_provider_keys.last_validation_ok`) rather
+    than being swallowed."""
     from services.market_key_service import resolve_key
     api_key = await resolve_key("fred")
     if not api_key:
-        return await _yfinance_fallback(series_id)
+        return await _yfinance_fallback(series_id, end_date=end_date)
+    # `desc` + limit takes the NEWEST 1000 observations, then we flip
+    # back to ascending for callers. With `asc` the limit took the
+    # OLDEST 1000, so a daily series starting in 1962 reported its
+    # "latest" value as 1965: observed live as
+    # `10y_yield.latest_date = 1965-11-01 (4.43)` and
+    # `usd_index.latest_date = 2009-10-30`. That only became reachable
+    # once a working key existed — the keyless proxy path had masked it.
     params: dict = {
         "series_id": series_id,
         "api_key": api_key,
         "file_type": "json",
-        "sort_order": "asc",
+        "sort_order": "desc",
         "limit": 1000,
     }
     if start_date:
@@ -152,13 +204,22 @@ async def get_series(series_id: str, start_date: str | None = None, end_date: st
     if end_date:
         params["observation_end"] = end_date
 
-    async with httpx.AsyncClient(timeout=10.0) as c:
-        r = await c.get(f"{_BASE}/series/observations", params=params)
-        r.raise_for_status()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.get(f"{_BASE}/series/observations", params=params)
+            r.raise_for_status()
+    except Exception as exc:
+        log.warning(
+            "fred.api_failed_using_yfinance_fallback",
+            extra={"series": series_id, "error": str(exc)},
+        )
+        return await _yfinance_fallback(series_id, end_date=end_date)
 
+    # Back to ascending — `get_latest` walks the list in reverse and
+    # `_macro_summary_from_series` reads `points[-1]` as the newest.
     return [
         {"date": obs["date"], "value": float(obs["value"]) if obs["value"] != "." else None}
-        for obs in r.json().get("observations", [])
+        for obs in reversed(r.json().get("observations", []))
     ]
 
 

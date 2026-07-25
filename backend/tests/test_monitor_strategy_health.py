@@ -6,7 +6,7 @@ against the SQLite test DB.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -14,6 +14,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.backtest_sweep import BacktestSweep
+from models.discussion import Discussion
 from models.discussion_strategy_template import DiscussionStrategyTemplate
 from models.user import User, UserRole
 from tasks import monitor_strategy_health as cron
@@ -238,3 +239,74 @@ async def test_per_strategy_failure_isolated(
         out = await cron.run_health_monitor()
     assert out["errors"] == 1
     assert out["snapshots_written"] == 1   # only B
+
+
+async def _live_price_signal_discussion(
+    db: AsyncSession, owner: User, *, verdict: str,
+) -> Discussion:
+    """A live (as_of_date NULL) auto-run price_signal discussion —
+    the exact shape the veto guard's revert-trigger query scans."""
+    d = Discussion(
+        id=uuid4(),
+        owner_id=owner.id,
+        topic="t",
+        rules="r",
+        market="TW",
+        status="done",
+        persona_ids=[],
+        auto_run=True,
+        auto_run_strategy="price_signal",
+        auto_run_date=date(2026, 7, 20),
+        auto_run_sequence=1,
+        verdict=verdict,
+    )
+    db.add(d)
+    await db.flush()
+    return d
+
+
+@pytest.mark.asyncio
+async def test_veto_guard_revert_trigger_forces_not_ok(
+    db_session: AsyncSession, owner: User,
+):
+    """3 consecutive live price_signal losses trips the revert guard
+    (spec Part 1) independent of the per-strategy sweep — no template
+    is configured here at all. `run_health_monitor` must surface the
+    finding, and `health_monitor_job` must fold it into ok=False plus
+    the recorded error text so it isn't a silent green."""
+    for _ in range(3):
+        await _live_price_signal_discussion(db_session, owner, verdict="loss")
+    await db_session.commit()
+
+    with patch.object(cron, "acquire_lock", AsyncMock(return_value=True)), \
+         patch.object(cron, "release_lock", AsyncMock()):
+        out = await cron.run_health_monitor()
+
+    assert out["guard_findings"]
+    assert any("revert" in f.lower() for f in out["guard_findings"])
+
+    record_health = AsyncMock()
+    with patch.object(cron, "run_health_monitor", AsyncMock(return_value=out)), \
+         patch.object(cron, "record_health", record_health):
+        await cron.health_monitor_job()
+
+    assert record_health.await_args.kwargs["ok"] is False
+    assert "veto_guard" in record_health.await_args.kwargs["error"]
+
+
+@pytest.mark.asyncio
+async def test_veto_guard_quiet_by_default(
+    db_session: AsyncSession, owner: User,
+):
+    """Zero-config at adoption time: with no price_signal discussions
+    at all (the common pre-adoption state), the guard produces no
+    findings and doesn't affect ok."""
+    await _make_strategy(db_session, owner.id)
+
+    with patch.object(cron, "acquire_lock", AsyncMock(return_value=True)), \
+         patch.object(cron, "release_lock", AsyncMock()), \
+         patch.object(cron, "notify_user", AsyncMock()):
+        out = await cron.run_health_monitor()
+
+    assert out["guard_findings"] == []
+    assert out["errors"] == 0

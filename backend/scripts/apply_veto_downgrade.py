@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import select
@@ -34,6 +34,18 @@ def revert_clause(rules: str) -> str:
     return rules.replace(VETO_DOWNGRADE_CLAUSE, "")
 
 
+def archive_stamp(now: datetime) -> str:
+    """Format a datetime as an ISO-like archive timestamp.
+
+    Args:
+        now: A timezone-aware datetime (preferably UTC).
+
+    Returns:
+        Formatted string like "20260725T120000Z".
+    """
+    return now.strftime("%Y%m%dT%H%M%SZ")
+
+
 async def main(mode: str, force_without_archive: bool) -> None:
     from db.session import AsyncSessionLocal
     from models.discussion_auto_run_config import DiscussionAutoRunConfig
@@ -47,13 +59,21 @@ async def main(mode: str, force_without_archive: bool) -> None:
             if mode == "show":
                 continue
 
-            # Attempt archive before any DB change
-            stamp = datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
+            # Compute new_rules first; skip archive for no-ops
+            new_rules = (
+                apply_clause(rules) if mode == "apply" else revert_clause(rules)
+            )
+            if new_rules == rules:
+                print("no-op (already in desired state)")
+                continue
+
+            # Attempt archive before any DB change (only for real mutations)
+            stamp = archive_stamp(datetime.now(UTC))
             archive = Path("docs/rules-archive")
             try:
                 archive.mkdir(parents=True, exist_ok=True)
                 archive_file = archive / f"rules-{cfg.user_id}-{stamp}.txt"
-                archive_file.write_text(rules)
+                archive_file.write_text(rules, encoding="utf-8")
                 print(f"--- archived original ({len(rules)} chars) to {archive_file} ---")
             except Exception as e:
                 print(f"!!! archive write failed: {e}")
@@ -63,13 +83,6 @@ async def main(mode: str, force_without_archive: bool) -> None:
                 if not force_without_archive:
                     print("Pass --force-without-archive to proceed without archive")
                     continue
-
-            new_rules = (
-                apply_clause(rules) if mode == "apply" else revert_clause(rules)
-            )
-            if new_rules == rules:
-                print("no-op (already in desired state)")
-                continue
 
             cfg.rules = new_rules
             await db.commit()

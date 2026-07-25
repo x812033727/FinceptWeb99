@@ -2,6 +2,7 @@
 import os
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from scripts.apply_veto_downgrade import (
     VETO_DOWNGRADE_CLAUSE,
     apply_clause,
+    archive_stamp,
     revert_clause,
 )
 
@@ -29,6 +31,18 @@ def test_revert_restores_exactly():
 def test_clause_is_strategy_scoped_in_wording():
     assert "量價訊號" in VETO_DOWNGRADE_CLAUSE
     assert "部位上限減半" in VETO_DOWNGRADE_CLAUSE
+
+
+def test_archive_stamp_formats_utc_datetime():
+    """Test the archive timestamp formatting with a fixed datetime.
+
+    This test catches the AttributeError regression that occurred when
+    UTC was not properly imported: datetime.now(datetime.UTC) fails
+    because UTC is not an attribute of the datetime class. With proper
+    imports (from datetime import UTC, datetime), this passes.
+    """
+    fixed_time = datetime(2026, 7, 25, 12, 0, 0, tzinfo=UTC)
+    assert archive_stamp(fixed_time) == "20260725T120000Z"
 
 
 def test_import_does_not_pull_in_engine_building_models():

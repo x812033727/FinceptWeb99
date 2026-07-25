@@ -5,13 +5,9 @@ wrote 15k+ rows reported `failed` because one chunk of ~30 timed out,
 while the runs that wrote nothing reported `ok` because nothing was
 due. Any consumer gating on this signal is misled in both directions.
 """
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "finmind"))
-
-from scripts.run_due import classify_run_outcome  # noqa: E402
+from finmind.scripts.run_due import classify_run_outcome
 
 
 def _outcome(status: str, rows: int, dataset: str = "ds", error: str | None = None):

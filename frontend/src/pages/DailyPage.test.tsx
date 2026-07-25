@@ -1,7 +1,7 @@
 import { render, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { dedupeBySymbol } from "./dailyCandidates";
-import { Scoreboard } from "./DailyPage";
+import { Scoreboard, SessionBadge } from "./DailyPage";
 
 const baseEntry = {
   strategy: "price_signal",
@@ -42,6 +42,41 @@ describe("dedupeBySymbol", () => {
     expect(dedupeBySymbol([{ symbol: "2330" }, { symbol: "2330", strategy_score: 1 }])).toEqual([
       { symbol: "2330", strategy_score: 1 },
     ]);
+  });
+});
+
+describe("SessionBadge", () => {
+  it("renders a muted 「資料截至」 pill for a live session, not the backtest label", () => {
+    const { getByText, queryByText } = render(
+      <SessionBadge session={{ session_date: "2026-07-24", phase: "today_close_published" }} />,
+    );
+    expect(getByText("資料截至 2026-07-24")).toBeTruthy();
+    expect(getByText("資料截至 2026-07-24").className).not.toContain("amber");
+    expect(queryByText(/回測重播/)).toBeNull();
+  });
+
+  it("switches to the warning-styled 「回測重播」 pill when phase is backtest", () => {
+    const { getByText } = render(
+      <SessionBadge session={{ session_date: "2025-06-01", phase: "backtest" }} />,
+    );
+    const pill = getByText("回測重播 · 2025-06-01");
+    expect(pill.className).toContain("amber");
+  });
+
+  it("puts hint_zh in the pill's title attribute for the hover tooltip", () => {
+    const { getByText } = render(
+      <SessionBadge session={{ session_date: "2025-06-01", phase: "backtest", hint_zh: "回測模式：截至 2025-06-01 收盤" }} />,
+    );
+    expect(getByText("回測重播 · 2025-06-01").title).toBe("回測模式：截至 2025-06-01 收盤");
+  });
+
+  it("renders nothing and does not crash when there is no captured_session", () => {
+    const { container: withNull } = render(<SessionBadge session={null} />);
+    expect(withNull.textContent).toBe("");
+    const { container: withUndefined } = render(<SessionBadge session={undefined} />);
+    expect(withUndefined.textContent).toBe("");
+    const { container: withEmptyObject } = render(<SessionBadge session={{}} />);
+    expect(withEmptyObject.textContent).toBe("");
   });
 });
 

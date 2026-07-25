@@ -31,7 +31,7 @@ type Result = {
   market: string;
   topic: string;
   created_at: string;
-  captured_session: { session_date?: string | null; hint_zh?: string } | null;
+  captured_session: { session_date?: string | null; phase?: string; hint_zh?: string } | null;
   conclusion: Conclusion;
   turns: Turn[];
   strategy?: string;
@@ -377,10 +377,33 @@ function CandidatePool({ results, onSelect }: { results: Result[]; onSelect: (sy
   </details>;
 }
 
+// Surfaces which trading session a run's numbers are anchored to, so a
+// backtest replay can never render indistinguishable from today's live
+// picks (the gap #265 closed on the server side — this closes it for the
+// reader). Pure presentation: drops out cleanly when the backend sent no
+// captured_session (older archived rows), so the card layout is unchanged
+// for them.
+export function SessionBadge({ session }: { session?: Result["captured_session"] }) {
+  if (!session?.session_date) return null;
+  const isBacktest = session.phase === "backtest";
+  const tone = isBacktest
+    ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+    : "border-slate-700 bg-slate-950/60 text-slate-300";
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border px-3 py-1 text-xs ${tone}`}
+      title={session.hint_zh || undefined}
+    >
+      {isBacktest ? `回測重播 · ${session.session_date}` : `資料截至 ${session.session_date}`}
+    </span>
+  );
+}
+
 function StrategyRun({ run, onSelect }: { run: Result; onSelect: (symbol: string, name?: string) => void }) {
   const warnings = qualityWarnings(run.conclusion.quality_signals);
   const signalCandidates = (run.candidates ?? []).filter((c) => c.symbol && c.signal_type && signalNames[c.signal_type]);
   return <article className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5 sm:p-7">
+    {run.captured_session?.session_date && <div className="mb-4"><SessionBadge session={run.captured_session} /></div>}
     {signalCandidates.length > 0 && <div className="mb-4 flex flex-wrap gap-2">{signalCandidates.map((c) => <button key={c.symbol} type="button" title="查看 K 線圖" onClick={() => onSelect(c.symbol!, c.name)} className="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-xs text-slate-300 transition hover:border-slate-500 hover:text-white">{c.symbol}{c.name && <span className="ml-1 text-slate-400">{c.name}</span>} · {signalNames[c.signal_type!]}</button>)}</div>}
     <OutcomeSummary run={run} onSelect={onSelect} />
     <div className="mt-4 flex flex-wrap gap-3">{(run.conclusion.recommended_symbols ?? []).map((symbol) => <button key={symbol} type="button" title="查看 K 線圖" onClick={() => onSelect(symbol, run.conclusion.symbol_names?.[symbol])} className="rounded-xl bg-amber-900/40 px-4 py-3 text-left text-amber-100 ring-1 ring-amber-800/60 transition hover:bg-amber-900/60 hover:ring-amber-600"><div className="font-bold">{symbol}</div><div className="text-xs text-amber-200/70">{run.conclusion.symbol_names?.[symbol] ?? ""}</div></button>)}{!(run.conclusion.recommended_symbols?.length) && <p className="text-slate-400">本場沒有推薦標的</p>}</div>

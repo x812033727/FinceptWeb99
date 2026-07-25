@@ -96,34 +96,40 @@ def _dealer_sql(has_cutoff: bool):
     """Dealer breadth: `contract = 'total'` rows are each dealer's
     volume summed across all their contracts, so summing again across
     dealer_id for a given ts gives the market-wide dealer total for
-    that session. mean20 averages up to the last 20 sessions
-    available (fewer if the archive doesn't have 20 yet)."""
+    that session. mean20 is the trailing mean over the 20 distinct
+    sessions STRICTLY BEFORE the latest one (`d2.ts < latest.ts`) —
+    the latest session's own volume must NOT be in its own baseline,
+    or comparing it to "20-session mean" is comparing it partly to
+    itself (with ~9 archived sessions that's already 1/9 self-weight,
+    which systematically damps `vs_20s_mean_pct` toward zero). No
+    separate cutoff is needed on the trailing-mean side: `d2.ts <
+    latest.ts` and `latest.ts` is already <= the caller's cutoff, so
+    every row the mean sees is too. Averages over fewer than 20
+    sessions when the archive doesn't have 20 yet."""
     clause = "AND ts <= :cutoff" if has_cutoff else ""
-    inner_clause = "AND d2.ts <= :cutoff" if has_cutoff else ""
     return text(
         f"""
-        SELECT ts, total, mean20
+        SELECT latest.ts, latest.total,
+               (SELECT avg(s)
+                  FROM (
+                        SELECT sum(volume) AS s
+                          FROM finmind.tw_futures_dealer_volume d2
+                         WHERE d2.contract = 'total'
+                           AND d2.ts < latest.ts
+                      GROUP BY d2.ts
+                      ORDER BY d2.ts DESC
+                         LIMIT 20
+                       ) t20
+               ) AS mean20
           FROM (
-                SELECT ts,
-                       sum(volume) AS total,
-                       (SELECT avg(s)
-                          FROM (
-                                SELECT sum(volume) AS s
-                                  FROM finmind.tw_futures_dealer_volume d2
-                                 WHERE d2.contract = 'total'
-                                   {inner_clause}
-                              GROUP BY d2.ts
-                              ORDER BY d2.ts DESC
-                                 LIMIT 20
-                               ) t20
-                       ) AS mean20
+                SELECT ts, sum(volume) AS total
                   FROM finmind.tw_futures_dealer_volume
                  WHERE contract = 'total'
                    {clause}
               GROUP BY ts
               ORDER BY ts DESC
                  LIMIT 1
-               ) latest_session
+               ) latest
         """
     )
 

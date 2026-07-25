@@ -34,6 +34,12 @@ async def test_builds_shape_from_latest_session():
         _row(date(2026, 7, 2), "top5", 60000, 59000, 0, 0),
         _row(date(2026, 7, 2), "top10", 70000, 71000, 0, 0),
     ]
+    # ts, total, mean20 — mean20 is a canned input here (the fake
+    # session hands back whatever row this test supplies), so this
+    # test only proves the Python-side pct math, not that the SQL
+    # actually excludes the latest session from its own baseline.
+    # That SQL-level property (`d2.ts < latest.ts`) is verified
+    # separately against the live archive — see task-1-report.md.
     dealer = [(date(2026, 7, 17), 45231.0, 40250.0)]   # ts, total, mean20
     out = await large_trader_positioning(_DB([latest, prior, dealer]), as_of=None)
     assert out["as_of_session"] == "2026-07-09"

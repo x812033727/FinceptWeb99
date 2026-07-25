@@ -128,10 +128,26 @@ the session actually returned, because each already tracks it:
 
 | Block | Session actually returned |
 |---|---|
-| `screener` | `actual_session` per row (already stamped; `min()` across rows is already computed for the phase downgrade) |
+| `screener` | `max()` of each row's own `as_of` — the freshest row in the batch (see rationale below) |
 | `index` | the bar's own date |
 | `macro` | FRED `observation_end` |
 | `focus_briefs` | the quote's session date per symbol |
+
+`screener`'s answered-session accessor is deliberately `max()`, not `min()`:
+a suspended symbol's stale bar sitting anywhere in a 200-row batch must not
+make the whole batch look archive-dead — that would permanently disable
+archive-first for the screener the moment one symbol halts trading. `max()`
+mirrors live `STOCK_DAY_ALL` semantics, where the batch is treated as
+answered once any row is current. This is a distinct signal from the
+per-row `screener_actual_session` used for the phase-downgrade safety net
+(`_maybe_downgrade_captured_session` in `builder.py`), which stays `min()`
+— the *worst* row governs there, because that check exists specifically to
+catch a batch containing anything stale. `focus_briefs` also keeps `min()`
+for its own answered-session accessor (the "weakest answer" in
+`fetch_focus_briefs`'s `_batch_session`), because a per-symbol brief batch
+must fully answer for every symbol before it counts as archive-served —
+there's no equivalent to "any one row being fresh enough" for a
+per-symbol report.
 
 A block whose returned session is older than the requested one is treated as a
 miss and falls back, and the tag records `live_fallback` with the stale session

@@ -31,12 +31,14 @@ from cache.redis_cache import acquire_lock, release_lock
 from db.session import AsyncSessionLocal
 from models.alert import AlertEvent
 from models.discussion import Discussion
+from models.discussion_auto_run_config import DiscussionAutoRunConfig
 from models.discussion_strategy_template import DiscussionStrategyTemplate
 from models.strategy_health_metric import StrategyHealthMetric
 from services import strategy_health_service as hsvc
 from services import strategy_maturity_service as msvc
 from services.ingest.repository import record_health
 from services.notification_service import notify_user
+from services.veto_clause import VETO_DOWNGRADE_CLAUSE
 from services.veto_guard import abstention_leakage, revert_trigger
 
 log = logging.getLogger(__name__)
@@ -46,10 +48,12 @@ _LOCK_KEY = "lock:monitor_strategy_health"
 _LOCK_TTL = 30 * 60   # 30 min — comfortable for ~100 strategies
 
 # Veto-downgrade revert guard + leakage watch (spec Part 1 governance).
-# See `services.veto_guard` for the pure trigger logic. Runs
-# unconditionally alongside the per-strategy health sweep — pre-adoption
-# it simply never fires (live price_signal rarely has 3 consecutive
-# decided losses), so there is nothing to gate on.
+# See `services.veto_guard` for the pure trigger logic. Gated on the
+# clause actually being adopted somewhere (`_veto_clause_armed` below)
+# — pre-adoption there is nothing to revert or leak, and running the
+# queries anyway means one ordinary losing streak on a strategy the
+# clause was never applied to fires a daily alarm naming a revert for a
+# clause that was never in play.
 _LIVE_PRICE_SIGNAL_LIMIT = 15
 _LEAKAGE_STRATEGIES = ("chip_quality", "general")
 _LEAKAGE_MIN_SAMPLES = 5   # noise floor — skip a window this thin
@@ -161,6 +165,20 @@ async def _abstain_rate(
         return (None, 0)
     abstains = sum(1 for v in verdicts if v == "abstain")
     return (abstains / total, total)
+
+
+async def _veto_clause_armed(db: AsyncSession) -> bool:
+    """True when at least one `DiscussionAutoRunConfig.rules` contains
+    the veto-downgrade clause — i.e. it has actually been adopted
+    somewhere, not merely available to apply. Gates the entire guard
+    section: `_veto_guard_findings` below has no business running
+    against live data for a clause nobody has applied yet."""
+    row = await db.scalar(
+        select(DiscussionAutoRunConfig.user_id).where(
+            DiscussionAutoRunConfig.rules.contains(VETO_DOWNGRADE_CLAUSE)
+        ).limit(1)
+    )
+    return row is not None
 
 
 async def _veto_guard_findings(db: AsyncSession) -> list[str]:
@@ -298,7 +316,8 @@ async def run_health_monitor() -> dict:
         # duties (snapshots still get written even if this errors).
         try:
             async with AsyncSessionLocal() as db:
-                counters["guard_findings"] = await _veto_guard_findings(db)
+                if await _veto_clause_armed(db):
+                    counters["guard_findings"] = await _veto_guard_findings(db)
         except Exception as exc:
             log.warning(
                 "monitor_strategy_health.veto_guard_failed",

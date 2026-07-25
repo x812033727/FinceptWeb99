@@ -15,9 +15,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.backtest_sweep import BacktestSweep
 from models.discussion import Discussion
+from models.discussion_auto_run_config import DiscussionAutoRunConfig
 from models.discussion_strategy_template import DiscussionStrategyTemplate
 from models.user import User, UserRole
+from services.veto_clause import VETO_DOWNGRADE_CLAUSE
 from tasks import monitor_strategy_health as cron
+
+
+async def _seed_veto_clause_config(db: AsyncSession, owner_id: uuid.UUID) -> None:
+    """Arm the veto-guard gate: a `DiscussionAutoRunConfig` whose rules
+    contain the clause, as if an operator had already run
+    `apply_veto_downgrade.py --apply` for this user. The guard section
+    is gated on this existing somewhere (FIX 3) — without it, the
+    revert-trigger and leakage-watch queries never even run."""
+    db.add(DiscussionAutoRunConfig(
+        user_id=owner_id,
+        persona_ids=["a"],
+        topic="t",
+        rules="原有規則。" + VETO_DOWNGRADE_CLAUSE,
+    ))
+    await db.commit()
 
 
 @pytest.fixture
@@ -301,7 +318,10 @@ async def test_veto_guard_revert_trigger_forces_not_ok(
     (spec Part 1) independent of the per-strategy sweep — no template
     is configured here at all. `run_health_monitor` must surface the
     finding, and `health_monitor_job` must fold it into ok=False plus
-    the recorded error text so it isn't a silent green."""
+    the recorded error text so it isn't a silent green. The guard is
+    gated on the clause actually being adopted (FIX 3) — seed a config
+    row with it so this still tests "fires when armed"."""
+    await _seed_veto_clause_config(db_session, owner.id)
     for _ in range(3):
         await _live_price_signal_discussion(db_session, owner, verdict="loss")
     await db_session.commit()
@@ -341,6 +361,29 @@ async def test_veto_guard_quiet_by_default(
 
 
 @pytest.mark.asyncio
+async def test_veto_guard_skipped_when_clause_never_adopted(
+    db_session: AsyncSession, owner: User,
+):
+    """FIX 3: the clause has never been applied to any
+    DiscussionAutoRunConfig anywhere — a live price_signal losing
+    streak that WOULD trip the revert trigger if the clause were
+    adopted must produce no guard findings at all, because the guard
+    section is gated on adoption. Before this fix, one ordinary losing
+    streak (pre-adoption, clause never applied) would have named a
+    revert for a clause nobody applied."""
+    for _ in range(3):
+        await _live_price_signal_discussion(db_session, owner, verdict="loss")
+    await db_session.commit()
+
+    with patch.object(cron, "acquire_lock", AsyncMock(return_value=True)), \
+         patch.object(cron, "release_lock", AsyncMock()):
+        out = await cron.run_health_monitor()
+
+    assert out["guard_findings"] == []
+    assert out["errors"] == 0
+
+
+@pytest.mark.asyncio
 async def test_veto_guard_leakage_fires_and_ignores_unverifiable(
     db_session: AsyncSession, owner: User,
 ):
@@ -351,7 +394,10 @@ async def test_veto_guard_leakage_fires_and_ignores_unverifiable(
     denominator, same convention as `daily_scoreboard_service`'s
     win-rate calc) — if they did, the baseline rate would read 62.5%
     instead of 100% and this assertion on the exact percentage would
-    catch it."""
+    catch it. Seeds the veto-clause config so the guard section is
+    armed (FIX 3) — otherwise this would be quiet for the wrong
+    reason (never reaching the leakage check at all)."""
+    await _seed_veto_clause_config(db_session, owner.id)
     now = datetime.now(UTC)
     current_ts = now - timedelta(days=1)
     baseline_ts = now - timedelta(days=20)
@@ -398,7 +444,9 @@ async def test_veto_guard_leakage_skips_thin_window(
 ):
     """Noise floor: a window with fewer than 5 verdicts is skipped
     entirely, even though the raw rates would otherwise read as a
-    dramatic (and spurious) drop."""
+    dramatic (and spurious) drop. Seeds the veto-clause config (FIX 3)
+    so this is testing the thin-window skip, not just the gate."""
+    await _seed_veto_clause_config(db_session, owner.id)
     now = datetime.now(UTC)
     current_ts = now - timedelta(days=1)
     baseline_ts = now - timedelta(days=20)
@@ -430,7 +478,10 @@ async def test_veto_guard_leakage_quiet_when_rate_rises(
     fire — it's the opposite of leakage. This also catches a
     current/baseline window-swap bug: if the current-window query were
     accidentally given the baseline date range (or vice versa), this
-    exact data would flip into a spurious 100pp "drop" and fire."""
+    exact data would flip into a spurious 100pp "drop" and fire.
+    Seeds the veto-clause config (FIX 3) so this is testing the
+    rate-direction logic, not just the gate."""
+    await _seed_veto_clause_config(db_session, owner.id)
     now = datetime.now(UTC)
     current_ts = now - timedelta(days=1)
     baseline_ts = now - timedelta(days=20)

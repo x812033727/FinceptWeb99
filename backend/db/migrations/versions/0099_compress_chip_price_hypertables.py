@@ -7,12 +7,30 @@ Rows are NEVER deleted — compression only. 90-day threshold keeps every
 chunk the daily ingest walks (10-day lookback) and the discussion reads
 (30-day history windows) uncompressed; only cold history compresses.
 
-Requires TimescaleDB community license (prod: `timescale`, 2.26.3 —
-verified). No plain-Postgres guard is added here: `ALTER TABLE ... SET
-(timescaledb.compress ...)` and `add_compression_policy` already fail
-loudly with a clear Postgres error if the extension/hypertable is
-absent, which is what we want on a non-Timescale environment (unit-test
-SQLite never runs alembic at all).
+Requires TimescaleDB community license (prod: `timescale/timescaledb:
+latest-pg15` per `docker-compose.yml`; rehearsed here against
+`2.26.3-pg16` — same TimescaleDB feature set, one PG major version
+ahead of prod. No compression-DDL behavior is known to differ across
+that gap, but it's a real delta worth flagging rather than glossing
+over). Both `upgrade()` and `downgrade()` are guarded by
+`_has_timescaledb()` (same pattern as migrations 0004 / 0011 / 0021):
+plain PostgreSQL — e.g. the e2e CI job's `postgres:16-alpine` service —
+has neither the `timescaledb.compress` storage parameter nor
+`add_compression_policy` / `remove_compression_policy` / `decompress_chunk`,
+so without the guard both directions hard-fail there. Unit-test SQLite
+never runs Alembic at all.
+
+Known write against compressed chunks: `tw_market_service.get_history()`
+can, on a user-triggered `/api/tw-market/history` request with `months`
+up to 60, upsert bars older than the 90-day compression threshold via
+`upsert_ohlcv_bars_autosession` (`services/ingest/repo/ohlcv.py`), which
+issues `INSERT ... ON CONFLICT (market, symbol, ts) DO UPDATE`. Verified
+(see `rehearse_timescale_migrations.sh`, `UPSERT-INTO-COMPRESSED-OK`)
+to succeed against a compressed chunk on 2.26.3 — TimescaleDB allows the
+upsert transparently. The accepted trade-off is occasional
+decompress-on-write churn from these occasional history-backfill
+requests; the daily scheduled ingest never triggers it since it only
+ever walks the last 10 days.
 """
 from collections.abc import Sequence
 
@@ -26,7 +44,25 @@ depends_on: str | Sequence[str] | None = None
 _TABLES = ("ohlcv_daily", "tw_institutional_daily", "tw_margin_daily")
 
 
+def _is_postgres() -> bool:
+    return op.get_bind().dialect.name == "postgresql"
+
+
+def _has_timescaledb() -> bool:
+    if not _is_postgres():
+        return False
+    return bool(op.get_bind().exec_driver_sql(
+        "SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'"
+    ).scalar())
+
+
 def upgrade() -> None:
+    # Plain Postgres (e2e CI's postgres:16-alpine) has no
+    # timescaledb.compress storage param / add_compression_policy —
+    # no-op there rather than hard-failing the whole migration chain.
+    if not _has_timescaledb():
+        return
+
     for t in _TABLES:
         op.execute(
             f"ALTER TABLE {t} SET ("
@@ -40,6 +76,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Mirror the upgrade guard: remove_compression_policy /
+    # decompress_chunk also don't exist on plain Postgres.
+    if not _has_timescaledb():
+        return
+
     for t in _TABLES:
         op.execute(
             f"SELECT remove_compression_policy('{t}', if_exists => true)"

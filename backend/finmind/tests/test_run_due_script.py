@@ -92,7 +92,7 @@ async def test_tw_only_market_wide_flags_reach_runner(
         "finmind_tw_marketwide",
         ok=True,
         row_count=0,
-        error=None,
+        error="idle: nothing due",
     )
 
 
@@ -169,10 +169,11 @@ async def test_tw_only_partial_failure_is_redacted_and_bounded(
 
     rc = await run_due.amain()
 
-    assert rc == run_due.EXIT_CHUNK_FAILURE
+    assert rc == run_due.EXIT_OK
     kwargs = record_health.await_args.kwargs
-    assert kwargs["ok"] is False
+    assert kwargs["ok"] is True
     assert kwargs["row_count"] == 8
+    assert kwargs["error"].startswith("partial:")
     assert "TaiwanFailed5" in kwargs["error"]
     assert "TaiwanFailed6" not in kwargs["error"]
     assert "(+1 more)" in kwargs["error"]

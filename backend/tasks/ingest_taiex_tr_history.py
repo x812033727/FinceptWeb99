@@ -15,8 +15,9 @@ Why we want both:
     denominated portfolios — replacing the wrong-by-default SPY
     benchmark that PR #132 left in place.
 
-Schedule: daily 15:30 Taipei (07:30 UTC), 20 min after the price-
-index cron, so neither shares the same TWSE quiet window.
+Schedule: 15:30 + 22:30 Taipei (07:30/14:30 UTC), 20 min after the
+price-index cron, so neither shares the same TWSE quiet window. The
+evening re-run covers FinMind's index sync lagging the 15:30 slot.
 
 Failure handling: paywall fail-soft via the shared
 `data.tw.finmind_paywall` detector — sponsor-tier today, but

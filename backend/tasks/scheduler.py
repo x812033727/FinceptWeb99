@@ -410,11 +410,15 @@ def setup_jobs() -> None:
     # returns the full month's index OHLC; idempotent UPSERT into
     # ohlcv_daily under symbol='_TAIEX' so the existing read tier
     # serves it. Stays after the chip-metric tasks so all post-close
-    # writes happen in one ~20-min window.
+    # writes happen in one ~20-min window. Runs twice: 15:10 Taipei
+    # can miss the just-closed session when FinMind hasn't synced the
+    # index yet (observed 2026-07-27 — stocks landed, index didn't),
+    # so a 22:10 Taipei re-run catches it before the next-morning
+    # 04:00 discussion reads the archive.
     from tasks.ingest_taiex_history import run as run_ingest_taiex_history
     scheduler.add_job(
         run_ingest_taiex_history,
-        trigger=CronTrigger(hour=7, minute=10, timezone="UTC"),
+        trigger=CronTrigger(hour="7,14", minute=10, timezone="UTC"),
         id="ingest_taiex_history",
         replace_existing=True,
         max_instances=1,
@@ -503,17 +507,19 @@ def setup_jobs() -> None:
     )
 
     # TAIEX TR (含息報酬指數). FinMind sponsor-tier; pulls trailing
-    # 400 days every tick (cheap, idempotent UPSERT). 15:30 Taipei
-    # (07:30 UTC), 20 min after `ingest_taiex_history` so neither
-    # shares the same TWSE quiet window. Archive lands under the
-    # synthetic symbol `_TAIEX_TR` in `ohlcv_daily` — same layout
-    # as `_TAIEX` from PR #132.
+    # 400 days every tick (cheap, idempotent UPSERT). 15:30/22:30
+    # Taipei (07:30/14:30 UTC), 20 min after `ingest_taiex_history`
+    # so neither shares the same TWSE quiet window; the evening
+    # re-run exists for the same reason as the price index's (FinMind
+    # index sync can lag the 15:30 slot by hours). Archive lands
+    # under the synthetic symbol `_TAIEX_TR` in `ohlcv_daily` — same
+    # layout as `_TAIEX` from PR #132.
     from tasks.ingest_taiex_tr_history import (
         run as run_ingest_taiex_tr_history,
     )
     scheduler.add_job(
         run_ingest_taiex_tr_history,
-        trigger=CronTrigger(hour=7, minute=30, timezone="UTC"),
+        trigger=CronTrigger(hour="7,14", minute=30, timezone="UTC"),
         id="ingest_taiex_tr_history",
         replace_existing=True,
         max_instances=1,

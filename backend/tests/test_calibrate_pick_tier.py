@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from scripts.calibrate_pick_tier import sweep
+from services.daily_pick_tier import T_HALLUC
 
 PICKS = [
     {"consensus": 0.95, "warnings": 0, "excess_pp": 10.0, "win": True},
@@ -33,7 +34,8 @@ def test_sweep_high_threshold_shrinks_tier():
 
 
 def test_warning_gate_applies_inside_sweep():
-    picks = [{"consensus": 0.95, "warnings": 9, "excess_pp": 8.0, "win": True}]
+    picks = [{"consensus": 0.95, "warnings": T_HALLUC + 1,
+              "excess_pp": 8.0, "win": True}]
     rows = sweep(picks, thresholds=[0.85])
     assert rows[0]["n_recommend"] == 0
 

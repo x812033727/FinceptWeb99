@@ -333,6 +333,8 @@ MAPPINGS: dict[str, DatasetMapping] = {
         pk_columns=("contract", "ts"),
         extra={"source": "finmind"},
         row_transform=_row_futures_daily,
+        # Market-wide form returns only start_date (verified 2026-07-28).
+        single_day=True,
     ),
     # ── 選擇權日成交資訊 ─────────────────────────────────────────
     "TaiwanOptionDaily": DatasetMapping(
@@ -353,6 +355,8 @@ MAPPINGS: dict[str, DatasetMapping] = {
         pk_columns=("contract", "strike", "call_put", "ts"),
         extra={"source": "finmind"},
         row_transform=_row_option_daily,
+        # Market-wide form returns only start_date (verified 2026-07-28).
+        single_day=True,
     ),
     # ── 季報三表 (wide-format batch_transform) ─────────────────
     "TaiwanStockFinancialStatements": DatasetMapping(
@@ -496,6 +500,8 @@ MAPPINGS: dict[str, DatasetMapping] = {
         pk_columns=("contract", "ts", "session"),
         extra={"session": "day", "source": "finmind"},
         row_transform=_row_futures_inst,
+        # Market-wide form returns only start_date (verified 2026-07-28).
+        single_day=True,
     ),
     "TaiwanFuturesInstitutionalInvestorsAfterHours": DatasetMapping(
         dataset_code="TaiwanFuturesInstitutionalInvestorsAfterHours",
@@ -513,6 +519,8 @@ MAPPINGS: dict[str, DatasetMapping] = {
         pk_columns=("contract", "ts", "session"),
         extra={"session": "night", "source": "finmind"},
         row_transform=_row_futures_inst,
+        # Market-wide form returns only start_date (verified 2026-07-28).
+        single_day=True,
     ),
     # ── 市值比重 ────────────────────────────────────────────────
     "TaiwanStockMarketValueWeight": DatasetMapping(
@@ -857,6 +865,8 @@ MAPPINGS: dict[str, DatasetMapping] = {
         column_map={},  # batch_transform owns the pivot
         pk_columns=("contract", "ts", "session", "call_put"),
         batch_transform=_batch_option_inst_regular,
+        # Market-wide form returns only start_date (verified 2026-07-28).
+        single_day=True,
     ),
     "TaiwanOptionInstitutionalInvestorsAfterHours": DatasetMapping(
         dataset_code="TaiwanOptionInstitutionalInvestorsAfterHours",
@@ -864,6 +874,8 @@ MAPPINGS: dict[str, DatasetMapping] = {
         column_map={},
         pk_columns=("contract", "ts", "session", "call_put"),
         batch_transform=_batch_option_inst_afterhours,
+        # Market-wide form returns only start_date (verified 2026-07-28).
+        single_day=True,
     ),
     # Same shape as TaiwanStockTradingDailyReport, but indexed by a
     # warrant code instead of an equity stock_id. The runner picks the

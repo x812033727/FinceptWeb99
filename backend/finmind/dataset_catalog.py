@@ -126,14 +126,17 @@ FUNDAMENTAL: tuple[CatalogEntry, ...] = (
 # ── Derivative (期權) ─────────────────────────────────────────────
 DERIVATIVE: tuple[CatalogEntry, ...] = (
     CatalogEntry("TaiwanFutOptDailyInfo",                              "tw_futopt_master",                "finmind", "taifex", "daily"),
-    CatalogEntry("TaiwanFuturesDaily",                                 "tw_futures_daily",                "finmind", "taifex", "daily"),
-    CatalogEntry("TaiwanOptionDaily",                                  "tw_option_daily",                 "finmind", "taifex", "daily"),
+    # Market-wide + single_day (verified 2026-07-28): the data_id=""
+    # form returns every contract but only start_date's day, so the
+    # runner must fan out per day — same trap as the dealer datasets.
+    CatalogEntry("TaiwanFuturesDaily",                                 "tw_futures_daily",                "finmind", "taifex", "daily", single_day=True),
+    CatalogEntry("TaiwanOptionDaily",                                  "tw_option_daily",                 "finmind", "taifex", "daily", single_day=True),
     CatalogEntry("TaiwanFuturesTick",                                  "",                                "finmind", None,     "daily"),
     CatalogEntry("TaiwanOptionTick",                                   "",                                "finmind", None,     "daily"),
-    CatalogEntry("TaiwanFuturesInstitutionalInvestors",                "tw_futures_inst_daily",           "finmind", "taifex", "daily"),
-    CatalogEntry("TaiwanOptionInstitutionalInvestors",                 "tw_option_inst_daily",            "finmind", "taifex", "daily"),
-    CatalogEntry("TaiwanFuturesInstitutionalInvestorsAfterHours",      "tw_futures_inst_daily",           "finmind", "taifex", "daily"),
-    CatalogEntry("TaiwanOptionInstitutionalInvestorsAfterHours",       "tw_option_inst_daily",            "finmind", "taifex", "daily"),
+    CatalogEntry("TaiwanFuturesInstitutionalInvestors",                "tw_futures_inst_daily",           "finmind", "taifex", "daily", single_day=True),
+    CatalogEntry("TaiwanOptionInstitutionalInvestors",                 "tw_option_inst_daily",            "finmind", "taifex", "daily", single_day=True),
+    CatalogEntry("TaiwanFuturesInstitutionalInvestorsAfterHours",      "tw_futures_inst_daily",           "finmind", "taifex", "daily", single_day=True),
+    CatalogEntry("TaiwanOptionInstitutionalInvestorsAfterHours",       "tw_option_inst_daily",            "finmind", "taifex", "daily", single_day=True),
     CatalogEntry("TaiwanFuturesDealerTradingVolumeDaily",              "tw_futures_dealer_volume",        "finmind", "taifex", "daily", single_day=True),
     CatalogEntry("TaiwanOptionDealerTradingVolumeDaily",               "tw_option_dealer_volume",         "finmind", "taifex", "daily", single_day=True),
     CatalogEntry("TaiwanFuturesOpenInterestLargeTraders",              "tw_futures_oi_largetraders",      "finmind", "taifex", "daily"),

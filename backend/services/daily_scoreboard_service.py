@@ -46,6 +46,7 @@ from sqlalchemy.orm import load_only
 
 from models.discussion import Discussion
 from models.ohlcv_daily import OhlcvDaily
+from services.daily_pick_tier import tier_for
 from services.outcome_classifier import DEFAULT_WIN_PCT
 from services.tw_trading_calendar import to_tw_date
 
@@ -151,6 +152,9 @@ async def build_scoreboard(
                 Discussion.day1_open_prices,
                 Discussion.day5_close_prices,
                 Discussion.pool_performance,
+                # Tier lens input — without this, `tier_for(d.conclusion)`
+                # would lazy-load per row (MissingGreenlet under asyncio).
+                Discussion.conclusion,
             ))
             .where(
                 Discussion.owner_id == owner_id,
@@ -181,6 +185,20 @@ async def build_scoreboard(
         # denominator — otherwise a strategy that correctly sat out a
         # falling tape would be punished as if it had lost.
         abstains = sum(1 for d in group if d.verdict == "abstain")
+        # Tier lens: the same decided rows split by read-time confidence
+        # tier. Rows whose stored conclusion yields no tier (mangled or
+        # symbol-less JSON) stay in the untiered totals only.
+        tier_wins = {"recommend": 0, "watch": 0}
+        tier_decided = {"recommend": 0, "watch": 0}
+        for d in group:
+            if d.verdict not in _GRADED_VERDICTS:
+                continue
+            tier = tier_for(d.conclusion)
+            if tier is None:
+                continue
+            tier_decided[tier] += 1
+            if d.verdict in WINNING_VERDICTS:
+                tier_wins[tier] += 1
         # Not yet graded (window still open). Surfacing this is the
         # whole point of C3: a 100% win rate over one decided sample
         # with three still pending is not a 100% win rate.
@@ -234,6 +252,18 @@ async def build_scoreboard(
             "abstains": abstains,
             "unverifiable": sum(1 for d in group if d.verdict == "unverifiable"),
             "win_rate": round(wins / decided, 4) if decided else None,
+            "recommend_decided": tier_decided["recommend"],
+            "recommend_wins": tier_wins["recommend"],
+            "recommend_win_rate": (
+                round(tier_wins["recommend"] / tier_decided["recommend"], 4)
+                if tier_decided["recommend"] else None
+            ),
+            "watch_decided": tier_decided["watch"],
+            "watch_wins": tier_wins["watch"],
+            "watch_win_rate": (
+                round(tier_wins["watch"] / tier_decided["watch"], 4)
+                if tier_decided["watch"] else None
+            ),
             "avg_return_pct": _mean(pick_returns),
             "d5_decided": d5_decided,
             "d5_wins": d5_wins,

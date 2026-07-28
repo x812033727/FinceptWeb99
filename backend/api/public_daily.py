@@ -154,6 +154,15 @@ class ScoreboardEntry(BaseModel):
     abstains: int = 0
     unverifiable: int
     win_rate: float | None = None
+    # Tier lens: the same decided rows split by read-time confidence
+    # tier (services.daily_pick_tier). Small-n dimming is the client's
+    # job — the n=1-shows-100% lesson applies per tier too.
+    recommend_decided: int = 0
+    recommend_wins: int = 0
+    recommend_win_rate: float | None = None
+    watch_decided: int = 0
+    watch_wins: int = 0
+    watch_win_rate: float | None = None
     avg_return_pct: float | None = None
     # Second lens on the same picks, graded purely on the D5 close.
     # The verdict bands are asymmetric by design (`big_loss` fires on

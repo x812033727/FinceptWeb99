@@ -30,12 +30,13 @@ def _verified(
     auto_run: bool = True,
     status: str = "done",
     as_of_date=None,
+    conclusion: dict | None = None,
 ):
     now = datetime(2026, 7, 10, tzinfo=UTC)
     return Discussion(
         id=uuid.uuid4(), owner_id=owner_id, topic="t", rules="r",
         persona_ids=["buffett"], market="TW", status=status,
-        current_round=5, conclusion={"reasoning": "x"},
+        current_round=5, conclusion=conclusion or {"reasoning": "x"},
         auto_run=auto_run, auto_run_strategy=strategy,
         verdict=verdict, day1_open_prices=day1, day5_close_prices=day5,
         pool_performance=pool_performance, as_of_date=as_of_date,
@@ -275,3 +276,38 @@ async def test_scoreboard_excludes_backtest_replay_rows(db_session):
     assert general["wins"] == 1
     assert general["losses"] == 0
     assert general["decided"] == 1
+
+
+@pytest.mark.asyncio
+async def test_tiered_win_rates_split_the_same_decided_rows(db_session):
+    """Per-tier lenses reuse the decided-verdict denominator; the
+    untiered win_rate still counts every decided row, and a mangled
+    conclusion (tier None) falls into neither tier column."""
+    owner = await _owner(db_session)
+    recommend = {
+        "recommended_symbols": ["2330"], "consensus_score": 0.95,
+        "quality_signals": {"hallucination_warnings": []},
+    }
+    watch = {
+        "recommended_symbols": ["1101"], "consensus_score": 0.5,
+        "quality_signals": {"hallucination_warnings": []},
+    }
+    db_session.add_all([
+        _verified(owner.id, strategy="general", verdict="win", conclusion=recommend),
+        _verified(owner.id, strategy="general", verdict="loss", conclusion=recommend),
+        _verified(owner.id, strategy="general", verdict="win", conclusion=watch),
+        # Decided but tier-less (no recommended_symbols in stored JSON):
+        # counts in the untiered totals, in neither tier column.
+        _verified(owner.id, strategy="general", verdict="win", conclusion={"reasoning": "x"}),
+    ])
+    await db_session.commit()
+
+    entry = (await build_scoreboard(db_session, owner.id))[0]
+    assert entry["recommend_decided"] == 2
+    assert entry["recommend_wins"] == 1
+    assert entry["recommend_win_rate"] == 0.5
+    assert entry["watch_decided"] == 1
+    assert entry["watch_wins"] == 1
+    assert entry["watch_win_rate"] == 1.0
+    assert entry["decided"] == 4
+    assert entry["win_rate"] == 0.75

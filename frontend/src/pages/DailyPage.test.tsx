@@ -1,7 +1,7 @@
 import { render, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { dedupeBySymbol } from "./dailyCandidates";
-import { Scoreboard, SessionBadge } from "./DailyPage";
+import { RunGroups, Scoreboard, SessionBadge } from "./DailyPage";
 
 const baseEntry = {
   strategy: "price_signal",
@@ -107,5 +107,71 @@ describe("Scoreboard sample-sufficiency markers", () => {
     // D5 lens is NOT thin: its % not dimmed, no D5 marker.
     expect(within(d5Cell as HTMLElement).getByText("60%").className).not.toContain(DIM);
     expect(within(d5Cell as HTMLElement).queryByText("樣本不足")).toBeNull();
+  });
+});
+
+describe("RunGroups tier grouping", () => {
+  const run = (tier: "recommend" | "watch" | null | undefined, symbol: string, sequence: number) => ({
+    market: "TW", topic: "t", created_at: "2026-07-28T04:00:00Z",
+    captured_session: null,
+    conclusion: { recommended_symbols: [symbol], reasoning: "r" },
+    turns: [], strategy: "price_signal", sequence, tier,
+  });
+
+  it("renders 推薦 group before 觀察名單 for mixed tiers", () => {
+    const { container, getByText } = render(
+      <RunGroups results={[run("watch", "1101", 1), run("recommend", "2330", 2)]} onSelect={() => {}} />,
+    );
+    const rec = getByText("推薦");
+    const watch = getByText("觀察名單");
+    // 推薦 header precedes 觀察名單 in document order.
+    expect(rec.compareDocumentPosition(watch) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(rec.className).toContain("amber");
+    expect(container.textContent).toContain("2330");
+    expect(container.textContent).toContain("1101");
+  });
+
+  it("renders no group headers for tier-less payloads (legacy)", () => {
+    const { queryByText } = render(
+      <RunGroups results={[run(null, "2330", 1), run(undefined as never, "1101", 2)]} onSelect={() => {}} />,
+    );
+    expect(queryByText("推薦")).toBeNull();
+    expect(queryByText("觀察名單")).toBeNull();
+  });
+});
+
+describe("Scoreboard tier columns", () => {
+  it("dims a thin recommend tier with the 樣本不足 marker", () => {
+    const { container } = render(<Scoreboard entries={[{
+      ...baseEntry,
+      decided: 20, win_rate: 0.5, wins: 10, losses: 10,
+      recommend_decided: 1, recommend_wins: 1, recommend_win_rate: 1,
+      watch_decided: 12, watch_wins: 6, watch_win_rate: 0.5,
+    }]} />);
+    const tierCell = container.querySelectorAll("tbody td")[3] as HTMLElement;
+    const rec = within(tierCell).getByText("100%");
+    expect(rec.className).toContain(DIM);
+    expect(within(tierCell).getByText("50%").className).not.toContain(DIM);
+    expect(within(tierCell).getAllByText("樣本不足").length).toBe(1);
+  });
+
+  it("shows a dash when tier fields are absent (pre-deploy payloads)", () => {
+    const { container } = render(<Scoreboard entries={[{
+      ...baseEntry, decided: 20, win_rate: 0.5, wins: 10, losses: 10,
+    }]} />);
+    const tierCell = container.querySelectorAll("tbody td")[3] as HTMLElement;
+    expect(tierCell.textContent).toContain("—");
+  });
+
+  it("renders the D10 reference lens off its own sample count", () => {
+    const { container } = render(<Scoreboard entries={[{
+      ...baseEntry,
+      decided: 20, win_rate: 0.5, wins: 10, losses: 10,
+      d10_decided: 12, d10_wins: 6, d10_win_rate: 0.5,
+      avg_d10_excess_vs_taiex_pct: 3.21,
+    }]} />);
+    const d10Cell = container.querySelectorAll("tbody td")[4] as HTMLElement;
+    expect(within(d10Cell).getByText("50%").className).not.toContain(DIM);
+    expect(d10Cell.textContent).toContain("+3.2%");
   });
 });

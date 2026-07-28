@@ -21,6 +21,7 @@ from db.session import get_db
 from limiter import limiter
 from models.discussion import Discussion, DiscussionTurn
 from models.user import User
+from services.daily_pick_tier import tier_for
 from services.daily_scoreboard_service import build_scoreboard
 from services.discussion.symbol_names import (
     enrich_conclusion_with_names,
@@ -73,6 +74,10 @@ class PublicDailyResult(BaseModel):
     candidates: list[dict[str, Any]] = Field(default_factory=list)
     # Full ranked pool (slim, capped) — carried on the sequence-1 row only.
     candidate_pool: list[dict[str, Any]] = Field(default_factory=list)
+    # Server-computed read-time confidence tier ("recommend" / "watch",
+    # None for abstentions) — services.daily_pick_tier is the single
+    # source of truth; clients must never re-derive it.
+    tier: str | None = None
     verdict: str | None = None
     verdict_reason: str | None = None
     verified_at: str | None = None
@@ -149,6 +154,15 @@ class ScoreboardEntry(BaseModel):
     abstains: int = 0
     unverifiable: int
     win_rate: float | None = None
+    # Tier lens: the same decided rows split by read-time confidence
+    # tier (services.daily_pick_tier). Small-n dimming is the client's
+    # job — the n=1-shows-100% lesson applies per tier too.
+    recommend_decided: int = 0
+    recommend_wins: int = 0
+    recommend_win_rate: float | None = None
+    watch_decided: int = 0
+    watch_wins: int = 0
+    watch_win_rate: float | None = None
     avg_return_pct: float | None = None
     # Second lens on the same picks, graded purely on the D5 close.
     # The verdict bands are asymmetric by design (`big_loss` fires on
@@ -160,6 +174,13 @@ class ScoreboardEntry(BaseModel):
     d5_win_rate: float | None = None
     # Booked win/loss while the D5 close is still missing.
     d5_unsettled: int = 0
+    # D10 reference lens (「D10 參考」) — parallel observation window,
+    # never the verdict window; only rows whose stored close arrays
+    # were extended to 10 entries count.
+    d10_decided: int = 0
+    d10_wins: int = 0
+    d10_win_rate: float | None = None
+    avg_d10_excess_vs_taiex_pct: float | None = None
     pool_samples: int = 0
     avg_alpha_pct: float | None = None
     benchmark_samples: int = 0
@@ -484,6 +505,7 @@ async def _build_response(db: AsyncSession, email: str) -> PublicDailyResponse:
             candidate_pool=_with_company_names(
                 snapshot.get("pool", []), row.market,
             ),
+            tier=tier_for(row.conclusion),
             verdict=row.verdict,
             verdict_reason=row.verdict_reason,
             verified_at=row.verified_at.isoformat() if row.verified_at else None,

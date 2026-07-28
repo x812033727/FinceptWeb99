@@ -54,6 +54,7 @@ from services.ingest.repository import (
     record_failure,
     record_health,
 )
+from services.daily_pick_tier import tier_for
 from services.notification_service import notify_user
 from services.tw_trading_calendar import is_today_likely_trading_day
 
@@ -252,6 +253,7 @@ async def _run_for_user(
     # rows must never feed the learning loop (see `_run_strategy_slot`).
     experiment = EXPERIMENT_RULES_OVERRIDE if rules_override else None
     ran_strategies: dict[str, int] = {}
+    tier_counts: dict[str, int] = {}
     for strategy, count in counts.items():
         if count <= 0:
             continue
@@ -279,27 +281,47 @@ async def _run_for_user(
             )
             if exists:
                 continue
-            await _run_strategy_slot(
+            conclusion = await _run_strategy_slot(
                 db, cfg, strategy, sequence + seq_offset, run_date, batch,
                 pool=pool if sequence == 1 else None,
                 as_of=as_of, rules=rules, experiment=experiment,
             )
             ran_strategies[strategy] = ran_strategies.get(strategy, 0) + 1
+            tier = tier_for(conclusion)
+            if tier:
+                tier_counts[tier] = tier_counts.get(tier, 0) + 1
     # Replays are an operator batch job, not something the user asked
     # for this morning — pushing "今日 AI 選股完成" sixty times would be
     # noise at best and misleading at worst.
     if ran_strategies and as_of is None:
-        await _notify_daily_ready(str(user_id), run_date, ran_strategies)
+        await _notify_daily_ready(
+            str(user_id), run_date, ran_strategies, tier_counts=tier_counts,
+        )
     return bool(ran_strategies)
 
 
 async def _notify_daily_ready(
     user_id: str, run_date, ran_strategies: dict[str, int],
+    tier_counts: dict[str, int] | None = None,
 ) -> None:
     """Best-effort 'your daily picks are ready' fan-out over the
     existing notification transports (websocket / web push / email /
-    LINE, each per user opt-in). Must never fail the run itself."""
+    LINE, each per user opt-in). Must never fail the run itself.
+
+    `tier_counts` is the recommend/watch split over the day's
+    pick-bearing sessions (abstentions have no tier). Empty/None keeps
+    the legacy message — an all-abstain day must not read 「推薦 0」."""
     slots = sum(ran_strategies.values())
+    tier_counts = tier_counts or {}
+    tier_fragment = ""
+    if tier_counts:
+        parts = []
+        if tier_counts.get("recommend"):
+            parts.append(f"推薦 {tier_counts['recommend']} 檔次")
+        if tier_counts.get("watch"):
+            parts.append(f"觀察名單 {tier_counts['watch']} 檔次")
+        if parts:
+            tier_fragment = "，" + "、".join(parts)
     try:
         await notify_user(user_id, {
             "kind": "daily_picks_ready",
@@ -307,11 +329,12 @@ async def _notify_daily_ready(
             "title": "今日 AI 選股完成",
             "message": (
                 f"{run_date.isoformat()} 已完成 {len(ran_strategies)} 個策略"
-                f"共 {slots} 場討論，歡迎查看每日精選。"
+                f"共 {slots} 場討論{tier_fragment}，歡迎查看每日精選。"
             ),
             "run_date": run_date.isoformat(),
             "strategies": sorted(ran_strategies),
             "discussions": slots,
+            "tier_counts": tier_counts,
         })
     except Exception:
         log.exception(
@@ -461,7 +484,9 @@ async def _run_strategy_slot(
     db, cfg, strategy, sequence, run_date, batch, pool: list | None = None,
     as_of: date | None = None, rules: str | None = None,
     experiment: str | None = None,
-) -> None:
+) -> dict | None:
+    """Returns the synthesized conclusion so `_run_for_user` can compute
+    the notification's tier split without re-querying the day's rows."""
     user_id = cfg.user_id
 
     # Live mode (no `as_of_date`): this is a forward-looking daily call,
@@ -602,7 +627,7 @@ async def _run_strategy_slot(
     # numerically correct). Trust the service-layer set; if a test
     # explicitly bypasses it via direct DB writes, that test owns
     # setting verify_after_date too.
-    return None
+    return conclusion
 
 
 async def _maybe_send_report_email(

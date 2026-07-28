@@ -38,6 +38,9 @@ type Result = {
   sequence?: number;
   candidates?: Array<{ symbol?: string; name?: string; strategy_score?: number; signal_type?: string }>;
   candidate_pool?: Array<{ symbol?: string; name?: string; strategy_score?: number; signal_type?: string }>;
+  // Server-computed read-time confidence tier — the frontend never
+  // re-derives it (single source of truth: services.daily_pick_tier).
+  tier?: "recommend" | "watch" | null;
   verdict?: "big_win" | "win" | "big_loss" | "loss" | "abstain" | "unverifiable" | null;
   verdict_reason?: string | null;
   verified_at?: string | null;
@@ -68,6 +71,16 @@ type ScoreboardEntry = {
   d5_losses?: number;
   d5_win_rate?: number | null;
   d5_unsettled?: number;
+  recommend_decided?: number;
+  recommend_wins?: number;
+  recommend_win_rate?: number | null;
+  watch_decided?: number;
+  watch_wins?: number;
+  watch_win_rate?: number | null;
+  d10_decided?: number;
+  d10_wins?: number;
+  d10_win_rate?: number | null;
+  avg_d10_excess_vs_taiex_pct?: number | null;
   pool_samples: number;
   avg_alpha_pct?: number | null;
 };
@@ -188,7 +201,7 @@ export default function DailyPage() {
             </nav>
 
             <section role="tabpanel" aria-label={strategyNames[currentStrategy] ?? legacyStrategyNames[currentStrategy]}>
-              {activeResults.length === 0 ? <StateCard icon={<CalendarDays className="h-6 w-6" />}>今日無符合安全條件的候選股。</StateCard> : <div className="space-y-6"><CandidatePool results={activeResults} onSelect={openChart} />{activeResults.map((run) => <StrategyRun key={`${currentStrategy}-${run.sequence}`} run={run} onSelect={openChart} />)}</div>}
+              {activeResults.length === 0 ? <StateCard icon={<CalendarDays className="h-6 w-6" />}>今日無符合安全條件的候選股。</StateCard> : <div className="space-y-6"><CandidatePool results={activeResults} onSelect={openChart} /><RunGroups results={activeResults} onSelect={openChart} /></div>}
             </section>
 
             <footer className="border-t border-slate-800 pt-6 text-xs leading-6 text-slate-500">{payload.disclaimer}</footer>
@@ -265,7 +278,7 @@ export function Scoreboard({ entries }: { entries: ScoreboardEntry[] }) {
   return <details className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
     <summary className="cursor-pointer text-sm font-semibold text-slate-300">策略計分板（歷史勝率與五日報酬）</summary>
     <div className="mt-4 overflow-x-auto">
-      <table className="w-full min-w-[560px] text-sm">
+      <table className="w-full min-w-[760px] text-sm">
         <thead>
           <tr className="text-left text-xs text-slate-500">
             <th className="py-1.5 pr-4 font-medium">策略</th>
@@ -277,6 +290,11 @@ export function Scoreboard({ entries }: { entries: ScoreboardEntry[] }) {
               勝率
               <span className="ml-1 font-normal text-slate-600">（只看五日收盤）</span>
             </th>
+            <th className="py-1.5 pr-4 font-medium">
+              分級勝率
+              <span className="ml-1 font-normal text-slate-600">（推薦／觀察）</span>
+            </th>
+            <th className="py-1.5 pr-4 font-medium">D10 參考</th>
             <th className="py-1.5 pr-4 font-medium">平均五日報酬</th>
             <th className="py-1.5 pr-4 font-medium">大勝／大敗</th>
             <th className="py-1.5 pr-4 font-medium">樣本</th>
@@ -329,6 +347,39 @@ export function Scoreboard({ entries }: { entries: ScoreboardEntry[] }) {
                   </span>
                 )}
               </td>
+              {/* Tier lens: same decided rows, split by the server-
+                  computed recommend/watch tier. The n=1-shows-100%
+                  lesson applies per tier — each rate dims off its own
+                  sample count. */}
+              <td className="py-2 pr-4">
+                {(entry.recommend_decided ?? 0) + (entry.watch_decided ?? 0) > 0 ? <>
+                  <span className={(entry.recommend_decided ?? 0) < 10 ? "text-slate-400" : undefined}>
+                    {typeof entry.recommend_win_rate === "number" ? `${Math.round(entry.recommend_win_rate * 100)}%` : "—"}
+                  </span>
+                  {(entry.recommend_decided ?? 0) > 0 && (entry.recommend_decided ?? 0) < 10 && <span className="ml-1 rounded-full border border-slate-700 px-1.5 py-0.5 text-micro text-slate-500">樣本不足</span>}
+                  <span className="mx-1 text-slate-600">／</span>
+                  <span className={(entry.watch_decided ?? 0) < 10 ? "text-slate-400" : undefined}>
+                    {typeof entry.watch_win_rate === "number" ? `${Math.round(entry.watch_win_rate * 100)}%` : "—"}
+                  </span>
+                  <span className="ml-1 text-xs text-slate-500">(推 {entry.recommend_decided ?? 0}／觀 {entry.watch_decided ?? 0})</span>
+                </> : <span className="text-slate-500">—</span>}
+              </td>
+              {/* D10 reference lens — a parallel observation window,
+                  never the verdict window; dims off its own count. */}
+              <td className="py-2 pr-4">
+                {(entry.d10_decided ?? 0) > 0 ? <>
+                  <span className={(entry.d10_decided ?? 0) < 10 ? "text-slate-400" : undefined}>
+                    {typeof entry.d10_win_rate === "number" ? `${Math.round(entry.d10_win_rate * 100)}%` : "—"}
+                  </span>
+                  {(entry.d10_decided ?? 0) < 10 && <span className="ml-1 rounded-full border border-slate-700 px-1.5 py-0.5 text-micro text-slate-500">樣本不足</span>}
+                  {typeof entry.avg_d10_excess_vs_taiex_pct === "number" && (
+                    <span className={`ml-1 text-xs ${entry.avg_d10_excess_vs_taiex_pct >= 0 ? "text-up" : "text-down"}`}>
+                      {pct(entry.avg_d10_excess_vs_taiex_pct, true)} vs 大盤
+                    </span>
+                  )}
+                  <span className="ml-1 text-xs text-slate-500">({entry.d10_decided} 場)</span>
+                </> : <span className="text-slate-500">累積中</span>}
+              </td>
               <td className={`py-2 pr-4 ${typeof entry.avg_return_pct === "number" ? (entry.avg_return_pct >= 0 ? "text-up" : "text-down") : ""}`}>
                 {pct(entry.avg_return_pct, true)}
               </td>
@@ -354,7 +405,7 @@ export function Scoreboard({ entries }: { entries: ScoreboardEntry[] }) {
         </tbody>
       </table>
     </div>
-    <p className="mt-3 text-xs leading-5 text-slate-500">勝率＝已分出勝負的場次中，第 5 個交易日收盤仍達門檻的比例（期間漲過又跌回來不算勝）；棄權（候選股皆不符合進場條件）與待判、無法驗證都不列入勝率分母。AI−池 α＝AI 精選的五日報酬減去該場完整候選池的平均報酬；AI−大盤＝減去同期間加權報酬指數。決勝場次少於 10 場時數字僅供參考，不具統計意義。歷史統計不構成投資建議。</p>
+    <p className="mt-3 text-xs leading-5 text-slate-500">勝率＝已分出勝負的場次中，第 5 個交易日收盤仍達門檻的比例（期間漲過又跌回來不算勝）；棄權（候選股皆不符合進場條件）與待判、無法驗證都不列入勝率分母。AI−池 α＝AI 精選的五日報酬減去該場完整候選池的平均報酬；AI−大盤＝減去同期間加權報酬指數。分級勝率＝依每場結論的共識度與資料引用品質分為「推薦」與「觀察名單」後，各自的勝率（分級只影響呈現，不影響選股）。D10 參考＝同一批推薦改看第 10 個交易日收盤的參考視角；第 5 日仍是正式驗證窗。決勝場次少於 10 場時數字僅供參考，不具統計意義。歷史統計不構成投資建議。</p>
   </details>;
 }
 
@@ -397,6 +448,29 @@ export function SessionBadge({ session }: { session?: Result["captured_session"]
       {isBacktest ? `回測重播 · ${session.session_date}` : `資料截至 ${session.session_date}`}
     </span>
   );
+}
+
+// Groups a day's runs 「推薦」 first (amber accent, matching the pick
+// buttons' visual language) then 「觀察名單」 (muted). Runs without a
+// tier — abstentions and pre-deploy payloads — render exactly as
+// before, with no group header, so old cached payloads are unaffected.
+export function RunGroups({ results, onSelect }: { results: Result[]; onSelect: (symbol: string, name?: string) => void }) {
+  const recommend = results.filter((run) => run.tier === "recommend");
+  const watch = results.filter((run) => run.tier === "watch");
+  const untiered = results.filter((run) => run.tier !== "recommend" && run.tier !== "watch");
+  const renderRuns = (runs: Result[]) => runs.map((run) => <StrategyRun key={`${run.strategy}-${run.sequence}`} run={run} onSelect={onSelect} />);
+  if (!recommend.length && !watch.length) return <>{renderRuns(untiered)}</>;
+  return <>
+    {recommend.length > 0 && <div className="space-y-4">
+      <h2 className="flex items-center gap-2 text-sm font-bold text-amber-300">推薦<span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs font-normal">共識與資料品質達門檻</span></h2>
+      {renderRuns(recommend)}
+    </div>}
+    {watch.length > 0 && <div className="space-y-4">
+      <h2 className="flex items-center gap-2 text-sm font-bold text-slate-400">觀察名單<span className="rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-xs font-normal text-slate-500">共識或資料品質未達推薦門檻</span></h2>
+      {renderRuns(watch)}
+    </div>}
+    {renderRuns(untiered)}
+  </>;
 }
 
 function StrategyRun({ run, onSelect }: { run: Result; onSelect: (symbol: string, name?: string) => void }) {

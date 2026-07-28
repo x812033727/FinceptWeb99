@@ -30,12 +30,13 @@ def _verified(
     auto_run: bool = True,
     status: str = "done",
     as_of_date=None,
+    conclusion: dict | None = None,
 ):
     now = datetime(2026, 7, 10, tzinfo=UTC)
     return Discussion(
         id=uuid.uuid4(), owner_id=owner_id, topic="t", rules="r",
         persona_ids=["buffett"], market="TW", status=status,
-        current_round=5, conclusion={"reasoning": "x"},
+        current_round=5, conclusion=conclusion or {"reasoning": "x"},
         auto_run=auto_run, auto_run_strategy=strategy,
         verdict=verdict, day1_open_prices=day1, day5_close_prices=day5,
         pool_performance=pool_performance, as_of_date=as_of_date,
@@ -275,3 +276,99 @@ async def test_scoreboard_excludes_backtest_replay_rows(db_session):
     assert general["wins"] == 1
     assert general["losses"] == 0
     assert general["decided"] == 1
+
+
+@pytest.mark.asyncio
+async def test_tiered_win_rates_split_the_same_decided_rows(db_session):
+    """Per-tier lenses reuse the decided-verdict denominator; the
+    untiered win_rate still counts every decided row, and a mangled
+    conclusion (tier None) falls into neither tier column."""
+    owner = await _owner(db_session)
+    recommend = {
+        "recommended_symbols": ["2330"], "consensus_score": 0.95,
+        "quality_signals": {"hallucination_warnings": []},
+    }
+    watch = {
+        "recommended_symbols": ["1101"], "consensus_score": 0.5,
+        "quality_signals": {"hallucination_warnings": []},
+    }
+    db_session.add_all([
+        _verified(owner.id, strategy="general", verdict="win", conclusion=recommend),
+        _verified(owner.id, strategy="general", verdict="loss", conclusion=recommend),
+        _verified(owner.id, strategy="general", verdict="win", conclusion=watch),
+        # Decided but tier-less (no recommended_symbols in stored JSON):
+        # counts in the untiered totals, in neither tier column.
+        _verified(owner.id, strategy="general", verdict="win", conclusion={"reasoning": "x"}),
+    ])
+    await db_session.commit()
+
+    entry = (await build_scoreboard(db_session, owner.id))[0]
+    assert entry["recommend_decided"] == 2
+    assert entry["recommend_wins"] == 1
+    assert entry["recommend_win_rate"] == 0.5
+    assert entry["watch_decided"] == 1
+    assert entry["watch_wins"] == 1
+    assert entry["watch_win_rate"] == 1.0
+    assert entry["decided"] == 4
+    assert entry["win_rate"] == 0.75
+
+
+@pytest.mark.asyncio
+async def test_d10_lens_counts_only_ten_entry_rows(db_session):
+    """D10 columns read the extended `daily_close_prices` arrays only —
+    a 5-entry row is excluded (no archive fan-out at build time), and
+    the excess compares against a 10-session benchmark window."""
+    from datetime import date
+
+    from models.ohlcv_daily import OhlcvDaily
+
+    owner = await _owner(db_session)
+    # Helper rows anchor at 2026-07-10; seed ten index sessions:
+    # open 100 → D10 close 104 (+4%).
+    closes = [100.4 + 0.4 * i for i in range(10)]
+    for offset, close in enumerate(closes):
+        db_session.add(OhlcvDaily(
+            market="TW", symbol="_TAIEX_TR",
+            ts=date(2026, 7, 10 + offset),
+            open=100.0 if offset == 0 else close,
+            high=close, low=close, close=close, volume=0, source="test",
+        ))
+    extended = _verified(
+        owner.id, strategy="general", verdict="win",
+        day1={"2330": 100.0}, day5={"2330": 106.0},
+    )
+    # D10 close 110 → +10% ≥ the +5% win bar; excess = 10 − 4 = +6.
+    extended.daily_close_prices = {
+        "2330": [101.0, 102.0, 103.0, 104.0, 106.0,
+                 107.0, 108.0, 108.5, 109.0, 110.0],
+    }
+    unextended = _verified(
+        owner.id, strategy="general", verdict="win",
+        day1={"1101": 50.0}, day5={"1101": 53.0},
+    )
+    unextended.daily_close_prices = {"1101": [51.0, 52.0, 52.5, 52.8, 53.0]}
+    db_session.add_all([extended, unextended])
+    await db_session.commit()
+
+    entry = (await build_scoreboard(db_session, owner.id))[0]
+    assert entry["d10_decided"] == 1
+    assert entry["d10_wins"] == 1
+    assert entry["d10_win_rate"] == 1.0
+    assert entry["avg_d10_excess_vs_taiex_pct"] == pytest.approx(6.0, abs=0.01)
+
+
+def test_picked_return_pct_d10_edges():
+    """Malformed / short / open-less rows never qualify for the D10 lens."""
+    from services.daily_scoreboard_service import _picked_return_pct_d10
+
+    class Row:
+        def __init__(self, daily, opens):
+            self.daily_close_prices = daily
+            self.day1_open_prices = opens
+
+    ten = [float(100 + i) for i in range(10)]
+    assert _picked_return_pct_d10(Row("corrupt", {"2330": 100.0})) is None
+    assert _picked_return_pct_d10(Row({"2330": ten[:5]}, {"2330": 100.0})) is None
+    assert _picked_return_pct_d10(Row({"2330": ten}, {})) is None
+    assert _picked_return_pct_d10(Row({"2330": ten[:9] + [None]}, {"2330": 100.0})) is None
+    assert _picked_return_pct_d10(Row({"2330": ten}, {"2330": 100.0})) == pytest.approx(9.0)

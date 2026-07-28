@@ -355,3 +355,20 @@ async def test_d10_lens_counts_only_ten_entry_rows(db_session):
     assert entry["d10_wins"] == 1
     assert entry["d10_win_rate"] == 1.0
     assert entry["avg_d10_excess_vs_taiex_pct"] == pytest.approx(6.0, abs=0.01)
+
+
+def test_picked_return_pct_d10_edges():
+    """Malformed / short / open-less rows never qualify for the D10 lens."""
+    from services.daily_scoreboard_service import _picked_return_pct_d10
+
+    class Row:
+        def __init__(self, daily, opens):
+            self.daily_close_prices = daily
+            self.day1_open_prices = opens
+
+    ten = [float(100 + i) for i in range(10)]
+    assert _picked_return_pct_d10(Row("corrupt", {"2330": 100.0})) is None
+    assert _picked_return_pct_d10(Row({"2330": ten[:5]}, {"2330": 100.0})) is None
+    assert _picked_return_pct_d10(Row({"2330": ten}, {})) is None
+    assert _picked_return_pct_d10(Row({"2330": ten[:9] + [None]}, {"2330": 100.0})) is None
+    assert _picked_return_pct_d10(Row({"2330": ten}, {"2330": 100.0})) == pytest.approx(9.0)

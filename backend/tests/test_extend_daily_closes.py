@@ -139,3 +139,49 @@ def test_scheduler_registers_the_job():
     trig = str(trigger)
     assert "hour='12'" in trig and "minute='10'" in trig, trig
     assert str(trigger.timezone) == "UTC"
+
+
+@pytest.mark.asyncio
+async def test_body_reports_idle_and_extended_counts():
+    from tasks import extend_daily_closes as mod
+
+    with patch.object(mod, "_do_run", return_value=0):
+        outcome = await mod._body()
+    assert outcome.row_count == 0
+    assert outcome.status == "idle: nothing to extend"
+
+    with patch.object(mod, "_do_run", return_value=3):
+        outcome = await mod._body()
+    assert outcome.row_count == 3
+    assert outcome.status is None
+
+    assert mod._format_error(RuntimeError("boom")) == "boom"
+
+
+@pytest.mark.asyncio
+async def test_run_wires_the_shared_runner(patch_session, db_session):
+    """run() goes through the shared lock/backoff/health skeleton and
+    records a health row off the body's outcome."""
+    from unittest.mock import AsyncMock
+
+    from tasks import extend_daily_closes as mod
+
+    with patch.object(mod, "acquire_lock", AsyncMock(return_value=True)), \
+         patch.object(mod, "release_lock", AsyncMock()) as release, \
+         patch.object(mod, "backoff_remaining_seconds", AsyncMock(return_value=0)), \
+         patch.object(mod, "record_health", AsyncMock()) as health, \
+         patch.object(mod, "clear_failures", AsyncMock()):
+        await mod.run()
+    health.assert_awaited_once()
+    assert health.await_args.kwargs.get("ok") is True
+    release.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_do_run_skips_rows_with_empty_or_malformed_daily(
+    patch_session, db_session,
+):
+    d = await _seed(db_session, symbol="3231")
+    d.daily_close_prices = {}
+    await db_session.commit()
+    assert await _do_run() == 0

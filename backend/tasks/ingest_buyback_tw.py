@@ -1,32 +1,28 @@
 """Daily TW buyback announcement ingest.
 
-`TaiwanStockBuyBack` from FinMind. Sponsor-tier as of 2026-04
-(see `data.tw.finmind_paywall` for the shared detector). Pulls the
-last 90 days of announcements market-wide so we always see
+Source: MOPS 庫藏股統計彙總表 (`mops_connector.get_buyback_summary`,
+上市+上櫃). Every prior source is dead — FinMind removed
+`TaiwanStockBuyBack` from its enum (HTTP 422, migration 0020), and
+TWSE re-assigned OpenAPI `t187ap43_L` to 權證交易人數 (verified
+2026-07-28), so MOPS is the remaining authoritative feed.
+
+Pulls the last 90 days of announcements so we always see
 in-execution buyback windows alongside fresh announcements; the
 upsert key is `(market, symbol, announce_date)` so a row that's
 re-pulled mid-window simply overwrites with the latest
 `current_shares` execution figure.
 
-Schedule: daily 18:00 Taipei (10:00 UTC) — well after the post-
+Schedule: daily 18:10 Taipei (10:10 UTC) — well after the post-
 close cluster, when companies that announced same-day buybacks
-have had their filings published. One FinMind market-wide call
-per tick — negligible quota.
-
-Failure handling: paywall fail-soft via the shared detector
-(matches the pattern PR #183 introduced for ingest_revenue_tw).
+have had their filings published. Two MOPS calls per tick.
 """
 import logging
 from datetime import date, datetime, timedelta
 
 import httpx
 
-import data.tw.finmind_connector as finmind
 from cache.redis_cache import acquire_lock, release_lock
-from data.tw.finmind_paywall import (
-    extract_body_message as _extract_body_message,
-    looks_like_paywall as _looks_like_paywall,
-)
+from data.tw.mops_connector import get_buyback_summary
 from db.session import AsyncSessionLocal
 from services.ingest.repository import (
     BuybackRow,
@@ -49,28 +45,11 @@ _LOCK_TTL = 10 * 60
 _LOOKBACK_DAYS = 90
 
 
-_HTTP_HINTS: dict[int, str] = {
-    400: "FinMind rejected the request (likely paywalled or malformed)",
-    401: "check FINMIND_TOKEN — invalid or missing",
-    402: "FinMind dataset requires paid sponsorship",
-    403: "FinMind token forbidden for this dataset",
-    429: "FinMind quota exhausted — resets at UTC 00:00",
-    500: "FinMind upstream error",
-    502: "FinMind bad gateway",
-    503: "FinMind unavailable",
-    504: "FinMind gateway timeout",
-}
-
-
 def _format_error(exc: BaseException) -> str:
     if isinstance(exc, httpx.HTTPStatusError):
         code = exc.response.status_code
         reason = exc.response.reason_phrase or "?"
-        body_msg = _extract_body_message(exc)
-        body_suffix = f" — {body_msg}" if body_msg else ""
-        hint = _HTTP_HINTS.get(code, "")
-        hint_suffix = f" ({hint})" if hint else ""
-        return f"HTTP {code} {reason}{hint_suffix}{body_suffix}"
+        return f"HTTP {code} {reason} (MOPS)"
     if isinstance(exc, httpx.TimeoutException):
         return f"timeout: {exc}"
     if isinstance(exc, httpx.ConnectError):
@@ -81,8 +60,8 @@ def _format_error(exc: BaseException) -> str:
 
 
 def _parse_date(s: str | None) -> date | None:
-    """FinMind dates come as `"2026-04-15"` or `"2026/04/15"` and
-    occasionally empty / null for in-progress fields. Be tolerant."""
+    """Connector dates come as ISO `"2026-04-15"` (or `"2026/04/15"`)
+    and occasionally empty / null for in-progress fields. Be tolerant."""
     if not s:
         return None
     s = str(s).strip()[:10]
@@ -137,49 +116,6 @@ async def run() -> None:
         try:
             row_count = await _do_run()
         except Exception as exc:
-            body_msg = _extract_body_message(exc)
-            if _looks_like_paywall(body_msg):
-                # Paywall is a known-permanent state, not an outage —
-                # same shape as PR #183's revenue cron handler.
-                await clear_failures(JOB_ID)
-                log.warning(
-                    "ingest_buyback_tw.paywalled",
-                    extra={"upstream_message": body_msg},
-                )
-                await record_health(
-                    JOB_ID, ok=False, row_count=0,
-                    error=(
-                        "skipped: FinMind paywalled this dataset "
-                        "(TaiwanStockBuyBack market-wide query needs "
-                        "paid sponsor tier). Existing tw_stock_buyback "
-                        "rows preserved. "
-                        f"Upstream message: {body_msg}"
-                    ),
-                )
-                return
-            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 422:
-                # FinMind v4 doesn't expose a `TaiwanStockBuyBack` dataset —
-                # every call returns 422 Unprocessable Entity. Treat as a
-                # known-permanent state (same as paywall) so manual retries
-                # via the admin button don't keep arming auto-backoff.
-                # If FinMind ever adds the dataset this branch will stop
-                # firing on its own.
-                await clear_failures(JOB_ID)
-                log.info(
-                    "ingest_buyback_tw.dataset_missing",
-                    extra={"upstream_message": body_msg},
-                )
-                await record_health(
-                    JOB_ID, ok=False, row_count=0,
-                    error=(
-                        "skipped: FinMind v4 has no TaiwanStockBuyBack "
-                        "dataset (HTTP 422). Cron is intentionally "
-                        "unscheduled; revive in scheduler.py once FinMind "
-                        "publishes the dataset."
-                        + (f" Upstream message: {body_msg}" if body_msg else "")
-                    ),
-                )
-                return
             detail = _format_error(exc)
             failures = await record_failure(JOB_ID)
             log.warning(
@@ -203,8 +139,8 @@ async def run() -> None:
 
 
 async def _do_run() -> int:
-    start = (date.today() - timedelta(days=_LOOKBACK_DAYS)).isoformat()
-    items = await finmind.get_buyback_market_wide(start)
+    start = date.today() - timedelta(days=_LOOKBACK_DAYS)
+    items = await get_buyback_summary(start, date.today())
     if not items:
         return 0
 
@@ -213,7 +149,7 @@ async def _do_run() -> int:
         sym = (r.get("symbol") or "").strip()
         if not sym:
             continue
-        announce = _parse_date(r.get("date"))
+        announce = _parse_date(r.get("announce_date"))
         if announce is None:
             continue
         payload.append(BuybackRow(
@@ -228,7 +164,7 @@ async def _do_run() -> int:
             current_shares=_to_int(r.get("current_shares")),
             price_lower=_to_float(r.get("price_lower")),
             price_upper=_to_float(r.get("price_upper")),
-            source="finmind",
+            source="mops",
         ))
 
     if not payload:

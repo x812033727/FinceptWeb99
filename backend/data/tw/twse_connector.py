@@ -756,6 +756,13 @@ async def get_buyback_announcements() -> list[dict[str, Any]]:
     Phase B caller iterates the snapshot in-process and clips by
     announcement date.
 
+    ⚠️ DEAD as of 2026-07-28: TWSE re-assigned `t187ap43_L` to
+    上市認購(售)權證交易人數檔 (verified via the OpenAPI catalog),
+    so this now returns [] (rows lack 公司代號 and are dropped). The
+    only caller is the finmind selfcrawl fallback for the disabled
+    `TaiwanStockBuyBack` dataset; the live buyback feed is
+    `mops_connector.get_buyback_summary`.
+
     Output shape (per row):
         symbol         : 公司代號
         name_zh        : 公司名稱

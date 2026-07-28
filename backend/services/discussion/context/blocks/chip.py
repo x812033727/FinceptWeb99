@@ -1,8 +1,8 @@
 """TW chip-metric + fundamentals context blocks (DB-bound).
 
 These read from `tw_institutional_daily`, `tw_margin_daily`,
-`tw_revenue_monthly`, `tw_buybacks`, `tw_govt_bank_flow_daily`, and
-`tw_market_institutional_daily`. Daily ingest crons populate them;
+`tw_revenue_monthly`, `tw_stock_buyback`, `tw_govt_bank_flow_daily`,
+and `tw_market_institutional_daily`. Daily ingest crons populate them;
 empty result (cron hasn't run yet, fresh deploy) is the expected
 no-signal state — personas just won't reference these.
 

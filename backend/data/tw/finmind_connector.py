@@ -810,43 +810,10 @@ async def get_government_bank_flow_market_wide(
     ]
 
 
-# ── Buyback announcements (庫藏股) ───────────────────────────────
-
-async def get_buyback_market_wide(
-    start_date: str, end_date: str | None = None,
-) -> list[dict[str, Any]]:
-    """Pull TaiwanStockBuyBack with `data_id=""` to get every
-    listed company's buyback announcements for the date range. One
-    row per (symbol, announce_date); FinMind updates the
-    `current_buy_back_shares` field day-by-day as execution
-    progresses, so re-pulling overwrites stale execution counts.
-
-    Sponsor-tier dataset as of 2026-04. The shared FinMind paywall
-    detector in `data.tw.finmind_paywall` covers the failure mode
-    when called by an unsponsored token.
-
-    Returns a list of canonical-shape dicts. Field naming follows
-    FinMind's response keys; `_normalize_buyback_row` in
-    `tasks.ingest_buyback_tw` does the conversion to the DB row
-    shape (with date parsing + null tolerance).
-    """
-    rows = await _query("TaiwanStockBuyBack", "", start_date, end_date)
-    return [
-        {
-            "date":          r.get("date"),
-            "symbol":        r.get("stock_id", ""),
-            "method":        r.get("buy_back_method"),
-            "period_start":  r.get("buy_back_period_start"),
-            "period_end":    r.get("buy_back_period_end"),
-            "purpose":       r.get("buy_back_purpose"),
-            "max_shares":    r.get("buy_back_max_shares") or r.get("max_buy_back_shares"),
-            "current_shares": r.get("current_buy_back_shares"),
-            "price_lower":   r.get("buy_back_price_lower"),
-            "price_upper":   r.get("buy_back_price_upper"),
-        }
-        for r in rows
-        if r.get("stock_id")
-    ]
+# NOTE: `get_buyback_market_wide` (TaiwanStockBuyBack) was removed
+# 2026-07-28 — FinMind dropped the dataset from its enum (every call
+# 422s) and `tasks.ingest_buyback_tw` now sources from MOPS'
+# 庫藏股統計彙總表 via `mops_connector.get_buyback_summary`.
 
 
 # ── News ──────────────────────────────────────────────────────────

@@ -460,6 +460,22 @@ def setup_jobs() -> None:
     #                     replace_existing=True, max_instances=1,
     #                     coalesce=True)
 
+    # 庫藏股 buyback announcements via MOPS 庫藏股統計彙總表 (上市+上櫃).
+    # Revived 2026-07-28: FinMind removed the dataset (HTTP 422) and
+    # TWSE re-assigned OpenAPI t187ap43_L to warrant data, so the task
+    # now scrapes MOPS' redirectToOld → legacy ajax_t35sc09 flow. Two
+    # calls/day at 18:10 Taipei (10:10 UTC), after the post-close
+    # cluster so same-day board resolutions have been filed.
+    from tasks.ingest_buyback_tw import run as run_ingest_buyback_tw
+    scheduler.add_job(
+        run_ingest_buyback_tw,
+        trigger=CronTrigger(hour=10, minute=10, timezone="UTC"),
+        id="ingest_buyback_tw",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # 八大行庫 daily flow. Sponsor-tier FinMind dataset; one
     # market-wide call/day. 18:30 Taipei (10:30 UTC) — offset from the
     # other post-close TW crons so the sponsor-tier cluster spreads

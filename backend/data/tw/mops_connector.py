@@ -19,6 +19,8 @@ are already in percent units (e.g. 12.5 means +12.5 %).
 from __future__ import annotations
 
 import logging
+import re
+from datetime import date
 from typing import Any
 
 import httpx
@@ -448,3 +450,127 @@ async def get_cash_flow_statement(
     return _flatten_statement_rows(
         symbol, year, quarter, _extract_rows(result), _CASHFLOW_LABEL_MAP,
     )
+
+
+# ── 庫藏股統計彙總表 (redirectToOld → legacy ajax_t35sc09) ─────────
+
+# The new-MOPS SPA has no direct JSON endpoint for the buyback summary.
+# It POSTs the query to `/mops/api/redirectToOld`, which returns a
+# one-shot legacy URL (`mopsov …/ajax_t35sc09?parameters=<opaque blob>`)
+# whose response is the classic HTML table. Both hops verified live
+# 2026-07-28. Dates must be COMPACT ROC digits ("1140101") — slashed
+# forms are rejected with 日期必需是數字.
+_MOPS_NEW_API_BASE = "https://mops.twse.com.tw/mops/api"
+
+# 買回目的 code → label (MOPS t35sc09 legend).
+_BUYBACK_PURPOSES = {
+    1: "轉讓股份予員工",
+    2: "股權轉換",
+    3: "維護公司信用及股東權益",
+}
+
+
+def _roc_compact(d: date) -> str:
+    return f"{d.year - 1911}{d.month:02d}{d.day:02d}"
+
+
+def _roc_slash_to_iso(s: str | None) -> str | None:
+    """`114/04/07` → `2025-04-07`; tolerant of blanks."""
+    if not s:
+        return None
+    parts = str(s).strip().split("/")
+    if len(parts) != 3:
+        return None
+    try:
+        y, m, dd = (int(p) for p in parts)
+    except ValueError:
+        return None
+    return f"{y + 1911:04d}-{m:02d}-{dd:02d}"
+
+
+def _strip_tags(cell: str) -> str:
+    return re.sub(r"<[^>]+>|&nbsp;", " ", cell).strip()
+
+
+def _parse_buyback_table(html: str) -> list[dict[str, Any]]:
+    """Rows of the legacy 庫藏股統計彙總表. Data rows start with a
+    numeric 序號 cell; header/title/error rows don't. Column layout
+    (verified live 2026-07-28):
+
+      0 序號, 1 公司代號, 2 公司名稱, 3 董事會決議日期, 4 買回目的(code),
+      5 買回總金額上限, 6 預定買回股數, 7 買回價格下限, 8 買回價格上限,
+      9 預定買回期間-起, 10 預定買回期間-迄, 11 是否執行完畢,
+      12 買回達一定標準, 13 本次已買回股數, …
+    """
+    out: list[dict[str, Any]] = []
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S):
+        cells = [
+            _strip_tags(c)
+            for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, re.S)
+        ]
+        if len(cells) < 14 or not cells[0].isdigit():
+            continue
+        symbol = cells[1].strip()
+        announce = _roc_slash_to_iso(cells[3])
+        if not symbol or not announce:
+            continue
+        purpose_code = _to_int(cells[4])
+        out.append({
+            "symbol": symbol,
+            "name_zh": cells[2],
+            "announce_date": announce,
+            "method": purpose_code,
+            "purpose": _BUYBACK_PURPOSES.get(purpose_code or -1),
+            "max_shares": _to_int(cells[6]),
+            "price_lower": _to_float(cells[7]),
+            "price_upper": _to_float(cells[8]),
+            "period_start": _roc_slash_to_iso(cells[9]),
+            "period_end": _roc_slash_to_iso(cells[10]),
+            "current_shares": _to_int(cells[13]),
+        })
+    return out
+
+
+async def get_buyback_summary(
+    start: date, end: date, *,
+    markets: tuple[str, ...] = ("sii", "otc"),
+    timeout: float = _DEFAULT_TIMEOUT,
+) -> list[dict[str, Any]]:
+    """庫藏股買回公告彙總 over `[start, end]` (board-resolution date)
+    for the given TYPEK markets (sii=上市, otc=上櫃).
+
+    Raises on transport errors so the caller's failure regime (backoff
+    + unhealthy health row) can see a real outage; an empty result for
+    a quiet window is a legitimate 查無所需資料 and returns [].
+    """
+    rows: list[dict[str, Any]] = []
+    async with httpx.AsyncClient(timeout=timeout, verify=False) as c:
+        for typek in markets:
+            r = await c.post(
+                f"{_MOPS_NEW_API_BASE}/redirectToOld",
+                json={
+                    "apiName": "ajax_t35sc09",
+                    "parameters": {
+                        "d1": _roc_compact(start),
+                        "d2": _roc_compact(end),
+                        "chBox": "Y",
+                        "TYPEK": typek,
+                        "RD": "1",
+                        "encodeURIComponent": 1,
+                        "step": 1,
+                        "firstin": 1,
+                        "off": 1,
+                    },
+                },
+                headers=_HEADERS,
+            )
+            r.raise_for_status()
+            url = ((r.json() or {}).get("result") or {}).get("url")
+            if not url:
+                log.warning("mops.buyback_redirect_missing_url",
+                            extra={"typek": typek})
+                continue
+            legacy = await c.get(url, headers={"User-Agent": _HEADERS["User-Agent"]})
+            legacy.raise_for_status()
+            rows.extend(_parse_buyback_table(legacy.text))
+    return rows

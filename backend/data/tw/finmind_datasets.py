@@ -124,14 +124,21 @@ FUNDAMENTAL: tuple[DatasetSpec, ...] = (
 
 DERIVATIVE: tuple[DatasetSpec, ...] = (
     DatasetSpec("TaiwanFutOptDailyInfo", "期貨、選擇權日成交資訊總覽", per_symbol=False),
-    DatasetSpec("TaiwanFuturesDaily", "期貨日成交資訊", per_symbol=True),
-    DatasetSpec("TaiwanOptionDaily", "選擇權日成交資訊", per_symbol=True),
+    # The six datasets below are ingested MARKET-WIDE (per_symbol=False)
+    # on purpose: FinMind's data_id="" form returns every contract for a
+    # day in one call (verified live 2026-07-28 — 359 futures ids / 48
+    # option ids), while the per-symbol fan-out would walk the equity
+    # universe and never hit a single valid contract id. Pair with
+    # `single_day=True` in the catalog: the market-wide form only
+    # honours start_date (same trap as the dealer-volume datasets).
+    DatasetSpec("TaiwanFuturesDaily", "期貨日成交資訊", per_symbol=False),
+    DatasetSpec("TaiwanOptionDaily", "選擇權日成交資訊", per_symbol=False),
     DatasetSpec("TaiwanFuturesTick", "期貨交易明細表", per_symbol=True, sponsor_tier=True),
     DatasetSpec("TaiwanOptionTick", "選擇權交易明細表", per_symbol=True, sponsor_tier=True),
-    DatasetSpec("TaiwanFuturesInstitutionalInvestors", "期貨三大法人買賣", per_symbol=True),
-    DatasetSpec("TaiwanOptionInstitutionalInvestors", "選擇權三大法人買賣", per_symbol=True),
-    DatasetSpec("TaiwanFuturesInstitutionalInvestorsAfterHours", "期貨夜盤三大法人買賣", per_symbol=True),
-    DatasetSpec("TaiwanOptionInstitutionalInvestorsAfterHours", "選擇權夜盤三大法人買賣", per_symbol=True),
+    DatasetSpec("TaiwanFuturesInstitutionalInvestors", "期貨三大法人買賣", per_symbol=False),
+    DatasetSpec("TaiwanOptionInstitutionalInvestors", "選擇權三大法人買賣", per_symbol=False),
+    DatasetSpec("TaiwanFuturesInstitutionalInvestorsAfterHours", "期貨夜盤三大法人買賣", per_symbol=False),
+    DatasetSpec("TaiwanOptionInstitutionalInvestorsAfterHours", "選擇權夜盤三大法人買賣", per_symbol=False),
     DatasetSpec("TaiwanFuturesDealerTradingVolumeDaily", "期貨各卷商每日交易", per_symbol=False),
     DatasetSpec("TaiwanOptionDealerTradingVolumeDaily", "選擇權各卷商每日交易", per_symbol=False),
     DatasetSpec("TaiwanFuturesOpenInterestLargeTraders", "期貨大額交易人未沖銷部位", per_symbol=True),

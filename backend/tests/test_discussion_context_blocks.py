@@ -1737,6 +1737,33 @@ async def test_build_market_context_skips_large_trader_block_for_other_strategie
 
 
 @pytest.mark.asyncio
+async def test_build_market_context_disable_env_reproduces_pre_feed_behavior(
+    db_session: AsyncSession, monkeypatch,
+):
+    """`LARGE_TRADER_FEED_DISABLED=1` is the replay A/B's control arm:
+    price_signal must behave exactly as if the feed never shipped —
+    block not invoked, ctx key `None`, and NO `data_gaps` entry (a gap
+    line in the prompt would leak the experiment into the control arm).
+    """
+    monkeypatch.setenv("LARGE_TRADER_FEED_DISABLED", "1")
+    spy = AsyncMock()
+
+    with patch.object(http, "fetch_screener", new=AsyncMock()), \
+         patch.object(http, "fetch_index", new=AsyncMock()), \
+         patch.object(http, "fetch_macro", new=AsyncMock()), \
+         patch.object(http, "fetch_focus_briefs", new=AsyncMock()), \
+         patch.object(derivatives, "fetch_large_trader_positioning", new=spy):
+        ctx = await build_market_context(
+            db_session, market="TW", strategy="price_signal",
+        )
+
+    spy.assert_not_awaited()
+    assert ctx["large_trader_positioning"] is None
+    assert "large_trader_positioning" not in ctx["data_gaps"]
+    assert "large_trader_positioning" not in (ctx.get("data_stale") or {})
+
+
+@pytest.mark.asyncio
 async def test_build_market_context_backtest_price_signal_uses_info_cutoff(
     db_session: AsyncSession,
 ):

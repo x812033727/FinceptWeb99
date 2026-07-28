@@ -59,6 +59,13 @@ _GRADED_VERDICTS = WINNING_VERDICTS + LOSING_VERDICTS
 # The 5-trading-day grading window, mirroring
 # `tasks.verify_discussion_outcome._WINDOW_TRADING_DAYS`.
 _WINDOW_TRADING_DAYS = 5
+# Parallel D10 observation lens (user pre-commitment, 2026-07-25 grill
+# round 2): the D1-D10 excess curve rose monotonically over the graded
+# experiment sessions, so D10 is reported ALONGSIDE the D5 verdict
+# window, never instead of it. Reads only the arrays that
+# `tasks.extend_daily_closes` has already extended — no archive
+# fan-out at build time.
+_D10_TRADING_DAYS = 10
 # Total-return TAIEX series archived by `tasks.ingest_taiex_tr_history`
 # under a reserved (non-numeric) symbol in `ohlcv_daily`.
 _BENCHMARK_SYMBOL = "_TAIEX_TR"
@@ -81,6 +88,29 @@ def _picked_return_pct(d: Discussion) -> float | None:
 
 def _mean(values: list[float]) -> float | None:
     return round(sum(values) / len(values), 4) if values else None
+
+
+def _picked_return_pct_d10(d: Discussion) -> float | None:
+    """Realized average (D10 close / D1 open − 1) in percent, read from
+    the extended `daily_close_prices` arrays only. None unless at least
+    one symbol has a resolved 10th close and a positive day-1 open —
+    an unextended (5-entry) row simply doesn't qualify yet."""
+    opens = d.day1_open_prices or {}
+    daily = d.daily_close_prices or {}
+    if not isinstance(daily, dict):
+        return None
+    returns = []
+    for sym, closes in daily.items():
+        if not isinstance(closes, list) or len(closes) < _D10_TRADING_DAYS:
+            continue
+        d10_close = closes[_D10_TRADING_DAYS - 1]
+        day1_open = opens.get(sym)
+        if d10_close is None or not day1_open or day1_open <= 0:
+            continue
+        returns.append((d10_close / day1_open - 1.0) * 100.0)
+    if not returns:
+        return None
+    return sum(returns) / len(returns)
 
 
 def _anchor_date(d: Discussion):
@@ -120,13 +150,14 @@ def _as_date(value: Any):
 
 def _benchmark_return_pct(
     series: list[tuple[Any, float, float]], anchor: Any,
+    days: int = _WINDOW_TRADING_DAYS,
 ) -> float | None:
     """Index return over the same window a pick is graded on: first
-    session open on/after `anchor` → close of the 5th session. None
-    when the window hasn't completed yet (so a pending pick never
+    session open on/after `anchor` → close of the `days`-th session.
+    None when the window hasn't completed yet (so a pending pick never
     gets compared against a truncated benchmark)."""
-    window = [row for row in series if row[0] >= anchor][:_WINDOW_TRADING_DAYS]
-    if len(window) < _WINDOW_TRADING_DAYS:
+    window = [row for row in series if row[0] >= anchor][:days]
+    if len(window) < days:
         return None
     entry_open = window[0][1]
     if entry_open <= 0:
@@ -155,6 +186,8 @@ async def build_scoreboard(
                 # Tier lens input — without this, `tier_for(d.conclusion)`
                 # would lazy-load per row (MissingGreenlet under asyncio).
                 Discussion.conclusion,
+                # D10 lens input (arrays extended by extend_daily_closes).
+                Discussion.daily_close_prices,
             ))
             .where(
                 Discussion.owner_id == owner_id,
@@ -227,6 +260,9 @@ async def build_scoreboard(
         # AI-vs-market excess: same window, TAIEX total-return index.
         excesses: list[float] = []
         benchmark_samples = 0
+        # D10 reference lens: same picks and win bar, 10-session window.
+        d10_returns: list[float] = []
+        d10_excesses: list[float] = []
         for d in group:
             picked = _picked_return_pct(d)
             perf = d.pool_performance or {}
@@ -239,6 +275,14 @@ async def build_scoreboard(
                 if index_return is not None:
                     benchmark_samples += 1
                     excesses.append(picked - index_return)
+            d10 = _picked_return_pct_d10(d)
+            if d10 is not None:
+                d10_returns.append(d10)
+                index_d10 = _benchmark_return_pct(
+                    benchmark, _anchor_date(d), days=_D10_TRADING_DAYS,
+                )
+                if index_d10 is not None:
+                    d10_excesses.append(d10 - index_d10)
 
         entries.append({
             "strategy": strategy,
@@ -272,6 +316,17 @@ async def build_scoreboard(
                 round(d5_wins / d5_decided, 4) if d5_decided else None
             ),
             "d5_unsettled": d5_unsettled,
+            "d10_decided": len(d10_returns),
+            "d10_wins": sum(1 for r in d10_returns if r >= DEFAULT_WIN_PCT),
+            "d10_win_rate": (
+                round(
+                    sum(1 for r in d10_returns if r >= DEFAULT_WIN_PCT)
+                    / len(d10_returns),
+                    4,
+                )
+                if d10_returns else None
+            ),
+            "avg_d10_excess_vs_taiex_pct": _mean(d10_excesses),
             "pool_samples": pool_samples,
             "avg_alpha_pct": _mean(alphas),
             "benchmark_samples": benchmark_samples,

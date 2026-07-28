@@ -174,6 +174,13 @@ class ScoreboardEntry(BaseModel):
     d5_win_rate: float | None = None
     # Booked win/loss while the D5 close is still missing.
     d5_unsettled: int = 0
+    # D10 reference lens (「D10 參考」) — parallel observation window,
+    # never the verdict window; only rows whose stored close arrays
+    # were extended to 10 entries count.
+    d10_decided: int = 0
+    d10_wins: int = 0
+    d10_win_rate: float | None = None
+    avg_d10_excess_vs_taiex_pct: float | None = None
     pool_samples: int = 0
     avg_alpha_pct: float | None = None
     benchmark_samples: int = 0

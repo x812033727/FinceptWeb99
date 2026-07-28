@@ -311,3 +311,47 @@ async def test_tiered_win_rates_split_the_same_decided_rows(db_session):
     assert entry["watch_win_rate"] == 1.0
     assert entry["decided"] == 4
     assert entry["win_rate"] == 0.75
+
+
+@pytest.mark.asyncio
+async def test_d10_lens_counts_only_ten_entry_rows(db_session):
+    """D10 columns read the extended `daily_close_prices` arrays only —
+    a 5-entry row is excluded (no archive fan-out at build time), and
+    the excess compares against a 10-session benchmark window."""
+    from datetime import date
+
+    from models.ohlcv_daily import OhlcvDaily
+
+    owner = await _owner(db_session)
+    # Helper rows anchor at 2026-07-10; seed ten index sessions:
+    # open 100 → D10 close 104 (+4%).
+    closes = [100.4 + 0.4 * i for i in range(10)]
+    for offset, close in enumerate(closes):
+        db_session.add(OhlcvDaily(
+            market="TW", symbol="_TAIEX_TR",
+            ts=date(2026, 7, 10 + offset),
+            open=100.0 if offset == 0 else close,
+            high=close, low=close, close=close, volume=0, source="test",
+        ))
+    extended = _verified(
+        owner.id, strategy="general", verdict="win",
+        day1={"2330": 100.0}, day5={"2330": 106.0},
+    )
+    # D10 close 110 → +10% ≥ the +5% win bar; excess = 10 − 4 = +6.
+    extended.daily_close_prices = {
+        "2330": [101.0, 102.0, 103.0, 104.0, 106.0,
+                 107.0, 108.0, 108.5, 109.0, 110.0],
+    }
+    unextended = _verified(
+        owner.id, strategy="general", verdict="win",
+        day1={"1101": 50.0}, day5={"1101": 53.0},
+    )
+    unextended.daily_close_prices = {"1101": [51.0, 52.0, 52.5, 52.8, 53.0]}
+    db_session.add_all([extended, unextended])
+    await db_session.commit()
+
+    entry = (await build_scoreboard(db_session, owner.id))[0]
+    assert entry["d10_decided"] == 1
+    assert entry["d10_wins"] == 1
+    assert entry["d10_win_rate"] == 1.0
+    assert entry["avg_d10_excess_vs_taiex_pct"] == pytest.approx(6.0, abs=0.01)

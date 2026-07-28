@@ -721,6 +721,23 @@ def setup_jobs() -> None:
         coalesce=True,
     )
 
+    # ── D10 reference lens: extend stored closes ─────────────────
+    # Daily at 12:10 UTC — after the TW EOD ingest (06:30) and the D5
+    # scorer (09:30). Appends sessions 6-10 to `daily_close_prices`
+    # for decided rows once the archive holds the full window, so the
+    # scoreboard's D10 columns never fan out to the archive at build
+    # time. D5 stays the primary verdict window (user pre-commitment,
+    # 2026-07-25 grill round 2).
+    from tasks.extend_daily_closes import run as run_extend_daily_closes
+    scheduler.add_job(
+        run_extend_daily_closes,
+        trigger=CronTrigger(hour=12, minute=10, timezone="UTC"),
+        id="extend_daily_closes",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── PR-D: strategy auto-sweep dispatcher ─────────────────────
     # Every 5 min checks the discussion_strategy_templates table
     # for templates that are auto_schedule_enabled and whose

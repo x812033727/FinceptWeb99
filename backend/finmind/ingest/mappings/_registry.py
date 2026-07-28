@@ -967,6 +967,10 @@ MAPPINGS: dict[str, DatasetMapping] = {
         pk_columns=("ts", "spread_pair"),
         extra={"source": "finmind"},
         row_transform=_row_futures_spread,
+        # FinMind returns only start_date's rows on a range query for this
+        # dataset (verified 2026-07-28: 2026-07-22..2026-07-27 returned only
+        # 2026-07-22), so force per-day fan-out.
+        single_day=True,
     ),
     "TaiwanStockConvertibleBondDaily": DatasetMapping(
         dataset_code="TaiwanStockConvertibleBondDaily",
@@ -981,6 +985,9 @@ MAPPINGS: dict[str, DatasetMapping] = {
         column_map={},
         pk_columns=("ts", "dealer_id", "contract"),
         batch_transform=_batch_futures_dealer_volume,
+        # FinMind returns only start_date's rows on a range query for this
+        # dataset (verified 2026-07-28), so force per-day fan-out.
+        single_day=True,
     ),
     "TaiwanOptionFinalSettlementPrice": DatasetMapping(
         dataset_code="TaiwanOptionFinalSettlementPrice",
@@ -1001,6 +1008,9 @@ MAPPINGS: dict[str, DatasetMapping] = {
         column_map={},
         pk_columns=("ts", "dealer_id", "contract"),
         batch_transform=_batch_option_dealer_volume,
+        # FinMind returns only start_date's rows on a range query for this
+        # dataset (verified 2026-07-28), so force per-day fan-out.
+        single_day=True,
     ),
     "TaiwanFutOptDailyInfo": DatasetMapping(
         dataset_code="TaiwanFutOptDailyInfo",

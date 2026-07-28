@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
@@ -384,7 +385,7 @@ async def build_market_context(
         # live (`None`) and backtest (prev-trading-day cutoff) modes,
         # same look-ahead guard as every other TW block here —
         # replay parity, not a live-only shortcut.
-        if strategy == "price_signal":
+        if _large_trader_feed_active(strategy):
             await derivatives.fetch_large_trader_positioning(
                 ctx, as_of=info_cutoff, record_error=record_error,
             )
@@ -575,6 +576,25 @@ def _block_is_empty(value: Any) -> bool:
     return False
 
 
+
+def _large_trader_feed_active(strategy: str | None) -> bool:
+    """Single gate for every `large_trader_positioning` site (fetch,
+    data_gaps, data_stale) so the three can never disagree.
+
+    `LARGE_TRADER_FEED_DISABLED=1` is a measurement escape hatch: the
+    replay A/B's control arm sets it to reproduce pre-feed behaviour
+    exactly — no fetch, no gap entry, no staleness row — so the
+    treatment/control diff is the block and nothing else. Read per
+    call (not at import) so `docker-compose exec -e` injection works
+    without touching the running service. Never set in production.
+    """
+    if strategy != "price_signal":
+        return False
+    return os.environ.get(
+        "LARGE_TRADER_FEED_DISABLED", ""
+    ).strip().lower() not in ("1", "true", "yes")
+
+
 def _record_data_gaps(ctx: dict[str, Any], *, strategy: str | None = None) -> None:
     """List the tracked blocks that carry no data, in place."""
     gaps = [
@@ -599,7 +619,7 @@ def _record_data_gaps(ctx: dict[str, Any], *, strategy: str | None = None) -> No
     # is a `None` here the real "attempted but the archive had
     # nothing" case the gap list exists to surface.
     if (
-        strategy == "price_signal"
+        _large_trader_feed_active(strategy)
         and _block_is_empty(ctx.get("large_trader_positioning"))
         and "large_trader_positioning" not in gaps
     ):
@@ -663,7 +683,7 @@ def _record_stale_blocks(
     if session is None:
         return
     tracked = _GAP_TRACKED_BLOCKS
-    if strategy == "price_signal":
+    if _large_trader_feed_active(strategy):
         tracked = (*tracked, "large_trader_positioning")
     stale: dict[str, dict[str, Any]] = {}
     for block in tracked:

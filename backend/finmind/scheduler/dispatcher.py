@@ -130,6 +130,27 @@ _CRYPTO_SOURCES: frozenset[str] = frozenset({"binance", "coingecko"})
 # after cutover flips active_source to the crawl source.
 _MARKET_WIDE_SOURCES: frozenset[str] = frozenset({"taifex", "tdcc", "fred"})
 
+# Per-symbol datasets whose `data_id` universe is a small FIXED set of
+# index/contract codes, not the tw_stock_info equity universe. These
+# fan out across the hardcoded ids below regardless of the caller's
+# universe, and `run_due_now(skip_per_symbol=True)` keeps them: the
+# per-symbol ban exists because the equity universe is over-broad and
+# unbounded, which cannot happen for a literal tuple. Without this
+# exemption these datasets never run under the production
+# `--tw-only --skip-per-symbol` sweep (observed frozen 07-19→07-27:
+# `tw_futures_oi_largetraders` stuck 18 sessions behind the
+# large-trader context block, `TaiwanStockTotalReturnIndex` 400ing
+# on the market-wide data_id="" form).
+_FIXED_ID_UNIVERSE: dict[str, tuple[str, ...]] = {
+    # 發行量加權股價報酬指數 — same data_id the legacy `_TAIEX_TR`
+    # connector uses; market-wide (data_id="") is HTTP 400.
+    "TaiwanStockTotalReturnIndex": ("TAIEX",),
+    # 台指期/台指選大額交易人 — the derivatives archive reads
+    # contract='TX'; TXO mirrors it for the option-side feed.
+    "TaiwanFuturesOpenInterestLargeTraders": ("TX",),
+    "TaiwanOptionOpenInterestLargeTraders": ("TXO",),
+}
+
 
 def expand_due_datasets(
     datasets: list[DatasetSource],
@@ -181,7 +202,9 @@ def expand_due_datasets(
             range_starts = [rs]
 
         if ds.per_symbol and ds.active_source not in _MARKET_WIDE_SOURCES:
-            if ds.active_source in _CRYPTO_SOURCES:
+            if ds.dataset_code in _FIXED_ID_UNIVERSE:
+                universe = list(_FIXED_ID_UNIVERSE[ds.dataset_code])
+            elif ds.active_source in _CRYPTO_SOURCES:
                 universe = crypto_symbols
             elif ds.dataset_code in _WARRANT_UNIVERSE_DATASETS:
                 universe = warrant_symbols

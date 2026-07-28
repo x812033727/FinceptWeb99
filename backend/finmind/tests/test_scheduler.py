@@ -179,6 +179,34 @@ def test_expand_per_symbol_with_no_universe_emits_market_wide_call():
     assert chunks[0].symbol is None
 
 
+def test_expand_fixed_id_dataset_fans_across_hardcoded_ids():
+    """Fixed-id datasets fan across their hardcoded index/contract
+    tuple even with no caller universe — and the equity universe is
+    ignored (a stock_id is never a valid data_id for these)."""
+    now = datetime.now(tz=UTC)
+    rows = [
+        _make_ds(
+            dataset_code="TaiwanFuturesOpenInterestLargeTraders",
+            local_table="tw_futures_oi_largetraders",
+            per_symbol=True,
+        ),
+        _make_ds(
+            dataset_code="TaiwanStockTotalReturnIndex",
+            local_table="tw_total_return_index",
+            per_symbol=True,
+        ),
+    ]
+    chunks = expand_due_datasets(rows, now, symbols=["2330", "2317"])
+    by_code = {}
+    for c in chunks:
+        by_code.setdefault(c.dataset_code, set()).add(c.symbol)
+    assert by_code == {
+        "TaiwanFuturesOpenInterestLargeTraders": {"TX"},
+        "TaiwanStockTotalReturnIndex": {"TAIEX"},
+    }
+    assert all(c.per_symbol for c in chunks)
+
+
 def test_expand_market_wide_ignores_universe():
     """Market-wide datasets emit one chunk regardless of the symbols
     list (the symbols are only relevant for per-symbol datasets)."""
@@ -334,6 +362,39 @@ async def test_run_due_now_skips_per_symbol_before_ingest(finmind_session):
         "TaiwanStockTradingDate"
     }
     assert all(not outcome.chunk.per_symbol for outcome in outcomes)
+    assert fake.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_run_due_now_keeps_fixed_id_datasets_under_skip_per_symbol(
+    finmind_session,
+):
+    """`--skip-per-symbol` guards against the unbounded equity fan-out;
+    fixed-id datasets (hardcoded contract/index tuple) must survive it.
+    Regression: the production `--tw-only --skip-per-symbol` sweep
+    silently froze TaiwanFuturesOpenInterestLargeTraders from the
+    07-19 cutover until 07-28."""
+    await seed_dataset_sources()
+
+    for code in ("TaiwanFuturesOpenInterestLargeTraders", "TaiwanStockPrice"):
+        row = await finmind_session.get(DatasetSource, code)
+        row.enabled = True
+    await finmind_session.commit()
+
+    fake = FakeClient(rows_per_call=[])
+    outcomes = await run_due_now(
+        finmind_session,
+        dataset_code_prefixes=("Taiwan", "taiwan_"),
+        skip_per_symbol=True,
+        client=fake,
+    )
+
+    # The equity per-symbol dataset stays excluded; the fixed-id one
+    # runs with its hardcoded contract as the data_id.
+    assert {o.chunk.dataset_code for o in outcomes} == {
+        "TaiwanFuturesOpenInterestLargeTraders"
+    }
+    assert [o.chunk.symbol for o in outcomes] == ["TX"]
     assert fake.call_count == 1
 
 

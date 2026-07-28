@@ -21,6 +21,7 @@ from db.session import get_db
 from limiter import limiter
 from models.discussion import Discussion, DiscussionTurn
 from models.user import User
+from services.daily_pick_tier import tier_for
 from services.daily_scoreboard_service import build_scoreboard
 from services.discussion.symbol_names import (
     enrich_conclusion_with_names,
@@ -73,6 +74,10 @@ class PublicDailyResult(BaseModel):
     candidates: list[dict[str, Any]] = Field(default_factory=list)
     # Full ranked pool (slim, capped) — carried on the sequence-1 row only.
     candidate_pool: list[dict[str, Any]] = Field(default_factory=list)
+    # Server-computed read-time confidence tier ("recommend" / "watch",
+    # None for abstentions) — services.daily_pick_tier is the single
+    # source of truth; clients must never re-derive it.
+    tier: str | None = None
     verdict: str | None = None
     verdict_reason: str | None = None
     verified_at: str | None = None
@@ -484,6 +489,7 @@ async def _build_response(db: AsyncSession, email: str) -> PublicDailyResponse:
             candidate_pool=_with_company_names(
                 snapshot.get("pool", []), row.market,
             ),
+            tier=tier_for(row.conclusion),
             verdict=row.verdict,
             verdict_reason=row.verdict_reason,
             verified_at=row.verified_at.isoformat() if row.verified_at else None,

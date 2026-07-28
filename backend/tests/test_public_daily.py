@@ -456,3 +456,41 @@ async def test_public_daily_history_404_when_disabled_or_empty(client, monkeypat
     # Enabled but publisher has no rows → still 404, never a data probe.
     monkeypatch.setattr(settings, "PUBLIC_DAILY_RESULTS_OWNER_EMAIL", "nobody@example.com")
     assert (await client.get("/api/public/daily/history/2330")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_public_daily_carries_server_computed_tier(client, db_session, monkeypatch):
+    """Every serialized run carries a server-computed `tier` — the
+    frontend must never re-derive it (single source of truth:
+    services.daily_pick_tier.tier_for)."""
+    owner = User(id=uuid.uuid4(), email="tier-pub@example.com", hashed_password="x",
+                 role=UserRole.viewer, is_active=True)
+    db_session.add(owner)
+    await db_session.flush()
+    strong = {
+        "recommended_symbols": ["2330"], "reasoning": "理由", "risks": [],
+        "time_horizon": "short_term", "consensus_score": 0.95,
+        "quality_signals": {"hallucination_warnings": []},
+    }
+    weak = dict(strong, consensus_score=0.5, recommended_symbols=["1101"])
+    abstain = dict(strong, recommended_symbols=[])
+    d1 = discussion(owner.id, created_at=datetime(2026, 7, 14, tzinfo=UTC), conclusion=strong)
+    d1.auto_run_strategy = "price_signal"
+    d1.auto_run_date = datetime(2026, 7, 14, tzinfo=UTC).date()
+    d2 = discussion(owner.id, created_at=datetime(2026, 7, 14, 1, tzinfo=UTC), conclusion=weak)
+    d2.auto_run_strategy = "general"
+    d2.auto_run_date = d1.auto_run_date
+    d3 = discussion(owner.id, created_at=datetime(2026, 7, 14, 2, tzinfo=UTC), conclusion=abstain)
+    d3.auto_run_strategy = "chip_quality"
+    d3.auto_run_date = d1.auto_run_date
+    db_session.add_all([d1, d2, d3])
+    await db_session.commit()
+    monkeypatch.setattr(settings, "PUBLIC_DAILY_RESULTS_OWNER_EMAIL", "tier-pub@example.com")
+
+    body = (await client.get("/api/public/daily")).json()
+    flat = {r["strategy"]: r["tier"]
+            for runs in body["strategies"].values() for r in runs}
+    assert flat["price_signal"] == "recommend"
+    assert flat["general"] == "watch"
+    assert flat["chip_quality"] is None
+    assert body["result"]["tier"] in ("recommend", "watch", None)

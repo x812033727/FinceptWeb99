@@ -1,6 +1,7 @@
 """Daily TAIEX (大盤加權指數) history ingest.
 
-Runs once daily after TWSE closes (07:10 UTC = 15:10 Taipei). One
+Runs after TWSE closes (07:10 UTC = 15:10 Taipei) and again at
+14:10 UTC (22:10 Taipei) for sessions FinMind syncs late. One
 TWSE call returns the entire current-month FMTQIK series (one row
 per trading day). Bars are upserted into `ohlcv_daily` under symbol
 `_TAIEX` (underscore prefix marks this as a synthetic index row,

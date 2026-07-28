@@ -20,7 +20,11 @@ from finmind.models.crypto import CryptoUniverse
 from finmind.models.dataset_source import DatasetSource
 from finmind.models.master import TwStockInfo
 from finmind.redaction import redact_exception
-from finmind.scheduler.dispatcher import DueChunk, expand_due_datasets
+from finmind.scheduler.dispatcher import (
+    _FIXED_ID_UNIVERSE,
+    DueChunk,
+    expand_due_datasets,
+)
 
 log = logging.getLogger("finmind.scheduler")
 
@@ -142,7 +146,10 @@ async def run_due_now(
     those catalog categories are considered. `dataset_code_prefixes`
     further scopes the query to dataset codes beginning with one of the
     supplied prefixes. `skip_per_symbol` excludes those rows in SQL,
-    before due-chunk expansion or any upstream request. `now` defaults
+    before due-chunk expansion or any upstream request — except
+    datasets in `dispatcher._FIXED_ID_UNIVERSE`, whose "universe" is a
+    hardcoded id tuple rather than the equity fan-out the flag exists
+    to prevent. `now` defaults
     to UTC wall clock. `client` overrides the ingest source (for tests)
     — production leaves it None and the runner picks per
     `dataset_sources.active_source`.
@@ -168,7 +175,15 @@ async def run_due_now(
             for prefix in prefixes
         )))
     if skip_per_symbol:
-        stmt = stmt.where(DatasetSource.per_symbol.is_(False))
+        # Fixed-id datasets stay in: their fan-out is a hardcoded
+        # tuple of index/contract codes (dispatcher._FIXED_ID_UNIVERSE),
+        # not the over-broad tw_stock_info universe the flag guards
+        # against — dropping them froze those datasets entirely under
+        # the production `--tw-only --skip-per-symbol` sweep.
+        stmt = stmt.where(or_(
+            DatasetSource.per_symbol.is_(False),
+            DatasetSource.dataset_code.in_(sorted(_FIXED_ID_UNIVERSE)),
+        ))
     rows = (await session.execute(stmt)).scalars().all()
 
     chunks = expand_due_datasets(

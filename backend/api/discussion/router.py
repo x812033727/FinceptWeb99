@@ -72,6 +72,7 @@ from api.discussion.schemas import (
 from config import settings
 from db.session import get_db, get_db_session_factory
 from services import discussion_service
+from services.discussion.round_runner.turn_exec import _MAX_TURN_ATTEMPTS
 from services.discussion.symbol_names import enrich_conclusion_with_names
 
 log = logging.getLogger(__name__)
@@ -122,9 +123,25 @@ async def run_round(
         last_update = row.updated_at
         if last_update is not None and last_update.tzinfo is None:
             last_update = last_update.replace(tzinfo=UTC)
+        # Threshold = one worst-case TURN, not one worst-case round:
+        # run_round bumps discussions.updated_at on every persisted
+        # turn, so "no update for longer than a single turn could
+        # possibly take (timeout × attempts) plus slack" means the
+        # runner is dead, however many personas the round has. Read
+        # the runtime-configurable timeout (DB override > env default)
+        # — the compiled setting alone silently diverged from the
+        # admin-tuned value.
+        try:
+            from services.runtime_config_service import get_int as _get_int
+            persona_timeout = await _get_int(
+                db, "DISCUSSION_PERSONA_TIMEOUT_SECONDS",
+            )
+        except Exception:
+            persona_timeout = settings.DISCUSSION_PERSONA_TIMEOUT_SECONDS
+        stale_after_s = persona_timeout * _MAX_TURN_ATTEMPTS * 2
         stale = last_update is None or (
             datetime.now(UTC) - last_update
-            > timedelta(seconds=settings.DISCUSSION_PERSONA_TIMEOUT_SECONDS * 2)
+            > timedelta(seconds=stale_after_s)
         )
         if stale:
             log.warning(

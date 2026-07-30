@@ -245,6 +245,50 @@ async def test_round_returns_409_when_already_running(
 
 
 @pytest.mark.asyncio
+async def test_round_auto_recovers_stale_running_discussion(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """RUNNING + updated_at older than the worst-case single turn
+    (persona_timeout × attempts × 2) means the previous runner died —
+    the endpoint force-resets and runs the round instead of 409ing.
+    A live runner bumps updated_at on every persisted turn, so a
+    genuinely in-progress round never looks like this."""
+    from datetime import UTC, datetime, timedelta
+
+    h = await _register(client, "disc_round_stale@example.com")
+    create = await client.post(
+        "/api/discussion/sessions",
+        headers=h,
+        json={"topic": "x", "rules": "y", "persona_ids": ["buffett", "lynch"]},
+    )
+    discussion_id = create.json()["id"]
+
+    row = await db_session.scalar(
+        select(Discussion).where(Discussion.id == uuid.UUID(discussion_id))
+    )
+    row.status = "running"
+    # Far beyond any plausible threshold (default 300s × 2 × 2 = 1200s).
+    row.updated_at = datetime.now(UTC) - timedelta(hours=3)
+    await db_session.commit()
+
+    with patch(
+        "services.discussion_service.stream_chat",
+        side_effect=_stream_events_sequence([
+            '{"stance": "agree", "content": "ok"}',
+            '{"stance": "agree", "content": "ok"}',
+        ]),
+    ), patch(
+        "services.discussion_service.gather_market_context",
+        new=AsyncMock(return_value={"market": "TW"}),
+    ):
+        r = await client.post(
+            f"/api/discussion/sessions/{discussion_id}/round", headers=h,
+        )
+    assert r.status_code == 200
+    assert "round_end" in r.text
+
+
+@pytest.mark.asyncio
 async def test_round_refunds_unconsumed_quota_on_round_crash(
     client: AsyncClient,
 ):

@@ -619,6 +619,22 @@ async def run_round(
                 injected_by_user=injected,
             )
             db.add(turn_row)
+            # Bump the discussion's updated_at in the SAME transaction
+            # as the turn write. The stale-round auto-recover in
+            # api/discussion/router.py treats "RUNNING but updated_at
+            # too old" as a dead runner; before this bump the timestamp
+            # was only touched at round start, so any round longer than
+            # the threshold (easily true for 8 personas × slow turns,
+            # doubly so with per-turn retries) could be force-reset by
+            # a second /round request while very much alive. Now stale
+            # means "no turn completed for longer than a worst-case
+            # single turn", which is the semantics the threshold wants.
+            await db.execute(
+                update(Discussion)
+                .where(Discussion.id == discussion.id)
+                .values(updated_at=datetime.now(UTC))
+                .execution_options(synchronize_session=False)
+            )
             await db.commit()
             prior_turns.append(turn_row)
 

@@ -209,10 +209,14 @@ class Settings(BaseSettings):
     SENTIMENT_CRON_MAX_AGE_DAYS: int = 7
 
     # Discussion: per-persona LLM timeout (seconds). When a single persona's
-    # turn doesn't complete in this window we abort it, persist a placeholder,
-    # and move on to the next persona — prevents one stuck provider from
-    # hanging the whole round indefinitely.
-    DISCUSSION_PERSONA_TIMEOUT_SECONDS: int = 60
+    # turn doesn't complete in this window we retry once (zero-output only),
+    # then persist an abstain placeholder and move on to the next persona —
+    # prevents one stuck provider from hanging the whole round indefinitely.
+    # 300 because llm-gateway (claude_sub) peak-hour queueing routinely
+    # pushes healthy turns past 120s — at 60/180 the nightly auto-run was
+    # losing up to 13/40 turns to timeouts (2026-07-30). Runtime-overridable
+    # via the admin RuntimeTunablesCard (DB row wins over this default).
+    DISCUSSION_PERSONA_TIMEOUT_SECONDS: int = 300
 
     # Discussion outcome thresholds (4-band classification). The
     # single source of truth is `services.outcome_classifier`; the

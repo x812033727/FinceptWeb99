@@ -400,8 +400,11 @@ FinceptWeb/
   Owner-scoped. Quota cost per round = `len(persona_ids)`. Mid-stream
   failure / disconnect refunds `(cost - completed_personas)` so partial
   rounds don't burn the full daily quota.
-- Per-persona LLM timeout: `DISCUSSION_PERSONA_TIMEOUT_SECONDS=60`.
-  Stuck provider → emit error event, persist placeholder, proceed.
+- Per-persona LLM timeout: `DISCUSSION_PERSONA_TIMEOUT_SECONDS=300`
+  (runtime-overridable via admin RuntimeTunablesCard; the DB row wins).
+  Zero-output timeout/LLM-error → one retry with a fresh window; final
+  failure → emit error event, persist an `abstain` placeholder turn
+  (excluded from consensus), proceed to the next persona.
 - Persona overrides batch-loaded once per round (`_resolve_persona_specs`)
   so an 8-persona round costs 1 DB query for routing, not 8.
 - **Per-round context snapshots** (migration `0023`): `run_round`
@@ -1089,7 +1092,7 @@ GITHUB_REPO=FinceptWeb
 UPDATE_CHECK_INTERVAL_HOURS=6
 UPDATE_COMMAND=                 # empty = /api/admin/update returns "not_configured"
 SENTIMENT_DAILY_LLM_CALL_CAP=100         # cap on background sentiment scorer LLM calls per UTC day
-DISCUSSION_PERSONA_TIMEOUT_SECONDS=60    # per-persona timeout in a discussion round
+DISCUSSION_PERSONA_TIMEOUT_SECONDS=300   # per-persona timeout in a discussion round (zero-output turns get 1 retry)
 ```
 
 Per-persona / per-system-task LLM provider+model can also be overridden

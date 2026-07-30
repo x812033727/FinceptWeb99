@@ -3165,17 +3165,19 @@ async def test_upsert_round_context_overwrites_on_duplicate(
 
 
 @pytest.mark.asyncio
-async def test_run_round_persists_timeout_placeholder_and_continues(
+async def test_run_round_retries_once_on_timeout_then_succeeds(
     db_session: AsyncSession, owner: User,
 ):
-    """If a persona's stream takes longer than the configured timeout, we
-    persist a placeholder turn (stance=DEFAULT_STANCE, content mentions
-    timeout) and proceed to the next persona without aborting the round.
+    """A zero-output timeout gets ONE retry with a fresh timeout window.
+    When the retry succeeds: no soft `error` event ever reaches the
+    stream (a first-attempt toast for a turn that ends up fine would be
+    noise), a `turn_retry` event + repeated `turn_start` announce the
+    second attempt, and the persisted turn is the retry's real content.
 
-    Simulates the timeout path by having the first persona's stream raise
-    TimeoutError directly — equivalent to what `asyncio.timeout()` would
-    raise but without abandoning a sleeping generator that could leave
-    the shared SQLite connection in a half-cancelled state.
+    Simulates the timeout by having the stream raise TimeoutError
+    directly — equivalent to what `asyncio.timeout()` would raise but
+    without abandoning a sleeping generator that could leave the shared
+    SQLite connection in a half-cancelled state.
     """
     row = await discussion_service.create_discussion(
         db_session,
@@ -3207,23 +3209,234 @@ async def test_run_round_persists_timeout_placeholder_and_continues(
 
     types = [t for t, _ in events]
     assert types.count("turn_end") == 2
-    assert any(t == "error" for t in types)
+    assert "error" not in types          # retry succeeded → no soft error
+    assert types.count("turn_retry") == 1
+    # buffett's turn_start is re-announced for the retry; lynch's once.
+    starts = [p for t, p in events if t == "turn_start"]
+    assert [s["turn_index"] for s in starts] == [0, 0, 1]
+    retry = next(p for t, p in events if t == "turn_retry")
+    assert retry["reason"] == "timeout"
+    assert retry["attempt"] == 2
+    assert retry["persona_id"] == "buffett"
+    # 2 calls for buffett (timeout + retry) + 1 for lynch.
+    assert call_count["n"] == 3
 
     turns = (await db_session.scalars(
         select(DiscussionTurn).where(DiscussionTurn.discussion_id == row.id)
         .order_by(DiscussionTurn.turn_index)
     )).all()
     assert len(turns) == 2
-    assert (
-        "未回覆" in turns[0].content
-        or "中止" in turns[0].content
-        or "錯誤" in turns[0].content
+    assert turns[0].stance == "agree"
+    assert turns[0].content == "ok"
+    assert turns[1].stance == "agree"
+
+
+@pytest.mark.asyncio
+async def test_run_round_double_timeout_persists_abstain_and_continues(
+    db_session: AsyncSession, owner: User,
+):
+    """Both attempts time out with zero output → persist the abstain
+    placeholder, surface exactly one soft `error` event, and proceed to
+    the next persona without aborting the round."""
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="topic",
+        rules="rules",
+        persona_ids=["buffett", "lynch"],
     )
+
+    call_count = {"n": 0}
+
+    async def _two_timeouts_then_ok(*_a, **_kw):
+        call_count["n"] += 1
+        if call_count["n"] <= 2:
+            raise TimeoutError("simulated timeout")
+        yield {"type": "delta", "text": '{"stance":"agree","content":"ok"}'}
+
+    with patch(
+        "services.discussion_service.stream_chat",
+        side_effect=_two_timeouts_then_ok,
+    ), patch(
+        "services.discussion_service.gather_market_context",
+        new=AsyncMock(return_value={"market": "TW"}),
+    ):
+        events = []
+        async for ev in discussion_service.run_round(
+            db_session, row, user_id=str(owner.id),
+        ):
+            events.append((ev.type, ev.payload))
+
+    types = [t for t, _ in events]
+    assert types.count("turn_end") == 2
+    assert types.count("error") == 1     # only the FINAL failure surfaces
+    assert types.count("turn_retry") == 1
+    assert call_count["n"] == 3          # 2 attempts buffett + 1 lynch
+
+    turns = (await db_session.scalars(
+        select(DiscussionTurn).where(DiscussionTurn.discussion_id == row.id)
+        .order_by(DiscussionTurn.turn_index)
+    )).all()
+    assert len(turns) == 2
+    assert "未回覆" in turns[0].content or "中止" in turns[0].content
     # Zero-output failure turns carry the system-only abstain stance so
     # consensus / stance_distribution can exclude them — NOT the parse
     # fallback's supplement, which scored an outage as 0.5 agreement.
     assert turns[0].stance == discussion_service.ABSTAIN_STANCE
     assert turns[1].stance == "agree"
+
+
+@pytest.mark.asyncio
+async def test_run_round_partial_text_timeout_is_not_retried(
+    db_session: AsyncSession, owner: User,
+):
+    """A timeout AFTER some text arrived is not retried — the salvage
+    parser keeps the analysis we already paid for. The soft `error`
+    event still surfaces (the turn genuinely degraded)."""
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="topic",
+        rules="rules",
+        persona_ids=["buffett", "lynch"],
+    )
+
+    call_count = {"n": 0}
+
+    async def _partial_then_timeout(*_a, **_kw):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            yield {
+                "type": "delta",
+                "text": '{"stance":"dissent","content":"風險太高，'
+            }
+            raise TimeoutError("simulated timeout mid-stream")
+        yield {"type": "delta", "text": '{"stance":"agree","content":"ok"}'}
+
+    with patch(
+        "services.discussion_service.stream_chat",
+        side_effect=_partial_then_timeout,
+    ), patch(
+        "services.discussion_service.gather_market_context",
+        new=AsyncMock(return_value={"market": "TW"}),
+    ):
+        events = []
+        async for ev in discussion_service.run_round(
+            db_session, row, user_id=str(owner.id),
+        ):
+            events.append((ev.type, ev.payload))
+
+    types = [t for t, _ in events]
+    assert types.count("turn_retry") == 0
+    assert types.count("error") == 1
+    assert call_count["n"] == 2          # 1 buffett (no retry) + 1 lynch
+
+    turns = (await db_session.scalars(
+        select(DiscussionTurn).where(DiscussionTurn.discussion_id == row.id)
+        .order_by(DiscussionTurn.turn_index)
+    )).all()
+    assert len(turns) == 2
+    assert turns[0].stance == "dissent"           # salvaged, not abstain
+    assert "風險太高" in turns[0].content
+    assert turns[1].stance == "agree"
+
+
+@pytest.mark.asyncio
+async def test_run_round_retries_on_zero_output_llm_error(
+    db_session: AsyncSession, owner: User,
+):
+    """A zero-output LLM `error` event (429/5xx from the gateway) is
+    the same transient failure class as a timeout — retried once."""
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="topic",
+        rules="rules",
+        persona_ids=["buffett", "lynch"],
+    )
+
+    call_count = {"n": 0}
+
+    async def _error_then_ok(*_a, **_kw):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            yield {"type": "error", "message": "rate limit"}
+        else:
+            yield {"type": "delta", "text": '{"stance":"agree","content":"ok"}'}
+
+    with patch(
+        "services.discussion_service.stream_chat", side_effect=_error_then_ok,
+    ), patch(
+        "services.discussion_service.gather_market_context",
+        new=AsyncMock(return_value={"market": "TW"}),
+    ):
+        events = []
+        async for ev in discussion_service.run_round(
+            db_session, row, user_id=str(owner.id),
+        ):
+            events.append((ev.type, ev.payload))
+
+    types = [t for t, _ in events]
+    assert "error" not in types
+    retry = next(p for t, p in events if t == "turn_retry")
+    assert retry["reason"] == "llm_error"
+    assert call_count["n"] == 3          # buffett ×2 + lynch ×1
+
+    turns = (await db_session.scalars(
+        select(DiscussionTurn).where(DiscussionTurn.discussion_id == row.id)
+    )).all()
+    assert len(turns) == 2
+    assert all(t.stance == "agree" for t in turns)
+
+
+@pytest.mark.asyncio
+async def test_run_round_usage_accumulates_across_retry_attempts(
+    db_session: AsyncSession, owner: User,
+):
+    """The first attempt's tokens were genuinely spent — a retried turn
+    must bill usage from BOTH attempts, not just the winning one."""
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="topic",
+        rules="rules",
+        persona_ids=["buffett", "lynch"],
+    )
+
+    call_count = {"n": 0}
+
+    async def _usage_then_timeout_then_ok(*_a, **_kw):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            yield {"type": "usage", "prompt_tokens": 100, "completion_tokens": 0}
+            raise TimeoutError("simulated timeout after usage")
+        yield {"type": "delta", "text": '{"stance":"agree","content":"ok"}'}
+        yield {"type": "usage", "prompt_tokens": 110, "completion_tokens": 25}
+
+    recorded: list[dict] = []
+
+    async def _capture_usage(_db, **kw):
+        recorded.append(kw)
+
+    with patch(
+        "services.discussion_service.stream_chat",
+        side_effect=_usage_then_timeout_then_ok,
+    ), patch(
+        "services.discussion_service.gather_market_context",
+        new=AsyncMock(return_value={"market": "TW"}),
+    ), patch(
+        "services.llm_usage_service.record_usage",
+        side_effect=_capture_usage,
+    ):
+        async for _ in discussion_service.run_round(
+            db_session, row, user_id=str(owner.id),
+        ):
+            pass
+
+    persona_rows = [r for r in recorded if r.get("persona_id") == "buffett"]
+    assert len(persona_rows) == 1
+    assert persona_rows[0]["prompt_tokens"] == 210      # 100 + 110
+    assert persona_rows[0]["completion_tokens"] == 25
 
 
 # ── status reset guarantee (#1 critical fix) ─────────────────────
@@ -4760,6 +4973,83 @@ async def test_interject_followup_appends_one_answer_turn(
     assert refreshed.conclusion == {
         "recommended_symbols": ["2330"], "reasoning": "x",
     }
+
+
+@pytest.mark.asyncio
+async def test_interject_followup_retries_once_on_timeout(
+    db_session: AsyncSession, owner: User,
+):
+    """Same retry policy as run_round: a zero-output timeout gets one
+    fresh attempt before the fail-and-refund RuntimeError fires."""
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+    row.status = discussion_service.STATUS_DONE
+    row.current_round = 2
+    row.conclusion = {"recommended_symbols": ["2330"], "reasoning": "x"}
+    await db_session.commit()
+
+    call_count = {"n": 0}
+
+    async def _timeout_then_ok(*_a, **_kw):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise TimeoutError("simulated timeout")
+        yield {"type": "delta",
+               "text": '{"stance": "supplement", "content": "重試後回覆"}'}
+
+    with patch(
+        "services.discussion_service.stream_chat", side_effect=_timeout_then_ok,
+    ):
+        _q, a_turn = await discussion_service.interject_followup(
+            db_session, row,
+            question="為什麼看好 2330?",
+            target_persona="lynch",
+            user_id=str(owner.id),
+        )
+
+    assert call_count["n"] == 2
+    assert "重試後回覆" in a_turn.content
+
+
+@pytest.mark.asyncio
+async def test_interject_followup_double_timeout_raises_runtime_error(
+    db_session: AsyncSession, owner: User,
+):
+    """Both attempts timing out keeps the RuntimeError contract so the
+    router still refunds the quota charge."""
+    row = await discussion_service.create_discussion(
+        db_session,
+        owner_id=owner.id,
+        topic="t", rules="r",
+        persona_ids=["buffett", "lynch"],
+    )
+    row.status = discussion_service.STATUS_DONE
+    row.current_round = 2
+    row.conclusion = {"recommended_symbols": ["2330"], "reasoning": "x"}
+    await db_session.commit()
+
+    call_count = {"n": 0}
+
+    async def _always_timeout(*_a, **_kw):
+        call_count["n"] += 1
+        raise TimeoutError("simulated timeout")
+        yield  # pragma: no cover — makes this an async generator
+
+    with patch(
+        "services.discussion_service.stream_chat", side_effect=_always_timeout,
+    ):
+        with pytest.raises(RuntimeError, match="timeout"):
+            await discussion_service.interject_followup(
+                db_session, row,
+                question="為什麼看好 2330?",
+                target_persona="lynch",
+                user_id=str(owner.id),
+            )
+    assert call_count["n"] == 2
 
 
 @pytest.mark.asyncio

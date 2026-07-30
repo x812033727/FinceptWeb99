@@ -40,6 +40,15 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+# Attempts per persona LLM call (1 initial + 1 retry). Only zero-output
+# timeouts / LLM errors are retried — the dominant production failure
+# is transient llm-gateway peak-hour queueing, so one fresh timeout
+# window recovers most of them. Shared by `loop.run_round` and
+# `followup.interject_followup`; the stale-round auto-recover threshold
+# in `api/discussion/router.py` derives the true worst-case turn
+# duration from it (timeout × attempts).
+_MAX_TURN_ATTEMPTS = 2
+
 
 # ── <think> block streaming filter ──────────────────────────────────
 #

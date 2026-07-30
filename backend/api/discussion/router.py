@@ -37,8 +37,9 @@ import asyncio
 import json
 import logging
 import uuid
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, AsyncGenerator
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -52,8 +53,8 @@ from api.discussion import sessions as sessions_router
 from api.discussion import strategies as strategies_router
 from api.discussion import sweeps as sweeps_router
 from api.discussion._helpers import (  # noqa: F401  — re-exports kept for back-compat
-    CurrentUser,
     _BG_ROUND_TASKS,
+    CurrentUser,
     _check_quota,
     _coerce_owner_uuid,
     _daily_limit,
@@ -72,6 +73,7 @@ from api.discussion.schemas import (
 from config import settings
 from db.session import get_db, get_db_session_factory
 from services import discussion_service
+from services.discussion.round_runner.turn_exec import _MAX_TURN_ATTEMPTS
 from services.discussion.symbol_names import enrich_conclusion_with_names
 
 log = logging.getLogger(__name__)
@@ -86,6 +88,28 @@ router.include_router(post_mortem_router.router)
 
 
 # ── routes ─────────────────────────────────────────────────────────
+
+
+async def _stale_threshold_seconds(db: AsyncSession) -> int:
+    """Seconds of updated_at silence after which a RUNNING discussion
+    is considered dead and safe to force-reset.
+
+    Threshold = one worst-case TURN, not one worst-case round:
+    run_round bumps discussions.updated_at on every persisted turn, so
+    "no update for longer than a single turn could possibly take
+    (timeout × attempts) plus slack" means the runner is dead, however
+    many personas the round has. Reads the runtime-configurable timeout
+    (DB override > env default) — the compiled setting alone silently
+    diverged from the admin-tuned value.
+    """
+    try:
+        from services.runtime_config_service import get_int as _get_int
+        persona_timeout = await _get_int(
+            db, "DISCUSSION_PERSONA_TIMEOUT_SECONDS",
+        )
+    except Exception:
+        persona_timeout = settings.DISCUSSION_PERSONA_TIMEOUT_SECONDS
+    return persona_timeout * _MAX_TURN_ATTEMPTS * 2
 
 
 @router.post("/sessions/{discussion_id}/round")
@@ -122,9 +146,10 @@ async def run_round(
         last_update = row.updated_at
         if last_update is not None and last_update.tzinfo is None:
             last_update = last_update.replace(tzinfo=UTC)
+        stale_after_s = await _stale_threshold_seconds(db)
         stale = last_update is None or (
             datetime.now(UTC) - last_update
-            > timedelta(seconds=settings.DISCUSSION_PERSONA_TIMEOUT_SECONDS * 2)
+            > timedelta(seconds=stale_after_s)
         )
         if stale:
             log.warning(

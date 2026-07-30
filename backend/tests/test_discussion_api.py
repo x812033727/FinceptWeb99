@@ -30,7 +30,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models.discussion import Discussion
 from models.user import User, UserRole
 
-
 # ── helpers ────────────────────────────────────────────────────────
 
 
@@ -242,6 +241,97 @@ async def test_round_returns_409_when_already_running(
         f"/api/discussion/sessions/{discussion_id}/round", headers=h,
     )
     assert r.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_stale_threshold_reads_runtime_override(
+    db_session: AsyncSession,
+):
+    """The auto-recover threshold must follow the admin-tuned runtime
+    value (DB row wins over the compiled default) — the two silently
+    diverged before (compiled 60×2=120s vs the DB's 180s). Direct-call
+    test because CI diff-coverage doesn't see ASGI-dispatched lines."""
+    from api.discussion.router import _stale_threshold_seconds
+    from services import runtime_config_service as svc
+
+    admin = User(
+        email="stale_threshold_admin@test.com",
+        hashed_password="x",
+        role=UserRole.admin,
+    )
+    db_session.add(admin)
+    await db_session.commit()
+    await db_session.refresh(admin)
+
+    await svc.upsert(
+        db_session, "DISCUSSION_PERSONA_TIMEOUT_SECONDS", 45,
+        updated_by_id=admin.id,
+    )
+    # timeout × _MAX_TURN_ATTEMPTS(2) × 2 slack
+    assert await _stale_threshold_seconds(db_session) == 45 * 2 * 2
+
+
+@pytest.mark.asyncio
+async def test_stale_threshold_falls_back_to_settings(
+    db_session: AsyncSession,
+):
+    """Runtime-config read failing (Redis + DB both down) falls back to
+    the compiled default instead of blowing up the /round request."""
+    from unittest.mock import patch as _patch
+
+    from api.discussion.router import _stale_threshold_seconds
+    from config import settings
+
+    with _patch(
+        "services.runtime_config_service.get_int",
+        side_effect=RuntimeError("redis down"),
+    ):
+        expected = settings.DISCUSSION_PERSONA_TIMEOUT_SECONDS * 2 * 2
+        assert await _stale_threshold_seconds(db_session) == expected
+
+
+@pytest.mark.asyncio
+async def test_round_auto_recovers_stale_running_discussion(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    """RUNNING + updated_at older than the worst-case single turn
+    (persona_timeout × attempts × 2) means the previous runner died —
+    the endpoint force-resets and runs the round instead of 409ing.
+    A live runner bumps updated_at on every persisted turn, so a
+    genuinely in-progress round never looks like this."""
+    from datetime import UTC, datetime, timedelta
+
+    h = await _register(client, "disc_round_stale@example.com")
+    create = await client.post(
+        "/api/discussion/sessions",
+        headers=h,
+        json={"topic": "x", "rules": "y", "persona_ids": ["buffett", "lynch"]},
+    )
+    discussion_id = create.json()["id"]
+
+    row = await db_session.scalar(
+        select(Discussion).where(Discussion.id == uuid.UUID(discussion_id))
+    )
+    row.status = "running"
+    # Far beyond any plausible threshold (default 300s × 2 × 2 = 1200s).
+    row.updated_at = datetime.now(UTC) - timedelta(hours=3)
+    await db_session.commit()
+
+    with patch(
+        "services.discussion_service.stream_chat",
+        side_effect=_stream_events_sequence([
+            '{"stance": "agree", "content": "ok"}',
+            '{"stance": "agree", "content": "ok"}',
+        ]),
+    ), patch(
+        "services.discussion_service.gather_market_context",
+        new=AsyncMock(return_value={"market": "TW"}),
+    ):
+        r = await client.post(
+            f"/api/discussion/sessions/{discussion_id}/round", headers=h,
+        )
+    assert r.status_code == 200
+    assert "round_end" in r.text
 
 
 @pytest.mark.asyncio
@@ -917,6 +1007,7 @@ async def test_walk_forward_returns_409_when_already_active(
     # Seed a running train fold for this strategy — simulates an
     # earlier walk-forward run that's still mid-flight.
     from sqlalchemy import select
+
     from models.backtest_sweep import BacktestSweep
     from models.user import User as _User
     user = (await db_session.execute(
@@ -961,6 +1052,7 @@ async def test_walk_forward_allows_new_run_after_previous_terminal(
     seeded = await _seed_ohlcv_days(db_session, n=120)
 
     from sqlalchemy import select
+
     from models.backtest_sweep import BacktestSweep
     from models.user import User as _User
     user = (await db_session.execute(
@@ -1051,9 +1143,13 @@ async def test_brier_history_returns_points_for_resolved_sweeps(
 ):
     """Happy path — completed sweeps with brier_score on at
     least one discussion show up as ordered datapoints."""
-    from datetime import UTC as _UTC, date as _date, datetime as _dt, timedelta as _td
+    from datetime import UTC as _UTC
+    from datetime import date as _date
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
 
     from sqlalchemy import select
+
     from models.backtest_sweep import BacktestSweep
     from models.discussion import Discussion as _Disc
     from models.user import User as _User

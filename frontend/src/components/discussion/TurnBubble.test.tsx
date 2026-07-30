@@ -89,6 +89,19 @@ describe("TurnBubble", () => {
     expect(container.querySelector(".animate-pulse")).not.toBeNull();
   });
 
+  it("renders the abstain stance badge for no-response placeholder turns", () => {
+    render(
+      <TurnBubble
+        turn={makeTurn({
+          stance: "abstain",
+          content: "（此輪因 LLM 300s 內未回覆而中止）",
+        })}
+        personaName={personaName}
+      />,
+    );
+    expect(screen.getByLabelText("No response")).toBeInTheDocument();
+  });
+
   // ── B4: interjection badges ─────────────────────────────────────
 
   it("badges the owner's interjected question (user_input stance)", () => {

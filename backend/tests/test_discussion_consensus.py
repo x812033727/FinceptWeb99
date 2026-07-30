@@ -57,6 +57,20 @@ def test_unknown_stance_scores_as_supplement():
     assert observed_consensus([T(1, "brand_new_stance")]) == 0.5
 
 
+def test_abstain_is_excluded_not_half_agreement():
+    """A timeout/no-response turn says nothing about agreement — it
+    must not dilute the room toward 0.5 the way the unknown-stance
+    fallback would. Excluded from numerator AND denominator."""
+    assert observed_consensus([T(1, "agree"), T(1, "abstain")]) == 1.0
+    assert observed_consensus([T(1, "dissent"), T(2, "abstain")]) == 0.0
+
+
+def test_all_abstain_transcript_is_none():
+    """A round where every persona timed out has no scorable turns —
+    same honest-absence semantics as an empty transcript."""
+    assert observed_consensus([T(1, "abstain"), T(2, "abstain")]) is None
+
+
 def test_gap_is_positive_when_the_model_overclaims():
     """The production signature: consensus_score 0.88 over a
     0-agree / 36-dissent transcript."""

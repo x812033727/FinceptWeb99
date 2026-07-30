@@ -106,7 +106,35 @@ async def test_stance_distribution_counts_latest_round_only(
     qs = conclusion["quality_signals"]
     # latest round = 2; user_input excluded
     assert qs["stance_distribution"] == {
-        "agree": 0, "dissent": 2, "supplement": 1, "other": 0,
+        "agree": 0, "dissent": 2, "supplement": 1, "abstain": 0, "other": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_stance_distribution_separates_abstain_from_supplement(
+    db_session: AsyncSession, owner: User,
+):
+    """No-response turns (timeout/LLM-error placeholders) land in their
+    own `abstain` bucket — before this bucket existed they fell through
+    the parse fallback as supplement and an outage looked like a round
+    of partial agreement."""
+    disc = _make_discussion(owner.id)
+    turns = [
+        _turn(1, "a", "agree"),
+        _turn(1, "b", "abstain", "（此輪因 LLM 300s 內未回覆而中止）"),
+        _turn(1, "c", "abstain", "（此輪因 LLM 300s 內未回覆而中止）"),
+    ]
+    conclusion: dict[str, Any] = {"recommendations": []}
+    with patch(
+        "services.signal_audit_service.audit_discussion_for_synthesis",
+        AsyncMock(return_value=[]),
+    ):
+        await discussion_service._compute_quality_signals(
+            db_session, disc, conclusion, turns=turns,
+        )
+    qs = conclusion["quality_signals"]
+    assert qs["stance_distribution"] == {
+        "agree": 1, "dissent": 0, "supplement": 0, "abstain": 2, "other": 0,
     }
 
 

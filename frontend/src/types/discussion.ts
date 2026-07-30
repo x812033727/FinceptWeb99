@@ -21,8 +21,10 @@ export interface Turn {
   persona_id: string;
   /** `user_input` is the discussion owner's between-rounds injection
    * (PR #211) — rendered as a directive in the transcript instead
-   * of an analyst opinion. */
-  stance: "agree" | "dissent" | "supplement" | "user_input";
+   * of an analyst opinion. `abstain` is system-assigned to turns
+   * where the persona produced no output (timeout / LLM error) —
+   * excluded from consensus scoring on the backend. */
+  stance: "agree" | "dissent" | "supplement" | "user_input" | "abstain";
   content: string;
   created_at: string;
   /** B4: true for turns that exist because the owner interjected —
@@ -93,6 +95,8 @@ export interface QualitySignals {
     agree: number;
     dissent: number;
     supplement: number;
+    /** No-response turns (timeout / LLM error placeholders). */
+    abstain?: number;
     other: number;
   };
   /** Confidence summary over recommendations. `n=0` when no picks. */

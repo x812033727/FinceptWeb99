@@ -1429,7 +1429,8 @@
       "agree": "Agree",
       "dissent": "Dissent",
       "supplement": "Supplement",
-      "user_input": "User input"
+      "user_input": "User input",
+      "abstain": "No response"
     },
     "created_at": "Created",
     "updated_at": "Last updated",

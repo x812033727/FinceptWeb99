@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, CornerDownRight, Edit3, X } from "lucide-react";
+import { Check, Clock, CornerDownRight, Edit3, X } from "lucide-react";
 import type { Turn } from "@/types/discussion";
 import { cn } from "@/lib/utils";
 import { PersonaAvatar } from "./PersonaAvatar";
@@ -46,6 +46,11 @@ const STANCE_ICON: Record<
     Icon: Edit3,
     cls: "bg-warning/10 text-warning ring-warning/30",
     titleKey: "discussion.stance.user_input",
+  },
+  abstain: {
+    Icon: Clock,
+    cls: "bg-muted/40 text-muted-foreground ring-border",
+    titleKey: "discussion.stance.abstain",
   },
 };
 

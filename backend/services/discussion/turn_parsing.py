@@ -35,6 +35,14 @@ from services.llm_parsing_utils import (
 VALID_STANCES = ("agree", "dissent", "supplement")
 DEFAULT_STANCE = "supplement"
 
+# System-assigned stance for a turn where the persona produced no
+# output at all (timeout / LLM error / exception with zero deltas).
+# Deliberately NOT in VALID_STANCES: an LLM claiming "abstain" for
+# itself still falls back to DEFAULT_STANCE — only the round loop may
+# assign it, so downstream consumers can trust it means "no response",
+# never "the model chose to abstain".
+ABSTAIN_STANCE = "abstain"
+
 
 _CONTENT_OPEN_RE = re.compile(r'"content"\s*:\s*"')
 _STANCE_RE = re.compile(r'"stance"\s*:\s*"([^"]*)"')

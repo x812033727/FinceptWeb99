@@ -29,7 +29,10 @@ from services.discussion.round_runner.turn_exec import (
     _ThinkBlockFilter,
 )
 from services.discussion.symbols import extract_focus_symbols
-from services.discussion.turn_parsing import _parse_turn_response
+from services.discussion.turn_parsing import (
+    ABSTAIN_STANCE,
+    _parse_turn_response,
+)
 
 log = logging.getLogger(__name__)
 
@@ -399,6 +402,7 @@ async def run_round(
             })
 
             assembled = ""
+            placeholder: str | None = None
             usage_seen: dict[str, int] | None = None
             breakdown: dict[str, Any] | None = None
             tool_call_total = 0
@@ -503,7 +507,7 @@ async def run_round(
                                 "message": event.get("message", "LLM error"),
                                 "persona_id": persona_id,
                             })
-                            assembled = assembled or "（此輪因 LLM 錯誤未取得回覆）"
+                            placeholder = "（此輪因 LLM 錯誤未取得回覆）"
                             break
             except TimeoutError:
                 log.warning(
@@ -515,7 +519,7 @@ async def run_round(
                     "message": f"persona timeout after {persona_timeout}s",
                     "persona_id": persona_id,
                 })
-                assembled = assembled or f"（此輪因 LLM {persona_timeout}s 內未回覆而中止）"
+                placeholder = f"（此輪因 LLM {persona_timeout}s 內未回覆而中止）"
             except Exception as exc:
                 log.exception("discussion.turn.failed",
                               extra={"persona_id": persona_id, "round": round_number})
@@ -523,7 +527,7 @@ async def run_round(
                     "message": str(exc),
                     "persona_id": persona_id,
                 })
-                assembled = assembled or "（此輪因例外中止）"
+                placeholder = "（此輪因例外中止）"
 
             # Whether the stream finished cleanly, errored, or timed out,
             # flush any text the think-filter is still buffering. If the
@@ -538,7 +542,19 @@ async def run_round(
                     "text": tail,
                 })
 
-            stance, content = _parse_turn_response(assembled)
+            if placeholder is not None and not assembled:
+                # The persona produced zero output before the failure —
+                # there is nothing to parse. Persist the placeholder
+                # under the system-only ABSTAIN stance so consensus /
+                # stance_distribution treat it as "no response" instead
+                # of the parse fallback's supplement (0.5 weight), which
+                # silently diluted the room's real agreement level.
+                stance, content = ABSTAIN_STANCE, placeholder
+            else:
+                # Partial text before a timeout still carries real
+                # analysis — keep the salvage path (stance + truncated
+                # content) rather than discarding paid-for tokens.
+                stance, content = _parse_turn_response(assembled)
             turn_row = DiscussionTurn(
                 discussion_id=discussion.id,
                 round=round_number,

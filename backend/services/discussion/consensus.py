@@ -37,12 +37,19 @@ class _Turn(Protocol):
 # An unrecognised stance scores as `supplement` rather than 0, so a
 # future stance value can't silently drag consensus toward "total
 # disagreement" before anyone notices the enum drifted.
+#
+# `abstain` is the one deliberate exception: it marks a turn where the
+# persona produced no output at all (timeout / LLM error), so it says
+# nothing about agreement. Those turns are excluded entirely —
+# numerator AND denominator — rather than scored 0.5, which would
+# drag every outage toward "the room half-agreed".
 _STANCE_WEIGHT: dict[str, float] = {
     "agree": 1.0,
     "supplement": 0.5,
     "dissent": 0.0,
 }
 _UNKNOWN_STANCE_WEIGHT = 0.5
+_ABSTAIN_STANCE = "abstain"
 
 
 def observed_consensus(turns: Iterable[_Turn]) -> float | None:
@@ -68,6 +75,8 @@ def observed_consensus(turns: Iterable[_Turn]) -> float | None:
         if rnd <= 0:
             continue
         stance = getattr(t, "stance", None)
+        if stance == _ABSTAIN_STANCE:
+            continue
         value = _STANCE_WEIGHT.get(
             stance if isinstance(stance, str) else "", _UNKNOWN_STANCE_WEIGHT,
         )

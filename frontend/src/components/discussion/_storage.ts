@@ -29,6 +29,7 @@ export const STANCE_BADGE: Record<Turn["stance"], { label: string; cls: string }
   dissent: { label: "✗ 異議", cls: "bg-danger/10 text-danger border-danger/30" },
   supplement: { label: "↳ 補充", cls: "bg-blue-900/30 text-blue-300 border-blue-800/50" },
   user_input: { label: "✎ 插話", cls: "bg-warning/10 text-warning border-warning/30" },
+  abstain: { label: "⏱ 未回應", cls: "bg-muted/40 text-muted-foreground border-border" },
 };
 
 // ── localStorage: topic / rules / collapse state ──────────────────

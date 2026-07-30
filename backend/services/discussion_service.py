@@ -874,6 +874,7 @@ from services.discussion.transcript_format import (  # noqa: E402,F401
 # Re-export for back-compat with `_ask_persona` (still in this file)
 # + tests/test_discussion_service.py.
 from services.discussion.turn_parsing import (  # noqa: E402,F401
+    ABSTAIN_STANCE,
     DEFAULT_STANCE,
     VALID_STANCES,
     _decode_partial_json_string,

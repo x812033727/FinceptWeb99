@@ -292,8 +292,11 @@ async def _compute_quality_signals(
     signals so the UI can warn the operator about outputs that
     look structurally ok but smell wrong:
 
-      - ``stance_distribution``: agree / dissent / supplement count
-        in the latest round (excludes user_input directives).
+      - ``stance_distribution``: agree / dissent / supplement /
+        abstain count in the latest round (excludes user_input
+        directives). ``abstain`` marks no-response turns (timeout /
+        LLM error) so outages are visible instead of blending into
+        supplement.
         Lets the UI flag the case where a "buy" recommendation was
         synthesized over a majority-dissent transcript.
       - ``confidence_stats``: n / mean / median / max / min over
@@ -334,7 +337,7 @@ async def _compute_quality_signals(
     latest_round = max((t.round for t in persona_turns), default=0)
     latest_turns = [t for t in persona_turns if t.round == latest_round]
 
-    stance_dist = {"agree": 0, "dissent": 0, "supplement": 0, "other": 0}
+    stance_dist = {"agree": 0, "dissent": 0, "supplement": 0, "abstain": 0, "other": 0}
     for t in latest_turns:
         bucket = t.stance if t.stance in stance_dist else "other"
         stance_dist[bucket] += 1

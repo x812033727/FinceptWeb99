@@ -94,11 +94,12 @@ const signalNames: Record<string, string> = { breakout: "突破", oversold: "超
 const horizon: Record<string, string> = {
   short_term: "短期", medium_term: "中期", long_term: "長期",
 };
-const stance: Record<string, string> = { agree: "贊同", dissent: "異議", supplement: "補充" };
+const stance: Record<string, string> = { agree: "贊同", dissent: "異議", supplement: "補充", abstain: "未回應" };
 const stanceTone: Record<string, string> = {
   agree: "border-success/30 bg-success/10 text-success",
   dissent: "border-danger/30 bg-danger/10 text-danger",
   supplement: "border-info/30 bg-info/10 text-info",
+  abstain: "border-border bg-muted/40 text-muted-foreground",
 };
 
 function qualityWarnings(q?: QualitySignals): string[] {

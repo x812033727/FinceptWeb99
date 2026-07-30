@@ -24,6 +24,7 @@ import at module load.
 from __future__ import annotations
 
 from models.discussion import DiscussionTurn
+from services.discussion.turn_parsing import ABSTAIN_STANCE
 
 # How many recent turns appear verbatim vs as one-line summaries.
 # `_MAX_HISTORY_TURNS` caps the total window because Chinese-prompt
@@ -87,6 +88,10 @@ def _format_history(
     `DISCUSSION_ROUND_DIGEST_ENABLED` is off) reproduces the original
     per-turn-summary output byte-for-byte.
     """
+    # Abstain turns are timeout/error placeholders with no analysis —
+    # rendering them would spend prompt budget teaching later personas
+    # that "（此輪因 LLM ... 中止）" is a valid style of contribution.
+    prior_turns = [t for t in prior_turns if t.stance != ABSTAIN_STANCE]
     if not prior_turns:
         return "（你是本場第一位發言者）"
     from services.discussion_service import USER_PERSONA_ID

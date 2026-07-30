@@ -1400,6 +1400,34 @@ def test_format_history_renders_user_injection_with_directive_label():
     assert "_user · user_input" not in out
 
 
+def test_format_history_drops_abstain_placeholder_turns():
+    """Timeout/no-response placeholder turns carry no analysis — they
+    must not spend prompt budget or teach later personas that
+    `（此輪因 LLM ... 中止）` is a valid contribution style."""
+    ok = DiscussionTurn()
+    ok.round = 1
+    ok.turn_index = 0
+    ok.persona_id = "buffett"
+    ok.stance = "agree"
+    ok.content = "看好台積電"
+
+    dead = DiscussionTurn()
+    dead.round = 1
+    dead.turn_index = 1
+    dead.persona_id = "lynch"
+    dead.stance = discussion_service.ABSTAIN_STANCE
+    dead.content = "（此輪因 LLM 300s 內未回覆而中止）"
+
+    out = discussion_service._format_history([ok, dead])
+    assert "看好台積電" in out
+    assert "未回覆而中止" not in out
+    assert "abstain" not in out
+
+    # An all-abstain history reads as "you speak first", not an empty
+    # summary block.
+    assert "第一位發言者" in discussion_service._format_history([dead])
+
+
 # ── _format_history compression ───────────────────────────────────
 
 
@@ -1850,8 +1878,10 @@ async def test_run_round_persists_partial_round_on_llm_error(
     )).all()
     assert len(turns) == 2
     assert turns[0].content == "first"
-    # second turn fell back to default stance + placeholder content
-    assert turns[1].stance == discussion_service.DEFAULT_STANCE
+    # second turn is a zero-output failure → system abstain stance +
+    # placeholder content (excluded from consensus downstream), not the
+    # parse fallback's DEFAULT_STANCE which scored outages as 0.5.
+    assert turns[1].stance == discussion_service.ABSTAIN_STANCE
     assert "錯誤" in turns[1].content or "中止" in turns[1].content
 
 
@@ -3189,6 +3219,11 @@ async def test_run_round_persists_timeout_placeholder_and_continues(
         or "中止" in turns[0].content
         or "錯誤" in turns[0].content
     )
+    # Zero-output failure turns carry the system-only abstain stance so
+    # consensus / stance_distribution can exclude them — NOT the parse
+    # fallback's supplement, which scored an outage as 0.5 agreement.
+    assert turns[0].stance == discussion_service.ABSTAIN_STANCE
+    assert turns[1].stance == "agree"
 
 
 # ── status reset guarantee (#1 critical fix) ─────────────────────

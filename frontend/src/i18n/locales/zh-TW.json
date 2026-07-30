@@ -1427,7 +1427,8 @@
       "agree": "同意",
       "dissent": "異議",
       "supplement": "補充",
-      "user_input": "使用者插話"
+      "user_input": "使用者插話",
+      "abstain": "未回應"
     },
     "created_at": "建立於",
     "updated_at": "最後更新",

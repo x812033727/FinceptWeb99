@@ -24,6 +24,7 @@ from config import settings
 from models.discussion import Discussion, DiscussionTurn
 from services.discussion.persona_config import _resolve_persona_specs
 from services.discussion.round_runner.turn_exec import (
+    _MAX_TURN_ATTEMPTS,
     TurnEvent,
     _ask_persona,
     _ThinkBlockFilter,
@@ -56,6 +57,10 @@ async def run_round(
       - round_start  {round}
       - context      {market_context}
       - turn_start   {round, turn_index, persona_id, persona_name}
+      - turn_retry   {round, turn_index, persona_id, reason, attempt}
+                     (zero-output timeout/LLM-error being retried;
+                     followed by a repeated turn_start for the same
+                     turn_index so clients reset per-turn state)
       - delta        {round, turn_index, persona_id, text}
       - tool_call    {round, turn_index, persona_id, id, name, args}
       - tool_result  {round, turn_index, persona_id, id, name, summary, is_error}
@@ -393,13 +398,14 @@ async def run_round(
                 })
                 turn_idx += 1
 
-            yield TurnEvent("turn_start", {
+            turn_start_payload = {
                 "round": round_number,
                 "turn_index": turn_idx,
                 "persona_id": persona_id,
                 "persona_name": spec.name,
                 "injected_by_user": injected,
-            })
+            }
+            yield TurnEvent("turn_start", turn_start_payload)
 
             assembled = ""
             placeholder: str | None = None
@@ -408,139 +414,185 @@ async def run_round(
             tool_call_total = 0
             tool_call_breakdown: dict[str, int] = {}
             # Wrap the persona's turn in asyncio.timeout so a single stuck
-            # provider can't hang the whole round indefinitely. On timeout
-            # we emit an error event, persist a placeholder turn, and
-            # proceed to the next persona — same pattern as an LLM error.
+            # provider can't hang the whole round indefinitely. A zero-
+            # output timeout / LLM error gets ONE retry (fresh timeout
+            # window) before we give up — the dominant failure mode is
+            # llm-gateway peak-hour queueing, which is transient, and
+            # a retry is far cheaper than losing the persona's voice
+            # for the round. Usage/tool counters deliberately accumulate
+            # ACROSS attempts: the first attempt's tokens were spent.
             # Filter out `<think>...</think>` content as it streams so
             # reasoning models (deepseek-r1, gpt-o1, qwen-3) don't flash
             # internal monologue across the chat UI. The full unfiltered
             # text is still kept in `assembled` so JSON parsing still
             # sees what the model sent (and `_parse_turn_response` strips
             # think blocks again for safety / persistence).
-            think_filter = _ThinkBlockFilter()
-            try:
-                async with asyncio.timeout(persona_timeout):
-                    async for event in _ask_persona(
-                        db,
-                        spec=spec,
-                        persona_id=persona_id,
-                        topic=discussion.topic,
-                        rules=discussion.rules,
-                        context=context,
-                        prior_turns=prior_turns,
-                        user_id=user_id,
-                        user_role=user_role,
-                        as_of_date=discussion.as_of_date,
-                        round_digests=round_digests,
-                        interject_question=(
-                            interjection["question"] if injected else None
-                        ),
-                    ):
-                        etype = event.get("type")
-                        if etype == "delta":
-                            chunk = event.get("text", "")
-                            assembled += chunk
-                            visible = think_filter.feed(chunk)
-                            if visible:
-                                yield TurnEvent("delta", {
+            for attempt in range(1, _MAX_TURN_ATTEMPTS + 1):
+                assembled = ""
+                placeholder = None
+                breakdown = None
+                outcome = "ok"
+                failure_message = ""
+                think_filter = _ThinkBlockFilter()
+                try:
+                    async with asyncio.timeout(persona_timeout):
+                        async for event in _ask_persona(
+                            db,
+                            spec=spec,
+                            persona_id=persona_id,
+                            topic=discussion.topic,
+                            rules=discussion.rules,
+                            context=context,
+                            prior_turns=prior_turns,
+                            user_id=user_id,
+                            user_role=user_role,
+                            as_of_date=discussion.as_of_date,
+                            round_digests=round_digests,
+                            interject_question=(
+                                interjection["question"] if injected else None
+                            ),
+                        ):
+                            etype = event.get("type")
+                            if etype == "delta":
+                                chunk = event.get("text", "")
+                                assembled += chunk
+                                visible = think_filter.feed(chunk)
+                                if visible:
+                                    yield TurnEvent("delta", {
+                                        "round": round_number,
+                                        "turn_index": turn_idx,
+                                        "persona_id": persona_id,
+                                        "text": visible,
+                                    })
+                            elif etype == "input_breakdown":
+                                # Captured (not forwarded as its own SSE
+                                # event) — folded into turn_end + persisted
+                                # on the DiscussionTurn below.
+                                breakdown = event.get("breakdown")
+                            elif etype == "tool_call":
+                                # Forward through so the SSE consumer can
+                                # show "buffett 正在執行 run_dcf" inline, AND
+                                # record the per-tool count for billing/debug
+                                # observability — without this the round shows
+                                # token cost but no signal for "why was this
+                                # turn slow / which tool got called repeatedly".
+                                tool_name = event.get("name") or "_unknown"
+                                tool_call_total += 1
+                                tool_call_breakdown[tool_name] = (
+                                    tool_call_breakdown.get(tool_name, 0) + 1
+                                )
+                                yield TurnEvent("tool_call", {
                                     "round": round_number,
                                     "turn_index": turn_idx,
                                     "persona_id": persona_id,
-                                    "text": visible,
+                                    "id":   event.get("id"),
+                                    "name": event.get("name"),
+                                    "args": event.get("args"),
                                 })
-                        elif etype == "input_breakdown":
-                            # Captured (not forwarded as its own SSE
-                            # event) — folded into turn_end + persisted
-                            # on the DiscussionTurn below.
-                            breakdown = event.get("breakdown")
-                        elif etype == "tool_call":
-                            # Forward through so the SSE consumer can
-                            # show "buffett 正在執行 run_dcf" inline, AND
-                            # record the per-tool count for billing/debug
-                            # observability — without this the round shows
-                            # token cost but no signal for "why was this
-                            # turn slow / which tool got called repeatedly".
-                            tool_name = event.get("name") or "_unknown"
-                            tool_call_total += 1
-                            tool_call_breakdown[tool_name] = (
-                                tool_call_breakdown.get(tool_name, 0) + 1
-                            )
-                            yield TurnEvent("tool_call", {
-                                "round": round_number,
-                                "turn_index": turn_idx,
-                                "persona_id": persona_id,
-                                "id":   event.get("id"),
-                                "name": event.get("name"),
-                                "args": event.get("args"),
-                            })
-                        elif etype == "tool_result":
-                            yield TurnEvent("tool_result", {
-                                "round": round_number,
-                                "turn_index": turn_idx,
-                                "persona_id": persona_id,
-                                "id":       event.get("id"),
-                                "name":     event.get("name"),
-                                "summary":  event.get("summary", ""),
-                                "is_error": event.get("is_error", False),
-                            })
-                        elif etype == "usage":
-                            # **Sum** usage across events instead of
-                            # overwriting (PR #216). When the persona's
-                            # provider goes through a tool loop —
-                            # claude_agent's MCP loop or
-                            # _openai_compat_tool_loop's max_turns
-                            # iteration — each LLM call emits its
-                            # own usage event. The earlier code took
-                            # only the LAST one, so a 5-turn tool run
-                            # dropped ~80% of the actual prompt token
-                            # cost. Now every event is added in.
-                            if usage_seen is None:
-                                usage_seen = {"prompt_tokens": 0, "completion_tokens": 0}
-                            usage_seen["prompt_tokens"] += int(
-                                event.get("prompt_tokens", 0)
-                            )
-                            usage_seen["completion_tokens"] += int(
-                                event.get("completion_tokens", 0)
-                            )
-                        elif etype == "error":
-                            yield TurnEvent("error", {
-                                "message": event.get("message", "LLM error"),
-                                "persona_id": persona_id,
-                            })
-                            placeholder = "（此輪因 LLM 錯誤未取得回覆）"
-                            break
-            except TimeoutError:
-                log.warning(
-                    "discussion.turn.timeout",
-                    extra={"persona_id": persona_id, "round": round_number,
-                           "timeout_s": persona_timeout},
-                )
-                yield TurnEvent("error", {
-                    "message": f"persona timeout after {persona_timeout}s",
-                    "persona_id": persona_id,
-                })
-                placeholder = f"（此輪因 LLM {persona_timeout}s 內未回覆而中止）"
-            except Exception as exc:
-                log.exception("discussion.turn.failed",
-                              extra={"persona_id": persona_id, "round": round_number})
-                yield TurnEvent("error", {
-                    "message": str(exc),
-                    "persona_id": persona_id,
-                })
-                placeholder = "（此輪因例外中止）"
+                            elif etype == "tool_result":
+                                yield TurnEvent("tool_result", {
+                                    "round": round_number,
+                                    "turn_index": turn_idx,
+                                    "persona_id": persona_id,
+                                    "id":       event.get("id"),
+                                    "name":     event.get("name"),
+                                    "summary":  event.get("summary", ""),
+                                    "is_error": event.get("is_error", False),
+                                })
+                            elif etype == "usage":
+                                # **Sum** usage across events instead of
+                                # overwriting (PR #216). When the persona's
+                                # provider goes through a tool loop —
+                                # claude_agent's MCP loop or
+                                # _openai_compat_tool_loop's max_turns
+                                # iteration — each LLM call emits its
+                                # own usage event. The earlier code took
+                                # only the LAST one, so a 5-turn tool run
+                                # dropped ~80% of the actual prompt token
+                                # cost. Now every event is added in.
+                                if usage_seen is None:
+                                    usage_seen = {"prompt_tokens": 0, "completion_tokens": 0}
+                                usage_seen["prompt_tokens"] += int(
+                                    event.get("prompt_tokens", 0)
+                                )
+                                usage_seen["completion_tokens"] += int(
+                                    event.get("completion_tokens", 0)
+                                )
+                            elif etype == "error":
+                                outcome = "llm_error"
+                                failure_message = event.get("message", "LLM error")
+                                placeholder = "（此輪因 LLM 錯誤未取得回覆）"
+                                break
+                except TimeoutError:
+                    log.warning(
+                        "discussion.turn.timeout",
+                        extra={"persona_id": persona_id, "round": round_number,
+                               "timeout_s": persona_timeout, "attempt": attempt},
+                    )
+                    outcome = "timeout"
+                    failure_message = f"persona timeout after {persona_timeout}s"
+                    placeholder = f"（此輪因 LLM {persona_timeout}s 內未回覆而中止）"
+                except Exception as exc:
+                    log.exception("discussion.turn.failed",
+                                  extra={"persona_id": persona_id, "round": round_number})
+                    outcome = "exception"
+                    failure_message = str(exc)
+                    placeholder = "（此輪因例外中止）"
 
-            # Whether the stream finished cleanly, errored, or timed out,
-            # flush any text the think-filter is still buffering. If the
-            # tail is inside an open <think> block it gets dropped (the
-            # model never closed the tag, so we never want to show it).
-            tail = think_filter.flush()
-            if tail:
-                yield TurnEvent("delta", {
+                # Whether the stream finished cleanly, errored, or timed out,
+                # flush any text the think-filter is still buffering. If the
+                # tail is inside an open <think> block it gets dropped (the
+                # model never closed the tag, so we never want to show it).
+                tail = think_filter.flush()
+                if tail:
+                    yield TurnEvent("delta", {
+                        "round": round_number,
+                        "turn_index": turn_idx,
+                        "persona_id": persona_id,
+                        "text": tail,
+                    })
+
+                # Retry only the transient, zero-output failures:
+                #   - timeout / LLM error with no deltas → the turn is a
+                #     total loss and the cause is usually gateway
+                #     congestion, so a second attempt is worth its cost.
+                #   - partial text is NOT retried — the salvage parser
+                #     keeps the analysis we already paid for.
+                #   - a Python exception is NOT retried — same code path
+                #     would almost certainly fail the same way.
+                retrying = (
+                    outcome in ("timeout", "llm_error")
+                    and not assembled
+                    and attempt < _MAX_TURN_ATTEMPTS
+                )
+                if outcome != "ok" and not retrying:
+                    # Final failure for this turn — only now surface the
+                    # soft per-persona error to the stream. Emitting it
+                    # on a first attempt that later succeeds would flash
+                    # a spurious timeout toast at the user.
+                    yield TurnEvent("error", {
+                        "message": failure_message,
+                        "persona_id": persona_id,
+                    })
+                if not retrying:
+                    break
+                log.info(
+                    "discussion.turn.retry",
+                    extra={"persona_id": persona_id, "round": round_number,
+                           "reason": outcome, "attempt": attempt + 1},
+                )
+                yield TurnEvent("turn_retry", {
                     "round": round_number,
                     "turn_index": turn_idx,
                     "persona_id": persona_id,
-                    "text": tail,
+                    "reason": outcome,
+                    "attempt": attempt + 1,
                 })
+                # Re-announce the turn so clients reset any per-turn
+                # streaming state (buffer, tool-call rows) from the
+                # failed attempt. Zero-output guarantees the visible
+                # buffer was empty, so there is no flicker.
+                yield TurnEvent("turn_start", turn_start_payload)
 
             if placeholder is not None and not assembled:
                 # The persona produced zero output before the failure —

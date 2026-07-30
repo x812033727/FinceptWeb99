@@ -18,7 +18,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from models.discussion import Discussion, DiscussionTurn
 from services.discussion.persona_config import _resolve_persona_specs
-from services.discussion.round_runner.turn_exec import _ask_persona
+from services.discussion.round_runner.turn_exec import (
+    _MAX_TURN_ATTEMPTS,
+    _ask_persona,
+)
 from services.discussion.turn_parsing import _parse_turn_response
 
 log = logging.getLogger(__name__)
@@ -107,44 +110,69 @@ async def interject_followup(
     usage_seen: dict[str, int] | None = None
     breakdown: dict[str, Any] | None = None
     tool_call_total = 0
-    try:
-        async with asyncio.timeout(persona_timeout):
-            async for event in _ask_persona(
-                db,
-                spec=spec,
-                persona_id=persona_id,
-                topic=discussion.topic,
-                rules=discussion.rules,
-                context=context,
-                prior_turns=prior_turns,
-                user_id=user_id,
-                user_role=user_role,
-                as_of_date=discussion.as_of_date,
-                interject_question=question_turn.content,
-            ):
-                etype = event.get("type")
-                if etype == "delta":
-                    assembled += event.get("text", "")
-                elif etype == "input_breakdown":
-                    breakdown = event.get("breakdown")
-                elif etype == "tool_call":
-                    tool_call_total += 1
-                elif etype == "usage":
-                    if usage_seen is None:
-                        usage_seen = {"prompt_tokens": 0, "completion_tokens": 0}
-                    usage_seen["prompt_tokens"] += int(
-                        event.get("prompt_tokens", 0)
-                    )
-                    usage_seen["completion_tokens"] += int(
-                        event.get("completion_tokens", 0)
-                    )
-                elif etype == "error":
-                    raise RuntimeError(
-                        event.get("message", "LLM error during follow-up"),
-                    )
-    except TimeoutError:
-        raise RuntimeError(
-            f"persona timeout after {persona_timeout}s during follow-up",
+    # One retry on zero-output timeout / LLM error — same policy (and
+    # same rationale: transient gateway congestion) as run_round's
+    # per-turn loop. The RuntimeError-on-final-failure contract is
+    # unchanged so the router still refunds the quota charge.
+    # Usage/tool counters accumulate across attempts.
+    last_failure: str | None = None
+    for attempt in range(1, _MAX_TURN_ATTEMPTS + 1):
+        assembled = ""
+        breakdown = None
+        last_failure = None
+        try:
+            async with asyncio.timeout(persona_timeout):
+                async for event in _ask_persona(
+                    db,
+                    spec=spec,
+                    persona_id=persona_id,
+                    topic=discussion.topic,
+                    rules=discussion.rules,
+                    context=context,
+                    prior_turns=prior_turns,
+                    user_id=user_id,
+                    user_role=user_role,
+                    as_of_date=discussion.as_of_date,
+                    interject_question=question_turn.content,
+                ):
+                    etype = event.get("type")
+                    if etype == "delta":
+                        assembled += event.get("text", "")
+                    elif etype == "input_breakdown":
+                        breakdown = event.get("breakdown")
+                    elif etype == "tool_call":
+                        tool_call_total += 1
+                    elif etype == "usage":
+                        if usage_seen is None:
+                            usage_seen = {"prompt_tokens": 0, "completion_tokens": 0}
+                        usage_seen["prompt_tokens"] += int(
+                            event.get("prompt_tokens", 0)
+                        )
+                        usage_seen["completion_tokens"] += int(
+                            event.get("completion_tokens", 0)
+                        )
+                    elif etype == "error":
+                        last_failure = event.get(
+                            "message", "LLM error during follow-up",
+                        )
+                        break
+        except TimeoutError:
+            last_failure = (
+                f"persona timeout after {persona_timeout}s during follow-up"
+            )
+        if last_failure is None:
+            break
+        if assembled or attempt >= _MAX_TURN_ATTEMPTS:
+            # Partial text is unusual here (single-shot answer) but if
+            # the provider died mid-stream twice, or after any text,
+            # keep the fail-and-refund contract rather than persisting
+            # a broken answer turn.
+            raise RuntimeError(last_failure)
+        log.info(
+            "discussion.followup.retry",
+            extra={"persona_id": persona_id,
+                   "discussion_id": str(discussion.id),
+                   "attempt": attempt + 1},
         )
 
     stance, content = _parse_turn_response(assembled)

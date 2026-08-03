@@ -12,6 +12,17 @@ without either depending on the other.
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
+# When `--apply` was actually run (the rules-archive stamp,
+# var/rules-archive/rules-*-20260725T124515Z.txt). The guard's revert
+# tripwires only judge picks created under the downgraded ruleset —
+# older verdicts ran under the original stricter veto, and reverting
+# because THOSE lost would reinstate the ruleset that produced them.
+# If the clause is ever reverted and re-applied, update this stamp to
+# the new archive timestamp.
+VETO_DOWNGRADE_ADOPTED_AT = datetime(2026, 7, 25, 12, 45, 15, tzinfo=UTC)
+
 VETO_DOWNGRADE_CLAUSE = (
     "\n\n【僅適用於量價訊號策略場次】總經逆風(外資台指期淨空、三大法人連續"
     "賣超、台VIX 偏高等系統性風險)不得作為否決個股的唯一理由。當候選同時"
@@ -20,4 +31,4 @@ VETO_DOWNGRADE_CLAUSE = (
     "逆風環境」。僅當個股本身不符技術或籌碼條件、或風報比不足時才棄權。"
 )
 
-__all__ = ["VETO_DOWNGRADE_CLAUSE"]
+__all__ = ["VETO_DOWNGRADE_ADOPTED_AT", "VETO_DOWNGRADE_CLAUSE"]

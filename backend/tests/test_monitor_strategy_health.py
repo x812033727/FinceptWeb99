@@ -462,6 +462,68 @@ async def test_veto_guard_exception_forces_not_ok_not_a_silent_pass(
 
 
 @pytest.mark.asyncio
+async def test_veto_guard_ignores_pre_adoption_verdicts(
+    db_session: AsyncSession, owner: User,
+):
+    """The revert tripwires judge the DOWNGRADED ruleset, so only
+    picks created after the clause was adopted (2026-07-25, the
+    rules-archive stamp) are in scope. A losing streak from picks
+    that ran under the ORIGINAL stricter veto — exactly the 7-21..7-24
+    tape that fired the guard in production — must not name a revert:
+    reverting would reinstate the very ruleset that produced those
+    losses. Seeds 3 consecutive losses plus 2 big_losses, all
+    pre-adoption, and expects the guard to stay quiet."""
+    await _seed_veto_clause_config(db_session, owner.id)
+    pre_adoption = datetime(2026, 7, 21, 4, 0, tzinfo=UTC)
+    for i, verdict in enumerate(
+        ["loss", "loss", "loss", "big_loss", "big_loss"]
+    ):
+        await _live_discussion(
+            db_session, owner, strategy="price_signal",
+            verdict=verdict, created_at=pre_adoption + timedelta(hours=i),
+        )
+    await db_session.commit()
+
+    with patch.object(cron, "acquire_lock", AsyncMock(return_value=True)), \
+         patch.object(cron, "release_lock", AsyncMock()):
+        out = await cron.run_health_monitor()
+
+    assert out["guard_findings"] == []
+
+
+@pytest.mark.asyncio
+async def test_veto_guard_pre_adoption_rows_do_not_pad_decided_window(
+    db_session: AsyncSession, owner: User,
+):
+    """Post-adoption verdicts still trip the guard on their own — the
+    adoption cutoff must not swallow real signal. 3 consecutive
+    post-adoption losses fire even when older pre-adoption wins sit
+    behind them (which, if wrongly included, would not break the
+    leading streak — so this also pins the cutoff to created_at, not
+    to streak arithmetic)."""
+    await _seed_veto_clause_config(db_session, owner.id)
+    pre_adoption = datetime(2026, 7, 20, 4, 0, tzinfo=UTC)
+    for i in range(3):
+        await _live_discussion(
+            db_session, owner, strategy="price_signal",
+            verdict="win", created_at=pre_adoption + timedelta(hours=i),
+        )
+    post_adoption = datetime(2026, 7, 28, 4, 0, tzinfo=UTC)
+    for i in range(3):
+        await _live_discussion(
+            db_session, owner, strategy="price_signal",
+            verdict="loss", created_at=post_adoption + timedelta(hours=i),
+        )
+    await db_session.commit()
+
+    with patch.object(cron, "acquire_lock", AsyncMock(return_value=True)), \
+         patch.object(cron, "release_lock", AsyncMock()):
+        out = await cron.run_health_monitor()
+
+    assert any("3 consecutive" in f for f in out["guard_findings"])
+
+
+@pytest.mark.asyncio
 async def test_veto_guard_leakage_fires_and_ignores_unverifiable(
     db_session: AsyncSession, owner: User,
 ):

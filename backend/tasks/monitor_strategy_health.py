@@ -38,7 +38,10 @@ from services import strategy_health_service as hsvc
 from services import strategy_maturity_service as msvc
 from services.ingest.repository import record_health
 from services.notification_service import notify_user
-from services.veto_clause import VETO_DOWNGRADE_CLAUSE
+from services.veto_clause import (
+    VETO_DOWNGRADE_ADOPTED_AT,
+    VETO_DOWNGRADE_CLAUSE,
+)
 from services.veto_guard import _DECIDED, abstention_leakage, revert_trigger
 
 log = logging.getLogger(__name__)
@@ -205,6 +208,9 @@ async def _veto_guard_findings(db: AsyncSession) -> list[str]:
             Discussion.as_of_date.is_(None),
             Discussion.auto_run.is_(True),
             Discussion.verdict.in_(_DECIDED),
+            # Only picks that ran under the downgraded ruleset are in
+            # scope for a revert judgment — see VETO_DOWNGRADE_ADOPTED_AT.
+            Discussion.created_at >= VETO_DOWNGRADE_ADOPTED_AT,
         )
         .order_by(Discussion.created_at.desc())
         .limit(_LIVE_PRICE_SIGNAL_LIMIT)

@@ -120,8 +120,8 @@ def test_an_extreme_factor_cannot_dominate_the_ranking():
 
 
 def test_no_single_factor_exceeds_half_of_the_score():
-    """Equal weighting over four factors caps any one factor's share at
-    25% — the property whose absence let a share count contribute
+    """Equal weighting caps any one factor's share at
+    20% (five factors now) — the property whose absence let a share count contribute
     99.97% of a total."""
     rows = [
         _safe_row(symbol="2330", revenue_yoy=99_999.0, return_5d=0.01,
@@ -130,8 +130,8 @@ def test_no_single_factor_exceeds_half_of_the_score():
                   foreign_net_buy_5d=800_000, pe=15.0),
     ]
     ranked = rank_candidates("general", rows)
-    # Four equally-weighted factors, each bounded on 0-1: the most any
-    # one can contribute to the mean is 1/4.
+    # Equally-weighted factors, each bounded on 0-1: the most any
+    # one can contribute to the mean is 1/N.
     for row in ranked:
         assert row["strategy_score"] <= 1.0
         assert row["strategy_score"] >= 0.0

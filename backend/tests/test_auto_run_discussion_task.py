@@ -374,11 +374,11 @@ async def test_no_enabled_users_is_a_clean_noop(
 
 
 @pytest.mark.asyncio
-async def test_runs_5_rounds_then_synthesize(
+async def test_runs_auto_rounds_then_synthesize(
     patch_session, db_session: AsyncSession,
 ):
     """Counts the round + synthesizer invocations to pin the canonical
-    5-rounds-then-conclude flow per enabled user."""
+    _AUTO_ROUNDS-then-conclude flow per enabled user."""
     from tasks import auto_run_discussion
 
     user = await _make_user(db_session)
@@ -409,7 +409,7 @@ async def test_runs_5_rounds_then_synthesize(
     finally:
         _exit_all(patches)
 
-    assert round_calls["n"] == 5
+    assert round_calls["n"] == auto_run_discussion._AUTO_ROUNDS
     synth.assert_awaited_once()
 
 
@@ -456,7 +456,7 @@ async def test_passes_system_task_llm_override_to_run_round(
     finally:
         _exit_all(patches)
 
-    assert len(captured_calls) == 5
+    assert len(captured_calls) == auto_run_discussion._AUTO_ROUNDS
     for call_kwargs in captured_calls:
         assert call_kwargs["provider_override"] == "groq"
         assert call_kwargs["model_override"] == "llama-3.3-70b-versatile"

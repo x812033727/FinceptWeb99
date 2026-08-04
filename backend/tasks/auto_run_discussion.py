@@ -67,7 +67,13 @@ _LOCK_KEY = "lock:auto_run_discussion"
 # preempted mid-loop.
 _LOCK_TTL = 60 * 60
 
-_AUTO_ROUNDS = 5
+# 5 → 3 (2026-08-04): the 20-decided pre-registered review found the
+# expert-panel picks did not beat the screener's own top-3 (D5 diff
+# −0.25pp over 42 paired sessions), triggering commitment #4 — shift
+# weight from discussion to the screener. Three rounds keep the
+# open → challenge → converge arc (consensus tiering was calibrated on
+# multi-round transcripts) while cutting ~40% of per-session LLM spend.
+_AUTO_ROUNDS = 3
 _TW_SYMBOL_RE = re.compile(r"^\d{4,6}$")
 
 

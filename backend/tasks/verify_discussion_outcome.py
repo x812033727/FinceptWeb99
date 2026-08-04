@@ -357,7 +357,9 @@ async def _verify_one(
         if abstained and d.market == "TW":
             anchor = d.as_of_date or to_tw_date(d.created_at)
             try:
-                pool_perf = await _compute_pool_performance(d, anchor)
+                pool_perf = await _compute_pool_performance(
+                    d, anchor, entry_after_anchor=d.as_of_date is not None,
+                )
             except Exception:
                 log.exception(
                     "verify_discussion_outcome.pool_performance_failed",
@@ -387,10 +389,22 @@ async def _verify_one(
     # instead of `created_at.date()`. A discussion built today that
     # backtests `as_of='2025-01-15'` is verified against bars from
     # 2025-01-16 onward, not from 2026-05-02.
+    #
+    # STRICTLY after, not `>=` (2026-08-04 look-ahead fix): for a
+    # backtest row `as_of` is the screener's info cutoff —
+    # `load_candidate_rows` clamps every source to `ts <= as_of`, so
+    # the pool already knows as_of's close. Grading entry at as_of's
+    # OPEN meant buying at a morning price with evening knowledge;
+    # measured on the 8-03/8-04 replay batch this inflated D5 alpha by
+    # ~4.2pp per session (+2.69pp reported vs −1.50pp honest). A live
+    # row's info cutoff is the *prior* session (the 04:00 Taipei run
+    # predates the open), so its `>=` created-date anchor is already
+    # honest and stays as-is.
     if d.as_of_date is not None:
         anchor_tw = d.as_of_date
     else:
         anchor_tw = to_tw_date(d.created_at)
+    entry_after_anchor = d.as_of_date is not None
 
     per_symbol: dict[str, tuple[float, list[float | None]]] = {}
 
@@ -413,17 +427,22 @@ async def _verify_one(
             bars = await read_ohlcv_range_autosession(
                 d.market,
                 sym,
-                d.as_of_date,
-                d.as_of_date + timedelta(days=14),
+                d.as_of_date + timedelta(days=1),
+                d.as_of_date + timedelta(days=15),
             )
         else:
             bars = await _fetch_history(sym, d.market)
         # Bars are returned with `time` either as ISO date ("YYYY-MM-DD")
         # or full ISO timestamp. Truncate to date for comparison.
-        # `>= anchor_tw` covers backtest (anchor=as_of_date) and
-        # live (anchor=created_at.date()) uniformly.
+        # Backtest rows enter strictly AFTER the anchor (info cutoff);
+        # live rows enter on the created-date anchor itself — see the
+        # look-ahead note above `entry_after_anchor`.
         future_bars = sorted(
-            (b for b in bars if _bar_date(b) >= anchor_tw),
+            (
+                b for b in bars
+                if (_bar_date(b) > anchor_tw
+                    if entry_after_anchor else _bar_date(b) >= anchor_tw)
+            ),
             key=lambda b: b.get("time", ""),
         )
         window = future_bars[:_WINDOW_TRADING_DAYS]
@@ -479,7 +498,9 @@ async def _verify_one(
             # TW-only — see the abstain-path comment above for why.
             if d.market == "TW":
                 try:
-                    pool_perf = await _compute_pool_performance(d, anchor_tw)
+                    pool_perf = await _compute_pool_performance(
+                        d, anchor_tw, entry_after_anchor=entry_after_anchor,
+                    )
                 except Exception:
                     # Pool stats are a bonus metric — never block the verdict.
                     log.exception(
@@ -546,13 +567,16 @@ async def _verify_one(
 
 
 async def _compute_pool_performance(
-    d: Discussion, anchor_tw: date,
+    d: Discussion, anchor_tw: date, *, entry_after_anchor: bool = False,
 ) -> dict[str, Any] | None:
     """Average 5-trading-day close-over-open return of the stored
     sequence-1 candidate pool, read from the local OHLCV archive (no
     live fetches — at verify time the ingest pipeline has these bars).
     None when the row carries no pool; a zero-`resolved` dict when the
-    pool exists but no symbol had a complete window yet."""
+    pool exists but no symbol had a complete window yet.
+    `entry_after_anchor` mirrors the pick-grading anchor: backtest rows
+    enter strictly after `anchor_tw` (their info cutoff), live rows on
+    the anchor itself."""
     snapshot = d.candidate_snapshot if isinstance(d.candidate_snapshot, dict) else {}
     pool = snapshot.get("pool")
     if not isinstance(pool, list) or not pool:
@@ -569,12 +593,13 @@ async def _compute_pool_performance(
     from services.ingest.repository import read_ohlcv_range_autosession
 
     returns: list[float] = []
+    entry_floor = anchor_tw + timedelta(days=1) if entry_after_anchor else anchor_tw
     for sym in symbols:
         bars = await read_ohlcv_range_autosession(
-            "TW", sym, anchor_tw, anchor_tw + timedelta(days=14),
+            "TW", sym, entry_floor, entry_floor + timedelta(days=14),
         )
         window = sorted(
-            (b for b in bars if _bar_date(b) >= anchor_tw),
+            (b for b in bars if _bar_date(b) >= entry_floor),
             key=lambda b: b.get("time", ""),
         )[:_WINDOW_TRADING_DAYS]
         if len(window) < _WINDOW_TRADING_DAYS:

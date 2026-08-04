@@ -84,6 +84,8 @@ async def _make_pending(
     abstained: bool = False,
     abstain_reason: str = "",
     market: str = "TW",
+    as_of_date: date | None = None,
+    candidate_snapshot: dict | None = None,
 ) -> Discussion:
     """Build an auto-run discussion ready for the verifier.
 
@@ -126,6 +128,8 @@ async def _make_pending(
         verify_after_date=today + timedelta(days=verify_after_offset),
         day1_open_prices=day1_open_prices,
         created_at=created_at,
+        as_of_date=as_of_date,
+        candidate_snapshot=candidate_snapshot,
     )
     db.add(d)
     await db.commit()
@@ -943,3 +947,92 @@ async def test_us_junk_symbols_still_filtered(
     assert refreshed.verdict == "unverifiable"
     assert refreshed.verdict_reason == "synthesizer returned no symbols"
     history.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_backtest_row_enters_strictly_after_as_of(
+    patch_session,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Look-ahead regression (2026-08-04): a backtest row's holding
+    window must start at the first bar strictly AFTER `as_of_date`.
+    `load_candidate_rows` clamps the screener to `ts <= as_of`, so the
+    pool already knows as_of's close — grading entry at as_of's open
+    would buy a morning price with evening knowledge. Here the as_of
+    bar rallies 100→110; graded from as_of open that spike alone is a
+    +10% "win". Honest entry is the NEXT session (open 110, flat to
+    D5) — a loss."""
+    as_of = datetime.now(UTC).date() - timedelta(days=30)
+    d = await _make_pending(
+        db_session, owner.id, symbols=["2330"], as_of_date=as_of,
+    )
+
+    # Bar ON as_of (the pumped session the screener saw) + 5 flat
+    # bars after it. The stub ignores the requested range, so only
+    # the strict `> as_of` filter can exclude the as_of bar.
+    as_of_bar = _bars(as_of, 1, open_=100.0, closes=[110.0])
+    after_bars = _bars(
+        as_of + timedelta(days=1), 5, open_=110.0,
+        closes=[110.0, 110.0, 110.0, 110.0, 110.0],
+    )
+    archive = AsyncMock(return_value=as_of_bar + after_bars)
+    patches = _stub_lock_helpers() + [
+        patch("services.ingest.repository.read_ohlcv_range_autosession", archive),
+    ]
+    _enter_all(patches)
+    try:
+        from tasks import verify_discussion_outcome
+
+        await verify_discussion_outcome.run()
+    finally:
+        _exit_all(patches)
+
+    refreshed = await db_session.get(Discussion, d.id)
+    await db_session.refresh(refreshed)
+    # Entry at 110 (first bar after as_of), D5 close 110 → 0% → loss.
+    # Under the buggy `>= as_of` anchor this graded +10% → win.
+    assert refreshed.verdict == "loss", refreshed.verdict_reason
+    assert refreshed.day1_open_prices == {"2330": 110.0}
+
+
+@pytest.mark.asyncio
+async def test_backtest_abstain_pool_counterfactual_enters_after_as_of(
+    patch_session,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """The abstain-path pool counterfactual must use the same honest
+    anchor as pick grading: entry strictly after `as_of_date`. The
+    as_of bar jumps 100→110; five flat bars follow. Honest pool
+    return is 0%, not +10%."""
+    as_of = datetime.now(UTC).date() - timedelta(days=30)
+    d = await _make_pending(
+        db_session, owner.id, symbols=[], abstained=True,
+        abstain_reason="風報比不足", as_of_date=as_of,
+        candidate_snapshot={"pool": [{"symbol": "2330"}]},
+    )
+
+    as_of_bar = _bars(as_of, 1, open_=100.0, closes=[110.0])
+    after_bars = _bars(
+        as_of + timedelta(days=1), 5, open_=110.0,
+        closes=[110.0, 110.0, 110.0, 110.0, 110.0],
+    )
+    archive = AsyncMock(return_value=as_of_bar + after_bars)
+    patches = _stub_lock_helpers() + [
+        patch("services.ingest.repository.read_ohlcv_range_autosession", archive),
+    ]
+    _enter_all(patches)
+    try:
+        from tasks import verify_discussion_outcome
+
+        await verify_discussion_outcome.run()
+    finally:
+        _exit_all(patches)
+
+    refreshed = await db_session.get(Discussion, d.id)
+    await db_session.refresh(refreshed)
+    assert refreshed.verdict == "abstain"
+    perf = refreshed.pool_performance or {}
+    assert perf.get("resolved") == 1
+    assert perf.get("avg_return_pct") == 0.0

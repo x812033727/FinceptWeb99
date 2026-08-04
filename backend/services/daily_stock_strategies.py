@@ -180,7 +180,14 @@ _FACTORS: dict[str, tuple[Any, bool]] = {
 # the old formulas used, so this change is about scale only — which
 # rows are *eligible* is untouched.
 _STRATEGY_FACTORS: dict[str, tuple[str, ...]] = {
-    "general": ("return_5d", "foreign_net_buy_5d", "revenue_yoy", "pe"),
+    # `return_20d` added 2026-08-04 from the honest-anchor factor study
+    # (217 pool-days 2025-09..2026-07, entry next-session open, D5 alpha
+    # vs TAIEX_TR): top-1 alpha +2.23pp t=2.76 vs +0.45pp without it,
+    # positive in both the train half and the held-out half, and in 3
+    # of 4 quarters. The lift is concentrated at rank 1 (top-3 shows no
+    # edge) — pre-registered check: 20 live sessions after adoption,
+    # top-1 D5 alpha must be > 0 or this factor comes back out.
+    "general": ("return_5d", "return_20d", "foreign_net_buy_5d", "revenue_yoy", "pe"),
     "chip_quality": (
         # chip half
         "foreign_buy_days_5d", "foreign_net_buy_5d", "volume_ratio", "return_5d",

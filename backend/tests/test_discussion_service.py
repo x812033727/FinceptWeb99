@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -2193,13 +2194,65 @@ def test_extract_focus_symbols_empty_when_none():
 
 def test_extract_focus_symbols_filters_year_like_tw():
     """4-digit year tokens (1900-2099) must NOT be treated as TW codes;
-    `2026 Q1 預估` shouldn't pollute per-symbol news lookups."""
+    `2026 Q1 預估` shouldn't pollute per-symbol news lookups. With an
+    empty symbol map there is no way to tell 2030 (彰源) from the year
+    2030, so the conservative filter drops both."""
     out = discussion_service.extract_focus_symbols(
         "2026 Q1 與 2030 展望，主軸在 2330", market="TW",
     )
     assert "2330" in out
     assert "2026" not in out
     assert "2030" not in out
+
+
+def test_extract_focus_symbols_keeps_year_like_listed_codes():
+    """Real TW symbols inside the 1900-2099 band (中鋼 2002, 東和鋼鐵
+    2006, 大成鋼 2027 …) must survive the year filter once the symbol
+    map knows them — the unconditional filter starved the whole steel
+    sector of focus briefs / short-term signals and the daily panel
+    kept skipping them as 無資料可評估."""
+    import services.tw_symbol_service as tws
+    tws._name_map.update({"2006": "東和鋼鐵", "2027": "大成鋼"})
+    try:
+        out = discussion_service.extract_focus_symbols(
+            "2026 Q1 展望：2006 與 2027 的鋼價循環，對照 2330", market="TW",
+        )
+        assert out == ["2006", "2027", "2330"]
+        assert "2026" not in out
+    finally:
+        tws._name_map.clear()
+
+
+def test_focus_symbols_for_discussion_prefers_candidate_snapshot():
+    """Auto-run daily-pick rows carry the batch as structured data —
+    topic re-parsing (lossy for year-band codes) must not be involved."""
+    from services.discussion.symbols import focus_symbols_for_discussion
+
+    row = SimpleNamespace(
+        candidate_snapshot={
+            "strategy": "chip_quality",
+            "candidates": [
+                {"symbol": "2006"}, {"symbol": "2451"}, {"symbol": "2618"},
+                {"symbol": "3034"}, {"symbol": "2610"},
+            ],
+        },
+        topic="這段文字完全不會被解析",
+        market="TW",
+    )
+    assert focus_symbols_for_discussion(row) == [
+        "2006", "2451", "2618", "3034", "2610",
+    ]
+
+
+def test_focus_symbols_for_discussion_falls_back_to_topic():
+    from services.discussion.symbols import focus_symbols_for_discussion
+
+    row = SimpleNamespace(
+        candidate_snapshot=None,
+        topic="討論 2330 與 2454 的短線走勢",
+        market="TW",
+    )
+    assert focus_symbols_for_discussion(row) == ["2330", "2454"]
 
 
 def test_extract_focus_symbols_us_market_uses_uppercase_tickers():

@@ -61,9 +61,9 @@ def observed_consensus(turns: Iterable[_Turn]) -> float | None:
     Later rounds weigh more (weight = round number). A discussion opens
     with everyone staking out a position and converges as it goes, so
     round 1's spread of opinion says less about the conclusion than
-    round 5's does. Weighting linearly rather than, say, taking only the
-    final round keeps a late lone dissent from swinging the whole
-    number, which matters at this scale (5 rounds, ~8 personas).
+    the final round's does. Weighting linearly rather than, say, taking
+    only the final round keeps a late lone dissent from swinging the
+    whole number, which matters at this scale (3-5 rounds, ~8 personas).
     """
     weighted_sum = 0.0
     weight_total = 0.0

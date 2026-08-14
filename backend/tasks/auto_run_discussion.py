@@ -608,6 +608,37 @@ async def _run_strategy_slot(
         discussion,
         user_id=str(user_id),
     )
+    if conclusion.get("_parse_error"):
+        # One retry before giving the batch up. Every 2026-08
+        # `unverifiable` auto-run row was a `_parse_error` placeholder
+        # (truncated / malformed synthesizer JSON), and each one threw
+        # away a full candidate batch — 08-03 price_signal discarded a
+        # batch whose best name did +23% over the window. A single
+        # re-synthesis reuses the same round-context snapshot, so the
+        # retry costs one LLM call, not a context rebuild. Still broken
+        # after the retry → leave the placeholder; the verifier grades
+        # it `unverifiable`, which is the honest label for a pipeline
+        # failure (an `abstain` here would masquerade as a decision).
+        log.warning(
+            "auto_run_discussion.synthesize_parse_error_retry",
+            extra={
+                "user_id": str(user_id),
+                "discussion_id": str(discussion.id),
+            },
+        )
+        conclusion = await discussion_service.synthesize_conclusion(
+            db,
+            discussion,
+            user_id=str(user_id),
+        )
+        if conclusion.get("_parse_error"):
+            log.error(
+                "auto_run_discussion.synthesize_parse_error_unrecovered",
+                extra={
+                    "user_id": str(user_id),
+                    "discussion_id": str(discussion.id),
+                },
+            )
 
     symbols = [
         str(s).strip()

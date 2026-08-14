@@ -29,7 +29,7 @@ from services.discussion.round_runner.turn_exec import (
     _ask_persona,
     _ThinkBlockFilter,
 )
-from services.discussion.symbols import extract_focus_symbols
+from services.discussion.symbols import focus_symbols_for_discussion
 from services.discussion.turn_parsing import (
     ABSTAIN_STANCE,
     _parse_turn_response,
@@ -131,9 +131,7 @@ async def run_round(
     # permanently stuck in RUNNING and the router would reject every
     # subsequent /round call.
     try:
-        focus = extract_focus_symbols(
-            discussion.topic, market=discussion.market,
-        )
+        focus = focus_symbols_for_discussion(discussion)
         # Bridge ctx-gathering progress milestones to SSE events so
         # the frontend's preparing card (PR #244) can show
         # "scoring news sentiment..." etc. instead of a static

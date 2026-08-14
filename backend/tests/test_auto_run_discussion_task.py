@@ -195,6 +195,92 @@ async def test_creates_discussion_with_auto_run_flag(
 
 
 @pytest.mark.asyncio
+async def test_synthesize_parse_error_retries_once(
+    patch_session, db_session: AsyncSession,
+):
+    """A `_parse_error` conclusion triggers exactly one re-synthesis.
+    Every 2026-08 `unverifiable` auto-run row was a parse-error
+    placeholder that threw away its whole candidate batch — one retry
+    recovers the common transient case (truncated JSON)."""
+    from tasks import auto_run_discussion
+
+    user = await _make_user(db_session)
+    await _enable_for(
+        db_session, user,
+        persona_ids=["buffett", "lynch"], topic="t", rules="r",
+    )
+
+    async def _fake_run_round(*_a, **_kw):
+        return
+        yield  # pragma: no cover
+
+    good = {
+        "recommended_symbols": ["2330"],
+        "reasoning": "x",
+        "risks": [],
+        "time_horizon": "short_term",
+        "consensus_score": 0.7,
+    }
+    synth = AsyncMock(side_effect=[
+        {"recommended_symbols": [], "abstained": False, "_parse_error": True},
+        good,
+    ])
+
+    patches = _stub_lock_helpers() + [
+        patch("tasks.auto_run_discussion.is_today_likely_trading_day",
+              AsyncMock(return_value=True)),
+        patch.object(discussion_service, "run_round", _fake_run_round),
+        patch.object(discussion_service, "synthesize_conclusion", synth),
+    ]
+    _enter_all(patches)
+    try:
+        await auto_run_discussion.run()
+    finally:
+        _exit_all(patches)
+
+    assert synth.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_synthesize_parse_error_gives_up_after_retry(
+    patch_session, db_session: AsyncSession,
+):
+    """Two consecutive parse errors → stop; the row stays a
+    parse-error placeholder for the verifier to grade `unverifiable`
+    (the honest label for a pipeline failure — not an abstain)."""
+    from tasks import auto_run_discussion
+
+    user = await _make_user(db_session)
+    await _enable_for(
+        db_session, user,
+        persona_ids=["buffett", "lynch"], topic="t", rules="r",
+    )
+
+    async def _fake_run_round(*_a, **_kw):
+        return
+        yield  # pragma: no cover
+
+    broken = {
+        "recommended_symbols": [], "abstained": False, "_parse_error": True,
+    }
+    synth = AsyncMock(return_value=broken)
+
+    patches = _stub_lock_helpers() + [
+        patch("tasks.auto_run_discussion.is_today_likely_trading_day",
+              AsyncMock(return_value=True)),
+        patch.object(discussion_service, "run_round", _fake_run_round),
+        patch.object(discussion_service, "synthesize_conclusion", synth),
+    ]
+    _enter_all(patches)
+    try:
+        await auto_run_discussion.run()
+    finally:
+        _exit_all(patches)
+
+    assert synth.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_iterates_multiple_enabled_users(
     patch_session, db_session: AsyncSession,
 ):

@@ -17,7 +17,7 @@ subfolder uses them:
   * Transcript / history formatters from ``discussion.transcript_format``
   * ``_safe_conclusion`` + ``compute_conclusion_diff`` from
     ``discussion.conclusion_parsing``
-  * ``extract_focus_symbols`` from ``discussion.symbols``
+  * ``focus_symbols_for_discussion`` from ``discussion.symbols``
   * ``_extract_lessons_payload`` from ``discussion.lessons``
 
 For the few CRUD entry-points still living in ``discussion_service``
@@ -52,7 +52,7 @@ from services.discussion.prompts import (
     _SYNTHESIZER_USER_TEMPLATE,
     _format_freshness_preamble,
 )
-from services.discussion.symbols import extract_focus_symbols
+from services.discussion.symbols import focus_symbols_for_discussion
 from services.discussion.transcript_format import _format_transcript
 
 log = logging.getLogger(__name__)
@@ -468,9 +468,7 @@ async def synthesize_conclusion(
     if snapshots:
         context = snapshots[-1].context
     else:
-        focus = extract_focus_symbols(
-            discussion.topic, market=discussion.market,
-        )
+        focus = focus_symbols_for_discussion(discussion)
         context = await gather_market_context(
             db,
             market=discussion.market,

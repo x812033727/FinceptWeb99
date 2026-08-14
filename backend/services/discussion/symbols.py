@@ -6,7 +6,13 @@ discussion lookups for the right tickers. Three market-shape rules:
 
   - **TW**: 4-6 digit numeric codes. Year-like 4-digit values
     (1900-2099) are filtered out so "2026 Q1 法說" doesn't pollute
-    the per-symbol sentiment lookup with a date.
+    the per-symbol sentiment lookup with a date — UNLESS the code is
+    a real listed symbol in the ``tw_symbol_service`` map. 36 listed
+    TW companies live inside 1900-2099 (中鋼 2002, 東和鋼鐵 2006,
+    大成鋼 2027, 上銀 2049, 川湖 2059 …); the unconditional filter
+    silently starved every one of them of focus briefs / short-term
+    signals, and the daily-pick panel kept skipping them as
+    "無資料可評估" even when they topped the candidate batch.
   - **US**: cashtag ``$AAPL`` always honoured; bare uppercase 1-5
     letter tokens honoured if they aren't in
     ``_US_TICKER_STOPWORDS`` (common English words like "AND" /
@@ -38,7 +44,9 @@ _TW_SYMBOL_RE = re.compile(r"(?<![\w])(\d{4,6})(?![\w])")
 _CASHTAG_RE = re.compile(r"\$([A-Z]{1,5})\b")
 _BARE_US_TICKER_RE = re.compile(r"\b([A-Z]{1,5})\b")
 
-# Year-like 4-digit numbers — keep generous; TW codes never overlap.
+# Year-like 4-digit numbers. TW codes DO overlap this range (the
+# 19xx/20xx band is the steel & machinery sector), so year-likeness
+# alone never disqualifies a token — see `_is_known_tw_symbol`.
 _YEAR_MIN = 1900
 _YEAR_MAX = 2099
 
@@ -67,6 +75,28 @@ def _is_year_like(code: str) -> bool:
     if len(code) != 4 or not code.isdigit():
         return False
     return _YEAR_MIN <= int(code) <= _YEAR_MAX
+
+
+def _is_known_tw_symbol(code: str) -> bool:
+    """Membership check against the in-memory TW symbol map.
+
+    Resolves the year-vs-code ambiguity for the 1900-2099 band: a
+    token that is BOTH year-like and a listed symbol (東和鋼鐵 2006,
+    大成鋼 2027 …) is a symbol. On a fresh pod where the map hasn't
+    loaded yet this returns False and the caller falls back to the
+    conservative year filter — worst case is the old behaviour, never
+    a date polluting the news lookup."""
+    try:
+        from services.tw_symbol_service import _name_map
+        return code in _name_map
+    except Exception:
+        return False
+
+
+def _drop_as_year(code: str) -> bool:
+    """True when `code` should be skipped as a year mention rather
+    than honoured as a TW symbol."""
+    return _is_year_like(code) and not _is_known_tw_symbol(code)
 
 
 def _crypto_universe() -> list[str]:
@@ -114,7 +144,7 @@ def extract_focus_symbols(text: str, *, market: str = _DEFAULT_MARKET) -> list[s
     market = (market or _DEFAULT_MARKET).upper()
     if market == "TW":
         for code in _TW_SYMBOL_RE.findall(raw):
-            if _is_year_like(code):
+            if _drop_as_year(code):
                 continue
             if _push(code):
                 break
@@ -132,7 +162,7 @@ def extract_focus_symbols(text: str, *, market: str = _DEFAULT_MARKET) -> list[s
             if _push(tok):
                 return seen
         for code in _TW_SYMBOL_RE.findall(raw):
-            if _is_year_like(code):
+            if _drop_as_year(code):
                 continue
             if _push(code):
                 break
@@ -160,3 +190,29 @@ def extract_focus_symbols(text: str, *, market: str = _DEFAULT_MARKET) -> list[s
             # the regex-only pass found.
             pass
     return seen
+
+
+def focus_symbols_for_discussion(discussion) -> list[str]:
+    """Focus symbols for a discussion row.
+
+    Auto-run daily-pick sessions already carry their candidate batch
+    as structured data in ``candidate_snapshot["candidates"]`` — use
+    those symbols directly instead of re-parsing the topic text,
+    which is lossy (regex misses, encounter-order cap, and the
+    year-band ambiguity above). Falls back to
+    :func:`extract_focus_symbols` for ordinary user-authored topics
+    and legacy rows without a snapshot.
+    """
+    snapshot = getattr(discussion, "candidate_snapshot", None)
+    candidates = snapshot.get("candidates") if isinstance(snapshot, dict) else None
+    symbols: list[str] = []
+    if isinstance(candidates, list):
+        for cand in candidates:
+            sym = cand.get("symbol") if isinstance(cand, dict) else None
+            if sym and str(sym) not in symbols:
+                symbols.append(str(sym))
+            if len(symbols) >= _MAX_FOCUS_SYMBOLS:
+                break
+    if symbols:
+        return symbols
+    return extract_focus_symbols(discussion.topic, market=discussion.market)

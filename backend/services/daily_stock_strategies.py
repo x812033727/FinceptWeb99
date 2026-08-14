@@ -309,4 +309,7 @@ def build_topic(strategy: str, batch: list[dict[str, Any]], general_topic: str) 
     symbols = "、".join(_candidate_display(strategy, item) for item in batch)
     if strategy == "general":
         return f"{general_topic}\n本場候選股：{symbols}。僅能從候選股推薦 1–3 檔。"
-    return f"{LABELS[strategy]}策略候選股：{symbols}。請完成五輪討論，僅從候選股推薦 1–3 檔並說明進出場與風險。"
+    # No round count in the ask — the actual count is `_AUTO_ROUNDS`
+    # (tasks/auto_run_discussion.py, 5 → 3 in 2026-08), and a stale
+    # "五輪" here had personas narrating a fifth round that never ran.
+    return f"{LABELS[strategy]}策略候選股：{symbols}。請僅從候選股推薦 1–3 檔並說明進出場與風險。"

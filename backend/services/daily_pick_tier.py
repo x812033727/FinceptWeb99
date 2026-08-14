@@ -14,13 +14,21 @@ Calibration 2026-07-28 (23 graded picks, D5 excess vs _TAIEX_TR):
 pre-registered rule (tier win rate >= 0.8 with >= 1/3 coverage:
 recommend 15 picks / 80% win vs watch 75%). The provisional 0.85/2
 pair was mis-scaled: `hallucination_warnings` counts every data-
-citation warning across all five rounds (observed range 3-54), so
-<=2 put EVERY pick in watch. Worse, the raw count anti-selects at
-every realistic cutoff (warning-light picks won LESS often), so
-T_HALLUC=60 deliberately renders that gate inert until a per-pick
-attribution exists (the spec's "warnings referencing signals the
-pick relies on"). The per-tier scoreboard columns publish each
-tier's live win rate, so a mis-calibrated split indicts itself.
+citation warning across all rounds (observed range 3-54 in the
+five-round era), so <=2 put EVERY pick in watch. Worse, the raw
+count anti-selects at every realistic cutoff (warning-light picks
+won LESS often), so T_HALLUC=60 deliberately renders that gate
+inert until a per-pick attribution exists (the spec's "warnings
+referencing signals the pick relies on"). The per-tier scoreboard
+columns publish each tier's live win rate, so a mis-calibrated
+split indicts itself.
+
+2026-08 note: `_AUTO_ROUNDS` dropped 5 → 3, shrinking the count
+scale (3-round live sessions observe 0-17, p90=9). That leaves 60
+still unreachable — the gate stays inert BY DESIGN, not by drift.
+Do not "recalibrate" it downward without first building the
+per-pick attribution the 07-28 sweep demanded; the raw count's
+anti-selection finding is independent of the round count.
 """
 from __future__ import annotations
 

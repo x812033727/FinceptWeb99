@@ -3,13 +3,13 @@
 # Testing
 pytest==9.1.1
 pytest-asyncio==1.4.0
-pytest-socket==0.8.0
+pytest-socket==0.8.1
 pytest-cov==7.1.0
-diff-cover==10.4.0
+diff-cover==10.5.1
 httpx==0.28.1
 anyio==4.14.2
 aiosqlite==0.22.1   # in-memory SQLite for test isolation
 
 # Code quality
-ruff==0.15.22
-mypy==2.3.0
+ruff==0.16.5
+mypy==2.3.1
